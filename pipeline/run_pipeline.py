@@ -32,6 +32,10 @@ import pandas as pd
 RAW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
 
+# xlwings 기반 Excel 읽기 (DRM 보호 파일 지원)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from excel_reader import read_xlsx
+
 TABLES = [
     'researchers',
     'evaluations',
@@ -46,12 +50,12 @@ TABLES = [
 
 
 def _read_raw(name: str) -> pd.DataFrame:
-    """xlsx 우선, 없으면 csv 시도."""
+    """xlsx 우선(xlwings로 읽어 DRM 지원), 없으면 csv 시도."""
     for ext in ('xlsx', 'csv'):
         path = os.path.join(RAW_DIR, f'{name}_raw.{ext}')
         if os.path.exists(path):
             if ext == 'xlsx':
-                return pd.read_excel(path)
+                return read_xlsx(path)
             return pd.read_csv(path, encoding='utf-8-sig')
     return None
 
