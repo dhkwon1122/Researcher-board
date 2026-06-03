@@ -1,0 +1,75 @@
+/* ── 전역 ── */
+body {
+  font-family: 'Noto Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+  color: #1a1a2e;
+}
+
+/* ── 카드 ── */
+.card {
+  border: none;
+  border-radius: 10px;
+}
+.card-body {
+  padding: 1rem 1.2rem;
+}
+
+/* ── 네비게이션 ── */
+.navbar-nav .nav-link {
+  font-size: 0.9rem;
+  font-weight: 500;
+  padding: 0.4rem 0.9rem !important;
+  border-radius: 6px;
+  transition: background 0.2s;
+}
+.navbar-nav .nav-link:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+.navbar-nav .nav-link.active {
+  background: rgba(255, 255, 255, 0.2) !important;
+}
+
+/* ── Dash Dropdown ── */
+.Select-control {
+  border-radius: 6px !important;
+}
+
+/* ── 테이블 헤더 ── */
+.table thead th {
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  border-bottom: 2px solid #dee2e6;
+}
+.table tbody td {
+  font-size: 0.85rem;
+  vertical-align: middle;
+}
+
+/* ── KPI 카드 ── */
+.card .bi {
+  opacity: 0.9;
+}
+
+/* ── 탭 ── */
+.nav-tabs .nav-link {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #555;
+}
+.nav-tabs .nav-link.active {
+  font-weight: 700;
+  color: #1e3a5f;
+  border-bottom: 2px solid #1e3a5f;
+}
+
+/* ── Plotly 차트 배경 투명 처리 ── */
+.js-plotly-plot .plotly .bg {
+  fill: transparent !important;
+}
+
+/* ── 스크롤 가능한 테이블 ── */
+.table-scroll {
+  max-height: 360px;
+  overflow-y: auto;
+  display: block;
+}
