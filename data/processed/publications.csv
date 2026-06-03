@@ -1,52 +1,43 @@
 ﻿researcher_id,title,journal,pub_year,impact_factor,citation_count,is_corresponding
-R001,Novel Robust Approach for 기계시스템 Applications,Journal of Mechanical Engineering,2021,6.69,161,True
-R001,Novel Intelligent Approach for 기계시스템 Applications,Robotics and Automation Letters,2019,2.9,176,False
-R001,Development of Intelligent Approach for 기계시스템 Applications,Int. Journal of Robotics Research,2019,12.22,178,False
-R003,Study on Advanced Approach for 기계시스템 Applications,Robotics and Automation Letters,2019,12.18,170,False
-R003,Improved Robust Approach for 기계시스템 Applications,Mechatronics,2024,13.46,156,True
-R003,Improved Intelligent Approach for 기계시스템 Applications,Robotics and Automation Letters,2019,11.36,121,False
-R003,Study on Efficient Approach for 기계시스템 Applications,Robotics and Automation Letters,2023,4.2,112,False
-R003,Analysis of High-performance Approach for 기계시스템 Applications,Mechatronics,2020,5.34,138,False
-R003,Study on High-performance Approach for 기계시스템 Applications,Robotics and Automation Letters,2023,2.97,54,False
-R003,Novel Efficient Approach for 기계시스템 Applications,Robotics and Automation Letters,2021,1.68,107,False
-R003,Improved Advanced Approach for 기계시스템 Applications,Robotics and Automation Letters,2021,0.88,90,False
-R004,Novel Robust Approach for 기계시스템 Applications,Int. Journal of Robotics Research,2021,3.92,111,False
-R004,Novel Efficient Approach for 기계시스템 Applications,Robotics and Automation Letters,2023,3.14,119,True
-R004,Improved Robust Approach for 기계시스템 Applications,Journal of Mechanical Engineering,2021,9.2,169,False
-R004,Novel High-performance Approach for 기계시스템 Applications,Robotics and Automation Letters,2019,1.51,97,False
-R004,Novel Efficient Approach for 기계시스템 Applications,Mechatronics,2024,13.29,71,True
-R004,Novel Efficient Approach for 기계시스템 Applications,Journal of Mechanical Engineering,2021,1.08,138,False
-R005,Study on Advanced Approach for 기계시스템 Applications,Journal of Mechanical Engineering,2024,1.24,63,False
-R005,Development of Robust Approach for 기계시스템 Applications,Int. Journal of Robotics Research,2019,2.59,171,False
-R005,Study on Intelligent Approach for 기계시스템 Applications,Mechatronics,2024,6.04,155,True
-R005,Development of High-performance Approach for 기계시스템 Applications,Mechatronics,2018,9.02,79,True
+R002,Novel Intelligent Approach for 기계시스템 Applications,Journal of Mechanical Engineering,2024,13.31,147,False
+R002,Development of Efficient Approach for 기계시스템 Applications,Mechatronics,2024,6.34,107,False
+R002,Improved Robust Approach for 기계시스템 Applications,Int. Journal of Robotics Research,2021,3.92,111,False
+R003,Analysis of Intelligent Approach for 기계시스템 Applications,Int. Journal of Robotics Research,2024,7.44,32,True
+R003,Improved Advanced Approach for 기계시스템 Applications,Robotics and Automation Letters,2022,8.81,6,False
+R003,Novel High-performance Approach for 기계시스템 Applications,Robotics and Automation Letters,2019,1.51,97,False
+R003,Novel Efficient Approach for 기계시스템 Applications,Mechatronics,2024,13.29,71,True
+R003,Novel Efficient Approach for 기계시스템 Applications,Journal of Mechanical Engineering,2021,1.08,138,False
+R003,Analysis of High-performance Approach for 기계시스템 Applications,Journal of Mechanical Engineering,2024,14.39,10,True
+R004,Study on Advanced Approach for 기계시스템 Applications,Int. Journal of Robotics Research,2019,2.59,171,False
+R004,Study on Intelligent Approach for 기계시스템 Applications,Mechatronics,2024,6.04,155,True
+R004,Development of High-performance Approach for 기계시스템 Applications,Mechatronics,2018,9.02,79,True
 R005,Novel Intelligent Approach for 기계시스템 Applications,Int. Journal of Robotics Research,2018,9.21,160,False
-R006,Analysis of Robust Approach for 기계시스템 Applications,Journal of Mechanical Engineering,2024,14.77,10,False
-R006,Novel Efficient Approach for 기계시스템 Applications,Journal of Mechanical Engineering,2022,10.0,3,True
-R006,Novel Advanced Approach for 기계시스템 Applications,Robotics and Automation Letters,2020,9.83,117,True
-R006,Novel High-performance Approach for 기계시스템 Applications,Mechatronics,2022,12.28,137,True
-R006,Novel Intelligent Approach for 기계시스템 Applications,Mechatronics,2020,12.89,22,False
-R006,Novel High-performance Approach for 기계시스템 Applications,Robotics and Automation Letters,2022,9.47,97,False
-R006,Novel Efficient Approach for 기계시스템 Applications,Int. Journal of Robotics Research,2021,3.81,66,False
-R006,Improved Efficient Approach for 기계시스템 Applications,Journal of Mechanical Engineering,2022,14.26,21,False
-R006,Novel Intelligent Approach for 기계시스템 Applications,Int. Journal of Robotics Research,2023,7.56,125,False
-R006,Development of Advanced Approach for 기계시스템 Applications,Mechatronics,2019,6.54,62,False
-R006,Improved Efficient Approach for 기계시스템 Applications,Robotics and Automation Letters,2022,8.34,108,True
-R007,Analysis of Efficient Approach for 기계시스템 Applications,Robotics and Automation Letters,2020,5.15,59,False
-R007,Study on Efficient Approach for 기계시스템 Applications,Journal of Mechanical Engineering,2023,8.41,176,False
-R007,Study on Intelligent Approach for 기계시스템 Applications,Mechatronics,2023,9.17,134,True
-R007,Development of High-performance Approach for 기계시스템 Applications,Mechatronics,2019,5.92,77,False
-R007,Improved High-performance Approach for 기계시스템 Applications,Mechatronics,2018,14.63,141,False
-R007,Study on Intelligent Approach for 기계시스템 Applications,Journal of Mechanical Engineering,2024,0.97,72,False
-R007,Novel Efficient Approach for 기계시스템 Applications,Int. Journal of Robotics Research,2018,4.39,122,False
-R007,Development of Intelligent Approach for 기계시스템 Applications,Robotics and Automation Letters,2018,8.99,175,False
-R008,Improved Efficient Approach for 기계시스템 Applications,Journal of Mechanical Engineering,2019,2.48,106,True
-R008,Improved High-performance Approach for 기계시스템 Applications,Robotics and Automation Letters,2021,13.7,76,True
-R009,Analysis of Robust Approach for 기계시스템 Applications,Journal of Mechanical Engineering,2022,14.43,25,True
-R009,Study on High-performance Approach for 기계시스템 Applications,Mechatronics,2023,1.95,61,False
-R009,Development of High-performance Approach for 기계시스템 Applications,Journal of Mechanical Engineering,2021,7.2,152,False
-R009,Development of High-performance Approach for 기계시스템 Applications,Mechatronics,2023,4.81,116,False
-R009,Study on Efficient Approach for 기계시스템 Applications,Int. Journal of Robotics Research,2021,2.43,57,True
+R005,Analysis of Robust Approach for 기계시스템 Applications,Journal of Mechanical Engineering,2024,14.77,10,False
+R005,Novel Efficient Approach for 기계시스템 Applications,Journal of Mechanical Engineering,2022,10.0,3,True
+R005,Novel Advanced Approach for 기계시스템 Applications,Robotics and Automation Letters,2020,9.83,117,True
+R005,Novel High-performance Approach for 기계시스템 Applications,Mechatronics,2022,12.28,137,True
+R005,Novel Intelligent Approach for 기계시스템 Applications,Mechatronics,2020,12.89,22,False
+R005,Novel High-performance Approach for 기계시스템 Applications,Robotics and Automation Letters,2022,9.47,97,False
+R005,Novel Efficient Approach for 기계시스템 Applications,Int. Journal of Robotics Research,2021,3.81,66,False
+R005,Improved Efficient Approach for 기계시스템 Applications,Journal of Mechanical Engineering,2022,14.26,21,False
+R005,Novel Intelligent Approach for 기계시스템 Applications,Int. Journal of Robotics Research,2023,7.56,125,False
+R005,Development of Advanced Approach for 기계시스템 Applications,Mechatronics,2019,6.54,62,False
+R005,Improved Efficient Approach for 기계시스템 Applications,Robotics and Automation Letters,2022,8.34,108,True
+R005,Improved Efficient Approach for 기계시스템 Applications,Mechatronics,2023,7.24,78,False
+R005,Development of High-performance Approach for 기계시스템 Applications,Mechatronics,2018,11.35,176,False
+R006,Novel Efficient Approach for 기계시스템 Applications,Mechatronics,2018,12.62,75,False
+R006,Study on Efficient Approach for 기계시스템 Applications,Journal of Mechanical Engineering,2023,8.38,70,False
+R006,Development of Robust Approach for 기계시스템 Applications,Mechatronics,2023,14.21,163,True
+R007,Development of Advanced Approach for 기계시스템 Applications,Mechatronics,2021,7.6,87,False
+R007,Development of Efficient Approach for 기계시스템 Applications,Robotics and Automation Letters,2018,12.47,102,False
+R007,Improved Advanced Approach for 기계시스템 Applications,Int. Journal of Robotics Research,2019,12.32,77,False
+R007,Study on Advanced Approach for 기계시스템 Applications,Robotics and Automation Letters,2022,9.27,158,False
+R007,Improved Intelligent Approach for 기계시스템 Applications,Robotics and Automation Letters,2021,5.02,150,True
+R007,Analysis of Robust Approach for 기계시스템 Applications,Journal of Mechanical Engineering,2022,14.43,25,True
+R007,Study on High-performance Approach for 기계시스템 Applications,Mechatronics,2023,1.95,61,False
+R008,Study on Advanced Approach for 기계시스템 Applications,Robotics and Automation Letters,2021,10.59,120,False
+R009,Analysis of Efficient Approach for 기계시스템 Applications,Robotics and Automation Letters,2018,10.56,67,True
+R009,Improved High-performance Approach for 기계시스템 Applications,Robotics and Automation Letters,2018,8.53,165,False
 R009,Analysis of High-performance Approach for 기계시스템 Applications,Journal of Mechanical Engineering,2018,3.16,78,True
 R010,Improved Efficient Approach for 기계시스템 Applications,Robotics and Automation Letters,2018,7.46,77,True
 R010,Analysis of Robust Approach for 기계시스템 Applications,Robotics and Automation Letters,2021,1.94,10,True

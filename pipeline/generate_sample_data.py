@@ -63,6 +63,22 @@ TECH_RECIPIENTS = [
     '(주)신기술연구소', 'KT&G 연구소', '삼성전자 기술원', '현대자동차(주)', 'LG화학(주)',
 ]
 
+TRANSFER_TYPES = ['부서발령', '프로젝트파견', '해외파견', '공동연구']
+
+TRANSFER_DESCS = {
+    '부서발령': lambda depts: f'{random.choice(list(depts))} 발령',
+    '프로젝트파견': lambda _: f'{random.choice(["산업부", "과기부", "중기부", "방사청"])} 과제 수행',
+    '해외파견': lambda _: f'{random.choice(["MIT", "Stanford", "TU Berlin", "ETH Zurich", "RIKEN"])} 공동연구',
+    '공동연구': lambda _: f'{random.choice(["삼성전자", "현대자동차", "LG화학", "SK이노베이션"])} 공동연구',
+}
+
+PEER_COMMENTS = [
+    "{name} 선배님은 전문 지식이 뛰어나고 팀원들을 잘 이끌어 주십니다. 어려운 문제도 명쾌하게 해결해 주셔서 많은 도움을 받고 있습니다.",
+    "업무에 대한 열정과 성실함이 인상적이며, 협업 시 원활한 소통으로 팀 분위기를 이끌어 주십니다.",
+    "{name} 선배님의 {tech} 분야 기술적 역량이 뛰어나며, 후배들에게 아낌없이 지식을 공유해 주셔서 감사합니다.",
+    "꼼꼼하고 체계적인 업무 처리 방식 덕분에 프로젝트가 원활하게 진행됩니다. 좋은 멘토십에 감사드립니다.",
+]
+
 COMMENT_TEMPLATES = [
     "{name} 연구원은 탁월한 연구 역량과 창의적인 문제 해결 능력을 보유하고 있습니다. "
     "특히 {tech} 분야에서 두각을 나타내며, 팀 협업에도 적극적으로 기여하고 있습니다. "
@@ -115,12 +131,13 @@ def generate_researchers():
             rows.append({
                 'researcher_id': f'R{rid:03d}',
                 'name': _make_name(),
+                'gender': random.choice(['남', '여']),
                 'department': dept,
                 'org_code': org_code,
                 'position': POSITIONS[pos_idx],
                 'hire_year': hire_year,
                 'birth_year': birth_year,
-                'photo_path': 'assets/photos/placeholder.png',
+                'photo_path': '',
             })
             rid += 1
     return pd.DataFrame(rows)
@@ -297,20 +314,52 @@ def generate_education(researchers_df):
     return pd.DataFrame(rows)
 
 
+def generate_transfers(researchers_df):
+    rows = []
+    depts = list(DEPARTMENTS.values())
+    for _, r in researchers_df.iterrows():
+        n = random.choices([0, 1, 2, 3, 4], weights=[0.2, 0.3, 0.25, 0.15, 0.1])[0]
+        for _ in range(n):
+            t_year = random.randint(max(2015, int(r['hire_year'])), 2024)
+            t_type = random.choice(TRANSFER_TYPES)
+            desc = TRANSFER_DESCS[t_type](depts)
+            rows.append({
+                'researcher_id': r['researcher_id'],
+                'date': date(t_year, random.randint(1, 12), 1).isoformat(),
+                'type': t_type,
+                'description': desc,
+            })
+    return pd.DataFrame(rows).sort_values(['researcher_id', 'date'])
+
+
 def generate_comments(researchers_df):
     rows = []
     for _, r in researchers_df.iterrows():
         tech = TECH_AREA.get(r['org_code'], '연구')
         for year in [2022, 2023, 2024]:
+            # 부서장 코멘트
             raw = random.choice(COMMENT_TEMPLATES).format(name=r['name'], tech=tech)
             rows.append({
                 'researcher_id': r['researcher_id'],
                 'year': year,
+                'commenter_type': '부서장',
                 'comment_raw': raw,
                 'comment_summary': raw[:120] + '...',
                 'strengths': f'{tech} 전문성, 연구 성과 우수',
                 'improvements': '리더십 역량 강화, 외부 네트워크 확대',
             })
+            # 부서원 코멘트 (약 50% 확률)
+            if random.random() > 0.5:
+                peer_raw = random.choice(PEER_COMMENTS).format(name=r['name'], tech=tech)
+                rows.append({
+                    'researcher_id': r['researcher_id'],
+                    'year': year,
+                    'commenter_type': '부서원',
+                    'comment_raw': peer_raw,
+                    'comment_summary': peer_raw,
+                    'strengths': '전문성 공유, 협업',
+                    'improvements': '',
+                })
     return pd.DataFrame(rows)
 
 
@@ -326,6 +375,7 @@ def main():
     leadership = generate_leadership(researchers)
     certifications = generate_certifications(researchers)
     education = generate_education(researchers)
+    transfers = generate_transfers(researchers)
     comments = generate_comments(researchers)
 
     datasets = {
@@ -338,6 +388,7 @@ def main():
         'leadership': leadership,
         'certifications': certifications,
         'education': education,
+        'transfers': transfers,
         'comments': comments,
     }
 
