@@ -65,6 +65,9 @@ def process() -> bool:
 
     df = read_xlsx(raw_path)
 
+    # 컬럼명 앞뒤 공백·숨김문자 제거 (Excel에서 흔히 발생)
+    df.columns = [str(c).strip() for c in df.columns]
+
     missing = [c for c in [COL_ID, COL_APP_ID] if c not in df.columns]
     if missing:
         print(

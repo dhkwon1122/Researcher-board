@@ -81,9 +81,9 @@ def read_xlsx(file_path: str, sheet: int | str = 0) -> pd.DataFrame:
         headers = data[0]
         rows = data[1:]
 
-        # 헤더가 None인 열 제거
+        # 헤더가 None인 열 제거, 앞뒤 공백 제거
         valid_cols = [(i, h) for i, h in enumerate(headers) if h is not None]
-        clean_headers = [h for _, h in valid_cols]
+        clean_headers = [str(h).strip() for _, h in valid_cols]
         clean_rows = [[row[i] if i < len(row) else None for i, _ in valid_cols]
                       for row in rows]
 
@@ -109,4 +109,6 @@ def read_xlsx(file_path: str, sheet: int | str = 0) -> pd.DataFrame:
 
 def _read_with_pandas(file_path: str, sheet: int | str = 0) -> pd.DataFrame:
     """xlwings 없이 pandas(openpyxl)로 읽는 폴백."""
-    return pd.read_excel(file_path, sheet_name=sheet)
+    df = pd.read_excel(file_path, sheet_name=sheet)
+    df.columns = [str(c).strip() for c in df.columns]
+    return df
