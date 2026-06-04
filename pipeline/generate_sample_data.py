@@ -143,29 +143,44 @@ def generate_researchers():
     return pd.DataFrame(rows)
 
 
+GRADE_TO_SCORE = {'가': 95, '나': 85, '다': 75, '라': 65, '마': 55}
+# 가중치: 가/나 비율을 높게, 마는 드물게
+GRADE_WEIGHTS = {'가': 10, '나': 30, '다': 35, '라': 20, '마': 5}
+GRADES = list(GRADE_WEIGHTS.keys())
+GRADE_W = list(GRADE_WEIGHTS.values())
+
+
 def generate_evaluations(researchers_df):
     rows = []
     for _, r in researchers_df.iterrows():
-        base = random.randint(65, 92)
-        for year in range(2020, 2025):
-            score = int(min(100, max(50, base + random.randint(-4, 7))))
-            grade = 'S' if score >= 90 else ('A' if score >= 80 else ('B' if score >= 70 else 'C'))
-            rows.append({'researcher_id': r['researcher_id'], 'year': year, 'score': score, 'grade': grade})
-            base = score
+        base_idx = random.choices(range(len(GRADES)), weights=GRADE_W)[0]
+        for year in [2024, 2025, 2026]:
+            idx = max(0, min(len(GRADES) - 1, base_idx + random.randint(-1, 1)))
+            grade = GRADES[idx]
+            rows.append({
+                'researcher_id': r['researcher_id'],
+                'year': year,
+                'grade': grade,
+                'score': GRADE_TO_SCORE[grade],
+            })
+            base_idx = idx
     return pd.DataFrame(rows)
 
 
 def generate_incentive_selection(researchers_df, evaluations_df):
     rows = []
     for _, r in researchers_df.iterrows():
-        for year in [2022, 2023, 2024]:
-            ev = evaluations_df[(evaluations_df['researcher_id'] == r['researcher_id']) & (evaluations_df['year'] == year)]
+        for year in [2024, 2025, 2026]:
+            ev = evaluations_df[
+                (evaluations_df['researcher_id'] == r['researcher_id']) &
+                (evaluations_df['year'] == year)
+            ]
             if ev.empty:
                 continue
             grade = ev.iloc[0]['grade']
-            if grade == 'S':
+            if grade == '가':
                 selected, category = True, '최우수연구원'
-            elif grade == 'A' and random.random() > 0.45:
+            elif grade == '나' and random.random() > 0.45:
                 selected, category = True, '우수연구원'
             else:
                 selected, category = False, ''
@@ -336,7 +351,7 @@ def generate_comments(researchers_df):
     rows = []
     for _, r in researchers_df.iterrows():
         tech = TECH_AREA.get(r['org_code'], '연구')
-        for year in [2022, 2023, 2024]:
+        for year in [2024, 2025, 2026]:
             # 부서장 코멘트
             raw = random.choice(COMMENT_TEMPLATES).format(name=r['name'], tech=tech)
             rows.append({

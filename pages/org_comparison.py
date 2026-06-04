@@ -22,7 +22,14 @@ METRIC_LABELS = {
     'leadership_score': '리더십 점수',
 }
 
-GRADE_COLOR = {'S': '#f5a623', 'A': '#52c41a', 'B': '#1890ff', 'C': '#8c8c8c', '-': '#d9d9d9'}
+GRADE_COLOR = {
+    '가': '#f5a623',  # 금색 — 최우수
+    '나': '#52c41a',  # 초록
+    '다': '#1890ff',  # 파랑
+    '라': '#8c8c8c',  # 회색
+    '마': '#ff4d4f',  # 빨강 — 최하
+    '-': '#d9d9d9',
+}
 
 RADAR_COLORS = [
     'rgba(74,144,226,0.85)', 'rgba(245,166,35,0.85)', 'rgba(82,196,26,0.85)',
@@ -338,10 +345,11 @@ def update_all(org, year, metric, top_n):
 
     # ── 순위 테이블 ──
     grade_badges = {
-        'S': dbc.Badge('S', color='warning', className='ms-1'),
-        'A': dbc.Badge('A', color='success', className='ms-1'),
-        'B': dbc.Badge('B', color='primary', className='ms-1'),
-        'C': dbc.Badge('C', color='secondary', className='ms-1'),
+        '가': dbc.Badge('가', color='warning', className='ms-1'),
+        '나': dbc.Badge('나', color='success', className='ms-1'),
+        '다': dbc.Badge('다', color='primary', className='ms-1'),
+        '라': dbc.Badge('라', color='secondary', className='ms-1'),
+        '마': dbc.Badge('마', color='danger', className='ms-1'),
     }
     table_rows = []
     for rank, (_, row) in enumerate(df_sorted.iterrows(), 1):

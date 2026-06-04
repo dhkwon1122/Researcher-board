@@ -4,22 +4,32 @@
 사용법:
   python pipeline/run_pipeline.py
 
-data/raw/ 폴더에 아래 파일들을 위치시킨 후 실행하세요.
+── 원천 파일 위치: data/raw/ ────────────────────────────────────────────────
 
-필수 파일 (xlsx 또는 csv):
-  - researchers_raw     : researcher_id, name, department, org_code, position, hire_year, birth_year
-  - evaluations_raw     : researcher_id, year, score, grade
-  - incentive_raw       : researcher_id, year, selected, category, note
-  - publications_raw    : researcher_id, title, journal, pub_year, impact_factor, citation_count, is_corresponding
-  - patents_raw         : researcher_id, title, application_no, application_date,
-                          registration_no, registration_date, country, status
-  - technology_transfer_raw : researcher_id, transfer_date, tech_name, recipient, amount, transfer_type
-  - leadership_raw      : researcher_id, year, overall_score, vision, communication,
-                          execution, collaboration, development
-  - certifications_raw  : researcher_id, cert_type, cert_name, score, grade, date_obtained
-  - education_raw       : researcher_id, degree, major, school, graduation_year
-  - comments_raw        : researcher_id, year, comment_raw
-                          (선택: comment_summary, strengths, improvements)
+[평가 데이터] ★ T&P 파일에서 자동 추출 (별도 raw 파일 불필요)
+  T&P_기본_인사_정보.xlsx
+    → '2024 연봉등급', '2025 연봉등급', '2026 연봉등급' 컬럼 사용
+    → 등급 체계: 가/나/다/라/마
+    ※ 처리기: pipeline/process_tp_evaluation.py
+       (사번 컬럼명 등 설정은 해당 파일 상단에서 변경)
+
+[그 외 데이터] 아래 이름으로 xlsx 또는 csv 파일 준비
+  researchers_raw     : researcher_id, name, gender, department, org_code,
+                        position, hire_year, birth_year
+  incentive_raw       : researcher_id, year, selected, category, note
+  publications_raw    : researcher_id, title, journal, pub_year,
+                        impact_factor, citation_count, is_corresponding
+  patents_raw         : researcher_id, title, application_no, application_date,
+                        registration_no, registration_date, country, status
+  technology_transfer_raw : researcher_id, transfer_date, tech_name,
+                            recipient, amount, transfer_type
+  transfers_raw       : researcher_id, date, type, description
+  leadership_raw      : researcher_id, year, overall_score,
+                        vision, communication, execution, collaboration, development
+  certifications_raw  : researcher_id, cert_type, cert_name, score, grade, date_obtained
+  education_raw       : researcher_id, degree, major, school, graduation_year
+  comments_raw        : researcher_id, year, commenter_type, comment_raw
+                        (선택: comment_summary, strengths, improvements)
 
 출력 위치: data/processed/
 """
@@ -32,25 +42,25 @@ import pandas as pd
 RAW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
 
-# xlwings 기반 Excel 읽기 (DRM 보호 파일 지원)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from excel_reader import read_xlsx
 
+# 평가(evaluations)는 T&P 파일에서 추출하므로 목록에서 제외
 TABLES = [
     'researchers',
-    'evaluations',
     'incentive_selection',
     'publications',
     'patents',
     'technology_transfer',
+    'transfers',
     'leadership',
     'certifications',
     'education',
 ]
 
 
-def _read_raw(name: str) -> pd.DataFrame:
-    """xlsx 우선(xlwings로 읽어 DRM 지원), 없으면 csv 시도."""
+def _read_raw(name: str) -> pd.DataFrame | None:
+    """xlsx 우선(xlwings DRM 지원), 없으면 csv 시도."""
     for ext in ('xlsx', 'csv'):
         path = os.path.join(RAW_DIR, f'{name}_raw.{ext}')
         if os.path.exists(path):
@@ -64,6 +74,20 @@ def run():
     os.makedirs(OUT_DIR, exist_ok=True)
     missing = []
 
+    # ── 1. 평가 데이터: T&P 파일에서 추출 ───────────────────────────────
+    from process_tp_evaluation import process as process_tp
+    tp_ok = process_tp()
+    if not tp_ok:
+        # T&P 파일 없으면 evaluations_raw 폴백
+        df = _read_raw('evaluations')
+        if df is not None:
+            out_path = os.path.join(OUT_DIR, 'evaluations.csv')
+            df.to_csv(out_path, index=False, encoding='utf-8-sig')
+            print(f'  [OK]   evaluations.csv (evaluations_raw 폴백, {len(df)}행)')
+        else:
+            missing.append('evaluations (T&P_기본_인사_정보.xlsx 또는 evaluations_raw)')
+
+    # ── 2. 나머지 테이블 ─────────────────────────────────────────────────
     for table in TABLES:
         df = _read_raw(table)
         if df is None:
@@ -74,8 +98,7 @@ def run():
         df.to_csv(out_path, index=False, encoding='utf-8-sig')
         print(f'  [OK]   {table}.csv ({len(df)}행)')
 
-    # 코멘트는 별도 처리 (LLM 요약 포함)
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    # ── 3. 코멘트: 별도 처리 (LLM 요약 옵션 포함) ───────────────────────
     from process_comments import process as process_comments
     process_comments(use_llm=False)
 
