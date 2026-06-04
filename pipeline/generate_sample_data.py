@@ -219,28 +219,39 @@ def generate_publications(researchers_df):
 
 
 def generate_patents(researchers_df):
+    grades = ['S', 'A', 'B', 'C', '']
+    grade_a_subs = ['A1', 'A2', '']
     rows = []
+    app_id_counter = 10000
     for _, r in researchers_df.iterrows():
         n = random.randint(0, 7)
         names = PATENT_NAMES.get(r['org_code'], ['신기술'])
         for i in range(n):
-            app_year = random.randint(2019, 2024)
+            app_year = random.randint(2019, 2025)
             app_date = date(app_year, random.randint(1, 12), random.randint(1, 28)).isoformat()
             is_reg = random.random() > 0.4 and app_year <= 2023
             reg_date = ''
             if is_reg:
-                reg_year = min(app_year + random.randint(1, 2), 2024)
+                reg_year = min(app_year + random.randint(1, 2), 2025)
                 reg_date = date(reg_year, random.randint(1, 12), random.randint(1, 28)).isoformat()
+            grade = random.choice(grades)
             rows.append({
-                'researcher_id': r['researcher_id'],
-                'title': f'{random.choice(names)} {i + 1:02d}',
-                'application_no': f'{random.randint(10000000, 99999999)}',
-                'application_date': app_date,
-                'registration_no': f'{random.randint(1000000, 9999999)}' if is_reg else '',
-                'registration_date': reg_date,
-                'country': random.choice(['국내', '국내', '국내', '해외']),
-                'status': '등록' if is_reg else '출원',
+                'researcher_id':      r['researcher_id'],
+                'application_id':     f'APP{app_id_counter + i:06d}',
+                'title':              f'{random.choice(names)} Method {i + 1:02d}',
+                'title_ko':           f'{random.choice(names)} {i + 1:02d}',
+                'status':             '등록' if is_reg else '출원',
+                'share_ratio':        round(random.uniform(10, 100), 1),
+                'is_lead_inventor':   random.choice(['Y', 'N']),
+                'patent_grade':       grade,
+                'patent_grade_a_sub': random.choice(grade_a_subs) if grade == 'A' else '',
+                'application_no':     f'{random.randint(10000000, 99999999)}',
+                'application_date':   app_date,
+                'registration_no':    f'{random.randint(1000000, 9999999)}' if is_reg else '',
+                'registration_date':  reg_date,
+                'country':            random.choice(['국내', '국내', '국내', '해외']),
             })
+        app_id_counter += n + 1
     return pd.DataFrame(rows)
 
 
@@ -524,7 +535,21 @@ def main():
     # ── 3. 나머지 데이터 ──────────────────────────────────────────────────────
     incentives,    log['incentive_selection']    = _load_or_gen('incentive_selection',  generate_incentive_selection,  researchers, evaluations)
     publications,  log['publications']           = _load_or_gen('publications',         generate_publications,         researchers)
-    patents,       log['patents']                = _load_or_gen('patents',              generate_patents,               researchers)
+
+    # 특허: '특허 리스트.xlsx' 우선 → patents_raw → 샘플 생성
+    patent_list_file = os.path.join(RAW_DIR, '특허 리스트.xlsx')
+    if os.path.exists(patent_list_file):
+        from process_patents import process as _process_patents
+        _process_patents()
+        patents = pd.read_csv(
+            os.path.join(OUTPUT_DIR, 'patents.csv'),
+            encoding='utf-8-sig', dtype=str,
+        )
+        log['patents'] = f'[RAW]   특허 리스트.xlsx'
+        skip_patent_save = True
+    else:
+        patents, log['patents'] = _load_or_gen('patents', generate_patents, researchers)
+        skip_patent_save = False
     tech_transfers,log['technology_transfer']    = _load_or_gen('technology_transfer',  generate_technology_transfer,  researchers)
     leadership,    log['leadership']             = _load_or_gen('leadership',           generate_leadership,           researchers)
     certifications,log['certifications']         = _load_or_gen('certifications',       generate_certifications,       researchers)
@@ -552,6 +577,8 @@ def main():
     }
 
     for name, df in datasets.items():
+        if name == 'patents' and skip_patent_save:
+            continue  # process_patents가 이미 저장함
         if name == 'evaluations' and skip_eval_save:
             continue  # T&P 처리기가 이미 저장함
         path = os.path.join(OUTPUT_DIR, f'{name}.csv')

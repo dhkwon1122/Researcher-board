@@ -19,8 +19,12 @@
   incentive_raw       : researcher_id, year, selected, category, note
   publications_raw    : researcher_id, title, journal, pub_year,
                         impact_factor, citation_count, is_corresponding
-  patents_raw         : researcher_id, title, application_no, application_date,
-                        registration_no, registration_date, country, status
+  patents_raw         : researcher_id, application_id, title, title_ko, status,
+                        share_ratio, is_lead_inventor, patent_grade, patent_grade_a_sub,
+                        application_no, application_date, registration_no,
+                        registration_date, country
+                        ※ '특허 리스트.xlsx' 가 있으면 자동 추출 (별도 raw 불필요)
+                           처리기: pipeline/process_patents.py
   technology_transfer_raw : researcher_id, transfer_date, tech_name,
                             recipient, amount, transfer_type
   transfers_raw       : researcher_id, date, type, description
@@ -54,7 +58,6 @@ TABLES = [
     'researchers',
     'incentive_selection',
     'publications',
-    'patents',
     'technology_transfer',
     'transfers',
     'leadership',
@@ -82,7 +85,7 @@ def run():
     os.makedirs(OUT_DIR, exist_ok=True)
     missing = []
 
-    # ── 1. 평가 데이터: T&P 파일에서 추출 ───────────────────────────────
+    # ── 1. 평가 데이터: T&P 파일에서 추출 ──────────────────────────────
     from process_tp_evaluation import process as process_tp
     tp_ok, _ = process_tp()   # 두 번째 반환값(researcher updates)은 run_pipeline에서 불필요
     if not tp_ok:
@@ -95,7 +98,19 @@ def run():
         else:
             missing.append('evaluations (T&P_기본_인사_정보.xlsx 또는 evaluations_raw)')
 
-    # ── 2. 나머지 테이블 ─────────────────────────────────────────────────
+    # ── 2. 특허 데이터: 특허 리스트.xlsx 우선, 없으면 patents_raw 폴백 ──
+    from process_patents import process as process_patents
+    pat_ok = process_patents()
+    if not pat_ok:
+        df = _read_raw('patents')
+        if df is not None:
+            out_path = os.path.join(OUT_DIR, 'patents.csv')
+            df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+            print(f'  [OK]   patents.csv (patents_raw 폴백, {len(df)}행)')
+        else:
+            missing.append('patents (특허 리스트.xlsx 또는 patents_raw)')
+
+    # ── 3. 나머지 테이블 ─────────────────────────────────────────────────
     for table in TABLES:
         df = _read_raw(table)
         if df is None:

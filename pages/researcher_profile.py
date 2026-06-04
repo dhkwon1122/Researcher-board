@@ -105,11 +105,29 @@ def _pat_tab(pat_df, rid):
     if pat_df.empty:
         return html.Div('특허 데이터 없음', className='text-muted p-3')
     pat = pat_df[pat_df['researcher_id'] == rid].copy()
+    if pat.empty:
+        return html.Div('특허 실적 없음', className='text-muted p-3')
+
+    # 상태 판별 (진행상태 값이 다양할 수 있으므로 키워드 포함 여부로 구분)
+    def _is_reg(s):
+        return '등록' in str(s)
+
+    total_cnt = len(pat)
+    reg_cnt   = int(pat['status'].apply(_is_reg).sum())
+    app_cnt   = total_cnt - reg_cnt
+
+    # 최근 3년 필터 (application_date 있을 때만)
     cutoff = str(CURRENT_YEAR - 2)
-    pat_recent = pat[pat['application_date'].astype(str).str[:4] >= cutoff]
-    app_cnt = int((pat_recent['status'] == '출원').sum())
-    reg_cnt = int((pat_recent['status'] == '등록').sum())
+    if 'application_date' in pat.columns:
+        pat_recent = pat[pat['application_date'].astype(str).str[:4] >= cutoff].copy()
+    else:
+        pat_recent = pat.copy()
+
     summary = dbc.Row([
+        dbc.Col(dbc.Card(dbc.CardBody([
+            html.H4(str(total_cnt), className='fw-bold text-dark mb-0'),
+            html.Small('누적 전체', className='text-muted'),
+        ]), className='text-center border-0 bg-light'), md=2),
         dbc.Col(dbc.Card(dbc.CardBody([
             html.H4(str(app_cnt), className='fw-bold text-primary mb-0'),
             html.Small('출원', className='text-muted'),
@@ -119,17 +137,46 @@ def _pat_tab(pat_df, rid):
             html.Small('등록', className='text-muted'),
         ]), className='text-center border-0 bg-light'), md=2),
     ], className='mb-3')
-    rows = [html.Tr([
-        html.Td(str(r['application_date'])[:7]),
-        html.Td(r['title']),
-        html.Td(dbc.Badge('등록', color='success') if r['status'] == '등록'
-                else dbc.Badge('출원', color='primary')),
-        html.Td(r['country']),
-        html.Td(str(r.get('registration_date', ''))[:7] or '-'),
-    ]) for _, r in pat_recent.sort_values('application_date', ascending=False).iterrows()]
+
+    # 테이블 행 구성 (새 컬럼 우선, 없으면 기존 컬럼 폴백)
+    def _cell(row, *keys, default='-'):
+        for k in keys:
+            v = str(row.get(k, ''))
+            if v and v not in ('', 'nan', 'None'):
+                return v
+        return default
+
+    sort_col = 'application_date' if 'application_date' in pat_recent.columns else pat_recent.columns[0]
+    rows = []
+    for _, r in pat_recent.sort_values(sort_col, ascending=False).iterrows():
+        status_val = str(r.get('status', ''))
+        status_badge = (dbc.Badge('등록', color='success') if _is_reg(status_val)
+                        else dbc.Badge(status_val or '출원', color='primary'))
+        lead = str(r.get('is_lead_inventor', ''))
+        grade = str(r.get('patent_grade', ''))
+        grade_a = str(r.get('patent_grade_a_sub', ''))
+        grade_str = grade + (f'({grade_a})' if grade_a and grade_a not in ('', 'nan') else '')
+
+        rows.append(html.Tr([
+            html.Td(_cell(r, 'application_date')[:7]),
+            html.Td(_cell(r, 'title', 'title_ko'),
+                    style={'maxWidth': '300px', 'wordBreak': 'break-word'}),
+            html.Td(status_badge),
+            html.Td(_cell(r, 'application_id', 'application_no')),
+            html.Td(f"{r.get('share_ratio', '-')}%"
+                    if str(r.get('share_ratio', '')).replace('.', '').isdigit() else '-'),
+            html.Td(dbc.Badge('대표', color='warning', text_color='dark')
+                    if lead in ('Y', 'y', '1', 'True', 'true') else ''),
+            html.Td(grade_str or '-'),
+            html.Td(_cell(r, 'country')),
+        ]))
+
     table = dbc.Table([
-        html.Thead(html.Tr([html.Th('출원일'), html.Th('발명 명칭'), html.Th('상태'),
-                            html.Th('국내/해외'), html.Th('등록일')])),
+        html.Thead(html.Tr([
+            html.Th('출원일'), html.Th('발명 명칭'), html.Th('상태'),
+            html.Th('접수ID/출원번호'), html.Th('지분율'),
+            html.Th('대표발명자'), html.Th('등급'), html.Th('국내/해외'),
+        ])),
         html.Tbody(rows),
     ], bordered=False, hover=True, responsive=True, size='sm')
     return html.Div([summary, table])
