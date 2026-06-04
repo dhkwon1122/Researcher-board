@@ -76,7 +76,7 @@ def run():
 
     # ── 1. 평가 데이터: T&P 파일에서 추출 ───────────────────────────────
     from process_tp_evaluation import process as process_tp
-    tp_ok = process_tp()
+    tp_ok, _ = process_tp()   # 두 번째 반환값(researcher updates)은 run_pipeline에서 불필요
     if not tp_ok:
         # T&P 파일 없으면 evaluations_raw 폴백
         df = _read_raw('evaluations')

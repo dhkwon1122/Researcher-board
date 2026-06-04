@@ -435,12 +435,36 @@ def main():
         # T&P 파일 있음 → process_tp_evaluation 으로 추출
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from process_tp_evaluation import process as _tp_process
-        ok = _tp_process()
+        ok, tp_res_updates = _tp_process()
         if ok:
             eval_out = os.path.join(OUTPUT_DIR, 'evaluations.csv')
             evaluations = pd.read_csv(eval_out, encoding='utf-8-sig')
             log['evaluations'] = '[RAW]   T&P_기본_인사_정보.xlsx → evaluations'
             skip_eval_save = True  # 이미 저장됨
+
+        # T&P에서 추출한 이름·성별·생년월일을 researchers DataFrame에 병합
+        if tp_res_updates is not None and not tp_res_updates.empty:
+            for col in ['name', 'gender', 'birth_year']:
+                if col not in tp_res_updates.columns:
+                    continue
+                tp_map = tp_res_updates.set_index('researcher_id')[col]
+                matched = researchers['researcher_id'].isin(tp_map.index)
+                researchers.loc[matched, col] = researchers.loc[matched, 'researcher_id'].map(tp_map)
+                # researchers_raw에 없는 신규 연구원이면 행 추가
+                new_ids = tp_res_updates[~tp_res_updates['researcher_id'].isin(
+                    researchers['researcher_id'])]['researcher_id'].unique()
+                if len(new_ids) and col == 'name':   # 첫 번째 컬럼 순회 시 한 번만 추가
+                    new_rows = tp_res_updates[tp_res_updates['researcher_id'].isin(new_ids)].copy()
+                    new_rows = new_rows.rename(columns={'researcher_id': 'researcher_id'})
+                    researchers = pd.concat([researchers, new_rows[['researcher_id']]], ignore_index=True)
+            # 병합 후 업데이트 재적용 (신규 행 포함)
+            for col in ['name', 'gender', 'birth_year']:
+                if col not in tp_res_updates.columns:
+                    continue
+                tp_map = tp_res_updates.set_index('researcher_id')[col]
+                matched = researchers['researcher_id'].isin(tp_map.index)
+                researchers.loc[matched, col] = researchers.loc[matched, 'researcher_id'].map(tp_map)
+            log['researchers'] += ' + T&P(이름·성별·생년월일 반영)'
 
     if evaluations is None:
         evaluations, src = _load_or_gen('evaluations', generate_evaluations, researchers)
