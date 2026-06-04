@@ -30,6 +30,9 @@
   education_raw       : researcher_id, degree, major, school, graduation_year
   comments_raw        : researcher_id, year, commenter_type, comment_raw
                         (선택: comment_summary, strengths, improvements)
+  succession_raw      : researcher_id, org_code, rank_type (Ready Now/Ready Later),
+                        rank_order, nominated_year
+  nurturing_raw       : researcher_id, year, category, content, result
 
 출력 위치: data/processed/
 """
@@ -57,6 +60,8 @@ TABLES = [
     'leadership',
     'certifications',
     'education',
+    'succession',
+    'nurturing',
 ]
 
 

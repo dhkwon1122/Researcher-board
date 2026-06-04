@@ -349,6 +349,53 @@ def generate_transfers(researchers_df):
     return pd.DataFrame(rows).sort_values(['researcher_id', 'date'])
 
 
+def generate_succession(researchers_df):
+    """조직별 조직장 석세션 후보 생성 (Ready Now 1·2순위, Ready Later 1순위)"""
+    rank_slots = [
+        ('Ready Now', 1),
+        ('Ready Now', 2),
+        ('Ready Later', 1),
+    ]
+    rows = []
+    senior_positions = ['수석연구원', '책임연구원']
+    for org_code, grp in researchers_df.groupby('org_code'):
+        candidates = grp[grp['position'].isin(senior_positions)].sample(
+            frac=1, random_state=42
+        ).head(len(rank_slots))
+        for (rank_type, rank_order), (_, r) in zip(rank_slots, candidates.iterrows()):
+            rows.append({
+                'researcher_id': r['researcher_id'],
+                'org_code': org_code,
+                'rank_type': rank_type,
+                'rank_order': rank_order,
+                'nominated_year': 2026,
+            })
+    return pd.DataFrame(rows)
+
+
+def generate_nurturing(researchers_df):
+    """주요 양성이력 생성 (멘토링·사내교육 강사·코칭 등)"""
+    categories = ['멘토링', '사내교육 강사', '코칭', 'OJT 지도', '핵심인재 육성']
+    programs = ['연구역량 강화과정', '리더십 개발 A과정', '기술전수 프로그램', 'R&D 멘토링', '후배연구원 지도']
+    results_pool = ['우수', '양호', '완료', '진행중']
+    rows = []
+    for _, r in researchers_df.iterrows():
+        if r['position'] not in ['수석연구원', '책임연구원']:
+            continue
+        n = random.randint(1, 3)
+        for _ in range(n):
+            year = random.randint(2022, 2026)
+            rows.append({
+                'researcher_id': r['researcher_id'],
+                'year': year,
+                'category': random.choice(categories),
+                'content': random.choice(programs),
+                'result': random.choice(results_pool),
+            })
+    return pd.DataFrame(rows) if rows else pd.DataFrame(
+        columns=['researcher_id', 'year', 'category', 'content', 'result'])
+
+
 def generate_comments(researchers_df):
     rows = []
     for _, r in researchers_df.iterrows():
@@ -483,6 +530,8 @@ def main():
     education,     log['education']              = _load_or_gen('education',            generate_education,            researchers)
     transfers,     log['transfers']              = _load_or_gen('transfers',            generate_transfers,            researchers)
     comments,      log['comments']               = _load_or_gen('comments',             generate_comments,             researchers)
+    succession,    log['succession']             = _load_or_gen('succession',           generate_succession,           researchers)
+    nurturing,     log['nurturing']              = _load_or_gen('nurturing',            generate_nurturing,            researchers)
 
     # ── 4. CSV 저장 ───────────────────────────────────────────────────────────
     datasets = {
@@ -497,6 +546,8 @@ def main():
         'education':          education,
         'transfers':          transfers,
         'comments':           comments,
+        'succession':         succession,
+        'nurturing':          nurturing,
     }
 
     for name, df in datasets.items():
