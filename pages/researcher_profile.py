@@ -159,39 +159,54 @@ def _pat_tab(pat_df, rid):
         lead_cnt = int(pat_dedup['is_lead_inventor'].astype(str)
                        .isin(['Y', 'y', '1', 'True', 'true']).sum())
 
-    # 전략 출원 — patent_grade 가 'S' 또는 'A'인 특허
-    # (실제 등급 체계에 맞게 조정 필요)
+    # 전략 출원 — '현재등급 - A급구분' 컬럼(patent_grade_a_sub)이 '전략출원'인 건
     strat_cnt = 0
-    if 'patent_grade' in pat_dedup.columns:
-        strat_cnt = int(pat_dedup['patent_grade'].astype(str)
-                        .isin(['S', 'A', 'A1', 'A2']).sum())
+    if 'patent_grade_a_sub' in pat_dedup.columns:
+        strat_cnt = int((pat_dedup['patent_grade_a_sub'].astype(str).str.strip() == '전략출원').sum())
 
-    # 미국 등록 특허 — country 에 '미국'/'US'/'USA' 포함 + status 가 등록
+    # 미국 등록 특허
     us_reg_cnt = 0
     if 'country' in pat_dedup.columns and 'status' in pat_dedup.columns:
         us_mask = pat_dedup['country'].astype(str).str.contains('미국|USA|US', case=False, na=False)
         us_reg_cnt = int((us_mask & pat_dedup['status'].apply(_is_reg)).sum())
 
-    def _summary_card(main_val, main_label, sub_val=None, sub_label=None, color='text-dark'):
-        body = [
-            html.H4(str(main_val), className=f'fw-bold {color} mb-0'),
-            html.Small(main_label, className='text-muted d-block'),
-        ]
-        if sub_val is not None:
-            body.append(html.Small(f'{sub_label} {sub_val}건',
-                                   className='text-muted fw-semibold'))
-        return dbc.Card(dbc.CardBody(body, className='text-center p-2'),
-                        className='border-0 bg-light h-100')
+    # 지분율 합계
+    share_sum = '-'
+    if 'share_ratio' in pat_dedup.columns:
+        shares = pd.to_numeric(pat_dedup['share_ratio'], errors='coerce').dropna()
+        if not shares.empty:
+            share_sum = f'{round(shares.sum(), 1)}%'
+
+    def _stat(val, label, color):
+        return html.Div([
+            html.H5(str(val), className=f'fw-bold {color} mb-0'),
+            html.Small(label, className='text-muted'),
+        ], className='text-center px-2')
+
+    def _dual_card(left_val, left_lbl, left_color, right_val, right_lbl, right_color):
+        """두 지표를 같은 크기로 나란히 표시하는 카드"""
+        return dbc.Card(dbc.CardBody(
+            dbc.Row([
+                dbc.Col(_stat(left_val,  left_lbl,  left_color),  width=6,
+                        className='border-end'),
+                dbc.Col(_stat(right_val, right_lbl, right_color), width=6),
+            ], className='g-0 align-items-center'),
+            className='p-2',
+        ), className='border-0 bg-light h-100')
+
+    def _single_card(val, label, color):
+        return dbc.Card(dbc.CardBody(
+            _stat(val, label, color), className='p-2',
+        ), className='border-0 bg-light h-100')
 
     summary = dbc.Row([
-        dbc.Col(_summary_card(total_cnt,  '전체 발명',
-                              sub_val=lead_cnt, sub_label='대표발명',
-                              color='text-dark'),   md=3),
-        dbc.Col(_summary_card(total_cnt,  '출원',
-                              sub_val=reg_cnt, sub_label='이 중 등록',
-                              color='text-primary'), md=3),
-        dbc.Col(_summary_card(strat_cnt,  '전략 출원', color='text-warning'), md=3),
-        dbc.Col(_summary_card(us_reg_cnt, '미국 등록', color='text-info'),    md=3),
+        dbc.Col(_dual_card(total_cnt, '전체 발명', 'text-dark',
+                           lead_cnt,  '대표 발명', 'text-secondary'), md=3),
+        dbc.Col(_dual_card(total_cnt, '출원',      'text-primary',
+                           reg_cnt,   '등록',      'text-success'),   md=3),
+        dbc.Col(_single_card(strat_cnt,  '전략 출원', 'text-warning'), md=2),
+        dbc.Col(_single_card(us_reg_cnt, '미국 등록', 'text-info'),    md=2),
+        dbc.Col(_single_card(share_sum,  '지분율 합계', 'text-danger'), md=2),
     ], className='mb-3')
 
     # ── 테이블 ──────────────────────────────────────────────────────────────────
