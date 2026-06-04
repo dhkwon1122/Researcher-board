@@ -405,12 +405,14 @@ def main():
         return None
 
     def _read(path):
-        """xlsx → xlwings(DRM 지원), csv → pandas"""
+        """xlsx → xlwings(DRM 지원), csv → pandas. researcher_id 자동 정규화."""
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from excel_reader import read_xlsx, norm_researcher_id_col
         if path.endswith('.xlsx'):
-            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-            from excel_reader import read_xlsx
-            return read_xlsx(path)
-        return pd.read_csv(path, encoding='utf-8-sig', dtype={'researcher_id': str})
+            df = read_xlsx(path)
+        else:
+            df = pd.read_csv(path, encoding='utf-8-sig', dtype=str)
+        return norm_researcher_id_col(df)
 
     def _load_or_gen(name, gen_func, *gen_args):
         """

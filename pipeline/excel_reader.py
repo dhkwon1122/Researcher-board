@@ -13,6 +13,28 @@ DRM 보호 파일도 정상적으로 읽을 수 있습니다.
 import pandas as pd
 
 
+def norm_id(val) -> str:
+    """사번 값을 8자리 제로패딩 문자열로 정규화.
+    Excel이 숫자로 읽은 12345.0 → '00012345'
+    """
+    s = str(val).strip()
+    if s in ('', 'nan', 'None', 'NaT'):
+        return ''
+    try:
+        return str(int(float(s))).zfill(8)
+    except (ValueError, OverflowError):
+        return s.zfill(8)
+
+
+def norm_researcher_id_col(df: pd.DataFrame) -> pd.DataFrame:
+    """DataFrame에 researcher_id 컬럼이 있으면 8자리 텍스트로 정규화."""
+    if 'researcher_id' in df.columns:
+        df = df.copy()
+        df['researcher_id'] = df['researcher_id'].apply(norm_id)
+        df = df[df['researcher_id'] != '']   # 빈 ID 행 제거
+    return df
+
+
 def read_xlsx(file_path: str, sheet: int | str = 0) -> pd.DataFrame:
     """
     xlwings를 사용하여 xlsx 파일을 DataFrame으로 읽습니다.

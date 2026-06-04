@@ -44,7 +44,7 @@ RAW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data',
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import read_xlsx
+from excel_reader import read_xlsx, norm_researcher_id_col
 
 # 평가(evaluations)는 T&P 파일에서 추출하므로 목록에서 제외
 TABLES = [
@@ -61,13 +61,15 @@ TABLES = [
 
 
 def _read_raw(name: str) -> pd.DataFrame | None:
-    """xlsx 우선(xlwings DRM 지원), 없으면 csv 시도."""
+    """xlsx 우선(xlwings DRM 지원), 없으면 csv 시도. researcher_id 자동 정규화."""
     for ext in ('xlsx', 'csv'):
         path = os.path.join(RAW_DIR, f'{name}_raw.{ext}')
         if os.path.exists(path):
             if ext == 'xlsx':
-                return read_xlsx(path)
-            return pd.read_csv(path, encoding='utf-8-sig', dtype={'researcher_id': str})
+                df = read_xlsx(path)
+            else:
+                df = pd.read_csv(path, encoding='utf-8-sig', dtype=str)
+            return norm_researcher_id_col(df)
     return None
 
 

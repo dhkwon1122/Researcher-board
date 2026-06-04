@@ -24,7 +24,7 @@ DATA_OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data'
 
 # xlwings 기반 Excel 읽기 (DRM 보호 파일 지원)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import read_xlsx
+from excel_reader import read_xlsx, norm_researcher_id_col
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -119,8 +119,8 @@ def process(use_llm: bool = False):
         print(f'[SKIP] {raw_path} 파일 없음')
         return
 
-    # xlwings로 읽어 DRM 보호 파일 지원
-    df = read_xlsx(raw_path)
+    # xlwings로 읽어 DRM 보호 파일 지원, 사번 정규화
+    df = norm_researcher_id_col(read_xlsx(raw_path))
     required = {'researcher_id', 'year', 'comment_raw'}
     if not required.issubset(df.columns):
         raise ValueError(f'필수 컬럼 누락: {required - set(df.columns)}')
