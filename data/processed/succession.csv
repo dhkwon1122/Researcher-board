@@ -1,0 +1,16 @@
+﻿"researcher_id","org_code","rank_type","rank_order","nominated_year"
+"00000001","ORG01","Ready Now",1,2026
+"00000002","ORG01","Ready Now",2,2026
+"00000008","ORG01","Ready Later",1,2026
+"00000013","ORG02","Ready Now",1,2026
+"00000018","ORG02","Ready Now",2,2026
+"00000014","ORG02","Ready Later",1,2026
+"00000025","ORG03","Ready Now",1,2026
+"00000030","ORG03","Ready Now",2,2026
+"00000026","ORG03","Ready Later",1,2026
+"00000033","ORG04","Ready Now",1,2026
+"00000039","ORG04","Ready Now",2,2026
+"00000035","ORG04","Ready Later",1,2026
+"00000046","ORG05","Ready Now",1,2026
+"00000050","ORG05","Ready Now",2,2026
+"00000043","ORG05","Ready Later",1,2026
