@@ -130,7 +130,7 @@ def generate_researchers():
             seniority = (2024 - hire_year) // 5
             pos_idx = min(max(seniority + random.randint(-1, 1), 0), 3)
             rows.append({
-                'researcher_id': f'R{rid:03d}',
+                'researcher_id': f'{rid:08d}',
                 'name': _make_name(),
                 'gender': random.choice(['남', '여']),
                 'department': dept,
@@ -409,7 +409,7 @@ def main():
             sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
             from excel_reader import read_xlsx
             return read_xlsx(path)
-        return pd.read_csv(path, encoding='utf-8-sig')
+        return pd.read_csv(path, encoding='utf-8-sig', dtype={'researcher_id': str})
 
     def _load_or_gen(name, gen_func, *gen_args):
         """
@@ -438,7 +438,7 @@ def main():
         ok, tp_res_updates = _tp_process()
         if ok:
             eval_out = os.path.join(OUTPUT_DIR, 'evaluations.csv')
-            evaluations = pd.read_csv(eval_out, encoding='utf-8-sig')
+            evaluations = pd.read_csv(eval_out, encoding='utf-8-sig', dtype={'researcher_id': str})
             log['evaluations'] = '[RAW]   T&P_기본_인사_정보.xlsx → evaluations'
             skip_eval_save = True  # 이미 저장됨
 

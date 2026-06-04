@@ -48,7 +48,7 @@ def _r(name):
     path = os.path.join(DATA_DIR, f'{name}.csv')
     if not os.path.exists(path):
         return pd.DataFrame()
-    return pd.read_csv(path, encoding='utf-8-sig')
+    return pd.read_csv(path, encoding='utf-8-sig', dtype={'researcher_id': str})
 
 
 def _avatar(name: str, size: int = 88):
@@ -666,7 +666,7 @@ def save_comment(n_clicks, rid, year, author_type, text):
     try:
         cols = ['researcher_id', 'year', 'commenter_type', 'comment_raw',
                 'comment_summary', 'strengths', 'improvements']
-        df = pd.read_csv(path, encoding='utf-8-sig') if os.path.exists(path) else pd.DataFrame(columns=cols)
+        df = pd.read_csv(path, encoding='utf-8-sig', dtype={'researcher_id': str}) if os.path.exists(path) else pd.DataFrame(columns=cols)
         if 'commenter_type' not in df.columns:
             df['commenter_type'] = '부서장'
 

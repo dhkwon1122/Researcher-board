@@ -41,7 +41,8 @@ RADAR_COLORS = [
 
 def _load():
     def _r(name):
-        return pd.read_csv(os.path.join(DATA_DIR, f'{name}.csv'), encoding='utf-8-sig')
+        return pd.read_csv(os.path.join(DATA_DIR, f'{name}.csv'), encoding='utf-8-sig',
+                           dtype={'researcher_id': str})
 
     res = _r('researchers')
     eva = _r('evaluations')

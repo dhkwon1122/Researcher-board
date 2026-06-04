@@ -128,7 +128,7 @@ def process(use_llm: bool = False):
     res_path = os.path.join(DATA_OUT, 'researchers.csv')
     name_map = {}
     if os.path.exists(res_path):
-        res_df = pd.read_csv(res_path)
+        res_df = pd.read_csv(res_path, dtype={'researcher_id': str})
         name_map = res_df.set_index('researcher_id')['name'].to_dict()
 
     results = []

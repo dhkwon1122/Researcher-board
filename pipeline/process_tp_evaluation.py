@@ -103,8 +103,19 @@ def process():
             f"→ process_tp_evaluation.py 상단의 ID_COL 변수를 실제 컬럼명으로 수정하세요."
         )
 
-    # 연구원 ID 정리
-    df['_rid'] = df[ID_COL].astype(str).str.strip()
+    # 연구원 ID → 8자리 텍스트로 정규화
+    # Excel이 사번을 숫자로 읽으면 12345.0 형태가 되므로 int 변환 후 zfill 처리
+    def _norm_id(val):
+        s = str(val).strip()
+        if s in ('', 'nan', 'None', 'NaT'):
+            return ''
+        try:
+            return str(int(float(s))).zfill(8)
+        except (ValueError, OverflowError):
+            return s.zfill(8)
+
+    df['_rid'] = df[ID_COL].apply(_norm_id)
+    df = df[df['_rid'] != '']   # 빈 ID 행 제거
 
     # ── 1. 기본 인사 정보 추출 ────────────────────────────────────────────────
     res_update = pd.DataFrame({'researcher_id': df['_rid']})

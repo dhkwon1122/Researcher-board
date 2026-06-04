@@ -66,7 +66,7 @@ def _read_raw(name: str) -> pd.DataFrame | None:
         if os.path.exists(path):
             if ext == 'xlsx':
                 return read_xlsx(path)
-            return pd.read_csv(path, encoding='utf-8-sig')
+            return pd.read_csv(path, encoding='utf-8-sig', dtype={'researcher_id': str})
     return None
 
 
