@@ -5,6 +5,7 @@
 
 import os
 import random
+import sys
 from datetime import date
 
 import numpy as np
@@ -379,42 +380,113 @@ def generate_comments(researchers_df):
 
 
 def main():
+    """
+    data/processed/ 에 대시보드용 CSV 파일을 준비합니다.
+
+    우선순위:
+      1순위 — data/raw/ 에 실제 xlsx/csv 원천 파일이 있으면 그것을 사용
+      2순위 — 평가 데이터는 T&P_기본_인사_정보.xlsx 에서 추출
+      3순위 — 원천 파일이 없는 항목만 샘플(더미) 데이터로 채움
+    """
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    researchers = generate_researchers()
-    evaluations = generate_evaluations(researchers)
-    incentives = generate_incentive_selection(researchers, evaluations)
-    publications = generate_publications(researchers)
-    patents = generate_patents(researchers)
-    tech_transfers = generate_technology_transfer(researchers)
-    leadership = generate_leadership(researchers)
-    certifications = generate_certifications(researchers)
-    education = generate_education(researchers)
-    transfers = generate_transfers(researchers)
-    comments = generate_comments(researchers)
+    RAW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
+    TP_FILE = os.path.join(RAW_DIR, 'T&P_기본_인사_정보.xlsx')
 
+    # ── 헬퍼 ─────────────────────────────────────────────────────────────────
+
+    def _raw_path(name):
+        """data/raw/{name}_raw.xlsx 또는 .csv 가 있으면 경로 반환, 없으면 None"""
+        for ext in ('xlsx', 'csv'):
+            p = os.path.join(RAW_DIR, f'{name}_raw.{ext}')
+            if os.path.exists(p):
+                return p
+        return None
+
+    def _read(path):
+        """xlsx → xlwings(DRM 지원), csv → pandas"""
+        if path.endswith('.xlsx'):
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            from excel_reader import read_xlsx
+            return read_xlsx(path)
+        return pd.read_csv(path, encoding='utf-8-sig')
+
+    def _load_or_gen(name, gen_func, *gen_args):
+        """
+        실제 raw 파일이 있으면 읽어서 반환, 없으면 gen_func(*gen_args)로 샘플 생성.
+        반환값: (DataFrame, source_label)
+        """
+        p = _raw_path(name)
+        if p:
+            df = _read(p)
+            return df, f'[RAW]   {os.path.basename(p)}'
+        df = gen_func(*gen_args)
+        return df, f'[샘플]  {name} ({len(df)}행 생성)'
+
+    # ── 1. 연구원 기본 정보 ───────────────────────────────────────────────────
+    researchers, src = _load_or_gen('researchers', generate_researchers)
+    log = {'researchers': src}
+
+    # ── 2. 평가 데이터 (T&P > evaluations_raw > 샘플) ─────────────────────────
+    evaluations = None
+    skip_eval_save = False  # T&P 처리기가 직접 저장하므로 중복 저장 방지
+
+    if os.path.exists(TP_FILE):
+        # T&P 파일 있음 → process_tp_evaluation 으로 추출
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from process_tp_evaluation import process as _tp_process
+        ok = _tp_process()
+        if ok:
+            eval_out = os.path.join(OUTPUT_DIR, 'evaluations.csv')
+            evaluations = pd.read_csv(eval_out, encoding='utf-8-sig')
+            log['evaluations'] = '[RAW]   T&P_기본_인사_정보.xlsx → evaluations'
+            skip_eval_save = True  # 이미 저장됨
+
+    if evaluations is None:
+        evaluations, src = _load_or_gen('evaluations', generate_evaluations, researchers)
+        log['evaluations'] = src
+
+    # ── 3. 나머지 데이터 ──────────────────────────────────────────────────────
+    incentives,    log['incentive_selection']    = _load_or_gen('incentive_selection',  generate_incentive_selection,  researchers, evaluations)
+    publications,  log['publications']           = _load_or_gen('publications',         generate_publications,         researchers)
+    patents,       log['patents']                = _load_or_gen('patents',              generate_patents,               researchers)
+    tech_transfers,log['technology_transfer']    = _load_or_gen('technology_transfer',  generate_technology_transfer,  researchers)
+    leadership,    log['leadership']             = _load_or_gen('leadership',           generate_leadership,           researchers)
+    certifications,log['certifications']         = _load_or_gen('certifications',       generate_certifications,       researchers)
+    education,     log['education']              = _load_or_gen('education',            generate_education,            researchers)
+    transfers,     log['transfers']              = _load_or_gen('transfers',            generate_transfers,            researchers)
+    comments,      log['comments']               = _load_or_gen('comments',             generate_comments,             researchers)
+
+    # ── 4. CSV 저장 ───────────────────────────────────────────────────────────
     datasets = {
-        'researchers': researchers,
-        'evaluations': evaluations,
-        'incentive_selection': incentives,
-        'publications': publications,
-        'patents': patents,
-        'technology_transfer': tech_transfers,
-        'leadership': leadership,
-        'certifications': certifications,
-        'education': education,
-        'transfers': transfers,
-        'comments': comments,
+        'researchers':        researchers,
+        'evaluations':        evaluations,
+        'incentive_selection':incentives,
+        'publications':       publications,
+        'patents':            patents,
+        'technology_transfer':tech_transfers,
+        'leadership':         leadership,
+        'certifications':     certifications,
+        'education':          education,
+        'transfers':          transfers,
+        'comments':           comments,
     }
 
     for name, df in datasets.items():
+        if name == 'evaluations' and skip_eval_save:
+            continue  # T&P 처리기가 이미 저장함
         path = os.path.join(OUTPUT_DIR, f'{name}.csv')
         df.to_csv(path, index=False, encoding='utf-8-sig')
 
-    print('샘플 데이터 생성 완료')
+    # ── 5. 결과 출력 ──────────────────────────────────────────────────────────
+    print('\n데이터 준비 완료')
+    print(f'  {"항목":<25}  {"출처/처리":<50}  {"행 수":>6}')
+    print('  ' + '-' * 85)
     for name, df in datasets.items():
-        print(f'  {name}.csv : {len(df):4d}행')
+        source = log.get(name, '')
+        print(f'  {name:<25}  {source:<50}  {len(df):>6}행')
 
 
 if __name__ == '__main__':
     main()
+

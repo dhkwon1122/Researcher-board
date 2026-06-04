@@ -30,8 +30,9 @@ def read_xlsx(file_path: str, sheet: int | str = 0) -> pd.DataFrame:
     """
     try:
         import xlwings as xw
-    except ImportError:
-        # xlwings 미설치 환경 — pandas fallback
+    except BaseException:
+        # xlwings 미설치 또는 환경 문제(Linux·Mac에서 Excel 없음, pyo3 초기화 실패 등)
+        # → openpyxl(pandas) 방식으로 폴백
         return _read_with_pandas(file_path, sheet)
 
     app = None
