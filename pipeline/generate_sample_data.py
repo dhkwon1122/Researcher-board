@@ -3,6 +3,7 @@
 실제 운영 시에는 run_pipeline.py 를 사용하세요.
 """
 
+import csv
 import os
 import random
 import sys
@@ -500,7 +501,7 @@ def main():
         if name == 'evaluations' and skip_eval_save:
             continue  # T&P 처리기가 이미 저장함
         path = os.path.join(OUTPUT_DIR, f'{name}.csv')
-        df.to_csv(path, index=False, encoding='utf-8-sig')
+        df.to_csv(path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
 
     # ── 5. 결과 출력 ──────────────────────────────────────────────────────────
     print('\n데이터 준비 완료')

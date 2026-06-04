@@ -4,6 +4,7 @@
 하단: 논문 / 특허 / 기술이전 실적 탭
 """
 
+import csv
 import os
 from datetime import datetime
 
@@ -684,7 +685,7 @@ def save_comment(n_clicks, rid, year, author_type, text):
         else:
             df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
 
-        df.to_csv(path, index=False, encoding='utf-8-sig')
+        df.to_csv(path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
         return dbc.Alert('저장 완료', color='success', className='py-1 px-2 mb-0')
     except Exception as e:
         return dbc.Alert(f'저장 실패: {e}', color='danger', className='py-1 px-2 mb-0')

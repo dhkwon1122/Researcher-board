@@ -14,6 +14,7 @@ comments_raw.xlsx 필수 컬럼:
   comment_summary, strengths, improvements
 """
 
+import csv
 import os
 import sys
 import pandas as pd
@@ -155,7 +156,7 @@ def process(use_llm: bool = False):
     out_df = pd.DataFrame(results)
     os.makedirs(DATA_OUT, exist_ok=True)
     out_path = os.path.join(DATA_OUT, 'comments.csv')
-    out_df.to_csv(out_path, index=False, encoding='utf-8-sig')
+    out_df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
     print(f'comments.csv 저장 완료 ({len(out_df)}행)')
 
 

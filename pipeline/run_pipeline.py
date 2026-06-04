@@ -34,6 +34,7 @@
 출력 위치: data/processed/
 """
 
+import csv
 import os
 import sys
 
@@ -82,7 +83,7 @@ def run():
         df = _read_raw('evaluations')
         if df is not None:
             out_path = os.path.join(OUT_DIR, 'evaluations.csv')
-            df.to_csv(out_path, index=False, encoding='utf-8-sig')
+            df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
             print(f'  [OK]   evaluations.csv (evaluations_raw 폴백, {len(df)}행)')
         else:
             missing.append('evaluations (T&P_기본_인사_정보.xlsx 또는 evaluations_raw)')
