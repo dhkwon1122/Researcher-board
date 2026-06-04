@@ -39,7 +39,7 @@ TRANSFER_BADGE = {
     '해외파견': 'info',
     '공동연구': 'secondary',
 }
-CURRENT_YEAR = datetime.now().year
+CURRENT_YEAR = 2026
 
 
 # ─── 데이터 헬퍼 ─────────────────────────────────────────────────────────────
