@@ -108,25 +108,52 @@ def _pat_tab(pat_df, rid):
     if pat.empty:
         return html.Div('특허 실적 없음', className='text-muted p-3')
 
-    # 상태 판별 (진행상태 값이 다양할 수 있으므로 키워드 포함 여부로 구분)
     def _is_reg(s):
         return '등록' in str(s)
 
-    total_cnt = len(pat)
-    reg_cnt   = int(pat['status'].apply(_is_reg).sum())
+    def _cell(row, *keys, default='-'):
+        for k in keys:
+            v = str(row.get(k, ''))
+            if v and v not in ('', 'nan', 'None'):
+                return v
+        return default
+
+    # ── 접수ID 기준 중복 제거 (같은 접수ID = 같은 특허, 국가는 합산) ──────────
+    id_col = 'application_id' if 'application_id' in pat.columns else None
+
+    if id_col:
+        def _merge_countries(series):
+            vals = [str(v).strip() for v in series if str(v).strip() not in ('', 'nan', 'None', '-')]
+            seen = {}
+            for v in vals:
+                for part in v.split(','):
+                    p = part.strip()
+                    if p:
+                        seen[p] = None
+            return ', '.join(seen.keys()) if seen else '-'
+
+        agg_dict = {c: 'first' for c in pat.columns if c not in (id_col, 'researcher_id', 'country')}
+        if 'country' in pat.columns:
+            agg_dict['country'] = _merge_countries
+        pat_dedup = pat.groupby(id_col, sort=False).agg(agg_dict).reset_index()
+    else:
+        pat_dedup = pat.copy()
+
+    # ── 요약 (전체 특허 수 + 지분율 합계) ──────────────────────────────────────
+    total_cnt = len(pat_dedup)
+    reg_cnt   = int(pat_dedup['status'].apply(_is_reg).sum()) if 'status' in pat_dedup.columns else 0
     app_cnt   = total_cnt - reg_cnt
 
-    # 최근 3년 필터 (application_date 있을 때만)
-    cutoff = str(CURRENT_YEAR - 2)
-    if 'application_date' in pat.columns:
-        pat_recent = pat[pat['application_date'].astype(str).str[:4] >= cutoff].copy()
-    else:
-        pat_recent = pat.copy()
+    share_sum = None
+    if 'share_ratio' in pat_dedup.columns:
+        shares = pd.to_numeric(pat_dedup['share_ratio'], errors='coerce').dropna()
+        if not shares.empty:
+            share_sum = round(shares.sum(), 1)
 
     summary = dbc.Row([
         dbc.Col(dbc.Card(dbc.CardBody([
             html.H4(str(total_cnt), className='fw-bold text-dark mb-0'),
-            html.Small('누적 전체', className='text-muted'),
+            html.Small('전체 발명', className='text-muted'),
         ]), className='text-center border-0 bg-light'), md=2),
         dbc.Col(dbc.Card(dbc.CardBody([
             html.H4(str(app_cnt), className='fw-bold text-primary mb-0'),
@@ -136,19 +163,17 @@ def _pat_tab(pat_df, rid):
             html.H4(str(reg_cnt), className='fw-bold text-success mb-0'),
             html.Small('등록', className='text-muted'),
         ]), className='text-center border-0 bg-light'), md=2),
+        dbc.Col(dbc.Card(dbc.CardBody([
+            html.H4(f'{share_sum}%' if share_sum is not None else '-',
+                    className='fw-bold text-warning mb-0'),
+            html.Small('지분율 합계', className='text-muted'),
+        ]), className='text-center border-0 bg-light'), md=2),
     ], className='mb-3')
 
-    # 테이블 행 구성 (새 컬럼 우선, 없으면 기존 컬럼 폴백)
-    def _cell(row, *keys, default='-'):
-        for k in keys:
-            v = str(row.get(k, ''))
-            if v and v not in ('', 'nan', 'None'):
-                return v
-        return default
-
-    sort_col = 'application_date' if 'application_date' in pat_recent.columns else pat_recent.columns[0]
+    # ── 테이블 ──────────────────────────────────────────────────────────────────
+    sort_col = 'application_date' if 'application_date' in pat_dedup.columns else pat_dedup.columns[0]
     rows = []
-    for _, r in pat_recent.sort_values(sort_col, ascending=False).iterrows():
+    for _, r in pat_dedup.sort_values(sort_col, ascending=False).iterrows():
         status_val = str(r.get('status', ''))
         status_badge = (dbc.Badge('등록', color='success') if _is_reg(status_val)
                         else dbc.Badge(status_val or '출원', color='primary'))
@@ -156,17 +181,18 @@ def _pat_tab(pat_df, rid):
         grade = str(r.get('patent_grade', ''))
         grade_a = str(r.get('patent_grade_a_sub', ''))
         grade_str = grade + (f'({grade_a})' if grade_a and grade_a not in ('', 'nan') else '')
+        share_val = r.get('share_ratio', '')
+        share_str = (f'{share_val}%' if str(share_val).replace('.', '').isdigit() else '-')
 
         rows.append(html.Tr([
             html.Td(_cell(r, 'application_date')[:7]),
             html.Td(_cell(r, 'title', 'title_ko'),
-                    style={'maxWidth': '300px', 'wordBreak': 'break-word'}),
+                    style={'maxWidth': '280px', 'wordBreak': 'break-word'}),
             html.Td(status_badge),
             html.Td(_cell(r, 'application_id', 'application_no')),
-            html.Td(f"{r.get('share_ratio', '-')}%"
-                    if str(r.get('share_ratio', '')).replace('.', '').isdigit() else '-'),
-            html.Td(dbc.Badge('대표', color='warning', text_color='dark')
+            html.Td(dbc.Badge('대표', color='warning', text_color='dark')   # 대표발명자 먼저
                     if lead in ('Y', 'y', '1', 'True', 'true') else ''),
+            html.Td(share_str),                                              # 지분율 나중에
             html.Td(grade_str or '-'),
             html.Td(_cell(r, 'country')),
         ]))
@@ -174,8 +200,8 @@ def _pat_tab(pat_df, rid):
     table = dbc.Table([
         html.Thead(html.Tr([
             html.Th('출원일'), html.Th('발명 명칭'), html.Th('상태'),
-            html.Th('접수ID/출원번호'), html.Th('지분율'),
-            html.Th('대표발명자'), html.Th('등급'), html.Th('국내/해외'),
+            html.Th('접수ID/출원번호'), html.Th('대표발명자'), html.Th('지분율'),
+            html.Th('등급'), html.Th('출원 국가'),
         ])),
         html.Tbody(rows),
     ], bordered=False, hover=True, responsive=True, size='sm')
