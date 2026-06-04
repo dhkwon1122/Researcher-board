@@ -413,8 +413,9 @@ def update_profile(rid):
                 encoded = base64.b64encode(f.read()).decode('utf-8')
             photo_el = html.Img(
                 src=f'data:{mime};base64,{encoded}',
-                style={'width': '100%', 'maxHeight': '110px',
-                       'objectFit': 'cover', 'borderRadius': '8px'},
+                style={'width': '100%', 'maxHeight': '200px',
+                       'objectFit': 'contain', 'borderRadius': '8px',
+                       'display': 'block'},
             )
             break
     if photo_el is None:
