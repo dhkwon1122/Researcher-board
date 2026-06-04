@@ -132,7 +132,17 @@ def _pat_tab(pat_df, rid):
                         seen[p] = None
             return ', '.join(seen.keys()) if seen else '-'
 
-        agg_dict = {c: 'first' for c in pat.columns if c not in (id_col, 'researcher_id', 'country')}
+        def _agg_status(series):
+            """등록 상태를 우선 반환 — 출원 중인 행이 먼저 와도 등록 상태 보존"""
+            vals = series.astype(str).tolist()
+            for v in vals:
+                if _is_reg(v):
+                    return v
+            return vals[0] if vals else ''
+
+        agg_dict = {c: 'first' for c in pat.columns if c not in (id_col, 'researcher_id', 'country', 'status')}
+        if 'status' in pat.columns:
+            agg_dict['status'] = _agg_status
         if 'country' in pat.columns:
             agg_dict['country'] = _merge_countries
         pat_dedup = pat.groupby(id_col, sort=False).agg(agg_dict).reset_index()
