@@ -139,35 +139,49 @@ def _pat_tab(pat_df, rid):
     else:
         pat_dedup = pat.copy()
 
-    # ── 요약 (전체 특허 수 + 지분율 합계) ──────────────────────────────────────
+    # ── 요약 집계 ──────────────────────────────────────────────────────────────
     total_cnt = len(pat_dedup)
     reg_cnt   = int(pat_dedup['status'].apply(_is_reg).sum()) if 'status' in pat_dedup.columns else 0
-    app_cnt   = total_cnt - reg_cnt
 
-    share_sum = None
-    if 'share_ratio' in pat_dedup.columns:
-        shares = pd.to_numeric(pat_dedup['share_ratio'], errors='coerce').dropna()
-        if not shares.empty:
-            share_sum = round(shares.sum(), 1)
+    # 대표발명 수
+    lead_cnt = 0
+    if 'is_lead_inventor' in pat_dedup.columns:
+        lead_cnt = int(pat_dedup['is_lead_inventor'].astype(str)
+                       .isin(['Y', 'y', '1', 'True', 'true']).sum())
+
+    # 전략 출원 — patent_grade 가 'S' 또는 'A'인 특허
+    # (실제 등급 체계에 맞게 조정 필요)
+    strat_cnt = 0
+    if 'patent_grade' in pat_dedup.columns:
+        strat_cnt = int(pat_dedup['patent_grade'].astype(str)
+                        .isin(['S', 'A', 'A1', 'A2']).sum())
+
+    # 미국 등록 특허 — country 에 '미국'/'US'/'USA' 포함 + status 가 등록
+    us_reg_cnt = 0
+    if 'country' in pat_dedup.columns and 'status' in pat_dedup.columns:
+        us_mask = pat_dedup['country'].astype(str).str.contains('미국|USA|US', case=False, na=False)
+        us_reg_cnt = int((us_mask & pat_dedup['status'].apply(_is_reg)).sum())
+
+    def _summary_card(main_val, main_label, sub_val=None, sub_label=None, color='text-dark'):
+        body = [
+            html.H4(str(main_val), className=f'fw-bold {color} mb-0'),
+            html.Small(main_label, className='text-muted d-block'),
+        ]
+        if sub_val is not None:
+            body.append(html.Small(f'{sub_label} {sub_val}건',
+                                   className='text-muted fw-semibold'))
+        return dbc.Card(dbc.CardBody(body, className='text-center p-2'),
+                        className='border-0 bg-light h-100')
 
     summary = dbc.Row([
-        dbc.Col(dbc.Card(dbc.CardBody([
-            html.H4(str(total_cnt), className='fw-bold text-dark mb-0'),
-            html.Small('전체 발명', className='text-muted'),
-        ]), className='text-center border-0 bg-light'), md=2),
-        dbc.Col(dbc.Card(dbc.CardBody([
-            html.H4(str(app_cnt), className='fw-bold text-primary mb-0'),
-            html.Small('출원', className='text-muted'),
-        ]), className='text-center border-0 bg-light'), md=2),
-        dbc.Col(dbc.Card(dbc.CardBody([
-            html.H4(str(reg_cnt), className='fw-bold text-success mb-0'),
-            html.Small('등록', className='text-muted'),
-        ]), className='text-center border-0 bg-light'), md=2),
-        dbc.Col(dbc.Card(dbc.CardBody([
-            html.H4(f'{share_sum}%' if share_sum is not None else '-',
-                    className='fw-bold text-warning mb-0'),
-            html.Small('지분율 합계', className='text-muted'),
-        ]), className='text-center border-0 bg-light'), md=2),
+        dbc.Col(_summary_card(total_cnt,  '전체 발명',
+                              sub_val=lead_cnt, sub_label='대표발명',
+                              color='text-dark'),   md=3),
+        dbc.Col(_summary_card(total_cnt,  '출원',
+                              sub_val=reg_cnt, sub_label='이 중 등록',
+                              color='text-primary'), md=3),
+        dbc.Col(_summary_card(strat_cnt,  '전략 출원', color='text-warning'), md=3),
+        dbc.Col(_summary_card(us_reg_cnt, '미국 등록', color='text-info'),    md=3),
     ], className='mb-3')
 
     # ── 테이블 ──────────────────────────────────────────────────────────────────
