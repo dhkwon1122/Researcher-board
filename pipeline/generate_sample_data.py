@@ -350,11 +350,12 @@ def generate_transfers(researchers_df):
 
 
 def generate_succession(researchers_df):
-    """조직별 조직장 석세션 후보 생성 (Ready Now 1·2순위, Ready Later 1순위)"""
+    """조직별 조직장 석세션 후보 생성 (Ready Now 1·2순위, Ready Later 1·2순위)"""
     rank_slots = [
-        ('Ready Now', 1),
-        ('Ready Now', 2),
+        ('Ready Now',   1),
+        ('Ready Now',   2),
         ('Ready Later', 1),
+        ('Ready Later', 2),
     ]
     rows = []
     senior_positions = ['수석연구원', '책임연구원']

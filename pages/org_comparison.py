@@ -207,7 +207,7 @@ def _org_section(dept_name, org_code, suc, res, eva, edu, inc, nur):
             int(srow['rank_order']),
             eva, edu, inc, nur,
         )
-        cards.append(dbc.Col(card, lg=4, md=6, className='mb-2'))
+        cards.append(dbc.Col(card, lg=3, md=6, className='mb-2'))
 
     if not cards:
         return None
