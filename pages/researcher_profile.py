@@ -17,6 +17,7 @@ from dash import Input, Output, State, callback, html, dcc
 dash.register_page(__name__, path='/researcher-profile', name='연구원 프로필', title='연구원 개별 프로필')
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
+RAW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
 
 DEGREE_ORDER = ['박사', '석사', '학사']
 GRADE_COLOR = {
@@ -401,14 +402,22 @@ def update_profile(rid):
 
     # ── 사진 블록 ──────────────────────────────────────────────────────────
     name = str(r['name'])
-    photo_path = str(r.get('photo_path', ''))
-    if photo_path and os.path.exists(photo_path):
-        photo_el = html.Img(
-            src=photo_path,
-            style={'width': '100%', 'maxHeight': '110px',
-                   'objectFit': 'cover', 'borderRadius': '8px'},
-        )
-    else:
+    rid_str = str(r['researcher_id'])
+    photo_el = None
+    for ext in ('png', 'jpg', 'jpeg'):
+        photo_file = os.path.join(RAW_DIR, f'{rid_str}.{ext}')
+        if os.path.exists(photo_file):
+            import base64, mimetypes
+            mime = mimetypes.guess_type(photo_file)[0] or f'image/{ext}'
+            with open(photo_file, 'rb') as f:
+                encoded = base64.b64encode(f.read()).decode('utf-8')
+            photo_el = html.Img(
+                src=f'data:{mime};base64,{encoded}',
+                style={'width': '100%', 'maxHeight': '110px',
+                       'objectFit': 'cover', 'borderRadius': '8px'},
+            )
+            break
+    if photo_el is None:
         photo_el = _avatar(name, size=90)
 
     photo_block = [

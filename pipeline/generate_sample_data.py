@@ -139,7 +139,7 @@ def generate_researchers():
                 'position': POSITIONS[pos_idx],
                 'hire_year': hire_year,
                 'birth_year': birth_year,
-                'photo_path': '',
+                'photo_path': f'data/raw/{rid:08d}.png',
             })
             rid += 1
     return pd.DataFrame(rows)
