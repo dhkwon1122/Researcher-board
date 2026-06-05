@@ -64,7 +64,6 @@ TABLES = [
     'certifications',
     'education',
     'succession',
-    'nurturing',
 ]
 
 
@@ -110,7 +109,19 @@ def run():
         else:
             missing.append('patents (특허 리스트.xlsx 또는 patents_raw)')
 
-    # ── 3. 나머지 테이블 ─────────────────────────────────────────────────
+    # ── 3. 양성이력: 양성_인력_현황.xlsx 우선, 없으면 nurturing_raw 폴백 ──
+    from process_nurturing import process as process_nurturing
+    nur_ok = process_nurturing()
+    if not nur_ok:
+        df = _read_raw('nurturing')
+        if df is not None:
+            out_path = os.path.join(OUT_DIR, 'nurturing.csv')
+            df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+            print(f'  [OK]   nurturing.csv (nurturing_raw 폴백, {len(df)}행)')
+        else:
+            missing.append('nurturing (양성_인력_현황.xlsx 또는 nurturing_raw)')
+
+    # ── 4. 나머지 테이블 ─────────────────────────────────────────────────
     for table in TABLES:
         df = _read_raw(table)
         if df is None:

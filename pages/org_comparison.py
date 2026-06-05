@@ -152,14 +152,20 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, inc, nur):
     # 주요 양성이력
     r_nur = nur[nur['researcher_id'] == rid] if not nur.empty else pd.DataFrame()
     if not r_nur.empty:
-        r_nur = r_nur.sort_values('year', ascending=False).head(3)
-    nur_items = [
-        html.Li(
-            f"{nr['year']}년  {nr.get('category', '')} — {nr.get('content', '')}  ({nr.get('result', '')})",
+        sort_col = 'start_date' if 'start_date' in r_nur.columns else (
+                   'year' if 'year' in r_nur.columns else r_nur.columns[0])
+        r_nur = r_nur.sort_values(sort_col, ascending=False).head(3)
+    nur_items = []
+    for _, nr in r_nur.iterrows():
+        yr   = str(nr.get('year', nr.get('start_date', '')))[:4]
+        cat  = str(nr.get('category', ''))
+        sub  = str(nr.get('subcategory', ''))
+        inst = str(nr.get('institution', ''))
+        parts = [p for p in [cat, sub, inst] if p and p not in ('', 'nan')]
+        nur_items.append(html.Li(
+            f"{yr}년  {' / '.join(parts)}" if yr else ' / '.join(parts),
             className='small',
-        )
-        for _, nr in r_nur.iterrows()
-    ]
+        ))
     nur_section = _section('주요 양성이력', html.Ul(
         nur_items or [html.Li('해당 없음', className='small text-muted')],
         className='ps-3 mb-0 small',

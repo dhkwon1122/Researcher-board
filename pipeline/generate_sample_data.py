@@ -386,26 +386,45 @@ def generate_succession(researchers_df):
 
 
 def generate_nurturing(researchers_df):
-    """주요 양성이력 생성 (멘토링·사내교육 강사·코칭 등)"""
-    categories = ['멘토링', '사내교육 강사', '코칭', 'OJT 지도', '핵심인재 육성']
-    programs = ['연구역량 강화과정', '리더십 개발 A과정', '기술전수 프로그램', 'R&D 멘토링', '후배연구원 지도']
-    results_pool = ['우수', '양호', '완료', '진행중']
+    """주요 양성이력 샘플 생성 (양성_인력_현황.xlsx 스키마 기준)"""
+    categories    = ['국내위탁교육', '해외위탁교육', '국내파견', '해외파견', '대학원위탁']
+    subcategories = ['석사과정', '박사과정', '단기연수', '전문교육', '현장실습']
+    institutions  = ['KAIST', '서울대학교', 'MIT', 'Stanford University',
+                     '한국생산기술연구원', 'POSTECH', 'ETH Zurich']
+    majors        = ['기계공학', '컴퓨터공학', '재료공학', '에너지공학', '인공지능']
+    countries     = ['대한민국', '미국', '독일', '일본', '영국']
+    cities        = {'대한민국': '서울', '미국': 'Boston', '독일': 'Munich',
+                     '일본': '도쿄', '영국': 'London'}
     rows = []
     for _, r in researchers_df.iterrows():
         if r['position'] not in ['수석연구원', '책임연구원']:
             continue
-        n = random.randint(1, 3)
+        n = random.randint(0, 2)
         for _ in range(n):
-            year = random.randint(2022, 2026)
+            start_yr   = random.randint(2018, 2024)
+            start_mo   = random.randint(1, 12)
+            start_date = date(start_yr, start_mo, 1).isoformat()
+            end_date   = date(min(start_yr + random.randint(0, 2), 2026),
+                              random.randint(1, 12), 28).isoformat()
+            country = random.choice(countries)
             rows.append({
-                'researcher_id': r['researcher_id'],
-                'year': year,
-                'category': random.choice(categories),
-                'content': random.choice(programs),
-                'result': random.choice(results_pool),
+                'researcher_id':    r['researcher_id'],
+                'category':         random.choice(categories),
+                'subcategory':      random.choice(subcategories),
+                'start_date':       start_date,
+                'end_date':         end_date,
+                'country':          country,
+                'city':             cities.get(country, ''),
+                'institution':      random.choice(institutions),
+                'major':            random.choice(majors),
+                'service_end_date': date(min(start_yr + random.randint(1, 3), 2028),
+                                         1, 1).isoformat(),
+                'year':             str(start_yr),
             })
-    return pd.DataFrame(rows) if rows else pd.DataFrame(
-        columns=['researcher_id', 'year', 'category', 'content', 'result'])
+    return pd.DataFrame(rows) if rows else pd.DataFrame(columns=[
+        'researcher_id', 'category', 'subcategory', 'start_date', 'end_date',
+        'country', 'city', 'institution', 'major', 'service_end_date', 'year',
+    ])
 
 
 def generate_comments(researchers_df):
@@ -557,7 +576,21 @@ def main():
     transfers,     log['transfers']              = _load_or_gen('transfers',            generate_transfers,            researchers)
     comments,      log['comments']               = _load_or_gen('comments',             generate_comments,             researchers)
     succession,    log['succession']             = _load_or_gen('succession',           generate_succession,           researchers)
-    nurturing,     log['nurturing']              = _load_or_gen('nurturing',            generate_nurturing,            researchers)
+
+    # 양성이력: '양성_인력_현황.xlsx' 우선 → nurturing_raw → 샘플 생성
+    nurturing_file = os.path.join(RAW_DIR, '양성_인력_현황.xlsx')
+    if os.path.exists(nurturing_file):
+        from process_nurturing import process as _process_nurturing
+        _process_nurturing()
+        nurturing = pd.read_csv(
+            os.path.join(OUTPUT_DIR, 'nurturing.csv'),
+            encoding='utf-8-sig', dtype=str,
+        )
+        log['nurturing'] = '[RAW]   양성_인력_현황.xlsx'
+        skip_nurturing_save = True
+    else:
+        nurturing, log['nurturing'] = _load_or_gen('nurturing', generate_nurturing, researchers)
+        skip_nurturing_save = False
 
     # ── 4. CSV 저장 ───────────────────────────────────────────────────────────
     datasets = {
@@ -578,7 +611,9 @@ def main():
 
     for name, df in datasets.items():
         if name == 'patents' and skip_patent_save:
-            continue  # process_patents가 이미 저장함
+            continue
+        if name == 'nurturing' and skip_nurturing_save:
+            continue
         if name == 'evaluations' and skip_eval_save:
             continue  # T&P 처리기가 이미 저장함
         path = os.path.join(OUTPUT_DIR, f'{name}.csv')
