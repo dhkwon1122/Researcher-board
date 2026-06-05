@@ -368,6 +368,14 @@ def layout():
                 ], className='g-2 mb-2'),
                 dbc.Card(
                     dbc.CardBody([
+                        html.P('양성 이력',
+                               className='fw-semibold text-muted small mb-2'),
+                        html.Div(id='nurturing-block'),
+                    ], className='p-3'),
+                    className='shadow-sm mb-2',
+                ),
+                dbc.Card(
+                    dbc.CardBody([
                         html.P('사내 발령 이력 (프로젝트 수행 이력)',
                                className='fw-semibold text-muted small mb-2'),
                         html.Div(id='transfer-block'),
@@ -474,6 +482,7 @@ def layout():
     Output('basic-info-block', 'children'),
     Output('education-block', 'children'),
     Output('eval-incentive-block', 'children'),
+    Output('nurturing-block', 'children'),
     Output('transfer-block', 'children'),
     Output('leadership-year', 'options'),
     Output('leadership-year', 'value'),
@@ -485,7 +494,7 @@ def layout():
 )
 def update_profile(rid):
     none_out = (
-        _avatar('?'), html.Div(), html.Div(), html.Div(), html.Div(),
+        _avatar('?'), html.Div(), html.Div(), html.Div(), html.Div(), html.Div(),
         [], None, html.Div(),
         html.Div('연구원을 선택하세요.', className='text-muted p-3'),
         html.Div('연구원을 선택하세요.', className='text-muted p-3'),
@@ -500,6 +509,7 @@ def update_profile(rid):
     inc_df = _r('incentive_selection')
     lea_df = _r('leadership')
     tra_df = _r('transfers')
+    nur_df = _r('nurturing')
     cmt_df = _r('comments')
     pub_df = _r('publications')
     pat_df = _r('patents')
@@ -640,6 +650,40 @@ def update_profile(rid):
         ]),
     ], bordered=True, size='sm', className='mb-0', style={'fontSize': '0.8rem'})
 
+    # ── 양성 이력 ──────────────────────────────────────────────────────────
+    r_nur = (nur_df[nur_df['researcher_id'] == rid].copy()
+             if not nur_df.empty else pd.DataFrame())
+    if not r_nur.empty:
+        sort_col = 'start_date' if 'start_date' in r_nur.columns else (
+                   'year' if 'year' in r_nur.columns else r_nur.columns[0])
+        r_nur = r_nur.sort_values(sort_col, ascending=False)
+    nur_items = []
+    for _, nr in r_nur.iterrows():
+        start = str(nr.get('start_date', '')).strip()
+        end   = str(nr.get('end_date', '')).strip()
+        sy    = start[:4] if len(start) >= 4 else ''
+        ey    = end[:4]   if len(end)   >= 4 else ''
+        if sy:
+            yr_label = f"'{sy[-2:]}"
+            if ey and ey > sy:
+                yr_label += f"~'{ey[-2:]}"
+        else:
+            yr_label = ''
+        sub     = str(nr.get('subcategory', '')).strip()
+        country = str(nr.get('country', '')).strip()
+        inst    = str(nr.get('institution', '')).strip()
+        loc_parts = [p for p in [country, inst] if p and p not in ('nan',)]
+        loc = ' '.join(loc_parts) if loc_parts else ''
+        parts = [p for p in [yr_label, sub, loc] if p and p not in ('nan',)]
+        nur_items.append(html.Li(
+            ' / '.join(parts) if parts else '-',
+            className='small',
+        ))
+    nurturing_block = (
+        html.Ul(nur_items, className='ps-3 mb-0 small') if nur_items
+        else html.Div('양성 이력 없음', className='text-muted small')
+    )
+
     # ── 발령/프로젝트 이력 ─────────────────────────────────────────────────
     tra = (tra_df[tra_df['researcher_id'] == rid].sort_values('date', ascending=False)
            if not tra_df.empty else pd.DataFrame())
@@ -723,7 +767,7 @@ def update_profile(rid):
 
     return (
         photo_block, basic_info_block, education_block, eval_incentive_block,
-        transfer_block, lea_options, lea_default, comments_block,
+        nurturing_block, transfer_block, lea_options, lea_default, comments_block,
         _pub_tab(pub_df, rid), _pat_tab(pat_df, rid), _tt_tab(tt_df, rid),
     )
 
