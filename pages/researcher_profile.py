@@ -325,7 +325,7 @@ def layout():
         # ── 상단 3열 레이아웃 ──────────────────────────────────────────────────
         dbc.Row([
 
-            # 열 1: 사진 + 기본정보
+            # 열 1: 사진 + 기본정보 + 양성이력
             dbc.Col([
                 dbc.Card(
                     dbc.CardBody(
@@ -337,9 +337,17 @@ def layout():
                 ),
                 dbc.Card(
                     dbc.CardBody(html.Div(id='basic-info-block'), className='p-2'),
+                    className='shadow-sm mb-2',
+                ),
+                dbc.Card(
+                    dbc.CardBody([
+                        html.P('양성 이력',
+                               className='fw-semibold text-muted small mb-2'),
+                        html.Div(id='nurturing-block'),
+                    ], className='p-2'),
                     className='shadow-sm',
                 ),
-            ], md=2),
+            ], md=3),
 
             # 열 2: 학력 + 평가/인센티브 표 + 발령이력
             dbc.Col([
@@ -368,21 +376,13 @@ def layout():
                 ], className='g-2 mb-2'),
                 dbc.Card(
                     dbc.CardBody([
-                        html.P('양성 이력',
-                               className='fw-semibold text-muted small mb-2'),
-                        html.Div(id='nurturing-block'),
-                    ], className='p-3'),
-                    className='shadow-sm mb-2',
-                ),
-                dbc.Card(
-                    dbc.CardBody([
                         html.P('사내 발령 이력 (프로젝트 수행 이력)',
                                className='fw-semibold text-muted small mb-2'),
                         html.Div(id='transfer-block'),
                     ], className='p-3'),
                     className='shadow-sm',
                 ),
-            ], md=5),
+            ], md=4),
 
             # 열 3: 리더십 진단 + 인물 코멘트
             dbc.Col([
@@ -584,12 +584,12 @@ def update_profile(rid):
             color = 'primary' if deg == '박사' else ('secondary' if deg == '석사' else 'light')
             text_color = 'dark' if deg == '학사' else 'white'
             edu_items.append(html.Div([
-                dbc.Badge(deg, color=color, text_color=text_color, className='me-1'),
-                html.Span(f"{e['school']}", className='small fw-semibold'),
-                html.Br(),
-                html.Span(f"{e['major']} ({int(e['graduation_year'])})",
-                          className='small text-muted', style={'marginLeft': '0.5rem'}),
-            ], className='mb-2'))
+                dbc.Badge(deg, color=color, text_color=text_color, className='me-1 flex-shrink-0'),
+                html.Span(
+                    f"{e['school']}  {e['major']} ({int(e['graduation_year'])})",
+                    className='small',
+                ),
+            ], className='d-flex align-items-center mb-1'))
     education_block = (
         html.Div(edu_items) if edu_items
         else html.Div('학력 정보 없음', className='text-muted small')
