@@ -49,7 +49,7 @@ GRADE_TO_SCORE = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import read_xlsx
+from excel_reader import read_xlsx, norm_id
 
 TP_FILE = 'T&P_기본_인사_정보.xlsx'
 
@@ -104,18 +104,8 @@ def process():
             f"→ process_tp_evaluation.py 상단의 ID_COL 변수를 실제 컬럼명으로 수정하세요."
         )
 
-    # 연구원 ID → 8자리 텍스트로 정규화
-    # Excel이 사번을 숫자로 읽으면 12345.0 형태가 되므로 int 변환 후 zfill 처리
-    def _norm_id(val):
-        s = str(val).strip()
-        if s in ('', 'nan', 'None', 'NaT'):
-            return ''
-        try:
-            return str(int(float(s))).zfill(8)
-        except (ValueError, OverflowError):
-            return s.zfill(8)
-
-    df['_rid'] = df[ID_COL].apply(_norm_id)
+    # 연구원 ID → 8자리 텍스트로 정규화 (excel_reader.norm_id 공통 함수 사용)
+    df['_rid'] = df[ID_COL].apply(norm_id)
     df = df[df['_rid'] != '']   # 빈 ID 행 제거
 
     # ── 1. 기본 인사 정보 추출 ────────────────────────────────────────────────

@@ -219,28 +219,39 @@ def generate_publications(researchers_df):
 
 
 def generate_patents(researchers_df):
+    grades = ['S', 'A', 'B', 'C', '']
+    grade_a_subs = ['A1', 'A2', '']
     rows = []
+    app_id_counter = 10000
     for _, r in researchers_df.iterrows():
         n = random.randint(0, 7)
         names = PATENT_NAMES.get(r['org_code'], ['신기술'])
         for i in range(n):
-            app_year = random.randint(2019, 2024)
+            app_year = random.randint(2019, 2025)
             app_date = date(app_year, random.randint(1, 12), random.randint(1, 28)).isoformat()
             is_reg = random.random() > 0.4 and app_year <= 2023
             reg_date = ''
             if is_reg:
-                reg_year = min(app_year + random.randint(1, 2), 2024)
+                reg_year = min(app_year + random.randint(1, 2), 2025)
                 reg_date = date(reg_year, random.randint(1, 12), random.randint(1, 28)).isoformat()
+            grade = random.choice(grades)
             rows.append({
-                'researcher_id': r['researcher_id'],
-                'title': f'{random.choice(names)} {i + 1:02d}',
-                'application_no': f'{random.randint(10000000, 99999999)}',
-                'application_date': app_date,
-                'registration_no': f'{random.randint(1000000, 9999999)}' if is_reg else '',
-                'registration_date': reg_date,
-                'country': random.choice(['국내', '국내', '국내', '해외']),
-                'status': '등록' if is_reg else '출원',
+                'researcher_id':      r['researcher_id'],
+                'application_id':     f'APP{app_id_counter + i:06d}',
+                'title':              f'{random.choice(names)} Method {i + 1:02d}',
+                'title_ko':           f'{random.choice(names)} {i + 1:02d}',
+                'status':             '등록' if is_reg else '출원',
+                'share_ratio':        round(random.uniform(10, 100), 1),
+                'is_lead_inventor':   random.choice(['Y', 'N']),
+                'patent_grade':       grade,
+                'patent_grade_a_sub': random.choice(grade_a_subs) if grade == 'A' else '',
+                'application_no':     f'{random.randint(10000000, 99999999)}',
+                'application_date':   app_date,
+                'registration_no':    f'{random.randint(1000000, 9999999)}' if is_reg else '',
+                'registration_date':  reg_date,
+                'country':            random.choice(['국내', '국내', '국내', '해외']),
             })
+        app_id_counter += n + 1
     return pd.DataFrame(rows)
 
 
@@ -349,6 +360,73 @@ def generate_transfers(researchers_df):
     return pd.DataFrame(rows).sort_values(['researcher_id', 'date'])
 
 
+def generate_succession(researchers_df):
+    """조직별 조직장 석세션 후보 생성 (Ready Now 1·2순위, Ready Later 1·2순위)"""
+    rank_slots = [
+        ('Ready Now',   1),
+        ('Ready Now',   2),
+        ('Ready Later', 1),
+        ('Ready Later', 2),
+    ]
+    rows = []
+    senior_positions = ['수석연구원', '책임연구원']
+    for org_code, grp in researchers_df.groupby('org_code'):
+        candidates = grp[grp['position'].isin(senior_positions)].sample(
+            frac=1, random_state=42
+        ).head(len(rank_slots))
+        for (rank_type, rank_order), (_, r) in zip(rank_slots, candidates.iterrows()):
+            rows.append({
+                'researcher_id': r['researcher_id'],
+                'org_code': org_code,
+                'rank_type': rank_type,
+                'rank_order': rank_order,
+                'nominated_year': 2026,
+            })
+    return pd.DataFrame(rows)
+
+
+def generate_nurturing(researchers_df):
+    """주요 양성이력 샘플 생성 (양성_인력_현황.xlsx 스키마 기준)"""
+    categories    = ['국내위탁교육', '해외위탁교육', '국내파견', '해외파견', '대학원위탁']
+    subcategories = ['석사과정', '박사과정', '단기연수', '전문교육', '현장실습']
+    institutions  = ['KAIST', '서울대학교', 'MIT', 'Stanford University',
+                     '한국생산기술연구원', 'POSTECH', 'ETH Zurich']
+    majors        = ['기계공학', '컴퓨터공학', '재료공학', '에너지공학', '인공지능']
+    countries     = ['대한민국', '미국', '독일', '일본', '영국']
+    cities        = {'대한민국': '서울', '미국': 'Boston', '독일': 'Munich',
+                     '일본': '도쿄', '영국': 'London'}
+    rows = []
+    for _, r in researchers_df.iterrows():
+        if r['position'] not in ['수석연구원', '책임연구원']:
+            continue
+        n = random.randint(0, 2)
+        for _ in range(n):
+            start_yr   = random.randint(2018, 2024)
+            start_mo   = random.randint(1, 12)
+            start_date = date(start_yr, start_mo, 1).isoformat()
+            end_date   = date(min(start_yr + random.randint(0, 2), 2026),
+                              random.randint(1, 12), 28).isoformat()
+            country = random.choice(countries)
+            rows.append({
+                'researcher_id':    r['researcher_id'],
+                'category':         random.choice(categories),
+                'subcategory':      random.choice(subcategories),
+                'start_date':       start_date,
+                'end_date':         end_date,
+                'country':          country,
+                'city':             cities.get(country, ''),
+                'institution':      random.choice(institutions),
+                'major':            random.choice(majors),
+                'service_end_date': date(min(start_yr + random.randint(1, 3), 2028),
+                                         1, 1).isoformat(),
+                'year':             str(start_yr),
+            })
+    return pd.DataFrame(rows) if rows else pd.DataFrame(columns=[
+        'researcher_id', 'category', 'subcategory', 'start_date', 'end_date',
+        'country', 'city', 'institution', 'major', 'service_end_date', 'year',
+    ])
+
+
 def generate_comments(researchers_df):
     rows = []
     for _, r in researchers_df.iterrows():
@@ -405,12 +483,14 @@ def main():
         return None
 
     def _read(path):
-        """xlsx → xlwings(DRM 지원), csv → pandas"""
+        """xlsx → xlwings(DRM 지원), csv → pandas. researcher_id 자동 정규화."""
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from excel_reader import read_xlsx, norm_researcher_id_col
         if path.endswith('.xlsx'):
-            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-            from excel_reader import read_xlsx
-            return read_xlsx(path)
-        return pd.read_csv(path, encoding='utf-8-sig', dtype={'researcher_id': str})
+            df = read_xlsx(path)
+        else:
+            df = pd.read_csv(path, encoding='utf-8-sig', dtype=str)
+        return norm_researcher_id_col(df)
 
     def _load_or_gen(name, gen_func, *gen_args):
         """
@@ -474,13 +554,43 @@ def main():
     # ── 3. 나머지 데이터 ──────────────────────────────────────────────────────
     incentives,    log['incentive_selection']    = _load_or_gen('incentive_selection',  generate_incentive_selection,  researchers, evaluations)
     publications,  log['publications']           = _load_or_gen('publications',         generate_publications,         researchers)
-    patents,       log['patents']                = _load_or_gen('patents',              generate_patents,               researchers)
+
+    # 특허: '특허 리스트.xlsx' 우선 → patents_raw → 샘플 생성
+    patent_list_file = os.path.join(RAW_DIR, '특허 리스트.xlsx')
+    if os.path.exists(patent_list_file):
+        from process_patents import process as _process_patents
+        _process_patents()
+        patents = pd.read_csv(
+            os.path.join(OUTPUT_DIR, 'patents.csv'),
+            encoding='utf-8-sig', dtype=str,
+        )
+        log['patents'] = f'[RAW]   특허 리스트.xlsx'
+        skip_patent_save = True
+    else:
+        patents, log['patents'] = _load_or_gen('patents', generate_patents, researchers)
+        skip_patent_save = False
     tech_transfers,log['technology_transfer']    = _load_or_gen('technology_transfer',  generate_technology_transfer,  researchers)
     leadership,    log['leadership']             = _load_or_gen('leadership',           generate_leadership,           researchers)
     certifications,log['certifications']         = _load_or_gen('certifications',       generate_certifications,       researchers)
     education,     log['education']              = _load_or_gen('education',            generate_education,            researchers)
     transfers,     log['transfers']              = _load_or_gen('transfers',            generate_transfers,            researchers)
     comments,      log['comments']               = _load_or_gen('comments',             generate_comments,             researchers)
+    succession,    log['succession']             = _load_or_gen('succession',           generate_succession,           researchers)
+
+    # 양성이력: '양성_인력_현황.xlsx' 우선 → nurturing_raw → 샘플 생성
+    nurturing_file = os.path.join(RAW_DIR, '양성_인력_현황.xlsx')
+    if os.path.exists(nurturing_file):
+        from process_nurturing import process as _process_nurturing
+        _process_nurturing()
+        nurturing = pd.read_csv(
+            os.path.join(OUTPUT_DIR, 'nurturing.csv'),
+            encoding='utf-8-sig', dtype=str,
+        )
+        log['nurturing'] = '[RAW]   양성_인력_현황.xlsx'
+        skip_nurturing_save = True
+    else:
+        nurturing, log['nurturing'] = _load_or_gen('nurturing', generate_nurturing, researchers)
+        skip_nurturing_save = False
 
     # ── 4. CSV 저장 ───────────────────────────────────────────────────────────
     datasets = {
@@ -495,9 +605,15 @@ def main():
         'education':          education,
         'transfers':          transfers,
         'comments':           comments,
+        'succession':         succession,
+        'nurturing':          nurturing,
     }
 
     for name, df in datasets.items():
+        if name == 'patents' and skip_patent_save:
+            continue
+        if name == 'nurturing' and skip_nurturing_save:
+            continue
         if name == 'evaluations' and skip_eval_save:
             continue  # T&P 처리기가 이미 저장함
         path = os.path.join(OUTPUT_DIR, f'{name}.csv')

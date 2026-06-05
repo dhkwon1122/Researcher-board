@@ -13,6 +13,28 @@ DRM 보호 파일도 정상적으로 읽을 수 있습니다.
 import pandas as pd
 
 
+def norm_id(val) -> str:
+    """사번 값을 8자리 제로패딩 문자열로 정규화.
+    Excel이 숫자로 읽은 12345.0 → '00012345'
+    """
+    s = str(val).strip()
+    if s in ('', 'nan', 'None', 'NaT'):
+        return ''
+    try:
+        return str(int(float(s))).zfill(8)
+    except (ValueError, OverflowError):
+        return s.zfill(8)
+
+
+def norm_researcher_id_col(df: pd.DataFrame) -> pd.DataFrame:
+    """DataFrame에 researcher_id 컬럼이 있으면 8자리 텍스트로 정규화."""
+    if 'researcher_id' in df.columns:
+        df = df.copy()
+        df['researcher_id'] = df['researcher_id'].apply(norm_id)
+        df = df[df['researcher_id'] != '']   # 빈 ID 행 제거
+    return df
+
+
 def read_xlsx(file_path: str, sheet: int | str = 0) -> pd.DataFrame:
     """
     xlwings를 사용하여 xlsx 파일을 DataFrame으로 읽습니다.
@@ -59,9 +81,9 @@ def read_xlsx(file_path: str, sheet: int | str = 0) -> pd.DataFrame:
         headers = data[0]
         rows = data[1:]
 
-        # 헤더가 None인 열 제거
+        # 헤더가 None인 열 제거, 앞뒤 공백 제거
         valid_cols = [(i, h) for i, h in enumerate(headers) if h is not None]
-        clean_headers = [h for _, h in valid_cols]
+        clean_headers = [str(h).strip() for _, h in valid_cols]
         clean_rows = [[row[i] if i < len(row) else None for i, _ in valid_cols]
                       for row in rows]
 
@@ -87,4 +109,6 @@ def read_xlsx(file_path: str, sheet: int | str = 0) -> pd.DataFrame:
 
 def _read_with_pandas(file_path: str, sheet: int | str = 0) -> pd.DataFrame:
     """xlwings 없이 pandas(openpyxl)로 읽는 폴백."""
-    return pd.read_excel(file_path, sheet_name=sheet)
+    df = pd.read_excel(file_path, sheet_name=sheet)
+    df.columns = [str(c).strip() for c in df.columns]
+    return df

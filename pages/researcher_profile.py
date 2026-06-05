@@ -105,31 +105,143 @@ def _pat_tab(pat_df, rid):
     if pat_df.empty:
         return html.Div('특허 데이터 없음', className='text-muted p-3')
     pat = pat_df[pat_df['researcher_id'] == rid].copy()
-    cutoff = str(CURRENT_YEAR - 2)
-    pat_recent = pat[pat['application_date'].astype(str).str[:4] >= cutoff]
-    app_cnt = int((pat_recent['status'] == '출원').sum())
-    reg_cnt = int((pat_recent['status'] == '등록').sum())
+    if pat.empty:
+        return html.Div('특허 실적 없음', className='text-muted p-3')
+
+    def _is_reg(s):
+        return '등록' in str(s)
+
+    def _cell(row, *keys, default='-'):
+        for k in keys:
+            v = str(row.get(k, ''))
+            if v and v not in ('', 'nan', 'None'):
+                return v
+        return default
+
+    # ── 접수ID 기준 중복 제거 (같은 접수ID = 같은 특허, 국가는 합산) ──────────
+    id_col = 'application_id' if 'application_id' in pat.columns else None
+
+    if id_col:
+        def _merge_countries(series):
+            vals = [str(v).strip() for v in series if str(v).strip() not in ('', 'nan', 'None', '-')]
+            seen = {}
+            for v in vals:
+                for part in v.split(','):
+                    p = part.strip()
+                    if p:
+                        seen[p] = None
+            return ', '.join(seen.keys()) if seen else '-'
+
+        def _agg_status(series):
+            """등록 상태를 우선 반환 — 출원 중인 행이 먼저 와도 등록 상태 보존"""
+            vals = series.astype(str).tolist()
+            for v in vals:
+                if _is_reg(v):
+                    return v
+            return vals[0] if vals else ''
+
+        agg_dict = {c: 'first' for c in pat.columns if c not in (id_col, 'researcher_id', 'country', 'status')}
+        if 'status' in pat.columns:
+            agg_dict['status'] = _agg_status
+        if 'country' in pat.columns:
+            agg_dict['country'] = _merge_countries
+        pat_dedup = pat.groupby(id_col, sort=False).agg(agg_dict).reset_index()
+    else:
+        pat_dedup = pat.copy()
+
+    # ── 요약 집계 ──────────────────────────────────────────────────────────────
+    total_cnt = len(pat_dedup)
+    reg_cnt   = int(pat_dedup['status'].apply(_is_reg).sum()) if 'status' in pat_dedup.columns else 0
+
+    # 대표발명 수
+    lead_cnt = 0
+    if 'is_lead_inventor' in pat_dedup.columns:
+        lead_cnt = int(pat_dedup['is_lead_inventor'].astype(str)
+                       .isin(['Y', 'y', '1', 'True', 'true']).sum())
+
+    # 전략 출원 — '현재등급 - A급구분' 컬럼(patent_grade_a_sub)이 '전략출원'인 건
+    strat_cnt = 0
+    if 'patent_grade_a_sub' in pat_dedup.columns:
+        strat_cnt = int((pat_dedup['patent_grade_a_sub'].astype(str).str.strip() == '전략출원').sum())
+
+    # 미국 등록 특허
+    us_reg_cnt = 0
+    if 'country' in pat_dedup.columns and 'status' in pat_dedup.columns:
+        us_mask = pat_dedup['country'].astype(str).str.contains('미국|USA|US', case=False, na=False)
+        us_reg_cnt = int((us_mask & pat_dedup['status'].apply(_is_reg)).sum())
+
+    # 지분율 합계
+    share_sum = '-'
+    if 'share_ratio' in pat_dedup.columns:
+        shares = pd.to_numeric(pat_dedup['share_ratio'], errors='coerce').dropna()
+        if not shares.empty:
+            share_sum = f'{round(shares.sum(), 1)}%'
+
+    def _stat(val, label, color):
+        return html.Div([
+            html.H5(str(val), className=f'fw-bold {color} mb-0'),
+            html.Small(label, className='text-muted'),
+        ], className='text-center px-2')
+
+    def _dual_card(left_val, left_lbl, left_color, right_val, right_lbl, right_color):
+        """두 지표를 같은 크기로 나란히 표시하는 카드"""
+        return dbc.Card(dbc.CardBody(
+            dbc.Row([
+                dbc.Col(_stat(left_val,  left_lbl,  left_color),  width=6,
+                        className='border-end'),
+                dbc.Col(_stat(right_val, right_lbl, right_color), width=6),
+            ], className='g-0 align-items-center'),
+            className='p-2',
+        ), className='border-0 bg-light h-100')
+
+    def _single_card(val, label, color):
+        return dbc.Card(dbc.CardBody(
+            _stat(val, label, color), className='p-2',
+        ), className='border-0 bg-light h-100')
+
     summary = dbc.Row([
-        dbc.Col(dbc.Card(dbc.CardBody([
-            html.H4(str(app_cnt), className='fw-bold text-primary mb-0'),
-            html.Small('출원', className='text-muted'),
-        ]), className='text-center border-0 bg-light'), md=2),
-        dbc.Col(dbc.Card(dbc.CardBody([
-            html.H4(str(reg_cnt), className='fw-bold text-success mb-0'),
-            html.Small('등록', className='text-muted'),
-        ]), className='text-center border-0 bg-light'), md=2),
+        dbc.Col(_dual_card(total_cnt, '전체 발명', 'text-dark',
+                           lead_cnt,  '대표 발명', 'text-secondary'), md=3),
+        dbc.Col(_dual_card(total_cnt, '출원',      'text-primary',
+                           reg_cnt,   '등록',      'text-success'),   md=3),
+        dbc.Col(_single_card(strat_cnt,  '전략 출원', 'text-warning'), md=2),
+        dbc.Col(_single_card(us_reg_cnt, '미국 등록', 'text-info'),    md=2),
+        dbc.Col(_single_card(share_sum,  '지분율 합계', 'text-danger'), md=2),
     ], className='mb-3')
-    rows = [html.Tr([
-        html.Td(str(r['application_date'])[:7]),
-        html.Td(r['title']),
-        html.Td(dbc.Badge('등록', color='success') if r['status'] == '등록'
-                else dbc.Badge('출원', color='primary')),
-        html.Td(r['country']),
-        html.Td(str(r.get('registration_date', ''))[:7] or '-'),
-    ]) for _, r in pat_recent.sort_values('application_date', ascending=False).iterrows()]
+
+    # ── 테이블 ──────────────────────────────────────────────────────────────────
+    sort_col = 'application_date' if 'application_date' in pat_dedup.columns else pat_dedup.columns[0]
+    rows = []
+    for _, r in pat_dedup.sort_values(sort_col, ascending=False).iterrows():
+        status_val = str(r.get('status', ''))
+        status_badge = (dbc.Badge('등록', color='success') if _is_reg(status_val)
+                        else dbc.Badge(status_val or '출원', color='primary'))
+        lead = str(r.get('is_lead_inventor', ''))
+        grade = str(r.get('patent_grade', ''))
+        grade_a = str(r.get('patent_grade_a_sub', ''))
+        grade_str = grade + (f'({grade_a})' if grade_a and grade_a not in ('', 'nan') else '')
+        share_val = r.get('share_ratio', '')
+        share_str = (f'{share_val}%' if str(share_val).replace('.', '').isdigit() else '-')
+
+        rows.append(html.Tr([
+            html.Td(_cell(r, 'application_date')[:7]),
+            html.Td(_cell(r, 'title', 'title_ko'),
+                    style={'maxWidth': '280px', 'wordBreak': 'break-word'}),
+            html.Td(status_badge),
+            html.Td(_cell(r, 'application_id', 'application_no')),
+            html.Td(dbc.Badge('대표', color='warning', text_color='dark')   # 대표발명자 먼저
+                    if lead in ('Y', 'y', '1', 'True', 'true') else ''),
+            html.Td(share_str),                                              # 지분율 나중에
+            html.Td(grade_str or '-'),
+            html.Td(_cell(r, 'country')),
+        ]))
+
     table = dbc.Table([
-        html.Thead(html.Tr([html.Th('출원일'), html.Th('발명 명칭'), html.Th('상태'),
-                            html.Th('국내/해외'), html.Th('등록일')])),
+        html.Thead(html.Tr([
+            html.Th('출원일'), html.Th('발명 명칭'), html.Th('상태'),
+            html.Th('접수ID/출원번호'), html.Th('대표발명자'), html.Th('지분율'),
+            html.Th('등급'), html.Th('출원 국가'),
+        ])),
         html.Tbody(rows),
     ], bordered=False, hover=True, responsive=True, size='sm')
     return html.Div([summary, table])

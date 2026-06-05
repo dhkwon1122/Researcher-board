@@ -1,431 +1,280 @@
 """
-화면 1: 조직별 우수 연구원 비교
+화면 1: 조직별 우수 연구원 비교 — 전체 조직 조직장 석세션 후보 카드
 """
 
+import base64
+import mimetypes
 import os
+from datetime import datetime
 
 import dash
 import dash_bootstrap_components as dbc
-import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
-from dash import Input, Output, callback, dash_table, html, dcc
+from dash import html
 
 dash.register_page(__name__, path='/', name='조직별 비교', title='조직별 우수 연구원 비교')
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
+RAW_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
 
-METRIC_LABELS = {
-    'score': '평가점수',
-    'pub_count': '논문 수',
-    'patent_count': '특허(등록) 수',
-    'leadership_score': '리더십 점수',
+CURRENT_YEAR = datetime.now().year
+
+RANK_META = {
+    ('Ready Now',   1): ('Ready Now 1순위',   'danger'),
+    ('Ready Now',   2): ('Ready Now 2순위',   'warning'),
+    ('Ready Later', 1): ('Ready Later 1순위', 'info'),
+    ('Ready Later', 2): ('Ready Later 2순위', 'secondary'),
 }
 
-GRADE_COLOR = {
-    '가': '#f5a623',  # 금색 — 최우수
-    '나': '#52c41a',  # 초록
-    '다': '#1890ff',  # 파랑
-    '라': '#8c8c8c',  # 회색
-    '마': '#ff4d4f',  # 빨강 — 최하
-    '-': '#d9d9d9',
+GRADE_BADGE_COLOR = {
+    '가': 'warning', '나': 'success', '다': 'primary',
+    '라': 'secondary', '마': 'danger', '-': 'light',
 }
 
-RADAR_COLORS = [
-    'rgba(74,144,226,0.85)', 'rgba(245,166,35,0.85)', 'rgba(82,196,26,0.85)',
-    'rgba(235,87,87,0.85)', 'rgba(155,89,182,0.85)',
-]
+
+# ─── 헬퍼 ──────────────────────────────────────────────────────────────────────
+
+def _r(name):
+    path = os.path.join(DATA_DIR, f'{name}.csv')
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    return pd.read_csv(path, encoding='utf-8-sig', dtype=str)
 
 
-# ─── 데이터 로드 ────────────────────────────────────────────────────────────
-
-def _load():
-    def _r(name):
-        return pd.read_csv(os.path.join(DATA_DIR, f'{name}.csv'), encoding='utf-8-sig',
-                           dtype={'researcher_id': str})
-
-    res = _r('researchers')
-    eva = _r('evaluations')
-    pub = _r('publications')
-    pat = _r('patents')
-    lea = _r('leadership')
-    return res, eva, pub, pat, lea
+def _load_photo_src(rid_str):
+    for ext in ('png', 'jpg', 'jpeg'):
+        f = os.path.join(RAW_DIR, f'{rid_str}.{ext}')
+        if os.path.exists(f):
+            mime = mimetypes.guess_type(f)[0] or f'image/{ext}'
+            with open(f, 'rb') as fp:
+                enc = base64.b64encode(fp.read()).decode('utf-8')
+            return f'data:{mime};base64,{enc}'
+    return None
 
 
-def _build_metrics(year: int, org_code: str | None) -> pd.DataFrame:
-    res, eva, pub, pat, lea = _load()
-
-    if org_code and org_code != 'ALL':
-        res = res[res['org_code'] == org_code].copy()
-
-    # 평가점수
-    ev = eva[eva['year'] == year][['researcher_id', 'score', 'grade']]
-
-    # 논문 수 (해당 연도)
-    pc = pub[pub['pub_year'] == year].groupby('researcher_id').size().reset_index(name='pub_count')
-
-    # 등록 특허 수 (해당 연도까지 누적)
-    pat_reg = pat[(pat['status'] == '등록') & (pat['registration_date'].astype(str).str[:4] <= str(year))]
-    ptc = pat_reg.groupby('researcher_id').size().reset_index(name='patent_count')
-
-    # 리더십 점수 (해당 연도, 없으면 직전 년도)
-    lea_y = lea[lea['year'] <= year].sort_values('year', ascending=False)
-    lea_y = lea_y.drop_duplicates('researcher_id')[['researcher_id', 'overall_score']]
-    lea_y = lea_y.rename(columns={'overall_score': 'leadership_score'})
-
-    df = res[['researcher_id', 'name', 'department', 'org_code', 'position']].copy()
-    df = df.merge(ev, on='researcher_id', how='left')
-    df = df.merge(pc, on='researcher_id', how='left')
-    df = df.merge(ptc, on='researcher_id', how='left')
-    df = df.merge(lea_y, on='researcher_id', how='left')
-
-    df['pub_count'] = df['pub_count'].fillna(0).astype(int)
-    df['patent_count'] = df['patent_count'].fillna(0).astype(int)
-    df['score'] = df['score'].fillna(0).round(1)
-    df['grade'] = df['grade'].fillna('-')
-    df['leadership_score'] = df['leadership_score'].fillna(0).round(1)
-
-    return df
-
-
-def _normalize_col(series: pd.Series) -> pd.Series:
-    mx = series.max()
-    if mx == 0:
-        return series * 0
-    return (series / mx * 100).round(1)
-
-
-# ─── 레이아웃 ────────────────────────────────────────────────────────────────
-
-def _filter_bar(org_options, year_options):
-    return dbc.Card(
-        dbc.CardBody(
-            dbc.Row(
-                [
-                    dbc.Col(
-                        [
-                            dbc.Label('조직', className='fw-semibold small text-muted mb-1'),
-                            dcc.Dropdown(
-                                id='org-filter',
-                                options=org_options,
-                                value='ALL',
-                                clearable=False,
-                                className='dash-dropdown',
-                            ),
-                        ],
-                        md=3,
-                    ),
-                    dbc.Col(
-                        [
-                            dbc.Label('기준 연도', className='fw-semibold small text-muted mb-1'),
-                            dcc.Dropdown(
-                                id='year-filter',
-                                options=year_options,
-                                value=year_options[-1]['value'],
-                                clearable=False,
-                            ),
-                        ],
-                        md=2,
-                    ),
-                    dbc.Col(
-                        [
-                            dbc.Label('정렬 기준 지표', className='fw-semibold small text-muted mb-1'),
-                            dcc.Dropdown(
-                                id='metric-filter',
-                                options=[{'label': v, 'value': k} for k, v in METRIC_LABELS.items()],
-                                value='score',
-                                clearable=False,
-                            ),
-                        ],
-                        md=3,
-                    ),
-                    dbc.Col(
-                        [
-                            dbc.Label('상위 N명 (레이더)', className='fw-semibold small text-muted mb-1'),
-                            dcc.Dropdown(
-                                id='topn-filter',
-                                options=[{'label': f'Top {n}', 'value': n} for n in [3, 5, 10]],
-                                value=5,
-                                clearable=False,
-                            ),
-                        ],
-                        md=2,
-                    ),
-                ],
-                className='g-2',
-            )
-        ),
-        className='mb-3 shadow-sm',
+def _avatar(name, size=64):
+    colors = ['#4a90e2', '#e25757', '#52c41a', '#f5a623', '#9b59b6', '#1abc9c']
+    color = colors[hash(name) % len(colors)]
+    return html.Div(
+        name[:2] if name else '?',
+        style={
+            'width': f'{size}px', 'height': f'{size}px', 'borderRadius': '50%',
+            'background': color, 'color': '#fff', 'display': 'flex',
+            'alignItems': 'center', 'justifyContent': 'center',
+            'fontWeight': 'bold', 'fontSize': f'{size // 3}px', 'margin': '0 auto',
+        },
     )
 
 
-def _kpi_card(icon, label, value_id, color):
-    return dbc.Card(
-        dbc.CardBody(
-            dbc.Row(
-                [
-                    dbc.Col(
-                        html.Div(
-                            html.I(className=f'bi {icon}',
-                                   style={'fontSize': '2rem', 'color': color}),
-                            className='d-flex align-items-center justify-content-center',
-                            style={'height': '60px'},
-                        ),
-                        width=3,
-                    ),
-                    dbc.Col(
-                        [
-                            html.P(label, className='text-muted small mb-0'),
-                            html.H4(id=value_id, className='fw-bold mb-0', style={'color': color}),
-                        ],
-                        width=9,
-                        className='d-flex flex-column justify-content-center',
-                    ),
-                ],
-                className='g-0',
-            )
-        ),
-        className='shadow-sm h-100',
+def _section(title, body):
+    return html.Div([
+        html.P(title, className='fw-bold small text-primary mb-1'),
+        body,
+    ], className='bg-light rounded p-2')
+
+
+# ─── 후보 카드 빌더 ─────────────────────────────────────────────────────────────
+
+def _candidate_card(r_info, rank_type, rank_order, eva, edu, inc, nur):
+    rid    = str(r_info['researcher_id'])
+    name   = str(r_info.get('name', '-'))
+    dept   = str(r_info.get('department', '-'))
+    pos    = str(r_info.get('position', '-'))
+    gender = str(r_info.get('gender', '-'))
+    try:
+        age_str = f'{CURRENT_YEAR - int(r_info["birth_year"])}세'
+    except (TypeError, ValueError, KeyError):
+        age_str = '-'
+
+    label, badge_color = RANK_META.get(
+        (rank_type, rank_order),
+        (f'{rank_type} {rank_order}순위', 'secondary'),
     )
 
+    # 사진
+    src = _load_photo_src(rid)
+    photo_el = (
+        html.Img(src=src,
+                 style={'width': '100%', 'maxHeight': '130px',
+                        'objectFit': 'contain', 'borderRadius': '6px'})
+        if src else _avatar(name, 70)
+    )
+
+    # 학력
+    r_edu = edu[edu['researcher_id'] == rid] if not edu.empty else pd.DataFrame()
+    edu_items = []
+    for deg in ['박사', '석사', '학사']:
+        row = r_edu[r_edu['degree'] == deg]
+        if not row.empty:
+            r0 = row.iloc[0]
+            edu_items.append(html.Li(
+                f"{deg} | {r0.get('major', '-')} | {r0.get('school', '-')} ({r0.get('graduation_year', '-')})",
+                className='small',
+            ))
+    edu_section = _section('학력', html.Ul(
+        edu_items or [html.Li('데이터 없음', className='small text-muted')],
+        className='ps-3 mb-0 small',
+    ))
+
+    # 주요 시상이력
+    r_inc = inc[inc['researcher_id'] == rid] if not inc.empty else pd.DataFrame()
+    if not r_inc.empty:
+        sel_mask = r_inc['selected'].astype(str).isin(['True', 'Y', '1', 'true', 'y'])
+        r_inc = r_inc[sel_mask].sort_values('year', ascending=False).head(3)
+    award_items = [
+        html.Li(
+            f"{aw['year']}년{(' — ' + str(aw.get('category', ''))) if aw.get('category') else ''}",
+            className='small',
+        )
+        for _, aw in r_inc.iterrows()
+    ]
+    award_section = _section('주요 시상이력', html.Ul(
+        award_items or [html.Li('해당 없음', className='small text-muted')],
+        className='ps-3 mb-0 small',
+    ))
+
+    # 기본인적사항 / 평가
+    r_eva = eva[eva['researcher_id'] == rid] if not eva.empty else pd.DataFrame()
+    grade_chips = []
+    for yr in ['2024', '2025', '2026']:
+        row = r_eva[r_eva['year'] == yr]
+        grade = row.iloc[0]['grade'] if not row.empty else '-'
+        grade_chips.append(html.Span([
+            html.Small(f"'{yr[-2:]}", className='text-muted'),
+            dbc.Badge(grade, color=GRADE_BADGE_COLOR.get(grade, 'light'), className='ms-1 me-2'),
+        ]))
+    basic_section = _section('기본인적사항 / 평가', html.Div([
+        html.P([html.B(name), f'  {gender} / {age_str}'], className='small mb-1'),
+        html.P(f'{dept}  |  {pos}', className='small text-muted mb-2'),
+        html.Div(grade_chips, className='d-flex flex-wrap align-items-center'),
+    ]))
+
+    # 주요 양성이력
+    r_nur = nur[nur['researcher_id'] == rid] if not nur.empty else pd.DataFrame()
+    if not r_nur.empty:
+        sort_col = 'start_date' if 'start_date' in r_nur.columns else (
+                   'year' if 'year' in r_nur.columns else r_nur.columns[0])
+        r_nur = r_nur.sort_values(sort_col, ascending=False).head(3)
+    nur_items = []
+    for _, nr in r_nur.iterrows():
+        yr   = str(nr.get('year', nr.get('start_date', '')))[:4]
+        cat  = str(nr.get('category', ''))
+        sub  = str(nr.get('subcategory', ''))
+        inst = str(nr.get('institution', ''))
+        parts = [p for p in [cat, sub, inst] if p and p not in ('', 'nan')]
+        nur_items.append(html.Li(
+            f"{yr}년  {' / '.join(parts)}" if yr else ' / '.join(parts),
+            className='small',
+        ))
+    nur_section = _section('주요 양성이력', html.Ul(
+        nur_items or [html.Li('해당 없음', className='small text-muted')],
+        className='ps-3 mb-0 small',
+    ))
+
+    return dbc.Card([
+        dbc.CardHeader(
+            dbc.Badge(label, color=badge_color, className='fs-6 px-3 py-2'),
+            className='text-center bg-white border-bottom-0 pb-1',
+        ),
+        dbc.CardBody([
+            dbc.Row([
+                dbc.Col(photo_el, width=4,
+                        className='d-flex align-items-center justify-content-center'),
+                dbc.Col([edu_section, html.Div(className='mb-2'), award_section], width=8),
+            ], className='g-2 mb-2'),
+            dbc.Row([
+                dbc.Col(basic_section, width=6),
+                dbc.Col(nur_section, width=6),
+            ], className='g-2'),
+        ], className='p-2'),
+    ], className='shadow-sm h-100')
+
+
+# ─── 조직 섹션 빌더 ─────────────────────────────────────────────────────────────
+
+def _org_section(dept_name, org_code, suc, res, eva, edu, inc, nur):
+    suc_org = suc[suc['org_code'] == org_code].copy()
+    if suc_org.empty:
+        return None
+
+    suc_org['_s'] = suc_org['rank_type'].map({'Ready Now': 0, 'Ready Later': 1}).fillna(2)
+    suc_org['rank_order'] = pd.to_numeric(suc_org['rank_order'], errors='coerce').fillna(99).astype(int)
+    suc_org = suc_org.sort_values(['_s', 'rank_order']).reset_index(drop=True)
+
+    cards = []
+    for _, srow in suc_org.iterrows():
+        rid = str(srow['researcher_id'])
+        r_rows = res[res['researcher_id'] == rid]
+        if r_rows.empty:
+            continue
+        card = _candidate_card(
+            r_rows.iloc[0],
+            str(srow['rank_type']),
+            int(srow['rank_order']),
+            eva, edu, inc, nur,
+        )
+        cards.append(dbc.Col(card, lg=3, md=6, className='mb-2'))
+
+    if not cards:
+        return None
+
+    return html.Div([
+        html.Div([
+            html.I(className='bi bi-building me-2 text-primary'),
+            html.Span(dept_name, className='fw-bold fs-6'),
+        ], className='mb-2 pb-1 border-bottom border-primary border-2'),
+        dbc.Row(cards, className='g-3'),
+    ], className='mb-4')
+
+
+# ─── 레이아웃 ────────────────────────────────────────────────────────────────────
 
 def layout():
     try:
-        res, eva, *_ = _load()
-        orgs = [{'label': '전체 조직', 'value': 'ALL'}] + [
-            {'label': row['department'], 'value': row['org_code']}
-            for _, row in res[['department', 'org_code']].drop_duplicates().sort_values('org_code').iterrows()
-        ]
-        years = [{'label': str(y), 'value': y} for y in sorted(eva['year'].unique())]
-    except Exception:
-        orgs = [{'label': '전체 조직', 'value': 'ALL'}]
-        years = [{'label': str(y), 'value': y} for y in range(2020, 2025)]
-
-    return html.Div(
-        [
-            html.H5(
-                [html.I(className='bi bi-people-fill me-2 text-primary'), '조직별 우수 연구원 비교'],
-                className='fw-bold mb-3 mt-1',
-            ),
-            _filter_bar(orgs, years),
-
-            # KPI 카드
-            dbc.Row(
-                [
-                    dbc.Col(_kpi_card('bi-star-fill', '평균 평가점수', 'kpi-eval', '#f5a623'), md=3),
-                    dbc.Col(_kpi_card('bi-journal-text', '총 논문 수 (해당연도)', 'kpi-pub', '#1890ff'), md=3),
-                    dbc.Col(_kpi_card('bi-award-fill', '총 등록 특허 수', 'kpi-patent', '#52c41a'), md=3),
-                    dbc.Col(_kpi_card('bi-graph-up-arrow', '평균 리더십 점수', 'kpi-leadership', '#9b59b6'), md=3),
-                ],
-                className='g-3 mb-3',
-            ),
-
-            # 레이더 + 순위 테이블
-            dbc.Row(
-                [
-                    dbc.Col(
-                        dbc.Card(
-                            dbc.CardBody(
-                                [
-                                    html.P('상위 연구원 다차원 비교 (레이더)',
-                                           className='fw-semibold text-muted small mb-2'),
-                                    dcc.Graph(id='radar-chart', style={'height': '420px'},
-                                              config={'displayModeBar': False}),
-                                ]
-                            ),
-                            className='shadow-sm h-100',
-                        ),
-                        md=6,
-                    ),
-                    dbc.Col(
-                        dbc.Card(
-                            dbc.CardBody(
-                                [
-                                    html.P('연구원 순위 테이블',
-                                           className='fw-semibold text-muted small mb-2'),
-                                    html.Div(id='ranking-table'),
-                                ]
-                            ),
-                            className='shadow-sm h-100',
-                        ),
-                        md=6,
-                    ),
-                ],
-                className='g-3 mb-3',
-            ),
-
-            # 조직별 비교 바 차트
-            dbc.Card(
-                dbc.CardBody(
-                    [
-                        html.P('조직별 지표 비교',
-                               className='fw-semibold text-muted small mb-2'),
-                        dcc.Graph(id='org-bar-chart', style={'height': '340px'},
-                                  config={'displayModeBar': False}),
-                    ]
-                ),
-                className='shadow-sm',
-            ),
-        ]
-    )
-
-
-# ─── 콜백 ────────────────────────────────────────────────────────────────────
-
-@callback(
-    Output('kpi-eval', 'children'),
-    Output('kpi-pub', 'children'),
-    Output('kpi-patent', 'children'),
-    Output('kpi-leadership', 'children'),
-    Output('radar-chart', 'figure'),
-    Output('ranking-table', 'children'),
-    Output('org-bar-chart', 'figure'),
-    Input('org-filter', 'value'),
-    Input('year-filter', 'value'),
-    Input('metric-filter', 'value'),
-    Input('topn-filter', 'value'),
-)
-def update_all(org, year, metric, top_n):
-    try:
-        df = _build_metrics(year, org)
+        res = _r('researchers')
+        eva = _r('evaluations')
+        edu = _r('education')
+        inc = _r('incentive_selection')
+        nur = _r('nurturing')
+        suc = _r('succession')
     except Exception as e:
-        empty = go.Figure()
-        empty.update_layout(
-            annotations=[{'text': f'데이터 로드 실패: {e}', 'showarrow': False,
-                           'xref': 'paper', 'yref': 'paper', 'x': 0.5, 'y': 0.5}],
-            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-        )
-        return '-', '-', '-', '-', empty, html.Div('데이터를 불러올 수 없습니다.'), empty
+        return html.P(f'데이터 로드 실패: {e}', className='text-danger p-3')
 
-    # ── KPI ──
-    kpi_eval = f'{df["score"].mean():.1f}점' if not df.empty else '-'
-    kpi_pub = f'{int(df["pub_count"].sum())}편'
-    kpi_patent = f'{int(df["patent_count"].sum())}건'
-    kpi_lead = f'{df["leadership_score"].mean():.1f}점' if not df.empty else '-'
-
-    # ── 순위 정렬 ──
-    df_sorted = df.sort_values(metric, ascending=False).reset_index(drop=True)
-    df_top = df_sorted.head(top_n)
-
-    # ── 레이더 차트 ──
-    radar_dims = ['score', 'pub_count', 'patent_count', 'leadership_score']
-    radar_labels = ['평가점수', '논문 수', '특허(등록) 수', '리더십 점수']
-
-    norm_df = df_sorted.copy()
-    for col in ['pub_count', 'patent_count']:
-        norm_df[col] = _normalize_col(df_sorted[col])
-
-    radar_fig = go.Figure()
-    for idx, (_, row) in enumerate(df_top.iterrows()):
-        vals = [row[c] for c in radar_dims]
-        vals_closed = vals + [vals[0]]
-        labels_closed = radar_labels + [radar_labels[0]]
-        color = RADAR_COLORS[idx % len(RADAR_COLORS)]
-        radar_fig.add_trace(go.Scatterpolar(
-            r=vals_closed,
-            theta=labels_closed,
-            fill='toself',
-            fillcolor=color.replace('0.85', '0.15'),
-            line=dict(color=color, width=2),
-            name=row['name'],
-            hovertemplate=(
-                f"<b>{row['name']}</b><br>"
-                '%{theta}: %{r:.1f}<extra></extra>'
+    if suc.empty:
+        return html.Div([
+            html.H5([html.I(className='bi bi-people-fill me-2 text-primary'),
+                     '조직별 우수 연구원 비교 (조직장 석세션)'],
+                    className='fw-bold mb-3 mt-1'),
+            dbc.Alert(
+                'succession 데이터가 없습니다. '
+                'python pipeline/generate_sample_data.py 로 샘플 데이터를 생성하세요.',
+                color='warning',
             ),
-        ))
-    radar_fig.update_layout(
-        polar=dict(
-            radialaxis=dict(visible=True, range=[0, 100], tickfont=dict(size=9)),
-            angularaxis=dict(tickfont=dict(size=11, color='#444')),
+        ])
+
+    # year 컬럼 문자열 통일
+    for df in (eva, inc, nur):
+        if not df.empty and 'year' in df.columns:
+            df['year'] = df['year'].astype(str)
+
+    # 조직 목록 (succession에 등록된 org_code 기준, 이름은 researchers에서)
+    org_order = suc['org_code'].unique()
+    dept_map = {}
+    if not res.empty:
+        dept_map = res[['org_code', 'department']].drop_duplicates().set_index('org_code')['department'].to_dict()
+
+    sections = []
+    for org_code in sorted(org_order):
+        dept_name = dept_map.get(org_code, org_code)
+        sec = _org_section(dept_name, org_code, suc, res, eva, edu, inc, nur)
+        if sec:
+            sections.append(sec)
+
+    return html.Div([
+        html.H5(
+            [html.I(className='bi bi-people-fill me-2 text-primary'),
+             '조직별 우수 연구원 비교 (조직장 석세션)'],
+            className='fw-bold mb-4 mt-1',
         ),
-        showlegend=True,
-        legend=dict(orientation='h', yanchor='bottom', y=-0.25, xanchor='center', x=0.5),
-        margin=dict(l=40, r=40, t=20, b=60),
-        paper_bgcolor='rgba(0,0,0,0)',
-    )
-
-    # ── 순위 테이블 ──
-    grade_badges = {
-        '가': dbc.Badge('가', color='warning', className='ms-1'),
-        '나': dbc.Badge('나', color='success', className='ms-1'),
-        '다': dbc.Badge('다', color='primary', className='ms-1'),
-        '라': dbc.Badge('라', color='secondary', className='ms-1'),
-        '마': dbc.Badge('마', color='danger', className='ms-1'),
-    }
-    table_rows = []
-    for rank, (_, row) in enumerate(df_sorted.iterrows(), 1):
-        table_rows.append(
-            html.Tr([
-                html.Td(rank, className='text-center fw-bold text-muted'),
-                html.Td(row['name'], className='fw-semibold'),
-                html.Td(row['position'], className='text-muted small'),
-                html.Td([f"{row['score']:.0f}", grade_badges.get(row['grade'], '')]),
-                html.Td(str(int(row['pub_count'])), className='text-center'),
-                html.Td(str(int(row['patent_count'])), className='text-center'),
-                html.Td(f"{row['leadership_score']:.0f}", className='text-center'),
-            ])
-        )
-    ranking_table = dbc.Table(
-        [
-            html.Thead(html.Tr([
-                html.Th('#', className='text-center', style={'width': '40px'}),
-                html.Th('이름'),
-                html.Th('직급'),
-                html.Th('평가점수'),
-                html.Th('논문', className='text-center'),
-                html.Th('특허', className='text-center'),
-                html.Th('리더십', className='text-center'),
-            ]), className='table-primary'),
-            html.Tbody(table_rows),
-        ],
-        bordered=False,
-        hover=True,
-        responsive=True,
-        size='sm',
-        className='mb-0',
-        style={'maxHeight': '380px', 'overflowY': 'auto', 'display': 'block'},
-    )
-
-    # ── 조직별 비교 바 차트 ──
-    try:
-        res_df, eva_df, pub_df, pat_df, lea_df = _load()
-        orgs_all = res_df['org_code'].unique()
-        bar_data = []
-        for oc in sorted(orgs_all):
-            df_oc = _build_metrics(year, oc)
-            dept_name = res_df[res_df['org_code'] == oc]['department'].iloc[0]
-            bar_data.append({
-                'department': dept_name,
-                'score': df_oc['score'].mean(),
-                'pub_count': df_oc['pub_count'].sum(),
-                'patent_count': df_oc['patent_count'].sum(),
-                'leadership_score': df_oc['leadership_score'].mean(),
-            })
-        bar_df = pd.DataFrame(bar_data)
-
-        bar_fig = go.Figure()
-        colors_map = {
-            'score': '#f5a623', 'pub_count': '#1890ff',
-            'patent_count': '#52c41a', 'leadership_score': '#9b59b6',
-        }
-        bar_fig.add_trace(go.Bar(
-            x=bar_df['department'],
-            y=bar_df[metric],
-            marker_color=colors_map.get(metric, '#1890ff'),
-            text=bar_df[metric].round(1),
-            textposition='outside',
-            hovertemplate='%{x}<br>' + METRIC_LABELS[metric] + ': %{y:.1f}<extra></extra>',
-        ))
-        bar_fig.update_layout(
-            xaxis_title=None,
-            yaxis_title=METRIC_LABELS[metric],
-            yaxis=dict(gridcolor='#eeeeee'),
-            plot_bgcolor='rgba(0,0,0,0)',
-            paper_bgcolor='rgba(0,0,0,0)',
-            margin=dict(l=40, r=20, t=20, b=60),
-            bargap=0.35,
-        )
-    except Exception:
-        bar_fig = go.Figure()
-
-    return kpi_eval, kpi_pub, kpi_patent, kpi_lead, radar_fig, ranking_table, bar_fig
+        *sections,
+    ])
