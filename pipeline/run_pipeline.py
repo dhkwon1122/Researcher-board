@@ -32,8 +32,10 @@
   technology_transfer_raw : researcher_id, transfer_date, tech_name,
                             recipient, amount, transfer_type
   transfers_raw       : researcher_id, date, type, description
-  leadership_raw      : researcher_id, year, overall_score,
-                        vision, communication, execution, collaboration, development
+  leadership_raw      : researcher_id, year, evaluator_group,
+                        미래통찰, 성과창출, 몰입촉진, 인재육성, 자기관리, 저해행동
+                        ※ '리더십진단.xlsx' 가 있으면 자동 추출 (별도 raw 불필요)
+                           처리기: pipeline/process_leadership.py
   certifications_raw  : researcher_id, cert_type, cert_name, score, grade, date_obtained
   education_raw       : researcher_id, degree, major, school, graduation_year
                         ※ '임직원_학력.xlsx' 가 있으면 자동 추출 (별도 raw 불필요)
@@ -66,7 +68,6 @@ TABLES = [
     'publications',
     'technology_transfer',
     'transfers',
-    'leadership',
     'certifications',
     'succession',
 ]
@@ -150,7 +151,19 @@ def run():
         else:
             missing.append('education (임직원_학력.xlsx 또는 education_raw)')
 
-    # ── 6. 나머지 테이블 ─────────────────────────────────────────────────
+    # ── 6. 리더십 진단: 리더십진단.xlsx 우선, 없으면 leadership_raw 폴백 ─
+    from process_leadership import process as process_leadership
+    lea_ok = process_leadership()
+    if not lea_ok:
+        df = _read_raw('leadership')
+        if df is not None:
+            out_path = os.path.join(OUT_DIR, 'leadership.csv')
+            df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+            print(f'  [OK]   leadership.csv (leadership_raw 폴백, {len(df)}행)')
+        else:
+            missing.append('leadership (리더십진단.xlsx 또는 leadership_raw)')
+
+    # ── 7. 나머지 테이블 ─────────────────────────────────────────────────
     for table in TABLES:
         df = _read_raw(table)
         if df is None:
@@ -161,7 +174,7 @@ def run():
         df.to_csv(out_path, index=False, encoding='utf-8-sig')
         print(f'  [OK]   {table}.csv ({len(df)}행)')
 
-    # ── 7. 코멘트: 별도 처리 (LLM 요약 옵션 포함) ───────────────────────
+    # ── 8. 코멘트: 별도 처리 (LLM 요약 옵션 포함) ───────────────────────
     from process_comments import process as process_comments
     process_comments(use_llm=False)
 

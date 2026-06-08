@@ -28,12 +28,12 @@ GRADE_COLOR = {
     '마': '#ff4d4f',  # 빨강 — 최하
     '-': '#aaa',
 }
-LEADERSHIP_DIMS = {
-    'vision': '비전제시',
-    'communication': '소통·협력',
-    'execution': '실행력',
-    'collaboration': '협업·팀워크',
-    'development': '인재육성',
+LEADERSHIP_DIMS = ['미래통찰', '성과창출', '몰입촉진', '인재육성', '자기관리', '저해행동']
+
+# 본인/타인평균 트레이스 색상
+LEADERSHIP_TRACE_COLORS = {
+    '본인':   ('#1e3a5f', 'rgba(30,58,95,0.15)'),
+    '타인평균': ('#e25757', 'rgba(226,87,87,0.15)'),
 }
 TRANSFER_BADGE = {
     '부서발령': 'primary',
@@ -790,29 +790,47 @@ def update_leadership(rid, year):
     lea_df = _r('leadership')
     if lea_df.empty:
         return fig
-    row = lea_df[(lea_df['researcher_id'] == rid) & (lea_df['year'] == year)]
-    if row.empty:
+
+    df_r = lea_df[
+        (lea_df['researcher_id'] == rid) &
+        (lea_df['year'].astype(str) == str(year))
+    ]
+    if df_r.empty:
         return fig
-    row = row.iloc[0]
-    dims = list(LEADERSHIP_DIMS.keys())
-    labels = list(LEADERSHIP_DIMS.values())
-    vals = [float(row.get(d, 0)) for d in dims]
-    vals_c = vals + [vals[0]]
-    labels_c = labels + [labels[0]]
-    fig.add_trace(go.Scatterpolar(
-        r=vals_c, theta=labels_c,
-        fill='toself',
-        fillcolor='rgba(30,58,95,0.15)',
-        line=dict(color='#1e3a5f', width=2),
-        hovertemplate='%{theta}: %{r:.0f}점<extra></extra>',
-    ))
+
+    dims   = LEADERSHIP_DIMS
+    labels = dims + [dims[0]]  # 다각형 닫기
+
+    all_vals = []
+    for group, (line_color, fill_color) in LEADERSHIP_TRACE_COLORS.items():
+        row = df_r[df_r['evaluator_group'] == group]
+        if row.empty:
+            continue
+        row = row.iloc[0]
+        vals = [float(row[d]) if d in row and pd.notna(row[d]) else 0 for d in dims]
+        all_vals.extend(vals)
+        fig.add_trace(go.Scatterpolar(
+            r=vals + [vals[0]],
+            theta=labels,
+            fill='toself',
+            fillcolor=fill_color,
+            line=dict(color=line_color, width=2),
+            name=group,
+            hovertemplate='%{theta}: %{r:.2f}<extra>' + group + '</extra>',
+        ))
+
+    r_max = max(all_vals) if all_vals else 5
+    r_max = max(r_max * 1.1, 1)
+
     fig.update_layout(
         polar=dict(
-            radialaxis=dict(visible=True, range=[0, 100], tickfont=dict(size=8)),
-            angularaxis=dict(tickfont=dict(size=11, color='#333')),
+            radialaxis=dict(visible=True, range=[0, r_max],
+                            tickfont=dict(size=8)),
+            angularaxis=dict(tickfont=dict(size=10, color='#333')),
         ),
-        showlegend=False,
-        margin=dict(l=50, r=50, t=15, b=15),
+        showlegend=True,
+        legend=dict(orientation='h', y=-0.12, font=dict(size=11)),
+        margin=dict(l=50, r=50, t=15, b=35),
         paper_bgcolor='rgba(0,0,0,0)',
     )
     return fig
