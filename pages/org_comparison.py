@@ -103,7 +103,7 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, inc, nur):
     # 학력
     r_edu = edu[edu['researcher_id'] == rid] if not edu.empty else pd.DataFrame()
     edu_items = []
-    for deg in ['박사', '석사', '학사']:
+    for deg in ['박사', '석사', '학사', '전문대', '고교']:
         row = r_edu[r_edu['degree'] == deg]
         if not row.empty:
             r0 = row.iloc[0]
