@@ -61,10 +61,9 @@ OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data',
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from excel_reader import read_xlsx, norm_researcher_id_col
 
-# 평가·특허·양성이력·학력은 전용 처리기에서 추출하므로 목록에서 제외
+# 평가·특허·양성이력·시상·학력·리더십·인센티브는 전용 처리기에서 추출하므로 목록에서 제외
 TABLES = [
     'researchers',
-    'incentive_selection',
     'publications',
     'technology_transfer',
     'transfers',
@@ -163,7 +162,19 @@ def run():
         else:
             missing.append('leadership (리더십진단.xlsx 또는 leadership_raw)')
 
-    # ── 7. 나머지 테이블 ─────────────────────────────────────────────────
+    # ── 7. 인센티브 선정 이력: 핵심이력.xlsx 우선, 없으면 incentive_selection_raw 폴백 ─
+    from process_incentive import process as process_incentive
+    inc_ok = process_incentive()
+    if not inc_ok:
+        df = _read_raw('incentive_selection')
+        if df is not None:
+            out_path = os.path.join(OUT_DIR, 'incentive_selection.csv')
+            df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+            print(f'  [OK]   incentive_selection.csv (incentive_selection_raw 폴백, {len(df)}행)')
+        else:
+            missing.append('incentive_selection (핵심이력.xlsx 또는 incentive_selection_raw)')
+
+    # ── 8. 나머지 테이블 (researchers, publications, technology_transfer, transfers, certifications, succession) ──
     for table in TABLES:
         df = _read_raw(table)
         if df is None:
@@ -174,7 +185,7 @@ def run():
         df.to_csv(out_path, index=False, encoding='utf-8-sig')
         print(f'  [OK]   {table}.csv ({len(df)}행)')
 
-    # ── 8. 코멘트: 별도 처리 (LLM 요약 옵션 포함) ───────────────────────
+    # ── 9. 코멘트: 별도 처리 (LLM 요약 옵션 포함) ───────────────────────
     from process_comments import process as process_comments
     process_comments(use_llm=False)
 
