@@ -28,8 +28,10 @@
   technology_transfer_raw : researcher_id, transfer_date, tech_name,
                             recipient, amount, transfer_type
   transfers_raw       : researcher_id, date, type, description
-  leadership_raw      : researcher_id, year, overall_score,
-                        vision, communication, execution, collaboration, development
+  leadership_raw      : researcher_id, year, evaluator_group,
+                        미래통찰, 성과창출, 몰입촉진, 인재육성, 자기관리, 저해행동
+                        ※ '리더십진단.xlsx' 가 있으면 자동 추출 (별도 raw 불필요)
+                           처리기: pipeline/process_leadership.py
   certifications_raw  : researcher_id, cert_type, cert_name, score, grade, date_obtained
   education_raw       : researcher_id, degree, major, school, graduation_year
                         ※ '임직원_학력.xlsx' 가 있으면 자동 추출 (별도 raw 불필요)
@@ -55,14 +57,12 @@ OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data',
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from excel_reader import read_xlsx, norm_researcher_id_col
 
-# 평가·특허·양성이력·학력은 전용 처리기에서 추출하므로 목록에서 제외
+# 평가·특허·양성이력·학력·리더십·인센티브는 전용 처리기에서 추출하므로 목록에서 제외
 TABLES = [
     'researchers',
-    'incentive_selection',
     'publications',
     'technology_transfer',
     'transfers',
-    'leadership',
     'certifications',
     'succession',
 ]
@@ -122,7 +122,19 @@ def run():
         else:
             missing.append('nurturing (양성_인력_현황.xlsx 또는 nurturing_raw)')
 
-    # ── 4. 학력: 임직원_학력.xlsx 우선, 없으면 education_raw 폴백 ──────
+    # ── 4. 시상이력: 시상 세부사항.xlsx 우선, 없으면 awards_raw 폴백 ────
+    from process_awards import process as process_awards
+    awd_ok = process_awards()
+    if not awd_ok:
+        df = _read_raw('awards')
+        if df is not None:
+            out_path = os.path.join(OUT_DIR, 'awards.csv')
+            df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+            print(f'  [OK]   awards.csv (awards_raw 폴백, {len(df)}행)')
+        else:
+            missing.append('awards (시상 세부사항.xlsx 또는 awards_raw)')
+
+    # ── 5. 학력: 임직원_학력.xlsx 우선, 없으면 education_raw 폴백 ──────
     from process_education import process as process_education
     edu_ok = process_education()
     if not edu_ok:
@@ -134,7 +146,31 @@ def run():
         else:
             missing.append('education (임직원_학력.xlsx 또는 education_raw)')
 
-    # ── 5. 나머지 테이블 ─────────────────────────────────────────────────
+    # ── 6. 리더십 진단: 리더십진단.xlsx 우선, 없으면 leadership_raw 폴백 ─
+    from process_leadership import process as process_leadership
+    lea_ok = process_leadership()
+    if not lea_ok:
+        df = _read_raw('leadership')
+        if df is not None:
+            out_path = os.path.join(OUT_DIR, 'leadership.csv')
+            df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+            print(f'  [OK]   leadership.csv (leadership_raw 폴백, {len(df)}행)')
+        else:
+            missing.append('leadership (리더십진단.xlsx 또는 leadership_raw)')
+
+    # ── 7. 인센티브 선정 이력: 핵심이력.xlsx 우선, 없으면 incentive_selection_raw 폴백 ─
+    from process_incentive import process as process_incentive
+    inc_ok = process_incentive()
+    if not inc_ok:
+        df = _read_raw('incentive_selection')
+        if df is not None:
+            out_path = os.path.join(OUT_DIR, 'incentive_selection.csv')
+            df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+            print(f'  [OK]   incentive_selection.csv (incentive_selection_raw 폴백, {len(df)}행)')
+        else:
+            missing.append('incentive_selection (핵심이력.xlsx 또는 incentive_selection_raw)')
+
+    # ── 8. 나머지 테이블 (researchers, publications, technology_transfer, transfers, certifications, succession) ──
     for table in TABLES:
         df = _read_raw(table)
         if df is None:
@@ -145,7 +181,7 @@ def run():
         df.to_csv(out_path, index=False, encoding='utf-8-sig')
         print(f'  [OK]   {table}.csv ({len(df)}행)')
 
-    # ── 6. 코멘트: 별도 처리 (LLM 요약 옵션 포함) ───────────────────────
+    # ── 9. 코멘트: 별도 처리 (LLM 요약 옵션 포함) ───────────────────────
     from process_comments import process as process_comments
     process_comments(use_llm=False)
 
