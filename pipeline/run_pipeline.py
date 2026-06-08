@@ -61,9 +61,8 @@ OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data',
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from excel_reader import read_xlsx, norm_researcher_id_col
 
-# 평가·특허·양성이력·시상·학력·리더십·인센티브는 전용 처리기에서 추출하므로 목록에서 제외
+# 평가·특허·양성이력·시상·학력·리더십·인센티브·연구원기본정보는 전용 처리기에서 추출하므로 목록에서 제외
 TABLES = [
-    'researchers',
     'publications',
     'technology_transfer',
     'transfers',
@@ -88,6 +87,18 @@ def _read_raw(name: str) -> pd.DataFrame | None:
 def run():
     os.makedirs(OUT_DIR, exist_ok=True)
     missing = []
+
+    # ── 0. 연구원 기본정보: 인력현황.xlsx 우선, 없으면 researchers_raw 폴백 ─
+    from process_researchers import process as process_researchers
+    res_ok = process_researchers()
+    if not res_ok:
+        df = _read_raw('researchers')
+        if df is not None:
+            out_path = os.path.join(OUT_DIR, 'researchers.csv')
+            df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+            print(f'  [OK]   researchers.csv (researchers_raw 폴백, {len(df)}행)')
+        else:
+            missing.append('researchers (인력현황.xlsx 또는 researchers_raw)')
 
     # ── 1. 평가 데이터: T&P 파일에서 추출 ──────────────────────────────
     from process_tp_evaluation import process as process_tp

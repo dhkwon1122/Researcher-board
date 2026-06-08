@@ -1,6 +1,8 @@
 import base64
+import math
 import mimetypes
 import os
+from datetime import date, datetime
 
 import dash_bootstrap_components as dbc
 import pandas as pd
@@ -64,15 +66,44 @@ def photo_block(rid: str, name: str, row=None, current_year: int = 2026):
             except (TypeError, ValueError):
                 return default
 
+        def _parse_date(v):
+            if v is None:
+                return None
+            if isinstance(v, (date, datetime)):
+                return v.date() if isinstance(v, datetime) else v
+            s = str(v).strip()
+            if s in ('', 'nan', 'None', 'NaT'):
+                return None
+            for fmt in ('%Y-%m-%d', '%Y/%m/%d', '%Y.%m.%d'):
+                try:
+                    return datetime.strptime(s[:10], fmt).date()
+                except ValueError:
+                    continue
+            return None
+
         birth_year = _int(row.get('birth_year'), current_year - 30)
-        hire_year  = _int(row.get('hire_year'),  current_year)
         age        = current_year - birth_year
-        tenure     = current_year - hire_year
         gender     = str(row.get('gender', '')).strip()
         position   = str(row.get('position', '')).strip()
 
+        # 근속: hire_date 있으면 정밀 계산, 없으면 hire_year 폴백
+        hire_dt = _parse_date(row.get('hire_date'))
+        if hire_dt:
+            tenure = round((date.today() - hire_dt).days / 365, 1)
+        else:
+            hire_year = _int(row.get('hire_year'), current_year)
+            tenure = float(current_year - hire_year)
+
+        # 직급연차: 2027-03-01 기준으로 올림
+        promo_dt = _parse_date(row.get('promotion_date'))
+        if promo_dt:
+            ref = date(2027, 3, 1)
+            position_year = math.ceil((ref - promo_dt).days / 365)
+        else:
+            position_year = int(tenure)
+
         line1 = f'{name}({gender}/{age}세)' if gender else f'{name}({age}세)'
-        line2 = f'{position}-{tenure}({tenure:.1f}년)' if position else f'{tenure:.1f}년 근속'
+        line2 = f'{position}-{position_year}({tenure:.1f}년)' if position else f'{tenure:.1f}년 근속'
 
         sub_lines = [
             html.P(line1, className='fw-bold mt-2 mb-0 text-center small'),
