@@ -225,6 +225,31 @@ def nurturing_block(nur_df, rid: str, *, limit: int | None = None):
     return html.Ul(items, className='ps-3 mb-0 small') if items else html.Div('양성 이력 없음', className='text-muted small')
 
 
+AWARD_TYPES = {'그룹표창', '대표이사표창', '대표이사표창(시상금미포함)', '부문표창'}
+
+
+def award_block(awd_df, rid: str):
+    if awd_df.empty:
+        return html.Div('시상 이력 없음', className='text-muted small')
+    rows = awd_df[awd_df['researcher_id'] == rid].copy()
+    rows = rows[rows['award_type'].isin(AWARD_TYPES)] if 'award_type' in rows.columns else rows
+    if rows.empty:
+        return html.Div('시상 이력 없음', className='text-muted small')
+
+    sort_col = 'year' if 'year' in rows.columns else ('award_date' if 'award_date' in rows.columns else rows.columns[0])
+    rows = rows.sort_values(sort_col, ascending=False)
+
+    items = []
+    for _, row in rows.iterrows():
+        yr = str(row.get('year', str(row.get('award_date', ''))[:4])).strip()
+        yr_label = f"'{yr[-2:]}" if len(yr) >= 2 else yr
+        aname = str(row.get('award_name', '')).strip()
+        desc  = str(row.get('description', '')).strip()
+        parts = [p for p in [yr_label, aname, desc] if p and p not in ('nan',)]
+        items.append(html.Li(' / '.join(parts) if parts else '-', className='small'))
+    return html.Ul(items, className='ps-3 mb-0 small')
+
+
 def transfer_block(tra_df, rid: str):
     rows = tra_df[tra_df['researcher_id'] == rid].sort_values('date', ascending=False) if not tra_df.empty else pd.DataFrame()
     if rows.empty:

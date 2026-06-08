@@ -15,6 +15,7 @@ from components.detail_tabs import (
 )
 from components.profile_sections import (
     avatar,
+    award_block,
     comments_block,
     education_block,
     evaluation_incentive_block,
@@ -99,6 +100,9 @@ def _left_column():
         _card([
             html.P('양성 이력', className='fw-semibold text-muted small mb-2'),
             html.Div(id='nurturing-block'),
+            html.Hr(className='my-2'),
+            html.P('시상 이력', className='fw-semibold text-muted small mb-2'),
+            html.Div(id='award-block'),
         ], body_class='p-2', card_class='shadow-sm'),
     ], md=3)
 
@@ -207,6 +211,7 @@ def _empty_profile_output():
     Output('education-block', 'children'),
     Output('eval-incentive-block', 'children'),
     Output('nurturing-block', 'children'),
+    Output('award-block', 'children'),
     Output('transfer-block', 'children'),
     Output('leadership-year', 'options'),
     Output('leadership-year', 'value'),
@@ -238,6 +243,7 @@ def update_profile(rid):
         education_block(tables['education'], rid),
         evaluation_incentive_block(tables['evaluations'], tables['incentive_selection'], rid, years),
         nurturing_block(tables['nurturing'], rid),
+        award_block(tables['awards'], rid),
         transfer_block(tables['transfers'], rid),
         leadership_options,
         leadership_default,
