@@ -73,7 +73,24 @@ def process() -> bool:
         return False
 
     df = read_xlsx(raw_path)
-    df.columns = [str(c).strip() for c in df.columns]
+
+    # 컬럼명 정규화: xlwings가 숫자 헤더를 float로 읽으면 '1.0' → '1' 변환
+    def _norm_col(c):
+        s = str(c).strip()
+        try:
+            f = float(s)
+            if f == int(f):
+                return str(int(f))
+        except (ValueError, TypeError):
+            pass
+        return s
+
+    df.columns = [_norm_col(c) for c in df.columns]
+
+    # 읽은 컬럼 목록 출력 (매칭 오류 진단용)
+    found_q = [c for c in df.columns if c in [str(i) for i in range(1, 29)]]
+    print(f'  [진단] 인식된 문항 컬럼: {found_q if found_q else "없음 — 컬럼명 확인 필요"}'
+          f'\n         전체 헤더 앞 10개: {list(df.columns[:10])}')
 
     for required in [COL_ID, COL_GROUP]:
         if required not in df.columns:
@@ -93,11 +110,14 @@ def process() -> bool:
     else:
         df['year'] = DEFAULT_YEAR
 
-    # 문항 컬럼 숫자 변환
+    # 문항 컬럼 숫자 변환 (문자열·float 모두 처리)
     q_all = [str(i) for i in range(1, 29)]
     for c in q_all:
         if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors='coerce')
+            df[c] = df[c].apply(
+                lambda v: pd.to_numeric(str(v).strip().replace(',', '.'), errors='coerce')
+                if v is not None else None
+            )
 
     # ── 강점·개선점 저장 ─────────────────────────────────────────────────────
     # 평가자 1인 1행으로 보존 (같은 그룹의 여러 평가자 응답이 각 행에 저장됨)
