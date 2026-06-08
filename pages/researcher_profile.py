@@ -15,7 +15,7 @@ from components.detail_tabs import (
 )
 from components.profile_sections import (
     avatar,
-    basic_info_block,
+    award_block,
     comments_block,
     education_block,
     evaluation_incentive_block,
@@ -97,10 +97,12 @@ def _selector_card(options, default):
 def _left_column():
     return dbc.Col([
         _card(html.Div(id='photo-block', className='d-flex flex-column align-items-center py-1'), body_class='p-2'),
-        _card(html.Div(id='basic-info-block'), body_class='p-2'),
         _card([
             html.P('양성 이력', className='fw-semibold text-muted small mb-2'),
             html.Div(id='nurturing-block'),
+            html.Hr(className='my-2'),
+            html.P('시상 이력', className='fw-semibold text-muted small mb-2'),
+            html.Div(id='award-block'),
         ], body_class='p-2', card_class='shadow-sm'),
     ], md=3)
 
@@ -206,10 +208,10 @@ def _empty_profile_output():
 
 @callback(
     Output('photo-block', 'children'),
-    Output('basic-info-block', 'children'),
     Output('education-block', 'children'),
     Output('eval-incentive-block', 'children'),
     Output('nurturing-block', 'children'),
+    Output('award-block', 'children'),
     Output('transfer-block', 'children'),
     Output('leadership-year', 'options'),
     Output('leadership-year', 'value'),
@@ -237,11 +239,11 @@ def update_profile(rid):
     leadership_options, leadership_default = leadership_year_options(tables['leadership'], rid)
 
     return (
-        photo_block(rid, str(researcher.get('name', ''))),
-        basic_info_block(researcher, CURRENT_YEAR),
+        photo_block(rid, str(researcher.get('name', '')), researcher, CURRENT_YEAR),
         education_block(tables['education'], rid),
         evaluation_incentive_block(tables['evaluations'], tables['incentive_selection'], rid, years),
         nurturing_block(tables['nurturing'], rid),
+        award_block(tables['awards'], rid),
         transfer_block(tables['transfers'], rid),
         leadership_options,
         leadership_default,

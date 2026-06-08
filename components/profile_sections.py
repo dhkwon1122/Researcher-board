@@ -1,6 +1,8 @@
 import base64
+import math
 import mimetypes
 import os
+from datetime import date, datetime
 
 import dash_bootstrap_components as dbc
 import pandas as pd
@@ -40,7 +42,7 @@ def avatar(name: str, size: int = 88):
     )
 
 
-def photo_block(rid: str, name: str):
+def photo_block(rid: str, name: str, row=None, current_year: int = 2026):
     photo_el = None
     for ext in ('png', 'jpg', 'jpeg'):
         photo_file = os.path.join(RAW_DIR, f'{rid}.{ext}')
@@ -55,8 +57,63 @@ def photo_block(rid: str, name: str):
                        'display': 'block'},
             )
             break
-    return [photo_el or avatar(name, size=90),
-            html.P(name, className='fw-bold mt-2 mb-0 text-center small')]
+
+    sub_lines = []
+    if row is not None:
+        def _int(v, default):
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return default
+
+        def _parse_date(v):
+            if v is None:
+                return None
+            if isinstance(v, (date, datetime)):
+                return v.date() if isinstance(v, datetime) else v
+            s = str(v).strip()
+            if s in ('', 'nan', 'None', 'NaT'):
+                return None
+            for fmt in ('%Y-%m-%d', '%Y/%m/%d', '%Y.%m.%d'):
+                try:
+                    return datetime.strptime(s[:10], fmt).date()
+                except ValueError:
+                    continue
+            return None
+
+        birth_year = _int(row.get('birth_year'), current_year - 30)
+        age        = current_year - birth_year
+        gender     = str(row.get('gender', '')).strip()
+        position   = str(row.get('position', '')).strip()
+
+        # 근속: hire_date 있으면 정밀 계산, 없으면 hire_year 폴백
+        hire_dt = _parse_date(row.get('hire_date'))
+        if hire_dt:
+            tenure = round((date.today() - hire_dt).days / 365, 1)
+        else:
+            hire_year = _int(row.get('hire_year'), current_year)
+            tenure = float(current_year - hire_year)
+
+        # 직급연차: 2027-03-01 기준으로 올림
+        promo_dt = _parse_date(row.get('promotion_date'))
+        if promo_dt:
+            ref = date(2027, 3, 1)
+            position_year = math.ceil((ref - promo_dt).days / 365)
+        else:
+            position_year = int(tenure)
+
+        line1 = f'{name}({gender}/{age}세)' if gender else f'{name}({age}세)'
+        line2 = f'{position}-{position_year}({tenure:.1f}년)' if position else f'{tenure:.1f}년 근속'
+
+        sub_lines = [
+            html.P(line1, className='fw-bold mt-2 mb-0 text-center small'),
+            html.P(line2, className='text-muted text-center mb-0',
+                   style={'fontSize': '0.78rem'}),
+        ]
+    else:
+        sub_lines = [html.P(name, className='fw-bold mt-2 mb-0 text-center small')]
+
+    return [photo_el or avatar(name, size=90)] + sub_lines
 
 
 def basic_info_block(row, current_year: int):
@@ -197,6 +254,31 @@ def nurturing_block(nur_df, rid: str, *, limit: int | None = None):
                  if p and p not in ('nan',)]
         items.append(html.Li(' / '.join(parts) if parts else '-', className='small'))
     return html.Ul(items, className='ps-3 mb-0 small') if items else html.Div('양성 이력 없음', className='text-muted small')
+
+
+AWARD_TYPES = {'그룹표창', '대표이사표창', '대표이사표창(시상금미포함)', '부문표창'}
+
+
+def award_block(awd_df, rid: str):
+    if awd_df.empty:
+        return html.Div('시상 이력 없음', className='text-muted small')
+    rows = awd_df[awd_df['researcher_id'] == rid].copy()
+    rows = rows[rows['award_type'].isin(AWARD_TYPES)] if 'award_type' in rows.columns else rows
+    if rows.empty:
+        return html.Div('시상 이력 없음', className='text-muted small')
+
+    sort_col = 'year' if 'year' in rows.columns else ('award_date' if 'award_date' in rows.columns else rows.columns[0])
+    rows = rows.sort_values(sort_col, ascending=False)
+
+    items = []
+    for _, row in rows.iterrows():
+        yr = str(row.get('year', str(row.get('award_date', ''))[:4])).strip()
+        yr_label = f"'{yr[-2:]}" if len(yr) >= 2 else yr
+        aname = str(row.get('award_name', '')).strip()
+        desc  = str(row.get('description', '')).strip()
+        parts = [p for p in [yr_label, aname, desc] if p and p not in ('nan',)]
+        items.append(html.Li(' / '.join(parts) if parts else '-', className='small'))
+    return html.Ul(items, className='ps-3 mb-0 small')
 
 
 def transfer_block(tra_df, rid: str):
