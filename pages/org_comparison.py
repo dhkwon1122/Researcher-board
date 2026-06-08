@@ -103,7 +103,7 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, inc, nur):
     # 학력
     r_edu = edu[edu['researcher_id'] == rid] if not edu.empty else pd.DataFrame()
     edu_items = []
-    for deg in ['박사', '석사', '학사']:
+    for deg in ['박사', '석사', '학사', '전문대', '고교']:
         row = r_edu[r_edu['degree'] == deg]
         if not row.empty:
             r0 = row.iloc[0]
@@ -157,13 +157,24 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, inc, nur):
         r_nur = r_nur.sort_values(sort_col, ascending=False).head(3)
     nur_items = []
     for _, nr in r_nur.iterrows():
-        yr   = str(nr.get('year', nr.get('start_date', '')))[:4]
-        cat  = str(nr.get('category', ''))
-        sub  = str(nr.get('subcategory', ''))
-        inst = str(nr.get('institution', ''))
-        parts = [p for p in [cat, sub, inst] if p and p not in ('', 'nan')]
+        start = str(nr.get('start_date', '')).strip()
+        end   = str(nr.get('end_date', '')).strip()
+        sy    = start[:4] if len(start) >= 4 else ''
+        ey    = end[:4]   if len(end)   >= 4 else ''
+        if sy:
+            yr_label = f"'{sy[-2:]}"
+            if ey and ey > sy:
+                yr_label += f"~'{ey[-2:]}"
+        else:
+            yr_label = ''
+        sub     = str(nr.get('subcategory', '')).strip()
+        country = str(nr.get('country', '')).strip()
+        inst    = str(nr.get('institution', '')).strip()
+        loc_parts = [p for p in [country, inst] if p and p not in ('nan',)]
+        loc = ' '.join(loc_parts) if loc_parts else ''
+        parts = [p for p in [yr_label, sub, loc] if p and p not in ('nan',)]
         nur_items.append(html.Li(
-            f"{yr}년  {' / '.join(parts)}" if yr else ' / '.join(parts),
+            ' / '.join(parts) if parts else '-',
             className='small',
         ))
     nur_section = _section('주요 양성이력', html.Ul(

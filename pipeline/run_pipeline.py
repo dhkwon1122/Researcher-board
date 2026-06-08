@@ -32,6 +32,8 @@
                         vision, communication, execution, collaboration, development
   certifications_raw  : researcher_id, cert_type, cert_name, score, grade, date_obtained
   education_raw       : researcher_id, degree, major, school, graduation_year
+                        ※ '임직원_학력.xlsx' 가 있으면 자동 추출 (별도 raw 불필요)
+                           처리기: pipeline/process_education.py
   comments_raw        : researcher_id, year, commenter_type, comment_raw
                         (선택: comment_summary, strengths, improvements)
   succession_raw      : researcher_id, org_code, rank_type (Ready Now/Ready Later),
@@ -53,7 +55,7 @@ OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data',
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from excel_reader import read_xlsx, norm_researcher_id_col
 
-# 평가(evaluations)는 T&P 파일에서 추출하므로 목록에서 제외
+# 평가·특허·양성이력·학력은 전용 처리기에서 추출하므로 목록에서 제외
 TABLES = [
     'researchers',
     'incentive_selection',
@@ -62,7 +64,6 @@ TABLES = [
     'transfers',
     'leadership',
     'certifications',
-    'education',
     'succession',
 ]
 
@@ -121,7 +122,19 @@ def run():
         else:
             missing.append('nurturing (양성_인력_현황.xlsx 또는 nurturing_raw)')
 
-    # ── 4. 나머지 테이블 ─────────────────────────────────────────────────
+    # ── 4. 학력: 임직원_학력.xlsx 우선, 없으면 education_raw 폴백 ──────
+    from process_education import process as process_education
+    edu_ok = process_education()
+    if not edu_ok:
+        df = _read_raw('education')
+        if df is not None:
+            out_path = os.path.join(OUT_DIR, 'education.csv')
+            df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+            print(f'  [OK]   education.csv (education_raw 폴백, {len(df)}행)')
+        else:
+            missing.append('education (임직원_학력.xlsx 또는 education_raw)')
+
+    # ── 5. 나머지 테이블 ─────────────────────────────────────────────────
     for table in TABLES:
         df = _read_raw(table)
         if df is None:
@@ -132,7 +145,7 @@ def run():
         df.to_csv(out_path, index=False, encoding='utf-8-sig')
         print(f'  [OK]   {table}.csv ({len(df)}행)')
 
-    # ── 3. 코멘트: 별도 처리 (LLM 요약 옵션 포함) ───────────────────────
+    # ── 6. 코멘트: 별도 처리 (LLM 요약 옵션 포함) ───────────────────────
     from process_comments import process as process_comments
     process_comments(use_llm=False)
 
