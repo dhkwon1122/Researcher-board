@@ -40,7 +40,7 @@ def avatar(name: str, size: int = 88):
     )
 
 
-def photo_block(rid: str, name: str):
+def photo_block(rid: str, name: str, row=None, current_year: int = 2026):
     photo_el = None
     for ext in ('png', 'jpg', 'jpeg'):
         photo_file = os.path.join(RAW_DIR, f'{rid}.{ext}')
@@ -55,8 +55,34 @@ def photo_block(rid: str, name: str):
                        'display': 'block'},
             )
             break
-    return [photo_el or avatar(name, size=90),
-            html.P(name, className='fw-bold mt-2 mb-0 text-center small')]
+
+    sub_lines = []
+    if row is not None:
+        def _int(v, default):
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return default
+
+        birth_year = _int(row.get('birth_year'), current_year - 30)
+        hire_year  = _int(row.get('hire_year'),  current_year)
+        age        = current_year - birth_year
+        tenure     = current_year - hire_year
+        gender     = str(row.get('gender', '')).strip()
+        position   = str(row.get('position', '')).strip()
+
+        line1 = f'{name}({gender}/{age}세)' if gender else f'{name}({age}세)'
+        line2 = f'{position}-{tenure}({tenure:.1f}년)' if position else f'{tenure:.1f}년 근속'
+
+        sub_lines = [
+            html.P(line1, className='fw-bold mt-2 mb-0 text-center small'),
+            html.P(line2, className='text-muted text-center mb-0',
+                   style={'fontSize': '0.78rem'}),
+        ]
+    else:
+        sub_lines = [html.P(name, className='fw-bold mt-2 mb-0 text-center small')]
+
+    return [photo_el or avatar(name, size=90)] + sub_lines
 
 
 def basic_info_block(row, current_year: int):
