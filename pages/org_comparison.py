@@ -125,13 +125,13 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur):
         r_awd = r_awd.sort_values('award_date', ascending=False).head(3)
     award_items = []
     for _, aw in r_awd.iterrows():
-        yr   = str(aw.get('year', str(aw.get('award_date', ''))[:4])).strip()
-        atype = str(aw.get('award_type', '')).strip()
+        yr    = str(aw.get('year', str(aw.get('award_date', ''))[:4])).strip()
         aname = str(aw.get('award_name', '')).strip()
+        desc  = str(aw.get('description', '')).strip()
         yr_label = f"'{yr[-2:]}" if len(yr) >= 2 else yr
-        parts = [p for p in [atype, aname] if p and p not in ('nan',)]
+        parts = [p for p in [yr_label, aname, desc] if p and p not in ('nan',)]
         award_items.append(html.Li(
-            f"{yr_label}  {' — '.join(parts)}" if yr_label else ' — '.join(parts),
+            ' / '.join(parts) if parts else '-',
             className='small',
         ))
     award_section = _section('주요 시상이력', html.Ul(
