@@ -194,8 +194,8 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, inc, nur):
                 dbc.Col([edu_section, html.Div(className='mb-2'), award_section], width=8),
             ], className='g-2 mb-2'),
             dbc.Row([
-                dbc.Col(basic_section, width=6),
-                dbc.Col(nur_section, width=6),
+                dbc.Col(basic_section, width=4),
+                dbc.Col(nur_section, width=8),
             ], className='g-2'),
         ], className='p-2'),
     ], className='shadow-sm h-100')
