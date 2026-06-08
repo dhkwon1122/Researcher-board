@@ -114,10 +114,15 @@ def process() -> bool:
 
     rows = []
     for rid, grp in df.groupby('researcher_id'):
-        has_higher = grp['_degree_std'].isin(HIGHER_DEGREES).any()
+        has_higher    = grp['_degree_std'].isin(HIGHER_DEGREES).any()
+        has_associate = (grp['_degree_std'] == '전문대').any()
         for _, row in grp.iterrows():
             deg = row['_degree_std']
+            # 학사 이상이 있으면 전문대·고교 제외
             if has_higher and deg in ('고교', '전문대'):
+                continue
+            # 전문대가 있으면 고교 제외 (전문대가 최종학력인 경우에만 전문대 표시)
+            if has_associate and deg == '고교':
                 continue
             school = str(row.get(COL_SCHOOL, '')).strip() if COL_SCHOOL in df.columns else ''
             major  = str(row.get(COL_MAJOR,  '')).strip() if COL_MAJOR  in df.columns else ''
