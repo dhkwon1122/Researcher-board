@@ -31,6 +31,8 @@ GRADE_BADGE_COLOR = {
     '라': 'secondary', '마': 'danger', '-': 'light',
 }
 
+AWARD_TYPES = {'그룹표창', '대표이사표창', '대표이사표창(시상금미포함)', '부문표창'}
+
 
 # ─── 헬퍼 ──────────────────────────────────────────────────────────────────────
 
@@ -75,7 +77,7 @@ def _section(title, body):
 
 # ─── 후보 카드 빌더 ─────────────────────────────────────────────────────────────
 
-def _candidate_card(r_info, rank_type, rank_order, eva, edu, inc, nur):
+def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur):
     rid    = str(r_info['researcher_id'])
     name   = str(r_info.get('name', '-'))
     dept   = str(r_info.get('department', '-'))
@@ -117,17 +119,21 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, inc, nur):
     ))
 
     # 주요 시상이력
-    r_inc = inc[inc['researcher_id'] == rid] if not inc.empty else pd.DataFrame()
-    if not r_inc.empty:
-        sel_mask = r_inc['selected'].astype(str).isin(['True', 'Y', '1', 'true', 'y'])
-        r_inc = r_inc[sel_mask].sort_values('year', ascending=False).head(3)
-    award_items = [
-        html.Li(
-            f"{aw['year']}년{(' — ' + str(aw.get('category', ''))) if aw.get('category') else ''}",
+    r_awd = awd[awd['researcher_id'] == rid].copy() if not awd.empty else pd.DataFrame()
+    if not r_awd.empty:
+        r_awd = r_awd[r_awd['award_type'].astype(str).str.strip().isin(AWARD_TYPES)]
+        r_awd = r_awd.sort_values('award_date', ascending=False).head(3)
+    award_items = []
+    for _, aw in r_awd.iterrows():
+        yr    = str(aw.get('year', str(aw.get('award_date', ''))[:4])).strip()
+        aname = str(aw.get('award_name', '')).strip()
+        desc  = str(aw.get('description', '')).strip()
+        yr_label = f"'{yr[-2:]}" if len(yr) >= 2 else yr
+        parts = [p for p in [yr_label, aname, desc] if p and p not in ('nan',)]
+        award_items.append(html.Li(
+            ' / '.join(parts) if parts else '-',
             className='small',
-        )
-        for _, aw in r_inc.iterrows()
-    ]
+        ))
     award_section = _section('주요 시상이력', html.Ul(
         award_items or [html.Li('해당 없음', className='small text-muted')],
         className='ps-3 mb-0 small',
@@ -194,8 +200,8 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, inc, nur):
                 dbc.Col([edu_section, html.Div(className='mb-2'), award_section], width=8),
             ], className='g-2 mb-2'),
             dbc.Row([
-                dbc.Col(basic_section, width=6),
-                dbc.Col(nur_section, width=6),
+                dbc.Col(basic_section, width=4),
+                dbc.Col(nur_section, width=8),
             ], className='g-2'),
         ], className='p-2'),
     ], className='shadow-sm h-100')
@@ -203,7 +209,7 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, inc, nur):
 
 # ─── 조직 섹션 빌더 ─────────────────────────────────────────────────────────────
 
-def _org_section(dept_name, org_code, suc, res, eva, edu, inc, nur):
+def _org_section(dept_name, org_code, suc, res, eva, edu, awd, nur):
     suc_org = suc[suc['org_code'] == org_code].copy()
     if suc_org.empty:
         return None
@@ -222,7 +228,7 @@ def _org_section(dept_name, org_code, suc, res, eva, edu, inc, nur):
             r_rows.iloc[0],
             str(srow['rank_type']),
             int(srow['rank_order']),
-            eva, edu, inc, nur,
+            eva, edu, awd, nur,
         )
         cards.append(dbc.Col(card, lg=3, md=6, className='mb-2'))
 
@@ -245,7 +251,7 @@ def layout():
         res = _r('researchers')
         eva = _r('evaluations')
         edu = _r('education')
-        inc = _r('incentive_selection')
+        awd = _r('awards')
         nur = _r('nurturing')
         suc = _r('succession')
     except Exception as e:
@@ -264,7 +270,7 @@ def layout():
         ])
 
     # year 컬럼 문자열 통일
-    for df in (eva, inc, nur):
+    for df in (eva, nur):
         if not df.empty and 'year' in df.columns:
             df['year'] = df['year'].astype(str)
 
@@ -277,7 +283,7 @@ def layout():
     sections = []
     for org_code in sorted(org_order):
         dept_name = dept_map.get(org_code, org_code)
-        sec = _org_section(dept_name, org_code, suc, res, eva, edu, inc, nur)
+        sec = _org_section(dept_name, org_code, suc, res, eva, edu, awd, nur)
         if sec:
             sections.append(sec)
 

@@ -28,13 +28,7 @@ GRADE_COLOR = {
     '마': '#ff4d4f',  # 빨강 — 최하
     '-': '#aaa',
 }
-LEADERSHIP_DIMS = {
-    'vision': '비전제시',
-    'communication': '소통·협력',
-    'execution': '실행력',
-    'collaboration': '협업·팀워크',
-    'development': '인재육성',
-}
+LEADERSHIP_DIMS = ['미래통찰', '성과창출', '몰입촉진', '인재육성', '자기관리', '저해행동']
 TRANSFER_BADGE = {
     '부서발령': 'primary',
     '프로젝트파견': 'success',
@@ -790,29 +784,61 @@ def update_leadership(rid, year):
     lea_df = _r('leadership')
     if lea_df.empty:
         return fig
-    row = lea_df[(lea_df['researcher_id'] == rid) & (lea_df['year'] == year)]
-    if row.empty:
+
+    dims   = LEADERSHIP_DIMS
+    labels = dims + [dims[0]]
+
+    def _vals(row):
+        return [float(row[d]) if d in row and pd.notna(row[d]) else 0 for d in dims]
+
+    # ── 트레이스 1: 전체 응답자 타인평균 (배경, 옅은 회색) ─────────────────
+    all_others = lea_df[lea_df['evaluator_group'] == '타인평균']
+    if not all_others.empty:
+        grand = [all_others[d].mean() for d in dims if d in all_others.columns]
+        if grand:
+            grand_vals = [all_others[d].mean() if d in all_others.columns else 0 for d in dims]
+            fig.add_trace(go.Scatterpolar(
+                r=grand_vals + [grand_vals[0]],
+                theta=labels,
+                fill='toself',
+                fillcolor='rgba(180,180,180,0.15)',
+                line=dict(color='rgba(150,150,150,0.5)', width=1.5, dash='dot'),
+                name='전체 평균',
+                hovertemplate='%{theta}: %{r:.2f}<extra>전체 평균</extra>',
+            ))
+
+    # ── 트레이스 2: 해당 연구원 타인평균 (주 트레이스) ──────────────────────
+    df_r = lea_df[
+        (lea_df['researcher_id'] == rid) &
+        (lea_df['year'].astype(str) == str(year)) &
+        (lea_df['evaluator_group'] == '타인평균')
+    ]
+    if df_r.empty:
         return fig
-    row = row.iloc[0]
-    dims = list(LEADERSHIP_DIMS.keys())
-    labels = list(LEADERSHIP_DIMS.values())
-    vals = [float(row.get(d, 0)) for d in dims]
-    vals_c = vals + [vals[0]]
-    labels_c = labels + [labels[0]]
+
+    my_vals = _vals(df_r.iloc[0])
     fig.add_trace(go.Scatterpolar(
-        r=vals_c, theta=labels_c,
+        r=my_vals + [my_vals[0]],
+        theta=labels,
         fill='toself',
-        fillcolor='rgba(30,58,95,0.15)',
-        line=dict(color='#1e3a5f', width=2),
-        hovertemplate='%{theta}: %{r:.0f}점<extra></extra>',
+        fillcolor='rgba(30,58,95,0.18)',
+        line=dict(color='#1e3a5f', width=2.5),
+        name='타인평균',
+        hovertemplate='%{theta}: %{r:.2f}<extra>타인평균</extra>',
     ))
+
+    all_vals = my_vals + ([all_others[d].mean() for d in dims if d in all_others.columns]
+                          if not all_others.empty else [])
+    r_max = max((v for v in all_vals if v), default=5) * 1.1
+
     fig.update_layout(
         polar=dict(
-            radialaxis=dict(visible=True, range=[0, 100], tickfont=dict(size=8)),
-            angularaxis=dict(tickfont=dict(size=11, color='#333')),
+            radialaxis=dict(visible=True, range=[0, r_max], tickfont=dict(size=8)),
+            angularaxis=dict(tickfont=dict(size=10, color='#333')),
         ),
-        showlegend=False,
-        margin=dict(l=50, r=50, t=15, b=15),
+        showlegend=True,
+        legend=dict(orientation='h', y=-0.12, font=dict(size=11)),
+        margin=dict(l=50, r=50, t=15, b=35),
         paper_bgcolor='rgba(0,0,0,0)',
     )
     return fig

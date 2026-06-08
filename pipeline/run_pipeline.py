@@ -17,6 +17,10 @@
   researchers_raw     : researcher_id, name, gender, department, org_code,
                         position, hire_year, birth_year
   incentive_raw       : researcher_id, year, selected, category, note
+  awards_raw          : researcher_id, award_date, award_type, award_name,
+                        awarding_org, description
+                        ※ '시상 세부사항.xlsx' 가 있으면 자동 추출 (별도 raw 불필요)
+                           처리기: pipeline/process_awards.py
   publications_raw    : researcher_id, title, journal, pub_year,
                         impact_factor, citation_count, is_corresponding
   patents_raw         : researcher_id, application_id, title, title_ko, status,
@@ -57,7 +61,7 @@ OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data',
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from excel_reader import read_xlsx, norm_researcher_id_col
 
-# 평가·특허·양성이력·학력·리더십·인센티브는 전용 처리기에서 추출하므로 목록에서 제외
+# 평가·특허·양성이력·시상·학력·리더십·인센티브는 전용 처리기에서 추출하므로 목록에서 제외
 TABLES = [
     'researchers',
     'publications',
