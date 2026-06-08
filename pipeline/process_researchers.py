@@ -102,13 +102,15 @@ def process() -> bool:
         if not rid:
             continue
 
-        # 생년 & 성별
+        # 생년 & 성별: 앞 두 자리가 연도 (26 이상 → 1900+, 26 미만 → 2000+)
         birth_sex = str(row.get(COL_BIRTH_SEX, '')).strip()
-        birth_year_str = birth_sex[:4] if len(birth_sex) >= 4 else ''
-        try:
-            birth_year = int(birth_year_str)
-        except ValueError:
-            birth_year = ''
+        birth_year = ''
+        if len(birth_sex) >= 2:
+            try:
+                yy = int(birth_sex[:2])
+                birth_year = (1900 + yy) if yy >= 26 else (2000 + yy)
+            except ValueError:
+                pass
 
         # 입사일 (근속기준일)
         hire_dt = _parse_date(row.get(COL_HIRE_DATE))
