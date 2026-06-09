@@ -10,7 +10,7 @@ from datetime import datetime
 import dash
 import dash_bootstrap_components as dbc
 import pandas as pd
-from dash import html
+from dash import ClientsideFunction, Input, Output, clientside_callback, dcc, html
 
 dash.register_page(__name__, path='/', name='조직별 비교', title='조직별 우수 연구원 비교')
 
@@ -241,7 +241,7 @@ def _org_section(dept_name, org_code, suc, res, eva, edu, awd, nur):
             html.Span(dept_name, className='fw-bold fs-6'),
         ], className='mb-2 pb-1 border-bottom border-primary border-2'),
         dbc.Row(cards, className='g-3'),
-    ], className='mb-4')
+    ], className='mb-4 org-section')
 
 
 # ─── 레이아웃 ────────────────────────────────────────────────────────────────────
@@ -288,10 +288,33 @@ def layout():
             sections.append(sec)
 
     return html.Div([
-        html.H5(
-            [html.I(className='bi bi-people-fill me-2 text-primary'),
-             '조직별 우수 연구원 비교 (조직장 석세션)'],
-            className='fw-bold mb-4 mt-1',
-        ),
+        dbc.Row([
+            dbc.Col(
+                html.H5(
+                    [html.I(className='bi bi-people-fill me-2 text-primary'),
+                     '조직별 우수 연구원 비교 (조직장 석세션)'],
+                    className='fw-bold mb-0 mt-1',
+                ),
+            ),
+            dbc.Col(
+                html.Button(
+                    [html.I(className='bi bi-printer me-1'), 'A3 인쇄'],
+                    id='print-btn',
+                    n_clicks=0,
+                    className='btn btn-outline-secondary btn-sm no-print',
+                ),
+                width='auto',
+                className='d-flex align-items-center',
+            ),
+        ], justify='between', align='center', className='mb-4'),
+        html.Div(id='_print-dummy', style={'display': 'none'}),
         *sections,
     ])
+
+
+clientside_callback(
+    "function(n) { if (n > 0) { window.print(); } return ''; }",
+    Output('_print-dummy', 'children'),
+    Input('print-btn', 'n_clicks'),
+    prevent_initial_call=True,
+)

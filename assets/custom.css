@@ -73,3 +73,93 @@ body {
   overflow-y: auto;
   display: block;
 }
+
+/* ════════════════════════════════════════════════
+   A3 인쇄 (landscape) — 조직별 비교 화면
+   ════════════════════════════════════════════════ */
+@media print {
+  @page {
+    size: A3 landscape;
+    margin: 12mm 14mm;
+  }
+
+  /* 화면 전용 요소 숨기기 */
+  .navbar,
+  .no-print,
+  #print-btn {
+    display: none !important;
+  }
+
+  /* 전체 컨테이너 여백 제거 */
+  body, .container, .container-fluid, .container-xxl {
+    padding: 0 !important;
+    margin:  0 !important;
+    font-size: 10.5px;
+    color: #000;
+  }
+
+  /* 조직 섹션 — 섹션마다 새 페이지 */
+  .org-section {
+    page-break-after: always;
+    break-after: page;
+    margin-bottom: 0 !important;
+  }
+  .org-section:last-child {
+    page-break-after: avoid;
+    break-after: avoid;
+  }
+
+  /* 섹션 제목 */
+  .org-section > div:first-child {
+    border-bottom: 2px solid #1e3a5f !important;
+    margin-bottom: 6px !important;
+    padding-bottom: 3px !important;
+  }
+
+  /* 카드 4열 고정 (Bootstrap lg-3 override) */
+  .row { display: flex !important; flex-wrap: wrap !important; }
+  .col-lg-3 {
+    flex: 0 0 25% !important;
+    max-width: 25% !important;
+    width: 25% !important;
+    padding: 4px !important;
+  }
+  .col-md-6 {
+    flex: 0 0 25% !important;
+    max-width: 25% !important;
+  }
+
+  /* 카드 테두리·그림자 조정 */
+  .card {
+    border: 1px solid #ccc !important;
+    border-radius: 4px !important;
+    box-shadow: none !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .card-header, .card-body {
+    padding: 4px 6px !important;
+  }
+
+  /* 배경색·뱃지 컬러 인쇄 강제 적용 */
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* 이미지 최대 높이 */
+  img {
+    max-height: 90px !important;
+    object-fit: contain;
+  }
+
+  /* 섹션 배경 */
+  .bg-light {
+    background-color: #f5f5f5 !important;
+  }
+
+  /* 불필요한 마진 축소 */
+  .mb-4 { margin-bottom: 0 !important; }
+  .mb-2 { margin-bottom: 4px !important; }
+  .g-3  { --bs-gutter-x: 6px; --bs-gutter-y: 6px; }
+}
