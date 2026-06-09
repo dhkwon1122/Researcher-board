@@ -311,32 +311,100 @@ def comments_block(cmt_df, rid: str):
     if cmt_df.empty:
         return html.Div('코멘트 없음', className='text-muted small')
     rows = cmt_df[cmt_df['researcher_id'] == rid]
-    sort_cols = ['year', 'commenter_type'] if 'commenter_type' in cmt_df.columns else ['year']
-    rows = rows.sort_values(sort_cols, ascending=False)
+    if rows.empty:
+        return html.Div('코멘트 없음', className='text-muted small')
+
     cards = []
-    for _, row in rows.iterrows():
+
+    # ── 종합요약 (LLM 생성) ─────────────────────────────────────────────────
+    summary_rows = rows[rows['commenter_type'] == '종합요약']
+    if not summary_rows.empty:
+        sr = summary_rows.iloc[0]
+        summary_text  = str(sr.get('comment_summary', '')).strip()
+        strengths_text = str(sr.get('strengths', '')).strip()
+        improve_text   = str(sr.get('improvements', '')).strip()
+        body = []
+        if summary_text and summary_text not in ('', 'nan'):
+            body.append(html.P(summary_text, className='small mb-2',
+                               style={'lineHeight': '1.6'}))
+        if strengths_text and strengths_text not in ('', 'nan'):
+            body.append(html.Div([
+                html.Span('강점  ', className='fw-semibold text-success',
+                          style={'fontSize': '0.78rem'}),
+                html.Span(strengths_text, className='small text-muted'),
+            ], className='mb-1'))
+        if improve_text and improve_text not in ('', 'nan'):
+            body.append(html.Div([
+                html.Span('개선  ', className='fw-semibold text-warning',
+                          style={'fontSize': '0.78rem'}),
+                html.Span(improve_text, className='small text-muted'),
+            ], className='mb-0'))
+        if body:
+            cards.append(dbc.Card(
+                dbc.CardBody([
+                    html.Div([
+                        dbc.Badge('AI 종합요약', color='dark', className='me-2 small'),
+                        html.Span('전체 코멘트 기반', className='text-muted',
+                                  style={'fontSize': '0.72rem'}),
+                    ], className='mb-2'),
+                    *body,
+                ], className='py-2 px-3'),
+                className='mb-3 border-0 shadow-sm',
+                style={'backgroundColor': '#f8f9fa'},
+            ))
+
+    # ── 개별 코멘트 ──────────────────────────────────────────────────────────
+    BADGE = {
+        '부서장': ('danger', '부서장'),
+        '리더십_본인': ('secondary', '본인'),
+        '리더십_동료': ('info', '동료'),
+        '리더십_상사': ('primary', '상사'),
+        '리더십_부서원': ('success', '부서원'),
+    }
+    detail = rows[rows['commenter_type'] != '종합요약']
+    sort_cols = ['year', 'commenter_type'] if 'commenter_type' in detail.columns else ['year']
+    detail = detail.sort_values(sort_cols, ascending=False)
+
+    for _, row in detail.iterrows():
         c_type = str(row.get('commenter_type', '부서장'))
-        badge_color = 'danger' if c_type == '부서장' else 'info'
+        color, label = BADGE.get(c_type, ('secondary', c_type))
         try:
             year_label = f'{int(row["year"])}년'
         except (TypeError, ValueError):
-            year_label = f'{row.get("year", "")}년'
-        cards.append(
-            dbc.Card(
-                dbc.CardBody([
-                    dbc.Row([
-                        dbc.Col(html.Span(year_label, className='fw-bold small'), width='auto'),
-                        dbc.Col(dbc.Badge(c_type, color=badge_color, className='small'), width='auto'),
-                    ], className='mb-1 g-1'),
-                    html.P(str(row.get('comment_summary', '')),
-                           className='small mb-1', style={'lineHeight': '1.5'}),
-                    html.Small(['강점: ', html.Span(str(row.get('strengths', '')),
-                                                   className='text-muted')],
-                               className='d-block') if row.get('strengths') else None,
-                ], className='py-2 px-3'),
-                className='mb-2 border',
-            )
-        )
+            year_label = str(row.get('year', ''))
+
+        body = []
+        raw = str(row.get('comment_raw', '')).strip()
+        summary = str(row.get('comment_summary', '')).strip()
+        strengths = str(row.get('strengths', '')).strip()
+        improvements = str(row.get('improvements', '')).strip()
+
+        if summary and summary not in ('nan', 'None'):
+            body.append(html.P(summary, className='small mb-1', style={'lineHeight': '1.5'}))
+        elif raw and raw not in ('nan', 'None'):
+            body.append(html.P(raw[:200] + ('...' if len(raw) > 200 else ''),
+                               className='small mb-1', style={'lineHeight': '1.5'}))
+        if strengths and strengths not in ('nan', 'None'):
+            body.append(html.Small(['강점: ', html.Span(strengths, className='text-muted')],
+                                   className='d-block'))
+        if improvements and improvements not in ('nan', 'None'):
+            body.append(html.Small(['개선: ', html.Span(improvements, className='text-muted')],
+                                   className='d-block'))
+
+        if not body:
+            continue
+
+        cards.append(dbc.Card(
+            dbc.CardBody([
+                dbc.Row([
+                    dbc.Col(html.Span(year_label, className='fw-bold small'), width='auto'),
+                    dbc.Col(dbc.Badge(label, color=color, className='small'), width='auto'),
+                ], className='mb-1 g-1'),
+                *body,
+            ], className='py-2 px-3'),
+            className='mb-2 border',
+        ))
+
     return html.Div(cards) if cards else html.Div('코멘트 없음', className='text-muted small')
 
 
