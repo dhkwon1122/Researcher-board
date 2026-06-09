@@ -17,6 +17,7 @@ import csv
 import json
 import os
 import sys
+import uuid
 
 import pandas as pd
 
@@ -27,17 +28,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from excel_reader import read_xlsx, norm_researcher_id_col
 
 # ── 사내 LLM API 설정 ─────────────────────────────────────────────────────────
-# 환경변수 LLM_API_KEY 가 있으면 우선 사용, 없으면 아래 기본값 사용
-LLM_API_URL = os.environ.get(
-    'LLM_API_URL',
-    'http://apigw.samsungds.net:8000/gpt-oss/1/chat/completions',
-)
-LLM_API_KEY = os.environ.get(
-    'LLM_API_KEY',
-    'credential:TICKET-블라블라',   # ← 실제 티켓 값으로 교체
-)
-LLM_MODEL   = os.environ.get('LLM_MODEL', 'gpt-4o')   # ← 사내 모델명으로 교체
-LLM_TIMEOUT = 60   # 초
+# 환경변수로 재정의 가능
+LLM_API_URL  = os.environ.get('LLM_API_URL',  'http://apigw.samsungds.net:8000/gpt-oss/1/chat/completions')
+LLM_API_KEY  = os.environ.get('LLM_API_KEY',  'credential:TICKET-블라블라')  # ← 실제 티켓으로 교체
+LLM_MODEL    = os.environ.get('LLM_MODEL',    'gpt-4o')                      # ← 사내 모델명으로 교체
+LLM_SYS_NAME = os.environ.get('LLM_SYS_NAME', 'SAIT_People_Summary')
+LLM_USER_ID  = os.environ.get('LLM_USER_ID',  'your.user.id')                # ← 실제 사번/ID로 교체
+LLM_TIMEOUT  = 60  # 초
 
 COLS = ['researcher_id', 'year', 'commenter_type',
         'comment_raw', 'comment_summary', 'strengths', 'improvements']
@@ -49,8 +46,14 @@ def _call_llm(prompt: str) -> str:
     import requests
 
     headers = {
-        'Content-Type':  'application/json',
-        'Authorization': LLM_API_KEY,
+        'Content-Type':        'application/json',
+        'Accept':              'text/event-stream; charset=utf-8',
+        'Authorization':       LLM_API_KEY,
+        'Send-System-Name':    LLM_SYS_NAME,
+        'User-Id':             LLM_USER_ID,
+        'User-Type':           LLM_USER_ID,
+        'Prompt-Msg-Id':       str(uuid.uuid4()),
+        'Completion-Msg-Id':   str(uuid.uuid4()),
     }
     payload = {
         'model': LLM_MODEL,
