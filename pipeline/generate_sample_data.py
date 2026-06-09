@@ -504,6 +504,34 @@ def main():
         df = gen_func(*gen_args)
         return df, f'[샘플]  {name} ({len(df)}행 생성)'
 
+    def _normalize_researchers(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        process_researchers 출력 CSV를 generate_* 함수가 기대하는 형태로 정규화.
+        CSV는 dtype=str 로 읽히므로 수치 컬럼을 int 로 변환하고,
+        hire_year (= hire_date 의 연도) 가 없으면 파생시킨다.
+        """
+        df = df.copy()
+        # birth_year: 문자열 → int
+        if 'birth_year' in df.columns:
+            df['birth_year'] = pd.to_numeric(df['birth_year'], errors='coerce').fillna(1985).astype(int)
+        else:
+            df['birth_year'] = 1985
+        # hire_year: 없으면 hire_date 앞 4자리에서 파생
+        if 'hire_year' not in df.columns:
+            if 'hire_date' in df.columns:
+                df['hire_year'] = (
+                    pd.to_datetime(df['hire_date'], errors='coerce').dt.year
+                    .fillna(2010).astype(int)
+                )
+            else:
+                df['hire_year'] = 2010
+        else:
+            df['hire_year'] = pd.to_numeric(df['hire_year'], errors='coerce').fillna(2010).astype(int)
+        # org_code: 없으면 빈 문자열
+        if 'org_code' not in df.columns:
+            df['org_code'] = ''
+        return df
+
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
     # ── 1. 연구원 기본정보: 인력현황.xlsx 우선, 없으면 researchers_raw 폴백 ──
@@ -521,6 +549,9 @@ def main():
         researchers, src = _load_or_gen('researchers', generate_researchers)
         log = {'researchers': src}
         skip_res_save = False
+
+    # generate_* 함수가 기대하는 컬럼·타입으로 정규화
+    researchers = _normalize_researchers(researchers)
 
     # ── 2. 평가 데이터 (T&P > evaluations_raw > 샘플) ─────────────────────────
     evaluations = None
