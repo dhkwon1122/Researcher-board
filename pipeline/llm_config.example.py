@@ -24,5 +24,6 @@ SEND_SYSTEM_NAME = 'SAIT_People_Summary'
 USER_ID          = 'your.user.id'   # 사번 또는 Knox ID
 USER_TYPE        = 'your.user.id'   # 보통 USER_ID 와 동일
 CONTENT_TYPE     = 'application/json'
-ACCEPT           = 'text/event-stream; charset=utf-8'
+# API가 SSE 스트리밍을 사용하면 'text/event-stream; charset=utf-8' 으로 변경
+ACCEPT           = 'application/json'
 # Prompt-Msg-Id / Completion-Msg-Id 는 호출마다 uuid 로 자동 생성됩니다.

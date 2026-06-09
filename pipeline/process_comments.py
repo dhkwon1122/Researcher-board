@@ -16,6 +16,7 @@
 import csv
 import json
 import os
+import re
 import sys
 import uuid
 
@@ -36,6 +37,33 @@ except ModuleNotFoundError:
 
 COLS = ['researcher_id', 'year', 'commenter_type',
         'comment_raw', 'comment_summary', 'strengths', 'improvements']
+
+
+def _parse_sse(text: str) -> str:
+    """SSE(text/event-stream) 응답에서 content 조각을 이어붙여 반환."""
+    parts = []
+    for line in text.splitlines():
+        if not line.startswith('data:'):
+            continue
+        data = line[5:].strip()
+        if data == '[DONE]':
+            break
+        try:
+            chunk = json.loads(data)
+            piece = chunk['choices'][0].get('delta', {}).get('content', '')
+            if piece:
+                parts.append(piece)
+        except (json.JSONDecodeError, KeyError, IndexError):
+            continue
+    return ''.join(parts)
+
+
+def _extract_json(text: str) -> str:
+    """응답 텍스트에서 첫 번째 JSON 객체 블록만 추출."""
+    # 코드 펜스 제거 (``` json, ```json, ``` 모두)
+    text = re.sub(r'```(?:json)?', '', text).replace('```', '').strip()
+    m = re.search(r'\{[\s\S]*\}', text)
+    return m.group(0) if m else text
 
 
 def _call_llm(prompt: str) -> str:
@@ -63,14 +91,22 @@ def _call_llm(prompt: str) -> str:
             {'role': 'user',   'content': prompt},
         ],
         'temperature': 0.2,
-        'max_tokens':  600,
+        'max_tokens':  1200,
     }
     try:
         resp = requests.post(_cfg.LLM_API_URL, json=payload, headers=headers, timeout=_cfg.LLM_TIMEOUT)
         resp.raise_for_status()
+        ct = resp.headers.get('Content-Type', '')
+        if 'event-stream' in ct:
+            return _parse_sse(resp.text)
         return resp.json()['choices'][0]['message']['content'].strip()
+    except requests.HTTPError as exc:
+        status = exc.response.status_code
+        body   = exc.response.text[:300]
+        print(f'  [LLM HTTP 오류] {status} — {body}')
+        return ''
     except Exception as exc:
-        print(f'  [LLM 오류] {exc}')
+        print(f'  [LLM 오류] {type(exc).__name__}: {exc}')
         return ''
 
 
@@ -98,9 +134,7 @@ def summarize_with_llm(comment_raw: str, researcher_name: str = '') -> dict:
             'strengths': '', 'improvements': '',
         }
     try:
-        # 응답에 ```json ... ``` 래핑이 있으면 제거
-        cleaned = raw.strip().removeprefix('```json').removeprefix('```').removesuffix('```').strip()
-        result = json.loads(cleaned)
+        result = json.loads(_extract_json(raw))
         return {
             'comment_summary': result.get('comment_summary', ''),
             'strengths':       result.get('strengths', ''),
@@ -157,8 +191,7 @@ def summarize_researcher(rid: str, name: str, rows: pd.DataFrame) -> dict | None
     if not raw:
         return None
     try:
-        cleaned = raw.strip().removeprefix('```json').removeprefix('```').removesuffix('```').strip()
-        result = json.loads(cleaned)
+        result = json.loads(_extract_json(raw))
         # year는 가장 최근 연도 사용
         try:
             latest_year = int(rows['year'].dropna().astype(str).str.extract(r'(\d{4})')[0].max())
