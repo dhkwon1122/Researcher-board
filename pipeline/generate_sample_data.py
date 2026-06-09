@@ -504,9 +504,23 @@ def main():
         df = gen_func(*gen_args)
         return df, f'[샘플]  {name} ({len(df)}행 생성)'
 
-    # ── 1. 연구원 기본 정보 ───────────────────────────────────────────────────
-    researchers, src = _load_or_gen('researchers', generate_researchers)
-    log = {'researchers': src}
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+    # ── 1. 연구원 기본정보: 인력현황.xlsx 우선, 없으면 researchers_raw 폴백 ──
+    res_file = os.path.join(RAW_DIR, '인력현황.xlsx')
+    if os.path.exists(res_file):
+        from process_researchers import process as _process_researchers
+        _process_researchers()
+        researchers = pd.read_csv(
+            os.path.join(OUTPUT_DIR, 'researchers.csv'),
+            encoding='utf-8-sig', dtype=str,
+        )
+        log = {'researchers': '[RAW]   인력현황.xlsx'}
+        skip_res_save = True
+    else:
+        researchers, src = _load_or_gen('researchers', generate_researchers)
+        log = {'researchers': src}
+        skip_res_save = False
 
     # ── 2. 평가 데이터 (T&P > evaluations_raw > 샘플) ─────────────────────────
     evaluations = None
@@ -552,7 +566,23 @@ def main():
         log['evaluations'] = src
 
     # ── 3. 나머지 데이터 ──────────────────────────────────────────────────────
-    incentives,    log['incentive_selection']    = _load_or_gen('incentive_selection',  generate_incentive_selection,  researchers, evaluations)
+
+    # 인센티브: 핵심이력.xlsx 우선 → incentive_selection_raw → 샘플 생성
+    inc_file = os.path.join(RAW_DIR, '핵심이력.xlsx')
+    if os.path.exists(inc_file):
+        from process_incentive import process as _process_incentive
+        _process_incentive()
+        incentives = pd.read_csv(
+            os.path.join(OUTPUT_DIR, 'incentive_selection.csv'),
+            encoding='utf-8-sig', dtype=str,
+        )
+        log['incentive_selection'] = '[RAW]   핵심이력.xlsx'
+        skip_inc_save = True
+    else:
+        incentives, log['incentive_selection'] = _load_or_gen(
+            'incentive_selection', generate_incentive_selection, researchers, evaluations)
+        skip_inc_save = False
+
     publications,  log['publications']           = _load_or_gen('publications',         generate_publications,         researchers)
 
     # 특허: '특허 리스트.xlsx' 우선 → patents_raw → 샘플 생성
@@ -564,18 +594,48 @@ def main():
             os.path.join(OUTPUT_DIR, 'patents.csv'),
             encoding='utf-8-sig', dtype=str,
         )
-        log['patents'] = f'[RAW]   특허 리스트.xlsx'
+        log['patents'] = '[RAW]   특허 리스트.xlsx'
         skip_patent_save = True
     else:
         patents, log['patents'] = _load_or_gen('patents', generate_patents, researchers)
         skip_patent_save = False
-    tech_transfers,log['technology_transfer']    = _load_or_gen('technology_transfer',  generate_technology_transfer,  researchers)
-    leadership,    log['leadership']             = _load_or_gen('leadership',           generate_leadership,           researchers)
-    certifications,log['certifications']         = _load_or_gen('certifications',       generate_certifications,       researchers)
-    education,     log['education']              = _load_or_gen('education',            generate_education,            researchers)
-    transfers,     log['transfers']              = _load_or_gen('transfers',            generate_transfers,            researchers)
-    comments,      log['comments']               = _load_or_gen('comments',             generate_comments,             researchers)
-    succession,    log['succession']             = _load_or_gen('succession',           generate_succession,           researchers)
+
+    tech_transfers, log['technology_transfer'] = _load_or_gen('technology_transfer', generate_technology_transfer, researchers)
+
+    # 리더십: 리더십진단.xlsx 우선 → leadership_raw → 샘플 생성
+    lea_file = os.path.join(RAW_DIR, '리더십진단.xlsx')
+    if os.path.exists(lea_file):
+        from process_leadership import process as _process_leadership
+        _process_leadership()
+        leadership = pd.read_csv(
+            os.path.join(OUTPUT_DIR, 'leadership.csv'),
+            encoding='utf-8-sig', dtype=str,
+        )
+        log['leadership'] = '[RAW]   리더십진단.xlsx'
+        skip_lea_save = True
+    else:
+        leadership, log['leadership'] = _load_or_gen('leadership', generate_leadership, researchers)
+        skip_lea_save = False
+
+    certifications, log['certifications'] = _load_or_gen('certifications', generate_certifications, researchers)
+
+    # 학력: 임직원_학력.xlsx 우선 → education_raw → 샘플 생성
+    edu_file = os.path.join(RAW_DIR, '임직원_학력.xlsx')
+    if os.path.exists(edu_file):
+        from process_education import process as _process_education
+        _process_education()
+        education = pd.read_csv(
+            os.path.join(OUTPUT_DIR, 'education.csv'),
+            encoding='utf-8-sig', dtype=str,
+        )
+        log['education'] = '[RAW]   임직원_학력.xlsx'
+        skip_edu_save = True
+    else:
+        education, log['education'] = _load_or_gen('education', generate_education, researchers)
+        skip_edu_save = False
+
+    transfers,  log['transfers']   = _load_or_gen('transfers',  generate_transfers,  researchers)
+    succession, log['succession']  = _load_or_gen('succession', generate_succession, researchers)
 
     # 양성이력: '양성_인력_현황.xlsx' 우선 → nurturing_raw → 샘플 생성
     nurturing_file = os.path.join(RAW_DIR, '양성_인력_현황.xlsx')
@@ -592,30 +652,77 @@ def main():
         nurturing, log['nurturing'] = _load_or_gen('nurturing', generate_nurturing, researchers)
         skip_nurturing_save = False
 
+    # 시상이력: 시상 세부사항.xlsx 우선 → awards_raw → 빈 데이터
+    awd_file = os.path.join(RAW_DIR, '시상 세부사항.xlsx')
+    if os.path.exists(awd_file):
+        from process_awards import process as _process_awards
+        _process_awards()
+        awards = pd.read_csv(
+            os.path.join(OUTPUT_DIR, 'awards.csv'),
+            encoding='utf-8-sig', dtype=str,
+        )
+        log['awards'] = '[RAW]   시상 세부사항.xlsx'
+        skip_awd_save = True
+    else:
+        awd_raw = _raw_path('awards')
+        if awd_raw:
+            awards = _read(awd_raw)
+            log['awards'] = f'[RAW]   {os.path.basename(awd_raw)}'
+        else:
+            awards = pd.DataFrame(columns=[
+                'researcher_id', 'award_date', 'award_type',
+                'award_name', 'awarding_org', 'description',
+            ])
+            log['awards'] = '[샘플]  awards (빈 데이터)'
+        skip_awd_save = False
+
+    # 코멘트: process_comments가 comments_raw.xlsx + leadership_comments.csv 통합
+    from process_comments import process as _process_comments
+    _process_comments(use_llm=False)
+    comments_out = os.path.join(OUTPUT_DIR, 'comments.csv')
+    if os.path.exists(comments_out):
+        comments = pd.read_csv(comments_out, encoding='utf-8-sig', dtype=str)
+        log['comments'] = '[RAW]   process_comments 통합'
+        skip_cmt_save = True
+    else:
+        comments, log['comments'] = _load_or_gen('comments', generate_comments, researchers)
+        skip_cmt_save = False
+
     # ── 4. CSV 저장 ───────────────────────────────────────────────────────────
     datasets = {
-        'researchers':        researchers,
-        'evaluations':        evaluations,
-        'incentive_selection':incentives,
-        'publications':       publications,
-        'patents':            patents,
-        'technology_transfer':tech_transfers,
-        'leadership':         leadership,
-        'certifications':     certifications,
-        'education':          education,
-        'transfers':          transfers,
-        'comments':           comments,
-        'succession':         succession,
-        'nurturing':          nurturing,
+        'researchers':         researchers,
+        'evaluations':         evaluations,
+        'incentive_selection': incentives,
+        'publications':        publications,
+        'patents':             patents,
+        'technology_transfer': tech_transfers,
+        'leadership':          leadership,
+        'certifications':      certifications,
+        'education':           education,
+        'transfers':           transfers,
+        'comments':            comments,
+        'succession':          succession,
+        'nurturing':           nurturing,
+        'awards':              awards,
+    }
+
+    skip_set = {
+        name for name, flag in [
+            ('researchers',         skip_res_save),
+            ('evaluations',         skip_eval_save),
+            ('incentive_selection', skip_inc_save),
+            ('patents',             skip_patent_save),
+            ('leadership',          skip_lea_save),
+            ('education',           skip_edu_save),
+            ('nurturing',           skip_nurturing_save),
+            ('awards',              skip_awd_save),
+            ('comments',            skip_cmt_save),
+        ] if flag
     }
 
     for name, df in datasets.items():
-        if name == 'patents' and skip_patent_save:
+        if name in skip_set:
             continue
-        if name == 'nurturing' and skip_nurturing_save:
-            continue
-        if name == 'evaluations' and skip_eval_save:
-            continue  # T&P 처리기가 이미 저장함
         path = os.path.join(OUTPUT_DIR, f'{name}.csv')
         df.to_csv(path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
 

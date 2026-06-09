@@ -17,6 +17,7 @@ import csv
 import json
 import os
 import sys
+import uuid
 
 import pandas as pd
 
@@ -26,34 +27,37 @@ DATA_OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data'
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from excel_reader import read_xlsx, norm_researcher_id_col
 
-# ── 사내 LLM API 설정 ─────────────────────────────────────────────────────────
-# 환경변수 LLM_API_KEY 가 있으면 우선 사용, 없으면 아래 기본값 사용
-LLM_API_URL = os.environ.get(
-    'LLM_API_URL',
-    'http://apigw.samsungds.net:8000/gpt-oss/1/chat/completions',
-)
-LLM_API_KEY = os.environ.get(
-    'LLM_API_KEY',
-    'credential:TICKET-블라블라',   # ← 실제 티켓 값으로 교체
-)
-LLM_MODEL   = os.environ.get('LLM_MODEL', 'gpt-4o')   # ← 사내 모델명으로 교체
-LLM_TIMEOUT = 60   # 초
+# ── 사내 LLM 설정: pipeline/llm_config.py 에서 로드 ─────────────────────────
+try:
+    import llm_config as _cfg
+except ModuleNotFoundError:
+    print('[WARN] pipeline/llm_config.py 없음 — llm_config.example.py를 복사 후 값을 채워주세요.')
+    _cfg = None  # type: ignore
 
 COLS = ['researcher_id', 'year', 'commenter_type',
         'comment_raw', 'comment_summary', 'strengths', 'improvements']
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 def _call_llm(prompt: str) -> str:
     """사내 LLM API 호출 → 응답 텍스트 반환. 실패 시 빈 문자열."""
+    if _cfg is None:
+        print('  [LLM 오류] llm_config.py 가 없어 API 호출을 건너뜁니다.')
+        return ''
+
     import requests
 
     headers = {
-        'Content-Type':  'application/json',
-        'Authorization': LLM_API_KEY,
+        'Content-Type':      _cfg.CONTENT_TYPE,
+        'Accept':            _cfg.ACCEPT,
+        'x-dep-ticket':      _cfg.LLM_API_KEY,
+        'Send-System-Name':  _cfg.SEND_SYSTEM_NAME,
+        'User-Id':           _cfg.USER_ID,
+        'User-Type':         _cfg.USER_TYPE,
+        'Prompt-Msg-Id':     str(uuid.uuid4()),
+        'Completion-Msg-Id': str(uuid.uuid4()),
     }
     payload = {
-        'model': LLM_MODEL,
+        'model': _cfg.LLM_MODEL,
         'messages': [
             {'role': 'system', 'content': '당신은 HR 전문 요약 어시스턴트입니다. 요청한 JSON 형식만 출력하세요.'},
             {'role': 'user',   'content': prompt},
@@ -62,7 +66,7 @@ def _call_llm(prompt: str) -> str:
         'max_tokens':  600,
     }
     try:
-        resp = requests.post(LLM_API_URL, json=payload, headers=headers, timeout=LLM_TIMEOUT)
+        resp = requests.post(_cfg.LLM_API_URL, json=payload, headers=headers, timeout=_cfg.LLM_TIMEOUT)
         resp.raise_for_status()
         return resp.json()['choices'][0]['message']['content'].strip()
     except Exception as exc:
