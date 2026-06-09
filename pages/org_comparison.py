@@ -127,22 +127,17 @@ def _eval_string(r_eva):
 
 
 def _incentive_string(r_inc):
-    """최근 3년 인센티브 선정 이력을 한 글자씩 연결. 없으면 'O'."""
+    """최근 3년 인센티브 등급(S/A/B/C)을 한 글자씩 연결. 없으면 '-'."""
     def _char(row):
-        sel = str(row.get('selected', '')).strip().lower()
-        cat = str(row.get('category', '')).strip()
-        if sel not in ('true', '1', 'yes', 'y') or not cat or cat in ('nan',):
-            return 'O'
-        if '최우수' in cat:
-            return '최'
-        if '우수' in cat:
-            return '우'
-        return cat[0]
+        cat = str(row.get('category', '')).strip().upper()
+        if cat in ('S', 'A', 'B', 'C'):
+            return cat
+        return '-'
 
     chars = []
     for yr in ['2024', '2025', '2026']:
         row = r_inc[r_inc['year'].astype(str) == yr] if not r_inc.empty else pd.DataFrame()
-        chars.append(_char(row.iloc[0]) if not row.empty else 'O')
+        chars.append(_char(row.iloc[0]) if not row.empty else '-')
     return ''.join(chars)
 
 
