@@ -147,13 +147,30 @@ def process(use_llm: bool = False):
             }
 
         results.append({
-            'researcher_id': row['researcher_id'],
-            'year': row['year'],
-            'comment_raw': raw,
+            'researcher_id':  row['researcher_id'],
+            'year':           row['year'],
+            'commenter_type': str(row.get('commenter_type', '부서장')),
+            'comment_raw':    raw,
             **summary,
         })
 
     out_df = pd.DataFrame(results)
+
+    # ── 리더십진단 강점·개선점 병합 ──────────────────────────────────────────
+    lea_path = os.path.join(DATA_OUT, 'leadership_comments.csv')
+    if os.path.exists(lea_path):
+        lea_df = pd.read_csv(lea_path, encoding='utf-8-sig', dtype={'researcher_id': str})
+        lea_df['researcher_id'] = lea_df['researcher_id'].astype(str).str.zfill(8)
+        out_df = pd.concat([out_df, lea_df], ignore_index=True)
+        print(f'  리더십진단 코멘트 {len(lea_df)}행 병합')
+
+    COLS = ['researcher_id', 'year', 'commenter_type', 'comment_raw',
+            'comment_summary', 'strengths', 'improvements']
+    for c in COLS:
+        if c not in out_df.columns:
+            out_df[c] = ''
+    out_df = out_df[COLS].sort_values(['researcher_id', 'year', 'commenter_type']).reset_index(drop=True)
+
     os.makedirs(DATA_OUT, exist_ok=True)
     out_path = os.path.join(DATA_OUT, 'comments.csv')
     out_df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
