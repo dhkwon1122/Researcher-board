@@ -3,9 +3,10 @@
 """
 
 import base64
+import math
 import mimetypes
 import os
-from datetime import datetime
+from datetime import date, datetime
 
 import dash
 import dash_bootstrap_components as dbc
@@ -24,11 +25,6 @@ RANK_META = {
     ('Ready Now',   2): ('Ready Now 2순위',   'warning'),
     ('Ready Later', 1): ('Ready Later 1순위', 'info'),
     ('Ready Later', 2): ('Ready Later 2순위', 'secondary'),
-}
-
-GRADE_BADGE_COLOR = {
-    '가': 'warning', '나': 'success', '다': 'primary',
-    '라': 'secondary', '마': 'danger', '-': 'light',
 }
 
 AWARD_TYPES = {'그룹표창', '대표이사표창', '대표이사표창(시상금미포함)', '부문표창'}
@@ -75,18 +71,86 @@ def _section(title, body):
     ], className='bg-light rounded p-2')
 
 
-# ─── 후보 카드 빌더 ─────────────────────────────────────────────────────────────
+def _parse_date(v):
+    if v is None:
+        return None
+    s = str(v).strip()
+    if s in ('', 'nan', 'None', 'NaT'):
+        return None
+    for fmt in ('%Y-%m-%d', '%Y/%m/%d', '%Y.%m.%d'):
+        try:
+            return datetime.strptime(s[:10], fmt).date()
+        except ValueError:
+            continue
+    return None
 
-def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur):
-    rid    = str(r_info['researcher_id'])
-    name   = str(r_info.get('name', '-'))
-    dept   = str(r_info.get('department', '-'))
-    pos    = str(r_info.get('position', '-'))
-    gender = str(r_info.get('gender', '-'))
+
+def _info_lines(r_info):
+    """연구원 프로필 화면과 동일한 2줄 표기 생성.
+    1줄: 성명(성별/나이)   2줄: 직급-직급연차(근속)
+    """
+    name = str(r_info.get('name', '-'))
+    gender = str(r_info.get('gender', '')).strip()
     try:
-        age_str = f'{CURRENT_YEAR - int(r_info["birth_year"])}세'
+        age_str = f'{CURRENT_YEAR - int(float(r_info["birth_year"]))}세'
     except (TypeError, ValueError, KeyError):
         age_str = '-'
+    position = str(r_info.get('position', '')).strip()
+
+    hire_dt = _parse_date(r_info.get('hire_date'))
+    tenure = round((date.today() - hire_dt).days / 365, 1) if hire_dt else None
+
+    promo_dt = _parse_date(r_info.get('promotion_date'))
+    position_year = math.ceil((date(2027, 3, 1) - promo_dt).days / 365) if promo_dt else None
+
+    line1 = f'{name}({gender}/{age_str})' if gender else f'{name}({age_str})'
+    if position:
+        if position_year is not None and tenure is not None:
+            line2 = f'{position}-{position_year}({tenure:.1f}년)'
+        elif tenure is not None:
+            line2 = f'{position}({tenure:.1f}년)'
+        else:
+            line2 = position
+    else:
+        line2 = f'{tenure:.1f}년 근속' if tenure is not None else ''
+    return line1, line2
+
+
+def _eval_string(r_eva):
+    """최근 3년 평가 등급을 '가나다' 형태로 연결. 없으면 'O'."""
+    chars = []
+    for yr in ['2024', '2025', '2026']:
+        row = r_eva[r_eva['year'].astype(str) == yr] if not r_eva.empty else pd.DataFrame()
+        g = str(row.iloc[0]['grade']).strip() if not row.empty else ''
+        chars.append(g if g and g not in ('nan', '-', '') else 'O')
+    return ''.join(chars)
+
+
+def _incentive_string(r_inc):
+    """최근 3년 인센티브 선정 이력을 한 글자씩 연결. 없으면 'O'."""
+    def _char(row):
+        sel = str(row.get('selected', '')).strip().lower()
+        cat = str(row.get('category', '')).strip()
+        if sel not in ('true', '1', 'yes', 'y') or not cat or cat in ('nan',):
+            return 'O'
+        if '최우수' in cat:
+            return '최'
+        if '우수' in cat:
+            return '우'
+        return cat[0]
+
+    chars = []
+    for yr in ['2024', '2025', '2026']:
+        row = r_inc[r_inc['year'].astype(str) == yr] if not r_inc.empty else pd.DataFrame()
+        chars.append(_char(row.iloc[0]) if not row.empty else 'O')
+    return ''.join(chars)
+
+
+# ─── 후보 카드 빌더 ─────────────────────────────────────────────────────────────
+
+def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur, inc):
+    rid    = str(r_info['researcher_id'])
+    name   = str(r_info.get('name', '-'))
 
     label, badge_color = RANK_META.get(
         (rank_type, rank_order),
@@ -140,19 +204,22 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur):
     ))
 
     # 기본인적사항 / 평가
+    line1, line2 = _info_lines(r_info)
     r_eva = eva[eva['researcher_id'] == rid] if not eva.empty else pd.DataFrame()
-    grade_chips = []
-    for yr in ['2024', '2025', '2026']:
-        row = r_eva[r_eva['year'] == yr]
-        grade = row.iloc[0]['grade'] if not row.empty else '-'
-        grade_chips.append(html.Span([
-            html.Small(f"'{yr[-2:]}", className='text-muted'),
-            dbc.Badge(grade, color=GRADE_BADGE_COLOR.get(grade, 'light'), className='ms-1 me-2'),
-        ]))
+    r_inc = inc[inc['researcher_id'] == rid] if not inc.empty else pd.DataFrame()
+    eval_str = _eval_string(r_eva)
+    inc_str  = _incentive_string(r_inc)
     basic_section = _section('기본인적사항 / 평가', html.Div([
-        html.P([html.B(name), f'  {gender} / {age_str}'], className='small mb-1'),
-        html.P(f'{dept}  |  {pos}', className='small text-muted mb-2'),
-        html.Div(grade_chips, className='d-flex flex-wrap align-items-center'),
+        html.P(line1, className='small fw-bold mb-0'),
+        html.P(line2, className='small text-muted mb-2'),
+        html.Div([
+            html.Span('평가 ', className='text-muted small'),
+            html.Span(eval_str, className='small fw-bold me-3',
+                      style={'letterSpacing': '0.15em'}),
+            html.Span('인센티브 ', className='text-muted small'),
+            html.Span(inc_str, className='small fw-bold',
+                      style={'letterSpacing': '0.15em'}),
+        ], className='d-flex flex-wrap align-items-center'),
     ]))
 
     # 주요 양성이력
@@ -207,19 +274,20 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur):
     ], className='shadow-sm h-100')
 
 
-# ─── 조직 섹션 빌더 ─────────────────────────────────────────────────────────────
+# ─── 부서 섹션 빌더 ─────────────────────────────────────────────────────────────
 
-def _org_section(dept_name, org_code, suc, res, eva, edu, awd, nur):
-    suc_org = suc[suc['org_code'] == org_code].copy()
-    if suc_org.empty:
+def _dept_section(dept_name, suc_dept, res, eva, edu, awd, nur, inc):
+    """동일 현소속부서명 소속 우수 연구원을 한 행(섹션)으로 표시."""
+    s = suc_dept.copy()
+    if s.empty:
         return None
 
-    suc_org['_s'] = suc_org['rank_type'].map({'Ready Now': 0, 'Ready Later': 1}).fillna(2)
-    suc_org['rank_order'] = pd.to_numeric(suc_org['rank_order'], errors='coerce').fillna(99).astype(int)
-    suc_org = suc_org.sort_values(['_s', 'rank_order']).reset_index(drop=True)
+    s['_s'] = s['rank_type'].map({'Ready Now': 0, 'Ready Later': 1}).fillna(2)
+    s['rank_order'] = pd.to_numeric(s['rank_order'], errors='coerce').fillna(99).astype(int)
+    s = s.sort_values(['_s', 'rank_order']).reset_index(drop=True)
 
     cards = []
-    for _, srow in suc_org.iterrows():
+    for _, srow in s.iterrows():
         rid = str(srow['researcher_id'])
         r_rows = res[res['researcher_id'] == rid]
         if r_rows.empty:
@@ -228,7 +296,7 @@ def _org_section(dept_name, org_code, suc, res, eva, edu, awd, nur):
             r_rows.iloc[0],
             str(srow['rank_type']),
             int(srow['rank_order']),
-            eva, edu, awd, nur,
+            eva, edu, awd, nur, inc,
         )
         cards.append(dbc.Col(card, lg=3, md=6, className='mb-2'))
 
@@ -254,6 +322,7 @@ def layout():
         awd = _r('awards')
         nur = _r('nurturing')
         suc = _r('succession')
+        inc = _r('incentive_selection')
     except Exception as e:
         return html.P(f'데이터 로드 실패: {e}', className='text-danger p-3')
 
@@ -274,16 +343,20 @@ def layout():
         if not df.empty and 'year' in df.columns:
             df['year'] = df['year'].astype(str)
 
-    # 조직 목록 (succession에 등록된 org_code 기준, 이름은 researchers에서)
-    org_order = suc['org_code'].unique()
-    dept_map = {}
-    if not res.empty:
-        dept_map = res[['org_code', 'department']].drop_duplicates().set_index('org_code')['department'].to_dict()
+    # 현소속부서명(researchers.department) 기준으로 그룹화
+    if not res.empty and 'department' in res.columns:
+        dept_map = (res[['researcher_id', 'department']]
+                    .drop_duplicates('researcher_id')
+                    .set_index('researcher_id')['department'].to_dict())
+    else:
+        dept_map = {}
+    suc = suc.copy()
+    suc['department'] = suc['researcher_id'].astype(str).map(dept_map).fillna('(소속부서 미상)')
 
     sections = []
-    for org_code in sorted(org_order):
-        dept_name = dept_map.get(org_code, org_code)
-        sec = _org_section(dept_name, org_code, suc, res, eva, edu, awd, nur)
+    for dept_name in sorted(suc['department'].unique()):
+        suc_dept = suc[suc['department'] == dept_name]
+        sec = _dept_section(dept_name, suc_dept, res, eva, edu, awd, nur, inc)
         if sec:
             sections.append(sec)
 
