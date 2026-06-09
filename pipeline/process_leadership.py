@@ -119,8 +119,9 @@ def process() -> bool:
                 if v is not None else None
             )
 
-    # ── 강점·개선점 저장 ─────────────────────────────────────────────────────
+    # ── 강점·개선점 저장 (comments.csv 통합 스키마) ──────────────────────────
     # 평가자 1인 1행으로 보존 (같은 그룹의 여러 평가자 응답이 각 행에 저장됨)
+    # commenter_type = '리더십_<평가자그룹>' 형식으로 저장 → process_comments가 병합
     cmt_rows = []
     for _, row in df.iterrows():
         s = str(row.get(COL_STR, '')).strip() if COL_STR in df.columns else ''
@@ -130,16 +131,18 @@ def process() -> bool:
         cmt_rows.append({
             'researcher_id':   row['researcher_id'],
             'year':            row['year'],
-            'evaluator_group': str(row[COL_GROUP]).strip(),
-            'strength':        '' if s in ('nan', 'None') else s,
-            'improvement':     '' if i in ('nan', 'None') else i,
+            'commenter_type':  f'리더십_{str(row[COL_GROUP]).strip()}',
+            'comment_raw':     '',
+            'comment_summary': '',
+            'strengths':       '' if s in ('nan', 'None') else s,
+            'improvements':    '' if i in ('nan', 'None') else i,
         })
     if cmt_rows:
         cmt_df = pd.DataFrame(cmt_rows)
         cmt_path = os.path.join(OUT_DIR, 'leadership_comments.csv')
         os.makedirs(OUT_DIR, exist_ok=True)
         cmt_df.to_csv(cmt_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
-        print(f'[OK]   leadership_comments.csv 저장 ({len(cmt_df)}행)')
+        print(f'[OK]   leadership_comments.csv 저장 ({len(cmt_df)}행) — process_comments가 comments.csv에 병합')
 
     # ── 역량 점수 계산 ───────────────────────────────────────────────────────
     # 같은 (연구원, 연도, 그룹) 내 여러 평가자 → 문항별 평균 먼저 산출
