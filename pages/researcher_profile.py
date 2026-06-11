@@ -288,7 +288,6 @@ def save_comment(n_clicks, rid, year, author_type, text):
 @callback(
     Output('researcher-select', 'value'),
     Input('profile-url', 'search'),
-    prevent_initial_call=True,
 )
 def _set_researcher_from_url(search):
     """연구원 목록에서 행 클릭 시 ?id= 쿼리 파라미터로 연구원 자동 선택."""
