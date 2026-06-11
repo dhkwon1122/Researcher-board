@@ -38,7 +38,7 @@ def _r(name):
         return pd.DataFrame()
     try:
         return pd.read_csv(path, encoding='utf-8-sig', dtype=str)
-    except pd.errors.EmptyDataError:
+    except Exception:
         return pd.DataFrame()
 
 

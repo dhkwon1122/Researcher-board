@@ -22,7 +22,7 @@ def read_processed(name: str, *, dtype: dict | str | None = None) -> pd.DataFram
     read_dtype = dtype if dtype is not None else {'researcher_id': str}
     try:
         df = pd.read_csv(path, encoding='utf-8-sig', dtype=read_dtype)
-    except pd.errors.EmptyDataError:
+    except Exception:
         return pd.DataFrame()
     if 'researcher_id' in df.columns:
         df['researcher_id'] = df['researcher_id'].astype(str).str.zfill(8)
