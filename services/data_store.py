@@ -20,7 +20,10 @@ def read_processed(name: str, *, dtype: dict | str | None = None) -> pd.DataFram
     if not os.path.exists(path):
         return pd.DataFrame()
     read_dtype = dtype if dtype is not None else {'researcher_id': str}
-    df = pd.read_csv(path, encoding='utf-8-sig', dtype=read_dtype)
+    try:
+        df = pd.read_csv(path, encoding='utf-8-sig', dtype=read_dtype)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
     if 'researcher_id' in df.columns:
         df['researcher_id'] = df['researcher_id'].astype(str).str.zfill(8)
     return df

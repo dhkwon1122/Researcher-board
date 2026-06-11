@@ -36,7 +36,10 @@ def _r(name):
     path = os.path.join(DATA_DIR, f'{name}.csv')
     if not os.path.exists(path):
         return pd.DataFrame()
-    return pd.read_csv(path, encoding='utf-8-sig', dtype=str)
+    try:
+        return pd.read_csv(path, encoding='utf-8-sig', dtype=str)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
 
 
 def _load_photo_src(rid_str):
