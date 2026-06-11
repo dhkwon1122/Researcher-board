@@ -46,6 +46,14 @@ navbar = dbc.Navbar(
                             className='text-white',
                         )
                     ),
+                    dbc.NavItem(
+                        dbc.NavLink(
+                            [html.I(className='bi bi-table me-1'), '연구원 목록'],
+                            href='/researcher-list',
+                            active='exact',
+                            className='text-white',
+                        )
+                    ),
                 ],
                 navbar=True,
                 className='ms-auto',

@@ -6,7 +6,7 @@ from datetime import datetime
 
 import dash
 import dash_bootstrap_components as dbc
-from dash import Input, Output, State, callback, dcc, html
+from dash import Input, Output, State, callback, dcc, html, no_update
 
 from components.detail_tabs import (
     patents_tab,
@@ -42,6 +42,7 @@ def layout():
     options, default = _researcher_options()
 
     return html.Div([
+        dcc.Location(id='profile-url', refresh=False),
         html.H5(
             [html.I(className='bi bi-person-badge-fill me-2 text-primary'), '연구원 개별 프로필'],
             className='fw-bold mb-3 mt-1',
@@ -282,3 +283,26 @@ def save_comment(n_clicks, rid, year, author_type, text):
         return dbc.Alert('저장 완료', color='success', className='py-1 px-2 mb-0')
     except Exception as exc:
         return dbc.Alert(f'저장 실패: {exc}', color='danger', className='py-1 px-2 mb-0')
+
+
+@callback(
+    Output('researcher-select', 'value'),
+    Input('profile-url', 'search'),
+    prevent_initial_call=True,
+)
+def _set_researcher_from_url(search):
+    """연구원 목록에서 행 클릭 시 ?id= 쿼리 파라미터로 연구원 자동 선택."""
+    if not search:
+        return no_update
+    from urllib.parse import parse_qs
+    params = parse_qs(search.lstrip('?'))
+    rid = params.get('id', [None])[0]
+    if not rid:
+        return no_update
+    try:
+        res_df = read_processed('researchers')
+        if rid in res_df['researcher_id'].values:
+            return rid
+    except Exception:
+        pass
+    return no_update
