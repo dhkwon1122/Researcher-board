@@ -39,28 +39,8 @@ COLS = ['researcher_id', 'year', 'commenter_type',
         'comment_raw', 'comment_summary', 'strengths', 'improvements']
 
 
-def _parse_sse(text: str) -> str:
-    """SSE(text/event-stream) 응답에서 content 조각을 이어붙여 반환."""
-    parts = []
-    for line in text.splitlines():
-        if not line.startswith('data:'):
-            continue
-        data = line[5:].strip()
-        if data == '[DONE]':
-            break
-        try:
-            chunk = json.loads(data)
-            piece = chunk['choices'][0].get('delta', {}).get('content', '')
-            if piece:
-                parts.append(piece)
-        except (json.JSONDecodeError, KeyError, IndexError):
-            continue
-    return ''.join(parts)
-
-
 def _extract_json(text: str) -> str:
     """응답 텍스트에서 첫 번째 JSON 객체 블록만 추출."""
-    # 코드 펜스 제거 (``` json, ```json, ``` 모두)
     text = re.sub(r'```(?:json)?', '', text).replace('```', '').strip()
     m = re.search(r'\{[\s\S]*\}', text)
     return m.group(0) if m else text
@@ -96,9 +76,6 @@ def _call_llm(prompt: str) -> str:
     try:
         resp = requests.post(_cfg.LLM_API_URL, json=payload, headers=headers, timeout=_cfg.LLM_TIMEOUT)
         resp.raise_for_status()
-        ct = resp.headers.get('Content-Type', '')
-        if 'event-stream' in ct:
-            return _parse_sse(resp.text)
         return resp.json()['choices'][0]['message']['content'].strip()
     except requests.HTTPError as exc:
         status = exc.response.status_code
