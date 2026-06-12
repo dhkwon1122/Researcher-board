@@ -45,16 +45,60 @@ def _parse_date(val) -> str:
 
 
 def _parse_rate(val) -> str:
-    """투입률 → 정수 문자열(%).
-    0~1 소수(0.5 → 50), 정수(50 → 50), 100 초과 클램프.
-    """
+    """투입률 → 정수 문자열(%). 알 수 없으면 빈 문자열."""
     try:
-        v = float(str(val).strip())
+        s = str(val).strip()
+        if s.lower() in ('', 'nan', 'none', 'nat'):
+            return ''
+        v = float(s)
         if 0.0 < v <= 1.0:
             v = round(v * 100)
         return str(int(round(v)))
     except (TypeError, ValueError):
         return ''
+
+
+_EMPTY = {'', 'nan', 'none', 'nat'}
+
+
+def _merge_consecutive_periods(df: pd.DataFrame) -> pd.DataFrame:
+    """같은 (researcher_id, task_name) 내에서
+    종료일 == 다음 시작일인 연속 구간을 하나로 병합.
+    병합 시 최초 시작일 · 마지막 종료일 사용, 투입률은 최신 값.
+    """
+    result = []
+    for (rid, task), grp in df.groupby(['researcher_id', 'task_name'], sort=False):
+        grp = grp.sort_values('start_date').reset_index(drop=True)
+
+        cur_s = str(grp.iloc[0]['start_date']).strip()
+        cur_e = str(grp.iloc[0]['end_date']).strip()
+        cur_r = str(grp.iloc[0]['input_rate']).strip()
+        if cur_e.lower() in _EMPTY:
+            cur_e = ''
+
+        for i in range(1, len(grp)):
+            ns = str(grp.iloc[i]['start_date']).strip()
+            ne = str(grp.iloc[i]['end_date']).strip()
+            nr = str(grp.iloc[i]['input_rate']).strip()
+            if ne.lower() in _EMPTY:
+                ne = ''
+
+            # 연속 조건: 이전 종료일 == 다음 시작일
+            if cur_e != '' and ns == cur_e:
+                cur_e = ne   # '' (ongoing) 또는 더 늦은 날짜
+                cur_r = nr
+            else:
+                result.append({'researcher_id': rid, 'task_name': task,
+                                'start_date': cur_s, 'end_date': cur_e, 'input_rate': cur_r})
+                cur_s, cur_e, cur_r = ns, ne, nr
+
+        result.append({'researcher_id': rid, 'task_name': task,
+                       'start_date': cur_s, 'end_date': cur_e, 'input_rate': cur_r})
+
+    if not result:
+        return pd.DataFrame(columns=['researcher_id', 'task_name',
+                                     'start_date', 'end_date', 'input_rate'])
+    return pd.DataFrame(result)
 
 
 def process():
@@ -82,9 +126,11 @@ def process():
         'input_rate':    df[COL_RATE].apply(_parse_rate),
     })
 
-    result = (result[result['researcher_id'] != '']
-              .sort_values(['researcher_id', 'start_date'])
-              .reset_index(drop=True))
+    result = result[result['researcher_id'] != ''].reset_index(drop=True)
+
+    # 연속 수행기간 병합
+    result = _merge_consecutive_periods(result)
+    result = result.sort_values(['researcher_id', 'start_date']).reset_index(drop=True)
 
     os.makedirs(OUT_DIR, exist_ok=True)
     result.to_csv(OUTPUT, index=False, encoding='utf-8-sig')
