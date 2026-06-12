@@ -1,6 +1,4 @@
-import base64
 import math
-import mimetypes
 import os
 import sys
 from datetime import date, datetime
@@ -31,47 +29,25 @@ LEADERSHIP_DIMS = ['미래통찰', '성과창출', '몰입촉진', '인재육성
 
 
 def load_photo_src(rid: str) -> str | None:
-    """사진 data-URL 반환. 없으면 None.
-    탐색 순서: assets/photos/ → data/raw/
-    사번은 8자리 패딩본과 원본(앞 0 제거) 모두 시도.
-    파일명·확장자 대소문자 무관하게 탐색.
+    """사진 URL 반환. 없으면 None.
+    파일이 존재하면 Flask 라우트 URL(/photo/<rid8>) 반환 — base64 인코딩 없이 HTTP 서빙.
+    탐색 순서: assets/photos/ → data/raw/ (파일명·확장자 대소문자 무관).
     """
     rid8 = str(rid).zfill(8)
     rid_plain = str(int(rid8)) if rid8.isdigit() else rid8
     candidates = {rid8.lower(), rid_plain.lower()}
-
-    print(f'[photo] rid={rid!r} → rid8={rid8!r}, candidates={candidates}', file=sys.stderr)
-    print(f'[photo] ASSETS_DIR={ASSETS_DIR}', file=sys.stderr)
-    print(f'[photo] RAW_DIR={RAW_DIR}', file=sys.stderr)
+    _EXTS = {'png', 'jpg', 'jpeg'}
 
     for base_dir in (os.path.join(ASSETS_DIR, 'photos'), RAW_DIR):
-        is_dir = os.path.isdir(base_dir)
-        print(f'[photo] checking dir: {base_dir!r} isdir={is_dir}', file=sys.stderr)
-        if not is_dir:
+        if not os.path.isdir(base_dir):
             continue
         try:
-            entries = os.listdir(base_dir)
-        except OSError as exc:
-            print(f'[photo] listdir error {base_dir!r}: {exc}', file=sys.stderr)
+            for fname in os.listdir(base_dir):
+                stem, dot, fext = fname.rpartition('.')
+                if dot and stem.lower() in candidates and fext.lower() in _EXTS:
+                    return f'/photo/{rid8}'
+        except OSError:
             continue
-        for fname in entries:
-            stem, dot, fext = fname.rpartition('.')
-            if not dot:
-                continue
-            if stem.lower() in candidates and fext.lower() in ('png', 'jpg', 'jpeg'):
-                path = os.path.join(base_dir, fname)
-                print(f'[photo] MATCH: {path!r}', file=sys.stderr)
-                try:
-                    mime = mimetypes.guess_type(path)[0] or f'image/{fext.lower()}'
-                    with open(path, 'rb') as f:
-                        enc = base64.b64encode(f.read()).decode('utf-8')
-                    print(f'[photo] SUCCESS: encoded {len(enc)} chars', file=sys.stderr)
-                    return f'data:{mime};base64,{enc}'
-                except Exception as exc:
-                    print(f'[photo] ERROR reading {path!r}: {exc}', file=sys.stderr)
-        print(f'[photo] no match in {base_dir!r} (files: {entries[:10]})', file=sys.stderr)
-
-    print(f'[photo] FAILED: no photo found for rid={rid!r}', file=sys.stderr)
     return None
 
 

@@ -20,22 +20,27 @@ _IMG_EXTS = ('png', 'jpg', 'jpeg')
 
 @app.server.route('/photo/<rid>')
 def serve_photo(rid):
-    """data/raw/ 또는 assets/photos/ 의 사진을 브라우저에 직접 서빙."""
-    if not rid.replace('_', '').isdigit():
+    """assets/photos/ 또는 data/raw/ 의 사진을 브라우저에 직접 서빙.
+    파일명 대소문자 무관, 8자리 패딩 + 원본 사번 모두 시도.
+    """
+    rid8 = rid.zfill(8) if rid.isdigit() else None
+    if rid8 is None:
         flask.abort(404)
-    rid8 = rid.zfill(8)
+    rid_plain = str(int(rid8))
+    candidates = {rid8.lower(), rid_plain.lower()}
 
-    # assets/photos/ 우선
-    for ext in _IMG_EXTS:
-        path = os.path.join(ASSETS_DIR, 'photos', f'{rid8}.{ext}')
-        if os.path.isfile(path):
-            return flask.send_file(path)
+    # assets/photos/ 우선 — 정확한 경로 시도
+    for r in (rid8, rid_plain):
+        for ext in _IMG_EXTS:
+            path = os.path.join(ASSETS_DIR, 'photos', f'{r}.{ext}')
+            if os.path.isfile(path):
+                return flask.send_file(path)
 
-    # data/raw/ — 파일명 대소문자 무관 스캔
+    # data/raw/ — 디렉토리 스캔 (대소문자 무관)
     if os.path.isdir(RAW_DIR):
         for fname in os.listdir(RAW_DIR):
-            stem, _, fext = fname.rpartition('.')
-            if stem == rid8 and fext.lower() in _IMG_EXTS:
+            stem, dot, fext = fname.rpartition('.')
+            if dot and stem.lower() in candidates and fext.lower() in _IMG_EXTS:
                 return flask.send_file(os.path.join(RAW_DIR, fname))
 
     flask.abort(404)
