@@ -1,4 +1,6 @@
+import base64
 import math
+import mimetypes
 import os
 from datetime import date, datetime
 
@@ -27,6 +29,32 @@ TRANSFER_BADGE = {
 LEADERSHIP_DIMS = ['미래통찰', '성과창출', '몰입촉진', '인재육성', '자기관리', '저해행동']
 
 
+def load_photo_src(rid: str) -> str | None:
+    """사진 data-URL 반환. 없으면 None.
+    탐색 순서: assets/photos/ → data/raw/
+    사번은 8자리 패딩본과 원본(앞 0 제거) 모두 시도.
+    """
+    rid8 = str(rid).zfill(8)
+    rid_plain = str(int(rid8)) if rid8.isdigit() else rid8
+    candidates = list(dict.fromkeys([rid8, rid_plain]))  # 중복 제거
+
+    for base_dir in (os.path.join(ASSETS_DIR, 'photos'), RAW_DIR):
+        if not os.path.isdir(base_dir):
+            continue
+        for r in candidates:
+            for ext in ('png', 'jpg', 'jpeg'):
+                path = os.path.join(base_dir, f'{r}.{ext}')
+                if os.path.exists(path):
+                    try:
+                        mime = mimetypes.guess_type(path)[0] or f'image/{ext}'
+                        with open(path, 'rb') as f:
+                            enc = base64.b64encode(f.read()).decode('utf-8')
+                        return f'data:{mime};base64,{enc}'
+                    except Exception:
+                        pass
+    return None
+
+
 def avatar(name: str, size: int = 88):
     initial = name[0] if name else '?'
     return html.Div(
@@ -45,29 +73,9 @@ def photo_block(rid: str, name: str, row=None, current_year: int = 2026):
     IMG_STYLE = {'width': '100%', 'maxHeight': '200px',
                  'objectFit': 'contain', 'borderRadius': '8px', 'display': 'block'}
 
-    rid8 = rid.zfill(8)
-    IMG_EXTS = ('png', 'jpg', 'jpeg')
-
-    # Flask /photo/<rid> 라우트로 서빙 가능한지 확인 (파일 존재 여부만 체크)
-    photo_exists = False
-
-    # assets/photos/ 확인
-    for ext in IMG_EXTS:
-        if os.path.isfile(os.path.join(ASSETS_DIR, 'photos', f'{rid8}.{ext}')):
-            photo_exists = True
-            break
-
-    # data/raw/ 확인 (대소문자 무관)
-    if not photo_exists and os.path.isdir(RAW_DIR):
-        for fname in os.listdir(RAW_DIR):
-            stem, _, fext = fname.rpartition('.')
-            if stem == rid8 and fext.lower() in IMG_EXTS:
-                photo_exists = True
-                break
-
-    if photo_exists:
-        # 실제 파일 서빙은 app.py 의 Flask /photo/<rid> 라우트가 담당
-        photo_el = html.Img(src=f'/photo/{rid8}', style=IMG_STYLE)
+    src = load_photo_src(rid)
+    if src:
+        photo_el = html.Img(src=src, style=IMG_STYLE)
 
     sub_lines = []
     if row is not None:
