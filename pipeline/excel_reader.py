@@ -108,7 +108,16 @@ def read_xlsx(file_path: str, sheet: int | str = 0) -> pd.DataFrame:
 
 
 def _read_with_pandas(file_path: str, sheet: int | str = 0) -> pd.DataFrame:
-    """xlwings 없이 pandas(openpyxl)로 읽는 폴백."""
-    df = pd.read_excel(file_path, sheet_name=sheet)
+    """xlwings 없이 pandas로 읽는 폴백. xlsb는 pyxlsb 엔진 사용."""
+    if str(file_path).lower().endswith('.xlsb'):
+        try:
+            df = pd.read_excel(file_path, sheet_name=sheet, engine='pyxlsb')
+        except Exception:
+            # pyxlsb 미설치 시 에러 메시지 안내
+            raise ImportError(
+                '.xlsb 파일 읽기에 pyxlsb 패키지가 필요합니다: pip install pyxlsb'
+            )
+    else:
+        df = pd.read_excel(file_path, sheet_name=sheet)
     df.columns = [str(c).strip() for c in df.columns]
     return df

@@ -23,6 +23,7 @@ from components.profile_sections import (
     leadership_year_options,
     nurturing_block,
     photo_block,
+    tasks_block,
     transfer_block,
 )
 from services.comments import upsert_comment
@@ -162,7 +163,7 @@ def _middle_column():
             ),
         ], className='g-2 mb-2'),
         _card([
-            html.P('사내 발령 이력 (프로젝트 수행 이력)', className='fw-semibold text-muted small mb-2'),
+            html.P('과제 수행 이력', className='fw-semibold text-muted small mb-2'),
             html.Div(id='transfer-block'),
         ], body_class='p-3', card_class='shadow-sm'),
     ], md=4)
@@ -304,7 +305,8 @@ def update_profile(rid):
         evaluation_incentive_block(tables['evaluations'], tables['incentive_selection'], rid, years),
         nurturing_block(tables['nurturing'], rid),
         award_block(tables['awards'], rid),
-        transfer_block(tables['transfers'], rid),
+        tasks_block(tables['tasks'], rid) if not tables['tasks'].empty
+        else transfer_block(tables['transfers'], rid),
         leadership_options,
         leadership_default,
         comments_block(tables['comments'], rid),
