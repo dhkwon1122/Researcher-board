@@ -199,23 +199,38 @@ def generate_incentive_selection(researchers_df, evaluations_df):
 
 
 def generate_publications(researchers_df):
+    author_types = ['단독', '제1저자', '공동저자', '교신저자']
+    pub_types    = ['SCI', 'SCIE', 'KCI', '국내학술대회', '국제학술대회']
     rows = []
     for _, r in researchers_df.iterrows():
         n = random.randint(0, 14)
         journals = JOURNALS.get(r['org_code'], ['Journal of Research'])
         for _ in range(n):
+            year  = random.randint(2016, 2026)
+            month = random.randint(1, 12)
+            day   = random.randint(1, 28)
+            total = random.randint(1, 8)
+            rank  = random.randint(1, total)
+            contrib = round(100 / total) if total > 0 else 100
+            author_type = random.choice(author_types)
+            is_corr = author_type == '교신저자' or random.random() > 0.8
             rows.append({
-                'researcher_id': r['researcher_id'],
+                'researcher_id':   r['researcher_id'],
+                'author_type':     author_type,
+                'is_corresponding': is_corr,
                 'title': (
                     f'{random.choice(["Development of", "Study on", "Analysis of", "Novel", "Improved"])} '
                     f'{random.choice(["Advanced", "High-performance", "Efficient", "Intelligent", "Robust"])} '
                     f'Approach for {TECH_AREA.get(r["org_code"], "Engineering")} Applications'
                 ),
-                'journal': random.choice(journals),
-                'pub_year': random.randint(2018, 2024),
-                'impact_factor': round(random.uniform(0.8, 15.0), 2),
-                'citation_count': random.randint(0, 180),
-                'is_corresponding': random.random() > 0.55,
+                'journal':       random.choice(journals),
+                'pub_type':      random.choice(pub_types),
+                'pub_date':      f'{year}-{month:02d}-{day:02d}',
+                'pub_year':      str(year),
+                'author_rank':   str(rank),
+                'total_authors': str(total),
+                'author_info':   f'홍길동 외 {total-1}명',
+                'contribution':  str(contrib),
             })
     return pd.DataFrame(rows)
 
@@ -708,7 +723,20 @@ def main():
             'incentive_selection', generate_incentive_selection, researchers, evaluations)
         skip_inc_save = False
 
-    publications,  log['publications']           = _load_or_gen('publications',         generate_publications,         researchers)
+    # 논문: '개인별논문현황_2016_2026.xlsx' 우선 → publications_raw → 샘플 생성
+    pub_file = os.path.join(RAW_DIR, '개인별논문현황_2016_2026.xlsx')
+    if os.path.exists(pub_file):
+        from process_publications import process as _process_publications
+        _process_publications()
+        publications = pd.read_csv(
+            os.path.join(OUTPUT_DIR, 'publications.csv'),
+            encoding='utf-8-sig', dtype=str,
+        )
+        log['publications'] = '[RAW]   개인별논문현황_2016_2026.xlsx'
+        skip_pub_save = True
+    else:
+        publications, log['publications'] = _load_or_gen('publications', generate_publications, researchers)
+        skip_pub_save = False
 
     # 특허: '특허 리스트.xlsx' 우선 → patents_raw → 샘플 생성
     patent_list_file = os.path.join(RAW_DIR, '특허 리스트.xlsx')
@@ -850,6 +878,7 @@ def main():
             ('researchers',         skip_res_save),
             ('evaluations',         skip_eval_save),
             ('incentive_selection', skip_inc_save),
+            ('publications',        skip_pub_save),
             ('patents',             skip_patent_save),
             ('leadership',          skip_lea_save),
             ('education',           skip_edu_save),

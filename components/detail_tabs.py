@@ -6,9 +6,18 @@ from dash import html
 def publications_tab(pub_df, rid):
     if pub_df.empty:
         return html.Div('논문 데이터 없음', className='text-muted p-3')
-    pub = pub_df[pub_df['researcher_id'] == rid].sort_values('pub_year', ascending=False)
+
+    # pub_date 기준 정렬 (없으면 pub_year)
+    sort_col = 'pub_date' if 'pub_date' in pub_df.columns else 'pub_year'
+    pub = pub_df[pub_df['researcher_id'] == rid].copy()
+    if pub.empty:
+        return html.Div('논문 실적 없음', className='text-muted p-3')
+    pub = pub.sort_values(sort_col, ascending=False)
+
     total = len(pub)
-    corr = int(pub['is_corresponding'].astype(str).str.lower().isin(['true', '1', 'y', 'yes']).sum())
+    corr_mask = pub['is_corresponding'].astype(str).str.lower().isin(['true', '1', 'y', 'yes'])
+    corr = int(corr_mask.sum())
+
     summary = dbc.Row([
         dbc.Col(dbc.Card(dbc.CardBody([
             html.H4(str(total), className='fw-bold text-primary mb-0'),
@@ -18,23 +27,53 @@ def publications_tab(pub_df, rid):
             html.H4(str(corr), className='fw-bold text-warning mb-0'),
             html.Small('교신저자', className='text-muted'),
         ]), className='text-center border-0 bg-light'), md=2),
-    ], className='mb-3')
+    ], className='mb-3 g-2')
+
     rows = []
     for _, row in pub.iterrows():
+        is_corr = str(row.get('is_corresponding', '')).lower() in ('true', '1', 'y', 'yes')
+        contrib = str(row.get('contribution', '')).strip()
+        rank_total = ''
+        r = str(row.get('author_rank', '')).strip()
+        t = str(row.get('total_authors', '')).strip()
+        if r and t and r not in ('nan', '') and t not in ('nan', ''):
+            rank_total = f'{r}/{t}'
+
+        badges = []
+        pub_type = str(row.get('pub_type', '')).strip()
+        if pub_type and pub_type not in ('nan', ''):
+            badges.append(dbc.Badge(pub_type, color='info', className='me-1'))
+        author_type = str(row.get('author_type', '')).strip()
+        if author_type and author_type not in ('nan', ''):
+            badges.append(dbc.Badge(author_type, color='secondary', className='me-1'))
+        if is_corr:
+            badges.append(dbc.Badge('교신', color='warning', text_color='dark'))
+
         rows.append(html.Tr([
-            html.Td(str(row.get('pub_year', ''))),
-            html.Td(row.get('title', ''), style={'maxWidth': '340px', 'wordBreak': 'break-word'}),
-            html.Td(row.get('journal', ''), className='small text-muted'),
-            html.Td(_number(row.get('impact_factor'), '{:.2f}')),
-            html.Td(_number(row.get('citation_count'), '{:.0f}')),
-            html.Td(dbc.Badge('교신', color='warning', text_color='dark')
-                    if str(row.get('is_corresponding', '')).lower() in ('true', '1', 'y', 'yes') else ''),
+            html.Td(str(row.get('pub_year', '') or row.get('pub_date', ''))[:7],
+                    className='small text-muted', style={'whiteSpace': 'nowrap'}),
+            html.Td(row.get('title', ''),
+                    style={'maxWidth': '320px', 'wordBreak': 'break-word', 'fontSize': '0.82rem'}),
+            html.Td(row.get('journal', ''), className='small text-muted',
+                    style={'maxWidth': '160px', 'wordBreak': 'break-word'}),
+            html.Td(rank_total, className='small text-center', style={'whiteSpace': 'nowrap'}),
+            html.Td(f'{contrib}%' if contrib and contrib not in ('nan', '') else '',
+                    className='small text-center'),
+            html.Td(html.Div(badges) if badges else ''),
         ]))
+
     return html.Div([summary, dbc.Table([
-        html.Thead(html.Tr([html.Th('연도'), html.Th('제목'), html.Th('저널'),
-                            html.Th('IF'), html.Th('피인용'), html.Th('')])),
+        html.Thead(html.Tr([
+            html.Th('발표일', style={'width': '70px'}),
+            html.Th('제목'),
+            html.Th('게재처'),
+            html.Th('순위/총수', className='text-center', style={'width': '70px'}),
+            html.Th('기여도', className='text-center', style={'width': '55px'}),
+            html.Th('구분'),
+        ]), className='table-light'),
         html.Tbody(rows),
-    ], bordered=False, hover=True, responsive=True, size='sm')])
+    ], bordered=False, hover=True, responsive=True, size='sm',
+       style={'maxHeight': '340px', 'overflowY': 'auto', 'display': 'block'})])
 
 
 def patents_tab(pat_df, rid):
