@@ -91,7 +91,10 @@ def layout(id=None, **_kwargs):
             _middle_column(),
             _right_column(),
         ], className='g-3 mb-3'),
-        _detail_tabs_card(),
+        dbc.Row([
+            _detail_tabs_col(),
+            _comments_col(),
+        ], className='g-3 mb-3'),
     ])
 
 
@@ -175,10 +178,31 @@ def _right_column():
             ], align='center', className='mb-1'),
             dcc.Graph(id='leadership-chart', style={'height': '240px'},
                       config={'displayModeBar': False}),
-        ], body_class='p-3'),
+        ], body_class='p-3', card_class='shadow-sm mb-0'),
+    ], md=5)
+
+
+def _detail_tabs_col():
+    return dbc.Col(
+        dbc.Card(
+            dbc.CardBody(
+                dbc.Tabs([
+                    dbc.Tab(html.Div(id='tab-publications'), label='논문 실적', tab_id='pub'),
+                    dbc.Tab(html.Div(id='tab-patents'), label='특허 실적 (최근 3년)', tab_id='pat'),
+                    dbc.Tab(html.Div(id='tab-transfer'), label='기술 이전 실적', tab_id='tt'),
+                ], id='detail-tabs', active_tab='pub', className='mb-2'),
+            ),
+            className='shadow-sm h-100',
+        ),
+        md=7,
+    )
+
+
+def _comments_col():
+    return dbc.Col(
         _card([
             html.P('인물 코멘트 (부서장 / 부서원)', className='fw-semibold text-muted small mb-2'),
-            html.Div(id='comments-block', style={'maxHeight': '220px', 'overflowY': 'auto'}),
+            html.Div(id='comments-block', style={'maxHeight': '280px', 'overflowY': 'auto'}),
             html.Hr(className='my-2'),
             dbc.Row([
                 dbc.Col(
@@ -210,20 +234,8 @@ def _right_column():
                          rows=3, className='mb-2'),
             dbc.Button('저장', id='comment-save-btn', color='primary', size='sm'),
             html.Div(id='comment-status', className='mt-2 small'),
-        ], body_class='p-3', card_class='shadow-sm'),
-    ], md=5)
-
-
-def _detail_tabs_card():
-    return dbc.Card(
-        dbc.CardBody(
-            dbc.Tabs([
-                dbc.Tab(html.Div(id='tab-publications'), label='논문 실적', tab_id='pub'),
-                dbc.Tab(html.Div(id='tab-patents'), label='특허 실적 (최근 3년)', tab_id='pat'),
-                dbc.Tab(html.Div(id='tab-transfer'), label='기술 이전 실적', tab_id='tt'),
-            ], id='detail-tabs', active_tab='pub', className='mb-2'),
-        ),
-        className='shadow-sm',
+        ], body_class='p-3', card_class='shadow-sm mb-0 h-100'),
+        md=5,
     )
 
 
