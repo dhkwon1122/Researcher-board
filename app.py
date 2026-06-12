@@ -1,6 +1,11 @@
+import os
+
 import dash
 import dash_bootstrap_components as dbc
-from dash import html, dcc
+import flask
+from dash import dcc, html
+
+from services.data_store import ASSETS_DIR, RAW_DIR
 
 app = dash.Dash(
     __name__,
@@ -9,6 +14,31 @@ app = dash.Dash(
     suppress_callback_exceptions=True,
     title='연구원 대시보드',
 )
+
+_IMG_EXTS = ('png', 'jpg', 'jpeg')
+
+
+@app.server.route('/photo/<rid>')
+def serve_photo(rid):
+    """data/raw/ 또는 assets/photos/ 의 사진을 브라우저에 직접 서빙."""
+    if not rid.replace('_', '').isdigit():
+        flask.abort(404)
+    rid8 = rid.zfill(8)
+
+    # assets/photos/ 우선
+    for ext in _IMG_EXTS:
+        path = os.path.join(ASSETS_DIR, 'photos', f'{rid8}.{ext}')
+        if os.path.isfile(path):
+            return flask.send_file(path)
+
+    # data/raw/ — 파일명 대소문자 무관 스캔
+    if os.path.isdir(RAW_DIR):
+        for fname in os.listdir(RAW_DIR):
+            stem, _, fext = fname.rpartition('.')
+            if stem == rid8 and fext.lower() in _IMG_EXTS:
+                return flask.send_file(os.path.join(RAW_DIR, fname))
+
+    flask.abort(404)
 
 navbar = dbc.Navbar(
     dbc.Container(
