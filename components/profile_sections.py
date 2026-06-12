@@ -2,6 +2,7 @@ import base64
 import math
 import mimetypes
 import os
+import sys
 from datetime import date, datetime
 
 import dash_bootstrap_components as dbc
@@ -57,12 +58,15 @@ def photo_block(rid: str, name: str, row=None, current_year: int = 2026):
             with open(path, 'rb') as f:
                 encoded = base64.b64encode(f.read()).decode('utf-8')
             return html.Img(src=f'data:{mime};base64,{encoded}', style=IMG_STYLE)
-        except Exception:
+        except Exception as exc:
+            print(f'[photo] 읽기 실패 {path}: {exc}', file=sys.stderr)
             return None
+
+    IMG_EXTS = {'png', 'jpg', 'jpeg'}
 
     # 1) assets/photos/ — Dash 정적 서빙 (권장 경로)
     for r in rid_variants:
-        for ext in ('png', 'jpg', 'jpeg', 'PNG', 'JPG', 'JPEG'):
+        for ext in IMG_EXTS:
             asset_file = os.path.join(ASSETS_DIR, 'photos', f'{r}.{ext}')
             if os.path.exists(asset_file):
                 photo_el = html.Img(src=f'/assets/photos/{r}.{ext}', style=IMG_STYLE)
@@ -79,17 +83,34 @@ def photo_block(rid: str, name: str, row=None, current_year: int = 2026):
             )
             if os.path.exists(full_path):
                 photo_el = _read_image(full_path)
+            else:
+                print(f'[photo] photo_path 파일 없음: {full_path}', file=sys.stderr)
 
-    # 3) data/raw/ — 사번 변형 × 확장자 조합 모두 시도
-    if photo_el is None:
+    # 3) data/raw/ — 파일명 대소문자 무관하게 디렉토리 스캔
+    if photo_el is None and os.path.isdir(RAW_DIR):
+        # 디렉토리 내 이미지 파일을 소문자 스템(확장자 제외)으로 인덱싱
+        raw_index: dict[str, str] = {}
+        try:
+            for fname in os.listdir(RAW_DIR):
+                stem, _, fext = fname.rpartition('.')
+                if fext.lower() in IMG_EXTS:
+                    raw_index[stem.lower()] = os.path.join(RAW_DIR, fname)
+        except Exception as exc:
+            print(f'[photo] data/raw 스캔 실패: {exc}', file=sys.stderr)
+
         for r in rid_variants:
-            for ext in ('png', 'jpg', 'jpeg', 'PNG', 'JPG', 'JPEG'):
-                raw_file = os.path.join(RAW_DIR, f'{r}.{ext}')
-                if os.path.exists(raw_file):
-                    photo_el = _read_image(raw_file)
-                    break
-            if photo_el:
+            found_path = raw_index.get(r.lower())
+            if found_path:
+                photo_el = _read_image(found_path)
                 break
+
+        if photo_el is None:
+            # 어떤 사번도 매칭 안 됐을 때 터미널에 힌트 출력
+            print(
+                f'[photo] 사번 {rid!r} ({rid_variants}) — data/raw/ 이미지 없음. '
+                f'현재 이미지 파일: {sorted(raw_index.keys())[:10]}',
+                file=sys.stderr,
+            )
 
     sub_lines = []
     if row is not None:
