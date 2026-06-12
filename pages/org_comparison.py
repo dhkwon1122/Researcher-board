@@ -2,9 +2,7 @@
 화면 1: 조직별 우수 연구원 비교 — 전체 조직 조직장 석세션 후보 카드
 """
 
-import base64
 import math
-import mimetypes
 import os
 from datetime import date, datetime
 
@@ -13,10 +11,11 @@ import dash_bootstrap_components as dbc
 import pandas as pd
 from dash import ClientsideFunction, Input, Output, clientside_callback, dcc, html
 
+from components.profile_sections import load_photo_src
+
 dash.register_page(__name__, path='/', name='조직별 비교', title='조직별 우수 연구원 비교')
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
-RAW_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
 
 CURRENT_YEAR = datetime.now().year
 
@@ -42,15 +41,6 @@ def _r(name):
         return pd.DataFrame()
 
 
-def _load_photo_src(rid_str):
-    for ext in ('png', 'jpg', 'jpeg'):
-        f = os.path.join(RAW_DIR, f'{rid_str}.{ext}')
-        if os.path.exists(f):
-            mime = mimetypes.guess_type(f)[0] or f'image/{ext}'
-            with open(f, 'rb') as fp:
-                enc = base64.b64encode(fp.read()).decode('utf-8')
-            return f'data:{mime};base64,{enc}'
-    return None
 
 
 def _avatar(name, size=64):
@@ -156,7 +146,7 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur, inc):
     )
 
     # 사진
-    src = _load_photo_src(rid)
+    src = load_photo_src(rid)
     photo_el = (
         html.Img(src=src,
                  style={'width': '100%', 'maxHeight': '130px',
