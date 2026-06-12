@@ -6,7 +6,9 @@
 import csv
 import os
 import random
+import struct
 import sys
+import zlib
 from datetime import date
 
 import numpy as np
@@ -512,6 +514,44 @@ def generate_comments(researchers_df):
     return pd.DataFrame(rows)
 
 
+def _make_png_bytes(r: int, g: int, b: int, size: int = 80) -> bytes:
+    """PIL 없이 단색 PNG(RGB) 바이트열 생성."""
+    def _chunk(name: bytes, data: bytes) -> bytes:
+        crc = zlib.crc32(name + data) & 0xFFFFFFFF
+        return struct.pack('>I', len(data)) + name + data + struct.pack('>I', crc)
+
+    ihdr = _chunk(b'IHDR', struct.pack('>IIBBBBB', size, size, 8, 2, 0, 0, 0))
+    row = b'\x00' + bytes([r, g, b] * size)
+    idat = _chunk(b'IDAT', zlib.compress(row * size))
+    iend = _chunk(b'IEND', b'')
+    return b'\x89PNG\r\n\x1a\n' + ihdr + idat + iend
+
+
+_AVATAR_COLORS = [
+    (30, 58, 95), (52, 120, 246), (22, 163, 74), (234, 88, 12),
+    (147, 51, 234), (220, 38, 38), (8, 145, 178), (161, 98, 7),
+]
+
+
+def _generate_sample_photos(res_df: pd.DataFrame, raw_dir: str) -> None:
+    """연구원마다 단색 PNG 사진 파일을 data/raw/{rid}.png 에 생성 (이미 있으면 스킵)."""
+    os.makedirs(raw_dir, exist_ok=True)
+    created = 0
+    for _, row in res_df.iterrows():
+        rid = str(row.get('researcher_id', '')).zfill(8)
+        if not rid or rid == '00000000':
+            continue
+        path = os.path.join(raw_dir, f'{rid}.png')
+        if os.path.exists(path):
+            continue
+        color = _AVATAR_COLORS[hash(rid) % len(_AVATAR_COLORS)]
+        with open(path, 'wb') as f:
+            f.write(_make_png_bytes(*color))
+        created += 1
+    if created:
+        print(f'[sample photos] {created}개 샘플 사진 생성 → {raw_dir}')
+
+
 def main():
     """
     data/processed/ 에 대시보드용 CSV 파일을 준비합니다.
@@ -826,7 +866,10 @@ def main():
         path = os.path.join(OUTPUT_DIR, f'{name}.csv')
         df.to_csv(path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
 
-    # ── 5. 결과 출력 ──────────────────────────────────────────────────────────
+    # ── 5. 샘플 사진 생성 (data/raw/{rid}.png) ────────────────────────────────
+    _generate_sample_photos(researchers, RAW_DIR)
+
+    # ── 6. 결과 출력 ──────────────────────────────────────────────────────────
     print('\n데이터 준비 완료')
     print(f'  {"항목":<25}  {"출처/처리":<50}  {"행 수":>6}')
     print('  ' + '-' * 85)
