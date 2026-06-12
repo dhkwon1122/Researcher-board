@@ -360,6 +360,37 @@ def generate_transfers(researchers_df):
     return pd.DataFrame(rows).sort_values(['researcher_id', 'date'])
 
 
+def generate_tasks(researchers_df):
+    """과제 수행 이력 샘플 생성 (tasks.csv 스키마)."""
+    task_names = [
+        'AI 기반 제어 시스템 개발', '차세대 배터리 소재 연구', '로봇 자동화 플랫폼 구축',
+        '반도체 공정 최적화', '스마트 팩토리 시스템', '양자컴퓨팅 알고리즘 연구',
+        '딥러닝 기반 불량 검출', '청정에너지 변환 기술', '지능형 물류 시스템',
+        '차세대 통신 모듈 개발', '수소연료전지 효율화', '나노소재 표면처리 연구',
+    ]
+    input_rates = [25, 30, 50, 70, 100]
+    rows = []
+    for _, r in researchers_df.iterrows():
+        n = random.choices([0, 1, 2, 3, 4, 5], weights=[0.1, 0.2, 0.25, 0.2, 0.15, 0.1])[0]
+        hire_year = int(r.get('hire_year', 2015))
+        for _ in range(n):
+            start_y = random.randint(max(hire_year, 2018), 2025)
+            start_m = random.randint(1, 12)
+            duration = random.randint(3, 36)
+            end_m_total = start_m + duration - 1
+            end_y = start_y + (end_m_total - 1) // 12
+            end_m = (end_m_total - 1) % 12 + 1
+            end_y = min(end_y, 2026)
+            rows.append({
+                'researcher_id': r['researcher_id'],
+                'task_name':  random.choice(task_names),
+                'start_date': date(start_y, start_m, 1).strftime('%Y%m%d'),
+                'end_date':   date(end_y, end_m, 1).strftime('%Y%m%d'),
+                'input_rate': random.choice(input_rates),
+            })
+    return pd.DataFrame(rows).sort_values(['researcher_id', 'start_date'])
+
+
 def generate_succession(researchers_df):
     """부서별 석세션 후보 생성 (Ready Now 1~2순위, Ready Later 1~3순위, 랜덤)"""
     rng = random.Random(7)
@@ -691,6 +722,19 @@ def main():
     transfers,  log['transfers']   = _load_or_gen('transfers',  generate_transfers,  researchers)
     succession, log['succession']  = _load_or_gen('succession', generate_succession, researchers)
 
+    # 과제 수행 이력: xlsb 파일 우선, 없으면 샘플 생성
+    tasks_file = os.path.join(RAW_DIR, '개인별과제투입기간데이터_260114.xlsb')
+    if os.path.exists(tasks_file):
+        from process_tasks import process as _process_tasks
+        _process_tasks()
+        tasks = pd.read_csv(os.path.join(OUTPUT_DIR, 'tasks.csv'),
+                            encoding='utf-8-sig', dtype=str)
+        log['tasks'] = '[RAW]   개인별과제투입기간데이터_260114.xlsb'
+        skip_tasks_save = True
+    else:
+        tasks, log['tasks'] = _load_or_gen('tasks', generate_tasks, researchers)
+        skip_tasks_save = False
+
     # 양성이력: '양성_인력_현황.xlsx' 우선 → nurturing_raw → 샘플 생성
     nurturing_file = os.path.join(RAW_DIR, '양성_인력_현황.xlsx')
     if os.path.exists(nurturing_file):
@@ -754,6 +798,7 @@ def main():
         'certifications':      certifications,
         'education':           education,
         'transfers':           transfers,
+        'tasks':               tasks,
         'comments':            comments,
         'succession':          succession,
         'nurturing':           nurturing,
@@ -771,6 +816,7 @@ def main():
             ('nurturing',           skip_nurturing_save),
             ('awards',              skip_awd_save),
             ('comments',            skip_cmt_save),
+            ('tasks',               skip_tasks_save),
         ] if flag
     }
 

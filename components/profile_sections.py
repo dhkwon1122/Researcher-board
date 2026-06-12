@@ -300,6 +300,38 @@ def award_block(awd_df, rid: str):
     return html.Ul(items, className='ps-3 mb-0 small')
 
 
+def tasks_block(task_df, rid: str):
+    """과제 수행 이력 테이블 (tasks.csv 기반)."""
+    rows = (task_df[task_df['researcher_id'] == rid]
+            .sort_values('start_date', ascending=False)
+            if not task_df.empty else pd.DataFrame())
+    if rows.empty:
+        return html.Div('과제 수행 이력 없음', className='text-muted small')
+
+    table_rows = []
+    for _, row in rows.iterrows():
+        start  = str(row.get('start_date', ''))[:7]
+        end    = str(row.get('end_date',   ''))[:7]
+        period = f'{start} ~ {end}' if start and end else (start or end or '-')
+        rate   = str(row.get('input_rate', '')).strip()
+        table_rows.append(html.Tr([
+            html.Td(str(row.get('task_name', '-')), className='small'),
+            html.Td(period, className='small text-muted', style={'whiteSpace': 'nowrap'}),
+            html.Td(f'{rate}%' if rate else '-', className='small text-center',
+                    style={'whiteSpace': 'nowrap'}),
+        ]))
+
+    return dbc.Table([
+        html.Thead(html.Tr([
+            html.Th('과제명',  style={'fontSize': '0.72rem'}),
+            html.Th('기간',    style={'fontSize': '0.72rem'}),
+            html.Th('투입률',  style={'fontSize': '0.72rem'}),
+        ]), className='table-light'),
+        html.Tbody(table_rows),
+    ], bordered=False, hover=True, responsive=True, size='sm',
+       className='mb-0', style={'maxHeight': '160px', 'overflowY': 'auto', 'display': 'block'})
+
+
 def transfer_block(tra_df, rid: str):
     rows = tra_df[tra_df['researcher_id'] == rid].sort_values('date', ascending=False) if not tra_df.empty else pd.DataFrame()
     if rows.empty:
