@@ -40,14 +40,20 @@ def load_photo_src(rid: str) -> str | None:
 
     for base_dir in (os.path.join(ASSETS_DIR, 'photos'), RAW_DIR):
         if not os.path.isdir(base_dir):
+            print(f'[photo] 디렉토리 없음: {base_dir}', file=sys.stderr)
             continue
         try:
-            for fname in os.listdir(base_dir):
-                stem, dot, fext = fname.rpartition('.')
-                if dot and stem.lower() in candidates and fext.lower() in _EXTS:
-                    return f'/photo/{rid8}'
-        except OSError:
+            files = os.listdir(base_dir)
+        except OSError as exc:
+            print(f'[photo] listdir 오류 {base_dir}: {exc}', file=sys.stderr)
             continue
+        print(f'[photo] {base_dir} 파일수={len(files)}, 후보={candidates}', file=sys.stderr)
+        for fname in files:
+            stem, dot, fext = fname.rpartition('.')
+            if dot and stem.lower() in candidates and fext.lower() in _EXTS:
+                print(f'[photo] 발견: {fname} → /photo/{rid8}', file=sys.stderr)
+                return f'/photo/{rid8}'
+    print(f'[photo] 없음: rid={rid!r}', file=sys.stderr)
     return None
 
 
