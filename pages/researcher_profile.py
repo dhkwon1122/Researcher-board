@@ -283,37 +283,51 @@ def filter_by_dept(dept, current_rid):
     Input('researcher-select', 'value'),
 )
 def update_profile(rid):
+    import sys
     if not rid:
         return _empty_profile_output()
 
-    tables = read_profile_tables()
-    researchers = tables['researchers']
-    if researchers.empty:
-        return _empty_profile_output()
+    try:
+        tables = read_profile_tables()
+        researchers = tables['researchers']
+        if researchers.empty:
+            return _empty_profile_output()
 
-    rid = str(rid).zfill(8)
-    rows = researchers[researchers['researcher_id'] == rid]
-    if rows.empty:
-        return _empty_profile_output()
-    researcher = rows.iloc[0]
-    years = [CURRENT_YEAR - 2, CURRENT_YEAR - 1, CURRENT_YEAR]
-    leadership_options, leadership_default = leadership_year_options(tables['leadership'], rid)
+        rid = str(rid).zfill(8)
+        rows = researchers[researchers['researcher_id'] == rid]
+        if rows.empty:
+            return _empty_profile_output()
+        researcher = rows.iloc[0]
+        years = [CURRENT_YEAR - 2, CURRENT_YEAR - 1, CURRENT_YEAR]
+        leadership_options, leadership_default = leadership_year_options(tables['leadership'], rid)
 
-    return (
-        photo_block(rid, str(researcher.get('name', '')), researcher, CURRENT_YEAR),
-        education_block(tables['education'], rid),
-        evaluation_incentive_block(tables['evaluations'], tables['incentive_selection'], rid, years),
-        nurturing_block(tables['nurturing'], rid),
-        award_block(tables['awards'], rid),
-        tasks_block(tables['tasks'], rid) if not tables['tasks'].empty
-        else transfer_block(tables['transfers'], rid),
-        leadership_options,
-        leadership_default,
-        comments_block(tables['comments'], rid),
-        publications_tab(tables['publications'], rid),
-        patents_tab(tables['patents'], rid),
-        technology_transfer_tab(tables['technology_transfer'], rid),
-    )
+        return (
+            photo_block(rid, str(researcher.get('name', '')), researcher, CURRENT_YEAR),
+            education_block(tables['education'], rid),
+            evaluation_incentive_block(tables['evaluations'], tables['incentive_selection'], rid, years),
+            nurturing_block(tables['nurturing'], rid),
+            award_block(tables['awards'], rid),
+            tasks_block(tables['tasks'], rid) if not tables['tasks'].empty
+            else transfer_block(tables['transfers'], rid),
+            leadership_options,
+            leadership_default,
+            comments_block(tables['comments'], rid),
+            publications_tab(tables['publications'], rid),
+            patents_tab(tables['patents'], rid),
+            technology_transfer_tab(tables['technology_transfer'], rid),
+        )
+    except Exception as exc:
+        import traceback
+        print(f'[update_profile] ERROR for rid={rid!r}:', file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        err_div = html.Div(
+            f'오류 발생: {exc}',
+            className='text-danger small p-2',
+        )
+        return (
+            avatar('?'), err_div, html.Div(), html.Div(), html.Div(), html.Div(),
+            [], None, html.Div(), err_div, html.Div(), html.Div(),
+        )
 
 
 @callback(
