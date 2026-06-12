@@ -300,6 +300,50 @@ def award_block(awd_df, rid: str):
     return html.Ul(items, className='ps-3 mb-0 small')
 
 
+_TASK_EMPTY = {'', 'nan', 'none', 'nat', 'NaN', 'None', 'NaT'}
+
+
+def _fmt_rate(val) -> str:
+    """투입률 표시: 정수% 또는 '-'."""
+    if val is None:
+        return '-'
+    try:
+        if pd.isna(val):
+            return '-'
+    except (TypeError, ValueError):
+        pass
+    s = str(val).strip()
+    if s.lower() in _TASK_EMPTY:
+        return '-'
+    try:
+        v = float(s)
+        if 0.0 < v <= 1.0:
+            v *= 100
+        return f'{int(round(v))}%'
+    except (ValueError, TypeError):
+        return '-'
+
+
+def _fmt_period(start_raw, end_raw) -> str:
+    """기간 표시: 'YYYY-MM ~ YYYY-MM' 또는 'YYYY-MM ~ 현재'."""
+    start = str(start_raw).strip()[:7] if start_raw is not None else ''
+    if start.lower() in _TASK_EMPTY:
+        start = ''
+
+    end_s = str(end_raw).strip() if end_raw is not None else ''
+    try:
+        is_empty_end = pd.isna(end_raw) or end_s.lower() in _TASK_EMPTY
+    except (TypeError, ValueError):
+        is_empty_end = end_s.lower() in _TASK_EMPTY
+    end = '' if is_empty_end else end_s[:7]
+
+    if start and end:
+        return f'{start} ~ {end}'
+    if start:
+        return f'{start} ~ 현재'
+    return '-'
+
+
 def tasks_block(task_df, rid: str):
     """과제 수행 이력 테이블 (tasks.csv 기반)."""
     rows = (task_df[task_df['researcher_id'] == rid]
@@ -310,15 +354,12 @@ def tasks_block(task_df, rid: str):
 
     table_rows = []
     for _, row in rows.iterrows():
-        start  = str(row.get('start_date', ''))[:7]
-        end    = str(row.get('end_date',   ''))[:7]
-        period = f'{start} ~ {end}' if start and end else (start or end or '-')
-        rate   = str(row.get('input_rate', '')).strip()
+        period = _fmt_period(row.get('start_date'), row.get('end_date'))
+        rate   = _fmt_rate(row.get('input_rate'))
         table_rows.append(html.Tr([
             html.Td(str(row.get('task_name', '-')), className='small'),
             html.Td(period, className='small text-muted', style={'whiteSpace': 'nowrap'}),
-            html.Td(f'{rate}%' if rate else '-', className='small text-center',
-                    style={'whiteSpace': 'nowrap'}),
+            html.Td(rate, className='small text-center', style={'whiteSpace': 'nowrap'}),
         ]))
 
     return dbc.Table([
