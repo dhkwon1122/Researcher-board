@@ -6,7 +6,7 @@ from datetime import datetime
 
 import dash
 import dash_bootstrap_components as dbc
-from dash import Input, Output, State, callback, dcc, html
+from dash import Input, Output, State, callback, dcc, html, no_update
 
 from components.detail_tabs import (
     patents_tab,
@@ -38,19 +38,54 @@ dash.register_page(
 CURRENT_YEAR = datetime.now().year
 
 
+def _load_selector_data():
+    try:
+        res_df = read_processed('researchers').sort_values(['department', 'name'])
+        if res_df.empty:
+            return [], [], {}
+
+        def _opt(row):
+            return {
+                'label': f'{row["name"]}  ({row["researcher_id"]}) — {row["position"]}',
+                'value': row['researcher_id'],
+            }
+
+        all_opts = [_opt(row) for _, row in res_df.iterrows()]
+        by_dept = {
+            dept: [_opt(row) for _, row in grp.iterrows()]
+            for dept, grp in res_df.groupby('department', sort=True)
+        }
+        dept_opts = [{'label': '전체', 'value': ''}] + [
+            {'label': d, 'value': d} for d in sorted(by_dept)
+        ]
+        return dept_opts, all_opts, by_dept
+    except Exception:
+        return [], [], {}
+
+
 def layout(id=None, **_kwargs):
-    options, default = _researcher_options()
-    if id is not None:
-        valid_ids = {opt['value'] for opt in options}
-        if id in valid_ids:
-            default = id
+    dept_opts, all_opts, by_dept = _load_selector_data()
+    default_rid = all_opts[0]['value'] if all_opts else None
+    default_dept = ''
+    res_opts = all_opts
+
+    if id is not None and any(o['value'] == id for o in all_opts):
+        default_rid = id
+        try:
+            res_df = read_processed('researchers')
+            match = res_df[res_df['researcher_id'] == id]
+            if not match.empty:
+                default_dept = str(match.iloc[0].get('department', ''))
+                res_opts = by_dept.get(default_dept, all_opts)
+        except Exception:
+            pass
 
     return html.Div([
         html.H5(
             [html.I(className='bi bi-person-badge-fill me-2 text-primary'), '연구원 개별 프로필'],
             className='fw-bold mb-3 mt-1',
         ),
-        _selector_card(options, default),
+        _selector_card(dept_opts, res_opts, default_dept, default_rid),
         dbc.Row([
             _left_column(),
             _middle_column(),
@@ -60,39 +95,33 @@ def layout(id=None, **_kwargs):
     ])
 
 
-def _researcher_options():
-    try:
-        res_df = read_processed('researchers')
-        options = [
-            {'label': f'{row["name"]}  ({row["department"]} / {row["position"]})',
-             'value': row['researcher_id']}
-            for _, row in res_df.sort_values('department').iterrows()
-        ]
-        return options, options[0]['value'] if options else None
-    except Exception:
-        return [], None
-
-
-def _selector_card(options, default):
+def _selector_card(dept_opts, res_opts, default_dept, default_rid):
     return dbc.Card(
         dbc.CardBody(
             dbc.Row([
-                dbc.Col(
-                    dbc.Label('연구원 선택', className='fw-semibold small text-muted mb-0'),
-                    width='auto',
-                    className='d-flex align-items-center pe-0',
-                ),
-                dbc.Col(
+                dbc.Col([
+                    dbc.Label('조직', className='fw-semibold small text-muted mb-1'),
+                    dcc.Dropdown(
+                        id='dept-select',
+                        options=dept_opts,
+                        value=default_dept or None,
+                        clearable=True,
+                        placeholder='전체',
+                        style={'minWidth': '200px'},
+                    ),
+                ], width='auto'),
+                dbc.Col([
+                    dbc.Label('연구원  (이름 · 사번 검색)', className='fw-semibold small text-muted mb-1'),
                     dcc.Dropdown(
                         id='researcher-select',
-                        options=options,
-                        value=default,
+                        options=res_opts,
+                        value=default_rid,
                         clearable=False,
-                        placeholder='이름 또는 부서로 검색...',
-                        style={'minWidth': '400px'},
+                        placeholder='이름 또는 사번으로 검색...',
+                        style={'minWidth': '380px'},
                     ),
-                ),
-            ], align='center', className='g-2'),
+                ]),
+            ], align='end', className='g-3'),
         ),
         className='mb-3 shadow-sm',
     )
@@ -211,6 +240,21 @@ def _empty_profile_output():
 
 
 @callback(
+    Output('researcher-select', 'options'),
+    Output('researcher-select', 'value'),
+    Input('dept-select', 'value'),
+    State('researcher-select', 'value'),
+    prevent_initial_call=True,
+)
+def filter_by_dept(dept, current_rid):
+    _, all_opts, by_dept = _load_selector_data()
+    opts = by_dept.get(dept, all_opts) if dept else all_opts
+    valid_ids = {o['value'] for o in opts}
+    new_value = current_rid if current_rid in valid_ids else (opts[0]['value'] if opts else None)
+    return opts, new_value
+
+
+@callback(
     Output('photo-block', 'children'),
     Output('education-block', 'children'),
     Output('eval-incentive-block', 'children'),
@@ -286,5 +330,3 @@ def save_comment(n_clicks, rid, year, author_type, text):
         return dbc.Alert('저장 완료', color='success', className='py-1 px-2 mb-0')
     except Exception as exc:
         return dbc.Alert(f'저장 실패: {exc}', color='danger', className='py-1 px-2 mb-0')
-
-
