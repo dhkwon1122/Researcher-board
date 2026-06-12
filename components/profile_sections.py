@@ -47,35 +47,48 @@ def photo_block(rid: str, name: str, row=None, current_year: int = 2026):
     IMG_STYLE = {'width': '100%', 'maxHeight': '200px',
                  'objectFit': 'contain', 'borderRadius': '8px', 'display': 'block'}
 
-    # 1) assets/photos/{rid}.{ext} — Dash 정적 서빙 (권장 경로)
-    for ext in ('png', 'jpg', 'jpeg'):
-        asset_file = os.path.join(ASSETS_DIR, 'photos', f'{rid}.{ext}')
-        if os.path.exists(asset_file):
-            photo_el = html.Img(src=f'/assets/photos/{rid}.{ext}', style=IMG_STYLE)
+    # 사번 변형 목록: 8자리 제로패딩 + 제로 제거 원본
+    rid_stripped = str(int(rid)) if rid.isdigit() else rid
+    rid_variants = list(dict.fromkeys([rid, rid_stripped]))  # 중복 제거, 순서 유지
+
+    def _read_image(path: str) -> 'html.Img | None':
+        try:
+            mime = mimetypes.guess_type(path)[0] or 'image/jpeg'
+            with open(path, 'rb') as f:
+                encoded = base64.b64encode(f.read()).decode('utf-8')
+            return html.Img(src=f'data:{mime};base64,{encoded}', style=IMG_STYLE)
+        except Exception:
+            return None
+
+    # 1) assets/photos/ — Dash 정적 서빙 (권장 경로)
+    for r in rid_variants:
+        for ext in ('png', 'jpg', 'jpeg', 'PNG', 'JPG', 'JPEG'):
+            asset_file = os.path.join(ASSETS_DIR, 'photos', f'{r}.{ext}')
+            if os.path.exists(asset_file):
+                photo_el = html.Img(src=f'/assets/photos/{r}.{ext}', style=IMG_STYLE)
+                break
+        if photo_el:
             break
 
-    # 2) row에 photo_path 컬럼이 있으면 해당 경로 시도
+    # 2) row의 photo_path 컬럼 경로
     if photo_el is None and row is not None:
-        raw_path = str(row.get('photo_path', '') or '').strip()
-        if raw_path and raw_path not in ('nan', 'None', ''):
-            full_path = raw_path if os.path.isabs(raw_path) else os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))), raw_path
+        raw_path_val = str(row.get('photo_path', '') or '').strip()
+        if raw_path_val and raw_path_val not in ('nan', 'None', ''):
+            full_path = raw_path_val if os.path.isabs(raw_path_val) else os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))), raw_path_val
             )
             if os.path.exists(full_path):
-                mime = mimetypes.guess_type(full_path)[0] or 'image/png'
-                with open(full_path, 'rb') as f:
-                    encoded = base64.b64encode(f.read()).decode('utf-8')
-                photo_el = html.Img(src=f'data:{mime};base64,{encoded}', style=IMG_STYLE)
+                photo_el = _read_image(full_path)
 
-    # 3) data/raw/{rid}.{ext} — 구 경로 호환
+    # 3) data/raw/ — 사번 변형 × 확장자 조합 모두 시도
     if photo_el is None:
-        for ext in ('png', 'jpg', 'jpeg'):
-            raw_file = os.path.join(RAW_DIR, f'{rid}.{ext}')
-            if os.path.exists(raw_file):
-                mime = mimetypes.guess_type(raw_file)[0] or f'image/{ext}'
-                with open(raw_file, 'rb') as f:
-                    encoded = base64.b64encode(f.read()).decode('utf-8')
-                photo_el = html.Img(src=f'data:{mime};base64,{encoded}', style=IMG_STYLE)
+        for r in rid_variants:
+            for ext in ('png', 'jpg', 'jpeg', 'PNG', 'JPG', 'JPEG'):
+                raw_file = os.path.join(RAW_DIR, f'{r}.{ext}')
+                if os.path.exists(raw_file):
+                    photo_el = _read_image(raw_file)
+                    break
+            if photo_el:
                 break
 
     sub_lines = []
