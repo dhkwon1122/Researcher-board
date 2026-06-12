@@ -1,8 +1,5 @@
-import base64
 import math
-import mimetypes
 import os
-import sys
 from datetime import date, datetime
 
 import dash_bootstrap_components as dbc
@@ -48,58 +45,29 @@ def photo_block(rid: str, name: str, row=None, current_year: int = 2026):
     IMG_STYLE = {'width': '100%', 'maxHeight': '200px',
                  'objectFit': 'contain', 'borderRadius': '8px', 'display': 'block'}
 
-    rid8 = rid.zfill(8)  # 항상 8자리 사번 사용
+    rid8 = rid.zfill(8)
+    IMG_EXTS = ('png', 'jpg', 'jpeg')
 
-    def _read_image(path: str) -> 'html.Img | None':
-        try:
-            mime = mimetypes.guess_type(path)[0] or 'image/jpeg'
-            with open(path, 'rb') as f:
-                encoded = base64.b64encode(f.read()).decode('utf-8')
-            return html.Img(src=f'data:{mime};base64,{encoded}', style=IMG_STYLE)
-        except Exception as exc:
-            print(f'[photo] 읽기 실패 {path}: {exc}', file=sys.stderr)
-            return None
+    # Flask /photo/<rid> 라우트로 서빙 가능한지 확인 (파일 존재 여부만 체크)
+    photo_exists = False
 
-    IMG_EXTS = {'png', 'jpg', 'jpeg'}
-
-    # 1) assets/photos/{8자리사번}.{ext}
+    # assets/photos/ 확인
     for ext in IMG_EXTS:
-        asset_file = os.path.join(ASSETS_DIR, 'photos', f'{rid8}.{ext}')
-        if os.path.exists(asset_file):
-            photo_el = html.Img(src=f'/assets/photos/{rid8}.{ext}', style=IMG_STYLE)
+        if os.path.isfile(os.path.join(ASSETS_DIR, 'photos', f'{rid8}.{ext}')):
+            photo_exists = True
             break
 
-    # 2) row의 photo_path 컬럼 경로
-    if photo_el is None and row is not None:
-        raw_path_val = str(row.get('photo_path', '') or '').strip()
-        if raw_path_val and raw_path_val not in ('nan', 'None', ''):
-            full_path = raw_path_val if os.path.isabs(raw_path_val) else os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))), raw_path_val
-            )
-            if os.path.exists(full_path):
-                photo_el = _read_image(full_path)
-            else:
-                print(f'[photo] photo_path 파일 없음: {full_path}', file=sys.stderr)
+    # data/raw/ 확인 (대소문자 무관)
+    if not photo_exists and os.path.isdir(RAW_DIR):
+        for fname in os.listdir(RAW_DIR):
+            stem, _, fext = fname.rpartition('.')
+            if stem == rid8 and fext.lower() in IMG_EXTS:
+                photo_exists = True
+                break
 
-    # 3) data/raw/{8자리사번}.{ext} — 대소문자 무관 스캔
-    if photo_el is None and os.path.isdir(RAW_DIR):
-        raw_index: dict[str, str] = {}
-        try:
-            for fname in os.listdir(RAW_DIR):
-                stem, _, fext = fname.rpartition('.')
-                if fext.lower() in IMG_EXTS:
-                    raw_index[stem] = os.path.join(RAW_DIR, fname)
-        except Exception as exc:
-            print(f'[photo] data/raw 스캔 실패: {exc}', file=sys.stderr)
-
-        found_path = raw_index.get(rid8)
-        if found_path:
-            photo_el = _read_image(found_path)
-        else:
-            print(
-                f'[photo] {rid8}.jpg 없음 — data/raw 이미지: {sorted(raw_index.keys())[:10]}',
-                file=sys.stderr,
-            )
+    if photo_exists:
+        # 실제 파일 서빙은 app.py 의 Flask /photo/<rid> 라우트가 담당
+        photo_el = html.Img(src=f'/photo/{rid8}', style=IMG_STYLE)
 
     sub_lines = []
     if row is not None:
