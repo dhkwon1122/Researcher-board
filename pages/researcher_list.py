@@ -44,9 +44,12 @@ def _build_summary_df() -> pd.DataFrame:
         return pd.DataFrame()
 
     # 숫자 변환
-    for col in ['pub_year', 'impact_factor', 'citation_count']:
+    for col in ['pub_year', 'impact_factor', 'citation_count', 'contribution']:
         if col in pub.columns:
             pub[col] = pd.to_numeric(pub[col], errors='coerce')
+    # pub_year가 없으면 pub_date 앞 4자리에서 파생
+    if 'pub_year' not in pub.columns and 'pub_date' in pub.columns:
+        pub['pub_year'] = pd.to_numeric(pub['pub_date'].str[:4], errors='coerce')
     for col in _LEA_DIMS + ['overall_score']:
         if col in lea.columns:
             lea[col] = pd.to_numeric(lea[col], errors='coerce')
@@ -84,8 +87,8 @@ def _build_summary_df() -> pd.DataFrame:
         # ── 논문 ───────────────────────────────────────────────────────────
         pubs = pub[pub['researcher_id'] == rid]
         pub_total  = len(pubs)
-        pub_3yr    = int((pubs['pub_year'] >= _CURRENT_YEAR - 2).sum()) if not pubs.empty else 0
-        avg_if     = round(pubs['impact_factor'].mean(), 2) if not pubs.empty and pubs['impact_factor'].notna().any() else '-'
+        pub_3yr    = int((pubs['pub_year'] >= _CURRENT_YEAR - 2).sum()) if not pubs.empty and 'pub_year' in pubs.columns else 0
+        avg_if     = round(pubs['impact_factor'].mean(), 2) if not pubs.empty and 'impact_factor' in pubs.columns and pubs['impact_factor'].notna().any() else '-'
 
         # ── 특허 ───────────────────────────────────────────────────────────
         pats = pat[pat['researcher_id'] == rid]

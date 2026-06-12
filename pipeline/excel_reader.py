@@ -35,7 +35,7 @@ def norm_researcher_id_col(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def read_xlsx(file_path: str, sheet: int | str = 0) -> pd.DataFrame:
+def read_xlsx(file_path: str, sheet: int | str = 0, header_row: int = 0) -> pd.DataFrame:
     """
     xlwings를 사용하여 xlsx 파일을 DataFrame으로 읽습니다.
 
@@ -46,21 +46,19 @@ def read_xlsx(file_path: str, sheet: int | str = 0) -> pd.DataFrame:
     Args:
         file_path: xlsx 파일 경로
         sheet: 시트 인덱스(0-based int) 또는 시트 이름(str)
+        header_row: 헤더 행 인덱스(0-based). 기본값 0 = 첫 번째 행.
 
     Returns:
-        pandas DataFrame (첫 행을 헤더로 사용)
+        pandas DataFrame
     """
     try:
         import xlwings as xw
     except BaseException:
-        # xlwings 미설치 또는 환경 문제(Linux·Mac에서 Excel 없음, pyo3 초기화 실패 등)
-        # → openpyxl(pandas) 방식으로 폴백
-        return _read_with_pandas(file_path, sheet)
+        return _read_with_pandas(file_path, sheet, header_row)
 
     app = None
     wb = None
     try:
-        # visible=False: 백그라운드 실행, add_book=False: 빈 통합 문서 자동 생성 방지
         app = xw.App(visible=False, add_book=False)
         wb = app.books.open(str(file_path))
 
@@ -74,14 +72,12 @@ def read_xlsx(file_path: str, sheet: int | str = 0) -> pd.DataFrame:
         if not data:
             return pd.DataFrame()
 
-        # 단일 행인 경우 리스트로 감싸기
         if not isinstance(data[0], list):
             data = [data]
 
-        headers = data[0]
-        rows = data[1:]
+        headers = data[header_row]
+        rows = data[header_row + 1:]
 
-        # 헤더가 None인 열 제거, 앞뒤 공백 제거
         valid_cols = [(i, h) for i, h in enumerate(headers) if h is not None]
         clean_headers = [str(h).strip() for _, h in valid_cols]
         clean_rows = [[row[i] if i < len(row) else None for i, _ in valid_cols]
@@ -90,9 +86,8 @@ def read_xlsx(file_path: str, sheet: int | str = 0) -> pd.DataFrame:
         return pd.DataFrame(clean_rows, columns=clean_headers)
 
     except Exception as exc:
-        # xlwings 실패 시 pandas fallback (DRM이 없는 일반 파일이라면 정상 동작)
         print(f'[xlwings 실패 → pandas fallback] {file_path}: {exc}')
-        return _read_with_pandas(file_path, sheet)
+        return _read_with_pandas(file_path, sheet, header_row)
 
     finally:
         if wb is not None:
@@ -107,17 +102,16 @@ def read_xlsx(file_path: str, sheet: int | str = 0) -> pd.DataFrame:
                 pass
 
 
-def _read_with_pandas(file_path: str, sheet: int | str = 0) -> pd.DataFrame:
+def _read_with_pandas(file_path: str, sheet: int | str = 0, header_row: int = 0) -> pd.DataFrame:
     """xlwings 없이 pandas로 읽는 폴백. xlsb는 pyxlsb 엔진 사용."""
     if str(file_path).lower().endswith('.xlsb'):
         try:
-            df = pd.read_excel(file_path, sheet_name=sheet, engine='pyxlsb')
+            df = pd.read_excel(file_path, sheet_name=sheet, header=header_row, engine='pyxlsb')
         except Exception:
-            # pyxlsb 미설치 시 에러 메시지 안내
             raise ImportError(
                 '.xlsb 파일 읽기에 pyxlsb 패키지가 필요합니다: pip install pyxlsb'
             )
     else:
-        df = pd.read_excel(file_path, sheet_name=sheet)
+        df = pd.read_excel(file_path, sheet_name=sheet, header=header_row)
     df.columns = [str(c).strip() for c in df.columns]
     return df
