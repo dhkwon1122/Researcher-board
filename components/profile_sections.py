@@ -2,6 +2,7 @@ import base64
 import math
 import mimetypes
 import os
+import sys
 from datetime import date, datetime
 
 import dash_bootstrap_components as dbc
@@ -47,9 +48,7 @@ def photo_block(rid: str, name: str, row=None, current_year: int = 2026):
     IMG_STYLE = {'width': '100%', 'maxHeight': '200px',
                  'objectFit': 'contain', 'borderRadius': '8px', 'display': 'block'}
 
-    # 사번 변형 목록: 8자리 제로패딩 + 제로 제거 원본
-    rid_stripped = str(int(rid)) if rid.isdigit() else rid
-    rid_variants = list(dict.fromkeys([rid, rid_stripped]))  # 중복 제거, 순서 유지
+    rid8 = rid.zfill(8)  # 항상 8자리 사번 사용
 
     def _read_image(path: str) -> 'html.Img | None':
         try:
@@ -57,17 +56,17 @@ def photo_block(rid: str, name: str, row=None, current_year: int = 2026):
             with open(path, 'rb') as f:
                 encoded = base64.b64encode(f.read()).decode('utf-8')
             return html.Img(src=f'data:{mime};base64,{encoded}', style=IMG_STYLE)
-        except Exception:
+        except Exception as exc:
+            print(f'[photo] 읽기 실패 {path}: {exc}', file=sys.stderr)
             return None
 
-    # 1) assets/photos/ — Dash 정적 서빙 (권장 경로)
-    for r in rid_variants:
-        for ext in ('png', 'jpg', 'jpeg', 'PNG', 'JPG', 'JPEG'):
-            asset_file = os.path.join(ASSETS_DIR, 'photos', f'{r}.{ext}')
-            if os.path.exists(asset_file):
-                photo_el = html.Img(src=f'/assets/photos/{r}.{ext}', style=IMG_STYLE)
-                break
-        if photo_el:
+    IMG_EXTS = {'png', 'jpg', 'jpeg'}
+
+    # 1) assets/photos/{8자리사번}.{ext}
+    for ext in IMG_EXTS:
+        asset_file = os.path.join(ASSETS_DIR, 'photos', f'{rid8}.{ext}')
+        if os.path.exists(asset_file):
+            photo_el = html.Img(src=f'/assets/photos/{rid8}.{ext}', style=IMG_STYLE)
             break
 
     # 2) row의 photo_path 컬럼 경로
@@ -79,17 +78,28 @@ def photo_block(rid: str, name: str, row=None, current_year: int = 2026):
             )
             if os.path.exists(full_path):
                 photo_el = _read_image(full_path)
+            else:
+                print(f'[photo] photo_path 파일 없음: {full_path}', file=sys.stderr)
 
-    # 3) data/raw/ — 사번 변형 × 확장자 조합 모두 시도
-    if photo_el is None:
-        for r in rid_variants:
-            for ext in ('png', 'jpg', 'jpeg', 'PNG', 'JPG', 'JPEG'):
-                raw_file = os.path.join(RAW_DIR, f'{r}.{ext}')
-                if os.path.exists(raw_file):
-                    photo_el = _read_image(raw_file)
-                    break
-            if photo_el:
-                break
+    # 3) data/raw/{8자리사번}.{ext} — 대소문자 무관 스캔
+    if photo_el is None and os.path.isdir(RAW_DIR):
+        raw_index: dict[str, str] = {}
+        try:
+            for fname in os.listdir(RAW_DIR):
+                stem, _, fext = fname.rpartition('.')
+                if fext.lower() in IMG_EXTS:
+                    raw_index[stem] = os.path.join(RAW_DIR, fname)
+        except Exception as exc:
+            print(f'[photo] data/raw 스캔 실패: {exc}', file=sys.stderr)
+
+        found_path = raw_index.get(rid8)
+        if found_path:
+            photo_el = _read_image(found_path)
+        else:
+            print(
+                f'[photo] {rid8}.jpg 없음 — data/raw 이미지: {sorted(raw_index.keys())[:10]}',
+                file=sys.stderr,
+            )
 
     sub_lines = []
     if row is not None:
