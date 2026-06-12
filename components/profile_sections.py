@@ -134,7 +134,7 @@ def photo_block(rid: str, name: str, row=None, current_year: int = 2026):
     else:
         sub_lines = [html.P(name, className='fw-bold mt-2 mb-0 text-center small')]
 
-    return [photo_el or avatar(name, size=90)] + sub_lines
+    return [avatar(name, size=90) if photo_el is None else photo_el] + sub_lines
 
 
 def basic_info_block(row, current_year: int):
