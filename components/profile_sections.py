@@ -9,7 +9,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from dash import html
 
-from services.data_store import RAW_DIR
+from services.data_store import ASSETS_DIR, RAW_DIR
 
 DEGREE_ORDER = ['박사', '석사', '학사', '전문대', '고교']
 GRADE_COLOR = {
@@ -44,19 +44,39 @@ def avatar(name: str, size: int = 88):
 
 def photo_block(rid: str, name: str, row=None, current_year: int = 2026):
     photo_el = None
+    IMG_STYLE = {'width': '100%', 'maxHeight': '200px',
+                 'objectFit': 'contain', 'borderRadius': '8px', 'display': 'block'}
+
+    # 1) assets/photos/{rid}.{ext} — Dash 정적 서빙 (권장 경로)
     for ext in ('png', 'jpg', 'jpeg'):
-        photo_file = os.path.join(RAW_DIR, f'{rid}.{ext}')
-        if os.path.exists(photo_file):
-            mime = mimetypes.guess_type(photo_file)[0] or f'image/{ext}'
-            with open(photo_file, 'rb') as file:
-                encoded = base64.b64encode(file.read()).decode('utf-8')
-            photo_el = html.Img(
-                src=f'data:{mime};base64,{encoded}',
-                style={'width': '100%', 'maxHeight': '200px',
-                       'objectFit': 'contain', 'borderRadius': '8px',
-                       'display': 'block'},
-            )
+        asset_file = os.path.join(ASSETS_DIR, 'photos', f'{rid}.{ext}')
+        if os.path.exists(asset_file):
+            photo_el = html.Img(src=f'/assets/photos/{rid}.{ext}', style=IMG_STYLE)
             break
+
+    # 2) row에 photo_path 컬럼이 있으면 해당 경로 시도
+    if photo_el is None and row is not None:
+        raw_path = str(row.get('photo_path', '') or '').strip()
+        if raw_path and raw_path not in ('nan', 'None', ''):
+            full_path = raw_path if os.path.isabs(raw_path) else os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))), raw_path
+            )
+            if os.path.exists(full_path):
+                mime = mimetypes.guess_type(full_path)[0] or 'image/png'
+                with open(full_path, 'rb') as f:
+                    encoded = base64.b64encode(f.read()).decode('utf-8')
+                photo_el = html.Img(src=f'data:{mime};base64,{encoded}', style=IMG_STYLE)
+
+    # 3) data/raw/{rid}.{ext} — 구 경로 호환
+    if photo_el is None:
+        for ext in ('png', 'jpg', 'jpeg'):
+            raw_file = os.path.join(RAW_DIR, f'{rid}.{ext}')
+            if os.path.exists(raw_file):
+                mime = mimetypes.guess_type(raw_file)[0] or f'image/{ext}'
+                with open(raw_file, 'rb') as f:
+                    encoded = base64.b64encode(f.read()).decode('utf-8')
+                photo_el = html.Img(src=f'data:{mime};base64,{encoded}', style=IMG_STYLE)
+                break
 
     sub_lines = []
     if row is not None:

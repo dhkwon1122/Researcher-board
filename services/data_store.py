@@ -5,6 +5,7 @@ import pandas as pd
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, 'data', 'processed')
 RAW_DIR = os.path.join(BASE_DIR, 'data', 'raw')
+ASSETS_DIR = os.path.join(BASE_DIR, 'assets')
 
 
 def processed_path(name: str) -> str:
