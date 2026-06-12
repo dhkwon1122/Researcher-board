@@ -361,27 +361,50 @@ def generate_transfers(researchers_df):
 
 
 def generate_succession(researchers_df):
-    """조직별 조직장 석세션 후보 생성 (Ready Now 1·2순위, Ready Later 1·2순위)"""
-    rank_slots = [
-        ('Ready Now',   1),
-        ('Ready Now',   2),
-        ('Ready Later', 1),
-        ('Ready Later', 2),
-    ]
+    """부서별 석세션 후보 생성 (Ready Now 1~2순위, Ready Later 1~3순위, 랜덤)"""
+    rng = random.Random(7)
+
+    # 그룹 기준: department 우선, 없으면 org_code
+    group_col = 'department' if 'department' in researchers_df.columns else 'org_code'
+
     rows = []
-    senior_positions = ['수석연구원', '책임연구원']
-    for org_code, grp in researchers_df.groupby('org_code'):
-        candidates = grp[grp['position'].isin(senior_positions)].sample(
-            frac=1, random_state=42
-        ).head(len(rank_slots))
-        for (rank_type, rank_order), (_, r) in zip(rank_slots, candidates.iterrows()):
+    for dept, grp in researchers_df.groupby(group_col):
+        if not dept:
+            continue
+
+        pool = grp.sample(frac=1, random_state=rng.randint(0, 9999)).reset_index(drop=True)
+        n = len(pool)
+        if n == 0:
+            continue
+
+        # 부서 규모에 따라 Ready Now / Ready Later 인원 수 결정
+        now_count   = min(2, max(1, n // 4))
+        later_count = min(3, max(1, n // 3))
+
+        now_picks   = pool.iloc[:now_count]
+        later_picks = pool.iloc[now_count: now_count + later_count]
+
+        org_code = grp['org_code'].iloc[0] if 'org_code' in grp.columns else ''
+
+        for rank_order, (_, r) in enumerate(now_picks.iterrows(), start=1):
             rows.append({
                 'researcher_id': r['researcher_id'],
-                'org_code': org_code,
-                'rank_type': rank_type,
-                'rank_order': rank_order,
+                'org_code':      org_code,
+                'department':    dept,
+                'rank_type':     'Ready Now',
+                'rank_order':    rank_order,
                 'nominated_year': 2026,
             })
+        for rank_order, (_, r) in enumerate(later_picks.iterrows(), start=1):
+            rows.append({
+                'researcher_id': r['researcher_id'],
+                'org_code':      org_code,
+                'department':    dept,
+                'rank_type':     'Ready Later',
+                'rank_order':    rank_order,
+                'nominated_year': 2026,
+            })
+
     return pd.DataFrame(rows)
 
 
