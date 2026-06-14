@@ -265,25 +265,35 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur, inc):
 # ─── 부서 섹션 빌더 ─────────────────────────────────────────────────────────────
 
 def _dept_section(dept_name, suc_dept, res, eva, edu, awd, nur, inc):
-    """동일 현소속부서명 소속 우수 연구원을 한 행(섹션)으로 표시."""
-    s = suc_dept.copy()
-    if s.empty:
+    """동일 현소속부서명 소속 우수 연구원을 한 행(섹션)으로 표시.
+    표시 순서 고정: Ready Now 1→2, Ready Later 1→2 (최대 4명).
+    """
+    if suc_dept.empty:
         return None
 
-    s['_s'] = s['rank_type'].map({'Ready Now': 0, 'Ready Later': 1}).fillna(2)
+    s = suc_dept.copy()
     s['rank_order'] = pd.to_numeric(s['rank_order'], errors='coerce').fillna(99).astype(int)
-    s = s.sort_values(['_s', 'rank_order']).reset_index(drop=True)
+
+    # 4개 슬롯 고정 순서
+    SLOTS = [
+        ('Ready Now',   1),
+        ('Ready Now',   2),
+        ('Ready Later', 1),
+        ('Ready Later', 2),
+    ]
 
     cards = []
-    for _, srow in s.iterrows():
+    for rank_type, rank_order in SLOTS:
+        matched = s[(s['rank_type'] == rank_type) & (s['rank_order'] == rank_order)]
+        if matched.empty:
+            continue
+        srow = matched.iloc[0]
         rid = str(srow['researcher_id'])
         r_rows = res[res['researcher_id'] == rid]
         if r_rows.empty:
             continue
         card = _candidate_card(
-            r_rows.iloc[0],
-            str(srow['rank_type']),
-            int(srow['rank_order']),
+            r_rows.iloc[0], rank_type, rank_order,
             eva, edu, awd, nur, inc,
         )
         cards.append(dbc.Col(card, lg=3, md=6, className='mb-2'))
