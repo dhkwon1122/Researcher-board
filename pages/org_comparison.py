@@ -152,7 +152,7 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur, inc):
         if not row.empty:
             r0 = row.iloc[0]
             edu_items.append(html.Li(
-                f"{deg} | {r0.get('major', '-')} | {r0.get('school', '-')} ({r0.get('graduation_year', '-')})",
+                f"{deg}  {r0.get('school', '-')}  {r0.get('major', '-')}",
                 className='small',
             ))
     edu_section = _section('학력', html.Ul(
