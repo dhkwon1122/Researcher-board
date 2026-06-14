@@ -152,7 +152,7 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur, inc):
         if not row.empty:
             r0 = row.iloc[0]
             edu_items.append(html.Li(
-                f"{deg} | {r0.get('major', '-')} | {r0.get('school', '-')} ({r0.get('graduation_year', '-')})",
+                f"{deg}  {r0.get('school', '-')}  {r0.get('major', '-')}",
                 className='small',
             ))
     edu_section = _section('학력', html.Ul(
@@ -187,7 +187,7 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur, inc):
     r_inc = inc[inc['researcher_id'] == rid] if not inc.empty else pd.DataFrame()
     eval_str = _eval_string(r_eva)
     inc_str  = _incentive_string(r_inc)
-    basic_section = _section('기본인적사항', html.Div([
+    basic_section = html.Div([
         html.P(line1, className='small fw-bold mb-0 text-center'),
         html.P(line2, className='small text-muted mb-2 text-center'),
         html.Div([
@@ -198,7 +198,7 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur, inc):
             html.Span(inc_str, className='small fw-bold',
                       style={'letterSpacing': '0.15em'}),
         ], className='d-flex flex-wrap align-items-center'),
-    ]))
+    ], className='bg-light rounded p-2')
 
     # 주요 양성이력
     r_nur = nur[nur['researcher_id'] == rid] if not nur.empty else pd.DataFrame()
@@ -233,7 +233,7 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur, inc):
         className='ps-3 mb-0 small',
     ))
 
-    return dbc.Card([
+    card = dbc.Card([
         dbc.CardHeader(
             dbc.Badge(label, color=badge_color, className='fs-6 px-3 py-2'),
             className='text-center bg-white border-bottom-0 pb-1',
@@ -249,7 +249,14 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur, inc):
                 dbc.Col(nur_section, width=8),
             ], className='g-2'),
         ], className='p-2'),
-    ], className='shadow-sm h-100')
+    ], className='shadow-sm h-100 border-0')
+
+    return html.A(
+        card,
+        href=f'/researcher-profile?id={rid}',
+        style={'textDecoration': 'none', 'color': 'inherit',
+               'display': 'block', 'height': '100%'},
+    )
 
 
 # ─── 부서 섹션 빌더 ─────────────────────────────────────────────────────────────
