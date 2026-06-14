@@ -79,9 +79,7 @@ def _parse_date(v):
 
 
 def _info_lines(r_info):
-    """연구원 프로필 화면과 동일한 2줄 표기 생성.
-    1줄: 성명(성별/나이)   2줄: 직급-직급연차(근속)
-    """
+    """1줄: 성명(성별/나이)   2줄: 직급-직급년차년차"""
     name = str(r_info.get('name', '-'))
     gender = str(r_info.get('gender', '')).strip()
     try:
@@ -90,22 +88,14 @@ def _info_lines(r_info):
         age_str = '-'
     position = str(r_info.get('position', '')).strip()
 
-    hire_dt = _parse_date(r_info.get('hire_date'))
-    tenure = round((date.today() - hire_dt).days / 365, 1) if hire_dt else None
-
     promo_dt = _parse_date(r_info.get('promotion_date'))
     position_year = math.ceil((date(2027, 3, 1) - promo_dt).days / 365) if promo_dt else None
 
     line1 = f'{name}({gender}/{age_str})' if gender else f'{name}({age_str})'
     if position:
-        if position_year is not None and tenure is not None:
-            line2 = f'{position}-{position_year}({tenure:.1f}년)'
-        elif tenure is not None:
-            line2 = f'{position}({tenure:.1f}년)'
-        else:
-            line2 = position
+        line2 = f'{position}-{position_year}년차' if position_year is not None else position
     else:
-        line2 = f'{tenure:.1f}년 근속' if tenure is not None else ''
+        line2 = ''
     return line1, line2
 
 
@@ -191,15 +181,15 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur, inc):
         className='ps-3 mb-0 small',
     ))
 
-    # 기본인적사항 / 평가
+    # 기본인적사항
     line1, line2 = _info_lines(r_info)
     r_eva = eva[eva['researcher_id'] == rid] if not eva.empty else pd.DataFrame()
     r_inc = inc[inc['researcher_id'] == rid] if not inc.empty else pd.DataFrame()
     eval_str = _eval_string(r_eva)
     inc_str  = _incentive_string(r_inc)
-    basic_section = _section('기본인적사항 / 평가', html.Div([
-        html.P(line1, className='small fw-bold mb-0'),
-        html.P(line2, className='small text-muted mb-2'),
+    basic_section = _section('기본인적사항', html.Div([
+        html.P(line1, className='small fw-bold mb-0 text-center'),
+        html.P(line2, className='small text-muted mb-2 text-center'),
         html.Div([
             html.Span('평가 ', className='text-muted small'),
             html.Span(eval_str, className='small fw-bold me-3',
