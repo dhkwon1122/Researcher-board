@@ -233,7 +233,7 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur, inc):
         className='ps-3 mb-0 small',
     ))
 
-    return dbc.Card([
+    card = dbc.Card([
         dbc.CardHeader(
             dbc.Badge(label, color=badge_color, className='fs-6 px-3 py-2'),
             className='text-center bg-white border-bottom-0 pb-1',
@@ -249,7 +249,14 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur, inc):
                 dbc.Col(nur_section, width=8),
             ], className='g-2'),
         ], className='p-2'),
-    ], className='shadow-sm h-100')
+    ], className='shadow-sm h-100 border-0')
+
+    return html.A(
+        card,
+        href=f'/researcher-profile?id={rid}',
+        style={'textDecoration': 'none', 'color': 'inherit',
+               'display': 'block', 'height': '100%'},
+    )
 
 
 # ─── 부서 섹션 빌더 ─────────────────────────────────────────────────────────────
