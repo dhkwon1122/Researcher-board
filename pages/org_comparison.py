@@ -187,7 +187,7 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur, inc):
     r_inc = inc[inc['researcher_id'] == rid] if not inc.empty else pd.DataFrame()
     eval_str = _eval_string(r_eva)
     inc_str  = _incentive_string(r_inc)
-    basic_section = _section('기본인적사항', html.Div([
+    basic_section = html.Div([
         html.P(line1, className='small fw-bold mb-0 text-center'),
         html.P(line2, className='small text-muted mb-2 text-center'),
         html.Div([
@@ -198,7 +198,7 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur, inc):
             html.Span(inc_str, className='small fw-bold',
                       style={'letterSpacing': '0.15em'}),
         ], className='d-flex flex-wrap align-items-center'),
-    ]))
+    ], className='bg-light rounded p-2')
 
     # 주요 양성이력
     r_nur = nur[nur['researcher_id'] == rid] if not nur.empty else pd.DataFrame()
