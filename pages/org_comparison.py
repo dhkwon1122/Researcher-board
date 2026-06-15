@@ -190,14 +190,11 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur, inc):
     basic_section = html.Div([
         html.P(line1, className='small fw-bold mb-0 text-center'),
         html.P(line2, className='small text-muted mb-2 text-center'),
-        html.Div([
-            html.Span('평가 ', className='text-muted small'),
-            html.Span(eval_str, className='small fw-bold me-3',
-                      style={'letterSpacing': '0.15em'}),
-            html.Span('인센티브 ', className='text-muted small'),
-            html.Span(inc_str, className='small fw-bold',
-                      style={'letterSpacing': '0.15em'}),
-        ], className='d-flex flex-wrap align-items-center'),
+        html.Div(
+            f'{eval_str} / {inc_str}',
+            className='small fw-bold text-center',
+            style={'letterSpacing': '0.15em'},
+        ),
     ], className='bg-light rounded p-2')
 
     # 주요 양성이력
@@ -355,6 +352,15 @@ def layout():
         if sec:
             sections.append(sec)
 
+    # 인쇄용: 3개 섹션씩 한 페이지로 묶기
+    page_groups = []
+    for i in range(0, len(sections), 3):
+        group = sections[i:i + 3]
+        is_last = (i + 3 >= len(sections))
+        page_groups.append(
+            html.Div(group, className='print-page' + (' print-page-last' if is_last else ''))
+        )
+
     return html.Div([
         dbc.Row([
             dbc.Col(
@@ -374,9 +380,9 @@ def layout():
                 width='auto',
                 className='d-flex align-items-center',
             ),
-        ], justify='between', align='center', className='mb-4'),
+        ], justify='between', align='center', className='mb-4 no-print'),
         html.Div(id='_print-dummy', style={'display': 'none'}),
-        *sections,
+        *page_groups,
     ])
 
 
