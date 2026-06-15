@@ -76,11 +76,12 @@ body {
 
 /* ════════════════════════════════════════════════
    A3 인쇄 (landscape) — 조직별 비교 화면
+   조직 3개씩 한 페이지 출력
    ════════════════════════════════════════════════ */
 @media print {
   @page {
     size: A3 landscape;
-    margin: 12mm 14mm;
+    margin: 8mm 10mm;
   }
 
   /* 화면 전용 요소 숨기기 */
@@ -94,26 +95,32 @@ body {
   body, .container, .container-fluid, .container-xxl {
     padding: 0 !important;
     margin:  0 !important;
-    font-size: 10.5px;
+    font-size: 9px;
     color: #000;
   }
 
-  /* 조직 섹션 — 섹션마다 새 페이지 */
-  .org-section {
+  /* 인쇄 페이지 그룹 (3개 조직 묶음) */
+  .print-page {
     page-break-after: always;
     break-after: page;
-    margin-bottom: 0 !important;
   }
-  .org-section:last-child {
+  .print-page-last {
     page-break-after: avoid;
     break-after: avoid;
+  }
+
+  /* 조직 섹션 — 페이지 안에서 자연스럽게 배치 */
+  .org-section {
+    margin-bottom: 6px !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
 
   /* 섹션 제목 */
   .org-section > div:first-child {
     border-bottom: 2px solid #1e3a5f !important;
-    margin-bottom: 6px !important;
-    padding-bottom: 3px !important;
+    margin-bottom: 4px !important;
+    padding-bottom: 2px !important;
   }
 
   /* 카드 4열 고정 (Bootstrap lg-3 override) */
@@ -122,7 +129,7 @@ body {
     flex: 0 0 25% !important;
     max-width: 25% !important;
     width: 25% !important;
-    padding: 4px !important;
+    padding: 3px !important;
   }
   .col-md-6 {
     flex: 0 0 25% !important;
@@ -132,13 +139,22 @@ body {
   /* 카드 테두리·그림자 조정 */
   .card {
     border: 1px solid #ccc !important;
-    border-radius: 4px !important;
+    border-radius: 3px !important;
     box-shadow: none !important;
     break-inside: avoid;
     page-break-inside: avoid;
   }
-  .card-header, .card-body {
-    padding: 4px 6px !important;
+  .card-header {
+    padding: 2px 5px !important;
+  }
+  .card-body {
+    padding: 3px 5px !important;
+  }
+
+  /* 뱃지 크기 축소 */
+  .badge {
+    font-size: 0.7em !important;
+    padding: 2px 5px !important;
   }
 
   /* 배경색·뱃지 컬러 인쇄 강제 적용 */
@@ -149,7 +165,7 @@ body {
 
   /* 이미지 최대 높이 */
   img {
-    max-height: 90px !important;
+    max-height: 65px !important;
     object-fit: contain;
   }
 
@@ -158,8 +174,21 @@ body {
     background-color: #f5f5f5 !important;
   }
 
-  /* 불필요한 마진 축소 */
-  .mb-4 { margin-bottom: 0 !important; }
-  .mb-2 { margin-bottom: 4px !important; }
-  .g-3  { --bs-gutter-x: 6px; --bs-gutter-y: 6px; }
+  /* 마진·패딩 전반 축소 */
+  .mb-4 { margin-bottom: 6px !important; }
+  .mb-3 { margin-bottom: 4px !important; }
+  .mb-2 { margin-bottom: 2px !important; }
+  .p-2  { padding: 3px 4px !important; }
+  .ps-3 { padding-left: 10px !important; }
+  .g-2, .g-3 { --bs-gutter-x: 4px; --bs-gutter-y: 4px; }
+
+  /* 리스트 항목 간격 */
+  li { margin-bottom: 1px !important; line-height: 1.3 !important; }
+
+  /* 아바타 크기 축소 */
+  .org-section [style*="border-radius: 50%"] {
+    width: 48px !important;
+    height: 48px !important;
+    font-size: 14px !important;
+  }
 }

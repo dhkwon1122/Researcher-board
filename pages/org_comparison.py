@@ -355,6 +355,15 @@ def layout():
         if sec:
             sections.append(sec)
 
+    # 인쇄용: 3개 섹션씩 한 페이지로 묶기
+    page_groups = []
+    for i in range(0, len(sections), 3):
+        group = sections[i:i + 3]
+        is_last = (i + 3 >= len(sections))
+        page_groups.append(
+            html.Div(group, className='print-page' + (' print-page-last' if is_last else ''))
+        )
+
     return html.Div([
         dbc.Row([
             dbc.Col(
@@ -374,9 +383,9 @@ def layout():
                 width='auto',
                 className='d-flex align-items-center',
             ),
-        ], justify='between', align='center', className='mb-4'),
+        ], justify='between', align='center', className='mb-4 no-print'),
         html.Div(id='_print-dummy', style={'display': 'none'}),
-        *sections,
+        *page_groups,
     ])
 
 
