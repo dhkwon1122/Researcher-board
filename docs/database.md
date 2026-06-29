@@ -28,6 +28,33 @@ docker compose up -d        # postgres:16 컨테이너 기동 (DB: researcher_bo
 CREATE DATABASE researcher_board;
 ```
 
+### 방법 C — Windows 네이티브 설치 (사내 PC 권장)
+사내 PC에 Docker 사용이 어려우면 설치 관리자로 직접 설치한다.
+
+1. https://www.postgresql.org/download/windows/ → **"Download the installer"**
+   (EDB 배포판) 다운로드 후 실행.
+2. 설치 마법사 주요 선택:
+   - **Components**: PostgreSQL Server, **Command Line Tools**(psql), pgAdmin 4 체크.
+     Stack Builder는 해제 가능.
+   - **Password**: `postgres` 슈퍼유저 비밀번호 설정 → 꼭 기억 (예: `postgres`).
+   - **Port**: 기본 `5432` 유지.
+   - **Locale**: 기본값.
+3. 설치 후 PostgreSQL이 Windows 서비스로 자동 등록·실행된다(재부팅 시 자동 시작).
+4. **DB 생성** — 함께 설치된 **SQL Shell (psql)** 실행 → 접속 프롬프트는
+   전부 Enter(기본값), 비밀번호만 입력 후:
+   ```sql
+   CREATE DATABASE researcher_board;
+   \q
+   ```
+   (또는 pgAdmin 4에서 Databases 우클릭 → Create → Database)
+
+> **psql이 명령어로 안 먹힐 때**: 설치 시 PATH 미등록이 원인.
+> `C:\Program Files\PostgreSQL\16\bin` 을 시스템 환경변수 PATH에 추가하거나
+> "SQL Shell (psql)" 바로가기를 사용한다.
+
+이후 적재·실행은 아래 2~4단계를 그대로 따른다. PowerShell/CMD에서는
+경로 구분자만 역슬래시를 쓴다: `python pipeline\load_to_db.py`.
+
 ---
 
 ## 2. 접속 설정
@@ -43,6 +70,8 @@ DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/researcher_b
 ```
 
 > `.env` 는 `.gitignore` 에 포함돼 커밋되지 않는다.
+> 비밀번호에 `@ : / ?` 등 특수문자가 있으면 URL 인코딩이 필요하다
+> (예: `@` → `%40`).
 
 ---
 
