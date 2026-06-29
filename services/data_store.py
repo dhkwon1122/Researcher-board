@@ -16,15 +16,33 @@ def raw_path(filename: str) -> str:
     return os.path.join(RAW_DIR, filename)
 
 
-def read_processed(name: str, *, dtype: dict | str | None = None) -> pd.DataFrame:
-    path = processed_path(name)
-    if not os.path.exists(path):
-        return pd.DataFrame()
-    read_dtype = dtype if dtype is not None else {'researcher_id': str}
+def _read_from_db(name: str) -> pd.DataFrame | None:
+    """DB가 설정돼 있으면 테이블을 읽어 반환. 미설정·오류 시 None (→ CSV 폴백)."""
+    from services.db import get_engine
+
+    engine = get_engine()
+    if engine is None:
+        return None
     try:
-        df = pd.read_csv(path, encoding='utf-8-sig', dtype=read_dtype)
+        # 모든 컬럼을 문자열로 읽어 CSV(dtype=str) 동작과 일치시킴
+        df = pd.read_sql_query(f'SELECT * FROM {name}', engine, dtype=str)
+        return df.fillna('')
     except Exception:
-        return pd.DataFrame()
+        # 테이블이 없거나 조회 실패 → CSV 폴백
+        return None
+
+
+def read_processed(name: str, *, dtype: dict | str | None = None) -> pd.DataFrame:
+    df = _read_from_db(name)
+    if df is None:
+        path = processed_path(name)
+        if not os.path.exists(path):
+            return pd.DataFrame()
+        read_dtype = dtype if dtype is not None else {'researcher_id': str}
+        try:
+            df = pd.read_csv(path, encoding='utf-8-sig', dtype=read_dtype)
+        except Exception:
+            return pd.DataFrame()
     if 'researcher_id' in df.columns:
         df['researcher_id'] = df['researcher_id'].astype(str).str.zfill(8)
     return df

@@ -32,13 +32,9 @@ AWARD_TYPES = {'그룹표창', '대표이사표창', '대표이사표창(시상�
 # ─── 헬퍼 ──────────────────────────────────────────────────────────────────────
 
 def _r(name):
-    path = os.path.join(DATA_DIR, f'{name}.csv')
-    if not os.path.exists(path):
-        return pd.DataFrame()
-    try:
-        return pd.read_csv(path, encoding='utf-8-sig', dtype=str)
-    except Exception:
-        return pd.DataFrame()
+    # 데이터 소스 추상화 계층 경유 (DB 설정 시 PostgreSQL, 아니면 CSV 폴백)
+    from services.data_store import read_processed
+    return read_processed(name, dtype=str)
 
 
 

@@ -16,7 +16,37 @@ COMMENT_COLUMNS = [
 ]
 
 
+def _upsert_comment_db(engine, rid, year, author_type, text, summary):
+    """PostgreSQL INSERT ... ON CONFLICT 로 코멘트 upsert."""
+    from sqlalchemy import text as sql_text
+
+    stmt = sql_text("""
+        INSERT INTO comments
+            (researcher_id, year, commenter_type, comment_raw, comment_summary,
+             strengths, improvements)
+        VALUES (:rid, :year, :ctype, :raw, :summary, '', '')
+        ON CONFLICT (researcher_id, year, commenter_type)
+        DO UPDATE SET
+            comment_raw = EXCLUDED.comment_raw,
+            comment_summary = EXCLUDED.comment_summary
+    """)
+    with engine.begin() as conn:
+        conn.execute(stmt, {
+            'rid': rid, 'year': str(year), 'ctype': author_type,
+            'raw': text, 'summary': summary,
+        })
+
+
 def upsert_comment(rid, year, author_type, text):
+    rid = str(rid).zfill(8)
+    summary = text[:120] + ('...' if len(text) > 120 else '')
+
+    from services.db import get_engine
+    engine = get_engine()
+    if engine is not None:
+        _upsert_comment_db(engine, rid, year, author_type, text, summary)
+        return
+
     path = processed_path('comments')
     df = (
         pd.read_csv(path, encoding='utf-8-sig', dtype={'researcher_id': str})
