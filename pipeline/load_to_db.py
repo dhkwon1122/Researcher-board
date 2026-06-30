@@ -6,9 +6,10 @@ data/processed/*.csv → PostgreSQL 적재 스크립트.
   python pipeline/load_to_db.py
 
 동작:
-  1) pipeline/schema.sql 실행 (테이블·제약·인덱스 생성, IF NOT EXISTS)
-  2) 각 테이블 TRUNCATE 후 해당 CSV를 to_sql(append)로 적재
-     (replace 대신 truncate+append → schema.sql 의 제약/인덱스 보존)
+  1) 각 CSV를 읽어 to_sql(if_exists='replace', 전 컬럼 TEXT)로 적재
+     → 테이블이 매번 실제 CSV 컬럼에 맞춰 재생성됨 (스키마 드리프트 방지).
+  2) 적재 후 pipeline/schema.sql 실행 (인덱스 + comments 유니크 인덱스).
+     replace 가 테이블을 drop 하므로 인덱스는 반드시 적재 '뒤'에 적용.
 
 DATABASE_URL 미설정 시 아무 것도 하지 않고 안내만 출력.
 """
@@ -46,18 +47,28 @@ TABLES = [
 ]
 
 
-def _apply_schema(engine):
+def _apply_post_load_ddl(engine):
+    """적재 후 인덱스/유니크 인덱스 적용 (schema.sql). 테이블이 이미 존재해야 함."""
     from sqlalchemy import text
     if not os.path.exists(SCHEMA_SQL):
-        print(f'[load_to_db] schema.sql 없음: {SCHEMA_SQL}')
+        print(f'[load_to_db] schema.sql 없음, 인덱스 생략: {SCHEMA_SQL}')
         return
     with open(SCHEMA_SQL, encoding='utf-8') as f:
         ddl = f.read()
+    # 주석 줄(--)을 먼저 제거 후 ; 로 분할 (주석이 문 앞에 와도 건너뛰지 않도록)
+    ddl_clean = '\n'.join(
+        ln for ln in ddl.splitlines() if not ln.strip().startswith('--')
+    )
     with engine.begin() as conn:
-        for stmt in (s.strip() for s in ddl.split(';')):
-            if stmt:
+        for stmt in (s.strip() for s in ddl_clean.split(';')):
+            if not stmt:
+                continue
+            try:
                 conn.execute(text(stmt))
-    print('[load_to_db] schema.sql 적용 완료')
+            except Exception as exc:
+                # 인덱스 대상 테이블/컬럼이 없을 수도 있음 → 경고 후 계속
+                print(f'[load_to_db] DDL 건너뜀: {exc}')
+    print('[load_to_db] 인덱스/유니크 적용 완료')
 
 
 def load():
@@ -74,9 +85,7 @@ def load():
               '3) pip install -r requirements.txt 실행했는지')
         return
 
-    _apply_schema(engine)
-
-    from sqlalchemy import text
+    from sqlalchemy import Text
     loaded = 0
     for name in TABLES:
         path = os.path.join(DATA_DIR, f'{name}.csv')
@@ -89,12 +98,13 @@ def load():
             print(f'[load_to_db] 읽기 실패 {name}: {exc}')
             continue
 
-        with engine.begin() as conn:
-            conn.execute(text(f'TRUNCATE TABLE {name}'))
-            df.to_sql(name, conn, if_exists='append', index=False)
-        print(f'[load_to_db] {name}: {len(df)}행 적재')
+        # 전 컬럼 TEXT로 테이블 재생성 → 실제 CSV 컬럼 구성에 자동으로 맞춤
+        df.to_sql(name, engine, if_exists='replace', index=False,
+                  dtype={col: Text() for col in df.columns})
+        print(f'[load_to_db] {name}: {len(df)}행 적재 ({len(df.columns)}컬럼)')
         loaded += 1
 
+    _apply_post_load_ddl(engine)
     print(f'[load_to_db] 완료 — {loaded}개 테이블 적재')
 
 
