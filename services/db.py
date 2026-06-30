@@ -1,19 +1,58 @@
 """
 PostgreSQL 접속 계층.
 
-DATABASE_URL 환경변수가 설정돼 있으면 SQLAlchemy Engine을 만들어 반환하고,
-없으면 None을 반환한다. 호출부(data_store, comments)는 None이면 CSV로 폴백한다.
+DATABASE_URL 환경변수(또는 프로젝트 루트의 .env 파일)가 설정돼 있으면
+SQLAlchemy Engine을 만들어 반환하고, 없으면 None을 반환한다.
+호출부(data_store, comments)는 None이면 CSV로 폴백한다.
 
 예) DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/researcher_board
 """
 
 import os
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except Exception:
-    pass
+# 프로젝트 루트 = 이 파일(services/db.py)의 상위 디렉터리
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ENV_PATH = os.path.join(BASE_DIR, '.env')
+
+
+def _load_env_file():
+    """
+    프로젝트 루트의 .env 를 환경변수로 로드한다.
+    - python-dotenv 가 있으면 그것으로 로드(경로 명시 → 실행 위치 무관).
+    - 없으면 최소 파서로 직접 읽어, 패키지 미설치여도 동작하게 한다.
+    이미 OS 환경변수로 설정된 값은 덮어쓰지 않는다.
+    """
+    # 1) python-dotenv 우선
+    try:
+        from dotenv import load_dotenv
+        if os.path.exists(ENV_PATH):
+            load_dotenv(ENV_PATH)
+        else:
+            load_dotenv()  # 혹시 다른 위치에 있으면 탐색
+    except Exception:
+        pass
+
+    # 2) DATABASE_URL 이 아직 비어 있으면 .env 수동 파싱 (dotenv 미설치 대비)
+    if os.environ.get('DATABASE_URL', '').strip():
+        return
+    if not os.path.exists(ENV_PATH):
+        return
+    try:
+        with open(ENV_PATH, encoding='utf-8-sig') as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith('#') or '=' not in line:
+                    continue
+                key, _, val = line.partition('=')
+                key = key.strip()
+                val = val.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = val
+    except Exception:
+        pass
+
+
+_load_env_file()
 
 try:
     from sqlalchemy import create_engine
@@ -34,7 +73,12 @@ def get_engine():
     _initialized = True
 
     url = os.environ.get('DATABASE_URL', '').strip()
-    if not url or create_engine is None:
+    if not url:
+        _engine = None
+        return None
+    if create_engine is None:
+        print('[db] sqlalchemy 미설치 — CSV로 폴백. '
+              'pip install -r requirements.txt 를 실행하세요.')
         _engine = None
         return None
     try:
