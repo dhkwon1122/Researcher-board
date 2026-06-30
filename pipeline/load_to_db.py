@@ -63,8 +63,15 @@ def _apply_schema(engine):
 def load():
     engine = get_engine()
     if engine is None:
-        print('[load_to_db] DATABASE_URL 미설정 — 적재 건너뜀. '
-              '환경변수를 설정하세요.')
+        from services.db import ENV_PATH
+        url_set = bool(os.environ.get('DATABASE_URL', '').strip())
+        print('[load_to_db] DATABASE_URL 미설정 — 적재 건너뜀.')
+        print(f'  · .env 경로 확인: {ENV_PATH} '
+              f'(존재: {os.path.exists(ENV_PATH)})')
+        print(f'  · DATABASE_URL 인식됨: {url_set}')
+        print('  점검: 1) 파일명이 정확히 ".env" 인지 (메모장이 ".env.txt"로 '
+              '저장하지 않았는지)  2) 파일이 프로젝트 루트에 있는지  '
+              '3) pip install -r requirements.txt 실행했는지')
         return
 
     _apply_schema(engine)
