@@ -200,6 +200,17 @@ def run():
     from process_comments import process as process_comments
     process_comments(use_llm=False)
 
+    # ── 10. DATABASE_URL 설정 시 PostgreSQL 적재 ────────────────────────
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from services.db import db_enabled
+        if db_enabled():
+            from load_to_db import load as load_to_db
+            print('\nDATABASE_URL 감지 — PostgreSQL 적재 시작')
+            load_to_db()
+    except Exception as exc:
+        print(f'[run_pipeline] DB 적재 건너뜀: {exc}')
+
     if missing:
         print(f'\n누락된 원천 파일: {missing}')
         print('개발용 더미 데이터를 사용하려면:  python pipeline/generate_sample_data.py')
