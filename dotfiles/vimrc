@@ -1,0 +1,11 @@
+" 컨테이너용 vim 설정 — 이미지에 /root/.vimrc 로 복사됨.
+" 본인 설정으로 교체한 뒤 `docker compose build` 하면 반영된다.
+
+syntax on
+set number
+set expandtab
+set tabstop=4
+set shiftwidth=4
+set hlsearch
+set incsearch
+set encoding=utf-8
