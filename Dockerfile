@@ -102,7 +102,10 @@ RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
 # data/ 와 .env 는 .dockerignore 로 제외 → 컨테이너에는 볼륨/시크릿으로 주입.
 COPY . .
 
-EXPOSE 8050
+# 리슨 포트 (기본 8501). 실행 시 -e PORT=... 로 바꿀 수 있음.
+ENV PORT=8501
+EXPOSE 8501
 
-# WSGI 서버로 구동 (app.py 의 server = app.server)
-CMD ["gunicorn", "--bind", "0.0.0.0:8050", "--workers", "2", "--timeout", "120", "app:server"]
+# WSGI 서버로 구동 (app.py 의 server = app.server).
+# PORT 환경변수를 반영하려 shell 형식 + exec (gunicorn 이 PID 1 로 신호 수신).
+CMD exec gunicorn --bind "0.0.0.0:${PORT:-8501}" --workers 2 --timeout 120 app:server

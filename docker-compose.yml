@@ -38,8 +38,9 @@ services:
     environment:
       # 컨테이너 내부에서는 db 서비스명으로 접속 (localhost 아님)
       DATABASE_URL: postgresql+psycopg2://postgres:postgres@db:5432/researcher_board
+      PORT: "8501"
     ports:
-      - "8050:8050"
+      - "8501:8501"   # 호스트:컨테이너 (둘 다 8501)
     volumes:
       # 데이터는 이미지에 굽지 않고 호스트에서 마운트 (수정·교체 용이)
       - ./data:/app/data
