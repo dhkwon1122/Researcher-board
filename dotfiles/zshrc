@@ -1,0 +1,16 @@
+# 컨테이너용 zsh 설정 — 이미지에 /root/.zshrc 로 복사됨.
+# 본인 설정으로 교체한 뒤 `docker compose build` 하면 반영된다.
+
+autoload -Uz compinit && compinit
+autoload -U colors && colors
+export CLICOLOR=1
+export LANG=C.UTF-8
+
+HISTFILE=~/.zsh_history
+HISTSIZE=10000
+SAVEHIST=10000
+setopt SHARE_HISTORY HIST_IGNORE_DUPS
+
+PROMPT="%F{cyan}%~%f %# "
+
+cd /app

@@ -51,21 +51,10 @@ RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
 #  깨지므로, 빌드 셸은 기본(sh)으로 두고 로그인 셸만 chsh 로 바꾼다.)
 RUN chsh -s /bin/zsh root
 
-# 최소 zsh/vim 설정 (개인 dotfile 이 있으면 이후 마운트/복사로 덮어쓰면 됨)
-RUN printf '%s\n' \
-    'autoload -Uz compinit && compinit' \
-    'autoload -U colors && colors' \
-    'export CLICOLOR=1' \
-    'export LANG=C.UTF-8' \
-    'HISTFILE=~/.zsh_history' 'HISTSIZE=10000' 'SAVEHIST=10000' \
-    'setopt SHARE_HISTORY HIST_IGNORE_DUPS' \
-    'PROMPT="%F{cyan}%~%f %# "' \
-    'cd /app' \
-    > /root/.zshrc \
-  && printf '%s\n' \
-    'syntax on' 'set number' 'set expandtab' 'set tabstop=4' 'set shiftwidth=4' \
-    'set hlsearch' 'set incsearch' 'set encoding=utf-8' \
-    > /root/.vimrc
+# zsh/vim 설정을 이미지에 굽는다. dotfiles/ 의 내용을 본인 설정으로 교체 후
+# 리빌드하면 반영된다.
+COPY dotfiles/zshrc /root/.zshrc
+COPY dotfiles/vimrc /root/.vimrc
 
 # 런타임 파이썬(requests/psycopg2 등)이 사내 CA 를 신뢰하도록 시스템 번들 지정
 ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
