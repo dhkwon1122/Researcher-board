@@ -1,7 +1,11 @@
 services:
+  # 번들 postgres — 기본으로는 뜨지 않는다(profiles). 컨테이너 안에 DB 도 함께
+  # 띄우고 싶을 때만: docker compose --profile bundled-db up -d
+  # 기본 시나리오는 Windows 호스트의 PostgreSQL 에 붙는 것(아래 app 참고).
   db:
     image: postgres:16
     container_name: researcher_board_db
+    profiles: ["bundled-db"]
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -32,14 +36,18 @@ services:
         HTTPS_PROXY: "http://12.26.204.100:8080"
         NO_PROXY: "localhost,127.0.0.1,db,::1,samsungds.net,*.samsungds.net,*.samsung.net,12.0.0.0/8,10.0.0.0/8,192.0.0.0/8,172.0.0.0/8"
     container_name: researcher_board_app
-    depends_on:
-      db:
-        condition: service_healthy
+    # DATABASE_URL 은 .env 에서 지정(비밀번호 등). 미설정 시 Windows 호스트의
+    # PostgreSQL(host.docker.internal:5432)을 기본값으로 시도한다.
+    # 번들 DB(--profile bundled-db)로 쓸 땐 .env 에서 @db:5432 로 바꾼다.
     environment:
-      # 컨테이너 내부에서는 db 서비스명으로 접속 (localhost 아님)
-      DATABASE_URL: postgresql+psycopg2://postgres:postgres@db:5432/researcher_board
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://postgres:postgres@host.docker.internal:5432/researcher_board}
+      PORT: "8501"
+    # WSL 컨테이너 → Windows 호스트 접근용. Docker Desktop 은 자동이지만,
+    # WSL 내 네이티브 docker 에서도 되도록 host-gateway 로 명시.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
-      - "8050:8050"
+      - "8501:8501"   # 호스트:컨테이너 (둘 다 8501)
     volumes:
       # 데이터는 이미지에 굽지 않고 호스트에서 마운트 (수정·교체 용이)
       - ./data:/app/data
