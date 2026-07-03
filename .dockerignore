@@ -1,0 +1,26 @@
+# 빌드 컨텍스트에서 제외 (이미지에 굽지 않음)
+.git
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+*.env
+!.env.example
+
+# 데이터·비밀은 볼륨/시크릿으로 주입 (이미지에 포함하지 않음)
+data/raw/
+data/processed/
+*.xlsx
+*.csv
+
+# 문서·기타
+docs/
+*.md
+.vscode/
+.idea/
+pipeline/llm_config.py
+
+# certs/ 는 제외하지 않는다 (Dockerfile 이 사내 CA 를 복사해야 함)

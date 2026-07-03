@@ -16,5 +16,31 @@ services:
       timeout: 5s
       retries: 5
 
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # 사내망 빌드 시: 아래 값들을 셸 환경변수로 export 하거나 값 직접 기입.
+      # 미설정 시 빈 값 → 공용 PyPI/무프록시로 빌드.
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+        PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
+        PIP_CERT: ${PIP_CERT:-}
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
+    container_name: researcher_board_app
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # 컨테이너 내부에서는 db 서비스명으로 접속 (localhost 아님)
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@db:5432/researcher_board
+    ports:
+      - "8050:8050"
+    volumes:
+      # 데이터는 이미지에 굽지 않고 호스트에서 마운트 (수정·교체 용이)
+      - ./data:/app/data
+
 volumes:
   pgdata:

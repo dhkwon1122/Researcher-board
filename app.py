@@ -114,5 +114,8 @@ app.layout = html.Div(
     style={'minHeight': '100vh', 'backgroundColor': '#f0f2f5'},
 )
 
+# WSGI 진입점 (gunicorn app:server 로 구동). Dash 의 내부 Flask 서버.
+server = app.server
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8050, debug=False)
