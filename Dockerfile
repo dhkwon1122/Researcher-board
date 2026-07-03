@@ -20,13 +20,15 @@
 
 FROM python:3.11-slim
 
-# ── 빌드 인자 (미지정 시 빈 값 → 공용 PyPI/무프록시) ──
-ARG PIP_INDEX_URL=
-ARG PIP_TRUSTED_HOST=
+# ── 빌드 인자 (사내 기본값 내장. 빌드 시 --build-arg 로 덮어쓸 수 있음) ──
+# 사외/공용 PyPI 로 빌드하려면 빈 값으로 덮어쓴다:
+#   docker build --build-arg PIP_INDEX_URL= --build-arg HTTP_PROXY= ... .
+ARG PIP_INDEX_URL=http://repository.samsungds.net/repository/proxy-pypi-files.pythonhosted.org/simple
+ARG PIP_TRUSTED_HOST=repository.samsungds.net
 ARG PIP_CERT=
-ARG HTTP_PROXY=
-ARG HTTPS_PROXY=
-ARG NO_PROXY=
+ARG HTTP_PROXY=http://12.26.204.100:8080
+ARG HTTPS_PROXY=http://12.26.204.100:8080
+ARG NO_PROXY=localhost,127.0.0.1,db,::1,samsungds.net,*.samsungds.net,*.samsung.net,12.0.0.0/8,10.0.0.0/8,192.0.0.0/8,172.0.0.0/8
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

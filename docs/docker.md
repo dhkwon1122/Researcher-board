@@ -19,16 +19,43 @@
 
 ---
 
-## 1. 사외 / 공용 PyPI 빌드
+## 0. 사내 기본값 (내장됨)
+Dockerfile·compose 에 사내 값이 **기본으로 내장**돼 있어, 사내망에서는
+추가 설정 없이 `docker compose build` 만 하면 된다.
+
+| 항목 | 기본값 |
+|------|--------|
+| pip 인덱스 | `http://repository.samsungds.net/repository/proxy-pypi-files.pythonhosted.org/simple` |
+| pip trusted-host | `repository.samsungds.net` (인덱스가 http 이므로 필요) |
+| HTTP/HTTPS 프록시 | `http://12.26.204.100:8080` |
+| NO_PROXY | `localhost,127.0.0.1,db,::1,samsungds.net,*.samsungds.net,*.samsung.net,12.0.0.0/8,10.0.0.0/8,192.0.0.0/8,172.0.0.0/8` |
+
+---
+
+## 1. 사내망 빌드 (기본값 그대로)
 ```bash
 docker compose build
 docker compose up -d
 # http://localhost:8050
 ```
 
+> 참고: compose 의 `args` 는 셸 환경변수의 영향을 받지 않도록 **리터럴로 고정**돼
+> 있다. 로컬에 `NO_PROXY` 등이 설정돼 있어도 위 값이 그대로 쓰인다
+> (DB 트래픽이 프록시로 새는 사고 방지).
+
+## 1-b. 사외 / 공용 PyPI 빌드
+사외에서는 compose 를 쓰지 않고 빈 인자로 직접 빌드한다.
+```bash
+docker build \
+  --build-arg PIP_INDEX_URL= --build-arg PIP_TRUSTED_HOST= \
+  --build-arg HTTP_PROXY= --build-arg HTTPS_PROXY= --build-arg NO_PROXY= \
+  -t researcher-board:latest .
+```
+(또는 `docker-compose.yml` 의 `args` 값을 직접 수정)
+
 ---
 
-## 2. 사내망 빌드 (pip 사내 저장소 · 프록시 · 인증서)
+## 2. 빌드 인자 덮어쓰기 (값 변경 시)
 
 ### 2-1. 사내 CA 인증서 (HTTPS 사내 저장소/프록시인 경우)
 사내 루트/중간 CA 를 PEM `.crt` 로 `certs/` 에 복사한다.
