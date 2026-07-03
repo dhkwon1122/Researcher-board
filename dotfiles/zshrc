@@ -1,16 +1,27 @@
-# 컨테이너용 zsh 설정 — 이미지에 /root/.zshrc 로 복사됨.
+# 컨테이너용 oh-my-zsh 설정 — 이미지에 /root/.zshrc 로 복사됨.
 # 본인 설정으로 교체한 뒤 `docker compose build` 하면 반영된다.
 
-autoload -Uz compinit && compinit
-autoload -U colors && colors
-export CLICOLOR=1
-export LANG=C.UTF-8
+export ZSH="$HOME/.oh-my-zsh"
 
-HISTFILE=~/.zsh_history
+# 테마 (원하는 것으로 변경)
+ZSH_THEME="robbyrussell"
+
+# 플러그인 (외부 플러그인은 Dockerfile 에서 custom/plugins 로 설치됨)
+plugins=(
+  git
+  zsh-autosuggestions
+  zsh-syntax-highlighting
+)
+
+source $ZSH/oh-my-zsh.sh
+
+# ── 사용자 커스텀 ──
+export LANG=C.UTF-8
+export CLICOLOR=1
+
 HISTSIZE=10000
 SAVEHIST=10000
 setopt SHARE_HISTORY HIST_IGNORE_DUPS
 
-PROMPT="%F{cyan}%~%f %# "
-
+# 컨테이너 진입 시 앱 디렉터리로
 cd /app

@@ -42,7 +42,7 @@ WORKDIR /app
 COPY certs/ /usr/local/share/ca-certificates/corp/
 RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
     apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates vim zsh \
+    && apt-get install -y --no-install-recommends ca-certificates vim zsh git curl \
     && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
@@ -50,6 +50,17 @@ RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
 # (주의: 여기서 SHELL 지시어를 zsh 로 바꾸면 이후 pip RUN 의 ${VAR:+...} 단어분리가
 #  깨지므로, 빌드 셸은 기본(sh)으로 두고 로그인 셸만 chsh 로 바꾼다.)
 RUN chsh -s /bin/zsh root
+
+# oh-my-zsh 설치 (github.com clone → 사내 프록시 경유, 시스템 CA 사용).
+# 자주 쓰는 외부 플러그인(zsh-autosuggestions, zsh-syntax-highlighting)도 함께 설치.
+RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
+    git clone --depth=1 https://github.com/ohmyzsh/ohmyzsh.git /root/.oh-my-zsh \
+  && http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
+    git clone --depth=1 https://github.com/zsh-users/zsh-autosuggestions \
+      /root/.oh-my-zsh/custom/plugins/zsh-autosuggestions \
+  && http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
+    git clone --depth=1 https://github.com/zsh-users/zsh-syntax-highlighting \
+      /root/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting
 
 # zsh/vim 설정을 이미지에 굽는다. dotfiles/ 의 내용을 본인 설정으로 교체 후
 # 리빌드하면 반영된다.
