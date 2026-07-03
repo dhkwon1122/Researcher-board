@@ -37,14 +37,26 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # ── 1) 사내 CA 인증서 등록 + 개발 편의 도구(vim, zsh) 설치 ──
-# certs/ 안의 *.crt 를 시스템 신뢰 저장소에 등록한다.
-# (certs/ 에 .crt 가 없으면 update-ca-certificates 는 아무 것도 추가하지 않음)
-COPY certs/ /usr/local/share/ca-certificates/corp/
+# certs/ 에 아래 중 하나(또는 둘 다)를 둘 수 있다:
+#   (a) 개별 사내 CA:  certs/corp-root-ca.crt  → update-ca-certificates 로 등록
+#   (b) 전체 CA 번들:  certs/ca-bundle.crt     → 시스템 번들을 통째로 교체
+#       (WSL 의 /etc/ssl/certs/ca-certificates.crt 를 그대로 복사한 파일)
+# 둘 다 없으면 컨테이너 기본 CA 로 빌드한다.
+COPY certs/ /tmp/corp-certs/
 RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
     apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates vim zsh git curl \
+    && for f in /tmp/corp-certs/*.crt; do \
+         [ -e "$f" ] || continue; \
+         case "$f" in */ca-bundle.crt) continue ;; esac; \
+         cp "$f" /usr/local/share/ca-certificates/; \
+       done \
     && update-ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    && if [ -f /tmp/corp-certs/ca-bundle.crt ]; then \
+         cp /tmp/corp-certs/ca-bundle.crt /etc/ssl/certs/ca-certificates.crt; \
+         echo '[build] 사내 CA 번들 적용: /etc/ssl/certs/ca-certificates.crt'; \
+       fi \
+    && rm -rf /var/lib/apt/lists/* /tmp/corp-certs
 
 # zsh 를 root 의 기본 로그인 셸로 지정.
 # (주의: 여기서 SHELL 지시어를 zsh 로 바꾸면 이후 pip RUN 의 ${VAR:+...} 단어분리가
