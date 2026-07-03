@@ -8,3 +8,7 @@ data/raw/
 data/processed/
 *.csv
 *.xlsx
+
+# 사내 CA 인증서는 커밋하지 않음 (README.md / .gitkeep 은 유지)
+certs/*.crt
+certs/*.pem
