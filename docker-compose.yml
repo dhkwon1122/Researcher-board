@@ -42,6 +42,9 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://postgres:postgres@host.docker.internal:5432/researcher_board}
       PORT: "8501"
+      # AI 검색(Text2SQL)용 로컬 LLM. ollama 서비스(profile llm)를 가리킨다.
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://ollama:11434/v1}
+      LLM_MODEL: ${LLM_MODEL:-qwen3.5:4b}
     # WSL 컨테이너 → Windows 호스트 접근용. Docker Desktop 은 자동이지만,
     # WSL 내 네이티브 docker 에서도 되도록 host-gateway 로 명시.
     extra_hosts:
@@ -52,5 +55,28 @@ services:
       # 데이터는 이미지에 굽지 않고 호스트에서 마운트 (수정·교체 용이)
       - ./data:/app/data
 
+  # 로컬 LLM (AI 검색용). 기본으로는 뜨지 않는다(profile llm).
+  # 사용:  docker compose --profile llm up -d
+  # 모델 1회 다운로드:  docker compose exec ollama ollama pull qwen2.5-coder:3b
+  ollama:
+    image: ollama/ollama:latest
+    container_name: researcher_board_ollama
+    profiles: ["llm"]
+    # 모델 다운로드(registry.ollama.ai)는 사내 프록시를 타야 할 수 있음.
+    environment:
+      HTTP_PROXY: ${HTTP_PROXY:-http://12.26.204.100:8080}
+      HTTPS_PROXY: ${HTTPS_PROXY:-http://12.26.204.100:8080}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1,ollama,app,samsungds.net,*.samsungds.net}
+    ports:
+      - "11434:11434"       # 호스트에서 직접 붙을 때 (선택)
+    volumes:
+      - ollama_models:/root/.ollama   # 받은 모델 캐시(재다운로드 방지)
+    # ── GPU 는 옵셔널: docker-compose.gpu.yml 오버레이로 켠다 ──
+    #   CPU(기본): docker compose --profile llm up -d
+    #   GPU      : docker compose -f docker-compose.yml -f docker-compose.gpu.yml \
+    #                --profile llm up -d
+    #   (+ .env 에서 LLM_MODEL 을 큰 코더 모델로, 예: qwen3-coder:30b)
+
 volumes:
   pgdata:
+  ollama_models:
