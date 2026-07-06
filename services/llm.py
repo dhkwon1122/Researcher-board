@@ -7,7 +7,7 @@ ollama, vllm 모두 OpenAI 호환 API 를 제공하므로 base URL 만 바꾸면
 
 환경변수:
   LLM_BASE_URL  기본 http://localhost:11434/v1
-  LLM_MODEL     기본 qwen2.5-coder:3b
+  LLM_MODEL     기본 qwen3.5:4b (CPU 가능한 소형; GPU 시 큰 코더 모델 권장)
   LLM_API_KEY   기본 'ollama' (로컬은 대개 불필요, 더미 값)
   LLM_TIMEOUT   기본 60 (초)
 """
@@ -21,7 +21,7 @@ class LLMError(RuntimeError):
 
 def _cfg():
     base = os.environ.get('LLM_BASE_URL', 'http://localhost:11434/v1').rstrip('/')
-    model = os.environ.get('LLM_MODEL', 'qwen2.5-coder:3b')
+    model = os.environ.get('LLM_MODEL', 'qwen3.5:4b')
     api_key = os.environ.get('LLM_API_KEY', 'ollama')
     try:
         timeout = float(os.environ.get('LLM_TIMEOUT', '60'))

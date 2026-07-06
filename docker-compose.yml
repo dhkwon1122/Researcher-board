@@ -44,7 +44,7 @@ services:
       PORT: "8501"
       # AI 검색(Text2SQL)용 로컬 LLM. ollama 서비스(profile llm)를 가리킨다.
       LLM_BASE_URL: ${LLM_BASE_URL:-http://ollama:11434/v1}
-      LLM_MODEL: ${LLM_MODEL:-qwen2.5-coder:3b}
+      LLM_MODEL: ${LLM_MODEL:-qwen3.5:4b}
     # WSL 컨테이너 → Windows 호스트 접근용. Docker Desktop 은 자동이지만,
     # WSL 내 네이티브 docker 에서도 되도록 host-gateway 로 명시.
     extra_hosts:
@@ -71,14 +71,11 @@ services:
       - "11434:11434"       # 호스트에서 직접 붙을 때 (선택)
     volumes:
       - ollama_models:/root/.ollama   # 받은 모델 캐시(재다운로드 방지)
-    # ── GPU 사용 시(NVIDIA, WSL GPU 패스스루 준비된 경우) 아래 주석 해제 ──
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
+    # ── GPU 는 옵셔널: docker-compose.gpu.yml 오버레이로 켠다 ──
+    #   CPU(기본): docker compose --profile llm up -d
+    #   GPU      : docker compose -f docker-compose.yml -f docker-compose.gpu.yml \
+    #                --profile llm up -d
+    #   (+ .env 에서 LLM_MODEL 을 큰 코더 모델로, 예: qwen3-coder:30b)
 
 volumes:
   pgdata:

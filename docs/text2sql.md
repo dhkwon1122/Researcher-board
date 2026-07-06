@@ -28,10 +28,10 @@ docker compose --profile llm up -d          # app + ollama 함께 기동
 
 ### 2) 모델 1회 다운로드
 ```bash
-docker compose exec ollama ollama pull qwen2.5-coder:3b
+docker compose exec ollama ollama pull qwen3.5:4b
 ```
-- 기본 모델은 `qwen2.5-coder:3b`(SQL 생성에 강하고 CPU 에서도 동작). `.env` 의
-  `LLM_MODEL` 로 바꿀 수 있다(예: 성능 여유 시 `qwen2.5-coder:7b`).
+- 기본 모델은 `qwen3.5:4b`(소형 범용, CPU 에서도 동작). `.env` 의 `LLM_MODEL` 로
+  바꿀 수 있다.
 - 사내망에서는 모델 다운로드가 프록시를 타야 한다. compose 의 ollama 서비스에
   `HTTP_PROXY/HTTPS_PROXY` 가 설정돼 있다.
 
@@ -40,9 +40,20 @@ docker compose exec ollama ollama pull qwen2.5-coder:3b
 docker compose exec app python -c "from services.llm import chat; print(chat([{'role':'user','content':'say hi'}]))"
 ```
 
-## GPU (선택)
-CPU 로도 동작하지만 느리다. NVIDIA GPU + WSL GPU 패스스루가 준비돼 있으면
-`docker-compose.yml` 의 ollama `deploy.resources` 주석을 해제한다.
+## GPU 로 전환 (선택)
+CPU 로도 동작하지만 큰 모델은 느리다. GPU 가 있으면 **오버레이 파일**로 켠다
+(기본 compose 는 그대로 두고, GPU 설정만 얹는 방식).
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile llm up -d
+```
+전제: NVIDIA GPU + 드라이버, `nvidia-container-toolkit`(Docker GPU 노출),
+WSL 이면 Windows NVIDIA 드라이버 + WSL GPU 패스스루.
+
+GPU 에서는 더 큰 코더 모델이 SQL 정확도가 좋다:
+```bash
+# .env: LLM_MODEL=qwen3-coder:30b   (또는 qwen3.5:27b)
+docker compose exec ollama ollama pull qwen3-coder:30b
+```
 
 ## vllm 으로 교체 (대안, GPU 필요)
 vllm 도 OpenAI 호환 API 라 `LLM_BASE_URL` 만 바꾸면 된다.

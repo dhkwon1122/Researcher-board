@@ -1,0 +1,19 @@
+# GPU 오버레이 (NVIDIA). 기본 docker-compose.yml 위에 얹어 ollama 가 GPU 를 쓰게 한다.
+#
+# 사용:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile llm up -d
+#
+# 전제:
+#   - NVIDIA GPU + 드라이버
+#   - nvidia-container-toolkit 설치 (Docker 가 GPU 를 컨테이너에 노출)
+#   - WSL 이면 Windows 쪽 NVIDIA 드라이버 + WSL GPU 패스스루 활성화
+#   - 큰 모델 사용 권장:  .env 에서 LLM_MODEL=qwen3-coder:30b (또는 qwen3.5:27b 등)
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
