@@ -58,6 +58,22 @@ OPTIONAL_COLS = [
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from excel_reader import read_xlsx, norm_id
 
+_DATE_DST_COLS = {'application_date', 'registration_date'}
+
+
+def _parse_date(val) -> str:
+    """YYYYMMDD(숫자 or 문자열) 또는 YYYY-MM-DD → YYYY-MM-DD. 변환 불가 시 원본 문자열."""
+    if val is None:
+        return ''
+    s = str(val).strip().split('.')[0]
+    if s in ('', 'nan', 'None', 'NaT'):
+        return ''
+    if len(s) == 8 and s.isdigit():
+        return f'{s[:4]}-{s[4:6]}-{s[6:]}'
+    if len(s) >= 10 and s[4] == '-':
+        return s[:10]
+    return s
+
 
 def process() -> bool:
     raw_path = os.path.join(RAW_DIR, PATENT_FILE)
@@ -105,7 +121,10 @@ def process() -> bool:
         if dst_col in filled:
             continue
         if src_col in df.columns:
-            result[dst_col] = df[src_col].astype(str).str.strip()
+            if dst_col in _DATE_DST_COLS:
+                result[dst_col] = df[src_col].apply(_parse_date)
+            else:
+                result[dst_col] = df[src_col].astype(str).str.strip()
             filled.add(dst_col)
     for dst_col in ['application_no', 'application_date', 'registration_no',
                     'registration_date', 'country']:
