@@ -12,6 +12,7 @@ from components.detail_tabs import (
     patents_tab,
     publications_tab,
     technology_transfer_tab,
+    timeline_tab,
 )
 from components.profile_sections import (
     avatar,
@@ -191,6 +192,7 @@ def _detail_tabs_col():
                     dbc.Tab(html.Div(id='tab-publications'), label='논문 실적', tab_id='pub'),
                     dbc.Tab(html.Div(id='tab-patents'), label='특허 실적 (최근 3년)', tab_id='pat'),
                     dbc.Tab(html.Div(id='tab-transfer'), label='기술 이전 실적', tab_id='tt'),
+                    dbc.Tab(html.Div(id='tab-timeline'), label='타임라인', tab_id='timeline'),
                 ], id='detail-tabs', active_tab='pub', className='mb-2'),
             ),
             className='shadow-sm h-100',
@@ -248,7 +250,7 @@ def _empty_profile_output():
     prompt = html.Div('연구원을 선택하세요.', className='text-muted p-3')
     return (
         avatar('?'), html.Div(), html.Div(), html.Div(), html.Div(), html.Div(),
-        [], None, html.Div(), prompt, prompt, prompt,
+        [], None, html.Div(), prompt, prompt, prompt, prompt,
     )
 
 
@@ -280,6 +282,7 @@ def filter_by_dept(dept, current_rid):
     Output('tab-publications', 'children'),
     Output('tab-patents', 'children'),
     Output('tab-transfer', 'children'),
+    Output('tab-timeline', 'children'),
     Input('researcher-select', 'value'),
 )
 def update_profile(rid):
@@ -315,6 +318,8 @@ def update_profile(rid):
             publications_tab(tables['publications'], rid),
             patents_tab(tables['patents'], rid),
             technology_transfer_tab(tables['technology_transfer'], rid),
+            timeline_tab(tables['tasks'], tables['hr_orders'], tables['publications'],
+                         tables['patents'], rid),
         )
     except Exception as exc:
         import traceback
@@ -326,7 +331,7 @@ def update_profile(rid):
         )
         return (
             avatar('?'), err_div, html.Div(), html.Div(), html.Div(), html.Div(),
-            [], None, html.Div(), err_div, html.Div(), html.Div(),
+            [], None, html.Div(), err_div, html.Div(), html.Div(), html.Div(),
         )
 
 

@@ -46,8 +46,10 @@ COL_GRADE_A  = '현재등급 - A급구분'
 OPTIONAL_COLS = [
     ('출원번호', 'application_no'),
     ('출원일',   'application_date'),
+    ('출원일자', 'application_date'),   # '출원일' 없으면 '출원일자' 시도
     ('등록번호', 'registration_no'),
     ('등록일',   'registration_date'),
+    ('등록일자', 'registration_date'),  # '등록일' 없으면 '등록일자' 시도
     ('국가',     'country'),
     ('국가명',   'country'),   # '국가' 없으면 '국가명' 시도
 ]

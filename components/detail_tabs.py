@@ -1,6 +1,18 @@
+from datetime import datetime
+
 import dash_bootstrap_components as dbc
 import pandas as pd
-from dash import html
+import plotly.graph_objects as go
+from dash import dcc, html
+
+TIMELINE_COLORS = {
+    '과제':     '#2a78d6',
+    '인사발령': '#1baf7a',
+    '논문':     '#eda100',
+    '특허':     '#008300',
+}
+_MUTED_INK = '#898781'
+_GRIDLINE = '#e1e0d9'
 
 
 def publications_tab(pub_df, rid):
@@ -163,6 +175,222 @@ def technology_transfer_tab(tt_df, rid):
                             html.Th('유형'), html.Th('금액', className='text-end')])),
         html.Tbody(rows),
     ], bordered=False, hover=True, responsive=True, size='sm')])
+
+
+def timeline_tab(task_df, hr_df, pub_df, pat_df, rid):
+    task = task_df[task_df['researcher_id'] == rid].copy() if not task_df.empty else pd.DataFrame()
+    hr = hr_df[hr_df['researcher_id'] == rid].copy() if not hr_df.empty else pd.DataFrame()
+    pub = pub_df[pub_df['researcher_id'] == rid].copy() if not pub_df.empty else pd.DataFrame()
+    pat = pat_df[pat_df['researcher_id'] == rid].copy() if not pat_df.empty else pd.DataFrame()
+    if not pat.empty:
+        pat = _dedupe_patents(pat)
+
+    if task.empty and hr.empty and pub.empty and pat.empty:
+        return html.Div('타임라인 데이터 없음', className='text-muted p-3')
+
+    task_points = _task_points(task)
+    hr_points = _hr_points(hr)
+    pub_points = _pub_points(pub)
+    pat_points = _pat_points(pat)
+
+    lane_labels = _assign_task_lanes(task_points)
+    task_lanes = list(dict.fromkeys(lane_labels)) if lane_labels else ['과제']
+
+    today = pd.Timestamp(datetime.now().date())
+    all_dates = (
+        [d for seg in task_points for d in (seg['start'], seg['end'])]
+        + [p['date'] for p in hr_points]
+        + [p['date'] for p in pub_points]
+        + [p['date'] for p in pat_points]
+    )
+    min_date = min(all_dates) if all_dates else today
+    pad = max(pd.Timedelta(days=15), (today - min_date) * 0.03)
+    x_range = [min_date - pad, today + pd.Timedelta(days=15)]
+    x_mid = x_range[0] + (x_range[1] - x_range[0]) / 2
+
+    y_order = task_lanes + ['인사발령', '논문', '특허']
+
+    fig = go.Figure()
+
+    if task_points:
+        xs, ys, texts = [], [], []
+        for seg, lane in zip(task_points, lane_labels):
+            hover = f"{seg['task_name']} | {seg['start_label']} ~ {seg['end_label']}"
+            xs += [seg['start'], seg['end'], None]
+            ys += [lane, lane, None]
+            texts += [hover, hover, None]
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode='lines+markers', name='과제',
+            marker=dict(symbol='circle', size=9, color=TIMELINE_COLORS['과제']),
+            line=dict(color=TIMELINE_COLORS['과제'], width=2),
+            text=texts, hovertemplate='%{text}',
+        ))
+    else:
+        fig.add_annotation(x=x_mid, y='과제', text='과제 데이터 없음',
+                            showarrow=False, font=dict(color=_MUTED_INK, size=12))
+
+    if hr_points:
+        fig.add_trace(go.Scatter(
+            x=[p['date'] for p in hr_points], y=['인사발령'] * len(hr_points),
+            mode='markers', name='인사발령',
+            marker=dict(symbol='star', size=12, color=TIMELINE_COLORS['인사발령']),
+            text=[p['hover'] for p in hr_points], hovertemplate='%{text}',
+        ))
+    else:
+        fig.add_annotation(x=x_mid, y='인사발령', text='인사발령 데이터 없음',
+                            showarrow=False, font=dict(color=_MUTED_INK, size=12))
+
+    if pub_points:
+        fig.add_trace(go.Scatter(
+            x=[p['date'] for p in pub_points], y=['논문'] * len(pub_points),
+            mode='markers', name='논문',
+            marker=dict(symbol='square', size=9, color=TIMELINE_COLORS['논문']),
+            text=[p['hover'] for p in pub_points], hovertemplate='%{text}',
+        ))
+    else:
+        fig.add_annotation(x=x_mid, y='논문', text='논문 데이터 없음',
+                            showarrow=False, font=dict(color=_MUTED_INK, size=12))
+
+    if pat_points:
+        fig.add_trace(go.Scatter(
+            x=[p['date'] for p in pat_points], y=['특허'] * len(pat_points),
+            mode='markers', name='특허',
+            marker=dict(symbol='triangle-up', size=10, color=TIMELINE_COLORS['특허']),
+            text=[p['hover'] for p in pat_points], hovertemplate='%{text}',
+        ))
+    else:
+        fig.add_annotation(x=x_mid, y='특허', text='특허 데이터 없음',
+                            showarrow=False, font=dict(color=_MUTED_INK, size=12))
+
+    fig.update_layout(
+        xaxis=dict(range=x_range, type='date', gridcolor=_GRIDLINE),
+        yaxis=dict(type='category', categoryorder='array', categoryarray=y_order,
+                   gridcolor=_GRIDLINE),
+        legend=dict(orientation='v', yanchor='top', y=1, xanchor='right', x=1),
+        hoverlabel=dict(namelength=-1),
+        margin=dict(l=10, r=10, t=30, b=30),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        height=420,
+    )
+
+    return dcc.Graph(figure=fig, config={'displayModeBar': False})
+
+
+def _parse_ts(val):
+    s = str(val).strip() if val is not None else ''
+    if not s or s in ('nan', 'None', 'NaT'):
+        return None
+    try:
+        return pd.Timestamp(s)
+    except (ValueError, TypeError):
+        return None
+
+
+def _task_points(task_df):
+    if task_df.empty:
+        return []
+    today = pd.Timestamp(datetime.now().date())
+    points = []
+    for _, row in task_df.iterrows():
+        start = _parse_ts(row.get('start_date'))
+        if start is None:
+            continue
+        end_raw = row.get('end_date')
+        end = _parse_ts(end_raw)
+        end_label = end.strftime('%Y-%m-%d') if end is not None else '진행중'
+        if end is None or end < start:
+            end = today
+        points.append({
+            'task_name': str(row.get('task_name', '')).strip(),
+            'start': start,
+            'end': end,
+            'start_label': start.strftime('%Y-%m-%d'),
+            'end_label': end_label,
+        })
+    points.sort(key=lambda p: p['start'])
+    return points
+
+
+def _assign_task_lanes(points):
+    if not points:
+        return []
+    lane_ends = []
+    lane_idx = [0] * len(points)
+    for i, p in enumerate(points):
+        placed = False
+        for lane, lane_end in enumerate(lane_ends):
+            if p['start'] >= lane_end:
+                lane_ends[lane] = p['end']
+                lane_idx[i] = lane
+                placed = True
+                break
+        if not placed:
+            lane_ends.append(p['end'])
+            lane_idx[i] = len(lane_ends) - 1
+    if len(lane_ends) <= 1:
+        return ['과제'] * len(points)
+    return [f'과제 {idx + 1}' for idx in lane_idx]
+
+
+def _hr_points(hr_df):
+    if hr_df.empty:
+        return []
+    points = []
+    for _, row in hr_df.iterrows():
+        date = _parse_ts(row.get('order_date'))
+        if date is None:
+            continue
+        hover = (f"{str(row.get('order_date', '')).strip()} | "
+                 f"{str(row.get('order_name', '')).strip()} | "
+                 f"{str(row.get('order_dep', '')).strip()} | "
+                 f"{str(row.get('order_cl', '')).strip()}")
+        points.append({'date': date, 'hover': hover})
+    points.sort(key=lambda p: p['date'])
+    return points
+
+
+def _pub_points(pub_df):
+    if pub_df.empty:
+        return []
+    points = []
+    for _, row in pub_df.iterrows():
+        pub_date = str(row.get('pub_date', '')).strip()
+        if not pub_date or pub_date in ('nan', 'None'):
+            pub_year = str(row.get('pub_year', '')).strip()
+            pub_date = f'{pub_year}-01-01' if pub_year and pub_year not in ('nan', 'None') else ''
+        date = _parse_ts(pub_date)
+        if date is None:
+            continue
+        hover = (f"{str(row.get('title', '')).strip()} | "
+                 f"{str(row.get('journal', '')).strip()} | "
+                 f"{str(row.get('author_type', '')).strip()}")
+        points.append({'date': date, 'hover': hover})
+    points.sort(key=lambda p: p['date'])
+    return points
+
+
+def _pat_points(pat_df):
+    if pat_df.empty:
+        return []
+    points = []
+    for _, row in pat_df.iterrows():
+        reg = str(row.get('registration_date', '')).strip()
+        app = str(row.get('application_date', '')).strip()
+        date_raw = reg if reg and reg not in ('nan', 'None') else app
+        date = _parse_ts(date_raw)
+        if date is None:
+            continue
+        title = _cell(row, 'title', 'title_ko')
+        grade = str(row.get('patent_grade', '')).strip()
+        grade_a = str(row.get('patent_grade_a_sub', '')).strip()
+        grade_str = grade + (' (전략출원)' if grade_a == '전략출원' else '')
+        share = str(row.get('share_ratio', '')).strip()
+        lead = str(row.get('is_lead_inventor', '')).strip()
+        hover = f'{title} | {grade_str} | 지분율 {share}% | 대표발명자 {lead}'
+        points.append({'date': date, 'hover': hover})
+    points.sort(key=lambda p: p['date'])
+    return points
 
 
 def _number(value, fmt):
