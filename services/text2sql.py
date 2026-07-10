@@ -39,8 +39,56 @@ class Text2SQLError(RuntimeError):
     """검증 실패 등 사용자에게 안내할 오류."""
 
 
-def build_schema_prompt(engine) -> str:
-    """information_schema 로 public 스키마의 실제 테이블·컬럼을 읽어 프롬프트 텍스트 생성."""
+# 테이블 의미(한국어) — 프롬프트에 붙여 모델이 어떤 표인지 알게 한다.
+TABLE_HINTS = {
+    'researchers': '연구원 기본정보(이름 name, 부서 department, 직급 position, 성별 gender, 생년 birth_year 등)',
+    'evaluations': '연도별 인사평가 등급(year, grade)',
+    'education': '학력/학위(degree 등)',
+    'incentive_selection': '인센티브 선정(year, selected, category)',
+    'leadership': '리더십 진단 점수(차원별 점수, overall_score, evaluator_group)',
+    'transfers': '인사이동 이력',
+    'tasks': '수행 과제',
+    'nurturing': '육성 이력',
+    'awards': '수상 이력',
+    'comments': '평가 코멘트(commenter_type, comment_raw, comment_summary)',
+    'publications': '논문(pub_year, impact_factor, citation_count 등)',
+    'patents': '특허(status 예: 출원/등록)',
+    'technology_transfer': '기술이전',
+    'certifications': '자격/어학(cert_name 예: TOEIC, score, date_obtained)',
+    'succession': '승계 계획',
+}
+
+# 값 예시를 뽑지 않을(자유텍스트/식별자) 컬럼 이름 패턴
+_SKIP_SAMPLE = re.compile(
+    r'(_id$|^id$|name|title|raw|summary|strengths|improvements|knox|date|url|path)',
+    re.IGNORECASE,
+)
+
+_schema_cache: str | None = None
+
+
+def _sample_values(conn, table: str, col: str, cap: int = 15):
+    """저低카디널리티 컬럼의 실제 값 목록(<=cap)을 반환. 아니면 None."""
+    from sqlalchemy import text
+    try:
+        rows = conn.execute(text(
+            f'SELECT DISTINCT "{col}" FROM "{table}" '
+            f'WHERE "{col}" IS NOT NULL AND "{col}" <> \'\' LIMIT {cap + 1}'
+        )).fetchall()
+    except Exception:
+        return None
+    vals = [str(r[0]) for r in rows]
+    if not vals or len(vals) > cap:
+        return None
+    return vals
+
+
+def build_schema_prompt(engine, *, use_cache: bool = True) -> str:
+    """실제 테이블·컬럼 + 값 예시 + 테이블 설명으로 풍부한 스키마 프롬프트 생성(세션 캐시)."""
+    global _schema_cache
+    if use_cache and _schema_cache is not None:
+        return _schema_cache
+
     from sqlalchemy import text
 
     q = text(
@@ -54,8 +102,26 @@ def build_schema_prompt(engine) -> str:
         for tname, cname in conn.execute(q):
             tables.setdefault(tname, []).append(cname)
 
-    lines = [f'{t}({", ".join(cols)})' for t, cols in tables.items()]
-    return '\n'.join(lines)
+        blocks = []
+        for t, cols in tables.items():
+            hint = TABLE_HINTS.get(t)
+            header = f'{t}({", ".join(cols)})'
+            if hint:
+                header += f'  -- {hint}'
+            lines = [header]
+            # 저카디널리티 컬럼의 실제 값 예시 (필터 정확도에 큰 도움)
+            for c in cols:
+                if _SKIP_SAMPLE.search(c):
+                    continue
+                vals = _sample_values(conn, t, c)
+                if vals:
+                    shown = ', '.join(vals[:15])
+                    lines.append(f'    {c} 값 예: {shown}')
+            blocks.append('\n'.join(lines))
+
+    prompt = '\n'.join(blocks)
+    _schema_cache = prompt
+    return prompt
 
 
 def _extract_sql(raw: str) -> str:
@@ -67,28 +133,72 @@ def _extract_sql(raw: str) -> str:
     return txt.strip().rstrip(';').strip()
 
 
-def generate_sql(question: str, schema: str) -> str:
-    """스키마 + 질문 → LLM → SQL 문자열."""
-    system = (
-        'You are a PostgreSQL expert. Convert the user question into ONE read-only '
-        'SQL SELECT query. Rules:\n'
-        '- Use ONLY the given tables and columns.\n'
-        '- Output ONLY the SQL, no explanation, no markdown fences.\n'
+def _system_prompt(schema: str) -> str:
+    return (
+        'You are a PostgreSQL expert for a Korean HR/researcher database. '
+        'Convert the user question into ONE read-only SQL SELECT query.\n'
+        'Rules:\n'
+        '- Use ONLY the given tables and columns. Do NOT invent columns.\n'
+        '- Output ONLY the SQL. No explanation, no markdown fences, no comments.\n'
         '- Single statement, must start with SELECT or WITH.\n'
         '- Never write/modify data (no INSERT/UPDATE/DELETE/DDL).\n'
-        '- IMPORTANT: every column is stored as TEXT. Cast before numeric/date '
-        'comparison or aggregation, e.g. CAST(col AS INTEGER), CAST(col AS FLOAT).\n'
-        '- Join tables on researcher_id when combining data.\n'
-        f'\nSchema (all columns are text):\n{schema}'
+        '- EVERY column is stored as TEXT. Cast before numeric/date comparison or '
+        'aggregation: CAST(col AS INTEGER), CAST(col AS FLOAT).\n'
+        '- All tables join on researcher_id.\n'
+        "- For filters, use the exact literal values shown in '값 예' hints.\n"
+        '- Prefer returning the researcher name (researchers.name) so results are readable.\n'
+        f'\nSchema (all columns are TEXT):\n{schema}'
     )
-    messages = [
-        {'role': 'system', 'content': system},
-        {'role': 'user', 'content': question},
-    ]
-    raw = chat(messages, temperature=0.0, max_tokens=512)
+
+
+# few-shot: 조인/캐스팅/값 형식을 모델에 학습시킨다
+_FEWSHOT = [
+    ('AI 부서 연구원 이름 알려줘',
+     "SELECT name FROM researchers WHERE department = 'AI'"),
+    ('논문이 가장 많은 연구원 5명',
+     'SELECT r.name, COUNT(*) AS pub_count FROM researchers r '
+     'JOIN publications p ON r.researcher_id = p.researcher_id '
+     'GROUP BY r.name ORDER BY pub_count DESC LIMIT 5'),
+    ("2024년 평가등급이 '가'인 연구원",
+     "SELECT r.name FROM researchers r JOIN evaluations e "
+     "ON r.researcher_id = e.researcher_id "
+     "WHERE e.year = '2024' AND e.grade = '가'"),
+    ('평균 impact factor가 2 이상인 연구원',
+     'SELECT r.name, AVG(CAST(p.impact_factor AS FLOAT)) AS avg_if '
+     'FROM researchers r JOIN publications p ON r.researcher_id = p.researcher_id '
+     'GROUP BY r.name HAVING AVG(CAST(p.impact_factor AS FLOAT)) >= 2'),
+]
+
+
+def _messages(schema: str, question: str):
+    msgs = [{'role': 'system', 'content': _system_prompt(schema)}]
+    for q, a in _FEWSHOT:
+        msgs.append({'role': 'user', 'content': q})
+        msgs.append({'role': 'assistant', 'content': a})
+    msgs.append({'role': 'user', 'content': question})
+    return msgs
+
+
+def generate_sql(question: str, schema: str) -> str:
+    """스키마 + few-shot + 질문 → LLM → SQL 문자열."""
+    raw = chat(_messages(schema, question), temperature=0.0, max_tokens=512)
     sql = _extract_sql(raw)
     if not sql:
         raise Text2SQLError('LLM 이 SQL 을 생성하지 못했습니다. 질문을 더 구체적으로 적어보세요.')
+    return sql
+
+
+def repair_sql(question: str, schema: str, bad_sql: str, error: str) -> str:
+    """실행 실패한 SQL 과 에러를 모델에 주고 한 번 고치게 한다."""
+    msgs = _messages(schema, question)
+    msgs.append({'role': 'assistant', 'content': bad_sql})
+    msgs.append({'role': 'user', 'content':
+                 f'That SQL failed with error:\n{error}\n'
+                 'Return a corrected single SELECT query only.'})
+    raw = chat(msgs, temperature=0.0, max_tokens=512)
+    sql = _extract_sql(raw)
+    if not sql:
+        raise Text2SQLError('SQL 재생성 실패.')
     return sql
 
 
@@ -152,23 +262,37 @@ def run_query(question: str) -> dict:
     except Text2SQLError as exc:
         return {'sql': None, 'columns': [], 'rows': [], 'error': str(exc)}
 
-    # 2) 안전 검증
-    try:
-        safe_sql = sanitize_sql(raw_sql)
-    except Text2SQLError as exc:
-        return {'sql': raw_sql, 'columns': [], 'rows': [], 'error': str(exc)}
+    # 2) 검증 + 실행 (실패 시 에러를 모델에 주고 1회 재시도)
+    last_err = None
+    for attempt in range(2):
+        try:
+            safe_sql = sanitize_sql(raw_sql)
+        except Text2SQLError as exc:
+            last_err = str(exc)
+        else:
+            try:
+                columns, rows = _execute(engine, safe_sql)
+                return {'sql': safe_sql, 'columns': columns, 'rows': rows, 'error': None}
+            except Exception as exc:  # noqa: BLE001
+                last_err = f'쿼리 실행 오류: {str(getattr(exc, "orig", exc))[:300]}'
 
-    # 3) read-only 트랜잭션 + timeout 실행
-    try:
-        with engine.begin() as conn:
-            conn.execute(text('SET TRANSACTION READ ONLY'))
-            conn.execute(text(f"SET LOCAL statement_timeout = '{STATEMENT_TIMEOUT_MS}ms'"))
-            result = conn.execute(text(safe_sql))
-            columns = list(result.keys())
-            rows = [list(r) for r in result.fetchall()]
-    except Exception as exc:  # noqa: BLE001
-        msg = str(getattr(exc, 'orig', exc))
-        return {'sql': safe_sql, 'columns': [], 'rows': [],
-                'error': f'쿼리 실행 오류: {msg[:300]}'}
+        # 마지막 시도였으면 종료
+        if attempt == 1:
+            break
+        # 재생성(self-repair)
+        try:
+            raw_sql = repair_sql(q, schema, raw_sql, last_err)
+        except (LLMError, Text2SQLError):
+            break
 
-    return {'sql': safe_sql, 'columns': columns, 'rows': rows, 'error': None}
+    return {'sql': raw_sql, 'columns': [], 'rows': [], 'error': last_err}
+
+
+def _execute(engine, safe_sql: str):
+    """read-only 트랜잭션 + statement_timeout 로 실행. (columns, rows) 반환."""
+    from sqlalchemy import text
+    with engine.begin() as conn:
+        conn.execute(text('SET TRANSACTION READ ONLY'))
+        conn.execute(text(f"SET LOCAL statement_timeout = '{STATEMENT_TIMEOUT_MS}ms'"))
+        result = conn.execute(text(safe_sql))
+        return list(result.keys()), [list(r) for r in result.fetchall()]
