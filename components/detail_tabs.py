@@ -5,9 +5,12 @@ import pandas as pd
 import plotly.graph_objects as go
 from dash import dcc, html
 
-# 인사발령·과제이력 레인은 y=1, 논문·특허 레인은 y=0 을 중심선으로 사용한다.
-LANE_TOP = 1.0
-LANE_BOTTOM = 0.0
+# 과제이력·논문·특허는 하나의 통합 레인(y=0 중심)을 공유하고,
+# 인사발령은 그 위 별도 영역(텍스트 + 아래를 향한 화살표)에 표시한다.
+MAIN_LANE = 0.0
+HR_ARROW_TIP_Y = 0.55
+HR_TEXT_BASE_Y = 0.85
+HR_TEXT_LEVEL_GAP = 0.22
 
 TIMELINE_COLORS = {
     '인사발령': '#1baf7a',
@@ -21,13 +24,10 @@ _LEGEND_NEUTRAL = '#52514e'
 _MUTED_INK = '#898781'
 _GRIDLINE = '#e1e0d9'
 
-# 레인 중심선 기준 위/아래 오프셋 간격
-_OFFSET_UNIT_TASK = 0.14
-_OFFSET_UNIT_POINT = 0.10
-# 호버 텍스트박스를 레인 중심에서 얼마나 멀리(위/아래) 띄울지 — 레인을 공유하는
-# 두 카테고리가 서로 다른 밴드에 뜨도록 카테고리별로 다른 값을 준다.
-_ANCHOR_SHIFT = {'과제': 0.22, '인사발령': 0.38, '논문': 0.22, '특허': 0.38}
-_DENSIFY_N = 12
+_OFFSET_UNIT_MAIN = 0.13   # 통합 레인 중심선 기준 위/아래 오프셋 간격
+_DENSIFY_N = 14            # 과제 연결선을 따라 호버가 되도록 촘촘히 배치하는 보조 포인트 수
+_NEAR_EXCLUDE_DAYS = 3     # 논문/특허 지점 근처의 과제 보조 포인트를 제외해 점의 호버를 우선시
+_TRUNCATE_LEN = 36         # 호버 텍스트 한 줄당 최대 길이(단어 경계에서 자르고 ... 표시)
 
 
 def timeline_tab(task_df, hr_df, pub_df, pat_df, rid):
@@ -59,35 +59,44 @@ def timeline_tab(task_df, hr_df, pub_df, pat_df, rid):
     total_days = max((x_range[1] - x_range[0]).days, 1)
     min_gap_days = max(10, total_days * 0.015)
 
-    task_levels = _assign_task_levels(task_points)
+    # 과제·논문·특허를 하나의 레인으로 놓고, 세 카테고리를 통틀어 겹치는 항목만
+    # 중앙선 기준 위/아래로 분리한다.
+    items = _combined_items(task_points, pub_points, pat_points, min_gap_days)
+    levels = _assign_levels(items)
+    for item, level in zip(items, levels):
+        item['ref']['y'] = MAIN_LANE + _level_to_offset(level, _OFFSET_UNIT_MAIN)
+
     task_colors = _task_colors(task_points)
+
+    # 인사발령 라벨은 겹치는 시점이 있으면 단계적으로 더 위에 표시
     hr_levels = _declutter_levels(hr_points, min_gap_days)
-    pub_levels = _declutter_levels(pub_points, min_gap_days)
-    pat_levels = _declutter_levels(pat_points, min_gap_days)
+    for p, level in zip(hr_points, hr_levels):
+        p['label_y'] = HR_TEXT_BASE_Y + level * HR_TEXT_LEVEL_GAP
+
+    exclude_dates = [p['date'] for p in pub_points] + [p['date'] for p in pat_points]
 
     fig = go.Figure()
-    _add_task_category(fig, task_points, task_levels, task_colors, x_range)
-    _add_point_category(fig, '인사발령', hr_points, hr_levels, LANE_TOP,
-                         symbol='star', size=12, x_range=x_range)
-    _add_point_category(fig, '논문', pub_points, pub_levels, LANE_BOTTOM,
-                         symbol='square', size=9, x_range=x_range)
-    _add_point_category(fig, '특허', pat_points, pat_levels, LANE_BOTTOM,
-                         symbol='triangle-up', size=10, x_range=x_range)
+    _add_task_traces(fig, task_points, task_colors, exclude_dates, x_range)
+    _add_pub_trace(fig, pub_points, x_range)
+    _add_pat_trace(fig, pat_points, x_range)
+    _add_hr_traces(fig, hr_points, x_range)
 
-    y_top_max = LANE_TOP + _ANCHOR_SHIFT['인사발령'] + _OFFSET_UNIT_POINT + 0.15
-    y_bottom_min = LANE_BOTTOM - _ANCHOR_SHIFT['특허'] - _OFFSET_UNIT_POINT - 0.15
+    max_offset = max((abs(_level_to_offset(lvl, _OFFSET_UNIT_MAIN)) for lvl in levels), default=0.0)
+    main_top = max_offset + 0.15
+    main_bottom = -(max_offset + 0.15)
+    hr_top = (max(p['label_y'] for p in hr_points) if hr_points else HR_TEXT_BASE_Y) + 0.25
+    y_top = max(main_top, hr_top)
 
     fig.update_layout(
         xaxis=dict(range=x_range, type='date', gridcolor=_GRIDLINE),
-        yaxis=dict(range=[y_bottom_min, y_top_max], tickmode='array',
-                   tickvals=[LANE_BOTTOM, LANE_TOP],
-                   ticktext=['논문 · 특허', '인사발령 · 과제이력'],
+        yaxis=dict(range=[main_bottom, y_top], tickmode='array',
+                   tickvals=[MAIN_LANE], ticktext=['과제이력<br>논문<br>특허'],
                    gridcolor=_GRIDLINE, zeroline=False),
         legend=dict(orientation='v', yanchor='top', y=1, xanchor='right', x=1,
                     groupclick='togglegroup'),
         hoverlabel=dict(namelength=-1),
         hovermode='closest',
-        hoverdistance=60,
+        hoverdistance=15,
         margin=dict(l=10, r=10, t=30, b=30),
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(0,0,0,0)',
@@ -116,6 +125,29 @@ def _mid(x_range):
     return x_range[0] + (x_range[1] - x_range[0]) / 2
 
 
+def _truncate(text, maxlen=_TRUNCATE_LEN):
+    """maxlen을 넘으면 단어 중간을 자르지 않고 단어 경계에서 잘라 '...'을 붙인다."""
+    text = str(text).strip()
+    if len(text) <= maxlen:
+        return text
+    cut = text[:maxlen]
+    if ' ' in cut:
+        cut = cut.rsplit(' ', 1)[0]
+    return cut.rstrip() + '...'
+
+
+def _hover_font_color(hex_color):
+    """호버박스 배경색(hex_color) 대비 잘 보이는 글자색(흑/백)을 계산."""
+    h = hex_color.lstrip('#')
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+    return '#0b0b0b' if luminance > 0.6 else '#ffffff'
+
+
+def _hoverlabel(color):
+    return dict(bgcolor=color, font=dict(color=_hover_font_color(color)))
+
+
 def _level_to_offset(level, unit):
     """0 -> 중앙, 1 -> +unit, 2 -> -unit, 3 -> +2*unit, 4 -> -2*unit, ... (중앙선 기준 위/아래 교대 배치)"""
     if level == 0:
@@ -125,76 +157,40 @@ def _level_to_offset(level, unit):
     return sign * n * unit
 
 
-def _add_task_category(fig, task_points, task_levels, task_colors, x_range):
-    if not task_points:
-        fig.add_annotation(x=_mid(x_range), y=LANE_TOP, text='과제 데이터 없음',
-                            showarrow=False, font=dict(color=_MUTED_INK, size=12))
-        return
-
-    # 범례는 과제별 색과 무관하게 중립색 하나로 대표 표시 (실제 색 구분은 차트에서 호버로 확인)
-    fig.add_trace(go.Scatter(
-        x=[None], y=[None], mode='markers', name='과제', legendgroup='과제',
-        marker=dict(symbol='circle', size=9, color=_LEGEND_NEUTRAL),
-        showlegend=True, hoverinfo='skip',
-    ))
-
-    for seg, level in zip(task_points, task_levels):
-        y = LANE_TOP + _level_to_offset(level, _OFFSET_UNIT_TASK)
-        color = task_colors[seg['task_name']]
-        hover = f"{seg['task_name']} | {seg['start_label']} ~ {seg['end_label']}"
-
-        fig.add_trace(go.Scatter(
-            x=[seg['start'], seg['end']], y=[y, y],
-            mode='lines+markers', name='과제', legendgroup='과제', showlegend=False,
-            marker=dict(symbol='circle', size=9, color=color),
-            line=dict(color=color, width=2.5),
-            hoverinfo='skip',
-        ))
-
-        # 선분 전체에서 호버가 동작하도록 촘촘한 보조 포인트를 깔고,
-        # 호버 텍스트박스가 레인 중심에서 위로 떨어져 표시되도록 y를 offset한다.
-        dense_x = _densify_dates(seg['start'], seg['end'], _DENSIFY_N)
-        anchor_y = y + _ANCHOR_SHIFT['과제']
-        fig.add_trace(go.Scatter(
-            x=dense_x, y=[anchor_y] * len(dense_x),
-            mode='markers', name='과제', legendgroup='과제', showlegend=False,
-            marker=dict(size=16, opacity=0),
-            text=[hover] * len(dense_x), hovertemplate='%{text}',
-        ))
+def _combined_items(task_points, pub_points, pat_points, min_gap_days):
+    """과제(구간)·논문·특허(시점)를 하나의 겹침-회피 계산 대상으로 묶는다.
+    점(논문/특허)은 min_gap_days 폭의 짧은 구간으로 취급해 과제와 동일한
+    구간-겹침 알고리즘을 그대로 적용할 수 있게 한다."""
+    items = []
+    for seg in task_points:
+        items.append({'start': seg['start'], 'end': seg['end'], 'ref': seg})
+    half = pd.Timedelta(days=min_gap_days / 2)
+    for p in pub_points:
+        items.append({'start': p['date'] - half, 'end': p['date'] + half, 'ref': p})
+    for p in pat_points:
+        items.append({'start': p['date'] - half, 'end': p['date'] + half, 'ref': p})
+    items.sort(key=lambda it: it['start'])
+    return items
 
 
-def _add_point_category(fig, label, points, levels, lane_base, *, symbol, size, x_range):
-    if not points:
-        fig.add_annotation(x=_mid(x_range), y=lane_base, text=f'{label} 데이터 없음',
-                            showarrow=False, font=dict(color=_MUTED_INK, size=12))
-        return
-
-    color = TIMELINE_COLORS[label]
-    xs = [p['date'] for p in points]
-    ys = [lane_base + _level_to_offset(lvl, _OFFSET_UNIT_POINT) for lvl in levels]
-    texts = [p['hover'] for p in points]
-
-    fig.add_trace(go.Scatter(
-        x=xs, y=ys, mode='markers', name=label, legendgroup=label,
-        marker=dict(symbol=symbol, size=size, color=color),
-        hoverinfo='skip',
-    ))
-
-    # 호버 텍스트박스를 레인 중심에서 위/아래로 떨어뜨려 표시 (마커를 가리지 않도록)
-    sign = 1 if lane_base >= LANE_TOP else -1
-    anchor_ys = [y + sign * _ANCHOR_SHIFT[label] for y in ys]
-    fig.add_trace(go.Scatter(
-        x=xs, y=anchor_ys, mode='markers', name=label, legendgroup=label, showlegend=False,
-        marker=dict(size=16, opacity=0),
-        text=texts, hovertemplate='%{text}',
-    ))
-
-
-def _densify_dates(start, end, n=12):
-    if n <= 1 or start == end:
-        return [start]
-    span = end - start
-    return [start + span * (i / (n - 1)) for i in range(n)]
+def _assign_levels(items):
+    """구간이 실제로 겹치는 경우에만 레벨을 분리 (items는 start 오름차순 정렬 상태)."""
+    if not items:
+        return []
+    lane_ends = []
+    levels = [0] * len(items)
+    for i, it in enumerate(items):
+        placed = False
+        for lvl, lane_end in enumerate(lane_ends):
+            if it['start'] >= lane_end:
+                lane_ends[lvl] = it['end']
+                levels[i] = lvl
+                placed = True
+                break
+        if not placed:
+            lane_ends.append(it['end'])
+            levels[i] = len(lane_ends) - 1
+    return levels
 
 
 def _declutter_levels(points, min_gap_days):
@@ -219,24 +215,144 @@ def _declutter_levels(points, min_gap_days):
     return levels
 
 
-def _assign_task_levels(points):
-    """과제 기간이 실제로 겹치는 경우에만 레벨을 분리 (points는 start 오름차순 정렬 상태)."""
-    if not points:
-        return []
-    lane_ends = []
-    levels = [0] * len(points)
-    for i, p in enumerate(points):
-        placed = False
-        for lvl, lane_end in enumerate(lane_ends):
-            if p['start'] >= lane_end:
-                lane_ends[lvl] = p['end']
-                levels[i] = lvl
-                placed = True
-                break
-        if not placed:
-            lane_ends.append(p['end'])
-            levels[i] = len(lane_ends) - 1
-    return levels
+def _add_task_traces(fig, task_points, task_colors, exclude_dates, x_range):
+    if not task_points:
+        fig.add_annotation(x=_mid(x_range), y=MAIN_LANE, text='과제 데이터 없음',
+                            showarrow=False, font=dict(color=_MUTED_INK, size=12))
+        return
+
+    # 범례는 과제별 색과 무관하게 중립색 하나로 대표 표시 (실제 색 구분은 차트에서 호버로 확인)
+    fig.add_trace(go.Scatter(
+        x=[None], y=[None], mode='markers', name='과제', legendgroup='과제',
+        marker=dict(symbol='circle', size=9, color=_LEGEND_NEUTRAL),
+        showlegend=True, hoverinfo='skip',
+    ))
+
+    for seg in task_points:
+        y = seg['y']
+        color = task_colors[seg['task_name']]
+        hover = (f"{_truncate(seg['task_name'])}<br>"
+                 f"시작일: {seg['start_label']}<br>종료일: {seg['end_label']}")
+
+        fig.add_trace(go.Scatter(
+            x=[seg['start'], seg['end']], y=[y, y],
+            mode='lines+markers', name='과제', legendgroup='과제', showlegend=False,
+            marker=dict(symbol='circle', size=9, color=color),
+            line=dict(color=color, width=2.5),
+            hoverinfo='skip',
+        ))
+
+        # 선분 전체에서 호버가 동작하도록 촘촘한 보조 포인트를 실제 위치(y)에 깔되,
+        # 논문/특허 지점과 가까운 x는 제외해 점의 호버가 항상 우선되도록 한다.
+        dense_x = _densify_dates(seg['start'], seg['end'], _DENSIFY_N)
+        dense_x = _filter_near(dense_x, exclude_dates)
+        fig.add_trace(go.Scatter(
+            x=dense_x, y=[y] * len(dense_x),
+            mode='markers', name='과제', legendgroup='과제', showlegend=False,
+            marker=dict(size=6, opacity=0),
+            text=[hover] * len(dense_x), hovertemplate='%{text}',
+            hoverlabel=_hoverlabel(color),
+        ))
+
+
+def _add_pub_trace(fig, pub_points, x_range):
+    if not pub_points:
+        fig.add_annotation(x=_mid(x_range), y=MAIN_LANE - 0.18, text='논문 데이터 없음',
+                            showarrow=False, font=dict(color=_MUTED_INK, size=12))
+        return
+
+    color = TIMELINE_COLORS['논문']
+    texts = [
+        f"{p['pub_date']}<br>{_truncate(p['title'])}<br>{_truncate(p['journal'])}<br>{p['author_type']}"
+        for p in pub_points
+    ]
+    fig.add_trace(go.Scatter(
+        x=[p['date'] for p in pub_points], y=[p['y'] for p in pub_points],
+        mode='markers', name='논문', legendgroup='논문',
+        marker=dict(symbol='square', size=9, color=color),
+        text=texts, hovertemplate='%{text}',
+        hoverlabel=_hoverlabel(color),
+    ))
+
+
+def _add_pat_trace(fig, pat_points, x_range):
+    if not pat_points:
+        fig.add_annotation(x=_mid(x_range), y=MAIN_LANE + 0.18, text='특허 데이터 없음',
+                            showarrow=False, font=dict(color=_MUTED_INK, size=12))
+        return
+
+    color = TIMELINE_COLORS['특허']
+    texts = [
+        f"{p['application_date']}<br>{_truncate(p['title'])}<br>{p['grade_str']}<br>"
+        f"지분율 {p['share']}%<br>대표발명자 {p['lead']}"
+        for p in pat_points
+    ]
+    fig.add_trace(go.Scatter(
+        x=[p['date'] for p in pat_points], y=[p['y'] for p in pat_points],
+        mode='markers', name='특허', legendgroup='특허',
+        marker=dict(symbol='triangle-up', size=10, color=color),
+        text=texts, hovertemplate='%{text}',
+        hoverlabel=_hoverlabel(color),
+    ))
+
+
+def _add_hr_traces(fig, hr_points, x_range):
+    if not hr_points:
+        fig.add_annotation(x=_mid(x_range), y=HR_ARROW_TIP_Y, text='인사발령 데이터 없음',
+                            showarrow=False, font=dict(color=_MUTED_INK, size=12))
+        return
+
+    color = TIMELINE_COLORS['인사발령']
+
+    # 발령명 텍스트 라벨 (상단)
+    fig.add_trace(go.Scatter(
+        x=[p['date'] for p in hr_points], y=[p['label_y'] for p in hr_points],
+        mode='text', text=[_truncate(p['order_name']) for p in hr_points],
+        textposition='middle center', textfont=dict(color=color, size=11),
+        name='인사발령', legendgroup='인사발령', showlegend=False, hoverinfo='skip',
+    ))
+
+    # 텍스트에서 타임라인으로 내려오는 화살표 축
+    shaft_x, shaft_y = [], []
+    for p in hr_points:
+        shaft_x += [p['date'], p['date'], None]
+        shaft_y += [p['label_y'] - 0.14, HR_ARROW_TIP_Y + 0.06, None]
+    fig.add_trace(go.Scatter(
+        x=shaft_x, y=shaft_y, mode='lines',
+        line=dict(color=color, width=1.5),
+        name='인사발령', legendgroup='인사발령', showlegend=False, hoverinfo='skip',
+    ))
+
+    # 화살촉 (실제 호버 대상 — 타임라인 날짜 위치, 정밀한 히트 영역)
+    texts = [
+        f"{p['order_date']}<br>{_truncate(p['order_dep'])}<br>{_truncate(p['order_cl'])}"
+        for p in hr_points
+    ]
+    fig.add_trace(go.Scatter(
+        x=[p['date'] for p in hr_points], y=[HR_ARROW_TIP_Y] * len(hr_points),
+        mode='markers', marker=dict(symbol='triangle-down', size=9, color=color),
+        name='인사발령', legendgroup='인사발령', showlegend=True,
+        text=texts, hovertemplate='%{text}',
+        hoverlabel=_hoverlabel(color),
+    ))
+
+
+def _densify_dates(start, end, n=12):
+    if n <= 1 or start == end:
+        return [start]
+    span = end - start
+    return [start + span * (i / (n - 1)) for i in range(n)]
+
+
+def _filter_near(dense_dates, exclude_dates, epsilon_days=_NEAR_EXCLUDE_DAYS):
+    """exclude_dates(논문/특허 지점) 근처의 보조 포인트를 제외해, 점과 선이 겹칠 때
+    선이 아닌 점의 호버가 우선되도록 한다. 전부 제외되면 최소 1개는 남긴다."""
+    if not exclude_dates:
+        return dense_dates
+    eps_sec = epsilon_days * 86400
+    kept = [d for d in dense_dates
+            if all(abs((d - e).total_seconds()) > eps_sec for e in exclude_dates)]
+    return kept if kept else dense_dates[:1]
 
 
 def _task_colors(points):
@@ -287,11 +403,13 @@ def _hr_points(hr_df):
         date = _parse_ts(row.get('order_date'))
         if date is None:
             continue
-        hover = (f"{str(row.get('order_date', '')).strip()} | "
-                 f"{str(row.get('order_name', '')).strip()} | "
-                 f"{str(row.get('order_dep', '')).strip()} | "
-                 f"{str(row.get('order_cl', '')).strip()}")
-        points.append({'date': date, 'hover': hover})
+        points.append({
+            'date': date,
+            'order_date': str(row.get('order_date', '')).strip(),
+            'order_name': str(row.get('order_name', '')).strip(),
+            'order_dep': str(row.get('order_dep', '')).strip(),
+            'order_cl': str(row.get('order_cl', '')).strip(),
+        })
     points.sort(key=lambda p: p['date'])
     return points
 
@@ -308,11 +426,13 @@ def _pub_points(pub_df):
         date = _parse_ts(pub_date)
         if date is None:
             continue
-        title = str(row.get('title', '')).strip()
-        journal = str(row.get('journal', '')).strip()
-        author_type = str(row.get('author_type', '')).strip()
-        hover = f'{pub_date} | {title} | {journal} | {author_type}'
-        points.append({'date': date, 'hover': hover})
+        points.append({
+            'date': date,
+            'pub_date': pub_date,
+            'title': str(row.get('title', '')).strip(),
+            'journal': str(row.get('journal', '')).strip(),
+            'author_type': str(row.get('author_type', '')).strip(),
+        })
     points.sort(key=lambda p: p['date'])
     return points
 
@@ -332,8 +452,14 @@ def _pat_points(pat_df):
         grade_str = grade + (' (전략출원)' if grade_a == '전략출원' else '')
         share = str(row.get('share_ratio', '')).strip()
         lead = str(row.get('is_lead_inventor', '')).strip()
-        hover = f'{app_date} | {title} | {grade_str} | 지분율 {share}% | 대표발명자 {lead}'
-        points.append({'date': date, 'hover': hover})
+        points.append({
+            'date': date,
+            'application_date': app_date,
+            'title': title,
+            'grade_str': grade_str,
+            'share': share,
+            'lead': lead,
+        })
     points.sort(key=lambda p: p['date'])
     return points
 
