@@ -146,27 +146,32 @@ def _system_prompt(schema: str) -> str:
         'aggregation: CAST(col AS INTEGER), CAST(col AS FLOAT).\n'
         '- All tables join on researcher_id.\n'
         "- For filters, use the exact literal values shown in '값 예' hints.\n"
-        '- Prefer returning the researcher name (researchers.name) so results are readable.\n'
+        '- UNLESS the user explicitly restricts the columns, ALWAYS include '
+        'researchers.researcher_id AS researcher_id and researchers.name AS name '
+        'as the FIRST two selected columns for any query that lists individual '
+        'researchers (join researchers if needed). For pure aggregates that do not '
+        'list individuals (e.g. counts grouped by department), this does not apply.\n'
         f'\nSchema (all columns are TEXT):\n{schema}'
     )
 
 
 # few-shot: 조인/캐스팅/값 형식을 모델에 학습시킨다
 _FEWSHOT = [
-    ('AI 부서 연구원 이름 알려줘',
-     "SELECT name FROM researchers WHERE department = 'AI'"),
+    ('AI 부서 연구원 알려줘',
+     "SELECT researcher_id, name FROM researchers WHERE department = 'AI'"),
     ('논문이 가장 많은 연구원 5명',
-     'SELECT r.name, COUNT(*) AS pub_count FROM researchers r '
+     'SELECT r.researcher_id, r.name, COUNT(*) AS pub_count FROM researchers r '
      'JOIN publications p ON r.researcher_id = p.researcher_id '
-     'GROUP BY r.name ORDER BY pub_count DESC LIMIT 5'),
+     'GROUP BY r.researcher_id, r.name ORDER BY pub_count DESC LIMIT 5'),
     ("2024년 평가등급이 '가'인 연구원",
-     "SELECT r.name FROM researchers r JOIN evaluations e "
+     "SELECT r.researcher_id, r.name FROM researchers r JOIN evaluations e "
      "ON r.researcher_id = e.researcher_id "
      "WHERE e.year = '2024' AND e.grade = '가'"),
-    ('평균 impact factor가 2 이상인 연구원',
-     'SELECT r.name, AVG(CAST(p.impact_factor AS FLOAT)) AS avg_if '
-     'FROM researchers r JOIN publications p ON r.researcher_id = p.researcher_id '
-     'GROUP BY r.name HAVING AVG(CAST(p.impact_factor AS FLOAT)) >= 2'),
+    ('부서별 평균 논문 수',
+     'SELECT r.department, AVG(CAST(cnt AS FLOAT)) AS avg_pubs FROM ('
+     'SELECT researcher_id, COUNT(*) AS cnt FROM publications GROUP BY researcher_id'
+     ') p JOIN researchers r ON r.researcher_id = p.researcher_id '
+     'GROUP BY r.department'),
 ]
 
 

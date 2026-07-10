@@ -448,8 +448,14 @@ def ai_search(n_clicks, n_submit, question):
 
     cols = res['columns']
     rows = res['rows']
+
+    # 컬럼 헤더 한국어 라벨 (키는 유지)
+    _labels = {'researcher_id': '사번', 'name': '이름'}
+    clickable = 'researcher_id' in cols   # 프로필 이동 가능 여부
+
     table = dash_table.DataTable(
-        columns=[{'name': c, 'id': c} for c in cols],
+        id='t2s-table',
+        columns=[{'name': _labels.get(c, c), 'id': c} for c in cols],
         data=[dict(zip(cols, r)) for r in rows],
         page_action='native',
         page_size=20,
@@ -460,11 +466,44 @@ def ai_search(n_clicks, n_submit, question):
                       'fontWeight': '600', 'fontSize': '0.8rem', 'textAlign': 'center'},
         style_cell={'fontSize': '0.82rem', 'padding': '5px 10px',
                     'textAlign': 'left', 'maxWidth': '260px',
-                    'overflow': 'hidden', 'textOverflow': 'ellipsis'},
-        style_data_conditional=[{'if': {'row_index': 'odd'},
-                                 'backgroundColor': '#f9fbfd'}],
+                    'overflow': 'hidden', 'textOverflow': 'ellipsis',
+                    'cursor': 'pointer' if clickable else 'default'},
+        style_cell_conditional=[
+            {'if': {'column_id': 'name'}, 'fontWeight': '600', 'color': '#1e3a5f'},
+        ],
+        style_data_conditional=[
+            {'if': {'row_index': 'odd'}, 'backgroundColor': '#f9fbfd'},
+            {'if': {'state': 'active'}, 'backgroundColor': '#dbeafe',
+             'border': '1px solid #3b82f6'},
+        ],
     )
     count = html.Div(f'{len(rows)}건', className='text-muted small mb-2')
     if not rows:
         count = dbc.Alert('조건에 맞는 결과가 없습니다.', color='secondary', className='mb-2')
-    return [_sql_block(res['sql']), count, table]
+
+    children = [_sql_block(res['sql']), count, table]
+    if clickable and rows:
+        children.append(html.P(
+            [html.I(className='bi bi-hand-index me-1'),
+             '행을 클릭하면 해당 연구원 프로필로 이동합니다.'],
+            className='text-muted small mt-2 mb-0'))
+    return children
+
+
+# ── 콜백 5: AI 검색 결과 행 클릭 → 프로필 이동 ──────────────────────────────
+@callback(
+    Output('list-url', 'href', allow_duplicate=True),
+    Input('t2s-table', 'active_cell'),
+    State('t2s-table', 'derived_virtual_data'),
+    prevent_initial_call=True,
+)
+def t2s_row_click(active_cell, data):
+    if not active_cell or not data:
+        return no_update
+    row_idx = active_cell.get('row')
+    if row_idx is None or row_idx >= len(data):
+        return no_update
+    rid = data[row_idx].get('researcher_id')
+    if not rid:
+        return no_update
+    return f'/researcher-profile?id={str(rid).zfill(8)}'
