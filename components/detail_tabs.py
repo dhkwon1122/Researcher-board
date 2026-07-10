@@ -12,6 +12,8 @@ MAIN_LANE = 0.0
 HR_ARROW_TIP_Y = 0.30
 HR_TEXT_BASE_Y = 0.48
 HR_TEXT_LEVEL_GAP = 0.16
+_HR_TEXT_CLEARANCE = 0.05   # 발령명 텍스트 바로 아래까지만 여백을 두고 선을 시작
+_HR_ARROW_CLEARANCE = 0.03  # 화살촉 바로 위까지만 여백을 두고 선을 마무리
 
 TIMELINE_COLORS = {
     '인사발령': '#1baf7a',
@@ -303,11 +305,12 @@ def _add_hr_traces(fig, hr_points):
         name='인사발령', legendgroup='인사발령', showlegend=False, hoverinfo='skip',
     ))
 
-    # 텍스트에서 타임라인으로 내려오는 화살표 축
+    # 텍스트에서 타임라인으로 내려오는 화살표 축 — 텍스트 바로 아래 ~ 화살촉 바로 위까지
+    # 최대한 길게 이어서 어떤 발령명과 어떤 지점이 연결되는지 직관적으로 보이게 한다.
     shaft_x, shaft_y = [], []
     for p in hr_points:
         shaft_x += [p['date'], p['date'], None]
-        shaft_y += [p['label_y'] - 0.14, HR_ARROW_TIP_Y + 0.06, None]
+        shaft_y += [p['label_y'] - _HR_TEXT_CLEARANCE, HR_ARROW_TIP_Y + _HR_ARROW_CLEARANCE, None]
     fig.add_trace(go.Scatter(
         x=shaft_x, y=shaft_y, mode='lines',
         line=dict(color=color, width=1.5),
@@ -444,14 +447,22 @@ def _pat_points(pat_df):
             continue
         title = _cell(row, 'title', 'title_ko')
         status = _clean(row.get('status', ''))
+        reg_date = _clean(row.get('registration_date', ''))
+        if status == '등록' and reg_date:
+            status_str = f'{status}({reg_date})'
+        elif status == '출원' and app_date:
+            status_str = f'{status}({app_date})'
+        else:
+            status_str = status
         grade = _clean(row.get('patent_grade', ''))
         grade_a = _clean(row.get('patent_grade_a_sub', ''))
+        grade_a = '' if grade_a == '없음' else grade_a
         grade_str = f'{grade}({grade_a})' if grade_a else grade
         share = str(row.get('share_ratio', '')).strip()
         points.append({
             'date': date,
             'title': title,
-            'status': status,
+            'status': status_str,
             'grade_str': grade_str,
             'share': share,
         })
