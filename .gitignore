@@ -9,6 +9,9 @@ data/processed/
 *.csv
 *.xlsx
 
+# 국가과학기술표준분류 기준 데이터는 정적 참조 데이터라 형상관리에 포함
+!data/reference/*.csv
+
 # 사내 CA 인증서는 커밋하지 않음 (README.md / .gitkeep 은 유지)
 certs/*.crt
 certs/*.pem

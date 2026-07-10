@@ -1,4 +1,3 @@
-import json
 from datetime import datetime
 
 import dash_bootstrap_components as dbc
@@ -115,55 +114,41 @@ def timeline_tab(task_df, hr_df, pub_df, pat_df, rid):
 
 
 def expertise_tab(expertise_df, rid):
-    """과제 이력 기반 LLM 전문성 분석 결과 표시 (data/processed/task_expertise.csv)."""
+    """과제 이력 기반 전문성 분류 결과 표시 (data/processed/researcher_expertise.csv).
+    CLOSE 3: 참여 과제 전체를 종합했을 때 가장 가까운 기술분류 3개.
+    FAR 3: 과제별로는 후보에 올랐지만 최종 전문성과 가장 거리가 먼 기술분류 3개.
+    """
     if expertise_df.empty:
         return html.Div('전문성 분석 데이터 없음', className='text-muted p-3')
-    row = expertise_df[expertise_df['researcher_id'] == rid]
-    if row.empty:
+    rows = expertise_df[expertise_df['researcher_id'] == rid]
+    if rows.empty:
         return html.Div('전문성 분석 데이터 없음', className='text-muted p-3')
-    row = row.iloc[0]
 
-    try:
-        parsed = json.loads(row.get('expertise_json', '') or '{}')
-    except (json.JSONDecodeError, TypeError):
-        parsed = {}
-    expertise = parsed.get('expertise') or []
-    caution_flags = parsed.get('caution_flags') or []
+    close = rows[rows['kind'] == 'CLOSE'].sort_values('rank')
+    far = rows[rows['kind'] == 'FAR'].sort_values('rank')
 
-    matched = row.get('matched_task_count', '')
-    total = row.get('total_task_count', '')
-    header = html.Small(f'매칭된 과제 {matched}/{total}건 기반 분석', className='text-muted d-block mb-3')
-
-    if not expertise:
-        return html.Div([header, html.Div('전문성 분석 데이터 없음', className='text-muted p-3')])
-
-    expertise_items = [
-        html.Li([
-            html.Span(str(item.get('keyword', '')), className='fw-semibold me-2'),
-            html.Span(f"— {item.get('evidence', '')}", className='text-muted small'),
-        ], className='mb-2')
-        for item in expertise
-    ]
+    def _item(row):
+        category = f"{row.get('category_top', '')} > {row.get('category_mid', '')} > {row.get('category_name', '')}"
+        similarity = row.get('similarity', '')
+        reason = str(row.get('reason', '')).strip()
+        children = [
+            html.Span(category, className='fw-semibold me-2'),
+            html.Span(f'(유사도 {similarity})', className='text-muted small'),
+        ]
+        if reason and reason not in ('nan', 'None'):
+            children.append(html.Div(reason, className='small text-muted mt-1'))
+        return html.Li(children, className='mb-3')
 
     blocks = [
-        header,
-        html.P('전문성 분석', className='fw-semibold small mb-2'),
-        html.Ul(expertise_items, className='ps-3 mb-0'),
+        html.P('전문성 CLOSE 3', className='fw-semibold small mb-2'),
+        html.Ul([_item(r) for _, r in close.iterrows()], className='ps-3 mb-0')
+        if not close.empty else html.Div('데이터 없음', className='text-muted small mb-3'),
     ]
 
-    if caution_flags:
-        caution_items = [
-            html.Li([
-                html.I(className='bi bi-question-circle-fill text-warning me-2'),
-                html.Span(f"{flag.get('from_task', '')} → {flag.get('to_task', '')}",
-                          className='fw-semibold me-2'),
-                html.Span(str(flag.get('reason', '')), className='text-muted small'),
-            ], className='mb-2')
-            for flag in caution_flags
-        ]
+    if not far.empty:
         blocks += [
-            html.P('확인 필요', className='fw-semibold text-warning small mb-2 mt-3'),
-            html.Ul(caution_items, className='ps-3 mb-0'),
+            html.P('전문성 FAR 3', className='fw-semibold text-warning small mb-2 mt-3'),
+            html.Ul([_item(r) for _, r in far.iterrows()], className='ps-3 mb-0'),
         ]
 
     return html.Div(blocks)

@@ -310,7 +310,7 @@ def update_profile(rid):
             comments_block(tables['comments'], rid),
             timeline_tab(tables['tasks'], tables['hr_orders'], tables['publications'],
                          tables['patents'], rid),
-            expertise_tab(tables['task_expertise'], rid),
+            expertise_tab(tables['researcher_expertise'], rid),
         )
     except Exception as exc:
         import traceback

@@ -37,8 +37,12 @@
                         task_futureusage, write_date
                         ※ '과제정보.xlsx' 가 있으면 자동 추출 (별도 raw 불필요)
                            처리기: pipeline/process_task_information.py
-                        ※ LLM 기반 전문성 분석(task_expertise.csv)은 별도 실행:
-                           python pipeline/process_task_expertise.py --llm
+                        ※ 과제 기반 전문성 분류(CLOSE3/FAR3, tasks_classification.csv,
+                           researcher_expertise.csv)는 data/reference/tech_classification.csv
+                           (국가과학기술표준분류) + 로컬 Ollama(BGE-M3) 임베딩이 필요.
+                           순위 계산까지는 run_pipeline.py에 포함되어 자동 실행되며,
+                           사내 LLM 근거까지 포함하려면 별도 실행:
+                           python pipeline/process_task_classification.py --llm
   technology_transfer_raw : researcher_id, transfer_date, tech_name,
                             recipient, amount, transfer_type
   transfers_raw       : researcher_id, date, type, description
@@ -234,10 +238,11 @@ def run():
     from process_comments import process as process_comments
     process_comments(use_llm=False)
 
-    # ── 11-1. 과제 기반 전문성 분석: task_name 매칭 현황만 확인 (LLM 호출은
-    #          별도 실행 — python pipeline/process_task_expertise.py --llm) ─
-    from process_task_expertise import process as process_task_expertise
-    process_task_expertise(use_llm=False)
+    # ── 11-1. 과제 기반 전문성 분류: 로컬 Ollama(BGE-M3) 임베딩으로 CLOSE3/FAR3
+    #          순위까지 계산 (사내 LLM 근거 생성은 별도 실행 —
+    #          python pipeline/process_task_classification.py --llm) ─
+    from process_task_classification import process as process_task_classification
+    process_task_classification(use_llm=False)
 
     # ── 12. DATABASE_URL 설정 시 PostgreSQL 적재 ────────────────────────
     try:
