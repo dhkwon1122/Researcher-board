@@ -35,7 +35,19 @@ def norm_researcher_id_col(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def read_xlsx(file_path: str, sheet: int | str = 0, header_row: int = 0) -> pd.DataFrame:
+def _is_blank_cell(value) -> bool:
+    return value is None or str(value).strip() in ('', 'nan', 'None', 'NaT')
+
+
+def _first_nonblank_row(rows: list[list]) -> int:
+    """행 리스트(list of list) 중 하나라도 값이 있는 첫 행의 인덱스. 못 찾으면 0."""
+    for i, row in enumerate(rows):
+        if any(not _is_blank_cell(cell) for cell in row):
+            return i
+    return 0
+
+
+def read_xlsx(file_path: str, sheet: int | str = 0, header_row: int | str = 0) -> pd.DataFrame:
     """
     xlwings를 사용하여 xlsx 파일을 DataFrame으로 읽습니다.
 
@@ -47,6 +59,8 @@ def read_xlsx(file_path: str, sheet: int | str = 0, header_row: int = 0) -> pd.D
         file_path: xlsx 파일 경로
         sheet: 시트 인덱스(0-based int) 또는 시트 이름(str)
         header_row: 헤더 행 인덱스(0-based). 기본값 0 = 첫 번째 행.
+                    'auto' 를 넘기면 앞쪽 공란 행을 건너뛰고 실제 값이 있는
+                    첫 행을 헤더로 자동 인식합니다 (엑셀 절대 행 기준).
 
     Returns:
         pandas DataFrame
@@ -75,8 +89,10 @@ def read_xlsx(file_path: str, sheet: int | str = 0, header_row: int = 0) -> pd.D
         if not isinstance(data[0], list):
             data = [data]
 
-        headers = data[header_row]
-        rows = data[header_row + 1:]
+        resolved_header_row = _first_nonblank_row(data) if header_row == 'auto' else header_row
+
+        headers = data[resolved_header_row]
+        rows = data[resolved_header_row + 1:]
 
         valid_cols = [(i, h) for i, h in enumerate(headers) if h is not None]
         clean_headers = [str(h).strip() for _, h in valid_cols]
@@ -102,16 +118,22 @@ def read_xlsx(file_path: str, sheet: int | str = 0, header_row: int = 0) -> pd.D
                 pass
 
 
-def _read_with_pandas(file_path: str, sheet: int | str = 0, header_row: int = 0) -> pd.DataFrame:
+def _read_with_pandas(file_path: str, sheet: int | str = 0, header_row: int | str = 0) -> pd.DataFrame:
     """xlwings 없이 pandas로 읽는 폴백. xlsb는 pyxlsb 엔진 사용."""
-    if str(file_path).lower().endswith('.xlsb'):
-        try:
-            df = pd.read_excel(file_path, sheet_name=sheet, header=header_row, engine='pyxlsb')
-        except Exception:
+    engine = 'pyxlsb' if str(file_path).lower().endswith('.xlsb') else None
+    try:
+        if header_row == 'auto':
+            raw = pd.read_excel(file_path, sheet_name=sheet, header=None, engine=engine)
+            rows = raw.values.tolist()
+            resolved_header_row = _first_nonblank_row(rows)
+            df = pd.read_excel(file_path, sheet_name=sheet, header=resolved_header_row, engine=engine)
+        else:
+            df = pd.read_excel(file_path, sheet_name=sheet, header=header_row, engine=engine)
+    except Exception:
+        if engine == 'pyxlsb':
             raise ImportError(
                 '.xlsb 파일 읽기에 pyxlsb 패키지가 필요합니다: pip install pyxlsb'
             )
-    else:
-        df = pd.read_excel(file_path, sheet_name=sheet, header=header_row)
+        raise
     df.columns = [str(c).strip() for c in df.columns]
     return df

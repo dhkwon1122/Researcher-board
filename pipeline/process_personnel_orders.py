@@ -1,8 +1,11 @@
 """
 인사발령 이력 처리 모듈
 
-원천 파일: data/raw/인사발령이력.xlsx  (헤더: 2번째 행, header_row=1)
+원천 파일: data/raw/인사발령이력.xlsx
 출력 파일: data/processed/hr_orders.csv
+
+※ 앞쪽에 공란 행이 있어도 실제 값이 있는 첫 행을 헤더로 자동 인식합니다
+   (excel_reader.read_xlsx 의 header_row='auto').
 
 컬럼 매핑:
   사원번호 → researcher_id (8자리 제로패딩)
@@ -69,7 +72,7 @@ def process() -> bool:
         print(f'[SKIP] {ORDERS_FILE} 파일 없음 — hr_orders_raw 폴백 시도')
         return False
 
-    df = read_xlsx(raw_path, header_row=1)
+    df = read_xlsx(raw_path, header_row='auto')
     df.columns = [str(c).strip() for c in df.columns]
 
     missing = [c for c in [COL_ID, COL_DATE] if c not in df.columns]
