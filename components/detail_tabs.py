@@ -7,10 +7,11 @@ from dash import dcc, html
 
 # 과제이력·논문·특허는 하나의 통합 레인(y=0 중심)을 공유하고,
 # 인사발령은 그 위 별도 영역(텍스트 + 아래를 향한 화살표)에 표시한다.
+# (5, 6번 요청: 인사발령 라벨 간 간격은 넉넉히, 대신 메인 레인과의 상하 간격은 좁게)
 MAIN_LANE = 0.0
-HR_ARROW_TIP_Y = 0.55
-HR_TEXT_BASE_Y = 0.85
-HR_TEXT_LEVEL_GAP = 0.22
+HR_ARROW_TIP_Y = 0.30
+HR_TEXT_BASE_Y = 0.48
+HR_TEXT_LEVEL_GAP = 0.16
 
 TIMELINE_COLORS = {
     '인사발령': '#1baf7a',
@@ -21,13 +22,13 @@ TIMELINE_COLORS = {
 TASK_COLOR_PALETTE = ['#2a78d6', '#4a3aa7', '#e34948', '#e87ba4', '#eb6834']
 _LEGEND_NEUTRAL = '#52514e'
 
-_MUTED_INK = '#898781'
 _GRIDLINE = '#e1e0d9'
 
 _OFFSET_UNIT_MAIN = 0.13   # 통합 레인 중심선 기준 위/아래 오프셋 간격
 _DENSIFY_N = 14            # 과제 연결선을 따라 호버가 되도록 촘촘히 배치하는 보조 포인트 수
 _NEAR_EXCLUDE_DAYS = 3     # 논문/특허 지점 근처의 과제 보조 포인트를 제외해 점의 호버를 우선시
 _TRUNCATE_LEN = 36         # 호버 텍스트 한 줄당 최대 길이(단어 경계에서 자르고 ... 표시)
+_HR_GAP_MULTIPLIER = 3     # 인사발령 라벨은 텍스트라 마커보다 더 넓은 간격이 필요해 배수 적용
 
 
 def timeline_tab(task_df, hr_df, pub_df, pat_df, rid):
@@ -68,18 +69,20 @@ def timeline_tab(task_df, hr_df, pub_df, pat_df, rid):
 
     task_colors = _task_colors(task_points)
 
-    # 인사발령 라벨은 겹치는 시점이 있으면 단계적으로 더 위에 표시
-    hr_levels = _declutter_levels(hr_points, min_gap_days)
+    # 인사발령 라벨은 겹치는 시점이 있으면 단계적으로 더 위에 표시.
+    # 라벨은 마커보다 폭이 넓은 텍스트라 더 넉넉한 간격 기준을 사용한다.
+    hr_min_gap_days = min_gap_days * _HR_GAP_MULTIPLIER
+    hr_levels = _declutter_levels(hr_points, hr_min_gap_days)
     for p, level in zip(hr_points, hr_levels):
         p['label_y'] = HR_TEXT_BASE_Y + level * HR_TEXT_LEVEL_GAP
 
     exclude_dates = [p['date'] for p in pub_points] + [p['date'] for p in pat_points]
 
     fig = go.Figure()
-    _add_task_traces(fig, task_points, task_colors, exclude_dates, x_range)
-    _add_pub_trace(fig, pub_points, x_range)
-    _add_pat_trace(fig, pat_points, x_range)
-    _add_hr_traces(fig, hr_points, x_range)
+    _add_task_traces(fig, task_points, task_colors, exclude_dates)
+    _add_pub_trace(fig, pub_points)
+    _add_pat_trace(fig, pat_points)
+    _add_hr_traces(fig, hr_points)
 
     max_offset = max((abs(_level_to_offset(lvl, _OFFSET_UNIT_MAIN)) for lvl in levels), default=0.0)
     main_top = max_offset + 0.15
@@ -92,12 +95,12 @@ def timeline_tab(task_df, hr_df, pub_df, pat_df, rid):
         yaxis=dict(range=[main_bottom, y_top], tickmode='array',
                    tickvals=[MAIN_LANE], ticktext=['과제이력<br>논문<br>특허'],
                    gridcolor=_GRIDLINE, zeroline=False),
-        legend=dict(orientation='v', yanchor='top', y=1, xanchor='right', x=1,
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0,
                     groupclick='togglegroup'),
         hoverlabel=dict(namelength=-1),
         hovermode='closest',
         hoverdistance=15,
-        margin=dict(l=10, r=10, t=30, b=30),
+        margin=dict(l=10, r=10, t=40, b=30),
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(0,0,0,0)',
         height=460,
@@ -119,10 +122,6 @@ def _summary_cards(task_df, pub_df, pat_dedup_df):
     if not cards:
         return None
     return dbc.Row(cards, className='mb-3 g-2')
-
-
-def _mid(x_range):
-    return x_range[0] + (x_range[1] - x_range[0]) / 2
 
 
 def _truncate(text, maxlen=_TRUNCATE_LEN):
@@ -215,10 +214,8 @@ def _declutter_levels(points, min_gap_days):
     return levels
 
 
-def _add_task_traces(fig, task_points, task_colors, exclude_dates, x_range):
+def _add_task_traces(fig, task_points, task_colors, exclude_dates):
     if not task_points:
-        fig.add_annotation(x=_mid(x_range), y=MAIN_LANE, text='과제 데이터 없음',
-                            showarrow=False, font=dict(color=_MUTED_INK, size=12))
         return
 
     # 범례는 과제별 색과 무관하게 중립색 하나로 대표 표시 (실제 색 구분은 차트에서 호버로 확인)
@@ -255,10 +252,8 @@ def _add_task_traces(fig, task_points, task_colors, exclude_dates, x_range):
         ))
 
 
-def _add_pub_trace(fig, pub_points, x_range):
+def _add_pub_trace(fig, pub_points):
     if not pub_points:
-        fig.add_annotation(x=_mid(x_range), y=MAIN_LANE - 0.18, text='논문 데이터 없음',
-                            showarrow=False, font=dict(color=_MUTED_INK, size=12))
         return
 
     color = TIMELINE_COLORS['논문']
@@ -275,16 +270,14 @@ def _add_pub_trace(fig, pub_points, x_range):
     ))
 
 
-def _add_pat_trace(fig, pat_points, x_range):
+def _add_pat_trace(fig, pat_points):
     if not pat_points:
-        fig.add_annotation(x=_mid(x_range), y=MAIN_LANE + 0.18, text='특허 데이터 없음',
-                            showarrow=False, font=dict(color=_MUTED_INK, size=12))
         return
 
     color = TIMELINE_COLORS['특허']
     texts = [
-        f"{p['application_date']}<br>{_truncate(p['title'])}<br>{p['grade_str']}<br>"
-        f"지분율 {p['share']}%<br>대표발명자 {p['lead']}"
+        f"{_truncate(p['title'])}<br>{p['status']}<br>"
+        f"지분율 {p['share']}%<br>{p['grade_str']}"
         for p in pat_points
     ]
     fig.add_trace(go.Scatter(
@@ -296,10 +289,8 @@ def _add_pat_trace(fig, pat_points, x_range):
     ))
 
 
-def _add_hr_traces(fig, hr_points, x_range):
+def _add_hr_traces(fig, hr_points):
     if not hr_points:
-        fig.add_annotation(x=_mid(x_range), y=HR_ARROW_TIP_Y, text='인사발령 데이터 없음',
-                            showarrow=False, font=dict(color=_MUTED_INK, size=12))
         return
 
     color = TIMELINE_COLORS['인사발령']
@@ -437,6 +428,11 @@ def _pub_points(pub_df):
     return points
 
 
+def _clean(value):
+    s = str(value).strip()
+    return '' if s in ('nan', 'None', 'NaT') else s
+
+
 def _pat_points(pat_df):
     if pat_df.empty:
         return []
@@ -447,18 +443,17 @@ def _pat_points(pat_df):
         if date is None:
             continue
         title = _cell(row, 'title', 'title_ko')
-        grade = str(row.get('patent_grade', '')).strip()
-        grade_a = str(row.get('patent_grade_a_sub', '')).strip()
-        grade_str = grade + (' (전략출원)' if grade_a == '전략출원' else '')
+        status = _clean(row.get('status', ''))
+        grade = _clean(row.get('patent_grade', ''))
+        grade_a = _clean(row.get('patent_grade_a_sub', ''))
+        grade_str = f'{grade}({grade_a})' if grade_a else grade
         share = str(row.get('share_ratio', '')).strip()
-        lead = str(row.get('is_lead_inventor', '')).strip()
         points.append({
             'date': date,
-            'application_date': app_date,
             'title': title,
+            'status': status,
             'grade_str': grade_str,
             'share': share,
-            'lead': lead,
         })
     points.sort(key=lambda p: p['date'])
     return points

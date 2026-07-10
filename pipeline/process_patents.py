@@ -7,13 +7,16 @@
 처리 로직:
   - 동일 접수ID → 동일 특허 (발명자별 1행 유지)
   - 사번으로 발명자(연구원) 구분, 8자리 텍스트로 정규화
+  - status: 원본 '진행상태' 컬럼을 쓰지 않고, 등록번호·출원번호 값 존재 여부로 도출
+      등록번호 있음        → '등록'
+      등록번호 없고 출원번호 있음 → '출원'
+      둘 다 없음           → '' (공란)
 
 컬럼 설정 (실제 파일 헤더에 맞게 상단 상수 수정):
   COL_ID      : 사번 컬럼명
   COL_APP_ID  : 접수ID 컬럼명
   COL_TITLE   : 발명명칭 - 영문 컬럼명
   COL_TITLE_KO: 발명명칭(한글) 컬럼명
-  COL_STATUS  : 진행상태 컬럼명
   COL_SHARE   : 지분율 컬럼명
   COL_LEAD    : 대표발명자여부 컬럼명
   COL_GRADE   : 현재등급 컬럼명
@@ -36,7 +39,6 @@ COL_ID       = '사번'
 COL_APP_ID   = '접수ID'
 COL_TITLE    = '발명명칭 - 영문'
 COL_TITLE_KO = '발명명칭'
-COL_STATUS   = '진행상태'
 COL_SHARE    = '지분율'
 COL_LEAD     = '대표발명자여부'
 COL_GRADE    = '현재등급'
@@ -108,7 +110,6 @@ def process() -> bool:
         'application_id':     _col(COL_APP_ID),
         'title':              _col(COL_TITLE),
         'title_ko':           _col(COL_TITLE_KO),
-        'status':             _col(COL_STATUS),
         'share_ratio':        _col(COL_SHARE),
         'is_lead_inventor':   _col(COL_LEAD),
         'patent_grade':       _col(COL_GRADE),
@@ -130,6 +131,14 @@ def process() -> bool:
                     'registration_date', 'country']:
         if dst_col not in result.columns:
             result[dst_col] = ''
+
+    # ── status 도출: 등록번호 있으면 '등록', 없고 출원번호 있으면 '출원', 둘 다 없으면 공란 ──
+    def _has_value(series):
+        return ~series.astype(str).str.strip().isin(['', 'nan', 'None'])
+
+    result['status'] = ''
+    result.loc[_has_value(result['application_no']), 'status'] = '출원'
+    result.loc[_has_value(result['registration_no']), 'status'] = '등록'
 
     result = result.sort_values(['researcher_id', 'application_id']).reset_index(drop=True)
 
