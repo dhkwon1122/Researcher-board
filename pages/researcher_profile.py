@@ -8,7 +8,7 @@ import dash
 import dash_bootstrap_components as dbc
 from dash import Input, Output, State, callback, dcc, html, no_update
 
-from components.detail_tabs import timeline_tab
+from components.detail_tabs import expertise_tab, timeline_tab
 from components.profile_sections import (
     avatar,
     award_block,
@@ -182,10 +182,14 @@ def _right_column():
 def _detail_tabs_col():
     return dbc.Col(
         dbc.Card(
-            dbc.CardBody([
-                html.P('타임라인(인사발령/과제이력/논문/특허)', className='fw-semibold text-muted small mb-2'),
-                html.Div(id='tab-timeline'),
-            ]),
+            dbc.CardBody(
+                dbc.Tabs([
+                    dbc.Tab(html.Div(id='tab-timeline'),
+                            label='타임라인(인사발령/과제이력/논문/특허)', tab_id='timeline'),
+                    dbc.Tab(html.Div(id='tab-expertise'),
+                            label='전문성 분석(과제 기반)', tab_id='expertise'),
+                ], id='detail-tabs', active_tab='timeline', className='mb-2'),
+            ),
             className='shadow-sm h-100',
         ),
         md=7,
@@ -241,7 +245,7 @@ def _empty_profile_output():
     prompt = html.Div('연구원을 선택하세요.', className='text-muted p-3')
     return (
         avatar('?'), html.Div(), html.Div(), html.Div(), html.Div(), html.Div(),
-        [], None, html.Div(), prompt,
+        [], None, html.Div(), prompt, prompt,
     )
 
 
@@ -271,6 +275,7 @@ def filter_by_dept(dept, current_rid):
     Output('leadership-year', 'value'),
     Output('comments-block', 'children'),
     Output('tab-timeline', 'children'),
+    Output('tab-expertise', 'children'),
     Input('researcher-select', 'value'),
 )
 def update_profile(rid):
@@ -305,6 +310,7 @@ def update_profile(rid):
             comments_block(tables['comments'], rid),
             timeline_tab(tables['tasks'], tables['hr_orders'], tables['publications'],
                          tables['patents'], rid),
+            expertise_tab(tables['task_expertise'], rid),
         )
     except Exception as exc:
         import traceback
@@ -316,7 +322,7 @@ def update_profile(rid):
         )
         return (
             avatar('?'), err_div, html.Div(), html.Div(), html.Div(), html.Div(),
-            [], None, html.Div(), err_div,
+            [], None, html.Div(), err_div, err_div,
         )
 
 

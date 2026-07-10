@@ -32,6 +32,13 @@
   hr_orders_raw       : researcher_id, order_date, order_name, order_dep, order_cl
                         ※ '인사발령이력.xlsx' 가 있으면 자동 추출 (별도 raw 불필요)
                            처리기: pipeline/process_personnel_orders.py
+  tasks_information_raw : task_name, task_code, task_collabo, task_goal, task_value,
+                        task_howtoget, task_expectissue, task_Activityplan,
+                        task_futureusage, write_date
+                        ※ '과제정보.xlsx' 가 있으면 자동 추출 (별도 raw 불필요)
+                           처리기: pipeline/process_task_information.py
+                        ※ LLM 기반 전문성 분석(task_expertise.csv)은 별도 실행:
+                           python pipeline/process_task_expertise.py --llm
   technology_transfer_raw : researcher_id, transfer_date, tech_name,
                             recipient, amount, transfer_type
   transfers_raw       : researcher_id, date, type, description
@@ -152,6 +159,18 @@ def run():
         else:
             missing.append('nurturing (양성_인력_현황.xlsx 또는 nurturing_raw)')
 
+    # ── 5. 과제 정보: 과제정보.xlsx 우선, 없으면 tasks_information_raw 폴백 ─
+    from process_task_information import process as process_task_information
+    tinfo_ok = process_task_information()
+    if not tinfo_ok:
+        df = _read_raw('tasks_information')
+        if df is not None:
+            out_path = os.path.join(OUT_DIR, 'tasks_information.csv')
+            df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+            print(f'  [OK]   tasks_information.csv (tasks_information_raw 폴백, {len(df)}행)')
+        else:
+            missing.append('tasks_information (과제정보.xlsx 또는 tasks_information_raw)')
+
     # ── 6. 시상이력: 시상 세부사항.xlsx 우선, 없으면 awards_raw 폴백 ────
     from process_awards import process as process_awards
     awd_ok = process_awards()
@@ -214,6 +233,11 @@ def run():
     # ── 11. 코멘트: 별도 처리 (LLM 요약 옵션 포함) ───────────────────────
     from process_comments import process as process_comments
     process_comments(use_llm=False)
+
+    # ── 11-1. 과제 기반 전문성 분석: task_name 매칭 현황만 확인 (LLM 호출은
+    #          별도 실행 — python pipeline/process_task_expertise.py --llm) ─
+    from process_task_expertise import process as process_task_expertise
+    process_task_expertise(use_llm=False)
 
     # ── 12. DATABASE_URL 설정 시 PostgreSQL 적재 ────────────────────────
     try:

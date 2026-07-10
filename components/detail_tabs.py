@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 
 import dash_bootstrap_components as dbc
@@ -111,6 +112,61 @@ def timeline_tab(task_df, hr_df, pub_df, pat_df, rid):
     graph = dcc.Graph(figure=fig, config={'displayModeBar': False})
     summary = _summary_cards(task, pub, pat_dedup)
     return html.Div([summary, graph]) if summary is not None else html.Div([graph])
+
+
+def expertise_tab(expertise_df, rid):
+    """과제 이력 기반 LLM 전문성 분석 결과 표시 (data/processed/task_expertise.csv)."""
+    if expertise_df.empty:
+        return html.Div('전문성 분석 데이터 없음', className='text-muted p-3')
+    row = expertise_df[expertise_df['researcher_id'] == rid]
+    if row.empty:
+        return html.Div('전문성 분석 데이터 없음', className='text-muted p-3')
+    row = row.iloc[0]
+
+    try:
+        parsed = json.loads(row.get('expertise_json', '') or '{}')
+    except (json.JSONDecodeError, TypeError):
+        parsed = {}
+    expertise = parsed.get('expertise') or []
+    caution_flags = parsed.get('caution_flags') or []
+
+    matched = row.get('matched_task_count', '')
+    total = row.get('total_task_count', '')
+    header = html.Small(f'매칭된 과제 {matched}/{total}건 기반 분석', className='text-muted d-block mb-3')
+
+    if not expertise:
+        return html.Div([header, html.Div('전문성 분석 데이터 없음', className='text-muted p-3')])
+
+    expertise_items = [
+        html.Li([
+            html.Span(str(item.get('keyword', '')), className='fw-semibold me-2'),
+            html.Span(f"— {item.get('evidence', '')}", className='text-muted small'),
+        ], className='mb-2')
+        for item in expertise
+    ]
+
+    blocks = [
+        header,
+        html.P('전문성 분석', className='fw-semibold small mb-2'),
+        html.Ul(expertise_items, className='ps-3 mb-0'),
+    ]
+
+    if caution_flags:
+        caution_items = [
+            html.Li([
+                html.I(className='bi bi-question-circle-fill text-warning me-2'),
+                html.Span(f"{flag.get('from_task', '')} → {flag.get('to_task', '')}",
+                          className='fw-semibold me-2'),
+                html.Span(str(flag.get('reason', '')), className='text-muted small'),
+            ], className='mb-2')
+            for flag in caution_flags
+        ]
+        blocks += [
+            html.P('확인 필요', className='fw-semibold text-warning small mb-2 mt-3'),
+            html.Ul(caution_items, className='ps-3 mb-0'),
+        ]
+
+    return html.Div(blocks)
 
 
 def _summary_cards(task_df, pub_df, pat_dedup_df):
