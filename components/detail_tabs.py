@@ -347,42 +347,52 @@ def _add_pat_trace(fig, pat_points):
     ))
 
 
+def _hr_hover_text(p):
+    cl = p['order_cl']
+    assignment = p.get('order_assignment', '')
+    cl_str = f'{cl}({assignment})' if assignment else cl
+    return f"{p['order_date']}<br>{_truncate(p['order_dep'])}<br>{cl_str}"
+
+
 def _add_hr_traces(fig, hr_points):
     if not hr_points:
         return
 
     color = TIMELINE_COLORS['인사발령']
+    hover_texts = [_hr_hover_text(p) for p in hr_points]
 
-    # 발령명 텍스트 라벨 (상단)
+    # 발령명 텍스트 라벨 (상단) — 화면 표시는 order_name, 호버는 다른 항목들과 동일하게
     fig.add_trace(go.Scatter(
         x=[p['date'] for p in hr_points], y=[p['label_y'] for p in hr_points],
         mode='text', text=[_truncate(p['order_name']) for p in hr_points],
         textposition='middle center', textfont=dict(color=color, size=11),
-        name='인사발령', legendgroup='인사발령', showlegend=False, hoverinfo='skip',
+        name='인사발령', legendgroup='인사발령', showlegend=False,
+        customdata=hover_texts, hovertemplate='%{customdata}',
+        hoverlabel=_hoverlabel(color),
     ))
 
     # 텍스트에서 타임라인으로 내려오는 화살표 축 — 텍스트 바로 아래 ~ 화살촉 바로 위까지
     # 최대한 길게 이어서 어떤 발령명과 어떤 지점이 연결되는지 직관적으로 보이게 한다.
-    shaft_x, shaft_y = [], []
-    for p in hr_points:
+    # 선 위 어디를 호버해도 동작하도록 텍스트도 각 점 쌍에 맞춰 반복한다.
+    shaft_x, shaft_y, shaft_text = [], [], []
+    for p, hover in zip(hr_points, hover_texts):
         shaft_x += [p['date'], p['date'], None]
         shaft_y += [p['label_y'] - _HR_TEXT_CLEARANCE, HR_ARROW_TIP_Y + _HR_ARROW_CLEARANCE, None]
+        shaft_text += [hover, hover, None]
     fig.add_trace(go.Scatter(
         x=shaft_x, y=shaft_y, mode='lines',
         line=dict(color=color, width=1.5),
-        name='인사발령', legendgroup='인사발령', showlegend=False, hoverinfo='skip',
+        name='인사발령', legendgroup='인사발령', showlegend=False,
+        text=shaft_text, hovertemplate='%{text}',
+        hoverlabel=_hoverlabel(color),
     ))
 
-    # 화살촉 (실제 호버 대상 — 타임라인 날짜 위치, 정밀한 히트 영역)
-    texts = [
-        f"{p['order_date']}<br>{_truncate(p['order_dep'])}<br>{_truncate(p['order_cl'])}"
-        for p in hr_points
-    ]
+    # 화살촉 (타임라인 날짜 위치, 정밀한 히트 영역)
     fig.add_trace(go.Scatter(
         x=[p['date'] for p in hr_points], y=[HR_ARROW_TIP_Y] * len(hr_points),
         mode='markers', marker=dict(symbol='triangle-down', size=9, color=color),
         name='인사발령', legendgroup='인사발령', showlegend=True,
-        text=texts, hovertemplate='%{text}',
+        text=hover_texts, hovertemplate='%{text}',
         hoverlabel=_hoverlabel(color),
     ))
 
@@ -459,6 +469,7 @@ def _hr_points(hr_df):
             'order_name': str(row.get('order_name', '')).strip(),
             'order_dep': str(row.get('order_dep', '')).strip(),
             'order_cl': str(row.get('order_cl', '')).strip(),
+            'order_assignment': _clean(row.get('order_assignment', '')),
         })
     points.sort(key=lambda p: p['date'])
     return points

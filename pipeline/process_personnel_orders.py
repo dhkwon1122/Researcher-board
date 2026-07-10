@@ -13,13 +13,15 @@
   발령명   → order_name
   부서     → order_dep
   직급명   → order_cl (괄호와 괄호 안 내용 제거, 예: '선임연구원(과장)' → '선임연구원')
+  직책명   → order_assignment
 
 컬럼 설정 (실제 파일 헤더에 맞게 상단 상수 수정):
-  COL_ID   : 사원번호 컬럼명
-  COL_DATE : 발령일자 컬럼명
-  COL_NAME : 발령명 컬럼명
-  COL_DEP  : 부서 컬럼명
-  COL_CL   : 직급명 컬럼명
+  COL_ID         : 사원번호 컬럼명
+  COL_DATE       : 발령일자 컬럼명
+  COL_NAME       : 발령명 컬럼명
+  COL_DEP        : 부서 컬럼명
+  COL_CL         : 직급명 컬럼명
+  COL_ASSIGNMENT : 직책명 컬럼명
 """
 
 import csv
@@ -35,11 +37,12 @@ OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data',
 ORDERS_FILE = '인사발령이력.xlsx'
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
-COL_ID   = '사원번호'
-COL_DATE = '발령일자'
-COL_NAME = '발령명'
-COL_DEP  = '부서'
-COL_CL   = '직급명'
+COL_ID         = '사원번호'
+COL_DATE       = '발령일자'
+COL_NAME       = '발령명'
+COL_DEP        = '부서'
+COL_CL         = '직급명'
+COL_ASSIGNMENT = '직책명'
 # ─────────────────────────────────────────────────────────────────────────────
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -91,12 +94,13 @@ def process() -> bool:
         return df[name].astype(str).str.strip() if name in df.columns else pd.Series('', index=df.index)
 
     result = pd.DataFrame({
-        'researcher_id': df['researcher_id'],
-        'order_date':    df[COL_DATE].apply(_parse_date),
-        'order_name':    _col(COL_NAME),
-        'order_dep':     _col(COL_DEP),
-        'order_cl':      df[COL_CL].apply(_strip_paren) if COL_CL in df.columns
-                         else pd.Series('', index=df.index),
+        'researcher_id':    df['researcher_id'],
+        'order_date':       df[COL_DATE].apply(_parse_date),
+        'order_name':       _col(COL_NAME),
+        'order_dep':        _col(COL_DEP),
+        'order_cl':         df[COL_CL].apply(_strip_paren) if COL_CL in df.columns
+                            else pd.Series('', index=df.index),
+        'order_assignment': _col(COL_ASSIGNMENT),
     })
 
     result = result.sort_values(['researcher_id', 'order_date']).reset_index(drop=True)
