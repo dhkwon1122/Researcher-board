@@ -92,10 +92,21 @@ def _build_summary_df() -> pd.DataFrame:
         pub_3yr    = int((pubs['pub_year'] >= _CURRENT_YEAR - 2).sum()) if not pubs.empty and 'pub_year' in pubs.columns else 0
         avg_if     = round(pubs['impact_factor'].mean(), 2) if not pubs.empty and 'impact_factor' in pubs.columns and pubs['impact_factor'].notna().any() else '-'
 
-        # ── 특허 ───────────────────────────────────────────────────────────
+        # ── 특허 (프로필 상세와 동일 기준) ─────────────────────────────────
+        #   출원 = 특허 수(application_id 기준 중복 제거), 등록 = status 에 '등록' 포함
         pats = pat[pat['researcher_id'] == rid]
-        pat_app = int((pats['status'] == '출원').sum()) if not pats.empty else 0
-        pat_reg = int((pats['status'] == '등록').sum()) if not pats.empty else 0
+        if pats.empty:
+            pat_app = pat_reg = 0
+        elif 'application_id' in pats.columns:
+            grp = pats.groupby('application_id')
+            pat_app = grp.ngroups
+            pat_reg = (int(grp['status'].apply(
+                lambda s: s.astype(str).str.contains('등록').any()).sum())
+                if 'status' in pats.columns else 0)
+        else:
+            pat_app = len(pats)
+            pat_reg = (int(pats['status'].astype(str).str.contains('등록').sum())
+                       if 'status' in pats.columns else 0)
 
         # ── 리더십 ─────────────────────────────────────────────────────────
         ldf = lea[(lea['researcher_id'] == rid)]
