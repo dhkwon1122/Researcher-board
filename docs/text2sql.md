@@ -18,25 +18,53 @@ PostgreSQL `SELECT` 쿼리를 생성하고 안전 검증을 거쳐 실행한 뒤
 - LLM 클라이언트: `services/llm.py` (OpenAI 호환 `/v1/chat/completions`)
 - **DB 필요**: PostgreSQL 연결(DATABASE_URL)이 있어야 동작. CSV 모드면 안내만 표시.
 
-## LLM 준비 (ollama 기본)
+## LLM 준비
 
-### 1) ollama 컨테이너 기동
-`docker-compose.yml` 에 `ollama` 서비스가 있으며 **profile `llm`** 로 옵트인이다.
+ollama 실행 방식은 두 가지다. 사내망에서는 **방식 A(WSL 네이티브)** 가 가장 안정적이다
+(도커 이미지 pull 을 안 거쳐서, 프록시가 큰 이미지를 손상시키는 문제를 피한다).
+
+### 방식 A — WSL 에서 직접 실행한 ollama 사용 (권장)
+앱은 도커 컨테이너, ollama 는 WSL 호스트에서 직접 실행하고 연결한다.
+
+1) **WSL 에서 ollama 를 0.0.0.0 으로 기동** (컨테이너가 접근하려면 필수):
 ```bash
-docker compose --profile llm up -d          # app + ollama 함께 기동
+export OLLAMA_HOST=0.0.0.0:11434
+ollama serve
+# systemd 서비스로 설치된 경우:
+#   sudo systemctl edit ollama   → [Service] Environment="OLLAMA_HOST=0.0.0.0:11434"
+#   sudo systemctl restart ollama
 ```
-
-### 2) 모델 1회 다운로드
+2) **모델 준비** (WSL 에서. HuggingFace GGUF 를 import 하거나 ollama 로 pull):
 ```bash
-docker compose exec ollama ollama pull qwen3.5:4b
+ollama pull qwen3.5:4b
+ollama list                     # LLM_MODEL 에 넣을 정확한 이름 확인
 ```
-- 기본 모델은 `qwen3.5:4b`(소형 범용, CPU 에서도 동작). `.env` 의 `LLM_MODEL` 로
-  바꿀 수 있다.
-- 사내망에서는 모델 다운로드가 프록시를 타야 한다. compose 의 ollama 서비스에
-  `HTTP_PROXY/HTTPS_PROXY` 가 설정돼 있다.
-
-### 3) 확인
+3) **앱 `.env`** — WSL 호스트(=host.docker.internal=172.17.0.1)를 가리킴:
+```
+LLM_BASE_URL=http://host.docker.internal:11434/v1
+LLM_MODEL=<ollama list 의 이름>
+```
+4) **앱만 기동** (ollama 컨테이너 불필요 → `--profile llm` 없이):
 ```bash
+docker compose up -d --force-recreate
+```
+> 흔한 실수: `OLLAMA_HOST=0.0.0.0` 을 안 하면 기본 127.0.0.1 이라 컨테이너에서
+> 연결이 refused 된다.
+
+### 방식 B — ollama 를 도커 컨테이너로 기동
+`docker-compose.yml` 의 `ollama` 서비스(**profile `llm`**)를 쓴다.
+```bash
+docker compose --profile llm up -d                  # app + ollama
+docker compose exec ollama ollama pull qwen3.5:4b   # 모델 1회
+```
+- `.env` 는 `LLM_BASE_URL=http://ollama:11434/v1` (compose 기본값).
+- 사내망은 이미지/모델 다운로드가 프록시를 타야 한다(ollama 서비스에 프록시 env 설정됨).
+  프록시가 큰 이미지를 손상시켜 `exec format error` 가 나면 방식 A 를 쓰거나,
+  외부망에서 `docker save`/`docker load` 로 이미지를 옮긴다.
+
+### 확인 (공통)
+```bash
+docker compose exec app python -c "import socket; socket.create_connection(('host.docker.internal',11434),5); print('OPEN')"
 docker compose exec app python -c "from services.llm import chat; print(chat([{'role':'user','content':'say hi'}]))"
 ```
 
@@ -100,7 +128,9 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO dashboard_ro;
 | 증상 | 원인/해결 |
 |------|-----------|
 | "PostgreSQL 연결이 필요합니다" | DATABASE_URL 미설정 → `.env` 설정 |
-| "로컬 LLM 서버에 연결할 수 없습니다" | ollama 미기동 → `docker compose --profile llm up -d` |
+| "로컬 LLM 서버에 연결할 수 없습니다" | ollama 미기동, 또는 WSL ollama 가 127.0.0.1 로만 리슨 → `export OLLAMA_HOST=0.0.0.0:11434` 후 `ollama serve`(방식 A), 또는 `docker compose --profile llm up -d`(방식 B) |
+| 컨테이너에서 ollama refused | `OLLAMA_HOST=0.0.0.0` 미설정 → 위와 동일 |
+| ollama 도커 이미지 `exec format error` | 프록시가 이미지 손상/오배포 → 방식 A(WSL 네이티브) 사용, 또는 외부망에서 `docker save`/`load` |
 | "LLM 응답 시간 초과" | 모델이 큼/CPU 느림 → 소형 모델 사용 또는 `LLM_TIMEOUT` 상향 |
 | "허용되지 않는 키워드" | LLM 이 쓰기/시스템 쿼리 생성 → 질문을 조회 형태로 다시 |
 | 결과가 이상함 | 전 컬럼이 TEXT 라 형변환 필요 — 프롬프트에 캐스팅 지시 포함되어 있으나, 질문을 더 구체적으로 |
