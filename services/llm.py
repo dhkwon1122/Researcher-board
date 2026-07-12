@@ -7,8 +7,9 @@ chat(): ollama, vllm 모두 OpenAI 호환 /v1/chat/completions API 를 제공하
   - vllm:    http://localhost:8000/v1
 
 embed(): 사내망 제한으로 ollama에 BGE-M3를 설치할 수 없어, 별도의 로컬 BGE-M3
-         python 서버(자체 /api/embed 엔드포인트)를 사용한다. chat()과는 다른
-         서버/포트이므로 EMBED_BASE_URL 로 독립적으로 설정한다.
+         python 서버를 사용한다. 엔드포인트 경로는 /api/embed 이지만 응답
+         본문은 OpenAI 호환 형식(`{"data": [{"index":.., "embedding":[..]}]}`)
+         이다. chat()과는 다른 서버/포트이므로 EMBED_BASE_URL 로 독립 설정한다.
 
 환경변수:
   LLM_BASE_URL    기본 http://localhost:11434/v1 (chat 전용)
@@ -130,8 +131,10 @@ def embed(texts: list[str], batch_size: int = 64) -> list[list[float]]:
             raise LLMError(f'임베딩 HTTP {resp.status_code}: {resp.text[:300]}')
 
         try:
-            vectors.extend(resp.json()['embeddings'])
-        except (KeyError, ValueError, TypeError) as exc:
+            data = resp.json()['data']
+            data.sort(key=lambda d: d.get('index', 0))
+            vectors.extend(d['embedding'] for d in data)
+        except (KeyError, IndexError, ValueError, TypeError) as exc:
             raise LLMError(f'임베딩 응답 파싱 실패: {resp.text[:300]}') from exc
 
     return vectors
