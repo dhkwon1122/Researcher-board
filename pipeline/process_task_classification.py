@@ -302,6 +302,22 @@ def process(use_llm: bool = False):
     rate = (len(matched) / total * 100) if total else 0.0
     print(f'[process_task_classification] task_name 매칭: {len(matched)}/{total}행 ({rate:.1f}%)')
 
+    # 매칭 안 되는 과제명을 별도 CSV로 저장 — tasks_information.csv와 직접
+    # 비교해서 표기 차이(공백·오탈자 등)인지, 아예 등록이 안 된 과제인지 확인용.
+    info_names = set(info_df['task_name'])
+    unmatched = tasks_df[~tasks_df['task_name'].isin(info_names)]
+    if not unmatched.empty:
+        unmatched_summary = (
+            unmatched.groupby('task_name')
+            .agg(row_count=('researcher_id', 'size'), researcher_count=('researcher_id', 'nunique'))
+            .reset_index()
+            .sort_values('row_count', ascending=False)
+        )
+        unmatched_path = os.path.join(OUT_DIR, 'unmatched_tasks.csv')
+        unmatched_summary.to_csv(unmatched_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+        print(f'[process_task_classification] 매칭 안 되는 과제명 {len(unmatched_summary)}건 → '
+              f'{unmatched_path} 저장 (tasks_information.csv와 비교해보세요)')
+
     matched_names = tasks_df['task_name'].unique().tolist()
     info_matched = info_df[info_df['task_name'].isin(matched_names)].drop_duplicates('task_name').reset_index(drop=True)
     if info_matched.empty:
