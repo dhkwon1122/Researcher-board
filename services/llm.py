@@ -1,16 +1,23 @@
 """
-로컬 LLM 클라이언트 (OpenAI 호환 /v1/chat/completions, /v1/embeddings).
+로컬 LLM/임베딩 클라이언트.
 
-ollama, vllm 모두 OpenAI 호환 API 를 제공하므로 base URL 만 바꾸면 그대로 동작한다.
+chat(): ollama, vllm 모두 OpenAI 호환 /v1/chat/completions API 를 제공하므로
+        base URL 만 바꾸면 그대로 동작한다.
   - ollama:  http://localhost:11434/v1   (docker: http://ollama:11434/v1)
   - vllm:    http://localhost:8000/v1
 
+embed(): 사내망 제한으로 ollama에 BGE-M3를 설치할 수 없어, 별도의 로컬 BGE-M3
+         python 서버(자체 /api/embed 엔드포인트)를 사용한다. chat()과는 다른
+         서버/포트이므로 EMBED_BASE_URL 로 독립적으로 설정한다.
+
 환경변수:
-  LLM_BASE_URL  기본 http://localhost:11434/v1
-  LLM_MODEL     기본 qwen3.5:4b (CPU 가능한 소형; GPU 시 큰 코더 모델 권장)
-  LLM_API_KEY   기본 'ollama' (로컬은 대개 불필요, 더미 값)
-  LLM_TIMEOUT   기본 60 (초)
-  EMBED_MODEL   기본 bge-m3 (임베딩 전용 모델명, 예: ollama에 설치된 BGE-M3)
+  LLM_BASE_URL    기본 http://localhost:11434/v1 (chat 전용)
+  LLM_MODEL       기본 qwen3.5:4b (CPU 가능한 소형; GPU 시 큰 코더 모델 권장)
+  LLM_API_KEY     기본 'ollama' (로컬은 대개 불필요, 더미 값)
+  LLM_TIMEOUT     기본 60 (초, chat/embed 공용)
+  EMBED_BASE_URL  기본 http://localhost:7138 (BGE-M3 python 서버, embed 전용)
+  EMBED_MODEL     기본 bge-m3
+  EMBED_API_KEY   기본 '' (내부 서버라 대개 인증 불필요)
 """
 
 import os
@@ -32,9 +39,9 @@ def _cfg():
 
 
 def _embed_cfg():
-    base = os.environ.get('LLM_BASE_URL', 'http://localhost:11434/v1').rstrip('/')
+    base = os.environ.get('EMBED_BASE_URL', 'http://localhost:7138').rstrip('/')
     model = os.environ.get('EMBED_MODEL', 'bge-m3')
-    api_key = os.environ.get('LLM_API_KEY', 'ollama')
+    api_key = os.environ.get('EMBED_API_KEY', '')
     try:
         timeout = float(os.environ.get('LLM_TIMEOUT', '60'))
     except ValueError:
@@ -99,7 +106,7 @@ def embed(texts: list[str], batch_size: int = 64) -> list[list[float]]:
         raise LLMError('requests 패키지가 없습니다. requirements.txt 를 설치하세요.') from exc
 
     base, model, api_key, timeout = _embed_cfg()
-    url = f'{base}/embeddings'
+    url = f'{base}/api/embed'
     headers = {'Content-Type': 'application/json'}
     if api_key:
         headers['Authorization'] = f'Bearer {api_key}'
@@ -112,7 +119,7 @@ def embed(texts: list[str], batch_size: int = 64) -> list[list[float]]:
             resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
         except requests.exceptions.ConnectionError as exc:
             raise LLMError(
-                f'로컬 임베딩 서버에 연결할 수 없습니다 ({base}). ollama가 기동 중인지 확인하세요.'
+                f'로컬 임베딩 서버에 연결할 수 없습니다 ({base}). BGE-M3 서버가 기동 중인지 확인하세요.'
             ) from exc
         except requests.exceptions.Timeout as exc:
             raise LLMError(f'임베딩 응답 시간 초과({timeout:.0f}s).') from exc
@@ -123,10 +130,8 @@ def embed(texts: list[str], batch_size: int = 64) -> list[list[float]]:
             raise LLMError(f'임베딩 HTTP {resp.status_code}: {resp.text[:300]}')
 
         try:
-            data = resp.json()['data']
-            data.sort(key=lambda d: d.get('index', 0))
-            vectors.extend(d['embedding'] for d in data)
-        except (KeyError, IndexError, ValueError, TypeError) as exc:
+            vectors.extend(resp.json()['embeddings'])
+        except (KeyError, ValueError, TypeError) as exc:
             raise LLMError(f'임베딩 응답 파싱 실패: {resp.text[:300]}') from exc
 
     return vectors
