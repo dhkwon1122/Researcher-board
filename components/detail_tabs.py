@@ -8,11 +8,11 @@ from dash import dcc, html
 # ── 세로(수직) 타임라인 ──────────────────────────────────────────────────────
 # 스파인(독립 축)을 차트 왼쪽 끝에 붙이고, 과제 레인은 스파인에서 뻗어나와
 # 오른쪽으로 순차 배치한다(겹치는 기간의 과제만 레인 분리). 논문·특허·인사발령은
-# 발생 시점에 진행 중이던 과제 레인(없으면 스파인)에서 화살표로 출발해, 모든
-# 이벤트가 공유하는 하나의 라벨 열(label_col_x)까지 이동해 아이콘+텍스트로
-# 표시된다. 라벨의 세로 위치(slot_y)는 카테고리·과제 구분 없이 전체 이벤트를
-# 시간순으로 훑으며 최소 픽셀 간격을 강제해 절대 겹치지 않도록 배정하고,
-# 실제 발생일과 slot_y가 다르면 화살표가 여러 번 꺾여 이동한다.
+# 과제 레인과 무관하게 항상 메인 스파인의 발생 시점에서 점선 화살표로 출발해,
+# 모든 이벤트가 공유하는 하나의 라벨 열(label_col_x)까지 이동해 아이콘+텍스트로
+# 표시된다. 라벨의 세로 위치(slot_y)는 카테고리 구분 없이 전체 이벤트를 시간순
+# 으로 훑으며 최소 픽셀 간격을 강제해 절대 겹치지 않도록 배정하고, 실제 발생일과
+# slot_y가 다르면 화살표가 여러 번 꺾여 이동한다.
 # y축(날짜)은 기본 방향을 그대로 사용 — 값이 클수록(최신일수록) 위에 그려진다.
 SPINE_X = 0.0
 SPINE_LEFT_MARGIN = 0.35   # 스파인과 차트 왼쪽 끝 사이 여백(축 눈금 라벨 공간)
@@ -89,8 +89,7 @@ def timeline_tab(task_df, hr_df, pub_df, pat_df, rid):
 
     task_colors = _task_colors(task_points)
 
-    # 논문/특허/인사발령 → 발생 시점에 진행 중이던 과제에 배정(겹치면 가장 나중에
-    # 시작된 과제 하나만). 진행 중인 과제가 없으면 스파인에 직접 배정(독립 표시).
+    # 논문/특허/인사발령 모두 항상 메인 스파인에서 출발한다(과제 레인에 배정하지 않음).
     events = []
     for p in pub_points:
         events.append({
@@ -106,9 +105,6 @@ def timeline_tab(task_df, hr_df, pub_df, pat_df, rid):
         events.append({
             'date': p['date'], 'kind': '인사발령', 'label': _hr_label(p), 'hover': None,
         })
-
-    for e in events:
-        e['host'] = _host_task(e['date'], task_items)
 
     # 논문·특허·인사발령은 모두 하나의 공유 라벨 열(label_col_x)에 아이콘+텍스트로
     # 표시한다. 실제 발생 시점(과제 레인 또는 스파인)에서 뻗어나가는 지점은 그대로
@@ -158,7 +154,7 @@ def timeline_tab(task_df, hr_df, pub_df, pat_df, rid):
 
     graph = dcc.Graph(figure=fig, config={'displayModeBar': False})
     summary = _summary_cards(task, pub, pat_dedup)
-    scroll_wrap = html.Div(graph, style={'maxHeight': '620px', 'overflowY': 'auto', 'overflowX': 'hidden'})
+    scroll_wrap = html.Div(graph, style={'maxHeight': '520px', 'overflowY': 'auto', 'overflowX': 'hidden'})
     return html.Div([summary, scroll_wrap]) if summary is not None else html.Div([scroll_wrap])
 
 
@@ -389,18 +385,6 @@ def _assign_levels(items):
     return levels
 
 
-def _host_task(date, task_items):
-    """date 시점에 진행 중이던 과제를 찾는다. 여러 개면 가장 나중에 시작된 과제
-    (동률이면 더 일찍 끝나는, 즉 더 짧고 구체적인 과제) 하나만 반환. 없으면 None."""
-    candidates = [t for t in task_items if t['start'] <= date <= t['end']]
-    if not candidates:
-        return None
-    candidates.sort(key=lambda t: t['start'])
-    latest_start = candidates[-1]['start']
-    tied = [t for t in candidates if t['start'] == latest_start]
-    return tied[0] if len(tied) == 1 else min(tied, key=lambda t: t['end'])
-
-
 def _add_spine(fig, y_range):
     fig.add_trace(go.Scatter(
         x=[SPINE_X, SPINE_X], y=[y_range[0], y_range[1]], mode='lines',
@@ -453,14 +437,16 @@ def _add_task_lanes(fig, task_items, task_colors):
             hoverlabel=_hoverlabel(color),
         ))
 
-        # 과제명 라벨 — 과제 기간의 세로 중앙에 동일 색 테두리 프레임(칩)으로 표시
+        # 과제명 라벨 — 과제 기간의 세로 중앙에 동일 색 테두리 프레임(칩)으로 표시.
+        # 배경을 완전 불투명(흰색)으로 칠해 선이 텍스트를 가로질러 비치지 않게 한다.
+        # (주석(annotation)은 Plotly에서 항상 트레이스보다 위 레이어에 그려진다.)
         mid_y = t['start'] + (t['end'] - t['start']) / 2
         fig.add_annotation(
             x=x, y=mid_y, xref='x', yref='y',
             text=_truncate(t['task_name'], 16),
             showarrow=False,
             font=dict(size=10.5, color=color, family=_CHART_FONT),
-            bgcolor='rgba(255,255,255,0.94)',
+            bgcolor='#ffffff',
             bordercolor=color, borderwidth=1.3, borderpad=3,
         )
 
@@ -497,7 +483,7 @@ def _add_event_traces(fig, events, label_col_x):
         hover_x, hover_y, hover_txt = [], [], []
 
         for e in items:
-            origin_x = e['host']['x'] if e['host'] is not None else SPINE_X
+            origin_x = SPINE_X
             elbow_x = origin_x + BRANCH_ELBOW
             slot_y = e['slot_y']
 
@@ -519,9 +505,11 @@ def _add_event_traces(fig, events, label_col_x):
                 hover_y.extend([slot_y] * len(hx))
                 hover_txt.extend([e['hover']] * len(hx))
 
+        # 논문/특허/인사발령 모두 메인 스파인에서 출발함을 시각적으로 드러내도록
+        # 화살표 끝까지 전체를 점선으로 표시한다.
         fig.add_trace(go.Scatter(
             x=shaft_x, y=shaft_y, mode='lines',
-            line=dict(color=color, width=1.5, shape='linear'),
+            line=dict(color=color, width=1.5, shape='linear', dash='dot'),
             name=kind, legendgroup=kind, showlegend=False, hoverinfo='skip',
         ))
         fig.add_trace(go.Scatter(
@@ -626,6 +614,8 @@ def _task_points(task_df):
         end_label = end.strftime('%Y-%m-%d') if end is not None else '진행중'
         if end is None or end < start:
             end = today
+        if (end - start).days <= 30:
+            continue
         points.append({
             'task_name': str(row.get('task_name', '')).strip(),
             'start': start,

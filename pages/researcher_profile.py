@@ -34,6 +34,12 @@ dash.register_page(
 
 CURRENT_YEAR = datetime.now().year
 
+# 중단 좌(사진+정보+탭)/우(타임라인) 영역의 절대 높이 — 양쪽을 이 값으로 고정해
+# 서로의 하단이 맞춰지도록 한다. 탭 카드는 고정 높이 내에서 내부 스크롤로 처리.
+SECTION_HEIGHT = 700
+TABS_SECTION_HEIGHT = 320
+TABS_CONTENT_HEIGHT = 230
+
 
 def _load_selector_data():
     try:
@@ -128,22 +134,29 @@ def _selector_card(dept_opts, res_opts, default_dept, default_rid):
 
 def _left_stack_col():
     """사진/정보 카드 + 과제·논문·특허 탭 카드를 세로로 쌓은 왼쪽 묶음.
-    오른쪽 타임라인 카드(h-100)가 이 묶음 전체 높이만큼 늘어나도록 같은 Row의 형제 Col로 둔다."""
-    return dbc.Col([
-        dbc.Row([
-            _left_column(),
-            _middle_column(),
-        ], className='g-3 mb-3'),
-        dbc.Row([
-            _task_pub_pat_col(),
-        ], className='g-3'),
-    ], md=7)
+    전체 높이를 오른쪽 타임라인 카드와 동일한 절대값(SECTION_HEIGHT)으로 고정하고,
+    사진+정보 행은 남는 공간만큼 커지도록(flex-grow) 하고, 탭 카드는 고정 높이 +
+    내부 스크롤로 그 아래 영역을 넘지 않게 한다."""
+    return dbc.Col(
+        html.Div([
+            dbc.Row([
+                _left_column(),
+                _middle_column(),
+            ], className='g-3 mb-3', style={'flex': '1 1 auto', 'minHeight': 0, 'overflowY': 'auto'}),
+            dbc.Row([
+                _task_pub_pat_col(),
+            ], className='g-3', style={'flex': '0 0 auto', 'maxHeight': f'{TABS_SECTION_HEIGHT}px',
+                                        'overflow': 'hidden'}),
+        ], style={'height': f'{SECTION_HEIGHT}px', 'display': 'flex', 'flexDirection': 'column'}),
+        md=7,
+    )
 
 
 def _left_column():
     return dbc.Col(
         _card(html.Div(id='photo-block', className='d-flex flex-column align-items-center py-1'),
-              body_class='p-2', card_class='shadow-sm profile-card h-100'),
+              body_class='p-2', card_class='shadow-sm profile-card h-100',
+              body_style={'overflowY': 'auto'}),
         md=5,
     )
 
@@ -162,22 +175,28 @@ def _middle_column():
             html.Hr(className='my-2'),
             html.P('시상 이력', className='section-label'),
             html.Div(id='award-block'),
-        ], body_class='p-3', card_class='shadow-sm profile-card h-100'),
+        ], body_class='p-3', card_class='shadow-sm profile-card h-100',
+           body_style={'overflowY': 'auto'}),
         md=7,
     )
 
 
 def _task_pub_pat_col():
+    tab_content_style = {'maxHeight': f'{TABS_CONTENT_HEIGHT}px', 'overflowY': 'auto'}
     return dbc.Col(
         dbc.Card(
             dbc.CardBody(
                 dbc.Tabs([
-                    dbc.Tab(html.Div(id='tab-tasks'), label='과제 수행 이력', tab_id='tasks'),
-                    dbc.Tab(html.Div(id='tab-publications'), label='논문', tab_id='publications'),
-                    dbc.Tab(html.Div(id='tab-patents'), label='특허', tab_id='patents'),
+                    dbc.Tab(html.Div(id='tab-tasks', style=tab_content_style),
+                            label='과제 수행 이력', tab_id='tasks'),
+                    dbc.Tab(html.Div(id='tab-publications', style=tab_content_style),
+                            label='논문', tab_id='publications'),
+                    dbc.Tab(html.Div(id='tab-patents', style=tab_content_style),
+                            label='특허', tab_id='patents'),
                 ], id='task-pub-pat-tabs', active_tab='tasks'),
             ),
-            className='shadow-sm profile-card',
+            className='shadow-sm profile-card h-100',
+            style={'overflow': 'hidden'},
         ),
         md=12,
     )
@@ -190,7 +209,8 @@ def _right_column():
                 html.P('타임라인 (인사발령 · 과제이력 · 논문 · 특허)', className='section-label'),
                 html.Div(id='tab-timeline'),
             ]),
-            className='shadow-sm profile-card h-100',
+            className='shadow-sm profile-card',
+            style={'height': f'{SECTION_HEIGHT}px', 'overflow': 'hidden'},
         ),
         md=5,
     )
@@ -269,8 +289,8 @@ def _comments_col():
     )
 
 
-def _card(children, *, body_class='p-2', card_class='shadow-sm profile-card mb-2'):
-    return dbc.Card(dbc.CardBody(children, className=body_class), className=card_class)
+def _card(children, *, body_class='p-2', card_class='shadow-sm profile-card mb-2', body_style=None):
+    return dbc.Card(dbc.CardBody(children, className=body_class, style=body_style), className=card_class)
 
 
 def _empty_profile_output():
