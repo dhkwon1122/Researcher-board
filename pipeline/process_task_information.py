@@ -16,11 +16,14 @@
   개요_향후활용계획(향후계획)     → task_futureusage
   작성일                        → write_date (YYYY-MM-DD)
 
-중복 제거 (write_date 최신 우선):
-  1) task_code가 동일한 행 → write_date가 가장 최근인 행만 유지
-  2) (1) 이후에도 task_name이 동일한 행이 남아있으면 → write_date가 가장 최근인
-     행만 유지 (tasks.csv와 task_name 기준으로 조인할 때 1:1이 되도록 보장)
-  ※ task_code/task_name이 비어있는 행은 서로 다른 항목으로 간주해 중복 제거 대상에서 제외
+중복 제거 (task_name 기준, tasks.csv와 1:1로 조인되도록 보장):
+  동일한 task_name을 가진 행이 여러 개면 아래 우선순위로 1건만 남긴다.
+    1순위: task_collabo~task_futureusage 중 값이 채워진 컬럼 수가 많은 행
+    2순위: (1이 동률일 때) write_date가 가장 최근인 행
+  ※ task_code가 같아도 task_name이 다르면(예: 과제 진행 중 개명) 서로 다른
+    행으로 보존한다 — task_code 기준으로만 줄이면 tasks.csv가 참조하는
+    과거 시점의 과제명이 유실되어 조인이 실패할 수 있기 때문.
+  ※ task_name이 비어있는 행은 서로 다른 항목으로 간주해 중복 제거 대상에서 제외
 
 컬럼 설정 (실제 파일 헤더에 맞게 상단 상수 수정):
   COL_NAME         : 과제명 컬럼명
@@ -62,6 +65,11 @@ COL_WRITE_DATE   = '작성일'
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from excel_reader import read_xlsx
 
+_CONTENT_COLS = [
+    'task_collabo', 'task_goal', 'task_value', 'task_howtoget',
+    'task_expectissue', 'task_Activityplan', 'task_futureusage',
+]
+
 
 def _parse_date(val) -> str:
     """YYYYMMDD(숫자 or 문자열) 또는 YYYY-MM-DD → YYYY-MM-DD. 변환 불가 시 원본 문자열."""
@@ -77,14 +85,25 @@ def _parse_date(val) -> str:
     return s
 
 
-def _dedupe_keep_latest(df: pd.DataFrame, key: str) -> pd.DataFrame:
-    """key 값이 있는 행끼리만 write_date 최신 행을 남기고, key가 빈 행은 그대로 둔다."""
-    has_key = df[key].astype(str).str.strip() != ''
-    with_key = (df[has_key]
-                .sort_values('write_date')
-                .drop_duplicates(key, keep='last'))
-    without_key = df[~has_key]
-    return pd.concat([with_key, without_key], ignore_index=True)
+def _filled_count(row) -> int:
+    """task_collabo~task_futureusage 중 값이 채워진 컬럼 수."""
+    return sum(1 for c in _CONTENT_COLS if str(row[c]).strip() not in ('', 'nan', 'None'))
+
+
+def _dedupe_by_name(df: pd.DataFrame) -> pd.DataFrame:
+    """task_name이 동일한 행 중, 채워진 항목이 가장 많은 행을 우선하고(신뢰도),
+    그 수가 같으면 write_date가 가장 최근인 행을 남긴다.
+    task_name이 빈 행은 서로 다른 항목으로 간주해 중복 제거 대상에서 제외한다."""
+    has_name = df['task_name'].astype(str).str.strip() != ''
+    with_name = df[has_name].copy()
+    without_name = df[~has_name]
+
+    with_name['_filled_count'] = with_name.apply(_filled_count, axis=1)
+    with_name = (with_name
+                 .sort_values(['_filled_count', 'write_date'])
+                 .drop_duplicates('task_name', keep='last')
+                 .drop(columns='_filled_count'))
+    return pd.concat([with_name, without_name], ignore_index=True)
 
 
 def process() -> bool:
@@ -123,8 +142,7 @@ def process() -> bool:
     })
 
     before = len(result)
-    result = _dedupe_keep_latest(result, 'task_code')
-    result = _dedupe_keep_latest(result, 'task_name')
+    result = _dedupe_by_name(result)
     after = len(result)
 
     result = result.sort_values('task_name').reset_index(drop=True)
