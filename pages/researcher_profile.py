@@ -8,7 +8,7 @@ import dash
 import dash_bootstrap_components as dbc
 from dash import Input, Output, State, callback, dcc, html, no_update
 
-from components.detail_tabs import expertise_tab, timeline_tab
+from components.detail_tabs import expertise_tab, patents_tab, publications_tab, timeline_tab
 from components.profile_sections import (
     avatar,
     award_block,
@@ -89,6 +89,9 @@ def layout(id=None, **_kwargs):
             _right_column(),
         ], className='g-3 mb-3'),
         dbc.Row([
+            _task_pub_pat_col(),
+        ], className='g-3 mb-3'),
+        dbc.Row([
             _detail_tabs_col(),
             _comments_col(),
         ], className='g-3 mb-3'),
@@ -128,33 +131,46 @@ def _selector_card(dept_opts, res_opts, default_dept, default_rid):
 
 
 def _left_column():
-    return dbc.Col([
+    return dbc.Col(
         _card(html.Div(id='photo-block', className='d-flex flex-column align-items-center py-1'),
-              body_class='p-2', card_class='shadow-sm profile-card'),
+              body_class='p-2', card_class='shadow-sm profile-card h-100'),
+        md=3,
+    )
+
+
+def _middle_column():
+    return dbc.Col(
         _card([
             html.P('학력', className='section-label'),
             html.Div(id='education-block'),
             html.Hr(className='my-2'),
             html.P('평가 / 인센티브 이력', className='section-label'),
             html.Div(id='eval-incentive-block'),
-        ], body_class='p-3', card_class='shadow-sm profile-card'),
-    ], md=3)
-
-
-def _middle_column():
-    return dbc.Col([
-        _card([
-            html.P('과제 수행 이력', className='section-label'),
-            html.Div(id='transfer-block'),
-        ], body_class='p-3', card_class='shadow-sm profile-card'),
-        _card([
+            html.Hr(className='my-2'),
             html.P('양성 이력', className='section-label'),
             html.Div(id='nurturing-block'),
             html.Hr(className='my-2'),
             html.P('시상 이력', className='section-label'),
             html.Div(id='award-block'),
-        ], body_class='p-2', card_class='shadow-sm profile-card'),
-    ], md=4)
+        ], body_class='p-3', card_class='shadow-sm profile-card h-100'),
+        md=4,
+    )
+
+
+def _task_pub_pat_col():
+    return dbc.Col(
+        dbc.Card(
+            dbc.CardBody(
+                dbc.Tabs([
+                    dbc.Tab(html.Div(id='tab-tasks'), label='과제 수행 이력', tab_id='tasks'),
+                    dbc.Tab(html.Div(id='tab-publications'), label='논문', tab_id='publications'),
+                    dbc.Tab(html.Div(id='tab-patents'), label='특허', tab_id='patents'),
+                ], id='task-pub-pat-tabs', active_tab='tasks'),
+            ),
+            className='shadow-sm profile-card',
+        ),
+        md=7,
+    )
 
 
 def _right_column():
@@ -250,7 +266,8 @@ def _card(children, *, body_class='p-2', card_class='shadow-sm profile-card mb-2
 def _empty_profile_output():
     prompt = html.Div('연구원을 선택하세요.', className='text-muted p-3')
     return (
-        avatar('?'), html.Div(), html.Div(), html.Div(), html.Div(), html.Div(),
+        avatar('?'), html.Div(), html.Div(), html.Div(), html.Div(),
+        html.Div(), html.Div(), html.Div(),
         [], None, html.Div(), prompt, prompt,
     )
 
@@ -276,7 +293,9 @@ def filter_by_dept(dept, current_rid):
     Output('eval-incentive-block', 'children'),
     Output('nurturing-block', 'children'),
     Output('award-block', 'children'),
-    Output('transfer-block', 'children'),
+    Output('tab-tasks', 'children'),
+    Output('tab-publications', 'children'),
+    Output('tab-patents', 'children'),
     Output('leadership-year', 'options'),
     Output('leadership-year', 'value'),
     Output('comments-block', 'children'),
@@ -311,6 +330,8 @@ def update_profile(rid):
             award_block(tables['awards'], rid),
             tasks_block(tables['tasks'], rid) if not tables['tasks'].empty
             else transfer_block(tables['transfers'], rid),
+            publications_tab(tables['publications'], rid),
+            patents_tab(tables['patents'], rid),
             leadership_options,
             leadership_default,
             comments_block(tables['comments'], rid),
@@ -327,7 +348,8 @@ def update_profile(rid):
             className='text-danger small p-2',
         )
         return (
-            avatar('?'), err_div, html.Div(), html.Div(), html.Div(), html.Div(),
+            avatar('?'), err_div, html.Div(), html.Div(), html.Div(),
+            html.Div(), html.Div(), html.Div(),
             [], None, html.Div(), err_div, err_div,
         )
 

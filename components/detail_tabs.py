@@ -7,16 +7,23 @@ import plotly.graph_objects as go
 from dash import dcc, html
 
 # ── 세로(수직) 타임라인 ──────────────────────────────────────────────────────
-# 중앙에 독립 스파인(x=0)을 두고, 과제는 겹치는 기간에만 좌우로 레인을 나눠
-# 세로 막대로 표시한다. 과제 진행 기간 중 발생한 논문·특허·인사발령은 그 과제
-# 레인에서 화살표(선+화살촉)로 가지처럼 뻗어나가 아이콘+텍스트로 표시되고,
-# 과제가 없던 공백 기간에 발생한 항목은 중앙 스파인에서 바로 뻗어나간다.
+# 스파인(독립 축)을 차트 왼쪽 끝에 붙이고, 과제·이벤트 내용이 보일 공간을 확보
+# 하기 위해 모든 과제 레인과 이벤트는 스파인 오른쪽으로만 확장한다. 과제 진행
+# 기간 중 발생한 논문·특허·인사발령은 그 과제 레인에서 화살표(선+화살촉)로
+# 가지처럼 뻗어나가 아이콘+텍스트로 표시되고, 과제가 없던 공백 기간에 발생한
+# 항목은 스파인에서 바로 뻗어나간다. 같은 레인에서 시점이 가까운 이벤트는
+# 화살표를 꺾어(엘보) 텍스트 행이 서로 겹치지 않게 위/아래로 분산한다.
 # y축(날짜)은 기본 방향을 그대로 사용 — 값이 클수록(최신일수록) 위에 그려진다.
 SPINE_X = 0.0
-TASK_LANE_UNIT = 1.05      # 과제 레인 간 x 간격(스파인 기준 좌우 교대 배치)
-BRANCH_BASE = 0.55         # 과제 레인 → 이벤트 아이콘까지 기본 가지 길이
-BRANCH_STEP = 0.42         # 같은 레인에서 시점이 가까운 이벤트를 추가로 밀어내는 간격
-ORPHAN_BRANCH = 0.55       # 공백기간(스파인 직결) 이벤트의 기본 가지 길이
+SPINE_LEFT_MARGIN = 0.35   # 스파인과 차트 왼쪽 끝 사이 여백(축 눈금 라벨 공간)
+TASK_LANE_UNIT = 0.85      # 과제 레인 간 x 간격(스파인 기준 오른쪽으로만 순차 배치)
+BRANCH_ELBOW = 0.28        # 과제/스파인 → 꺾이는 지점까지의 가로 길이
+BRANCH_BASE = 0.55         # 과제/스파인 → 이벤트 아이콘까지 기본 가지 길이(꺾인 지점 이후 포함)
+Y_STEP_FACTOR = 1.1        # 픽셀 기준 분산 간격에 곱하는 여유 배수
+_ROW_PX_GAP = 20           # 분산된 이벤트 텍스트 행 사이에 확보할 최소 픽셀 간격
+_HOVER_SPAN_PER_CHAR = 0.052  # 라벨 글자 수 → 호버 히트 영역 가로 폭 근사 환산
+_HOVER_SPAN_MIN = 0.5
+_HOVER_SPAN_MAX = 2.6
 
 TIMELINE_COLORS = {
     '인사발령': '#1baf7a',
@@ -73,12 +80,12 @@ def timeline_tab(task_df, hr_df, pub_df, pat_df, rid):
     total_days = max((y_range[1] - y_range[0]).days, 1)
     min_gap_days = max(12, total_days * 0.02)
 
-    # 과제 레인 배정 — 실제로 기간이 겹치는 과제만 좌우로 분리 배치.
+    # 과제 레인 배정 — 실제로 기간이 겹치는 과제만 스파인 오른쪽으로 순차 분리 배치.
     task_items = sorted(task_points, key=lambda t: t['start'])
     lane_items = [{'start': t['start'], 'end': t['end']} for t in task_items]
     levels = _assign_levels(lane_items)
     for t, lvl in zip(task_items, levels):
-        t['x'] = _level_to_offset(lvl + 1, TASK_LANE_UNIT)
+        t['x'] = SPINE_X + TASK_LANE_UNIT * (lvl + 1)
 
     task_colors = _task_colors(task_points)
 
@@ -103,8 +110,16 @@ def timeline_tab(task_df, hr_df, pub_df, pat_df, rid):
     for e in events:
         e['host'] = _host_task(e['date'], task_items)
 
-    # 같은 레인(과제 또는 스파인)에서 시점이 가까운 이벤트는 겹치지 않도록
-    # 가지 길이를 단계적으로 늘린다.
+    # 같은 레인(과제 또는 스파인)에서 시점이 가까운 이벤트는 화살표를 꺾어
+    # (엘보) 텍스트 행을 위/아래로 분산— 꺾이는 지점 이전(과제선 이탈 지점)은
+    # 실제 발생일 그대로 유지해 시점 자체는 왜곡하지 않는다.
+    # 분산 간격(y_step)은 날짜 단위가 아니라 "실제 렌더링 픽셀 간격"이 텍스트
+    # 한 줄 높이 이상 되도록, 차트의 픽셀당-일수 밀도에 반비례해 계산한다.
+    # (전체 기간이 길어 1일당 픽셀 수가 작을수록 y_step의 날짜 폭을 더 크게 잡아야
+    #  실제 화면에서 겹치지 않는 간격이 나온다.)
+    plot_px = max(_chart_height(y_range) - 50, 100)
+    px_per_day = plot_px / total_days
+    y_step = pd.Timedelta(days=(_ROW_PX_GAP / px_per_day) * Y_STEP_FACTOR)
     groups = defaultdict(list)
     for e in events:
         groups[id(e['host']) if e['host'] is not None else 'orphan'].append(e)
@@ -114,22 +129,23 @@ def timeline_tab(task_df, hr_df, pub_df, pat_df, rid):
         stagger_items = [{'start': e['date'] - half, 'end': e['date'] + half} for e in grp]
         for e, lvl in zip(grp, _assign_levels(stagger_items)):
             e['stagger'] = lvl
+            e['bent_y'] = e['date'] + _level_to_offset(lvl, y_step)
 
     fig = go.Figure()
     _add_spine(fig, y_range)
     _add_task_lanes(fig, task_items, task_colors)
     _add_event_traces(fig, events)
 
-    max_lane = max((abs(t['x']) for t in task_items), default=0.0)
-    max_stagger = max((e['stagger'] for e in events), default=0)
-    max_x = max_lane + TASK_LANE_UNIT + BRANCH_BASE + max_stagger * BRANCH_STEP + 2.8
-    x_range = [-max_x, max_x]
+    max_lane = max((t['x'] for t in task_items), default=0.0)
+    max_label_span = max((_hover_span(e['label']) for e in events), default=0.0)
+    max_x = max_lane + BRANCH_BASE + max_label_span + 0.4
+    x_range = [SPINE_X - SPINE_LEFT_MARGIN, max_x]
 
     fig.update_layout(
         font=dict(family=_CHART_FONT, size=12, color='#52525b'),
         xaxis=dict(range=x_range, visible=False, fixedrange=True),
         yaxis=dict(range=y_range, type='date', gridcolor=_GRIDLINE, showline=False,
-                   tickfont=dict(size=11, color='#a1a1aa')),
+                   tickfont=dict(size=11, color='#a1a1aa'), automargin=True),
         legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0,
                     groupclick='togglegroup', font=dict(size=11.5),
                     itemsizing='constant'),
@@ -152,6 +168,132 @@ def _chart_height(y_range):
     """세로 타임라인 실제 픽셀 높이 — 기간이 길수록 커지고, 카드는 고정 높이로 스크롤."""
     years = max((y_range[1] - y_range[0]).days / 365, 1)
     return int(min(2200, max(460, 165 * years)))
+
+
+def publications_tab(pub_df, rid):
+    """연구원의 논문 실적 목록 (data/processed/publications.csv)."""
+    if pub_df.empty:
+        return html.Div('논문 데이터 없음', className='text-muted p-3')
+
+    sort_col = 'pub_date' if 'pub_date' in pub_df.columns else 'pub_year'
+    pub = pub_df[pub_df['researcher_id'] == rid].copy()
+    if pub.empty:
+        return html.Div('논문 실적 없음', className='text-muted p-3')
+    pub = pub.sort_values(sort_col, ascending=False)
+
+    total = len(pub)
+    corr_mask = pub['is_corresponding'].astype(str).str.lower().isin(['true', '1', 'y', 'yes'])
+    corr = int(corr_mask.sum())
+
+    summary = dbc.Row([
+        dbc.Col(_single_card(total, '총 논문 수', 'text-primary'), md=2),
+        dbc.Col(_single_card(corr, '교신저자', 'text-warning'), md=2),
+    ], className='mb-3 g-2')
+
+    rows = []
+    for _, row in pub.iterrows():
+        is_corr = str(row.get('is_corresponding', '')).lower() in ('true', '1', 'y', 'yes')
+        contrib = str(row.get('contribution', '')).strip()
+        rank_total = ''
+        r = str(row.get('author_rank', '')).strip()
+        t = str(row.get('total_authors', '')).strip()
+        if r and t and r not in ('nan', '') and t not in ('nan', ''):
+            rank_total = f'{r}/{t}'
+
+        badges = []
+        pub_type = str(row.get('pub_type', '')).strip()
+        if pub_type and pub_type not in ('nan', ''):
+            badges.append(dbc.Badge(pub_type, color='info', className='me-1'))
+        author_type = str(row.get('author_type', '')).strip()
+        if author_type and author_type not in ('nan', ''):
+            badges.append(dbc.Badge(author_type, color='secondary', className='me-1'))
+        if is_corr:
+            badges.append(dbc.Badge('교신', color='warning', text_color='dark'))
+
+        rows.append(html.Tr([
+            html.Td(str(row.get('pub_year', '') or row.get('pub_date', ''))[:7],
+                    className='small text-muted', style={'whiteSpace': 'nowrap'}),
+            html.Td(row.get('title', ''),
+                    style={'maxWidth': '320px', 'wordBreak': 'break-word', 'fontSize': '0.82rem'}),
+            html.Td(row.get('journal', ''), className='small text-muted',
+                    style={'maxWidth': '160px', 'wordBreak': 'break-word'}),
+            html.Td(rank_total, className='small text-center', style={'whiteSpace': 'nowrap'}),
+            html.Td(f'{contrib}%' if contrib and contrib not in ('nan', '') else '',
+                    className='small text-center'),
+            html.Td(html.Div(badges) if badges else ''),
+        ]))
+
+    return html.Div([summary, dbc.Table([
+        html.Thead(html.Tr([
+            html.Th('발표일', style={'width': '70px'}),
+            html.Th('제목'),
+            html.Th('게재처'),
+            html.Th('순위/총수', className='text-center', style={'width': '70px'}),
+            html.Th('기여도', className='text-center', style={'width': '55px'}),
+            html.Th('구분'),
+        ]), className='table-light'),
+        html.Tbody(rows),
+    ], bordered=False, hover=True, responsive=True, size='sm',
+       style={'maxHeight': '340px', 'overflowY': 'auto', 'display': 'block'})])
+
+
+def patents_tab(pat_df, rid):
+    """연구원의 특허 실적 목록 (data/processed/patents.csv)."""
+    if pat_df.empty:
+        return html.Div('특허 데이터 없음', className='text-muted p-3')
+    pat = pat_df[pat_df['researcher_id'] == rid].copy()
+    if pat.empty:
+        return html.Div('특허 실적 없음', className='text-muted p-3')
+
+    pat_dedup = _dedupe_patents(pat)
+    total_cnt = len(pat_dedup)
+    reg_cnt = int(pat_dedup['status'].apply(_is_registered).sum()) if 'status' in pat_dedup.columns else 0
+    lead_cnt = _count_true(pat_dedup, 'is_lead_inventor')
+    strat_cnt = int((pat_dedup.get('patent_grade_a_sub', pd.Series(dtype=str)).astype(str).str.strip() == '전략출원').sum())
+    us_reg_cnt = _count_us_registered(pat_dedup)
+    share_sum = _share_sum(pat_dedup)
+
+    summary = dbc.Row([
+        dbc.Col(_dual_card(total_cnt, '전체 발명', 'text-dark',
+                           lead_cnt, '대표 발명', 'text-secondary'), md=3),
+        dbc.Col(_dual_card(total_cnt, '출원', 'text-primary',
+                           reg_cnt, '등록', 'text-success'), md=3),
+        dbc.Col(_single_card(strat_cnt, '전략 출원', 'text-warning'), md=2),
+        dbc.Col(_single_card(us_reg_cnt, '미국 등록', 'text-info'), md=2),
+        dbc.Col(_single_card(share_sum, '지분율 합계', 'text-danger'), md=2),
+    ], className='mb-3 g-2')
+
+    sort_col = 'application_date' if 'application_date' in pat_dedup.columns else pat_dedup.columns[0]
+    rows = []
+    for _, row in pat_dedup.sort_values(sort_col, ascending=False).iterrows():
+        status_val = str(row.get('status', ''))
+        lead = str(row.get('is_lead_inventor', ''))
+        grade = str(row.get('patent_grade', ''))
+        grade_a = str(row.get('patent_grade_a_sub', ''))
+        grade_str = grade + (f'({grade_a})' if grade_a and grade_a not in ('', 'nan') else '')
+        share_val = row.get('share_ratio', '')
+        share_str = f'{share_val}%' if str(share_val).replace('.', '').isdigit() else '-'
+        rows.append(html.Tr([
+            html.Td(_cell(row, 'application_date')[:7]),
+            html.Td(_cell(row, 'title', 'title_ko'), style={'maxWidth': '280px', 'wordBreak': 'break-word'}),
+            html.Td(dbc.Badge('등록', color='success') if _is_registered(status_val)
+                    else dbc.Badge(status_val or '출원', color='primary')),
+            html.Td(_cell(row, 'application_id', 'application_no')),
+            html.Td(dbc.Badge('대표', color='warning', text_color='dark')
+                    if lead in ('Y', 'y', '1', 'True', 'true') else ''),
+            html.Td(share_str),
+            html.Td(grade_str or '-'),
+            html.Td(_cell(row, 'country')),
+        ]))
+
+    return html.Div([summary, dbc.Table([
+        html.Thead(html.Tr([
+            html.Th('출원일'), html.Th('발명 명칭'), html.Th('상태'),
+            html.Th('접수ID/출원번호'), html.Th('대표발명자'), html.Th('지분율'),
+            html.Th('등급'), html.Th('출원 국가'),
+        ])),
+        html.Tbody(rows),
+    ], bordered=False, hover=True, responsive=True, size='sm')])
 
 
 def expertise_tab(expertise_df, rid):
@@ -230,9 +372,10 @@ def _hoverlabel(color):
 
 
 def _level_to_offset(level, unit):
-    """0 -> 중앙, 1 -> +unit, 2 -> -unit, 3 -> +2*unit, 4 -> -2*unit, ... (중앙선 기준 위/아래 교대 배치)"""
+    """0 -> 중앙, 1 -> +unit, 2 -> -unit, 3 -> +2*unit, 4 -> -2*unit, ... (중앙선 기준 위/아래 교대 배치)
+    unit이 float이든 Timedelta든 동일한 0값을 반환하도록 0 * unit을 사용한다."""
     if level == 0:
-        return 0.0
+        return 0 * unit
     n = (level + 1) // 2
     sign = 1 if level % 2 == 1 else -1
     return sign * n * unit
@@ -314,13 +457,21 @@ def _add_task_lanes(fig, task_items, task_colors):
             hoverlabel=_hoverlabel(color),
         ))
 
-        # 과제명 라벨 (레인 끝에 상시 표시)
-        fig.add_trace(go.Scatter(
-            x=[x], y=[t['end']], mode='text', text=[_truncate(t['task_name'], 16)],
-            textposition='top center', textfont=dict(size=10.5, color=color),
-            name='과제', legendgroup='과제', showlegend=False, hoverinfo='skip',
-            cliponaxis=False,
-        ))
+        # 과제명 라벨 — 과제 기간의 세로 중앙에 동일 색 테두리 프레임(칩)으로 표시
+        mid_y = t['start'] + (t['end'] - t['start']) / 2
+        fig.add_annotation(
+            x=x, y=mid_y, xref='x', yref='y',
+            text=_truncate(t['task_name'], 16),
+            showarrow=False,
+            font=dict(size=10.5, color=color, family=_CHART_FONT),
+            bgcolor='rgba(255,255,255,0.94)',
+            bordercolor=color, borderwidth=1.3, borderpad=3,
+        )
+
+
+def _hover_span(label):
+    """라벨 글자 수로 호버 히트 영역의 대략적인 가로 폭을 추정(데이터 좌표 단위)."""
+    return max(_HOVER_SPAN_MIN, min(_HOVER_SPAN_MAX, len(label) * _HOVER_SPAN_PER_CHAR))
 
 
 def _add_event_traces(fig, events):
@@ -345,48 +496,52 @@ def _add_event_traces(fig, events):
         ))
 
         shaft_x, shaft_y = [], []
-        tip_x, tip_y, tip_symbol = [], [], []
-        text_x, text_y, text_str, text_pos = [], [], [], []
+        tip_x, tip_y = [], []
+        text_x, text_y, text_str = [], [], []
         hover_x, hover_y, hover_txt = [], [], []
 
         for e in items:
             origin_x = e['host']['x'] if e['host'] is not None else SPINE_X
-            direction = 1 if origin_x >= 0 else -1
-            branch_base = BRANCH_BASE if e['host'] is not None else ORPHAN_BRANCH
-            tip = origin_x + direction * (branch_base + e['stagger'] * BRANCH_STEP)
+            elbow_x = origin_x + BRANCH_ELBOW
+            tip = origin_x + BRANCH_BASE
+            bent_y = e['bent_y']
 
-            shaft_x += [origin_x, tip, None]
-            shaft_y += [e['date'], e['date'], None]
+            # 실제 발생일(origin) → 꺾이는 지점까지는 실제 날짜 그대로, 이후
+            # bent_y(위/아래로 분산된 위치)로 꺾어 텍스트 행이 겹치지 않게 한다.
+            shaft_x += [origin_x, elbow_x, elbow_x, tip, None]
+            shaft_y += [e['date'], e['date'], bent_y, bent_y, None]
+
             tip_x.append(tip)
-            tip_y.append(e['date'])
-            tip_symbol.append('triangle-right' if direction > 0 else 'triangle-left')
+            tip_y.append(bent_y)
             text_x.append(tip)
-            text_y.append(e['date'])
+            text_y.append(bent_y)
             text_str.append(f'{icon}  {e["label"]}')
-            text_pos.append('middle right' if direction > 0 else 'middle left')
             if e['hover']:
-                hover_x.append(tip)
-                hover_y.append(e['date'])
-                hover_txt.append(e['hover'])
+                span = _hover_span(e['label'])
+                hx = _densify_dates(tip, tip + span, 6)
+                hover_x.extend(hx)
+                hover_y.extend([bent_y] * len(hx))
+                hover_txt.extend([e['hover']] * len(hx))
 
         fig.add_trace(go.Scatter(
             x=shaft_x, y=shaft_y, mode='lines',
-            line=dict(color=color, width=1.5),
+            line=dict(color=color, width=1.5, shape='linear'),
             name=kind, legendgroup=kind, showlegend=False, hoverinfo='skip',
         ))
         fig.add_trace(go.Scatter(
             x=tip_x, y=tip_y, mode='markers',
-            marker=dict(symbol=tip_symbol, size=9, color=color,
+            marker=dict(symbol='triangle-right', size=9, color=color,
                         line=dict(color=_MARKER_RING, width=1.2)),
             name=kind, legendgroup=kind, showlegend=False, hoverinfo='skip',
         ))
         fig.add_trace(go.Scatter(
-            x=text_x, y=text_y, mode='text', text=text_str, textposition=text_pos,
+            x=text_x, y=text_y, mode='text', text=text_str, textposition='middle right',
             textfont=dict(size=11.5, color=color),
             name=kind, legendgroup=kind, showlegend=False, hoverinfo='skip',
             cliponaxis=False,
         ))
         if hover_x:
+            # 화살표 끝뿐 아니라 라벨 텍스트 영역 전체에서 호버가 되도록 촘촘히 배치
             fig.add_trace(go.Scatter(
                 x=hover_x, y=hover_y, mode='markers',
                 marker=dict(size=18, opacity=0),
@@ -593,11 +748,41 @@ def _dedupe_patents(pat):
     return pat.groupby(id_col, sort=False).agg(agg_dict).reset_index()
 
 
+def _count_true(df, col):
+    if col not in df.columns:
+        return 0
+    return int(df[col].astype(str).isin(['Y', 'y', '1', 'True', 'true']).sum())
+
+
+def _count_us_registered(df):
+    if 'country' not in df.columns or 'status' not in df.columns:
+        return 0
+    us_mask = df['country'].astype(str).str.contains('미국|USA|US', case=False, na=False)
+    return int((us_mask & df['status'].apply(_is_registered)).sum())
+
+
+def _share_sum(df):
+    if 'share_ratio' not in df.columns:
+        return '-'
+    shares = pd.to_numeric(df['share_ratio'], errors='coerce').dropna()
+    return f'{round(shares.sum(), 1)}%' if not shares.empty else '-'
+
+
 def _stat(value, label, color):
     return html.Div([
         html.H5(str(value), className=f'fw-bold stat-value {color} mb-0'),
         html.Small(label, className='text-muted'),
     ], className='text-center px-2')
+
+
+def _dual_card(left_value, left_label, left_color, right_value, right_label, right_color):
+    return dbc.Card(dbc.CardBody(
+        dbc.Row([
+            dbc.Col(_stat(left_value, left_label, left_color), width=6, className='border-end'),
+            dbc.Col(_stat(right_value, right_label, right_color), width=6),
+        ], className='g-0 align-items-center'),
+        className='p-2',
+    ), className='profile-card h-100', style={'backgroundColor': '#fafafa'})
 
 
 def _single_card(value, label, color):
