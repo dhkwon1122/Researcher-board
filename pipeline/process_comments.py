@@ -16,9 +16,7 @@
 import csv
 import json
 import os
-import re
 import sys
-import uuid
 
 import pandas as pd
 
@@ -27,68 +25,18 @@ DATA_OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data'
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from excel_reader import read_xlsx, norm_researcher_id_col
-
-# ── 사내 LLM 설정: pipeline/llm_config.py 에서 로드 ─────────────────────────
-try:
-    import llm_config as _cfg
-except ModuleNotFoundError:
-    print('[WARN] pipeline/llm_config.py 없음 — llm_config.example.py를 복사 후 값을 채워주세요.')
-    _cfg = None  # type: ignore
+from llm_client import call_llm, extract_json
 
 COLS = ['researcher_id', 'year', 'commenter_type',
         'comment_raw', 'comment_summary', 'strengths', 'improvements']
 
-
-def _extract_json(text: str) -> str:
-    """응답 텍스트에서 첫 번째 JSON 객체 블록만 추출."""
-    text = re.sub(r'```(?:json)?', '', text).replace('```', '').strip()
-    m = re.search(r'\{[\s\S]*\}', text)
-    return m.group(0) if m else text
+_SYSTEM_PROMPT = '당신은 HR 전문 요약 어시스턴트입니다. 요청한 JSON 형식만 출력하세요.'
 
 
-def _call_llm(prompt: str) -> str:
-    """사내 LLM API 호출 → 응답 텍스트 반환. 실패 시 빈 문자열."""
-    if _cfg is None:
-        print('  [LLM 오류] llm_config.py 가 없어 API 호출을 건너뜁니다.')
-        return ''
-
-    import requests
-
-    headers = {
-        'Content-Type':      _cfg.CONTENT_TYPE,
-        'Accept':            _cfg.ACCEPT,
-        'x-dep-ticket':      _cfg.LLM_API_KEY,
-        'Send-System-Name':  _cfg.SEND_SYSTEM_NAME,
-        'User-Id':           _cfg.USER_ID,
-        'User-Type':         _cfg.USER_TYPE,
-        'Prompt-Msg-Id':     str(uuid.uuid4()),
-        'Completion-Msg-Id': str(uuid.uuid4()),
-    }
-    payload = {
-        'model': _cfg.LLM_MODEL,
-        'messages': [
-            {'role': 'system', 'content': '당신은 HR 전문 요약 어시스턴트입니다. 요청한 JSON 형식만 출력하세요.'},
-            {'role': 'user',   'content': prompt},
-        ],
-        'temperature': 0.2,
-        'max_tokens':  1200,
-    }
-    try:
-        resp = requests.post(_cfg.LLM_API_URL, json=payload, headers=headers, timeout=_cfg.LLM_TIMEOUT)
-        resp.raise_for_status()
-        return resp.json()['choices'][0]['message']['content'].strip()
-    except requests.HTTPError as exc:
-        status = exc.response.status_code
-        body   = exc.response.text[:300]
-        print(f'  [LLM HTTP 오류] {status} — {body}')
-        return ''
-    except Exception as exc:
-        print(f'  [LLM 오류] {type(exc).__name__}: {exc}')
-        return ''
-
-
-def summarize_with_llm(comment_raw: str, researcher_name: str = '') -> dict:
-    """단일 부서장 코멘트 → 요약 dict (comment_summary / strengths / improvements)."""
+def summarize_with_llm(comment_raw: str) -> dict:
+    """단일 부서장 코멘트 → 요약 dict (comment_summary / strengths / improvements).
+    프롬프트에는 researcher_id/이름 등 개인 식별 정보를 절대 포함하지 않는다.
+    코멘트 원문(content)만 사내 LLM에 전달하고, 결과는 호출부에서 researcher_id에 매핑한다."""
     if not comment_raw.strip():
         return {'comment_summary': '', 'strengths': '', 'improvements': ''}
 
@@ -100,18 +48,17 @@ def summarize_with_llm(comment_raw: str, researcher_name: str = '') -> dict:
   "improvements": "개선점1, 개선점2"
 }}
 
-대상 연구원: {researcher_name}
 코멘트:
 {comment_raw}"""
 
-    raw = _call_llm(prompt)
+    raw = call_llm(prompt, _SYSTEM_PROMPT, max_tokens=1200)
     if not raw:
         return {
             'comment_summary': comment_raw[:120] + ('...' if len(comment_raw) > 120 else ''),
             'strengths': '', 'improvements': '',
         }
     try:
-        result = json.loads(_extract_json(raw))
+        result = json.loads(extract_json(raw))
         return {
             'comment_summary': result.get('comment_summary', ''),
             'strengths':       result.get('strengths', ''),
@@ -121,10 +68,12 @@ def summarize_with_llm(comment_raw: str, researcher_name: str = '') -> dict:
         return {'comment_summary': raw[:200], 'strengths': '', 'improvements': ''}
 
 
-def summarize_researcher(rid: str, name: str, rows: pd.DataFrame) -> dict | None:
+def summarize_researcher(rid: str, rows: pd.DataFrame) -> dict | None:
     """
     한 연구원의 모든 코멘트(부서장 + 리더십진단)를 통합 요약.
     종합요약 행으로 저장할 dict 반환. LLM 실패 시 None.
+    프롬프트에는 researcher_id/이름 등 개인 식별 정보를 절대 포함하지 않는다.
+    코멘트 내용(content)만 사내 LLM에 전달하고, 결과는 호출부에서 rid에 매핑한다.
     """
     parts = []
 
@@ -152,7 +101,7 @@ def summarize_researcher(rid: str, name: str, rows: pd.DataFrame) -> dict | None
         return None
 
     combined = '\n'.join(parts)
-    prompt = f"""아래는 연구원 {name}에 대한 평가자별 코멘트 모음입니다.
+    prompt = f"""아래는 한 연구원에 대한 평가자별 코멘트 모음입니다.
 전체 내용을 종합하여 다음 JSON 형식으로 요약하세요. JSON 외 텍스트는 출력하지 마세요.
 
 {{
@@ -164,11 +113,11 @@ def summarize_researcher(rid: str, name: str, rows: pd.DataFrame) -> dict | None
 평가 내용:
 {combined}"""
 
-    raw = _call_llm(prompt)
+    raw = call_llm(prompt, _SYSTEM_PROMPT, max_tokens=1200)
     if not raw:
         return None
     try:
-        result = json.loads(_extract_json(raw))
+        result = json.loads(extract_json(raw))
         # year는 가장 최근 연도 사용
         try:
             latest_year = int(rows['year'].dropna().astype(str).str.extract(r'(\d{4})')[0].max())
@@ -205,18 +154,10 @@ def process(use_llm: bool = False):
         if not required.issubset(df.columns):
             print(f'[WARN] comments_raw.xlsx 필수 컬럼 누락: {required - set(df.columns)}')
         else:
-            # researchers 이름 조회
-            res_path = os.path.join(DATA_OUT, 'researchers.csv')
-            name_map = {}
-            if os.path.exists(res_path):
-                res_df = pd.read_csv(res_path, dtype={'researcher_id': str})
-                name_map = res_df.set_index('researcher_id')['name'].to_dict()
-
             for _, row in df.iterrows():
                 raw = str(row['comment_raw'])
-                name = name_map.get(str(row['researcher_id']), '')
                 if use_llm:
-                    summary = summarize_with_llm(raw, name)
+                    summary = summarize_with_llm(raw)
                 else:
                     summary = {
                         'comment_summary': str(row.get('comment_summary', raw[:120] + '...')),
@@ -263,7 +204,7 @@ def process(use_llm: bool = False):
         for rid in rids:
             name = name_map.get(rid, rid)
             r_rows = out_df[out_df['researcher_id'] == rid]
-            summary = summarize_researcher(rid, name, r_rows)
+            summary = summarize_researcher(rid, r_rows)
             if summary:
                 summary_rows.append(summary)
                 print(f'    [{rid}] {name} 종합요약 완료')
