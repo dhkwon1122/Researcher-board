@@ -1,48 +1,164 @@
+/* ════════════════════════════════════════════════
+   Vercel/Geist 스타일 참고 — 모노크롬 베이스, 절제된 컬러,
+   1px 뉴트럴 보더, 넉넉한 여백, 은은한 호버 트랜지션
+   ════════════════════════════════════════════════ */
+
 /* ── 전역 ── */
+:root {
+  --gs-bg:        #fafafa;
+  --gs-surface:   #ffffff;
+  --gs-border:    #eaeaea;
+  --gs-border-2:  #e4e4e7;
+  --gs-text:      #171717;
+  --gs-muted:     #71717a;
+  --gs-label:     #8a8f98;
+  --gs-accent:    #111111;
+  --gs-accent-2:  #3291ff;
+  --gs-radius:    12px;
+  --gs-radius-sm: 8px;
+  --gs-font: 'Inter', 'Noto Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+}
+
 body {
-  font-family: 'Noto Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
-  color: #1a1a2e;
+  font-family: var(--gs-font);
+  color: var(--gs-text);
+  background-color: var(--gs-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--gs-font);
+  letter-spacing: -0.01em;
+}
+
+/* 섹션 라벨 (카드 상단 소제목) */
+.section-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--gs-label);
+  margin-bottom: 0.65rem;
+}
+
+/* 숫자 강조(통계 타일) — 모노스페이스로 데이터 느낌 */
+.stat-value {
+  font-family: 'ui-monospace', 'SFMono-Regular', Menlo, Consolas, monospace;
+  letter-spacing: -0.02em;
 }
 
 /* ── 카드 ── */
 .card {
-  border: none;
-  border-radius: 10px;
+  border: 1px solid var(--gs-border);
+  border-radius: var(--gs-radius);
+  box-shadow: none !important;
+  background-color: var(--gs-surface);
 }
 .card-body {
   padding: 1rem 1.2rem;
 }
+.shadow-sm {
+  box-shadow: none !important;
+  border: 1px solid var(--gs-border) !important;
+}
+
+/* 프로필 페이지 카드 — 은은한 호버 리프트 */
+.profile-card {
+  transition: box-shadow 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
+}
+.profile-card:hover {
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06) !important;
+  border-color: #dcdce0 !important;
+}
 
 /* ── 네비게이션 ── */
+.app-navbar {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
 .navbar-nav .nav-link {
-  font-size: 0.9rem;
+  font-size: 0.88rem;
   font-weight: 500;
   padding: 0.4rem 0.9rem !important;
-  border-radius: 6px;
-  transition: background 0.2s;
+  border-radius: var(--gs-radius-sm);
+  transition: background 0.2s, color 0.2s;
+  color: rgba(255, 255, 255, 0.72) !important;
 }
 .navbar-nav .nav-link:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff !important;
 }
 .navbar-nav .nav-link.active {
-  background: rgba(255, 255, 255, 0.2) !important;
+  background: rgba(255, 255, 255, 0.1) !important;
+  color: #fff !important;
+}
+
+/* ── 버튼 ── */
+.btn {
+  border-radius: var(--gs-radius-sm);
+  font-weight: 600;
+  font-size: 0.85rem;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+.btn-primary {
+  background-color: var(--gs-accent) !important;
+  border-color: var(--gs-accent) !important;
+}
+.btn-primary:hover {
+  background-color: #2e2e2e !important;
+  border-color: #2e2e2e !important;
+}
+.btn-primary:active {
+  transform: translateY(1px);
+}
+.text-primary {
+  color: var(--gs-accent) !important;
+}
+.bg-primary {
+  background-color: var(--gs-accent) !important;
+}
+.border-primary {
+  border-color: var(--gs-accent) !important;
+}
+
+/* ── 뱃지 (필 형태) ── */
+.badge {
+  border-radius: 999px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  padding: 0.32em 0.7em;
 }
 
 /* ── Dash Dropdown ── */
-.Select-control {
-  border-radius: 6px !important;
+.Select-control,
+.dash-dropdown .Select-control {
+  border-radius: var(--gs-radius-sm) !important;
+  border-color: var(--gs-border-2) !important;
+}
+.dash-dropdown div[class*="-control"] {
+  border-radius: var(--gs-radius-sm) !important;
+  border-color: var(--gs-border-2) !important;
+  min-height: 36px !important;
+}
+.dash-dropdown div[class*="-control"]:hover {
+  border-color: #c9c9cf !important;
 }
 
 /* ── 테이블 헤더 ── */
 .table thead th {
-  font-size: 0.8rem;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  border-bottom: 2px solid #dee2e6;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--gs-muted);
+  border-bottom: 1px solid var(--gs-border);
 }
 .table tbody td {
   font-size: 0.85rem;
   vertical-align: middle;
+  border-color: var(--gs-border) !important;
+}
+.table-hover tbody tr:hover {
+  background-color: #fafafa;
 }
 
 /* ── KPI 카드 ── */
@@ -50,21 +166,40 @@ body {
   opacity: 0.9;
 }
 
-/* ── 탭 ── */
+/* ── 탭 (밑줄형 미니멀) ── */
+.nav-tabs {
+  border-bottom: 1px solid var(--gs-border);
+  gap: 0.25rem;
+}
 .nav-tabs .nav-link {
   font-size: 0.85rem;
   font-weight: 500;
-  color: #555;
+  color: var(--gs-muted);
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: 0.55rem 0.9rem;
+  transition: color 0.15s, border-color 0.15s;
+}
+.nav-tabs .nav-link:hover {
+  color: var(--gs-text);
+  border-color: var(--gs-border-2);
 }
 .nav-tabs .nav-link.active {
   font-weight: 700;
-  color: #1e3a5f;
-  border-bottom: 2px solid #1e3a5f;
+  color: var(--gs-text);
+  background: transparent;
+  border-color: var(--gs-text);
 }
 
 /* ── Plotly 차트 배경 투명 처리 ── */
 .js-plotly-plot .plotly .bg {
   fill: transparent !important;
+}
+
+/* Plotly 호버 라벨 — 다크 카드형 툴팁 */
+.js-plotly-plot .hoverlayer .hovertext text {
+  font-family: var(--gs-font) !important;
 }
 
 /* ── 스크롤 가능한 테이블 ── */

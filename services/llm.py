@@ -15,10 +15,11 @@ embed(): 사내망 제한으로 ollama에 BGE-M3를 설치할 수 없어, 별도
   LLM_BASE_URL    기본 http://localhost:11434/v1 (chat 전용)
   LLM_MODEL       기본 qwen3.5:4b (CPU 가능한 소형; GPU 시 큰 코더 모델 권장)
   LLM_API_KEY     기본 'ollama' (로컬은 대개 불필요, 더미 값)
-  LLM_TIMEOUT     기본 60 (초, chat/embed 공용)
+  LLM_TIMEOUT     기본 60 (초, chat 전용)
   EMBED_BASE_URL  기본 http://localhost:7138 (BGE-M3 python 서버, embed 전용)
   EMBED_MODEL     기본 bge-m3
   EMBED_API_KEY   기본 '' (내부 서버라 대개 인증 불필요)
+  EMBED_TIMEOUT   기본 300 (초, embed 전용 — CPU 추론 시 배치당 오래 걸릴 수 있어 넉넉하게)
 """
 
 import os
@@ -44,9 +45,9 @@ def _embed_cfg():
     model = os.environ.get('EMBED_MODEL', 'bge-m3')
     api_key = os.environ.get('EMBED_API_KEY', '')
     try:
-        timeout = float(os.environ.get('LLM_TIMEOUT', '60'))
+        timeout = float(os.environ.get('EMBED_TIMEOUT', '300'))
     except ValueError:
-        timeout = 60.0
+        timeout = 300.0
     return base, model, api_key, timeout
 
 

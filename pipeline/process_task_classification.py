@@ -177,7 +177,7 @@ def _generate_task_reasons(task_cls: pd.DataFrame, info_df: pd.DataFrame) -> pd.
     return task_cls
 
 
-def _researcher_final(rid: str, name: str, pool: pd.DataFrame,
+def _researcher_final(rid: str, pool: pd.DataFrame,
                        taxonomy: pd.DataFrame, taxo_emb: np.ndarray,
                        task_emb_by_name: dict) -> list[dict]:
     if pool.empty:
@@ -233,7 +233,9 @@ def _researcher_final(rid: str, name: str, pool: pd.DataFrame,
     return close_rows + far_rows
 
 
-def _generate_researcher_reasons(name: str, rows: list[dict]) -> list[dict]:
+def _generate_researcher_reasons(rows: list[dict]) -> list[dict]:
+    """근거 생성 프롬프트에는 researcher_id/이름 등 개인 식별 정보를 절대 포함하지 않는다.
+    과제명·분류 정보만 사내 LLM에 전달하고, 결과는 호출부에서 rid에 매핑한다."""
     close = [r for r in rows if r['kind'] == 'CLOSE']
     far = [r for r in rows if r['kind'] == 'FAR']
     if not close and not far:
@@ -246,7 +248,7 @@ def _generate_researcher_reasons(name: str, rows: list[dict]) -> list[dict]:
             for r in items
         )
 
-    prompt = f"""연구원 {name}의 전체 과제 이력을 종합했을 때 아래와 같이 계산되었습니다.
+    prompt = f"""한 연구원의 전체 과제 이력을 종합했을 때 아래와 같이 계산되었습니다.
 
 [최종 전문성에 가장 가까운 분류 CLOSE 3]
 {_fmt(close)}
@@ -360,11 +362,11 @@ def process(use_llm: bool = False):
         if pool.empty:
             continue
 
-        rows = _researcher_final(rid, name, pool, taxonomy, taxo_emb, task_emb_by_name)
+        rows = _researcher_final(rid, pool, taxonomy, taxo_emb, task_emb_by_name)
         if not rows:
             continue
         if use_llm:
-            rows = _generate_researcher_reasons(name, rows)
+            rows = _generate_researcher_reasons(rows)
 
         result_rows.extend(rows)
         print(f'    [{rid}] {name} 분류 완료 (참여 과제 {pool["task_name"].nunique()}건)')

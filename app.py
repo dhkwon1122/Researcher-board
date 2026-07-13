@@ -15,6 +15,27 @@ app = dash.Dash(
     title='연구원 대시보드',
 )
 
+app.index_string = '''<!DOCTYPE html>
+<html>
+    <head>
+        {%metas%}
+        <title>{%title%}</title>
+        {%favicon%}
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+        {%css%}
+    </head>
+    <body>
+        {%app_entry%}
+        <footer>
+            {%config%}
+            {%scripts%}
+            {%renderer%}
+        </footer>
+    </body>
+</html>'''
+
 _IMG_EXTS = ('png', 'jpg', 'jpeg')
 
 
@@ -52,7 +73,7 @@ navbar = dbc.Navbar(
                 [
                     dbc.Col(
                         html.I(className='bi bi-bar-chart-fill me-2',
-                               style={'fontSize': '1.4rem', 'color': '#7eb8f7'}),
+                               style={'fontSize': '1.4rem', 'color': '#3291ff'}),
                         width='auto',
                     ),
                     dbc.Col(
@@ -96,10 +117,10 @@ navbar = dbc.Navbar(
         ],
         fluid=True,
     ),
-    color='#1e3a5f',
+    color='#0a0a0a',
     dark=True,
     sticky='top',
-    className='shadow-sm',
+    className='app-navbar',
 )
 
 app.layout = html.Div(
@@ -111,7 +132,7 @@ app.layout = html.Div(
             className='px-4 py-3',
         ),
     ],
-    style={'minHeight': '100vh', 'backgroundColor': '#f0f2f5'},
+    style={'minHeight': '100vh', 'backgroundColor': '#fafafa'},
 )
 
 # WSGI 진입점 (gunicorn app:server 로 구동). Dash 의 내부 Flask 서버.

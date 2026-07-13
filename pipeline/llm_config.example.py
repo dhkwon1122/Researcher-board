@@ -14,7 +14,7 @@
 # ── API 기본 정보 ─────────────────────────────────────────────────────────────
 LLM_API_URL = 'http://apigw.samsungds.net:8000/gpt-oss/1/chat/completions'
 LLM_MODEL   = 'gpt-4o'       # 사내 모델명으로 교체
-LLM_TIMEOUT = 60              # 초
+LLM_TIMEOUT = 300              # 초
 
 # ── 인증 ─────────────────────────────────────────────────────────────────────
 LLM_API_KEY = 'credential:TICKET-여기에_실제_티켓_입력'   # x-dep-ticket 값

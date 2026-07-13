@@ -24,7 +24,11 @@ TIMELINE_COLORS = {
 TASK_COLOR_PALETTE = ['#2a78d6', '#4a3aa7', '#e34948', '#e87ba4', '#eb6834']
 _LEGEND_NEUTRAL = '#52514e'
 
-_GRIDLINE = '#e1e0d9'
+_GRIDLINE = '#eef0f2'
+_CHART_FONT = "'Inter','Noto Sans KR',sans-serif"
+_TOOLTIP_BG = '#18181b'
+_TOOLTIP_FG = '#f4f4f5'
+_MARKER_RING = '#ffffff'
 
 _OFFSET_UNIT_MAIN = 0.13   # 통합 레인 중심선 기준 위/아래 오프셋 간격
 _DENSIFY_N = 14            # 과제 연결선을 따라 호버가 되도록 촘촘히 배치하는 보조 포인트 수
@@ -93,12 +97,16 @@ def timeline_tab(task_df, hr_df, pub_df, pat_df, rid):
     y_top = max(main_top, hr_top)
 
     fig.update_layout(
-        xaxis=dict(range=x_range, type='date', gridcolor=_GRIDLINE),
+        font=dict(family=_CHART_FONT, size=12, color='#52525b'),
+        xaxis=dict(range=x_range, type='date', gridcolor=_GRIDLINE, showline=False,
+                   tickfont=dict(size=11, color='#a1a1aa')),
         yaxis=dict(range=[main_bottom, y_top], tickmode='array',
-                   tickvals=[MAIN_LANE], ticktext=['과제이력<br>논문<br>특허'],
-                   gridcolor=_GRIDLINE, zeroline=False),
+                   tickvals=[MAIN_LANE], ticktext=['과제이력 · 논문 · 특허'],
+                   gridcolor=_GRIDLINE, zeroline=False, showline=False,
+                   tickfont=dict(size=11, color='#a1a1aa')),
         legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0,
-                    groupclick='togglegroup'),
+                    groupclick='togglegroup', font=dict(size=11.5),
+                    itemsizing='constant'),
         hoverlabel=dict(namelength=-1),
         hovermode='closest',
         hoverdistance=15,
@@ -140,14 +148,14 @@ def expertise_tab(expertise_df, rid):
         return html.Li(children, className='mb-3')
 
     blocks = [
-        html.P('전문성 CLOSE 3', className='fw-semibold small mb-2'),
+        html.P('전문성 CLOSE 3', className='section-label mb-2'),
         html.Ul([_item(r) for _, r in close.iterrows()], className='ps-3 mb-0')
         if not close.empty else html.Div('데이터 없음', className='text-muted small mb-3'),
     ]
 
     if not far.empty:
         blocks += [
-            html.P('전문성 FAR 3', className='fw-semibold text-warning small mb-2 mt-3'),
+            html.P('전문성 FAR 3', className='section-label mb-2 mt-3', style={'color': '#c98a1c'}),
             html.Ul([_item(r) for _, r in far.iterrows()], className='ps-3 mb-0'),
         ]
 
@@ -178,16 +186,14 @@ def _truncate(text, maxlen=_TRUNCATE_LEN):
     return cut.rstrip() + '...'
 
 
-def _hover_font_color(hex_color):
-    """호버박스 배경색(hex_color) 대비 잘 보이는 글자색(흑/백)을 계산."""
-    h = hex_color.lstrip('#')
-    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
-    return '#0b0b0b' if luminance > 0.6 else '#ffffff'
-
-
 def _hoverlabel(color):
-    return dict(bgcolor=color, font=dict(color=_hover_font_color(color)))
+    """카테고리 색은 테두리로만 표시하는 다크 카드형 툴팁 (모던 대시보드 스타일)."""
+    return dict(
+        bgcolor=_TOOLTIP_BG,
+        bordercolor=color,
+        font=dict(color=_TOOLTIP_FG, size=12, family=_CHART_FONT),
+        align='left',
+    )
 
 
 def _level_to_offset(level, unit):
@@ -264,20 +270,22 @@ def _add_task_traces(fig, task_points, task_colors, exclude_dates):
     # 범례는 과제별 색과 무관하게 중립색 하나로 대표 표시 (실제 색 구분은 차트에서 호버로 확인)
     fig.add_trace(go.Scatter(
         x=[None], y=[None], mode='markers', name='과제', legendgroup='과제',
-        marker=dict(symbol='circle', size=9, color=_LEGEND_NEUTRAL),
+        marker=dict(symbol='circle', size=9, color=_LEGEND_NEUTRAL,
+                    line=dict(color=_MARKER_RING, width=1.5)),
         showlegend=True, hoverinfo='skip',
     ))
 
     for seg in task_points:
         y = seg['y']
         color = task_colors[seg['task_name']]
-        hover = (f"{_truncate(seg['task_name'])}<br>"
-                 f"시작일: {seg['start_label']}<br>종료일: {seg['end_label']}")
+        hover = (f"<b>{_truncate(seg['task_name'])}</b><br>"
+                 f"{seg['start_label']} → {seg['end_label']}")
 
         fig.add_trace(go.Scatter(
             x=[seg['start'], seg['end']], y=[y, y],
             mode='lines+markers', name='과제', legendgroup='과제', showlegend=False,
-            marker=dict(symbol='circle', size=9, color=color),
+            marker=dict(symbol='circle', size=10, color=color,
+                        line=dict(color=_MARKER_RING, width=1.5)),
             line=dict(color=color, width=2.5),
             hoverinfo='skip',
         ))
@@ -301,13 +309,14 @@ def _add_pub_trace(fig, pub_points):
 
     color = TIMELINE_COLORS['논문']
     texts = [
-        f"{p['pub_date']}<br>{_truncate(p['title'])}<br>{_truncate(p['journal'])}<br>{p['author_type']}"
+        f"<b>{_truncate(p['title'])}</b><br>{p['pub_date']}  ·  {_truncate(p['journal'], 24)}<br>{p['author_type']}"
         for p in pub_points
     ]
     fig.add_trace(go.Scatter(
         x=[p['date'] for p in pub_points], y=[p['y'] for p in pub_points],
         mode='markers', name='논문', legendgroup='논문',
-        marker=dict(symbol='square', size=9, color=color),
+        marker=dict(symbol='diamond', size=11, color=color,
+                    line=dict(color=_MARKER_RING, width=1.5)),
         text=texts, hovertemplate='%{text}',
         hoverlabel=_hoverlabel(color),
     ))
@@ -319,14 +328,14 @@ def _add_pat_trace(fig, pat_points):
 
     color = TIMELINE_COLORS['특허']
     texts = [
-        f"{_truncate(p['title'])}<br>{p['status']}<br>"
-        f"지분율 {p['share']}%<br>{p['grade_str']}"
+        f"<b>{_truncate(p['title'])}</b><br>{p['status']}  ·  지분율 {p['share']}%<br>{p['grade_str']}"
         for p in pat_points
     ]
     fig.add_trace(go.Scatter(
         x=[p['date'] for p in pat_points], y=[p['y'] for p in pat_points],
         mode='markers', name='특허', legendgroup='특허',
-        marker=dict(symbol='triangle-up', size=10, color=color),
+        marker=dict(symbol='hexagon', size=11, color=color,
+                    line=dict(color=_MARKER_RING, width=1.5)),
         text=texts, hovertemplate='%{text}',
         hoverlabel=_hoverlabel(color),
     ))
@@ -336,7 +345,7 @@ def _hr_hover_text(p):
     cl = p['order_cl']
     assignment = p.get('order_assignment', '')
     cl_str = f'{cl}({assignment})' if assignment else cl
-    return f"{p['order_date']}<br>{_truncate(p['order_dep'])}<br>{cl_str}"
+    return f"<b>{_truncate(p['order_name'])}</b><br>{p['order_date']}  ·  {_truncate(p['order_dep'])}<br>{cl_str}"
 
 
 def _add_hr_traces(fig, hr_points):
@@ -375,7 +384,9 @@ def _add_hr_traces(fig, hr_points):
     # 화살촉 (타임라인 날짜 위치, 정밀한 히트 영역)
     fig.add_trace(go.Scatter(
         x=[p['date'] for p in hr_points], y=[HR_ARROW_TIP_Y] * len(hr_points),
-        mode='markers', marker=dict(symbol='triangle-down', size=9, color=color),
+        mode='markers',
+        marker=dict(symbol='triangle-down', size=10, color=color,
+                    line=dict(color=_MARKER_RING, width=1.5)),
         name='인사발령', legendgroup='인사발령', showlegend=True,
         text=hover_texts, hovertemplate='%{text}',
         hoverlabel=_hoverlabel(color),
@@ -568,11 +579,11 @@ def _dedupe_patents(pat):
 
 def _stat(value, label, color):
     return html.Div([
-        html.H5(str(value), className=f'fw-bold {color} mb-0'),
+        html.H5(str(value), className=f'fw-bold stat-value {color} mb-0'),
         html.Small(label, className='text-muted'),
     ], className='text-center px-2')
 
 
 def _single_card(value, label, color):
     return dbc.Card(dbc.CardBody(_stat(value, label, color), className='p-2'),
-                    className='border-0 bg-light h-100')
+                    className='profile-card h-100', style={'backgroundColor': '#fafafa'})

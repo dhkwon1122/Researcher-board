@@ -129,115 +129,121 @@ def _selector_card(dept_opts, res_opts, default_dept, default_rid):
 
 def _left_column():
     return dbc.Col([
-        _card(html.Div(id='photo-block', className='d-flex flex-column align-items-center py-1'), body_class='p-2'),
+        _card(html.Div(id='photo-block', className='d-flex flex-column align-items-center py-1'),
+              body_class='p-2', card_class='shadow-sm profile-card'),
         _card([
-            html.P('양성 이력', className='fw-semibold text-muted small mb-2'),
-            html.Div(id='nurturing-block'),
+            html.P('학력', className='section-label'),
+            html.Div(id='education-block'),
             html.Hr(className='my-2'),
-            html.P('시상 이력', className='fw-semibold text-muted small mb-2'),
-            html.Div(id='award-block'),
-        ], body_class='p-2', card_class='shadow-sm'),
+            html.P('평가 / 인센티브 이력', className='section-label'),
+            html.Div(id='eval-incentive-block'),
+        ], body_class='p-3', card_class='shadow-sm profile-card'),
     ], md=3)
 
 
 def _middle_column():
     return dbc.Col([
-        dbc.Row([
-            dbc.Col(
-                _card([
-                    html.P('학력', className='fw-semibold text-muted small mb-2'),
-                    html.Div(id='education-block'),
-                ], body_class='p-3', card_class='shadow-sm h-100'),
-                md=7,
-            ),
-            dbc.Col(
-                _card([
-                    html.P('평가 / 인센티브 이력', className='fw-semibold text-muted small mb-2'),
-                    html.Div(id='eval-incentive-block'),
-                ], body_class='p-3', card_class='shadow-sm h-100'),
-                md=5,
-            ),
-        ], className='g-2 mb-2'),
         _card([
-            html.P('과제 수행 이력', className='fw-semibold text-muted small mb-2'),
+            html.P('과제 수행 이력', className='section-label'),
             html.Div(id='transfer-block'),
-        ], body_class='p-3', card_class='shadow-sm'),
+        ], body_class='p-3', card_class='shadow-sm profile-card'),
+        _card([
+            html.P('양성 이력', className='section-label'),
+            html.Div(id='nurturing-block'),
+            html.Hr(className='my-2'),
+            html.P('시상 이력', className='section-label'),
+            html.Div(id='award-block'),
+        ], body_class='p-2', card_class='shadow-sm profile-card'),
     ], md=4)
 
 
 def _right_column():
-    return dbc.Col([
-        _card([
-            dbc.Row([
-                dbc.Col(html.P('리더십 진단 그래프', className='fw-semibold text-muted small mb-0')),
-                dbc.Col(dcc.Dropdown(id='leadership-year', clearable=False,
-                                     style={'width': '110px'}), width='auto'),
-            ], align='center', className='mb-1'),
-            dcc.Graph(id='leadership-chart', style={'height': '240px'},
-                      config={'displayModeBar': False}),
-        ], body_class='p-3', card_class='shadow-sm mb-0'),
-    ], md=5)
+    return dbc.Col(
+        dbc.Card(
+            dbc.CardBody([
+                html.P('타임라인 (인사발령 · 과제이력 · 논문 · 특허)', className='section-label'),
+                html.Div(id='tab-timeline'),
+            ]),
+            className='shadow-sm profile-card h-100',
+        ),
+        md=5,
+    )
 
 
 def _detail_tabs_col():
     return dbc.Col(
         dbc.Card(
+            dbc.CardBody([
+                html.P('전문성 분석 (과제 기반)', className='section-label'),
+                html.Div(id='tab-expertise'),
+            ]),
+            className='shadow-sm profile-card h-100',
+        ),
+        md=5,
+    )
+
+
+def _comments_col():
+    comments_pane = html.Div([
+        html.Div(id='comments-block', style={'maxHeight': '280px', 'overflowY': 'auto'}),
+        html.Hr(className='my-2'),
+        dbc.Row([
+            dbc.Col(
+                dcc.Dropdown(
+                    id='comment-year',
+                    options=[{'label': str(y), 'value': y}
+                             for y in range(CURRENT_YEAR, CURRENT_YEAR - 5, -1)],
+                    value=CURRENT_YEAR,
+                    clearable=False,
+                    style={'minWidth': '100px'},
+                ),
+                width='auto',
+            ),
+            dbc.Col(
+                dcc.Dropdown(
+                    id='comment-author-type',
+                    options=[
+                        {'label': '부서장', 'value': '부서장'},
+                        {'label': '부서원', 'value': '부서원'},
+                    ],
+                    value='부서장',
+                    clearable=False,
+                    style={'minWidth': '100px'},
+                ),
+                width='auto',
+            ),
+        ], className='g-2 mb-2'),
+        dbc.Textarea(id='comment-text', placeholder='코멘트를 입력하세요...',
+                     rows=3, className='mb-2'),
+        dbc.Button('저장', id='comment-save-btn', color='primary', size='sm'),
+        html.Div(id='comment-status', className='mt-2 small'),
+    ], className='pt-3')
+
+    leadership_pane = html.Div([
+        dbc.Row([
+            dbc.Col(html.P('타인평균 대비 리더십 진단', className='section-label mb-0')),
+            dbc.Col(dcc.Dropdown(id='leadership-year', clearable=False,
+                                 style={'width': '110px'}), width='auto'),
+        ], align='center', className='mb-1 pt-3'),
+        dcc.Graph(id='leadership-chart', style={'height': '260px'},
+                  config={'displayModeBar': False}),
+    ])
+
+    return dbc.Col(
+        dbc.Card(
             dbc.CardBody(
                 dbc.Tabs([
-                    dbc.Tab(html.Div(id='tab-timeline'),
-                            label='타임라인(인사발령/과제이력/논문/특허)', tab_id='timeline'),
-                    dbc.Tab(html.Div(id='tab-expertise'),
-                            label='전문성 분석(과제 기반)', tab_id='expertise'),
-                ], id='detail-tabs', active_tab='timeline', className='mb-2'),
+                    dbc.Tab(comments_pane, label='인물 코멘트 (부서장 · 부서원)', tab_id='comments'),
+                    dbc.Tab(leadership_pane, label='리더십 진단', tab_id='leadership'),
+                ], id='bottom-right-tabs', active_tab='comments'),
             ),
-            className='shadow-sm h-100',
+            className='shadow-sm profile-card h-100',
         ),
         md=7,
     )
 
 
-def _comments_col():
-    return dbc.Col(
-        _card([
-            html.P('인물 코멘트 (부서장 / 부서원)', className='fw-semibold text-muted small mb-2'),
-            html.Div(id='comments-block', style={'maxHeight': '280px', 'overflowY': 'auto'}),
-            html.Hr(className='my-2'),
-            dbc.Row([
-                dbc.Col(
-                    dcc.Dropdown(
-                        id='comment-year',
-                        options=[{'label': str(y), 'value': y}
-                                 for y in range(CURRENT_YEAR, CURRENT_YEAR - 5, -1)],
-                        value=CURRENT_YEAR,
-                        clearable=False,
-                        style={'minWidth': '100px'},
-                    ),
-                    width='auto',
-                ),
-                dbc.Col(
-                    dcc.Dropdown(
-                        id='comment-author-type',
-                        options=[
-                            {'label': '부서장', 'value': '부서장'},
-                            {'label': '부서원', 'value': '부서원'},
-                        ],
-                        value='부서장',
-                        clearable=False,
-                        style={'minWidth': '100px'},
-                    ),
-                    width='auto',
-                ),
-            ], className='g-2 mb-2'),
-            dbc.Textarea(id='comment-text', placeholder='코멘트를 입력하세요...',
-                         rows=3, className='mb-2'),
-            dbc.Button('저장', id='comment-save-btn', color='primary', size='sm'),
-            html.Div(id='comment-status', className='mt-2 small'),
-        ], body_class='p-3', card_class='shadow-sm mb-0 h-100'),
-        md=5,
-    )
-
-
-def _card(children, *, body_class='p-2', card_class='shadow-sm mb-2'):
+def _card(children, *, body_class='p-2', card_class='shadow-sm profile-card mb-2'):
     return dbc.Card(dbc.CardBody(children, className=body_class), className=card_class)
 
 
