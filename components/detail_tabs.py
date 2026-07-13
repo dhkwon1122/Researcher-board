@@ -1,4 +1,3 @@
-from collections import defaultdict
 from datetime import datetime
 
 import dash_bootstrap_components as dbc
@@ -7,20 +6,21 @@ import plotly.graph_objects as go
 from dash import dcc, html
 
 # ── 세로(수직) 타임라인 ──────────────────────────────────────────────────────
-# 스파인(독립 축)을 차트 왼쪽 끝에 붙이고, 과제·이벤트 내용이 보일 공간을 확보
-# 하기 위해 모든 과제 레인과 이벤트는 스파인 오른쪽으로만 확장한다. 과제 진행
-# 기간 중 발생한 논문·특허·인사발령은 그 과제 레인에서 화살표(선+화살촉)로
-# 가지처럼 뻗어나가 아이콘+텍스트로 표시되고, 과제가 없던 공백 기간에 발생한
-# 항목은 스파인에서 바로 뻗어나간다. 같은 레인에서 시점이 가까운 이벤트는
-# 화살표를 꺾어(엘보) 텍스트 행이 서로 겹치지 않게 위/아래로 분산한다.
+# 스파인(독립 축)을 차트 왼쪽 끝에 붙이고, 과제 레인은 스파인에서 뻗어나와
+# 오른쪽으로 순차 배치한다(겹치는 기간의 과제만 레인 분리). 논문·특허·인사발령은
+# 발생 시점에 진행 중이던 과제 레인(없으면 스파인)에서 화살표로 출발해, 모든
+# 이벤트가 공유하는 하나의 라벨 열(label_col_x)까지 이동해 아이콘+텍스트로
+# 표시된다. 라벨의 세로 위치(slot_y)는 카테고리·과제 구분 없이 전체 이벤트를
+# 시간순으로 훑으며 최소 픽셀 간격을 강제해 절대 겹치지 않도록 배정하고,
+# 실제 발생일과 slot_y가 다르면 화살표가 여러 번 꺾여 이동한다.
 # y축(날짜)은 기본 방향을 그대로 사용 — 값이 클수록(최신일수록) 위에 그려진다.
 SPINE_X = 0.0
 SPINE_LEFT_MARGIN = 0.35   # 스파인과 차트 왼쪽 끝 사이 여백(축 눈금 라벨 공간)
 TASK_LANE_UNIT = 0.85      # 과제 레인 간 x 간격(스파인 기준 오른쪽으로만 순차 배치)
-BRANCH_ELBOW = 0.28        # 과제/스파인 → 꺾이는 지점까지의 가로 길이
-BRANCH_BASE = 0.55         # 과제/스파인 → 이벤트 아이콘까지 기본 가지 길이(꺾인 지점 이후 포함)
-Y_STEP_FACTOR = 1.1        # 픽셀 기준 분산 간격에 곱하는 여유 배수
-_ROW_PX_GAP = 20           # 분산된 이벤트 텍스트 행 사이에 확보할 최소 픽셀 간격
+BRANCH_ELBOW = 0.28        # 과제/스파인 → 첫 번째로 꺾이는 지점까지의 가로 길이
+BRANCH_BASE = 0.55         # 공유 라벨 열까지의 최소 여유 거리(과제 레인 오른쪽 끝 기준)
+Y_STEP_FACTOR = 1.1        # 픽셀 기준 최소 라벨 간격에 곱하는 여유 배수
+_ROW_PX_GAP = 20           # 라벨 행 사이에 확보할 최소 픽셀 간격(전체 이벤트 공통)
 _HOVER_SPAN_PER_CHAR = 0.052  # 라벨 글자 수 → 호버 히트 영역 가로 폭 근사 환산
 _HOVER_SPAN_MIN = 0.5
 _HOVER_SPAN_MAX = 2.6
@@ -110,35 +110,33 @@ def timeline_tab(task_df, hr_df, pub_df, pat_df, rid):
     for e in events:
         e['host'] = _host_task(e['date'], task_items)
 
-    # 같은 레인(과제 또는 스파인)에서 시점이 가까운 이벤트는 화살표를 꺾어
-    # (엘보) 텍스트 행을 위/아래로 분산— 꺾이는 지점 이전(과제선 이탈 지점)은
-    # 실제 발생일 그대로 유지해 시점 자체는 왜곡하지 않는다.
-    # 분산 간격(y_step)은 날짜 단위가 아니라 "실제 렌더링 픽셀 간격"이 텍스트
-    # 한 줄 높이 이상 되도록, 차트의 픽셀당-일수 밀도에 반비례해 계산한다.
-    # (전체 기간이 길어 1일당 픽셀 수가 작을수록 y_step의 날짜 폭을 더 크게 잡아야
-    #  실제 화면에서 겹치지 않는 간격이 나온다.)
+    # 논문·특허·인사발령은 모두 하나의 공유 라벨 열(label_col_x)에 아이콘+텍스트로
+    # 표시한다. 실제 발생 시점(과제 레인 또는 스파인)에서 뻗어나가는 지점은 그대로
+    # 두되, 라벨이 배치되는 세로 위치(slot_y)는 전체 이벤트를 시간순으로 훑으며
+    # 최소 간격(row_gap)을 강제해 카테고리·과제 구분 없이 절대 겹치지 않게 한다.
+    # 실제 발생일과 slot_y가 다르면 화살표가 여러 번 꺾여 이동한다.
     plot_px = max(_chart_height(y_range) - 50, 100)
     px_per_day = plot_px / total_days
-    y_step = pd.Timedelta(days=(_ROW_PX_GAP / px_per_day) * Y_STEP_FACTOR)
-    groups = defaultdict(list)
-    for e in events:
-        groups[id(e['host']) if e['host'] is not None else 'orphan'].append(e)
-    for grp in groups.values():
-        grp.sort(key=lambda e: e['date'])
-        half = pd.Timedelta(days=min_gap_days / 2)
-        stagger_items = [{'start': e['date'] - half, 'end': e['date'] + half} for e in grp]
-        for e, lvl in zip(grp, _assign_levels(stagger_items)):
-            e['stagger'] = lvl
-            e['bent_y'] = e['date'] + _level_to_offset(lvl, y_step)
+    row_gap = pd.Timedelta(days=(_ROW_PX_GAP / px_per_day) * Y_STEP_FACTOR)
+
+    prev_slot = None
+    for e in sorted(events, key=lambda e: e['date'], reverse=True):
+        slot = e['date']
+        if prev_slot is not None and slot > prev_slot - row_gap:
+            slot = prev_slot - row_gap
+        e['slot_y'] = slot
+        prev_slot = slot
+
+    max_lane = max((t['x'] for t in task_items), default=0.0)
+    label_col_x = max_lane + BRANCH_BASE
 
     fig = go.Figure()
     _add_spine(fig, y_range)
     _add_task_lanes(fig, task_items, task_colors)
-    _add_event_traces(fig, events)
+    _add_event_traces(fig, events, label_col_x)
 
-    max_lane = max((t['x'] for t in task_items), default=0.0)
     max_label_span = max((_hover_span(e['label']) for e in events), default=0.0)
-    max_x = max_lane + BRANCH_BASE + max_label_span + 0.4
+    max_x = label_col_x + max_label_span + 0.4
     x_range = [SPINE_X - SPINE_LEFT_MARGIN, max_x]
 
     fig.update_layout(
@@ -371,16 +369,6 @@ def _hoverlabel(color):
     )
 
 
-def _level_to_offset(level, unit):
-    """0 -> 중앙, 1 -> +unit, 2 -> -unit, 3 -> +2*unit, 4 -> -2*unit, ... (중앙선 기준 위/아래 교대 배치)
-    unit이 float이든 Timedelta든 동일한 0값을 반환하도록 0 * unit을 사용한다."""
-    if level == 0:
-        return 0 * unit
-    n = (level + 1) // 2
-    sign = 1 if level % 2 == 1 else -1
-    return sign * n * unit
-
-
 def _assign_levels(items):
     """구간이 실제로 겹치는 경우에만 레벨을 분리 (items는 start 오름차순 정렬 상태)."""
     if not items:
@@ -438,6 +426,14 @@ def _add_task_lanes(fig, task_items, task_colors):
         x = t['x']
         hover = f"<b>{_truncate(t['task_name'])}</b><br>{t['start_label']} → {t['end_label']}"
 
+        # 과제 선이 스파인에서 뻗어나와 시작하도록, 시작 시점에 스파인→레인 연결선을 먼저 그린다.
+        fig.add_trace(go.Scatter(
+            x=[SPINE_X, x], y=[t['start'], t['start']],
+            mode='lines', name='과제', legendgroup='과제', showlegend=False,
+            line=dict(color=color, width=2),
+            hoverinfo='skip',
+        ))
+
         fig.add_trace(go.Scatter(
             x=[x, x], y=[t['start'], t['end']],
             mode='lines+markers', name='과제', legendgroup='과제', showlegend=False,
@@ -474,7 +470,7 @@ def _hover_span(label):
     return max(_HOVER_SPAN_MIN, min(_HOVER_SPAN_MAX, len(label) * _HOVER_SPAN_PER_CHAR))
 
 
-def _add_event_traces(fig, events):
+def _add_event_traces(fig, events, label_col_x):
     if not events:
         return
 
@@ -503,24 +499,24 @@ def _add_event_traces(fig, events):
         for e in items:
             origin_x = e['host']['x'] if e['host'] is not None else SPINE_X
             elbow_x = origin_x + BRANCH_ELBOW
-            tip = origin_x + BRANCH_BASE
-            bent_y = e['bent_y']
+            slot_y = e['slot_y']
 
             # 실제 발생일(origin) → 꺾이는 지점까지는 실제 날짜 그대로, 이후
-            # bent_y(위/아래로 분산된 위치)로 꺾어 텍스트 행이 겹치지 않게 한다.
-            shaft_x += [origin_x, elbow_x, elbow_x, tip, None]
-            shaft_y += [e['date'], e['date'], bent_y, bent_y, None]
+            # slot_y(전체 이벤트 기준으로 겹치지 않게 배정된 위치)로 꺾어 올라가거나
+            # 내려간 뒤, 공유 라벨 열(label_col_x)까지 수평으로 한 번 더 꺾여 도달한다.
+            shaft_x += [origin_x, elbow_x, elbow_x, label_col_x, None]
+            shaft_y += [e['date'], e['date'], slot_y, slot_y, None]
 
-            tip_x.append(tip)
-            tip_y.append(bent_y)
-            text_x.append(tip)
-            text_y.append(bent_y)
+            tip_x.append(label_col_x)
+            tip_y.append(slot_y)
+            text_x.append(label_col_x)
+            text_y.append(slot_y)
             text_str.append(f'{icon}  {e["label"]}')
             if e['hover']:
                 span = _hover_span(e['label'])
-                hx = _densify_dates(tip, tip + span, 6)
+                hx = _densify_dates(label_col_x, label_col_x + span, 6)
                 hover_x.extend(hx)
-                hover_y.extend([bent_y] * len(hx))
+                hover_y.extend([slot_y] * len(hx))
                 hover_txt.extend([e['hover']] * len(hx))
 
         fig.add_trace(go.Scatter(
@@ -603,12 +599,25 @@ def _parse_ts(val):
         return None
 
 
+def _has_input_rate(val) -> bool:
+    """투입률이 0이거나 비어있으면 False (해당 과제는 타임라인에서 제외)."""
+    s = str(val).strip() if val is not None else ''
+    if not s or s.lower() in ('nan', 'none', 'nat'):
+        return False
+    try:
+        return float(s) > 0
+    except (ValueError, TypeError):
+        return False
+
+
 def _task_points(task_df):
     if task_df.empty:
         return []
     today = pd.Timestamp(datetime.now().date())
     points = []
     for _, row in task_df.iterrows():
+        if not _has_input_rate(row.get('input_rate')):
+            continue
         start = _parse_ts(row.get('start_date'))
         if start is None:
             continue

@@ -84,12 +84,8 @@ def layout(id=None, **_kwargs):
         ),
         _selector_card(dept_opts, res_opts, default_dept, default_rid),
         dbc.Row([
-            _left_column(),
-            _middle_column(),
+            _left_stack_col(),
             _right_column(),
-        ], className='g-3 mb-3'),
-        dbc.Row([
-            _task_pub_pat_col(),
         ], className='g-3 mb-3'),
         dbc.Row([
             _detail_tabs_col(),
@@ -130,11 +126,25 @@ def _selector_card(dept_opts, res_opts, default_dept, default_rid):
     )
 
 
+def _left_stack_col():
+    """사진/정보 카드 + 과제·논문·특허 탭 카드를 세로로 쌓은 왼쪽 묶음.
+    오른쪽 타임라인 카드(h-100)가 이 묶음 전체 높이만큼 늘어나도록 같은 Row의 형제 Col로 둔다."""
+    return dbc.Col([
+        dbc.Row([
+            _left_column(),
+            _middle_column(),
+        ], className='g-3 mb-3'),
+        dbc.Row([
+            _task_pub_pat_col(),
+        ], className='g-3'),
+    ], md=7)
+
+
 def _left_column():
     return dbc.Col(
         _card(html.Div(id='photo-block', className='d-flex flex-column align-items-center py-1'),
               body_class='p-2', card_class='shadow-sm profile-card h-100'),
-        md=3,
+        md=5,
     )
 
 
@@ -153,7 +163,7 @@ def _middle_column():
             html.P('시상 이력', className='section-label'),
             html.Div(id='award-block'),
         ], body_class='p-3', card_class='shadow-sm profile-card h-100'),
-        md=4,
+        md=7,
     )
 
 
@@ -169,7 +179,7 @@ def _task_pub_pat_col():
             ),
             className='shadow-sm profile-card',
         ),
-        md=7,
+        md=12,
     )
 
 

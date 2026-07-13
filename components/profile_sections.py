@@ -326,6 +326,22 @@ def _fmt_rate(val) -> str:
         return '-'
 
 
+def _has_input_rate(val) -> bool:
+    """투입률이 0이거나 비어있으면 False (해당 과제는 목록/타임라인에서 제외)."""
+    try:
+        if pd.isna(val):
+            return False
+    except (TypeError, ValueError):
+        pass
+    s = str(val).strip()
+    if s.lower() in _TASK_EMPTY:
+        return False
+    try:
+        return float(s) > 0
+    except (ValueError, TypeError):
+        return False
+
+
 def _fmt_period(start_raw, end_raw) -> str:
     """기간 표시: 'YYYY-MM ~ YYYY-MM' 또는 'YYYY-MM ~ 현재'."""
     start = str(start_raw).strip()[:7] if start_raw is not None else ''
@@ -347,10 +363,12 @@ def _fmt_period(start_raw, end_raw) -> str:
 
 
 def tasks_block(task_df, rid: str):
-    """과제 수행 이력 테이블 (tasks.csv 기반)."""
+    """과제 수행 이력 테이블 (tasks.csv 기반). 투입률이 0이거나 없는 과제는 제외."""
     rows = (task_df[task_df['researcher_id'] == rid]
             .sort_values('start_date', ascending=False)
             if not task_df.empty else pd.DataFrame())
+    if not rows.empty:
+        rows = rows[rows['input_rate'].apply(_has_input_rate)]
     if rows.empty:
         return html.Div('과제 수행 이력 없음', className='text-muted small')
 
