@@ -179,8 +179,16 @@ def _money(value):
     return f'{int(number):,}만원'
 
 
+# '등록' 을 포함하지만 실제로는 등록이 아닌 상태(등록 전/무산). 필요시 추가.
+_NOT_REGISTERED_KEYWORDS = ('등록전', '등록 전', '등록료불납', '등록료 불납')
+
+
 def _is_registered(value):
-    return '등록' in str(value)
+    """진행상태 문자열이 '등록(완료)'을 의미하면 True. '등록전 종료' 등은 False."""
+    s = str(value)
+    if '등록' not in s:
+        return False
+    return not any(neg in s for neg in _NOT_REGISTERED_KEYWORDS)
 
 
 def _cell(row, *keys, default='-'):
