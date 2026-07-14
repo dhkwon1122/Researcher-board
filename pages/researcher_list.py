@@ -10,6 +10,7 @@ import dash_bootstrap_components as dbc
 import pandas as pd
 from dash import Input, Output, State, callback, dash_table, dcc, html, no_update
 
+from components.detail_tabs import _is_registered
 from services.data_store import read_processed
 from services.db import db_enabled
 from services.text2sql import run_query
@@ -101,11 +102,11 @@ def _build_summary_df() -> pd.DataFrame:
             grp = pats.groupby('application_id')
             pat_app = grp.ngroups
             pat_reg = (int(grp['status'].apply(
-                lambda s: s.astype(str).str.contains('등록').any()).sum())
+                lambda s: s.apply(_is_registered).any()).sum())
                 if 'status' in pats.columns else 0)
         else:
             pat_app = len(pats)
-            pat_reg = (int(pats['status'].astype(str).str.contains('등록').sum())
+            pat_reg = (int(pats['status'].apply(_is_registered).sum())
                        if 'status' in pats.columns else 0)
 
         # ── 리더십 ─────────────────────────────────────────────────────────
