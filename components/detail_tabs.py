@@ -94,12 +94,12 @@ def timeline_tab(task_df, hr_df, pub_df, pat_df, rid):
     for p in pub_points:
         events.append({
             'date': p['date'], 'kind': '논문', 'label': _pub_label(p),
-            'hover': f"<b>{_truncate(p['title'])}</b>",
+            'hover': f"<b>{p['title']}</b>",
         })
     for p in pat_points:
         events.append({
             'date': p['date'], 'kind': '특허', 'label': _patent_label(p),
-            'hover': f"<b>{_truncate(p['title'])}</b>",
+            'hover': f"<b>{p['title']}</b>",
         })
     for p in hr_points:
         events.append({
@@ -129,7 +129,7 @@ def timeline_tab(task_df, hr_df, pub_df, pat_df, rid):
     fig = go.Figure()
     _add_spine(fig, y_range)
     _add_task_lanes(fig, task_items, task_colors)
-    _add_event_traces(fig, events, label_col_x)
+    _add_event_traces(fig, events, label_col_x, row_gap)
 
     max_label_span = max((_hover_span(e['label']) for e in events), default=0.0)
     max_x = label_col_x + max_label_span + 0.4
@@ -433,7 +433,7 @@ def _add_task_lanes(fig, task_items, task_colors):
             x=[x] * len(dense_y), y=dense_y,
             mode='markers', name='과제', legendgroup='과제', showlegend=False,
             marker=dict(size=6, opacity=0),
-            text=[hover] * len(dense_y), hovertemplate='%{text}',
+            text=[hover] * len(dense_y), hovertemplate='%{text}<extra></extra>',
             hoverlabel=_hoverlabel(color),
         ))
 
@@ -456,9 +456,13 @@ def _hover_span(label):
     return max(_HOVER_SPAN_MIN, min(_HOVER_SPAN_MAX, len(label) * _HOVER_SPAN_PER_CHAR))
 
 
-def _add_event_traces(fig, events, label_col_x):
+def _add_event_traces(fig, events, label_col_x, row_gap):
     if not events:
         return
+
+    # 호버 박스가 상시 노출 라벨(텍스트)을 가리지 않도록, 호버가 트리거되는
+    # 지점을 라벨 행 위쪽으로 살짝 띄운다(라벨 자체의 화면 위치는 그대로 유지).
+    hover_offset = row_gap * 0.6
 
     by_kind = {'논문': [], '특허': [], '인사발령': []}
     for e in events:
@@ -502,7 +506,7 @@ def _add_event_traces(fig, events, label_col_x):
                 span = _hover_span(e['label'])
                 hx = _densify_dates(label_col_x, label_col_x + span, 6)
                 hover_x.extend(hx)
-                hover_y.extend([slot_y] * len(hx))
+                hover_y.extend([slot_y + hover_offset] * len(hx))
                 hover_txt.extend([e['hover']] * len(hx))
 
         # 논문/특허/인사발령 모두 메인 스파인에서 출발함을 시각적으로 드러내도록
@@ -525,11 +529,13 @@ def _add_event_traces(fig, events, label_col_x):
             cliponaxis=False,
         ))
         if hover_x:
-            # 화살표 끝뿐 아니라 라벨 텍스트 영역 전체에서 호버가 되도록 촘촘히 배치
+            # 화살표 끝뿐 아니라 라벨 텍스트 영역 전체에서 호버가 되도록 촘촘히 배치.
+            # hovertemplate 끝에 <extra></extra>를 붙여 Plotly가 자동으로 옆에
+            # 추가하는 트레이스 이름(예: '특허') 박스가 나오지 않도록 한다.
             fig.add_trace(go.Scatter(
                 x=hover_x, y=hover_y, mode='markers',
                 marker=dict(size=18, opacity=0),
-                text=hover_txt, hovertemplate='%{text}',
+                text=hover_txt, hovertemplate='%{text}<extra></extra>',
                 name=kind, legendgroup=kind, showlegend=False,
                 hoverlabel=_hoverlabel(color),
             ))

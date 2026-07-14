@@ -34,11 +34,13 @@ dash.register_page(
 
 CURRENT_YEAR = datetime.now().year
 
-# 중단 좌(사진+정보+탭)/우(타임라인) 영역의 절대 높이 — 양쪽을 이 값으로 고정해
-# 서로의 하단이 맞춰지도록 한다. 탭 카드는 고정 높이 내에서 내부 스크롤로 처리.
+# 중단 좌(사진+정보 / 과제·논문·특허 탭)/우(타임라인) 영역의 절대 높이 — 양쪽
+# 전체 합이 서로 일치해 하단이 맞춰지도록 한다. 사진+정보, 탭 두 박스 모두 각각
+# 고정 높이(둘 다 SECTION_HEIGHT의 절반)를 갖고, 넘치는 내용은 내부 스크롤로 처리.
 SECTION_HEIGHT = 700
-TABS_SECTION_HEIGHT = 320
-TABS_CONTENT_HEIGHT = 230
+PHOTO_INFO_HEIGHT = 350
+TABS_SECTION_HEIGHT = 350
+TABS_CONTENT_HEIGHT = 260
 
 
 def _load_selector_data():
@@ -133,72 +135,62 @@ def _selector_card(dept_opts, res_opts, default_dept, default_rid):
 
 
 def _left_stack_col():
-    """사진/정보 카드 + 과제·논문·특허 탭 카드를 세로로 쌓은 왼쪽 묶음.
-    전체 높이를 오른쪽 타임라인 카드와 동일한 절대값(SECTION_HEIGHT)으로 고정하고,
-    사진+정보 행은 남는 공간만큼 커지도록(flex-grow) 하고, 탭 카드는 고정 높이 +
-    내부 스크롤로 그 아래 영역을 넘지 않게 한다."""
+    """사진+정보 카드 + 과제·논문·특허 탭 카드를 세로로 쌓은 왼쪽 묶음.
+    둘 다 각각 절대값(PHOTO_INFO_HEIGHT / TABS_SECTION_HEIGHT, 합계 SECTION_HEIGHT)으로
+    높이를 고정해, 오른쪽 타임라인 카드와 하단이 맞도록 한다. 넘치는 내용은 내부 스크롤."""
     return dbc.Col(
         html.Div([
-            dbc.Row([
-                _left_column(),
-                _middle_column(),
-            ], className='g-3 mb-3', style={'flex': '1 1 auto', 'minHeight': 0, 'overflowY': 'auto'}),
-            dbc.Row([
-                _task_pub_pat_col(),
-            ], className='g-3', style={'flex': '0 0 auto', 'maxHeight': f'{TABS_SECTION_HEIGHT}px',
-                                        'overflow': 'hidden'}),
+            html.Div(_photo_info_card(),
+                     style={'flex': '0 0 auto', 'height': f'{PHOTO_INFO_HEIGHT}px', 'overflow': 'hidden'}),
+            html.Div(_task_pub_pat_card(),
+                     style={'flex': '0 0 auto', 'height': f'{TABS_SECTION_HEIGHT}px', 'overflow': 'hidden'}),
         ], style={'height': f'{SECTION_HEIGHT}px', 'display': 'flex', 'flexDirection': 'column'}),
         md=7,
     )
 
 
-def _left_column():
-    return dbc.Col(
-        _card(html.Div(id='photo-block', className='d-flex flex-column align-items-center py-1'),
-              body_class='p-2', card_class='shadow-sm profile-card h-100',
-              body_style={'overflowY': 'auto'}),
-        md=5,
-    )
-
-
-def _middle_column():
-    return dbc.Col(
-        _card([
-            html.P('학력', className='section-label'),
-            html.Div(id='education-block'),
-            html.Hr(className='my-2'),
-            html.P('평가 / 인센티브 이력', className='section-label'),
-            html.Div(id='eval-incentive-block'),
-            html.Hr(className='my-2'),
-            html.P('양성 이력', className='section-label'),
-            html.Div(id='nurturing-block'),
-            html.Hr(className='my-2'),
-            html.P('시상 이력', className='section-label'),
-            html.Div(id='award-block'),
-        ], body_class='p-3', card_class='shadow-sm profile-card h-100',
-           body_style={'overflowY': 'auto'}),
-        md=7,
-    )
-
-
-def _task_pub_pat_col():
-    tab_content_style = {'maxHeight': f'{TABS_CONTENT_HEIGHT}px', 'overflowY': 'auto'}
-    return dbc.Col(
-        dbc.Card(
-            dbc.CardBody(
-                dbc.Tabs([
-                    dbc.Tab(html.Div(id='tab-tasks', style=tab_content_style),
-                            label='과제 수행 이력', tab_id='tasks'),
-                    dbc.Tab(html.Div(id='tab-publications', style=tab_content_style),
-                            label='논문', tab_id='publications'),
-                    dbc.Tab(html.Div(id='tab-patents', style=tab_content_style),
-                            label='특허', tab_id='patents'),
-                ], id='task-pub-pat-tabs', active_tab='tasks'),
-            ),
-            className='shadow-sm profile-card h-100',
-            style={'overflow': 'hidden'},
+def _photo_info_card():
+    """사진(좌) + 학력/평가·인센티브/양성/시상(우) 정보를 세로선으로 구분한 하나의 카드."""
+    return dbc.Card(
+        dbc.CardBody(
+            dbc.Row([
+                dbc.Col(
+                    html.Div(id='photo-block', className='d-flex flex-column align-items-center py-1'),
+                    md=5, className='p-2',
+                ),
+                dbc.Col([
+                    html.P('학력', className='section-label'),
+                    html.Div(id='education-block'),
+                    html.Hr(className='my-2'),
+                    html.P('평가 / 인센티브 이력', className='section-label'),
+                    html.Div(id='eval-incentive-block'),
+                    html.Hr(className='my-2'),
+                    html.P('양성 이력', className='section-label'),
+                    html.Div(id='nurturing-block'),
+                    html.Hr(className='my-2'),
+                    html.P('시상 이력', className='section-label'),
+                    html.Div(id='award-block'),
+                ], md=7, className='p-3 border-start', style={'overflowY': 'auto'}),
+            ], className='g-0 h-100'),
         ),
-        md=12,
+        className='shadow-sm profile-card h-100',
+    )
+
+
+def _task_pub_pat_card():
+    tab_content_style = {'maxHeight': f'{TABS_CONTENT_HEIGHT}px', 'overflowY': 'auto'}
+    return dbc.Card(
+        dbc.CardBody(
+            dbc.Tabs([
+                dbc.Tab(html.Div(id='tab-tasks', style=tab_content_style),
+                        label='과제 수행 이력', tab_id='tasks'),
+                dbc.Tab(html.Div(id='tab-publications', style=tab_content_style),
+                        label='논문', tab_id='publications'),
+                dbc.Tab(html.Div(id='tab-patents', style=tab_content_style),
+                        label='특허', tab_id='patents'),
+            ], id='task-pub-pat-tabs', active_tab='tasks'),
+        ),
+        className='shadow-sm profile-card h-100',
     )
 
 
