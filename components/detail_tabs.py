@@ -24,12 +24,18 @@ _ROW_PX_GAP = 20           # 라벨 행 사이에 확보할 최소 픽셀 간격
 _HOVER_SPAN_PER_CHAR = 0.052  # 라벨 글자 수 → 호버 히트 영역 가로 폭 근사 환산
 _HOVER_SPAN_MIN = 0.5
 _HOVER_SPAN_MAX = 2.6
-_HOVER_OFFSET_FACTOR = 3.0  # 호버 박스를 라벨 행보다 위로 띄우는 배수(행 간격의 3배 ≈ 이전의 5배)
+_HOVER_DISTANCE_PX = 5       # 전역 hoverdistance(모든 이벤트 공통, Plotly 레이아웃 단위라 개별 조정 불가)
+_HOVER_MIN_OFFSET_PX = 8     # 호버 히트 지점을 텍스트보다 위로 띄우는 최소 오프셋(공간이 좁을 때)
+_HOVER_MAX_OFFSET_PX = 32    # 2줄로 꺾인 호버창이 자기 행을 완전히 벗어나기에 충분한 목표 오프셋
+                              # (공간이 있을 때만 적용 — 좁으면 _HOVER_MIN_OFFSET_PX 근처로 축소)
+_HOVER_MIN_MARKER_SIZE = 6   # 호버 히트 마커 최소 크기(지름, px)
 _TASK_LABEL_GAP_PX = 26     # 과제명 라벨이 위치하는 구간에서 선을 끊어 비워둘 픽셀 높이
+_ELBOW_STEP = 0.06          # 같은 종류 이벤트끼리 꺾임 지점(elbow) x를 조금씩 어긋나게 해 세로 구간이 겹치지 않게 함
+_ELBOW_CYCLE = 3            # 위 어긋남을 순환시키는 주기(라벨이 많아도 폭이 무한정 커지지 않도록)
 
 # 애플 스타일: 절제된 무채색 베이스 위에 채도를 낮춘 데이터 색상만 포인트로 사용.
 TIMELINE_COLORS = {
-    '인사발령': '#3d8f6d',
+    '인사발령': '#0071e3',
     '논문':     '#c98a2e',
     '특허':     '#3f8f57',
 }
@@ -148,7 +154,7 @@ def timeline_tab(task_df, hr_df, pub_df, pat_df, rid):
                     itemsizing='constant'),
         hoverlabel=dict(namelength=-1),
         hovermode='closest',
-        hoverdistance=15,
+        hoverdistance=_HOVER_DISTANCE_PX,
         margin=dict(l=10, r=10, t=40, b=10),
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(0,0,0,0)',
@@ -343,7 +349,7 @@ def expertise_tab(expertise_df, rid):
 def _summary_cards(task_count, pub_df, pat_dedup_df):
     cards = []
     if task_count:
-        cards.append(dbc.Col(_single_card(task_count, '과제 수', 'text-primary'), md=2))
+        cards.append(dbc.Col(_single_card(task_count, '과제 수', 'text-danger'), md=2))
     if not pub_df.empty:
         cards.append(dbc.Col(_single_card(len(pub_df), '논문 수', 'text-warning'), md=2))
     if not pat_dedup_df.empty:
@@ -524,11 +530,30 @@ def _add_event_traces(fig, events, label_col_x, row_gap, y_range):
     if not events:
         return
 
-    # 호버 박스가 상시 노출 라벨(텍스트)을 확실히 벗어나 보이도록, 호버가
-    # 트리거되는 지점을 라벨 행보다 충분히 위쪽으로 띄운다(라벨 자체의 화면
-    # 위치는 그대로 유지). 단, y축 표시 범위를 벗어나면 호버 자체가 동작하지
-    # 않으므로 상단 여유 안에서만 띄우도록 상한을 둔다.
-    hover_offset = row_gap * _HOVER_OFFSET_FACTOR
+    # 호버 히트 지점은 라벨 텍스트보다 살짝 위에 두되(텍스트 위에 마우스를 올려도
+    # 히트 반경 안에 들어오게), 실제 뜨는 호버창은 그 텍스트 행과 겹치지 않게
+    # 한다(위/아래 다른 행과는 겹쳐도 무방). 다만 바로 위 행까지의 실제 여유
+    # 공간을 넘어서 오프셋을 주면 엉뚱한 위쪽 이벤트의 호버가 대신 뜨는 오작동이
+    # 생기므로, 이벤트마다 "바로 위 행까지 남는 여유"를 계산해 그 안에서만
+    # (여유가 넉넉하면 완전히 벗어날 만큼, 좁으면 트리거만 되는 최소한만) 띄운다.
+    # Plotly의 hoverdistance는 전역 설정이라 이벤트마다 다르게 줄 수 없으므로,
+    # 대신 히트 마커의 크기(반지름)를 이벤트마다 오프셋에 맞춰 늘려 "히트 반경 +
+    # 전역 hoverdistance"가 항상 그 이벤트의 오프셋 이상이 되도록 맞춘다. 그러면
+    # 오프셋이 아무리 커도(여유 공간이 넉넉해도) 텍스트 위에서 항상 트리거된다.
+    day_per_px = row_gap / (_ROW_PX_GAP * Y_STEP_FACTOR)
+    by_slot = sorted(events, key=lambda e: e['slot_y'])
+    hover_offsets = {}
+    hover_marker_px = {}
+    for i, e in enumerate(by_slot):
+        if i + 1 < len(by_slot):
+            room_px = (by_slot[i + 1]['slot_y'] - e['slot_y']) / day_per_px
+        else:
+            room_px = (y_range[1] - e['slot_y']) / day_per_px
+        offset_px = max(_HOVER_MIN_OFFSET_PX, min(_HOVER_MAX_OFFSET_PX, room_px / 2 - 6))
+        radius_px = max(_HOVER_MIN_MARKER_SIZE / 2, offset_px - _HOVER_DISTANCE_PX + 2)
+        hover_offsets[id(e)] = day_per_px * offset_px
+        hover_marker_px[id(e)] = radius_px * 2
+
     hover_y_max = y_range[1] - pd.Timedelta(days=2)
 
     by_kind = {'논문': [], '특허': [], '인사발령': []}
@@ -551,11 +576,13 @@ def _add_event_traces(fig, events, label_col_x, row_gap, y_range):
         shaft_x, shaft_y = [], []
         tip_x, tip_y = [], []
         text_x, text_y, text_str = [], [], []
-        hover_x, hover_y, hover_txt = [], [], []
+        hover_x, hover_y, hover_txt, hover_size = [], [], [], []
 
-        for e in items:
+        for idx, e in enumerate(items):
             origin_x = SPINE_X
-            elbow_x = origin_x + BRANCH_ELBOW
+            # 같은 종류의 이벤트가 시기적으로 가까우면 꺾임 지점(elbow)의 세로
+            # 구간이 서로 같은 x에 겹쳐 보일 수 있어, 항목마다 조금씩 어긋나게 한다.
+            elbow_x = origin_x + BRANCH_ELBOW + (idx % _ELBOW_CYCLE) * _ELBOW_STEP
             slot_y = e['slot_y']
 
             # 실제 발생일(origin) → 꺾이는 지점까지는 실제 날짜 그대로, 이후
@@ -571,11 +598,15 @@ def _add_event_traces(fig, events, label_col_x, row_gap, y_range):
             text_str.append(f'{icon}  {e["label"]}')
             if e['hover']:
                 span = _hover_span(e['label'])
-                hx = _densify_dates(label_col_x, label_col_x + span, 6)
-                hover_y_pos = min(slot_y + hover_offset, hover_y_max)
+                # 라벨 텍스트 어디에 마우스를 올려도 빈틈없이 호버가 트리거되도록,
+                # 히트 포인트를 라벨 길이에 비례해 촘촘히(간격 ≈ 0.05 데이터 단위) 배치.
+                n_hit = max(6, int(span / 0.03) + 1)
+                hx = _densify_dates(label_col_x, label_col_x + span, n_hit)
+                hover_y_pos = min(slot_y + hover_offsets[id(e)], hover_y_max)
                 hover_x.extend(hx)
                 hover_y.extend([hover_y_pos] * len(hx))
                 hover_txt.extend([e['hover']] * len(hx))
+                hover_size.extend([hover_marker_px[id(e)]] * len(hx))
 
         # 논문/특허/인사발령 모두 메인 스파인에서 출발함을 시각적으로 드러내도록
         # 화살표 끝까지 전체를 점선으로 표시한다.
@@ -602,7 +633,7 @@ def _add_event_traces(fig, events, label_col_x, row_gap, y_range):
             # 추가하는 트레이스 이름(예: '특허') 박스가 나오지 않도록 한다.
             fig.add_trace(go.Scatter(
                 x=hover_x, y=hover_y, mode='markers',
-                marker=dict(size=18, opacity=0),
+                marker=dict(size=hover_size, opacity=0),
                 text=hover_txt, hovertemplate='%{text}<extra></extra>',
                 name=kind, legendgroup=kind, showlegend=False,
                 hoverlabel=_hoverlabel(color),

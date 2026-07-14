@@ -129,6 +129,9 @@ h1, h2, h3, h4, h5, h6 {
 .border-primary {
   border-color: var(--gs-accent) !important;
 }
+.text-danger {
+  color: #ff3b30 !important;
+}
 
 /* ── 뱃지 (필 형태) ── */
 .badge {
