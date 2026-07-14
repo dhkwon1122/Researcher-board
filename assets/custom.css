@@ -175,6 +175,13 @@ h1, h2, h3, h4, h5, h6 {
   background-color: var(--gs-bg);
 }
 
+/* 평가/인센티브 이력 테이블 — 외곽선 색을 헤더/바디 구분 없이 통일 */
+.eval-incentive-table,
+.eval-incentive-table th,
+.eval-incentive-table td {
+  border-color: var(--gs-border-2) !important;
+}
+
 /* ── KPI 카드 ── */
 .card .bi {
   opacity: 0.9;

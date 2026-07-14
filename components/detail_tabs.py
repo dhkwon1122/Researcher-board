@@ -209,28 +209,29 @@ def publications_tab(pub_df, rid):
 
         rows.append(html.Tr([
             html.Td(str(row.get('pub_year', '') or row.get('pub_date', ''))[:7],
-                    className='small text-muted', style={'whiteSpace': 'nowrap'}),
+                    className='small text-muted', style={'wordBreak': 'break-word'}),
             html.Td(row.get('title', ''),
-                    style={'maxWidth': '320px', 'wordBreak': 'break-word', 'fontSize': '0.82rem'}),
+                    style={'wordBreak': 'break-word', 'fontSize': '0.82rem'}),
             html.Td(row.get('journal', ''), className='small text-muted',
-                    style={'maxWidth': '160px', 'wordBreak': 'break-word'}),
-            html.Td(rank_total, className='small text-center', style={'whiteSpace': 'nowrap'}),
+                    style={'wordBreak': 'break-word'}),
+            html.Td(rank_total, className='small text-center', style={'wordBreak': 'break-word'}),
             html.Td(f'{contrib}%' if contrib and contrib not in ('nan', '') else '',
                     className='small text-center'),
-            html.Td(html.Div(badges) if badges else ''),
+            html.Td(html.Div(badges) if badges else '', style={'wordBreak': 'break-word'}),
         ]))
 
     return html.Div([summary, dbc.Table([
         html.Thead(html.Tr([
-            html.Th('발표일', style={'width': '70px'}),
-            html.Th('제목'),
-            html.Th('게재처'),
-            html.Th('순위/총수', className='text-center', style={'width': '70px'}),
-            html.Th('기여도', className='text-center', style={'width': '55px'}),
-            html.Th('구분'),
+            html.Th('발표일', style={'width': '9%'}),
+            html.Th('제목', style={'width': '31%'}),
+            html.Th('게재처', style={'width': '20%'}),
+            html.Th('순위/총수', className='text-center', style={'width': '10%'}),
+            html.Th('기여도', className='text-center', style={'width': '10%'}),
+            html.Th('구분', style={'width': '20%'}),
         ]), className='table-light'),
         html.Tbody(rows),
-    ], bordered=False, hover=True, responsive=True, size='sm')])
+    ], bordered=False, hover=True, size='sm',
+       style={'tableLayout': 'fixed', 'width': '100%'})])
 
 
 def patents_tab(pat_df, rid):
@@ -270,26 +271,32 @@ def patents_tab(pat_df, rid):
         share_val = row.get('share_ratio', '')
         share_str = f'{share_val}%' if str(share_val).replace('.', '').isdigit() else '-'
         rows.append(html.Tr([
-            html.Td(_cell(row, 'application_date')[:7]),
-            html.Td(_cell(row, 'title', 'title_ko'), style={'maxWidth': '280px', 'wordBreak': 'break-word'}),
+            html.Td(_cell(row, 'application_date')[:7], style={'wordBreak': 'break-word'}),
+            html.Td(_cell(row, 'title', 'title_ko'), style={'wordBreak': 'break-word'}),
             html.Td(dbc.Badge('등록', color='success') if _is_registered(status_val)
                     else dbc.Badge(status_val or '출원', color='primary')),
-            html.Td(_cell(row, 'application_id', 'application_no')),
+            html.Td(_cell(row, 'application_id', 'application_no'), style={'wordBreak': 'break-word'}),
             html.Td(dbc.Badge('대표', color='warning', text_color='dark')
                     if lead in ('Y', 'y', '1', 'True', 'true') else ''),
             html.Td(share_str),
-            html.Td(grade_str or '-'),
-            html.Td(_cell(row, 'country')),
+            html.Td(grade_str or '-', style={'wordBreak': 'break-word'}),
+            html.Td(_cell(row, 'country'), style={'wordBreak': 'break-word'}),
         ]))
 
     return html.Div([summary, dbc.Table([
         html.Thead(html.Tr([
-            html.Th('출원일'), html.Th('발명 명칭'), html.Th('상태'),
-            html.Th('접수ID/출원번호'), html.Th('대표발명자'), html.Th('지분율'),
-            html.Th('등급'), html.Th('출원 국가'),
+            html.Th('출원일', style={'width': '9%'}),
+            html.Th('발명 명칭', style={'width': '24%'}),
+            html.Th('상태', style={'width': '9%'}),
+            html.Th('접수ID/출원번호', style={'width': '14%'}),
+            html.Th('대표발명자', style={'width': '9%'}),
+            html.Th('지분율', style={'width': '8%'}),
+            html.Th('등급', style={'width': '12%'}),
+            html.Th('출원 국가', style={'width': '15%'}),
         ])),
         html.Tbody(rows),
-    ], bordered=False, hover=True, responsive=True, size='sm')])
+    ], bordered=False, hover=True, size='sm',
+       style={'tableLayout': 'fixed', 'width': '100%'})])
 
 
 def expertise_tab(expertise_df, rid):
@@ -430,16 +437,32 @@ def _add_task_lanes(fig, task_items, task_colors, px_per_day):
     half_gap = pd.Timedelta(days=(_TASK_LABEL_GAP_PX / px_per_day) / 2)
     mids = [t['start'] + (t['end'] - t['start']) / 2 for t in task_items]
 
+    # 과제 기간이 겹치면(=스파인에 더 가까운 레인의 과제가 이 과제의 시작일에 이미
+    # 진행 중이었으면) 메인 스파인이 아니라 그 먼저 시작된 과제의 선에서 갈라져
+    # 나오도록 연결한다. 겹치는 과제가 없으면 기존처럼 메인 스파인에서 시작.
+    origins = {}
+    for t in task_items:
+        parent = None
+        for other in task_items:
+            if other is t or other['x'] >= t['x']:
+                continue
+            if other['start'] < t['start'] <= other['end']:
+                if parent is None or other['start'] > parent['start']:
+                    parent = other
+        origins[id(t)] = parent['x'] if parent else SPINE_X
+
     for t in task_items:
         color = task_colors[t['task_name']]
         x = t['x']
+        origin_x = origins[id(t)]
         hover = f"<b>{_truncate(t['task_name'])}</b><br>{t['start_label']} → {t['end_label']}"
         mid_y = t['start'] + (t['end'] - t['start']) / 2
 
-        # 스파인→레인 연결선과 과제 자체 선을 하나의 연속된 선(점 없이)으로 잇는다:
-        # (스파인, 시작일) → (레인, 시작일) → (레인, 종료일). 레인 간격이 좁아
-        # 옆 레인 과제의 라벨이 이 선 위를 지나갈 수도 있으므로, 자기 자신뿐 아니라
-        # "이 선의 날짜 범위 안에 들어오는 모든 과제"의 라벨 위치에서 선을 끊는다.
+        # 스파인(또는 겹치는 과제의 선)→레인 연결선과 과제 자체 선을 하나의
+        # 연속된 선(점 없이)으로 잇는다: (기점, 시작일) → (레인, 시작일) →
+        # (레인, 종료일). 레인 간격이 좁아 옆 레인 과제의 라벨이 이 선 위를
+        # 지나갈 수도 있으므로, 자기 자신뿐 아니라 "이 선의 날짜 범위 안에
+        # 들어오는 모든 과제"의 라벨 위치에서 선을 끊는다.
         gaps = []
         for m in mids:
             if t['start'] <= m <= t['end']:
@@ -460,7 +483,7 @@ def _add_task_lanes(fig, task_items, task_colors, px_per_day):
             line_x, line_y = line_x[:-1], line_y[:-1]
 
         fig.add_trace(go.Scatter(
-            x=[SPINE_X, x, None] + line_x, y=[t['start'], t['start'], None] + line_y,
+            x=[origin_x, x, None] + line_x, y=[t['start'], t['start'], None] + line_y,
             mode='lines',
             line=dict(color=color, width=3, shape='linear'),
             name='과제', legendgroup='과제', showlegend=False, hoverinfo='skip',
@@ -479,8 +502,11 @@ def _add_task_lanes(fig, task_items, task_colors, px_per_day):
 
         # 과제명 라벨 — 과제 기간의 세로 중앙에 동일 색 테두리 프레임(칩)으로 표시.
         # 위에서 그 구간의 선을 끊어뒀기 때문에 배경색과 무관하게 겹칠 선이 없다.
+        # xanchor='left'로 고정해 라벨 박스가 항상 레인 x 위치 오른쪽으로만
+        # 확장되도록 해, 레인 간격이 좁아도 박스 왼쪽 끝이 메인 스파인보다
+        # 왼쪽으로 튀어나오지 않게 한다.
         fig.add_annotation(
-            x=x, y=mid_y, xref='x', yref='y',
+            x=x, y=mid_y, xref='x', yref='y', xanchor='left',
             text=_truncate(t['task_name'], 16),
             showarrow=False,
             font=dict(size=10.5, color=color, family=_CHART_FONT),

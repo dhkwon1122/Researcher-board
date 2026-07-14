@@ -221,32 +221,34 @@ def evaluation_incentive_block(eva_df, inc_df, rid: str, years: list[int]):
         color = GRADE_COLOR.get(grade, '#aaa')
         return html.Td(
             html.Span(grade, style={'color': color, 'fontWeight': '700', 'fontSize': '0.9rem'}),
-            className='text-center',
+            className='text-center', style={'verticalAlign': 'middle'},
         )
 
     return dbc.Table([
         html.Thead(
             html.Tr(
-                [html.Th('구분', style={'fontSize': '0.72rem', 'width': '55px'})] +
+                [html.Th('구분', className='text-center',
+                         style={'fontSize': '0.72rem', 'width': '55px', 'verticalAlign': 'middle'})] +
                 [html.Th(f"'{str(year)[-2:]}", className='text-center',
-                         style={'fontSize': '0.72rem'})
+                         style={'fontSize': '0.72rem', 'verticalAlign': 'middle'})
                  for year in years]
             ),
             className='table-light',
         ),
         html.Tbody([
             html.Tr(
-                [html.Td('인센티브', className='small text-muted',
-                         style={'whiteSpace': 'nowrap', 'fontSize': '0.75rem'})] +
-                [html.Td(_inc_label(year), className='text-center small') for year in years]
+                [html.Td('인센티브', className='small text-muted text-center',
+                         style={'whiteSpace': 'nowrap', 'fontSize': '0.75rem', 'verticalAlign': 'middle'})] +
+                [html.Td(_inc_label(year), className='text-center small',
+                         style={'verticalAlign': 'middle'}) for year in years]
             ),
             html.Tr(
-                [html.Td('평가등급', className='small text-muted',
-                         style={'whiteSpace': 'nowrap', 'fontSize': '0.75rem'})] +
+                [html.Td('평가등급', className='small text-muted text-center',
+                         style={'whiteSpace': 'nowrap', 'fontSize': '0.75rem', 'verticalAlign': 'middle'})] +
                 [_grade_td(_grade(year)) for year in years]
             ),
         ]),
-    ], bordered=True, size='sm', className='mb-0', style={'fontSize': '0.8rem'})
+    ], bordered=True, size='sm', className='mb-0 eval-incentive-table', style={'fontSize': '0.8rem'})
 
 
 def nurturing_block(nur_df, rid: str, *, limit: int | None = None):
@@ -396,19 +398,20 @@ def tasks_block(task_df, rid: str):
         period = _fmt_period(row.get('start_date'), row.get('end_date'))
         rate   = _fmt_rate(row.get('input_rate'))
         table_rows.append(html.Tr([
-            html.Td(str(row.get('task_name', '-')), className='small'),
-            html.Td(period, className='small text-muted', style={'whiteSpace': 'nowrap'}),
-            html.Td(rate, className='small text-center', style={'whiteSpace': 'nowrap'}),
+            html.Td(str(row.get('task_name', '-')), className='small', style={'wordBreak': 'break-word'}),
+            html.Td(period, className='small text-muted', style={'wordBreak': 'break-word'}),
+            html.Td(rate, className='small text-center', style={'wordBreak': 'break-word'}),
         ]))
 
     return dbc.Table([
         html.Thead(html.Tr([
-            html.Th('과제명',  style={'fontSize': '0.72rem'}),
-            html.Th('기간',    style={'fontSize': '0.72rem'}),
-            html.Th('투입률',  style={'fontSize': '0.72rem'}),
+            html.Th('과제명',  style={'fontSize': '0.72rem', 'width': '50%'}),
+            html.Th('기간',    style={'fontSize': '0.72rem', 'width': '35%'}),
+            html.Th('투입률',  style={'fontSize': '0.72rem', 'width': '15%'}),
         ]), className='table-light'),
         html.Tbody(table_rows),
-    ], bordered=False, hover=True, responsive=True, size='sm', className='mb-0')
+    ], bordered=False, hover=True, size='sm', className='mb-0',
+       style={'tableLayout': 'fixed', 'width': '100%'})
 
 
 def transfer_block(tra_df, rid: str):
@@ -418,22 +421,23 @@ def transfer_block(tra_df, rid: str):
     table_rows = [
         html.Tr([
             html.Td(str(row.get('date', ''))[:7], className='small text-muted',
-                    style={'whiteSpace': 'nowrap'}),
+                    style={'wordBreak': 'break-word'}),
             html.Td(dbc.Badge(str(row.get('type', '')),
                               color=TRANSFER_BADGE.get(str(row.get('type', '')), 'light'),
                               className='small')),
-            html.Td(str(row.get('description', '')), className='small'),
+            html.Td(str(row.get('description', '')), className='small', style={'wordBreak': 'break-word'}),
         ])
         for _, row in rows.iterrows()
     ]
     return dbc.Table([
         html.Thead(html.Tr([
-            html.Th('시기', style={'fontSize': '0.72rem'}),
-            html.Th('유형', style={'fontSize': '0.72rem'}),
-            html.Th('내용', style={'fontSize': '0.72rem'}),
+            html.Th('시기', style={'fontSize': '0.72rem', 'width': '15%'}),
+            html.Th('유형', style={'fontSize': '0.72rem', 'width': '20%'}),
+            html.Th('내용', style={'fontSize': '0.72rem', 'width': '65%'}),
         ]), className='table-light'),
         html.Tbody(table_rows),
-    ], bordered=False, hover=True, responsive=True, size='sm', className='mb-0')
+    ], bordered=False, hover=True, size='sm', className='mb-0',
+       style={'tableLayout': 'fixed', 'width': '100%'})
 
 
 def comments_block(cmt_df, rid: str):
