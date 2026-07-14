@@ -1,4 +1,5 @@
 from datetime import datetime
+from urllib.parse import quote
 
 import dash_bootstrap_components as dbc
 import pandas as pd
@@ -303,6 +304,150 @@ def patents_tab(pat_df, rid):
         html.Tbody(rows),
     ], bordered=False, hover=True, size='sm',
        style={'tableLayout': 'fixed', 'width': '100%'})])
+
+
+_PANEL_TITLE_STYLE = {'fontSize': '0.85rem', 'fontWeight': 600, 'color': '#1d1d1f'}
+_GRADE_PILL_COLOR = '#3f8f57'
+_E_SUPPORT_COLOR = '#0071e3'
+
+
+def _pill(text, bg, fg='#ffffff'):
+    return html.Span(text, style={
+        'display': 'inline-block',
+        'backgroundColor': bg,
+        'color': fg,
+        'borderRadius': '999px',
+        'padding': '2px 10px',
+        'fontSize': '0.7rem',
+        'fontWeight': 600,
+        'lineHeight': '1.5',
+        'whiteSpace': 'nowrap',
+    })
+
+
+def _e_support_pill(value):
+    v = str(value).strip().upper()
+    return _pill('E직군', _LEGEND_NEUTRAL) if v == 'E' else _pill('R직군', _E_SUPPORT_COLOR)
+
+
+def _info_hover(icon_id, label, image_filename):
+    return html.Div([
+        html.I(className='bi bi-info-circle', id=icon_id,
+               style={'fontSize': '0.85rem', 'color': _LEGEND_NEUTRAL, 'cursor': 'help'}),
+        html.Span(f' {label}', className='small text-muted ms-1'),
+        dbc.Tooltip(
+            html.Img(src=f'/raw-image/{quote(image_filename)}',
+                     style={'maxWidth': '360px', 'maxHeight': '360px', 'display': 'block'}),
+            target=icon_id, placement='top',
+        ),
+    ], className='d-flex align-items-center mt-2')
+
+
+def _clean_num_str(val) -> str:
+    """CSV 왕복 과정에서 컬럼에 빈 값이 섞이면 pandas가 float로 승격시켜
+    '3.0'처럼 불필요한 소수점이 붙는 경우가 있어, 표시 직전에 한 번 더 정리한다."""
+    s = str(val).strip()
+    if s in ('', 'nan', 'None', 'NaT'):
+        return ''
+    try:
+        f = float(s)
+        return str(int(f)) if f == int(f) else s
+    except (ValueError, OverflowError):
+        return s
+
+
+def _core_technology_table(core_df):
+    if core_df.empty:
+        return html.Div('핵심기술 데이터 없음', className='text-muted small')
+
+    rows = []
+    for _, row in core_df.iterrows():
+        field = str(row.get('tech_field', '')).strip()
+        name = str(row.get('tech_name', '')).strip()
+        grade = _clean_num_str(row.get('tech_grade', '')) or '-'
+        rows.append(html.Tr([
+            html.Td(field, className='small', style={'wordBreak': 'break-word'}),
+            html.Td(html.Div([
+                _pill(grade, _GRADE_PILL_COLOR),
+                html.Span(name, className='small ms-2'),
+            ], className='d-flex align-items-center'), style={'wordBreak': 'break-word'}),
+        ]))
+
+    return dbc.Table([
+        html.Thead(html.Tr([
+            html.Th('기술분야', style={'fontSize': '0.72rem', 'width': '35%'}),
+            html.Th('핵심기술', style={'fontSize': '0.72rem', 'width': '65%'}),
+        ]), className='table-light'),
+        html.Tbody(rows),
+    ], bordered=False, hover=True, size='sm', className='mb-0',
+       style={'tableLayout': 'fixed', 'width': '100%'})
+
+
+def _tech_ownership_table(tech_row):
+    if tech_row is None:
+        return html.Div('보유기술 데이터 없음', className='text-muted small')
+
+    rows = []
+    for i in range(1, 6):
+        name = str(tech_row.get(f'tech_{i}', '')).strip()
+        if not name or name in ('nan', 'None'):
+            continue
+        lv = _clean_num_str(tech_row.get(f'lv_{i}', ''))
+        portion = _clean_num_str(tech_row.get(f'portion_{i}', ''))
+        rows.append(html.Tr([
+            html.Td(str(i), className='small text-center'),
+            html.Td(name, className='small', style={'wordBreak': 'break-word'}),
+            html.Td(lv or '-', className='small text-center'),
+            html.Td(f'{portion}%' if portion else '-', className='small text-center'),
+        ]))
+
+    if not rows:
+        return html.Div('보유기술 데이터 없음', className='text-muted small')
+
+    return dbc.Table([
+        html.Thead(html.Tr([
+            html.Th('구분', className='text-center', style={'fontSize': '0.72rem', 'width': '15%'}),
+            html.Th('전문분야', style={'fontSize': '0.72rem', 'width': '45%'}),
+            html.Th('Lv', className='text-center', style={'fontSize': '0.72rem', 'width': '15%'}),
+            html.Th('보유율', className='text-center', style={'fontSize': '0.72rem', 'width': '25%'}),
+        ]), className='table-light'),
+        html.Tbody(rows),
+    ], bordered=False, hover=True, size='sm', className='mb-0',
+       style={'tableLayout': 'fixed', 'width': '100%'})
+
+
+def owned_expertise_block(core_df, tech_df, rid):
+    """보유 전문성 — 핵심기술(core_technology.csv) / 보유기술(tech_ownership.csv)을
+    좌우로 나눠 표시. 좌: 기술분야·핵심기술(등급 배지). 우: 전문분야별 Lv·보유율,
+    상단에 E/R 직군 배지."""
+    core = core_df[core_df['researcher_id'] == rid] if not core_df.empty else pd.DataFrame()
+    tech = tech_df[tech_df['researcher_id'] == rid] if not tech_df.empty else pd.DataFrame()
+    tech_row = tech.iloc[0] if not tech.empty else None
+    e_support = tech_row.get('E_support') if tech_row is not None else None
+
+    left = html.Div([
+        html.P('핵심기술', style=_PANEL_TITLE_STYLE, className='mb-2'),
+        _core_technology_table(core),
+        _info_hover('grade-info-icon', '등급 개요', '등급 개요.png'),
+    ])
+
+    right_title_children = [
+        html.Span('보유기술', style=_PANEL_TITLE_STYLE),
+        html.Span("('25년기준)", style={'fontSize': '0.68rem', 'color': _LEGEND_NEUTRAL, 'marginLeft': '3px'}),
+    ]
+    if e_support is not None:
+        right_title_children.append(html.Div(_e_support_pill(e_support), className='ms-auto'))
+
+    right = html.Div([
+        html.Div(right_title_children, className='d-flex align-items-center mb-2'),
+        _tech_ownership_table(tech_row),
+        _info_hover('lv-info-icon', 'Lv 개요', 'lv 개요.png'),
+    ])
+
+    return dbc.Row([
+        dbc.Col(left, md=6, className='pe-3'),
+        dbc.Col(right, md=6, className='ps-3 border-start'),
+    ], className='g-0')
 
 
 def expertise_tab(expertise_df, rid):

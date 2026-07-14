@@ -79,7 +79,10 @@ def process() -> bool:
     df = df[df['researcher_id'] != ''].copy()
 
     def _col(name):
-        return df[name].astype(str).str.strip() if name in df.columns else pd.Series('', index=df.index)
+        if name not in df.columns:
+            return pd.Series('', index=df.index)
+        s = df[name]
+        return s.where(~s.isna(), '').astype(str).str.strip()
 
     out = {'researcher_id': df['researcher_id']}
     out_cols = ['researcher_id']

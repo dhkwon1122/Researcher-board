@@ -5,10 +5,12 @@
 출력 파일: data/processed/core_technology.csv
 
 읽는 컬럼:
-  사원번호, 기술 분야, 핵심기술
+  사원번호, 기술 분야, 핵심기술, 등급
 
 출력 스키마:
-  researcher_id, tech_field, tech_name
+  researcher_id, tech_field, tech_name, tech_grade
+
+등급(tech_grade) 값이 없으면 '-'로 표기합니다.
 
 컬럼명이 다를 경우 파일 상단의 COL_* 상수를 수정하세요.
 """
@@ -28,6 +30,7 @@ CORE_TECH_FILE = '핵심기술.xlsx'
 COL_ID    = '사원번호'
 COL_FIELD = '기술 분야'
 COL_NAME  = '핵심기술'
+COL_GRADE = '등급'
 # ─────────────────────────────────────────────────────────────────────────────
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -55,14 +58,19 @@ def process() -> bool:
     df = df[df['researcher_id'] != ''].copy()
 
     def _col(name):
-        return df[name].astype(str).str.strip() if name in df.columns else pd.Series('', index=df.index)
+        if name not in df.columns:
+            return pd.Series('', index=df.index)
+        s = df[name]
+        return s.where(~s.isna(), '').astype(str).str.strip()
 
     result = pd.DataFrame({
         'researcher_id': df['researcher_id'],
         'tech_field':    _col(COL_FIELD),
         'tech_name':     _col(COL_NAME),
+        'tech_grade':    _col(COL_GRADE),
     })
     result = result.replace({'nan': '', 'None': ''})
+    result.loc[result['tech_grade'] == '', 'tech_grade'] = '-'
     result = result.sort_values(['researcher_id']).reset_index(drop=True)
 
     os.makedirs(OUT_DIR, exist_ok=True)

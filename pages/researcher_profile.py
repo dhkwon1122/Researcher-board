@@ -8,7 +8,7 @@ import dash
 import dash_bootstrap_components as dbc
 from dash import Input, Output, State, callback, dcc, html, no_update
 
-from components.detail_tabs import expertise_tab, patents_tab, publications_tab, timeline_tab
+from components.detail_tabs import owned_expertise_block, patents_tab, publications_tab, timeline_tab
 from components.profile_sections import (
     avatar,
     award_block,
@@ -213,12 +213,13 @@ def _detail_tabs_col():
     return dbc.Col(
         dbc.Card(
             dbc.CardBody([
-                html.P('전문성 분석 (과제 기반)', className='section-label'),
+                html.P('보유 전문성', style={'fontSize': '0.85rem', 'fontWeight': 600,
+                                          'color': '#1d1d1f'}, className='mb-2'),
                 html.Div(id='tab-expertise'),
             ]),
             className='shadow-sm profile-card h-100',
         ),
-        md=5,
+        md=7,
     )
 
 
@@ -278,7 +279,7 @@ def _comments_col():
             ),
             className='shadow-sm profile-card h-100',
         ),
-        md=7,
+        md=5,
     )
 
 
@@ -360,7 +361,7 @@ def update_profile(rid):
             comments_block(tables['comments'], rid),
             timeline_tab(tables['tasks'], tables['hr_orders'], tables['publications'],
                          tables['patents'], rid),
-            expertise_tab(tables['researcher_expertise'], rid),
+            owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid),
         )
     except Exception as exc:
         import traceback

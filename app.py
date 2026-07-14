@@ -63,6 +63,21 @@ def serve_photo(rid):
 
     flask.abort(404)
 
+
+_RAW_IMAGE_ALLOWLIST = {'등급 개요.png', 'lv 개요.png'}
+
+
+@app.server.route('/raw-image/<path:filename>')
+def serve_raw_image(filename):
+    """data/raw/ 아래 안내용 이미지(등급/Lv 개요 등)를 서빙. 허용 목록에 있는
+    파일명만 응답해 임의 경로 접근을 막는다."""
+    if filename not in _RAW_IMAGE_ALLOWLIST:
+        flask.abort(404)
+    path = os.path.join(RAW_DIR, filename)
+    if not os.path.isfile(path):
+        flask.abort(404)
+    return flask.send_file(path)
+
 navbar = dbc.Navbar(
     dbc.Container(
         [
