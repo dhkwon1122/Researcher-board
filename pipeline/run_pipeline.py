@@ -61,9 +61,9 @@ OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data',
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from excel_reader import read_xlsx, norm_researcher_id_col
 
-# 평가·특허·양성이력·시상·학력·리더십·인센티브·연구원기본정보는 전용 처리기에서 추출하므로 목록에서 제외
+# 평가·특허·논문·양성이력·시상·학력·리더십·인센티브·연구원기본정보는 전용 처리기에서
+# 추출하므로 목록에서 제외 (아래는 전용 변환기 없이 raw 통과만 하는 테이블)
 TABLES = [
-    'publications',
     'technology_transfer',
     'transfers',
     'certifications',
@@ -185,7 +185,19 @@ def run():
         else:
             missing.append('incentive_selection (핵심이력.xlsx 또는 incentive_selection_raw)')
 
-    # ── 8. 나머지 테이블 (researchers, publications, technology_transfer, transfers, certifications, succession) ──
+    # ── 7-1. 논문: 개인별논문현황_2016_2026.xlsx 우선, 없으면 publications_raw 폴백 ─
+    from process_publications import process as process_publications
+    pub_ok = process_publications()
+    if not pub_ok:
+        df = _read_raw('publications')
+        if df is not None:
+            out_path = os.path.join(OUT_DIR, 'publications.csv')
+            df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+            print(f'  [OK]   publications.csv (publications_raw 폴백, {len(df)}행)')
+        else:
+            missing.append('publications (개인별논문현황_2016_2026.xlsx 또는 publications_raw)')
+
+    # ── 8. 나머지 테이블 (technology_transfer, transfers, certifications, succession) — raw 통과만 ──
     for table in TABLES:
         df = _read_raw(table)
         if df is None:
