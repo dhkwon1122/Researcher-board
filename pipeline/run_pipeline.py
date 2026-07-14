@@ -59,6 +59,13 @@
   succession_raw      : researcher_id, org_code, rank_type (Ready Now/Ready Later),
                         rank_order, nominated_year
   nurturing_raw       : researcher_id, year, category, content, result
+  core_technology_raw : researcher_id, tech_field, tech_name
+                        ※ '핵심기술.xlsx' 가 있으면 자동 추출 (별도 raw 불필요)
+                           처리기: pipeline/process_core_technology.py
+  tech_ownership_raw  : researcher_id, tech_1, lv_1, portion_1, ..., tech_5, lv_5,
+                        portion_5, E_support
+                        ※ '보유기술.xlsx' 가 있으면 자동 추출 (별도 raw 불필요)
+                           처리기: pipeline/process_tech_ownership.py
 
 출력 위치: data/processed/
 """
@@ -222,6 +229,30 @@ def run():
             print(f'  [OK]   incentive_selection.csv (incentive_selection_raw 폴백, {len(df)}행)')
         else:
             missing.append('incentive_selection (핵심이력.xlsx 또는 incentive_selection_raw)')
+
+    # ── 9-1. 핵심기술: 핵심기술.xlsx 우선, 없으면 core_technology_raw 폴백 ─
+    from process_core_technology import process as process_core_technology
+    ctech_ok = process_core_technology()
+    if not ctech_ok:
+        df = _read_raw('core_technology')
+        if df is not None:
+            out_path = os.path.join(OUT_DIR, 'core_technology.csv')
+            df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+            print(f'  [OK]   core_technology.csv (core_technology_raw 폴백, {len(df)}행)')
+        else:
+            missing.append('core_technology (핵심기술.xlsx 또는 core_technology_raw)')
+
+    # ── 9-2. 보유기술: 보유기술.xlsx 우선, 없으면 tech_ownership_raw 폴백 ─
+    from process_tech_ownership import process as process_tech_ownership
+    town_ok = process_tech_ownership()
+    if not town_ok:
+        df = _read_raw('tech_ownership')
+        if df is not None:
+            out_path = os.path.join(OUT_DIR, 'tech_ownership.csv')
+            df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+            print(f'  [OK]   tech_ownership.csv (tech_ownership_raw 폴백, {len(df)}행)')
+        else:
+            missing.append('tech_ownership (보유기술.xlsx 또는 tech_ownership_raw)')
 
     # ── 10. 나머지 테이블 (researchers, publications, technology_transfer, transfers, certifications, succession) ──
     for table in TABLES:
