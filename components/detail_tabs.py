@@ -16,7 +16,7 @@ from dash import dcc, html
 # y축(날짜)은 기본 방향을 그대로 사용 — 값이 클수록(최신일수록) 위에 그려진다.
 SPINE_X = 0.0
 SPINE_LEFT_MARGIN = 0.35   # 스파인과 차트 왼쪽 끝 사이 여백(축 눈금 라벨 공간)
-TASK_LANE_UNIT = 0.85      # 과제 레인 간 x 간격(스파인 기준 오른쪽으로만 순차 배치)
+TASK_LANE_UNIT = 0.17      # 과제 레인 간 x 간격(스파인 기준 오른쪽으로만 순차 배치, 짧게 축소)
 BRANCH_ELBOW = 0.28        # 과제/스파인 → 첫 번째로 꺾이는 지점까지의 가로 길이
 BRANCH_BASE = 0.55         # 공유 라벨 열까지의 최소 여유 거리(과제 레인 오른쪽 끝 기준)
 Y_STEP_FACTOR = 1.1        # 픽셀 기준 최소 라벨 간격에 곱하는 여유 배수
@@ -24,21 +24,24 @@ _ROW_PX_GAP = 20           # 라벨 행 사이에 확보할 최소 픽셀 간격
 _HOVER_SPAN_PER_CHAR = 0.052  # 라벨 글자 수 → 호버 히트 영역 가로 폭 근사 환산
 _HOVER_SPAN_MIN = 0.5
 _HOVER_SPAN_MAX = 2.6
+_HOVER_OFFSET_FACTOR = 3.0  # 호버 박스를 라벨 행보다 위로 띄우는 배수(행 간격의 3배 ≈ 이전의 5배)
+_TASK_LABEL_GAP_PX = 26     # 과제명 라벨이 위치하는 구간에서 선을 끊어 비워둘 픽셀 높이
 
+# 애플 스타일: 절제된 무채색 베이스 위에 채도를 낮춘 데이터 색상만 포인트로 사용.
 TIMELINE_COLORS = {
-    '인사발령': '#1baf7a',
-    '논문':     '#eda100',
-    '특허':     '#008300',
+    '인사발령': '#3d8f6d',
+    '논문':     '#c98a2e',
+    '특허':     '#3f8f57',
 }
-# 과제는 항목마다 다른 색을 쓰되, 위 3개 카테고리 색은 피한다.
-TASK_COLOR_PALETTE = ['#2a78d6', '#4a3aa7', '#e34948', '#e87ba4', '#eb6834']
-_SPINE_COLOR = '#c4c8cf'
-_LEGEND_NEUTRAL = '#52514e'
+# 과제는 항목마다 다른 색을 쓰되, 위 3개 카테고리 색은 피한다. 모두 채도를 낮춘 톤.
+TASK_COLOR_PALETTE = ['#4a7fc1', '#7b6fb0', '#c46b6b', '#c07d97', '#c08a52']
+_SPINE_COLOR = '#c7c7cc'
+_LEGEND_NEUTRAL = '#6e6e73'
 
-_GRIDLINE = '#eef0f2'
-_CHART_FONT = "'Inter','Noto Sans KR',sans-serif"
-_TOOLTIP_BG = '#18181b'
-_TOOLTIP_FG = '#f4f4f5'
+_GRIDLINE = '#e8e8ed'
+_CHART_FONT = "-apple-system,BlinkMacSystemFont,'SF Pro Display','Noto Sans KR',sans-serif"
+_TOOLTIP_BG = '#1d1d1f'
+_TOOLTIP_FG = '#f5f5f7'
 _MARKER_RING = '#ffffff'
 
 _ICONS = {'논문': '📄', '특허': '💡', '인사발령': '🧭'}
@@ -94,12 +97,12 @@ def timeline_tab(task_df, hr_df, pub_df, pat_df, rid):
     for p in pub_points:
         events.append({
             'date': p['date'], 'kind': '논문', 'label': _pub_label(p),
-            'hover': f"<b>{p['title']}</b>",
+            'hover': f"<b>{_wrap_title(p['title'])}</b>",
         })
     for p in pat_points:
         events.append({
             'date': p['date'], 'kind': '특허', 'label': _patent_label(p),
-            'hover': f"<b>{p['title']}</b>",
+            'hover': f"<b>{_wrap_title(p['title'])}</b>",
         })
     for p in hr_points:
         events.append({
@@ -128,8 +131,8 @@ def timeline_tab(task_df, hr_df, pub_df, pat_df, rid):
 
     fig = go.Figure()
     _add_spine(fig, y_range)
-    _add_task_lanes(fig, task_items, task_colors)
-    _add_event_traces(fig, events, label_col_x, row_gap)
+    _add_task_lanes(fig, task_items, task_colors, px_per_day)
+    _add_event_traces(fig, events, label_col_x, row_gap, y_range)
 
     max_label_span = max((_hover_span(e['label']) for e in events), default=0.0)
     max_x = label_col_x + max_label_span + 0.4
@@ -153,7 +156,7 @@ def timeline_tab(task_df, hr_df, pub_df, pat_df, rid):
     )
 
     graph = dcc.Graph(figure=fig, config={'displayModeBar': False})
-    summary = _summary_cards(task, pub, pat_dedup)
+    summary = _summary_cards(len(task_points), pub, pat_dedup)
     scroll_wrap = html.Div(graph, style={'maxHeight': '520px', 'overflowY': 'auto', 'overflowX': 'hidden'})
     return html.Div([summary, scroll_wrap]) if summary is not None else html.Div([scroll_wrap])
 
@@ -227,8 +230,7 @@ def publications_tab(pub_df, rid):
             html.Th('구분'),
         ]), className='table-light'),
         html.Tbody(rows),
-    ], bordered=False, hover=True, responsive=True, size='sm',
-       style={'maxHeight': '340px', 'overflowY': 'auto', 'display': 'block'})])
+    ], bordered=False, hover=True, responsive=True, size='sm')])
 
 
 def patents_tab(pat_df, rid):
@@ -331,10 +333,10 @@ def expertise_tab(expertise_df, rid):
     return html.Div(blocks)
 
 
-def _summary_cards(task_df, pub_df, pat_dedup_df):
+def _summary_cards(task_count, pub_df, pat_dedup_df):
     cards = []
-    if not task_df.empty:
-        cards.append(dbc.Col(_single_card(len(task_df), '과제 수', 'text-primary'), md=2))
+    if task_count:
+        cards.append(dbc.Col(_single_card(task_count, '과제 수', 'text-primary'), md=2))
     if not pub_df.empty:
         cards.append(dbc.Col(_single_card(len(pub_df), '논문 수', 'text-warning'), md=2))
     if not pat_dedup_df.empty:
@@ -353,6 +355,26 @@ def _truncate(text, maxlen=_TRUNCATE_LEN):
     if ' ' in cut:
         cut = cut.rsplit(' ', 1)[0]
     return cut.rstrip() + '...'
+
+
+def _wrap_title(text, max_chars=42):
+    """호버에 전체 제목을 다 보여주되, 너무 길면 차트 폭을 벗어나지 않도록
+    중간 지점에서 가장 가까운 공백을 찾아 <br>로 꺾어 최대 2줄로 표시한다."""
+    text = str(text).strip()
+    if len(text) <= max_chars:
+        return text
+    mid = len(text) // 2
+    left = text.rfind(' ', 0, mid)
+    right = text.find(' ', mid)
+    if left == -1 and right == -1:
+        split_at = mid
+    elif left == -1:
+        split_at = right
+    elif right == -1:
+        split_at = left
+    else:
+        split_at = left if (mid - left) <= (right - mid) else right
+    return text[:split_at].rstrip() + '<br>' + text[split_at:].lstrip()
 
 
 def _hoverlabel(color):
@@ -393,7 +415,7 @@ def _add_spine(fig, y_range):
     ))
 
 
-def _add_task_lanes(fig, task_items, task_colors):
+def _add_task_lanes(fig, task_items, task_colors, px_per_day):
     if not task_items:
         return
 
@@ -405,29 +427,47 @@ def _add_task_lanes(fig, task_items, task_colors):
         showlegend=True, hoverinfo='skip',
     ))
 
+    half_gap = pd.Timedelta(days=(_TASK_LABEL_GAP_PX / px_per_day) / 2)
+    mids = [t['start'] + (t['end'] - t['start']) / 2 for t in task_items]
+
     for t in task_items:
         color = task_colors[t['task_name']]
         x = t['x']
         hover = f"<b>{_truncate(t['task_name'])}</b><br>{t['start_label']} → {t['end_label']}"
+        mid_y = t['start'] + (t['end'] - t['start']) / 2
 
-        # 과제 선이 스파인에서 뻗어나와 시작하도록, 시작 시점에 스파인→레인 연결선을 먼저 그린다.
+        # 스파인→레인 연결선과 과제 자체 선을 하나의 연속된 선(점 없이)으로 잇는다:
+        # (스파인, 시작일) → (레인, 시작일) → (레인, 종료일). 레인 간격이 좁아
+        # 옆 레인 과제의 라벨이 이 선 위를 지나갈 수도 있으므로, 자기 자신뿐 아니라
+        # "이 선의 날짜 범위 안에 들어오는 모든 과제"의 라벨 위치에서 선을 끊는다.
+        gaps = []
+        for m in mids:
+            if t['start'] <= m <= t['end']:
+                gaps.append((max(t['start'], m - half_gap), min(t['end'], m + half_gap)))
+        gaps.sort()
+
+        line_x, line_y = [], []
+        cursor = t['start']
+        for gs, ge in gaps:
+            if gs > cursor:
+                line_x += [x, x, None]
+                line_y += [cursor, gs, None]
+            cursor = max(cursor, ge)
+        if cursor < t['end']:
+            line_x += [x, x]
+            line_y += [cursor, t['end']]
+        elif line_x and line_x[-1] is None:
+            line_x, line_y = line_x[:-1], line_y[:-1]
+
         fig.add_trace(go.Scatter(
-            x=[SPINE_X, x], y=[t['start'], t['start']],
-            mode='lines', name='과제', legendgroup='과제', showlegend=False,
-            line=dict(color=color, width=2),
-            hoverinfo='skip',
+            x=[SPINE_X, x, None] + line_x, y=[t['start'], t['start'], None] + line_y,
+            mode='lines',
+            line=dict(color=color, width=3, shape='linear'),
+            name='과제', legendgroup='과제', showlegend=False, hoverinfo='skip',
         ))
 
-        fig.add_trace(go.Scatter(
-            x=[x, x], y=[t['start'], t['end']],
-            mode='lines+markers', name='과제', legendgroup='과제', showlegend=False,
-            marker=dict(symbol='circle', size=8, color=color,
-                        line=dict(color=_MARKER_RING, width=1.5)),
-            line=dict(color=color, width=3),
-            hoverinfo='skip',
-        ))
-
-        # 레인 전체에서 어디를 호버해도 과제 정보가 뜨도록 촘촘한 보조 포인트 배치
+        # 레인 전체(스파인 연결 구간 포함)에서 어디를 호버해도 과제 정보가 뜨도록
+        # 촘촘한 보조 포인트 배치
         dense_y = _densify_dates(t['start'], t['end'], _DENSIFY_N)
         fig.add_trace(go.Scatter(
             x=[x] * len(dense_y), y=dense_y,
@@ -438,9 +478,7 @@ def _add_task_lanes(fig, task_items, task_colors):
         ))
 
         # 과제명 라벨 — 과제 기간의 세로 중앙에 동일 색 테두리 프레임(칩)으로 표시.
-        # 배경을 완전 불투명(흰색)으로 칠해 선이 텍스트를 가로질러 비치지 않게 한다.
-        # (주석(annotation)은 Plotly에서 항상 트레이스보다 위 레이어에 그려진다.)
-        mid_y = t['start'] + (t['end'] - t['start']) / 2
+        # 위에서 그 구간의 선을 끊어뒀기 때문에 배경색과 무관하게 겹칠 선이 없다.
         fig.add_annotation(
             x=x, y=mid_y, xref='x', yref='y',
             text=_truncate(t['task_name'], 16),
@@ -456,13 +494,16 @@ def _hover_span(label):
     return max(_HOVER_SPAN_MIN, min(_HOVER_SPAN_MAX, len(label) * _HOVER_SPAN_PER_CHAR))
 
 
-def _add_event_traces(fig, events, label_col_x, row_gap):
+def _add_event_traces(fig, events, label_col_x, row_gap, y_range):
     if not events:
         return
 
-    # 호버 박스가 상시 노출 라벨(텍스트)을 가리지 않도록, 호버가 트리거되는
-    # 지점을 라벨 행 위쪽으로 살짝 띄운다(라벨 자체의 화면 위치는 그대로 유지).
-    hover_offset = row_gap * 0.6
+    # 호버 박스가 상시 노출 라벨(텍스트)을 확실히 벗어나 보이도록, 호버가
+    # 트리거되는 지점을 라벨 행보다 충분히 위쪽으로 띄운다(라벨 자체의 화면
+    # 위치는 그대로 유지). 단, y축 표시 범위를 벗어나면 호버 자체가 동작하지
+    # 않으므로 상단 여유 안에서만 띄우도록 상한을 둔다.
+    hover_offset = row_gap * _HOVER_OFFSET_FACTOR
+    hover_y_max = y_range[1] - pd.Timedelta(days=2)
 
     by_kind = {'논문': [], '특허': [], '인사발령': []}
     for e in events:
@@ -505,8 +546,9 @@ def _add_event_traces(fig, events, label_col_x, row_gap):
             if e['hover']:
                 span = _hover_span(e['label'])
                 hx = _densify_dates(label_col_x, label_col_x + span, 6)
+                hover_y_pos = min(slot_y + hover_offset, hover_y_max)
                 hover_x.extend(hx)
-                hover_y.extend([slot_y + hover_offset] * len(hx))
+                hover_y.extend([hover_y_pos] * len(hx))
                 hover_txt.extend([e['hover']] * len(hx))
 
         # 논문/특허/인사발령 모두 메인 스파인에서 출발함을 시각적으로 드러내도록

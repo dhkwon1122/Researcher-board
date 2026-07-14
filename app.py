@@ -21,9 +21,6 @@ app.index_string = '''<!DOCTYPE html>
         {%metas%}
         <title>{%title%}</title>
         {%favicon%}
-        <link rel="preconnect" href="https://fonts.googleapis.com">
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
         {%css%}
     </head>
     <body>
@@ -73,7 +70,7 @@ navbar = dbc.Navbar(
                 [
                     dbc.Col(
                         html.I(className='bi bi-bar-chart-fill me-2',
-                               style={'fontSize': '1.4rem', 'color': '#3291ff'}),
+                               style={'fontSize': '1.4rem', 'color': '#0071e3'}),
                         width='auto',
                     ),
                     dbc.Col(
@@ -117,7 +114,7 @@ navbar = dbc.Navbar(
         ],
         fluid=True,
     ),
-    color='#0a0a0a',
+    color='#1d1d1f',
     dark=True,
     sticky='top',
     className='app-navbar',
@@ -132,7 +129,7 @@ app.layout = html.Div(
             className='px-4 py-3',
         ),
     ],
-    style={'minHeight': '100vh', 'backgroundColor': '#fafafa'},
+    style={'minHeight': '100vh', 'backgroundColor': '#f5f5f7'},
 )
 
 # WSGI 진입점 (gunicorn app:server 로 구동). Dash 의 내부 Flask 서버.

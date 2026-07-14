@@ -1,22 +1,24 @@
 /* ════════════════════════════════════════════════
-   Vercel/Geist 스타일 참고 — 모노크롬 베이스, 절제된 컬러,
-   1px 뉴트럴 보더, 넉넉한 여백, 은은한 호버 트랜지션
+   애플(apple.com) 스타일 참고 — 절제된 무채색 베이스,
+   넉넉한 여백, 또렷한 타이포그래피, 은은한 인터랙션.
+   장식은 최소화하고 콘텐츠 자체의 위계로 가독성을 만든다.
    ════════════════════════════════════════════════ */
 
 /* ── 전역 ── */
 :root {
-  --gs-bg:        #fafafa;
+  --gs-bg:        #f5f5f7;
   --gs-surface:   #ffffff;
-  --gs-border:    #eaeaea;
-  --gs-border-2:  #e4e4e7;
-  --gs-text:      #171717;
-  --gs-muted:     #71717a;
-  --gs-label:     #8a8f98;
-  --gs-accent:    #111111;
-  --gs-accent-2:  #3291ff;
-  --gs-radius:    12px;
-  --gs-radius-sm: 8px;
-  --gs-font: 'Inter', 'Noto Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+  --gs-border:    #e8e8ed;
+  --gs-border-2:  #d2d2d7;
+  --gs-text:      #1d1d1f;
+  --gs-muted:     #6e6e73;
+  --gs-label:     #86868b;
+  --gs-accent:    #0071e3;
+  --gs-accent-hover: #0077ed;
+  --gs-radius:    14px;
+  --gs-radius-sm: 10px;
+  --gs-font: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text',
+             'Noto Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
 }
 
 body {
@@ -24,27 +26,30 @@ body {
   color: var(--gs-text);
   background-color: var(--gs-bg);
   -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.011em;
 }
 
 h1, h2, h3, h4, h5, h6 {
   font-family: var(--gs-font);
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
+  font-weight: 600;
 }
 
 /* 섹션 라벨 (카드 상단 소제목) */
 .section-label {
-  font-size: 0.7rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-transform: none;
   color: var(--gs-label);
   margin-bottom: 0.65rem;
 }
 
-/* 숫자 강조(통계 타일) — 모노스페이스로 데이터 느낌 */
+/* 숫자 강조(통계 타일) — 굵고 또렷하게, 애플 특유의 큰 숫자 강조 */
 .stat-value {
-  font-family: 'ui-monospace', 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-family: var(--gs-font);
   letter-spacing: -0.02em;
+  font-weight: 700;
 }
 
 /* ── 카드 ── */
@@ -55,7 +60,7 @@ h1, h2, h3, h4, h5, h6 {
   background-color: var(--gs-surface);
 }
 .card-body {
-  padding: 1rem 1.2rem;
+  padding: 1.1rem 1.3rem;
 }
 .shadow-sm {
   box-shadow: none !important;
@@ -64,51 +69,56 @@ h1, h2, h3, h4, h5, h6 {
 
 /* 프로필 페이지 카드 — 은은한 호버 리프트 */
 .profile-card {
-  transition: box-shadow 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
 }
 .profile-card:hover {
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06) !important;
-  border-color: #dcdce0 !important;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.05) !important;
+  border-color: var(--gs-border-2) !important;
 }
 
-/* ── 네비게이션 ── */
+/* ── 네비게이션 (블러 처리된 반투명 다크 바) ── */
 .app-navbar {
+  background-color: rgba(29, 29, 31, 0.82) !important;
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
+.app-navbar .navbar-brand {
+  color: #fff !important;
+}
 .navbar-nav .nav-link {
-  font-size: 0.88rem;
-  font-weight: 500;
+  font-size: 0.86rem;
+  font-weight: 400;
   padding: 0.4rem 0.9rem !important;
-  border-radius: var(--gs-radius-sm);
-  transition: background 0.2s, color 0.2s;
-  color: rgba(255, 255, 255, 0.72) !important;
+  border-radius: 980px;
+  transition: color 0.2s;
+  color: rgba(255, 255, 255, 0.8) !important;
 }
 .navbar-nav .nav-link:hover {
-  background: rgba(255, 255, 255, 0.08);
   color: #fff !important;
 }
 .navbar-nav .nav-link.active {
-  background: rgba(255, 255, 255, 0.1) !important;
+  background: rgba(255, 255, 255, 0.12) !important;
   color: #fff !important;
 }
 
-/* ── 버튼 ── */
+/* ── 버튼 (애플 특유의 필 버튼) ── */
 .btn {
-  border-radius: var(--gs-radius-sm);
-  font-weight: 600;
+  border-radius: 980px;
+  font-weight: 500;
   font-size: 0.85rem;
-  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+  transition: background 0.15s, border-color 0.15s, opacity 0.1s;
 }
 .btn-primary {
   background-color: var(--gs-accent) !important;
   border-color: var(--gs-accent) !important;
 }
 .btn-primary:hover {
-  background-color: #2e2e2e !important;
-  border-color: #2e2e2e !important;
+  background-color: var(--gs-accent-hover) !important;
+  border-color: var(--gs-accent-hover) !important;
 }
 .btn-primary:active {
-  transform: translateY(1px);
+  opacity: 0.85;
 }
 .text-primary {
   color: var(--gs-accent) !important;
@@ -140,15 +150,19 @@ h1, h2, h3, h4, h5, h6 {
   min-height: 36px !important;
 }
 .dash-dropdown div[class*="-control"]:hover {
-  border-color: #c9c9cf !important;
+  border-color: #adadb2 !important;
+}
+.dash-dropdown div[class*="-control"]:focus-within {
+  border-color: var(--gs-accent) !important;
+  box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.15) !important;
 }
 
 /* ── 테이블 헤더 ── */
 .table thead th {
   font-size: 0.7rem;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: none;
   color: var(--gs-muted);
   border-bottom: 1px solid var(--gs-border);
 }
@@ -158,7 +172,7 @@ h1, h2, h3, h4, h5, h6 {
   border-color: var(--gs-border) !important;
 }
 .table-hover tbody tr:hover {
-  background-color: #fafafa;
+  background-color: var(--gs-bg);
 }
 
 /* ── KPI 카드 ── */
@@ -186,10 +200,10 @@ h1, h2, h3, h4, h5, h6 {
   border-color: var(--gs-border-2);
 }
 .nav-tabs .nav-link.active {
-  font-weight: 700;
+  font-weight: 600;
   color: var(--gs-text);
   background: transparent;
-  border-color: var(--gs-text);
+  border-color: var(--gs-accent);
 }
 
 /* ── Plotly 차트 배경 투명 처리 ── */

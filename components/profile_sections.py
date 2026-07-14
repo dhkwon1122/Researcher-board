@@ -408,8 +408,7 @@ def tasks_block(task_df, rid: str):
             html.Th('투입률',  style={'fontSize': '0.72rem'}),
         ]), className='table-light'),
         html.Tbody(table_rows),
-    ], bordered=False, hover=True, responsive=True, size='sm',
-       className='mb-0', style={'maxHeight': '160px', 'overflowY': 'auto', 'display': 'block'})
+    ], bordered=False, hover=True, responsive=True, size='sm', className='mb-0')
 
 
 def transfer_block(tra_df, rid: str):
@@ -434,8 +433,7 @@ def transfer_block(tra_df, rid: str):
             html.Th('내용', style={'fontSize': '0.72rem'}),
         ]), className='table-light'),
         html.Tbody(table_rows),
-    ], bordered=False, hover=True, responsive=True, size='sm',
-       className='mb-0', style={'maxHeight': '130px', 'overflowY': 'auto', 'display': 'block'})
+    ], bordered=False, hover=True, responsive=True, size='sm', className='mb-0')
 
 
 def comments_block(cmt_df, rid: str):
