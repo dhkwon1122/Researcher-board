@@ -97,8 +97,8 @@ def layout(id=None, **_kwargs):
             _right_column(),
         ], className='g-3 mb-3'),
         dbc.Row([
-            _detail_tabs_col(),
             _comments_col(),
+            _detail_tabs_col(),
         ], className='g-3 mb-3'),
     ])
 
@@ -223,7 +223,7 @@ def _right_column():
 
 
 def _detail_tabs_col():
-    return dbc.Col(_task_pub_pat_card(), md=7)
+    return dbc.Col(_task_pub_pat_card(), md=6)
 
 
 def _comments_col():
@@ -282,7 +282,7 @@ def _comments_col():
             ),
             className='shadow-sm profile-card h-100',
         ),
-        md=5,
+        md=6,
     )
 
 

@@ -89,8 +89,8 @@ def timeline_view(task_df, hr_df, pub_df, pat_df, rid):
     support_col, support_stores = _build_support_spine(pubs, pats, hrs, rid, y_range, total_height)
 
     body = dbc.Row([
-        dbc.Col(main_col, md=6),
-        dbc.Col(support_col, md=6),
+        dbc.Col(main_col, style={'flex': '0 0 30%', 'maxWidth': '30%'}),
+        dbc.Col(support_col, style={'flex': '0 0 70%', 'maxWidth': '70%'}),
     ], className='g-2')
 
     scroll_wrap = html.Div(body, style={'maxHeight': '520px', 'overflowY': 'auto', 'overflowX': 'hidden'})
@@ -264,8 +264,8 @@ def _task_card(t, gkey, rank, y_px, x_px, z_index, color):
         }),
         dbc.Tooltip(t['task_name'], target=tooltip_id, placement='top'),
     ], id={'type': 'stack-card', 'gkey': gkey, 'idx': rank}, n_clicks=0, style={
-        'position': 'absolute', 'top': f'{y_px}px', 'left': f'{x_px}px',
-        'zIndex': z_index, 'width': f'{_TASK_CARD_WIDTH}px',
+        'position': 'absolute', 'top': f'{y_px}px', 'left': f'{x_px}px', 'right': '4px',
+        'zIndex': z_index, 'maxWidth': f'{_TASK_CARD_WIDTH}px',
         'backgroundColor': '#ffffff', 'border': f'1.3px solid {color}',
         'borderRadius': '10px', 'padding': '5px 10px', 'cursor': 'pointer',
         'boxShadow': '0 1px 4px rgba(0,0,0,0.10)',
