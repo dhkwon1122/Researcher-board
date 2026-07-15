@@ -30,6 +30,7 @@ from dash import ALL, MATCH, Input, Output, State, dcc, html
 from components.timeline_data import (
     dedupe_patents,
     hr_points,
+    job_points,
     pat_points,
     pub_points,
     task_points,
@@ -55,11 +56,12 @@ _LEGEND_NEUTRAL = '#6e6e73'
 _ICONS = {'논문': '📄', '특허': '💡', '인사발령': '🧭'}
 
 
-def timeline_view(task_df, hr_df, pub_df, pat_df, rid):
+def timeline_view(task_df, hr_df, pub_df, pat_df, job_df, rid):
     task = task_df[task_df['researcher_id'] == rid].copy() if not task_df.empty else pd.DataFrame()
     hr = hr_df[hr_df['researcher_id'] == rid].copy() if not hr_df.empty else pd.DataFrame()
     pub = pub_df[pub_df['researcher_id'] == rid].copy() if not pub_df.empty else pd.DataFrame()
     pat = pat_df[pat_df['researcher_id'] == rid].copy() if not pat_df.empty else pd.DataFrame()
+    job = job_df[job_df['researcher_id'] == rid].copy() if not job_df.empty else pd.DataFrame()
     pat_dedup = dedupe_patents(pat) if not pat.empty else pat
 
     if task.empty and hr.empty and pub.empty and pat.empty:
@@ -69,6 +71,7 @@ def timeline_view(task_df, hr_df, pub_df, pat_df, rid):
     hrs = hr_points(hr)
     pubs = pub_points(pub)
     pats = pat_points(pat_dedup)
+    jobs = job_points(job)
 
     if not tasks and not hrs and not pubs and not pats:
         return html.Div('타임라인 데이터 없음', className='text-muted p-3')
@@ -85,7 +88,7 @@ def timeline_view(task_df, hr_df, pub_df, pat_df, rid):
     total_height = _chart_height(y_range)
 
     header = _header_pills(len(tasks), len(pubs), len(pats))
-    main_col, main_stores = _build_main_spine(tasks, rid, y_range, total_height)
+    main_col, main_stores = _build_main_spine(tasks, jobs, today, rid, y_range, total_height)
     support_col, support_stores = _build_support_spine(pubs, pats, hrs, rid, y_range, total_height)
 
     body = dbc.Row([
@@ -215,7 +218,20 @@ def _year_gridlines(y_range, total_height):
     return children
 
 
-def _build_main_spine(tasks, rid, y_range, total_height):
+def _overlapping_jobs(task, jobs, today):
+    """과제 기간과 겹치는 직무 구간만 겹치는 부분으로 잘라 반환한다. 종료일이 없는
+    (진행중) 직무는 오늘 날짜로 클리핑한다."""
+    result = []
+    for j in jobs:
+        j_end = j['end'] if j['end'] is not None else today
+        start = max(task['start'], j['start'])
+        end = min(task['end'], j_end)
+        if start <= end:
+            result.append({'name': j['name'], 'start': start, 'end': end})
+    return result
+
+
+def _build_main_spine(tasks, jobs, today, rid, y_range, total_height):
     task_y = _assign_slots([t['start'] for t in tasks], y_range, total_height, _TASK_ROW_GAP_PX)
     groups = _group_overlapping([{'start': t['start'], 'end': t['end']} for t in tasks])
     stack_meta, stores = _assign_stack_groups(groups, [t['start'] for t in tasks], f'{rid}-task')
@@ -233,8 +249,9 @@ def _build_main_spine(tasks, rid, y_range, total_height):
         x_px = _STACK_BASE_X + rank * _STACK_OFFSET_PX
         z_index = 100 - rank
         color = task_colors[t['task_name']]
+        task_jobs = _overlapping_jobs(t, jobs, today)
         children.append(_stack_connector(task_y[idx], x_px, color))
-        children.append(_task_card(t, gkey, rank, task_y[idx], x_px, z_index, color))
+        children.append(_task_card(t, gkey, rank, task_y[idx], x_px, z_index, color, task_jobs))
 
     main_col = html.Div(children, style={'position': 'relative', 'height': f'{total_height}px',
                                           'paddingBottom': '20px'})
@@ -249,11 +266,18 @@ def _stack_connector(y_px, x_px, color):
     })
 
 
-def _task_card(t, gkey, rank, y_px, x_px, z_index, color):
+def _task_card(t, gkey, rank, y_px, x_px, z_index, color, jobs=None):
     start_disp = t['start'].strftime('%y.%m')
     end_disp = '진행중' if t['end_label'] == '진행중' else t['end'].strftime('%y.%m')
     name_disp = truncate(t['task_name'], 20)
     tooltip_id = f'task-tt-{gkey}-{rank}'
+
+    job_lines = [
+        html.Div(f"{j['name']}({j['start'].strftime('%y.%m')}~{j['end'].strftime('%y.%m')})", style={
+            'fontSize': '0.64rem', 'color': _LEGEND_NEUTRAL, 'marginTop': '1px',
+        })
+        for j in (jobs or [])
+    ]
 
     return html.Div([
         html.Div(name_disp, id=tooltip_id, className='fw-semibold',
@@ -262,6 +286,7 @@ def _task_card(t, gkey, rank, y_px, x_px, z_index, color):
         html.Div(f'{start_disp} ~ {end_disp}', style={
             'fontSize': '0.66rem', 'color': _LEGEND_NEUTRAL, 'marginTop': '1px',
         }),
+        *job_lines,
         dbc.Tooltip(t['task_name'], target=tooltip_id, placement='top'),
     ], id={'type': 'stack-card', 'gkey': gkey, 'idx': rank}, n_clicks=0, style={
         'position': 'absolute', 'top': f'{y_px}px', 'left': f'{x_px}px', 'right': '4px',

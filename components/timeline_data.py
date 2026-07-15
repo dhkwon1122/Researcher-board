@@ -90,6 +90,29 @@ def task_points(task_df):
     return points
 
 
+def job_points(job_df):
+    """job_df: researcher_id로 필터링된 job_profile 행(0~1개). wide 포맷
+    (job_profile_name_1..N, job_start_date_1..N, job_end_date_1..N)을 슬롯별로
+    풀어서 [{'name','start','end'}, ...]로 반환한다. end=None은 진행중(종료일 없음)."""
+    if job_df.empty:
+        return []
+    row = job_df.iloc[0]
+    slot_idxs = sorted({
+        int(c.rsplit('_', 1)[1]) for c in job_df.columns
+        if c.startswith('job_profile_name_') and c.rsplit('_', 1)[1].isdigit()
+    })
+    points = []
+    for i in slot_idxs:
+        name = clean(row.get(f'job_profile_name_{i}', ''))
+        start = parse_ts(row.get(f'job_start_date_{i}'))
+        if not name or start is None:
+            continue
+        end = parse_ts(row.get(f'job_end_date_{i}'))
+        points.append({'name': name, 'start': start, 'end': end})
+    points.sort(key=lambda p: p['start'])
+    return points
+
+
 def hr_points(hr_df):
     if hr_df.empty:
         return []

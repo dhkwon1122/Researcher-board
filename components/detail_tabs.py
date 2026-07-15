@@ -293,47 +293,6 @@ def owned_expertise_block(core_df, tech_df, rid):
     ], className='g-0')
 
 
-def expertise_tab(expertise_df, rid):
-    """과제 이력 기반 전문성 분류 결과 표시 (data/processed/researcher_expertise.csv).
-    CLOSE 3: 참여 과제 전체를 종합했을 때 가장 가까운 기술분류 3개.
-    FAR 3: 과제별로는 후보에 올랐지만 최종 전문성과 가장 거리가 먼 기술분류 3개.
-    """
-    if expertise_df.empty:
-        return html.Div('전문성 분석 데이터 없음', className='text-muted p-3')
-    rows = expertise_df[expertise_df['researcher_id'] == rid]
-    if rows.empty:
-        return html.Div('전문성 분석 데이터 없음', className='text-muted p-3')
-
-    close = rows[rows['kind'] == 'CLOSE'].sort_values('rank')
-    far = rows[rows['kind'] == 'FAR'].sort_values('rank')
-
-    def _item(row):
-        category = f"{row.get('category_top', '')} > {row.get('category_mid', '')} > {row.get('category_name', '')}"
-        similarity = row.get('similarity', '')
-        reason = str(row.get('reason', '')).strip()
-        children = [
-            html.Span(category, className='fw-semibold me-2'),
-            html.Span(f'(유사도 {similarity})', className='text-muted small'),
-        ]
-        if reason and reason not in ('nan', 'None'):
-            children.append(html.Div(reason, className='small text-muted mt-1'))
-        return html.Li(children, className='mb-3')
-
-    blocks = [
-        html.P('전문성 CLOSE 3', className='section-label mb-2'),
-        html.Ul([_item(r) for _, r in close.iterrows()], className='ps-3 mb-0')
-        if not close.empty else html.Div('데이터 없음', className='text-muted small mb-3'),
-    ]
-
-    if not far.empty:
-        blocks += [
-            html.P('전문성 FAR 3', className='section-label mb-2 mt-3', style={'color': '#c98a1c'}),
-            html.Ul([_item(r) for _, r in far.iterrows()], className='ps-3 mb-0'),
-        ]
-
-    return html.Div(blocks)
-
-
 def _stat(value, label, color):
     return html.Div([
         html.H5(str(value), className=f'fw-bold stat-value {color} mb-0'),
