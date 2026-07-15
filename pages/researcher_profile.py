@@ -136,14 +136,14 @@ def _selector_card(dept_opts, res_opts, default_dept, default_rid):
 
 
 def _left_stack_col():
-    """사진+정보 카드 + 과제·논문·특허 탭 카드를 세로로 쌓은 왼쪽 묶음.
+    """사진+정보 카드 + 보유 전문성 카드를 세로로 쌓은 왼쪽 묶음.
     둘 다 각각 절대값(PHOTO_INFO_HEIGHT / TABS_SECTION_HEIGHT, 합계 SECTION_HEIGHT)으로
     높이를 고정해, 오른쪽 타임라인 카드와 하단이 맞도록 한다. 넘치는 내용은 내부 스크롤."""
     return dbc.Col(
         html.Div([
             html.Div(_photo_info_card(),
                      style={'flex': '0 0 auto', 'height': f'{PHOTO_INFO_HEIGHT}px', 'overflow': 'hidden'}),
-            html.Div(_task_pub_pat_card(),
+            html.Div(_owned_expertise_stack_card(),
                      style={'flex': '0 0 auto', 'height': f'{TABS_SECTION_HEIGHT}px', 'overflow': 'hidden'}),
         ], style={'height': f'{SECTION_HEIGHT}px', 'display': 'flex', 'flexDirection': 'column'}),
         md=7,
@@ -179,6 +179,17 @@ def _photo_info_card():
     )
 
 
+def _owned_expertise_stack_card():
+    return dbc.Card(
+        dbc.CardBody([
+            html.P('보유 전문성', style={'fontSize': '0.85rem', 'fontWeight': 600,
+                                      'color': '#1d1d1f'}, className='mb-2'),
+            html.Div(id='tab-expertise', style={'maxHeight': f'{TABS_CONTENT_HEIGHT}px', 'overflowY': 'auto'}),
+        ]),
+        className='shadow-sm profile-card h-100',
+    )
+
+
 def _task_pub_pat_card():
     tab_content_style = {'maxHeight': f'{TABS_CONTENT_HEIGHT}px', 'overflowY': 'auto'}
     return dbc.Card(
@@ -200,7 +211,8 @@ def _right_column():
     return dbc.Col(
         dbc.Card(
             dbc.CardBody([
-                html.P('타임라인 (인사발령 · 과제이력 · 논문 · 특허)', className='section-label'),
+                html.P('타임라인', style={'fontSize': '0.85rem', 'fontWeight': 600,
+                                       'color': '#1d1d1f'}, className='mb-2'),
                 html.Div(id='tab-timeline'),
             ]),
             className='shadow-sm profile-card',
@@ -211,17 +223,7 @@ def _right_column():
 
 
 def _detail_tabs_col():
-    return dbc.Col(
-        dbc.Card(
-            dbc.CardBody([
-                html.P('보유 전문성', style={'fontSize': '0.85rem', 'fontWeight': 600,
-                                          'color': '#1d1d1f'}, className='mb-2'),
-                html.Div(id='tab-expertise'),
-            ]),
-            className='shadow-sm profile-card h-100',
-        ),
-        md=7,
-    )
+    return dbc.Col(_task_pub_pat_card(), md=7)
 
 
 def _comments_col():

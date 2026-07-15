@@ -41,7 +41,7 @@ _TASK_CARD_X = _SPINE_X + 26
 _EVENT_PILL_X = _SPINE_X + 26
 _STACK_OFFSET_PX = 16    # 겹치는 과제 카드가 쌓일 때 한 겹당 우측으로 밀리는 거리
 _TASK_ROW_GAP_PX = 40    # 과제 카드 사이 최소 세로 간격
-_EVENT_ROW_GAP_PX = 30   # 이벤트 필 사이 최소 세로 간격
+_EVENT_ROW_GAP_PX = 38   # 이벤트 필 사이 최소 세로 간격(줄바꿈되는 필도 고려해 여유를 둠)
 _TASK_CARD_WIDTH = 168
 
 # ── 색상 ──────────────────────────────────────────────────────────────────
@@ -87,8 +87,8 @@ def timeline_view(task_df, hr_df, pub_df, pat_df, rid):
     support_col = _build_support_spine(pubs, pats, hrs, y_range, total_height)
 
     body = dbc.Row([
-        dbc.Col(main_col, md=7),
-        dbc.Col(support_col, md=5),
+        dbc.Col(main_col, md=6),
+        dbc.Col(support_col, md=6),
     ], className='g-2')
 
     scroll_wrap = html.Div(body, style={'maxHeight': '520px', 'overflowY': 'auto', 'overflowX': 'hidden'})
@@ -319,12 +319,15 @@ def _event_connector(y_px, color):
 
 def _event_pill(e, i, y_px, color):
     pill_id = f'event-pill-{i}'
+    # 컬럼 폭이 좁을 때 텍스트가 프레임 밖으로 잘리지 않도록, 고정폭 대신 남은
+    # 가로 공간(100% - 스파인 여백)을 넘지 않는 선에서 줄바꿈되게 한다.
     pill = html.Div(f"{_ICONS[e['kind']]} {e['text']}", id=pill_id, style={
-        'display': 'inline-block', 'position': 'absolute', 'top': f'{y_px}px',
-        'left': f'{_EVENT_PILL_X}px', 'backgroundColor': color, 'color': '#ffffff',
-        'borderRadius': '999px', 'padding': '4px 14px', 'fontSize': '0.72rem',
-        'fontWeight': 500, 'whiteSpace': 'nowrap', 'boxShadow': '0 1px 3px rgba(0,0,0,0.10)',
-        'zIndex': 5,
+        'position': 'absolute', 'top': f'{y_px}px',
+        'left': f'{_EVENT_PILL_X}px', 'right': '4px',
+        'backgroundColor': color, 'color': '#ffffff',
+        'borderRadius': '14px', 'padding': '4px 14px', 'fontSize': '0.72rem',
+        'fontWeight': 500, 'whiteSpace': 'normal', 'overflowWrap': 'break-word',
+        'boxShadow': '0 1px 3px rgba(0,0,0,0.10)', 'zIndex': 5,
     })
     if not e['title']:
         return pill

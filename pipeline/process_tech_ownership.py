@@ -11,6 +11,8 @@
   researcher_id, tech_1, lv_1, portion_1, tech_2, lv_2, portion_2, ...,
   tech_5, lv_5, portion_5, E_support
 
+portion_N: 원본 보유율(N)이 0.1/0.2 같은 비율로 들어오므로 100을 곱해 10/20으로
+저장한다(화면에는 뒤에 %만 붙여 10%/20%로 표시).
 E_support: 원본 값이 'E'면 'E', 그 외(빈 값 포함)에는 모두 'R'로 통일.
 
 컬럼명이 다를 경우 파일 상단의 COL_* 상수를 수정하세요.
@@ -58,6 +60,18 @@ def _clean_num(val) -> str:
         return s
 
 
+def _scale_portion(val) -> str:
+    """보유율(N)은 원본이 0.1/0.2 같은 비율로 들어오므로 100을 곱해 10/20(%)로 변환."""
+    s = str(val).strip()
+    if s in ('', 'nan', 'None', 'NaT'):
+        return ''
+    try:
+        f = float(s) * 100
+        return str(int(f)) if f == int(f) else str(round(f, 1))
+    except (ValueError, OverflowError):
+        return s
+
+
 def process() -> bool:
     raw_path = os.path.join(RAW_DIR, TECH_OWNERSHIP_FILE)
     if not os.path.exists(raw_path):
@@ -90,7 +104,7 @@ def process() -> bool:
         field_col, lv_col, portion_col = _slot_cols(i)
         out[f'tech_{i}']    = _col(field_col)
         out[f'lv_{i}']      = _col(lv_col).apply(_clean_num)
-        out[f'portion_{i}'] = _col(portion_col).apply(_clean_num)
+        out[f'portion_{i}'] = _col(portion_col).apply(_scale_portion)
         out_cols += [f'tech_{i}', f'lv_{i}', f'portion_{i}']
 
     out['E_support'] = _col(COL_E_SUPPORT).apply(_normalize_e_support) if COL_E_SUPPORT in df.columns \
