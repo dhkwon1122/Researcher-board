@@ -72,7 +72,7 @@ def avatar(name: str, size: int = 88):
 
 def photo_block(rid: str, name: str, row=None, current_year: int = 2026):
     photo_el = None
-    IMG_STYLE = {'width': '100%', 'maxHeight': '200px',
+    IMG_STYLE = {'width': 'auto', 'maxWidth': '100%', 'height': 'auto', 'maxHeight': '200px',
                  'objectFit': 'contain', 'borderRadius': '8px', 'display': 'block'}
 
     src = load_photo_src(rid)

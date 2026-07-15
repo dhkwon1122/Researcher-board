@@ -146,7 +146,7 @@ def _left_stack_col():
             html.Div(_owned_expertise_stack_card(),
                      style={'flex': '0 0 auto', 'height': f'{TABS_SECTION_HEIGHT}px', 'overflow': 'hidden'}),
         ], style={'height': f'{SECTION_HEIGHT}px', 'display': 'flex', 'flexDirection': 'column'}),
-        md=7,
+        md=6,
     )
 
 
@@ -157,7 +157,7 @@ def _photo_info_card():
             dbc.Row([
                 dbc.Col(
                     html.Div(id='photo-block', className='d-flex flex-column align-items-center py-1'),
-                    md=5, className='p-2',
+                    md=4, className='p-2',
                 ),
                 dbc.Col([
                     html.P('학력', className='section-label'),
@@ -171,7 +171,7 @@ def _photo_info_card():
                     html.Hr(className='my-2'),
                     html.P('시상 이력', className='section-label'),
                     html.Div(id='award-block'),
-                ], md=7, className='p-3 border-start',
+                ], md=8, className='p-3 border-start',
                    style={'maxHeight': f'{PHOTO_INFO_HEIGHT - 40}px', 'overflowY': 'auto'}),
             ], className='g-0 h-100'),
         ),
@@ -218,7 +218,7 @@ def _right_column():
             className='shadow-sm profile-card',
             style={'height': f'{SECTION_HEIGHT}px', 'overflow': 'hidden'},
         ),
-        md=5,
+        md=6,
     )
 
 

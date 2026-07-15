@@ -12,9 +12,12 @@
   ├ Main spine(과제)              │ Support spine(논문·특허·인사발령) ┤
   │  점선 스파인 + 연도 라벨      │  점선 스파인                      │
   │  과제 박스 카드                │  타원(pill) 카드                  │
-  │  (겹치는 기간의 과제는 쌓임,   │  (호버 시 논문/특허 title 표시)   │
-  │   클릭하면 맨 위로)            │                                    │
+  │  (겹치는 기간의 과제는 쌓임,   │  (같은 간격 안에 몰린 이벤트도    │
+  │   클릭하면 맨 위로)            │   동일하게 쌓임 + 클릭 시 맨 위로) │
   └────────────────────────────────┴────────────────────────────────┘
+
+과제/이벤트 모두 "겹칠 때 쌓기 + 클릭 시 맨 위로" 로직을 공유한다
+(_group_overlapping, _assign_stack_groups, 클라이언트사이드 콜백).
 """
 
 from datetime import datetime
@@ -36,12 +39,11 @@ from components.timeline_data import (
 
 # ── 레이아웃 상수(px) ─────────────────────────────────────────────────────
 _TOP_PAD = 24
-_SPINE_X = 34            # 스파인이 컬럼 왼쪽 끝에서 떨어진 거리(연도 라벨 공간)
-_TASK_CARD_X = _SPINE_X + 26
-_EVENT_PILL_X = _SPINE_X + 26
-_STACK_OFFSET_PX = 16    # 겹치는 과제 카드가 쌓일 때 한 겹당 우측으로 밀리는 거리
-_TASK_ROW_GAP_PX = 40    # 과제 카드 사이 최소 세로 간격
-_EVENT_ROW_GAP_PX = 38   # 이벤트 필 사이 최소 세로 간격(줄바꿈되는 필도 고려해 여유를 둠)
+_SPINE_X = 34             # 스파인이 컬럼 왼쪽 끝에서 떨어진 거리(연도 라벨 공간)
+_STACK_BASE_X = _SPINE_X + 26   # 스택(과제 카드/이벤트 필 공통) 맨 앞 카드의 x 위치
+_STACK_OFFSET_PX = 16     # 겹치는 카드가 쌓일 때 한 겹당 우측으로 밀리는 거리
+_TASK_ROW_GAP_PX = 40     # 과제 카드 사이 최소 세로 간격
+_EVENT_ROW_GAP_PX = 38    # 이벤트 필 사이 최소 세로 간격(줄바꿈되는 필도 고려해 여유를 둠)
 _TASK_CARD_WIDTH = 168
 
 # ── 색상 ──────────────────────────────────────────────────────────────────
@@ -83,8 +85,8 @@ def timeline_view(task_df, hr_df, pub_df, pat_df, rid):
     total_height = _chart_height(y_range)
 
     header = _header_pills(len(tasks), len(pubs), len(pats))
-    main_col, stores = _build_main_spine(tasks, rid, y_range, total_height)
-    support_col = _build_support_spine(pubs, pats, hrs, y_range, total_height)
+    main_col, main_stores = _build_main_spine(tasks, rid, y_range, total_height)
+    support_col, support_stores = _build_support_spine(pubs, pats, hrs, rid, y_range, total_height)
 
     body = dbc.Row([
         dbc.Col(main_col, md=6),
@@ -92,7 +94,7 @@ def timeline_view(task_df, hr_df, pub_df, pat_df, rid):
     ], className='g-2')
 
     scroll_wrap = html.Div(body, style={'maxHeight': '520px', 'overflowY': 'auto', 'overflowX': 'hidden'})
-    return html.Div([header, scroll_wrap, *stores])
+    return html.Div([header, scroll_wrap, *main_stores, *support_stores])
 
 
 def _chart_height(y_range):
@@ -122,24 +124,51 @@ def _assign_slots(dates, y_range, total_height, min_gap_px):
     return y_px
 
 
-def _group_overlapping_tasks(tasks):
-    """기간이 겹치는(직접·전이적으로) 과제끼리 하나의 그룹으로 묶는다.
-    반환값은 그룹 목록, 각 그룹은 tasks 리스트에 대한 인덱스 목록."""
-    order = sorted(range(len(tasks)), key=lambda i: tasks[i]['start'])
+def _group_overlapping(items):
+    """items: [{'start','end'}, ...] (Timestamp). 구간이 겹치는(직접·전이적으로)
+    항목끼리 하나의 그룹으로 묶는다. 반환값은 그룹 목록(각 그룹은 items에 대한
+    인덱스 리스트), items를 start 기준으로 훑는 스윕 방식."""
+    order = sorted(range(len(items)), key=lambda i: items[i]['start'])
     groups = []
     current, current_end = [], None
     for i in order:
-        t = tasks[i]
-        if current and t['start'] <= current_end:
+        it = items[i]
+        if current and it['start'] <= current_end:
             current.append(i)
-            current_end = max(current_end, t['end'])
+            current_end = max(current_end, it['end'])
         else:
             if current:
                 groups.append(current)
-            current, current_end = [i], t['end']
+            current, current_end = [i], it['end']
     if current:
         groups.append(current)
     return groups
+
+
+def _event_windows(dates, y_range, total_height, gap_px):
+    """단일 날짜 이벤트에도 과제와 동일한 겹침 그룹핑을 적용하기 위해, 최소 간격
+    (gap_px)의 절반만큼 앞뒤로 넓힌 가상 구간을 만든다 — 이 구간이 겹치면(=서로
+    너무 가까워 세로 간격 강제 시 압축이 필요했을 이벤트) 하나의 그룹으로 쌓는다."""
+    total_days = max((y_range[1] - y_range[0]).days, 1)
+    usable = max(total_height - _TOP_PAD * 2, 10)
+    px_per_day = usable / total_days
+    half_gap = pd.Timedelta(days=(gap_px / 2) / px_per_day)
+    return [{'start': d - half_gap, 'end': d + half_gap} for d in dates]
+
+
+def _assign_stack_groups(groups, dates, prefix):
+    """그룹별로 최신 날짜가 앞(rank 0)에 오도록 정렬하고, 카드 스타일/클릭 콜백에
+    쓸 (gkey, rank)를 원래 인덱스별로 반환. 그룹마다 현재 순서를 저장할 dcc.Store도
+    함께 만든다."""
+    stack_meta = {}
+    stores = []
+    for gi, group in enumerate(groups):
+        ordered = sorted(group, key=lambda i: dates[i], reverse=True)
+        gkey = f'{prefix}-g{gi}'
+        for rank, idx in enumerate(ordered):
+            stack_meta[idx] = (gkey, rank)
+        stores.append(dcc.Store(id={'type': 'stack-order', 'gkey': gkey}, data=list(range(len(ordered)))))
+    return stack_meta, stores
 
 
 def _assign_task_colors(tasks):
@@ -188,15 +217,9 @@ def _year_gridlines(y_range, total_height):
 
 def _build_main_spine(tasks, rid, y_range, total_height):
     task_y = _assign_slots([t['start'] for t in tasks], y_range, total_height, _TASK_ROW_GAP_PX)
-    groups = _group_overlapping_tasks(tasks)
+    groups = _group_overlapping([{'start': t['start'], 'end': t['end']} for t in tasks])
+    stack_meta, stores = _assign_stack_groups(groups, [t['start'] for t in tasks], f'{rid}-task')
     task_colors = _assign_task_colors(tasks)
-
-    stack_meta = {}
-    for gi, group in enumerate(groups):
-        ordered = sorted(group, key=lambda i: tasks[i]['start'], reverse=True)
-        gkey = f'{rid}-g{gi}'
-        for rank, idx in enumerate(ordered):
-            stack_meta[idx] = (gkey, rank)
 
     children = [
         html.Div(style={
@@ -205,20 +228,12 @@ def _build_main_spine(tasks, rid, y_range, total_height):
         }),
         *_year_gridlines(y_range, total_height),
     ]
-    stores = []
-    seen_groups = set()
     for idx, t in enumerate(tasks):
         gkey, rank = stack_meta[idx]
-        if gkey not in seen_groups:
-            seen_groups.add(gkey)
-            group_size = sum(1 for v in stack_meta.values() if v[0] == gkey)
-            stores.append(dcc.Store(id={'type': 'task-stack-order', 'gkey': gkey},
-                                     data=list(range(group_size))))
-
-        x_px = _TASK_CARD_X + rank * _STACK_OFFSET_PX
+        x_px = _STACK_BASE_X + rank * _STACK_OFFSET_PX
         z_index = 100 - rank
         color = task_colors[t['task_name']]
-        children.append(_task_connector(task_y[idx], x_px, color))
+        children.append(_stack_connector(task_y[idx], x_px, color))
         children.append(_task_card(t, gkey, rank, task_y[idx], x_px, z_index, color))
 
     main_col = html.Div(children, style={'position': 'relative', 'height': f'{total_height}px',
@@ -226,7 +241,7 @@ def _build_main_spine(tasks, rid, y_range, total_height):
     return main_col, stores
 
 
-def _task_connector(y_px, x_px, color):
+def _stack_connector(y_px, x_px, color):
     return html.Div(style={
         'position': 'absolute', 'top': f'{y_px + 13}px', 'left': f'{_SPINE_X}px',
         'width': f'{max(x_px - _SPINE_X, 0)}px', 'height': '2px',
@@ -248,7 +263,7 @@ def _task_card(t, gkey, rank, y_px, x_px, z_index, color):
             'fontSize': '0.66rem', 'color': _LEGEND_NEUTRAL, 'marginTop': '1px',
         }),
         dbc.Tooltip(t['task_name'], target=tooltip_id, placement='top'),
-    ], id={'type': 'task-card', 'gkey': gkey, 'idx': rank}, n_clicks=0, style={
+    ], id={'type': 'stack-card', 'gkey': gkey, 'idx': rank}, n_clicks=0, style={
         'position': 'absolute', 'top': f'{y_px}px', 'left': f'{x_px}px',
         'zIndex': z_index, 'width': f'{_TASK_CARD_WIDTH}px',
         'backgroundColor': '#ffffff', 'border': f'1.3px solid {color}',
@@ -282,7 +297,7 @@ def _hr_pill_text(p):
     return '  '.join(x for x in (date_str, dep, cl) if x)
 
 
-def _build_support_spine(pubs, pats, hrs, y_range, total_height):
+def _build_support_spine(pubs, pats, hrs, rid, y_range, total_height):
     events = []
     for p in pubs:
         events.append({'date': p['date'], 'kind': '논문', 'text': _pub_pill_text(p), 'title': p['title']})
@@ -292,53 +307,60 @@ def _build_support_spine(pubs, pats, hrs, y_range, total_height):
         events.append({'date': p['date'], 'kind': '인사발령', 'text': _hr_pill_text(p), 'title': None})
 
     if not events:
-        return html.Div(style={'position': 'relative', 'height': f'{total_height}px'})
+        return html.Div(style={'position': 'relative', 'height': f'{total_height}px'}), []
 
-    event_y = _assign_slots([e['date'] for e in events], y_range, total_height, _EVENT_ROW_GAP_PX)
+    dates = [e['date'] for e in events]
+    event_y = _assign_slots(dates, y_range, total_height, _EVENT_ROW_GAP_PX)
+    groups = _group_overlapping(_event_windows(dates, y_range, total_height, _EVENT_ROW_GAP_PX))
+    stack_meta, stores = _assign_stack_groups(groups, dates, f'{rid}-evt')
 
     children = [html.Div(style={
         'position': 'absolute', 'top': '0', 'bottom': '0', 'left': f'{_SPINE_X}px',
         'borderLeft': f'2px dashed {_SPINE_COLOR}',
     })]
     for i, e in enumerate(events):
+        gkey, rank = stack_meta[i]
+        x_px = _STACK_BASE_X + rank * _STACK_OFFSET_PX
+        z_index = 100 - rank
         color = EVENT_COLORS[e['kind']]
-        children.append(_event_connector(event_y[i], color))
-        children.append(_event_pill(e, i, event_y[i], color))
+        children.append(_stack_connector(event_y[i], x_px, color))
+        children.append(_event_pill(e, gkey, rank, event_y[i], x_px, z_index, color))
 
-    return html.Div(children, style={'position': 'relative', 'height': f'{total_height}px',
-                                      'paddingBottom': '20px'})
-
-
-def _event_connector(y_px, color):
-    return html.Div(style={
-        'position': 'absolute', 'top': f'{y_px + 11}px', 'left': f'{_SPINE_X}px',
-        'width': f'{_EVENT_PILL_X - _SPINE_X}px', 'height': '2px',
-        'backgroundColor': color, 'opacity': 0.55, 'zIndex': 1,
-    })
+    support_col = html.Div(children, style={'position': 'relative', 'height': f'{total_height}px',
+                                             'paddingBottom': '20px'})
+    return support_col, stores
 
 
-def _event_pill(e, i, y_px, color):
-    pill_id = f'event-pill-{i}'
+def _event_pill(e, gkey, rank, y_px, x_px, z_index, color):
+    tooltip_id = f'event-tt-{gkey}-{rank}'
     # 컬럼 폭이 좁을 때 텍스트가 프레임 밖으로 잘리지 않도록, 고정폭 대신 남은
     # 가로 공간(100% - 스파인 여백)을 넘지 않는 선에서 줄바꿈되게 한다.
-    pill = html.Div(f"{_ICONS[e['kind']]} {e['text']}", id=pill_id, style={
-        'position': 'absolute', 'top': f'{y_px}px',
-        'left': f'{_EVENT_PILL_X}px', 'right': '4px',
+    inner = html.Div(f"{_ICONS[e['kind']]} {e['text']}", id=tooltip_id, style={
         'backgroundColor': color, 'color': '#ffffff',
         'borderRadius': '14px', 'padding': '4px 14px', 'fontSize': '0.72rem',
         'fontWeight': 500, 'whiteSpace': 'normal', 'overflowWrap': 'break-word',
-        'boxShadow': '0 1px 3px rgba(0,0,0,0.10)', 'zIndex': 5,
+        'boxShadow': '0 1px 3px rgba(0,0,0,0.10)',
     })
+    wrapper = html.Div(
+        inner, id={'type': 'stack-card', 'gkey': gkey, 'idx': rank}, n_clicks=0,
+        style={
+            'position': 'absolute', 'top': f'{y_px}px', 'left': f'{x_px}px', 'right': '4px',
+            'zIndex': z_index, 'cursor': 'pointer',
+        },
+    )
     if not e['title']:
-        return pill
+        return wrapper
     # 특허/논문은 호버 시 전체 title 표시. placement='top'이면 pill 위쪽에 여백을 두고
     # 뜨므로 pill 자체는 가리지 않는다.
-    return html.Div([pill, dbc.Tooltip(e['title'], target=pill_id, placement='top')])
+    return html.Div([wrapper, dbc.Tooltip(e['title'], target=tooltip_id, placement='top')])
 
 
-# ── 클릭한 과제 카드를 스택 맨 위로 올리는 클라이언트사이드 콜백 ───────────
-# idx는 렌더링 시점의 stack_rank(=초기 left 오프셋 배수)와 같으므로, 현재 스타일의
-# left 값에서 idx*OFFSET을 역산해 그룹의 기준 left를 복원한 뒤 새 순서로 재배치한다.
+# ── 클릭한 카드(과제/이벤트 공통)를 스택 맨 위로 올리는 클라이언트사이드 콜백 ──
+# 이전에는 "현재 left 값 - idx*OFFSET"으로 그룹의 기준 x를 역산했는데, 이는 카드가
+# 한 번도 재배치되지 않았을 때만 성립한다. 재배치 이후에는 idx(고정)와 pos(그때그때
+# 순서)가 달라지므로 역산 결과가 어긋나고, 클릭할 때마다 오차가 누적돼 카드가
+# 한쪽으로 계속 밀려나는 버그가 있었다. 기준 x(_STACK_BASE_X)를 역산 없이 상수로
+# 고정해 이 문제를 근본적으로 없앤다.
 dash.clientside_callback(
     """
     function(n_clicks_list, current_styles, current_order) {
@@ -358,6 +380,7 @@ dash.clientside_callback(
         }
         const clickedIdx = triggeredId.idx;
         const OFFSET = """ + str(_STACK_OFFSET_PX) + """;
+        const BASE = """ + str(_STACK_BASE_X) + """;
 
         const outIds = ctx.outputs_list[0].map(o => o.id.idx);
         let order = (current_order && current_order.length ? current_order : outIds.slice()).slice();
@@ -368,9 +391,7 @@ dash.clientside_callback(
         const newStyles = outIds.map((idx, i) => {
             const pos = order.indexOf(idx);
             const style = Object.assign({}, current_styles[i]);
-            const curLeft = parseFloat(style.left);
-            const baseLeft = curLeft - idx * OFFSET;
-            style.left = (baseLeft + pos * OFFSET) + 'px';
+            style.left = (BASE + pos * OFFSET) + 'px';
             style.zIndex = 100 - pos;
             return style;
         });
@@ -378,9 +399,9 @@ dash.clientside_callback(
         return [newStyles, order];
     }
     """,
-    Output({'type': 'task-card', 'gkey': MATCH, 'idx': ALL}, 'style'),
-    Output({'type': 'task-stack-order', 'gkey': MATCH}, 'data'),
-    Input({'type': 'task-card', 'gkey': MATCH, 'idx': ALL}, 'n_clicks'),
-    State({'type': 'task-card', 'gkey': MATCH, 'idx': ALL}, 'style'),
-    State({'type': 'task-stack-order', 'gkey': MATCH}, 'data'),
+    Output({'type': 'stack-card', 'gkey': MATCH, 'idx': ALL}, 'style'),
+    Output({'type': 'stack-order', 'gkey': MATCH}, 'data'),
+    Input({'type': 'stack-card', 'gkey': MATCH, 'idx': ALL}, 'n_clicks'),
+    State({'type': 'stack-card', 'gkey': MATCH, 'idx': ALL}, 'style'),
+    State({'type': 'stack-order', 'gkey': MATCH}, 'data'),
 )
