@@ -2,26 +2,31 @@
 2026 MIT 10대 기술 처리 모듈
 
 원천 파일: data/raw/2026MIT10대기술.xlsx
-출력 파일: data/processed/2026MITTech10.json
+출력 파일: data/processed/2026MITTech10.json, data/processed/2026MITTech10.html
 
 읽는 컬럼:
-  순위, 기술명, 설명
+  No., 기술명, 설명
 
 처리:
   - xlsx를 JSON 배열로 변환합니다.
   - --llm 옵션을 주면, 기술마다 "R&D Project Specialist Agent" 역할의 사내 LLM을
     호출해 해당 기술 연구개발에 필요한 직무·전문성 딥다이브 분석을 생성하고
     expertise_analysis 필드에 채웁니다(마크다운 원문 그대로 저장).
+  - JSON과 함께 2026MITTech10.html도 생성합니다. expertise_analysis 중
+    "R&D 필수 전문성 및 직무 딥다이브 매핑" 섹션만 추출해 직무별 카드로
+    시각화합니다(나머지 섹션은 표시하지 않음).
 
 사용법:
-  python pipeline/process_mit10.py           # JSON 변환만 (전문성 분석 없음)
+  python pipeline/process_mit10.py           # JSON+HTML 변환만 (전문성 분석 없음)
   python pipeline/process_mit10.py --llm     # 전문성 분석 포함
 
 컬럼명이 다를 경우 파일 상단의 COL_* 상수를 수정하세요.
 """
 
+import html
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -34,7 +39,7 @@ OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data',
 MIT10_FILE = '2026MIT10대기술.xlsx'
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
-COL_RANK = '순위'
+COL_RANK = 'No.'
 COL_NAME = '기술명'
 COL_DESC = '설명'
 # ─────────────────────────────────────────────────────────────────────────────
@@ -117,6 +122,187 @@ def _analyze_expertise(name: str, description: str) -> str:
     return call_llm(prompt, _SYSTEM_PROMPT, temperature=0.2, max_tokens=4000)
 
 
+def _extract_section2(analysis_text: str) -> str:
+    """expertise_analysis 마크다운에서 '## 2. R&D 필수 전문성 및 직무 딥다이브
+    매핑' 섹션 본문만 추출(다음 '## 3.' 헤더 전까지). 없으면 빈 문자열."""
+    if not analysis_text:
+        return ''
+    m = re.search(r'^##\s*2[.\)]\s.*$', analysis_text, re.MULTILINE)
+    if not m:
+        return ''
+    start = m.end()
+    m2 = re.search(r'^##\s*[3-9][.\)]', analysis_text[start:], re.MULTILINE)
+    end = start + m2.start() if m2 else len(analysis_text)
+    return analysis_text[start:end].strip(' \n-')
+
+
+def _split_job_blocks(section2_text: str) -> tuple[str, list[str]]:
+    """섹션 본문을 '### ' 헤더 기준으로 인트로 문단과 직무별 블록으로 분리."""
+    intro_lines = []
+    jobs: list[list[str]] = []
+    current = None
+    for line in section2_text.split('\n'):
+        if re.match(r'^###\s+', line.rstrip()):
+            current = [line]
+            jobs.append(current)
+        elif current is not None:
+            current.append(line)
+        else:
+            intro_lines.append(line)
+    return '\n'.join(intro_lines), ['\n'.join(j) for j in jobs]
+
+
+def _inline_md(text: str) -> str:
+    """굵게(**..**)만 HTML로 변환하고 나머지는 이스케이프."""
+    escaped = html.escape(text)
+    return re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', escaped)
+
+
+def _markdown_to_html(text: str) -> str:
+    """딥다이브 섹션에서 쓰이는 제한된 마크다운(###, **굵게**, *중첩 불릿*,
+    번호 목록)만 다루는 최소 변환기. 표/링크 등은 이 섹션에 나오지 않아 미지원."""
+    parts: list[str] = []
+    list_stack: list[tuple[int, str]] = []
+
+    def close_to(level: int):
+        while list_stack and list_stack[-1][0] >= level:
+            parts.append(f'</{list_stack.pop()[1]}>')
+
+    def close_all():
+        close_to(0)
+
+    for raw_line in text.split('\n'):
+        line = raw_line.rstrip()
+        if not line.strip():
+            continue
+
+        m = re.match(r'^(#{3,4})\s*\[?(.+?)\]?$', line.strip())
+        if m:
+            close_all()
+            tag = 'h4' if len(m.group(1)) == 3 else 'h5'
+            parts.append(f'<{tag}>{_inline_md(m.group(2))}</{tag}>')
+            continue
+
+        m = re.match(r'^(\s*)\d+\.\s+(.+)$', line)
+        if m:
+            level = len(m.group(1)) // 2
+            close_to(level + 1)
+            if not list_stack or list_stack[-1][0] != level or list_stack[-1][1] != 'ol':
+                parts.append('<ol>')
+                list_stack.append((level, 'ol'))
+            parts.append(f'<li>{_inline_md(m.group(2))}</li>')
+            continue
+
+        m = re.match(r'^(\s*)[*\-]\s+(.+)$', line)
+        if m:
+            level = len(m.group(1)) // 2
+            close_to(level + 1)
+            if not list_stack or list_stack[-1][0] != level or list_stack[-1][1] != 'ul':
+                parts.append('<ul>')
+                list_stack.append((level, 'ul'))
+            parts.append(f'<li>{_inline_md(m.group(2))}</li>')
+            continue
+
+        if re.match(r'^-{3,}$', line.strip()):
+            close_all()
+            continue
+
+        close_all()
+        parts.append(f'<p>{_inline_md(line.strip())}</p>')
+
+    close_all()
+    return '\n'.join(parts)
+
+
+_HTML_STYLE = """
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 40px 24px 80px; background: #f5f5f7;
+    color: #1d1d1f; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Malgun Gothic', sans-serif;
+    line-height: 1.55;
+  }
+  h1 { font-size: 1.5rem; font-weight: 700; text-align: center; margin: 0 0 8px; }
+  .subtitle { text-align: center; color: #6e6e73; font-size: 0.85rem; margin: 0 0 28px; }
+  nav.toc {
+    max-width: 860px; margin: 0 auto 40px; display: flex; flex-wrap: wrap; gap: 8px;
+    justify-content: center;
+  }
+  nav.toc a {
+    text-decoration: none; color: #0071e3; font-size: 0.78rem; font-weight: 600;
+    border: 1px solid #d2d2d7; border-radius: 999px; padding: 5px 14px; background: #fff;
+  }
+  nav.toc a:hover { background: #0071e3; color: #fff; border-color: #0071e3; }
+  .tech-card {
+    max-width: 860px; margin: 0 auto 32px; background: #fff; border-radius: 18px;
+    padding: 28px 32px; box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+  }
+  .tech-card header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+  .tech-card .rank {
+    display: inline-block; background: #1d1d1f; color: #fff; font-size: 0.72rem;
+    font-weight: 700; border-radius: 999px; padding: 3px 10px;
+  }
+  .tech-card h2 { font-size: 1.15rem; margin: 0; }
+  .tech-card .desc { color: #444; font-size: 0.86rem; margin: 0 0 20px; }
+  .deepdive-title {
+    font-size: 0.95rem; font-weight: 700; color: #0071e3; margin: 0 0 14px;
+    border-top: 1px solid #e8e8ed; padding-top: 18px;
+  }
+  .job-card {
+    border: 1px solid #e8e8ed; border-radius: 12px; padding: 16px 20px; margin: 0 0 14px;
+    background: #fafafa;
+  }
+  .job-card:last-child { margin-bottom: 0; }
+  .expertise h4 { font-size: 0.92rem; margin: 0 0 10px; color: #1d1d1f; }
+  .expertise h5 { font-size: 0.82rem; margin: 12px 0 4px; color: #3a3a3c; }
+  .expertise p { font-size: 0.82rem; margin: 4px 0; color: #333; }
+  .expertise ul, .expertise ol { margin: 4px 0 8px; padding-left: 20px; font-size: 0.82rem; }
+  .expertise li { margin: 2px 0; }
+  .empty { color: #98989d; font-size: 0.82rem; font-style: italic; }
+"""
+
+
+def _build_html(items: list) -> str:
+    toc_links = []
+    cards = []
+    for i, it in enumerate(items, start=1):
+        anchor = f"tech-{it['rank'] if it['rank'] is not None else i}"
+        toc_links.append(f'<a href="#{anchor}">{it["rank"] or i}. {html.escape(it["name"])}</a>')
+
+        section2 = _extract_section2(it.get('expertise_analysis', ''))
+        if section2:
+            intro_raw, job_blocks_raw = _split_job_blocks(section2)
+            expertise_html = _markdown_to_html(intro_raw)
+            expertise_html += ''.join(
+                f'<div class="job-card">{_markdown_to_html(jb)}</div>' for jb in job_blocks_raw
+            )
+        else:
+            expertise_html = '<p class="empty">전문성 분석 데이터 없음 (python pipeline/process_mit10.py --llm 실행 필요)</p>'
+
+        rank_badge = f'<span class="rank">#{it["rank"]}</span>' if it.get('rank') is not None else ''
+        cards.append(f'''<section class="tech-card" id="{anchor}">
+  <header>{rank_badge}<h2>{html.escape(it['name'])}</h2></header>
+  <p class="desc">{html.escape(it.get('description', ''))}</p>
+  <p class="deepdive-title">R&amp;D 필수 전문성 및 직무 딥다이브 매핑</p>
+  <div class="expertise">{expertise_html}</div>
+</section>''')
+
+    return f'''<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>2026 MIT 10대 기술 — R&D 전문성 매핑</title>
+<style>{_HTML_STYLE}</style>
+</head>
+<body>
+<h1>2026 MIT 10대 기술 — R&amp;D 필수 전문성 및 직무 딥다이브 매핑</h1>
+<p class="subtitle">기술별 필요 직무·전문성 분석 (R&amp;D Project Specialist Agent)</p>
+<nav class="toc">{''.join(toc_links)}</nav>
+{''.join(cards)}
+</body>
+</html>'''
+
+
 def process(use_llm: bool = False) -> bool:
     raw_path = os.path.join(RAW_DIR, MIT10_FILE)
     if not os.path.exists(raw_path):
@@ -163,8 +349,13 @@ def process(use_llm: bool = False) -> bool:
     out_path = os.path.join(OUT_DIR, '2026MITTech10.json')
     with open(out_path, 'w', encoding='utf-8') as f:
         json.dump(items, f, ensure_ascii=False, indent=2)
-
     print(f'[OK]   2026MITTech10.json 저장 ({len(items)}건)')
+
+    html_path = os.path.join(OUT_DIR, '2026MITTech10.html')
+    with open(html_path, 'w', encoding='utf-8') as f:
+        f.write(_build_html(items))
+    print(f'[OK]   2026MITTech10.html 저장')
+
     return True
 
 
