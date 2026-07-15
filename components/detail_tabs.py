@@ -207,10 +207,11 @@ def _core_technology_table(core_df):
         field = str(row.get('tech_field', '')).strip()
         name = str(row.get('tech_name', '')).strip()
         grade = _clean_num_str(row.get('tech_grade', '')) or '-'
+        grade_disp = f'{grade}급' if grade != '-' else '-'
         rows.append(html.Tr([
             html.Td(field, className='small', style={'wordBreak': 'break-word'}),
             html.Td(html.Div([
-                _pill(grade, _GRADE_PILL_COLOR),
+                _pill(grade_disp, _GRADE_PILL_COLOR),
                 html.Span(name, className='small ms-2'),
             ], className='d-flex align-items-center'), style={'wordBreak': 'break-word'}),
         ]))

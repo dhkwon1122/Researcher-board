@@ -66,6 +66,10 @@
                         portion_5, E_support
                         ※ '보유기술.xlsx' 가 있으면 자동 추출 (별도 raw 불필요)
                            처리기: pipeline/process_tech_ownership.py
+  job_profile_raw     : researcher_id, name, job_profile_name_1, job_start_date_1,
+                        job_end_date_1, ... (사람마다 최대 직무 구간 수만큼 반복)
+                        ※ '임직원_직무이력.xlsx' 가 있으면 자동 추출 (별도 raw 불필요)
+                           처리기: pipeline/process_job_profile.py
 
 출력 위치: data/processed/
 """
@@ -253,6 +257,18 @@ def run():
             print(f'  [OK]   tech_ownership.csv (tech_ownership_raw 폴백, {len(df)}행)')
         else:
             missing.append('tech_ownership (보유기술.xlsx 또는 tech_ownership_raw)')
+
+    # ── 9-3. 직무이력: 임직원_직무이력.xlsx 우선, 없으면 job_profile_raw 폴백 ─
+    from process_job_profile import process as process_job_profile
+    jobp_ok = process_job_profile()
+    if not jobp_ok:
+        df = _read_raw('job_profile')
+        if df is not None:
+            out_path = os.path.join(OUT_DIR, 'job_profile.csv')
+            df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+            print(f'  [OK]   job_profile.csv (job_profile_raw 폴백, {len(df)}행)')
+        else:
+            missing.append('job_profile (임직원_직무이력.xlsx 또는 job_profile_raw)')
 
     # ── 10. 나머지 테이블 (researchers, publications, technology_transfer, transfers, certifications, succession) ──
     for table in TABLES:
