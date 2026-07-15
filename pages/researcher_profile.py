@@ -8,7 +8,7 @@ import dash
 import dash_bootstrap_components as dbc
 from dash import Input, Output, State, callback, dcc, html, no_update
 
-from components.detail_tabs import owned_expertise_block, patents_tab, publications_tab, timeline_tab
+from components.detail_tabs import owned_expertise_block, patents_tab, publications_tab
 from components.profile_sections import (
     avatar,
     award_block,
@@ -22,6 +22,7 @@ from components.profile_sections import (
     tasks_block,
     transfer_block,
 )
+from components.timeline_view import timeline_view
 from services.comments import upsert_comment
 from services.data_store import read_processed, read_profile_tables
 
@@ -359,8 +360,8 @@ def update_profile(rid):
             leadership_options,
             leadership_default,
             comments_block(tables['comments'], rid),
-            timeline_tab(tables['tasks'], tables['hr_orders'], tables['publications'],
-                         tables['patents'], rid),
+            timeline_view(tables['tasks'], tables['hr_orders'], tables['publications'],
+                          tables['patents'], rid),
             owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid),
         )
     except Exception as exc:

@@ -10,7 +10,7 @@ import dash_bootstrap_components as dbc
 import pandas as pd
 from dash import Input, Output, State, callback, dash_table, dcc, html, no_update
 
-from components.detail_tabs import _dedupe_patents
+from components.timeline_data import dedupe_patents
 from services.data_store import read_processed
 from services.db import db_enabled
 from services.text2sql import run_query
@@ -96,7 +96,7 @@ def _build_summary_df() -> pd.DataFrame:
         # ── 특허 ───────────────────────────────────────────────────────────
         # 타임라인과 동일하게 application_id 기준으로 중복(공동발명자 등) 제거 후 집계
         pats = pat[pat['researcher_id'] == rid]
-        pats_dedup = _dedupe_patents(pats) if not pats.empty else pats
+        pats_dedup = dedupe_patents(pats) if not pats.empty else pats
         pat_app = int((pats_dedup['status'] == '출원').sum()) if not pats_dedup.empty else 0
         pat_reg = int((pats_dedup['status'] == '등록').sum()) if not pats_dedup.empty else 0
 
