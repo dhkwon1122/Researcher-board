@@ -65,6 +65,14 @@
                         ※ '임직원_직무이력.xlsx' 가 있으면 자동 추출 (별도 raw 불필요)
                            처리기: pipeline/process_job_profile.py
 
+[2026 MIT 10대 기술] ★ 전용 원천 파일에서 자동 추출 (별도 raw 불필요)
+  2026MIT10대기술.xlsx (순위, 기술명, 설명)
+    → data/processed/2026MITTech10.json 로 변환
+    ※ 처리기: pipeline/process_mit10.py
+       run_pipeline.py 에서는 JSON 변환까지만 자동 실행되며, 기술별 필요
+       전문성 분석(사내 LLM, R&D Project Specialist Agent 역할)을 포함하려면
+       별도 실행: python pipeline/process_mit10.py --llm
+
 출력 위치: data/processed/
 """
 
@@ -278,6 +286,10 @@ def run():
     # ── 11. 코멘트: 별도 처리 (LLM 요약 옵션 포함) ───────────────────────
     from process_comments import process as process_comments
     process_comments(use_llm=False)
+
+    # ── 11-1. 2026 MIT 10대 기술: JSON 변환 (전문성 분석은 --llm 옵션으로 별도 실행) ─
+    from process_mit10 import process as process_mit10
+    process_mit10(use_llm=False)
 
     # ── 12. DATABASE_URL 설정 시 PostgreSQL 적재 ────────────────────────
     try:
