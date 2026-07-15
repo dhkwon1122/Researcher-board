@@ -10,6 +10,8 @@
 처리:
   - 동일 인물의 동일 직무(job_profile_name)가 연속되는 경우(이전 종료일 + 1일 =
     다음 시작일) 하나의 기간으로 통합합니다.
+  - 종료일이 비어있으면 진행중(현재 직무)으로 보고, 출력 컬럼도 빈 값으로 둡니다
+    (타임라인에서는 이를 "진행중"으로 표기). 시작일 값으로 임의 대체하지 않습니다.
   - researcher_id별로 여러 직무 기간을 옆으로 펼쳐(wide) 한 행으로 만듭니다.
     슬롯 수(N)는 고정값이 아니라, 실제 데이터에서 한 사람이 가진 최대 직무
     기간 수로 정해집니다.
@@ -62,13 +64,15 @@ def _clean(val) -> str:
 
 def _merge_consecutive(records):
     """records: 한 사람의 직무 기록 리스트({'job','start','end'}), start 오름차순
-    정렬된 상태. 같은 job이 '종료일 + 1일 = 다음 시작일'로 이어지면 하나로 합친다."""
+    정렬된 상태. 같은 job이 '종료일 + 1일 = 다음 시작일'로 이어지면 하나로 합친다.
+    end=None은 종료일 없음(진행중)을 뜻하며, 그 뒤로는 추가 병합을 시도하지 않는다."""
     if not records:
         return []
     merged = [dict(records[0])]
     for rec in records[1:]:
         prev = merged[-1]
-        if rec['job'] == prev['job'] and rec['start'] == prev['end'] + pd.Timedelta(days=1):
+        if (rec['job'] == prev['job'] and prev['end'] is not None
+                and rec['start'] == prev['end'] + pd.Timedelta(days=1)):
             prev['end'] = rec['end']
         else:
             merged.append(dict(rec))
@@ -104,7 +108,7 @@ def process() -> bool:
         if start is None:
             continue
         end = _parse_date(row.get(COL_END))
-        if end is None or end < start:
+        if end is not None and end < start:
             end = start
         job = _clean(row.get(COL_JOB))
         by_researcher.setdefault(rid, []).append({'job': job, 'start': start, 'end': end})
@@ -132,7 +136,7 @@ def process() -> bool:
                 rec = merged[i - 1]
                 row[f'job_profile_name_{i}'] = rec['job']
                 row[f'job_start_date_{i}'] = rec['start'].strftime('%Y-%m-%d')
-                row[f'job_end_date_{i}'] = rec['end'].strftime('%Y-%m-%d')
+                row[f'job_end_date_{i}'] = rec['end'].strftime('%Y-%m-%d') if rec['end'] is not None else ''
             else:
                 row[f'job_profile_name_{i}'] = ''
                 row[f'job_start_date_{i}'] = ''
