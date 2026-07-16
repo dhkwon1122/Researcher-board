@@ -8,6 +8,16 @@ from dash import Input, Output, callback, dcc, html
 
 from services.data_store import ASSETS_DIR, RAW_DIR
 
+try:
+    from onelogin.saml2.auth import OneLogin_Saml2_Auth
+    from onelogin.saml2.utils import OneLogin_Saml2_Utils
+    _SAML_AVAILABLE = True
+except ImportError:
+    _SAML_AVAILABLE = False
+
+# SAML 설정 파일 경로 (saml/settings.json, saml/advanced_settings.json)
+SAML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'saml')
+
 # ── Flask/Dash 앱 초기화 ──────────────────────────────────────────────────────
 app = dash.Dash(
     __name__,
@@ -21,6 +31,28 @@ app = dash.Dash(
 app.server.secret_key = os.getenv('FLASK_SECRET_KEY', secrets.token_hex(32))
 
 _IMG_EXTS = ('png', 'jpg', 'jpeg')
+
+
+# ── SAML 헬퍼 ────────────────────────────────────────────────────────────────
+def _prepare_flask_request(request) -> dict:
+    """Flask request 객체를 python3-saml 형식으로 변환.
+    리버스 프록시(X-Forwarded-Proto) 환경을 자동으로 감지.
+    """
+    forwarded_proto = request.headers.get('X-Forwarded-Proto', '')
+    is_https = forwarded_proto.lower() == 'https' or request.scheme == 'https'
+    return {
+        'https': 'on' if is_https else 'off',
+        'http_host': request.host,
+        'script_name': request.path,
+        'get_data': request.args.copy(),
+        'post_data': request.form.copy(),
+    }
+
+
+def _init_saml_auth(request) -> 'OneLogin_Saml2_Auth':
+    req = _prepare_flask_request(request)
+    return OneLogin_Saml2_Auth(req, custom_base_path=SAML_PATH)
+
 
 # ── 사진 서빙 라우트 ──────────────────────────────────────────────────────────
 @app.server.route('/photo/<rid>')
@@ -47,7 +79,7 @@ def serve_photo(rid):
     flask.abort(404)
 
 
-# ── 로그인 페이지 HTML 템플릿 ─────────────────────────────────────────────────
+# ── 로그인 페이지 (SSO 버튼만 표시) ─────────────────────────────────────────
 _LOGIN_HTML = """<!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -62,45 +94,37 @@ _LOGIN_HTML = """<!DOCTYPE html>
     body {{ background:#f0f2f5; min-height:100vh;
             display:flex; align-items:center; justify-content:center; }}
     .login-card {{ border:none; border-radius:12px;
-                   box-shadow:0 4px 24px rgba(0,0,0,.1); max-width:400px; width:100%; }}
-    .btn-primary {{ background-color:#1e3a5f; border-color:#1e3a5f; }}
-    .btn-primary:hover {{ background-color:#163050; border-color:#163050; }}
+                   box-shadow:0 4px 24px rgba(0,0,0,.1); max-width:420px; width:100%; }}
+    .btn-sso {{ background-color:#1e3a5f; border-color:#1e3a5f; font-size:1rem; padding:.6rem 1.5rem; }}
+    .btn-sso:hover {{ background-color:#163050; border-color:#163050; }}
     .brand-icon {{ font-size:2.4rem; color:#1e3a5f; }}
   </style>
 </head>
 <body>
-  <div class="login-card card p-4 mx-3">
+  <div class="login-card card p-5 mx-3">
     <div class="text-center mb-4">
       <i class="bi bi-bar-chart-fill brand-icon"></i>
-      <h5 class="fw-bold mt-2 mb-0">연구원 대시보드</h5>
-      <p class="text-muted small mt-1 mb-0">사내 AD 계정으로 로그인하세요</p>
+      <h5 class="fw-bold mt-2 mb-1">연구원 대시보드</h5>
+      <p class="text-muted small mb-0">피플팀 전용 시스템입니다</p>
     </div>
     {error_block}
-    <form method="POST" action="/auth/login">
-      <input type="hidden" name="next" value="{next_url}">
-      <div class="mb-3">
-        <label class="form-label small fw-semibold">AD 계정 (사번)</label>
-        <div class="input-group">
-          <span class="input-group-text"><i class="bi bi-person"></i></span>
-          <input type="text" class="form-control" name="username"
-                 placeholder="AD 계정명 입력" autocomplete="username" autofocus required>
-        </div>
-      </div>
-      <div class="mb-4">
-        <label class="form-label small fw-semibold">비밀번호</label>
-        <div class="input-group">
-          <span class="input-group-text"><i class="bi bi-lock"></i></span>
-          <input type="password" class="form-control" name="password"
-                 placeholder="비밀번호 입력" autocomplete="current-password" required>
-        </div>
-      </div>
-      <button type="submit" class="btn btn-primary w-100">
-        <i class="bi bi-box-arrow-in-right me-1"></i> 로그인
-      </button>
-    </form>
+    <div class="d-grid mt-2">
+      <a href="/saml/sso?next={next_url}" class="btn btn-sso text-white">
+        <i class="bi bi-shield-lock-fill me-2"></i>사내 AD SSO 로그인
+      </a>
+    </div>
+    <p class="text-center text-muted small mt-4 mb-0">
+      사내 AD 계정으로 자동 인증됩니다.<br>
+      접근 권한 문의: IT 보안팀
+    </p>
   </div>
 </body>
 </html>"""
+
+_ERROR_MESSAGES = {
+    'saml': ('danger',  'SAML 인증에 실패했습니다. 다시 시도하거나 IT 보안팀에 문의하세요.'),
+    'slo':  ('warning', 'SSO 로그아웃 처리 중 오류가 발생했습니다.'),
+}
 
 
 @app.server.route('/login')
@@ -110,54 +134,144 @@ def login_page():
         return flask.redirect('/')
     error = flask.request.args.get('error', '')
     next_url = flask.request.args.get('next', '/')
-    if error == 'invalid':
+
+    if error in _ERROR_MESSAGES:
+        color, msg = _ERROR_MESSAGES[error]
         error_block = (
-            '<div class="alert alert-danger py-2 small">'
-            '<i class="bi bi-exclamation-circle me-1"></i>'
-            'AD 계정 또는 비밀번호가 올바르지 않습니다.'
-            '</div>'
-        )
-    elif error == 'server':
-        error_block = (
-            '<div class="alert alert-warning py-2 small">'
-            '<i class="bi bi-exclamation-triangle me-1"></i>'
-            'AD 서버에 연결할 수 없습니다. 관리자에게 문의하세요.'
-            '</div>'
+            f'<div class="alert alert-{color} py-2 small">'
+            f'<i class="bi bi-exclamation-circle me-1"></i>{msg}'
+            f'</div>'
         )
     else:
         error_block = ''
+
     return _LOGIN_HTML.format(error_block=error_block, next_url=next_url)
 
 
-@app.server.route('/auth/login', methods=['POST'])
-def auth_login():
-    from services.auth import authenticate, set_session
-    username = flask.request.form.get('username', '').strip()
-    password = flask.request.form.get('password', '')
-    next_url = flask.request.form.get('next', '/')
-
-    user = authenticate(username, password)
-    if user is None:
-        # ldap3 미설치 또는 서버 연결 실패와 단순 인증 실패를 구분하기 어려우므로
-        # 현재는 동일한 에러 메시지 표시
-        return flask.redirect(
-            f'/login?error=invalid&next={flask.request.form.get("next", "/")}'
+# ── SAML SSO 시작 ──────────────────────────────────────────────────────────────
+@app.server.route('/saml/sso')
+def saml_sso():
+    """IdP로 인증 요청 리다이렉트. next 파라미터를 RelayState로 전달."""
+    if not _SAML_AVAILABLE:
+        return flask.make_response(
+            'python3-saml 라이브러리가 설치되지 않았습니다. '
+            'pip install python3-saml 을 실행하세요.', 500
         )
+    auth = _init_saml_auth(flask.request)
+    next_url = flask.request.args.get('next', '/')
+    return flask.redirect(auth.login(return_to=next_url))
 
+
+# ── SAML ACS (Assertion Consumer Service) ────────────────────────────────────
+@app.server.route('/saml/acs', methods=['POST'])
+def saml_acs():
+    """IdP에서 POST로 전달된 SAML Response를 검증하고 세션을 생성."""
+    if not _SAML_AVAILABLE:
+        return flask.redirect('/login?error=saml')
+
+    auth = _init_saml_auth(flask.request)
+    request_id = flask.session.get('AuthNRequestID')
+    auth.process_response(request_id=request_id)
+    errors = auth.get_errors()
+
+    if errors or not auth.is_authenticated():
+        return flask.redirect('/login?error=saml')
+
+    if 'AuthNRequestID' in flask.session:
+        del flask.session['AuthNRequestID']
+
+    from services.auth import build_user_from_saml, set_session
+    user = build_user_from_saml(auth.get_attributes(), auth.get_nameid())
     set_session(user)
-    return flask.redirect(next_url if next_url.startswith('/') else '/')
+
+    # SAML 세션 정보 저장 (SLO 에 필요)
+    flask.session['samlNameId'] = auth.get_nameid()
+    flask.session['samlNameIdFormat'] = auth.get_nameid_format()
+    flask.session['samlNameIdNameQualifier'] = auth.get_nameid_nq()
+    flask.session['samlNameIdSPNameQualifier'] = auth.get_nameid_spnq()
+    flask.session['samlSessionIndex'] = auth.get_session_index()
+
+    # RelayState를 원래 목적지로 사용 (오픈 리다이렉트 방지)
+    relay_state = flask.request.form.get('RelayState', '/')
+    req_dict = _prepare_flask_request(flask.request)
+    self_url = OneLogin_Saml2_Utils.get_self_url(req_dict)
+    if relay_state and relay_state != self_url and relay_state.startswith('/'):
+        return flask.redirect(relay_state)
+    return flask.redirect('/')
 
 
+# ── SAML SLO 시작 (앱 → IdP) ─────────────────────────────────────────────────
+@app.server.route('/saml/slo')
+def saml_slo():
+    """사용자가 로그아웃 요청 → IdP에 SLO 요청을 전송."""
+    if not _SAML_AVAILABLE:
+        from services.auth import clear_session
+        clear_session()
+        return flask.redirect('/login')
+
+    auth = _init_saml_auth(flask.request)
+    url = auth.logout(
+        name_id=flask.session.get('samlNameId'),
+        session_index=flask.session.get('samlSessionIndex'),
+        nq=flask.session.get('samlNameIdNameQualifier'),
+        name_id_format=flask.session.get('samlNameIdFormat'),
+        spnq=flask.session.get('samlNameIdSPNameQualifier'),
+    )
+    return flask.redirect(url)
+
+
+# ── SAML SLS (Single Logout Service, IdP → 앱) ───────────────────────────────
+@app.server.route('/saml/sls', methods=['GET', 'POST'])
+def saml_sls():
+    """IdP에서 전달된 로그아웃 응답을 처리하고 세션을 삭제."""
+    if not _SAML_AVAILABLE:
+        flask.session.clear()
+        return flask.redirect('/login')
+
+    auth = _init_saml_auth(flask.request)
+    request_id = flask.session.get('LogoutRequestID')
+
+    def _clear():
+        flask.session.clear()
+
+    url = auth.process_slo(request_id=request_id, delete_session_cb=_clear)
+    errors = auth.get_errors()
+
+    if not errors:
+        return flask.redirect(url) if url else flask.redirect('/login')
+    return flask.redirect('/login?error=slo')
+
+
+# ── SP 메타데이터 엔드포인트 ─────────────────────────────────────────────────
+@app.server.route('/saml/metadata')
+def saml_metadata():
+    """SP 메타데이터 XML 반환. IdP(AD FS)에 SP 등록 시 이 URL을 제출."""
+    if not _SAML_AVAILABLE:
+        return flask.make_response('python3-saml 미설치', 500)
+
+    auth = _init_saml_auth(flask.request)
+    settings = auth.get_settings()
+    metadata = settings.get_sp_metadata()
+    errors = settings.validate_metadata(metadata)
+
+    if not errors:
+        resp = flask.make_response(metadata, 200)
+        resp.headers['Content-Type'] = 'text/xml'
+        return resp
+    return flask.make_response(', '.join(errors), 500)
+
+
+# ── 로그아웃 진입점 ──────────────────────────────────────────────────────────
 @app.server.route('/logout')
 def logout():
-    from services.auth import clear_session
-    clear_session()
-    return flask.redirect('/login')
+    """네비게이션 바의 로그아웃 링크 → SAML SLO 흐름으로 위임."""
+    return flask.redirect('/saml/slo')
 
 
 # ── 인증 미들웨어 ─────────────────────────────────────────────────────────────
-_AUTH_EXEMPT_PREFIXES = ('/assets/', '/photo/', '/_dash', '/_reload')
-_AUTH_EXEMPT_PATHS = {'/login', '/auth/login', '/logout'}
+# /saml/* 전체를 허용 — SSO, ACS, SLO, SLS, metadata 모두 인증 전에 접근 가능해야 함
+_AUTH_EXEMPT_PREFIXES = ('/assets/', '/photo/', '/_dash', '/_reload', '/saml/')
+_AUTH_EXEMPT_PATHS = {'/login', '/logout'}
 
 
 @app.server.before_request
@@ -219,7 +333,6 @@ navbar = dbc.Navbar(
                             className='text-white',
                         )
                     ),
-                    # 사용자 정보 / 로그아웃 (콜백으로 갱신)
                     html.Div(id='_navbar-user', className='d-flex align-items-center ms-3'),
                 ],
                 navbar=True,

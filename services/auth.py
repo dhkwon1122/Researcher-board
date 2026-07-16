@@ -1,31 +1,22 @@
 """
-AD LDAP 인증 및 Flask 세션 기반 권한 관리.
+SAML 기반 사용자 인증 및 Flask 세션 관리.
+python3-saml 라이브러리를 사용하며, 실제 SAML 처리는 app.py의 ACS 라우트에서 수행.
+이 모듈은 SAML assertion 속성 → 앱 역할 매핑과 세션 CRUD를 담당.
 """
 from __future__ import annotations
 
 import flask
 
 try:
-    import ldap3
-    import ldap3.utils.conv as _ldap_conv
-    _LDAP_AVAILABLE = True
-except ImportError:
-    _LDAP_AVAILABLE = False
-
-try:
     from config.auth_config import (
-        AD_BASE_DN, AD_DOMAIN, AD_PORT, AD_SERVER, AD_USE_SSL,
-        DEFAULT_ROLE, ROLE_GROUP_MAPPING, ROLE_LABELS,
-        ROLE_PERMISSIONS, SESSION_LIFETIME_HOURS,
+        DEFAULT_ROLE, ROLE_ATTRIBUTES, ROLE_LABELS,
+        ROLE_PERMISSIONS, SAML_DISPLAY_NAME_ATTR,
+        SAML_EMAIL_ATTR, SAML_ROLE_ATTRIBUTE,
+        SESSION_LIFETIME_HOURS,
     )
 except ImportError:
-    AD_SERVER = 'ldap://localhost'
-    AD_PORT = 389
-    AD_USE_SSL = False
-    AD_BASE_DN = 'DC=company,DC=com'
-    AD_DOMAIN = 'COMPANY'
-    ROLE_GROUP_MAPPING: dict[str, str] = {}
     DEFAULT_ROLE = 'talent_dev'
+    ROLE_ATTRIBUTES: dict[str, str] = {}
     ROLE_LABELS: dict[str, str] = {
         'executive_org': '임원조직 담당자',
         'talent_dev': '인재개발 담당자',
@@ -40,75 +31,40 @@ except ImportError:
             'view_comments': False, 'view_grade': False,
         },
     }
+    SAML_DISPLAY_NAME_ATTR = ''
+    SAML_EMAIL_ATTR = ''
+    SAML_ROLE_ATTRIBUTE = ''
     SESSION_LIFETIME_HOURS = 8
 
 
-def authenticate(username: str, password: str) -> dict | None:
-    """AD LDAP 인증. 성공 시 사용자 dict 반환, 실패 시 None."""
-    if not username or not password:
-        return None
+def build_user_from_saml(attributes: dict, name_id: str) -> dict:
+    """SAML assertion 속성에서 앱 사용자 정보와 역할을 결정.
 
-    if not _LDAP_AVAILABLE:
-        return None
+    Args:
+        attributes: auth.get_attributes() 반환값 (키→값 리스트 dict)
+        name_id: auth.get_nameid() 반환값 (로그인 식별자)
+    """
+    def _first(attr_name: str) -> str:
+        vals = attributes.get(attr_name, [])
+        return vals[0] if vals else ''
 
-    try:
-        server = ldap3.Server(
-            AD_SERVER,
-            port=AD_PORT,
-            use_ssl=AD_USE_SSL,
-            connect_timeout=5,
-        )
-        conn = ldap3.Connection(
-            server,
-            user=f'{AD_DOMAIN}\\{username}',
-            password=password,
-            authentication=ldap3.NTLM,
-            auto_bind=False,
-        )
-        if not conn.bind():
-            return None
+    display_name = _first(SAML_DISPLAY_NAME_ATTR) or name_id
+    email = _first(SAML_EMAIL_ATTR)
 
-        safe_username = _ldap_conv.escape_filter_chars(username)
-        conn.search(
-            search_base=AD_BASE_DN,
-            search_filter=f'(sAMAccountName={safe_username})',
-            attributes=['displayName', 'memberOf', 'mail'],
-        )
+    # 그룹 claim으로 역할 결정
+    user_groups: list[str] = attributes.get(SAML_ROLE_ATTRIBUTE, [])
+    role = DEFAULT_ROLE
+    for app_role, group_value in ROLE_ATTRIBUTES.items():
+        if group_value in user_groups:
+            role = app_role
+            break
 
-        if not conn.entries:
-            conn.unbind()
-            return None
-
-        entry = conn.entries[0]
-        display_name = (
-            str(entry.displayName)
-            if hasattr(entry, 'displayName') and entry.displayName
-            else username
-        )
-        email = (
-            str(entry.mail)
-            if hasattr(entry, 'mail') and entry.mail
-            else ''
-        )
-        member_of = list(entry.memberOf) if hasattr(entry, 'memberOf') else []
-        conn.unbind()
-
-        return {
-            'user_id': username,
-            'display_name': display_name,
-            'email': email,
-            'role': _resolve_role(member_of),
-        }
-    except Exception:
-        return None
-
-
-def _resolve_role(member_of: list[str]) -> str:
-    lower = [dn.lower() for dn in member_of]
-    for role, group_dn in ROLE_GROUP_MAPPING.items():
-        if group_dn.lower() in lower:
-            return role
-    return DEFAULT_ROLE
+    return {
+        'user_id': name_id,
+        'display_name': display_name,
+        'email': email,
+        'role': role,
+    }
 
 
 def get_current_user() -> dict | None:
