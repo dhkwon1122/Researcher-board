@@ -70,9 +70,20 @@ def chat(messages, temperature: float = 0.0, max_tokens: int = 512) -> str:
 
     try:
         data = resp.json()
-        return data['choices'][0]['message']['content'].strip()
+        msg = data['choices'][0]['message']
     except (KeyError, IndexError, ValueError) as exc:
         raise LLMError(f'LLM 응답 파싱 실패: {resp.text[:300]}') from exc
+
+    # reasoning 모델(vllm reasoning parser)은 content 가 null 이고 실제 텍스트가
+    # reasoning_content 에 담길 수 있다. content 우선, 없으면 reasoning_content 폴백.
+    content = msg.get('content') or msg.get('reasoning_content') or ''
+    if not content.strip():
+        raise LLMError(
+            'LLM 이 빈 응답을 반환했습니다(모델이 사고만 하고 답을 못 냈을 수 있음). '
+            'LLM_MAX_TOKENS 를 늘려보세요. '
+            f'원본: {resp.text[:300]}'
+        )
+    return content.strip()
 
 
 def is_configured() -> bool:
