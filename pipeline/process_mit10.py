@@ -12,9 +12,11 @@
   - --llm 옵션을 주면, 기술마다 "R&D Project Specialist Agent" 역할의 사내 LLM을
     호출해 해당 기술 연구개발에 필요한 직무·전문성 딥다이브 분석을 생성하고
     expertise_analysis 필드에 채웁니다(마크다운 원문 그대로 저장).
-  - JSON과 함께 2026MITTech10.html도 생성합니다. expertise_analysis 중
-    "R&D 필수 전문성 및 직무 딥다이브 매핑" 섹션만 추출해 직무별 카드로
-    시각화합니다(나머지 섹션은 표시하지 않음).
+  - JSON과 함께 2026MITTech10.html도 생성합니다. "R&D 필수 전문성 및 직무
+    딥다이브 매핑" 섹션은 직무별 카드로 강조해서 보여주고, 나머지 섹션(개요/
+    인력 수급 매트릭스/HR 제언)은 아코디언으로 접어서 함께 제공합니다.
+    Bootstrap 5(연구원 개별 프로필과 동일 CDN 버전) + marked.js/DOMPurify로
+    렌더링합니다.
 
 사용법:
   python pipeline/process_mit10.py           # JSON+HTML 변환만 (전문성 분석 없음)
@@ -23,6 +25,7 @@
 컬럼명이 다를 경우 파일 상단의 COL_* 상수를 수정하세요.
 """
 
+import base64
 import html
 import json
 import os
@@ -122,26 +125,27 @@ def _analyze_expertise(name: str, description: str) -> str:
     return call_llm(prompt, _SYSTEM_PROMPT, temperature=0.2, max_tokens=4000)
 
 
-def _extract_section2(analysis_text: str) -> str:
-    """expertise_analysis 마크다운에서 '## 2. R&D 필수 전문성 및 직무 딥다이브
-    매핑' 섹션 본문만 추출(다음 '## 3.' 헤더 전까지). 없으면 빈 문자열."""
-    if not analysis_text:
-        return ''
-    m = re.search(r'^##\s*2[.\)]\s.*$', analysis_text, re.MULTILINE)
-    if not m:
-        return ''
-    start = m.end()
-    m2 = re.search(r'^##\s*[3-9][.\)]', analysis_text[start:], re.MULTILINE)
-    end = start + m2.start() if m2 else len(analysis_text)
-    return analysis_text[start:end].strip(' \n-')
+def _split_top_sections(text: str) -> list:
+    """'## ' 최상위 헤더 기준으로 전체 마크다운을 섹션 단위로 분리한다(헤더 행도
+    각 청크에 포함). 첫 '## ' 이전에 다른 텍스트가 있으면 별도 청크로 남는다."""
+    if not text:
+        return []
+    parts = re.split(r'(?m)^(?=##\s+)', text)
+    return [p.strip() for p in parts if p.strip()]
 
 
-def _split_job_blocks(section2_text: str) -> tuple[str, list[str]]:
-    """섹션 본문을 '### ' 헤더 기준으로 인트로 문단과 직무별 블록으로 분리."""
+def _is_deepdive_section(section_text: str) -> bool:
+    first_line = section_text.split('\n', 1)[0]
+    return bool(re.match(r'^##\s*2[.\)]', first_line)) or '딥다이브' in first_line or 'Deep-Dive' in first_line
+
+
+def _split_job_blocks(section_text: str) -> tuple:
+    """섹션 본문(맨 위 '## ...' 헤더는 제외하고 넘겨야 함)을 '### ' 헤더 기준으로
+    인트로 문단과 직무별 블록으로 분리."""
     intro_lines = []
-    jobs: list[list[str]] = []
+    jobs = []
     current = None
-    for line in section2_text.split('\n'):
+    for line in section_text.split('\n'):
         if re.match(r'^###\s+', line.rstrip()):
             current = [line]
             jobs.append(current)
@@ -152,113 +156,104 @@ def _split_job_blocks(section2_text: str) -> tuple[str, list[str]]:
     return '\n'.join(intro_lines), ['\n'.join(j) for j in jobs]
 
 
-def _inline_md(text: str) -> str:
-    """굵게(**..**)만 HTML로 변환하고 나머지는 이스케이프."""
-    escaped = html.escape(text)
-    return re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', escaped)
+_DIFFICULTY_BADGE = {'상': 'text-bg-danger', '중': 'text-bg-warning', '하': 'text-bg-success'}
 
 
-def _markdown_to_html(text: str) -> str:
-    """딥다이브 섹션에서 쓰이는 제한된 마크다운(###, **굵게**, *중첩 불릿*,
-    번호 목록)만 다루는 최소 변환기. 표/링크 등은 이 섹션에 나오지 않아 미지원."""
-    parts: list[str] = []
-    list_stack: list[tuple[int, str]] = []
-
-    def close_to(level: int):
-        while list_stack and list_stack[-1][0] >= level:
-            parts.append(f'</{list_stack.pop()[1]}>')
-
-    def close_all():
-        close_to(0)
-
-    for raw_line in text.split('\n'):
-        line = raw_line.rstrip()
-        if not line.strip():
-            continue
-
-        m = re.match(r'^(#{3,4})\s*\[?(.+?)\]?$', line.strip())
-        if m:
-            close_all()
-            tag = 'h4' if len(m.group(1)) == 3 else 'h5'
-            parts.append(f'<{tag}>{_inline_md(m.group(2))}</{tag}>')
-            continue
-
-        m = re.match(r'^(\s*)\d+\.\s+(.+)$', line)
-        if m:
-            level = len(m.group(1)) // 2
-            close_to(level + 1)
-            if not list_stack or list_stack[-1][0] != level or list_stack[-1][1] != 'ol':
-                parts.append('<ol>')
-                list_stack.append((level, 'ol'))
-            parts.append(f'<li>{_inline_md(m.group(2))}</li>')
-            continue
-
-        m = re.match(r'^(\s*)[*\-]\s+(.+)$', line)
-        if m:
-            level = len(m.group(1)) // 2
-            close_to(level + 1)
-            if not list_stack or list_stack[-1][0] != level or list_stack[-1][1] != 'ul':
-                parts.append('<ul>')
-                list_stack.append((level, 'ul'))
-            parts.append(f'<li>{_inline_md(m.group(2))}</li>')
-            continue
-
-        if re.match(r'^-{3,}$', line.strip()):
-            close_all()
-            continue
-
-        close_all()
-        parts.append(f'<p>{_inline_md(line.strip())}</p>')
-
-    close_all()
-    return '\n'.join(parts)
+def _extract_difficulty(job_block_text: str):
+    m = re.search(r'채용.{0,6}난이도[^:：]*[:：]\*{0,2}\s*\[?\s*(상|중|하)', job_block_text)
+    return m.group(1) if m else None
 
 
+def _extract_job_title(job_block_text: str) -> str:
+    first_line = job_block_text.split('\n', 1)[0]
+    m = re.match(r'^#{2,4}\s*\[?(.+?)\]?\s*$', first_line.strip())
+    return m.group(1).strip() if m else first_line.strip('# ').strip()
+
+
+def _job_body(job_block_text: str) -> str:
+    """### 헤더 첫 줄을 뗀 나머지 본문(마크다운 렌더용)."""
+    lines = job_block_text.split('\n', 1)
+    return lines[1] if len(lines) > 1 else ''
+
+
+def _b64(text: str) -> str:
+    return base64.b64encode(text.encode('utf-8')).decode('ascii')
+
+
+# Bootstrap 5 / Bootstrap Icons — 연구원 개별 프로필 화면(app.py)과 동일한 CDN 버전
+_BOOTSTRAP_CSS = 'https://cdn.jsdelivr.net/npm/bootstrap@5.3.6/dist/css/bootstrap.min.css'
+_BOOTSTRAP_ICONS_CSS = 'https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css'
+_BOOTSTRAP_JS = 'https://cdn.jsdelivr.net/npm/bootstrap@5.3.6/dist/js/bootstrap.bundle.min.js'
+_MARKED_JS = 'https://cdn.jsdelivr.net/npm/marked@4/marked.min.js'
+_DOMPURIFY_JS = 'https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js'
+
+# 연구원 개별 프로필(assets/custom.css)과 동일한 애플 스타일 팔레트를 그대로 사용
 _HTML_STYLE = """
-  :root { color-scheme: light; }
-  * { box-sizing: border-box; }
+  :root {
+    --gs-bg:        #f5f5f7;
+    --gs-surface:   #ffffff;
+    --gs-border:    #e8e8ed;
+    --gs-border-2:  #d2d2d7;
+    --gs-text:      #1d1d1f;
+    --gs-muted:     #6e6e73;
+    --gs-label:     #86868b;
+    --gs-accent:    #0071e3;
+    --gs-font: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text',
+               'Noto Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+  }
   body {
-    margin: 0; padding: 40px 24px 80px; background: #f5f5f7;
-    color: #1d1d1f; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Malgun Gothic', sans-serif;
-    line-height: 1.55;
+    font-family: var(--gs-font); color: var(--gs-text); background-color: var(--gs-bg);
+    -webkit-font-smoothing: antialiased; letter-spacing: -0.011em;
+    padding: 48px 16px 96px;
   }
-  h1 { font-size: 1.5rem; font-weight: 700; text-align: center; margin: 0 0 8px; }
-  .subtitle { text-align: center; color: #6e6e73; font-size: 0.85rem; margin: 0 0 28px; }
-  nav.toc {
-    max-width: 860px; margin: 0 auto 40px; display: flex; flex-wrap: wrap; gap: 8px;
-    justify-content: center;
-  }
-  nav.toc a {
-    text-decoration: none; color: #0071e3; font-size: 0.78rem; font-weight: 600;
-    border: 1px solid #d2d2d7; border-radius: 999px; padding: 5px 14px; background: #fff;
-  }
-  nav.toc a:hover { background: #0071e3; color: #fff; border-color: #0071e3; }
+  h1, h2, h3, h4, h5, h6 { font-family: var(--gs-font); letter-spacing: -0.02em; }
+  .page-header { text-align: center; margin-bottom: 32px; }
+  .page-header h1 { font-size: 1.6rem; font-weight: 700; margin-bottom: 6px; }
+  .page-header p { color: var(--gs-muted); font-size: 0.86rem; }
+  .toc { max-width: 900px; margin: 0 auto 40px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  .toc a { text-decoration: none; }
   .tech-card {
-    max-width: 860px; margin: 0 auto 32px; background: #fff; border-radius: 18px;
-    padding: 28px 32px; box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    max-width: 900px; margin: 0 auto 32px; border: 1px solid var(--gs-border);
+    border-radius: 18px; background: var(--gs-surface); box-shadow: 0 1px 4px rgba(0,0,0,0.06);
   }
-  .tech-card header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
-  .tech-card .rank {
-    display: inline-block; background: #1d1d1f; color: #fff; font-size: 0.72rem;
-    font-weight: 700; border-radius: 999px; padding: 3px 10px;
-  }
-  .tech-card h2 { font-size: 1.15rem; margin: 0; }
-  .tech-card .desc { color: #444; font-size: 0.86rem; margin: 0 0 20px; }
+  .tech-card .card-body { padding: 28px 32px; }
+  .tech-header .badge { font-size: 0.7rem; }
+  .tech-header h2 { font-size: 1.2rem; font-weight: 700; margin: 0; }
+  .tech-desc { color: #444; font-size: 0.86rem; margin: 6px 0 22px; }
   .deepdive-title {
-    font-size: 0.95rem; font-weight: 700; color: #0071e3; margin: 0 0 14px;
-    border-top: 1px solid #e8e8ed; padding-top: 18px;
+    font-size: 1rem; font-weight: 700; color: var(--gs-accent); margin: 0 0 4px;
+    display: flex; align-items: center; gap: 8px;
   }
+  .deepdive-lead { color: var(--gs-muted); font-size: 0.8rem; margin: 0 0 16px; }
   .job-card {
-    border: 1px solid #e8e8ed; border-radius: 12px; padding: 16px 20px; margin: 0 0 14px;
-    background: #fafafa;
+    border: 1px solid var(--gs-border); border-left: 3px solid var(--gs-accent);
+    border-radius: 12px; background: #fafafa; height: 100%;
   }
-  .job-card:last-child { margin-bottom: 0; }
-  .expertise h4 { font-size: 0.92rem; margin: 0 0 10px; color: #1d1d1f; }
-  .expertise h5 { font-size: 0.82rem; margin: 12px 0 4px; color: #3a3a3c; }
-  .expertise p { font-size: 0.82rem; margin: 4px 0; color: #333; }
-  .expertise ul, .expertise ol { margin: 4px 0 8px; padding-left: 20px; font-size: 0.82rem; }
-  .expertise li { margin: 2px 0; }
+  .job-card .card-body { padding: 18px 20px; }
+  .job-card .job-title { font-size: 0.92rem; font-weight: 700; margin: 0; }
+  .job-card .badge { font-size: 0.68rem; }
+  .md-render { font-size: 0.82rem; color: #333; }
+  .md-render h1, .md-render h2, .md-render h3, .md-render h4 { font-size: 0.86rem; margin: 10px 0 4px; color: var(--gs-text); }
+  .md-render p { margin: 4px 0; }
+  .md-render ul, .md-render ol { padding-left: 20px; margin: 4px 0 8px; }
+  .md-render li { margin: 2px 0; }
+  .md-render table { width: 100%; border-collapse: collapse; font-size: 0.78rem; margin: 8px 0; }
+  .md-render th, .md-render td { border: 1px solid var(--gs-border); padding: 6px 8px; text-align: left; }
+  .md-render th { background: var(--gs-bg); font-weight: 600; color: var(--gs-muted); }
   .empty { color: #98989d; font-size: 0.82rem; font-style: italic; }
+  .other-sections .accordion-button {
+    font-size: 0.82rem; font-weight: 600; color: var(--gs-muted); background: var(--gs-bg);
+  }
+  .other-sections .accordion-button:not(.collapsed) { color: var(--gs-text); background: var(--gs-bg); box-shadow: none; }
+  .other-sections .accordion-button:focus { box-shadow: none; }
+"""
+
+_RENDER_SCRIPT = """
+document.querySelectorAll('.md-render[data-md-b64]').forEach(function (el) {
+  var raw = decodeURIComponent(escape(atob(el.dataset.mdB64)));
+  var parsed = marked.parse(raw);
+  el.innerHTML = (window.DOMPurify ? DOMPurify.sanitize(parsed) : parsed);
+});
 """
 
 
@@ -266,39 +261,108 @@ def _build_html(items: list) -> str:
     toc_links = []
     cards = []
     for i, it in enumerate(items, start=1):
-        anchor = f"tech-{it['rank'] if it['rank'] is not None else i}"
-        toc_links.append(f'<a href="#{anchor}">{it["rank"] or i}. {html.escape(it["name"])}</a>')
+        rank = it.get('rank')
+        anchor = f"tech-{rank if rank is not None else i}"
+        toc_links.append(
+            f'<a class="btn btn-sm btn-outline-primary rounded-pill" href="#{anchor}">'
+            f'{rank or i}. {html.escape(it["name"])}</a>'
+        )
 
-        section2 = _extract_section2(it.get('expertise_analysis', ''))
-        if section2:
-            intro_raw, job_blocks_raw = _split_job_blocks(section2)
-            expertise_html = _markdown_to_html(intro_raw)
-            expertise_html += ''.join(
-                f'<div class="job-card">{_markdown_to_html(jb)}</div>' for jb in job_blocks_raw
+        analysis = it.get('expertise_analysis', '')
+        sections = _split_top_sections(analysis)
+        deepdive_idx = next((idx for idx, s in enumerate(sections) if _is_deepdive_section(s)), None)
+
+        if deepdive_idx is not None:
+            deepdive_section = sections[deepdive_idx]
+            other_sections = sections[:deepdive_idx] + sections[deepdive_idx + 1:]
+            # 섹션 자체의 '## 2. ...' 헤더 행은 우리가 별도 타이틀로 그리므로 본문에서 제외
+            deepdive_body = deepdive_section.split('\n', 1)[1] if '\n' in deepdive_section else ''
+            intro_raw, job_blocks_raw = _split_job_blocks(deepdive_body)
+
+            deepdive_lead = (
+                f'<p class="deepdive-lead md-render" data-md-b64="{_b64(intro_raw)}"></p>'
+                if intro_raw.strip() else ''
             )
+            job_cards = []
+            for jb in job_blocks_raw:
+                title = html.escape(_extract_job_title(jb))
+                diff = _extract_difficulty(jb)
+                diff_badge = (
+                    f'<span class="badge rounded-pill {_DIFFICULTY_BADGE.get(diff, "text-bg-secondary")}">'
+                    f'채용난이도 {diff}</span>'
+                ) if diff else ''
+                body = _job_body(jb)
+                job_cards.append(f'''<div class="col-md-6">
+  <div class="job-card card">
+    <div class="card-body">
+      <div class="d-flex justify-content-between align-items-start gap-2 mb-2">
+        <p class="job-title mb-0">{title}</p>
+        {diff_badge}
+      </div>
+      <div class="md-render" data-md-b64="{_b64(body)}"></div>
+    </div>
+  </div>
+</div>''')
+            deepdive_html = f'''<p class="deepdive-title"><i class="bi bi-diagram-3-fill"></i> R&amp;D 필수 전문성 및 직무 딥다이브 매핑</p>
+{deepdive_lead}
+<div class="row row-cols-1 row-cols-lg-2 g-3">{''.join(job_cards)}</div>'''
         else:
-            expertise_html = '<p class="empty">전문성 분석 데이터 없음 (python pipeline/process_mit10.py --llm 실행 필요)</p>'
+            deepdive_html = (
+                '<p class="deepdive-title"><i class="bi bi-diagram-3-fill"></i> '
+                'R&amp;D 필수 전문성 및 직무 딥다이브 매핑</p>'
+                '<p class="empty">전문성 분석 데이터 없음 (python pipeline/process_mit10.py --llm 실행 필요)</p>'
+            )
+            other_sections = []
 
-        rank_badge = f'<span class="rank">#{it["rank"]}</span>' if it.get('rank') is not None else ''
-        cards.append(f'''<section class="tech-card" id="{anchor}">
-  <header>{rank_badge}<h2>{html.escape(it['name'])}</h2></header>
-  <p class="desc">{html.escape(it.get('description', ''))}</p>
-  <p class="deepdive-title">R&amp;D 필수 전문성 및 직무 딥다이브 매핑</p>
-  <div class="expertise">{expertise_html}</div>
+        other_html = ''
+        if other_sections:
+            other_raw = '\n\n'.join(other_sections)
+            other_html = f'''<div class="other-sections accordion accordion-flush mt-4">
+  <div class="accordion-item">
+    <h2 class="accordion-header">
+      <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#{anchor}-more">
+        프로젝트 개요 · 인력 수급 매트릭스 · HR 제언 더 보기
+      </button>
+    </h2>
+    <div id="{anchor}-more" class="accordion-collapse collapse">
+      <div class="accordion-body md-render" data-md-b64="{_b64(other_raw)}"></div>
+    </div>
+  </div>
+</div>'''
+
+        rank_badge = f'<span class="badge text-bg-dark rounded-pill">#{rank}</span>' if rank is not None else ''
+        cards.append(f'''<section class="tech-card card" id="{anchor}">
+  <div class="card-body">
+    <div class="tech-header d-flex align-items-center gap-2 mb-1">
+      {rank_badge}<h2>{html.escape(it['name'])}</h2>
+    </div>
+    <p class="tech-desc">{html.escape(it.get('description', ''))}</p>
+    {deepdive_html}
+    {other_html}
+  </div>
 </section>''')
 
     return f'''<!doctype html>
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<title>2026 MIT 10대 기술 — R&D 전문성 매핑</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2026 MIT 10대 기술 — R&amp;D 전문성 매핑</title>
+<link rel="stylesheet" href="{_BOOTSTRAP_CSS}">
+<link rel="stylesheet" href="{_BOOTSTRAP_ICONS_CSS}">
 <style>{_HTML_STYLE}</style>
 </head>
 <body>
-<h1>2026 MIT 10대 기술 — R&amp;D 필수 전문성 및 직무 딥다이브 매핑</h1>
-<p class="subtitle">기술별 필요 직무·전문성 분석 (R&amp;D Project Specialist Agent)</p>
+<div class="page-header">
+  <h1>2026 MIT 10대 기술 — R&amp;D 필수 전문성 및 직무 딥다이브 매핑</h1>
+  <p>기술별 필요 직무·전문성 분석 (R&amp;D Project Specialist Agent)</p>
+</div>
 <nav class="toc">{''.join(toc_links)}</nav>
 {''.join(cards)}
+<script src="{_MARKED_JS}"></script>
+<script src="{_DOMPURIFY_JS}"></script>
+<script src="{_BOOTSTRAP_JS}"></script>
+<script>{_RENDER_SCRIPT}</script>
 </body>
 </html>'''
 

@@ -66,12 +66,20 @@
                            처리기: pipeline/process_job_profile.py
 
 [2026 MIT 10대 기술] ★ 전용 원천 파일에서 자동 추출 (별도 raw 불필요)
-  2026MIT10대기술.xlsx (순위, 기술명, 설명)
-    → data/processed/2026MITTech10.json 로 변환
+  2026MIT10대기술.xlsx (No., 기술명, 설명)
+    → data/processed/2026MITTech10.json / 2026MITTech10.html 로 변환
     ※ 처리기: pipeline/process_mit10.py
-       run_pipeline.py 에서는 JSON 변환까지만 자동 실행되며, 기술별 필요
+       run_pipeline.py 에서는 JSON+HTML 변환까지만 자동 실행되며, 기술별 필요
        전문성 분석(사내 LLM, R&D Project Specialist Agent 역할)을 포함하려면
        별도 실행: python pipeline/process_mit10.py --llm
+
+[직무정보 참조 데이터] ★ 전용 원천 파일에서 자동 추출 (별도 raw 불필요)
+  직무정보_표준.xlsx (직무, 정의)
+    → data/processed/job_profile_info_standard.json 로 변환
+    ※ 처리기: pipeline/process_job_profile_standard.py
+  직무정보_부서.xlsx (직무, 세부직무, 정의)
+    → data/processed/job_profile_info_sait.json 로 변환
+    ※ 처리기: pipeline/process_job_profile_sait.py
 
 출력 위치: data/processed/
 """
@@ -290,6 +298,12 @@ def run():
     # ── 11-1. 2026 MIT 10대 기술: JSON 변환 (전문성 분석은 --llm 옵션으로 별도 실행) ─
     from process_mit10 import process as process_mit10
     process_mit10(use_llm=False)
+
+    # ── 11-2. 직무정보 참조 데이터: 표준/부서 직무정의 JSON 변환 ──────────
+    from process_job_profile_standard import process as process_job_profile_standard
+    process_job_profile_standard()
+    from process_job_profile_sait import process as process_job_profile_sait
+    process_job_profile_sait()
 
     # ── 12. DATABASE_URL 설정 시 PostgreSQL 적재 ────────────────────────
     try:
