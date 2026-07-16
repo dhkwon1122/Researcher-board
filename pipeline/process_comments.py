@@ -18,22 +18,16 @@ import json
 import os
 import re
 import sys
-import uuid
 
 import pandas as pd
 
 DATA_RAW = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
 DATA_OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
 
+# pipeline 디렉터리 + 프로젝트 루트를 path 에 추가 (services.llm 임포트용)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from excel_reader import read_xlsx, norm_researcher_id_col
-
-# ── 사내 LLM 설정: pipeline/llm_config.py 에서 로드 ─────────────────────────
-try:
-    import llm_config as _cfg
-except ModuleNotFoundError:
-    print('[WARN] pipeline/llm_config.py 없음 — llm_config.example.py를 복사 후 값을 채워주세요.')
-    _cfg = None  # type: ignore
 
 COLS = ['researcher_id', 'year', 'commenter_type',
         'comment_raw', 'comment_summary', 'strengths', 'improvements']
@@ -47,43 +41,21 @@ def _extract_json(text: str) -> str:
 
 
 def _call_llm(prompt: str) -> str:
-    """사내 LLM API 호출 → 응답 텍스트 반환. 실패 시 빈 문자열."""
-    if _cfg is None:
-        print('  [LLM 오류] llm_config.py 가 없어 API 호출을 건너뜁니다.')
-        return ''
+    """로컬/온프레미스 LLM(OpenAI 호환) 호출 → 응답 텍스트. 실패 시 빈 문자열.
 
-    import requests
+    services/llm.py 의 chat() 을 재사용한다. 설정은 환경변수:
+      LLM_BASE_URL (예: http://<vllm서버>:8000/v1), LLM_MODEL, (선택)LLM_API_KEY.
+    """
+    from services.llm import chat, LLMError
 
-    headers = {
-        'Content-Type':      _cfg.CONTENT_TYPE,
-        'Accept':            _cfg.ACCEPT,
-        'x-dep-ticket':      _cfg.LLM_API_KEY,
-        'Send-System-Name':  _cfg.SEND_SYSTEM_NAME,
-        'User-Id':           _cfg.USER_ID,
-        'User-Type':         _cfg.USER_TYPE,
-        'Prompt-Msg-Id':     str(uuid.uuid4()),
-        'Completion-Msg-Id': str(uuid.uuid4()),
-    }
-    payload = {
-        'model': _cfg.LLM_MODEL,
-        'messages': [
-            {'role': 'system', 'content': '당신은 HR 전문 요약 어시스턴트입니다. 요청한 JSON 형식만 출력하세요.'},
-            {'role': 'user',   'content': prompt},
-        ],
-        'temperature': 0.2,
-        'max_tokens':  1200,
-    }
+    messages = [
+        {'role': 'system', 'content': '당신은 HR 전문 요약 어시스턴트입니다. 요청한 JSON 형식만 출력하세요.'},
+        {'role': 'user',   'content': prompt},
+    ]
     try:
-        resp = requests.post(_cfg.LLM_API_URL, json=payload, headers=headers, timeout=_cfg.LLM_TIMEOUT)
-        resp.raise_for_status()
-        return resp.json()['choices'][0]['message']['content'].strip()
-    except requests.HTTPError as exc:
-        status = exc.response.status_code
-        body   = exc.response.text[:300]
-        print(f'  [LLM HTTP 오류] {status} — {body}')
-        return ''
-    except Exception as exc:
-        print(f'  [LLM 오류] {type(exc).__name__}: {exc}')
+        return chat(messages, temperature=0.2, max_tokens=1200)
+    except LLMError as exc:
+        print(f'  [LLM 오류] {exc}')
         return ''
 
 
