@@ -26,3 +26,8 @@ USER_TYPE        = 'your.user.id'   # 보통 USER_ID 와 동일
 CONTENT_TYPE     = 'application/json'
 ACCEPT           = 'application/json'
 # Prompt-Msg-Id / Completion-Msg-Id 는 호출마다 uuid 로 자동 생성됩니다.
+
+# ── 사내 Confluence 접속 정보 (개인 액세스 토큰, PAT 방식) ──────────────────────
+# base URL은 별도로 설정하지 않고, project_confl_address.csv의 각 행 confl_address
+# (컨플루언스 페이지 URL) 에서 그때그때 추출해서 사용합니다.
+CONFLUENCE_TOKEN = 'your-confluence-personal-access-token'   # 개인 액세스 토큰(PAT)
