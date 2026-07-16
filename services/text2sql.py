@@ -9,6 +9,7 @@ Text2SQL: 자연어 질문 → 로컬 LLM 이 PostgreSQL SELECT 생성 → 안�
 권장: DB 에 SELECT 전용 read-only 롤을 부여(문서 참고).
 """
 
+import os
 import re
 
 from services.db import get_engine
@@ -16,6 +17,11 @@ from services.llm import chat, LLMError
 
 DEFAULT_LIMIT = 200
 STATEMENT_TIMEOUT_MS = 10_000
+# SQL 생성 최대 토큰(reasoning 모델은 사고+SQL 이라 넉넉히). env LLM_MAX_TOKENS 로 조정.
+try:
+    _GEN_MAX_TOKENS = int(os.environ.get('LLM_MAX_TOKENS', '1024'))
+except ValueError:
+    _GEN_MAX_TOKENS = 1024
 
 # 문자열 리터럴 제거 후 스캔할 금지 토큰 (쓰기/DDL/권한/세션/시스템 함수)
 _FORBIDDEN = re.compile(
@@ -56,6 +62,34 @@ TABLE_HINTS = {
     'technology_transfer': '기술이전',
     'certifications': '자격/어학(cert_name 예: TOEIC, score, date_obtained)',
     'succession': '승계 계획',
+}
+
+# 컬럼 의미(한국어) — 이름이 모호하지 않은 것만. 스키마 프롬프트에 컬럼별로 붙는다.
+COLUMN_DESC = {
+    'researcher_id': '사번(8자리, 전 테이블 공통 조인키)',
+    'name': '연구원 이름',
+    'department': '부서명',
+    'position': '직급(CL)',
+    'gender': '성별',
+    'birth_year': '출생연도(YYYY)',
+    'year': '연도(YYYY)',
+    'grade': "평가등급: '가'(최상)~'나'~'다'~'라'~'마'(최하)",
+    'score': '평가점수(등급 환산: 가95·나85·다75·라65·마55)',
+    'degree': '최종학위(박사/석사/학사/전문대/고교)',
+    'selected': '인센티브 선정 여부(True/False)',
+    'evaluator_group': "리더십 평가자그룹(본인/상사/동료/부서원/'타인평균')",
+    'overall_score': '리더십 종합점수',
+    '미래통찰': '리더십 역량점수', '성과창출': '리더십 역량점수',
+    '몰입촉진': '리더십 역량점수', '인재육성': '리더십 역량점수',
+    '자기관리': '리더십 역량점수', '저해행동': '리더십 역량점수(낮을수록 좋음)',
+    'status': "특허 진행상태(원문). '등록' 포함=등록특허, '출원' 포함=출원",
+    'patent_grade': '특허 등급', 'is_lead_inventor': '대표발명자 여부',
+    'pub_year': '논문 게재연도', 'impact_factor': '논문 Impact Factor(숫자)',
+    'citation_count': '피인용수(숫자)', 'is_corresponding': '교신저자 여부',
+    'contribution': '논문 기여도(%)', 'author_rank': '저자 순위(숫자)',
+    'cert_name': "자격/어학명(예: TOEIC)", 'award_name': '수상명',
+    'commenter_type': "코멘트 작성자유형(부서장/리더십_*/종합요약)",
+    'rank_type': '승계 준비도(Ready Now/Ready Later)',
 }
 
 # 값 예시를 뽑지 않을(자유텍스트/식별자) 컬럼 이름 패턴
@@ -109,14 +143,18 @@ def build_schema_prompt(engine, *, use_cache: bool = True) -> str:
             if hint:
                 header += f'  -- {hint}'
             lines = [header]
-            # 저카디널리티 컬럼의 실제 값 예시 (필터 정확도에 큰 도움)
+            # 컬럼별 의미(설명) + 저카디널리티 컬럼의 실제 값 예시(필터 정확도에 도움)
             for c in cols:
-                if _SKIP_SAMPLE.search(c):
+                desc = COLUMN_DESC.get(c)
+                vals = None if _SKIP_SAMPLE.search(c) else _sample_values(conn, t, c)
+                if not desc and not vals:
                     continue
-                vals = _sample_values(conn, t, c)
+                parts = []
+                if desc:
+                    parts.append(desc)
                 if vals:
-                    shown = ', '.join(vals[:15])
-                    lines.append(f'    {c} 값 예: {shown}')
+                    parts.append('값 예: ' + ', '.join(vals[:15]))
+                lines.append(f'    {c} — ' + ' / '.join(parts))
             blocks.append('\n'.join(lines))
 
     prompt = '\n'.join(blocks)
@@ -125,8 +163,29 @@ def build_schema_prompt(engine, *, use_cache: bool = True) -> str:
 
 
 def _extract_sql(raw: str) -> str:
-    """LLM 응답에서 코드펜스/설명을 걷어내고 SELECT/WITH 이후만 취한다."""
-    txt = re.sub(r'```(?:sql)?', '', raw, flags=re.IGNORECASE).replace('```', '').strip()
+    """LLM 응답에서 실제 SQL만 추출.
+
+    reasoning 모델(<think>...</think>)과 코드펜스, 설명 텍스트를 견고하게 처리:
+      1) <think> 블록 제거(닫힘 없으면 </think> 뒤만 사용)
+      2) ```sql ... ``` 코드펜스가 있으면 '마지막' 블록 사용(추론 후 최종 답)
+      3) 남은 텍스트에서 SELECT/WITH 이후만 취함
+    """
+    txt = raw or ''
+
+    # 1) reasoning 모델의 사고 블록 제거
+    txt = re.sub(r'<think>.*?</think>', '', txt, flags=re.IGNORECASE | re.DOTALL)
+    low = txt.lower()
+    if '</think>' in low:                      # 닫힘만 있고 열림이 잘린 경우
+        txt = txt[low.rfind('</think>') + len('</think>'):]
+
+    # 2) 코드펜스가 있으면 마지막 SQL 블록을 우선 사용
+    fences = re.findall(r'```(?:sql)?\s*(.*?)```', txt, flags=re.IGNORECASE | re.DOTALL)
+    if fences:
+        txt = fences[-1]
+    else:
+        txt = re.sub(r'```(?:sql)?', '', txt, flags=re.IGNORECASE).replace('```', '')
+
+    # 3) SELECT/WITH 부터
     m = re.search(r'\b(with|select)\b', txt, flags=re.IGNORECASE)
     if m:
         txt = txt[m.start():]
@@ -186,7 +245,8 @@ def _messages(schema: str, question: str):
 
 def generate_sql(question: str, schema: str) -> str:
     """스키마 + few-shot + 질문 → LLM → SQL 문자열."""
-    raw = chat(_messages(schema, question), temperature=0.0, max_tokens=512)
+    # reasoning 모델은 사고에 토큰을 많이 쓰므로 넉넉히(잘리면 SQL 미완성).
+    raw = chat(_messages(schema, question), temperature=0.0, max_tokens=_GEN_MAX_TOKENS)
     sql = _extract_sql(raw)
     if not sql:
         raise Text2SQLError('LLM 이 SQL 을 생성하지 못했습니다. 질문을 더 구체적으로 적어보세요.')
@@ -200,7 +260,7 @@ def repair_sql(question: str, schema: str, bad_sql: str, error: str) -> str:
     msgs.append({'role': 'user', 'content':
                  f'That SQL failed with error:\n{error}\n'
                  'Return a corrected single SELECT query only.'})
-    raw = chat(msgs, temperature=0.0, max_tokens=512)
+    raw = chat(msgs, temperature=0.0, max_tokens=_GEN_MAX_TOKENS)
     sql = _extract_sql(raw)
     if not sql:
         raise Text2SQLError('SQL 재생성 실패.')
