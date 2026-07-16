@@ -25,14 +25,13 @@
 컬럼명이 다를 경우 파일 상단의 COL_* 상수를 수정하세요.
 """
 
-import base64
 import html
 import json
 import os
-import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import mit_markdown as mmd
 from excel_reader import read_xlsx
 from llm_client import call_llm
 
@@ -125,93 +124,7 @@ def _analyze_expertise(name: str, description: str) -> str:
     return call_llm(prompt, _SYSTEM_PROMPT, temperature=0.2, max_tokens=4000)
 
 
-def _split_top_sections(text: str) -> list:
-    """'## ' 최상위 헤더 기준으로 전체 마크다운을 섹션 단위로 분리한다(헤더 행도
-    각 청크에 포함). 첫 '## ' 이전에 다른 텍스트가 있으면 별도 청크로 남는다."""
-    if not text:
-        return []
-    parts = re.split(r'(?m)^(?=##\s+)', text)
-    return [p.strip() for p in parts if p.strip()]
-
-
-def _is_deepdive_section(section_text: str) -> bool:
-    first_line = section_text.split('\n', 1)[0]
-    return bool(re.match(r'^##\s*2[.\)]', first_line)) or '딥다이브' in first_line or 'Deep-Dive' in first_line
-
-
-def _split_job_blocks(section_text: str) -> tuple:
-    """섹션 본문(맨 위 '## ...' 헤더는 제외하고 넘겨야 함)을 '### ' 헤더 기준으로
-    인트로 문단과 직무별 블록으로 분리."""
-    intro_lines = []
-    jobs = []
-    current = None
-    for line in section_text.split('\n'):
-        if re.match(r'^###\s+', line.rstrip()):
-            current = [line]
-            jobs.append(current)
-        elif current is not None:
-            current.append(line)
-        else:
-            intro_lines.append(line)
-    return '\n'.join(intro_lines), ['\n'.join(j) for j in jobs]
-
-
-_DIFFICULTY_BADGE = {'상': 'text-bg-danger', '중': 'text-bg-warning', '하': 'text-bg-success'}
-
-
-def _extract_difficulty(job_block_text: str):
-    m = re.search(r'채용.{0,6}난이도[^:：]*[:：]\*{0,2}\s*\[?\s*(상|중|하)', job_block_text)
-    return m.group(1) if m else None
-
-
-def _extract_job_title(job_block_text: str) -> str:
-    first_line = job_block_text.split('\n', 1)[0]
-    m = re.match(r'^#{2,4}\s*\[?(.+?)\]?\s*$', first_line.strip())
-    return m.group(1).strip() if m else first_line.strip('# ').strip()
-
-
-def _job_body(job_block_text: str) -> str:
-    """### 헤더 첫 줄을 뗀 나머지 본문(마크다운 렌더용)."""
-    lines = job_block_text.split('\n', 1)
-    return lines[1] if len(lines) > 1 else ''
-
-
-def _b64(text: str) -> str:
-    return base64.b64encode(text.encode('utf-8')).decode('ascii')
-
-
-# Bootstrap 5 / Bootstrap Icons — 연구원 개별 프로필 화면(app.py)과 동일한 CDN 버전
-_BOOTSTRAP_CSS = 'https://cdn.jsdelivr.net/npm/bootstrap@5.3.6/dist/css/bootstrap.min.css'
-_BOOTSTRAP_ICONS_CSS = 'https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css'
-_BOOTSTRAP_JS = 'https://cdn.jsdelivr.net/npm/bootstrap@5.3.6/dist/js/bootstrap.bundle.min.js'
-_MARKED_JS = 'https://cdn.jsdelivr.net/npm/marked@4/marked.min.js'
-_DOMPURIFY_JS = 'https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js'
-
-# 연구원 개별 프로필(assets/custom.css)과 동일한 애플 스타일 팔레트를 그대로 사용
-_HTML_STYLE = """
-  :root {
-    --gs-bg:        #f5f5f7;
-    --gs-surface:   #ffffff;
-    --gs-border:    #e8e8ed;
-    --gs-border-2:  #d2d2d7;
-    --gs-text:      #1d1d1f;
-    --gs-muted:     #6e6e73;
-    --gs-label:     #86868b;
-    --gs-accent:    #0071e3;
-    --gs-font: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text',
-               'Noto Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
-  }
-  body {
-    font-family: var(--gs-font); color: var(--gs-text); background-color: var(--gs-bg);
-    -webkit-font-smoothing: antialiased; letter-spacing: -0.011em;
-    padding: 48px 16px 96px;
-  }
-  h1, h2, h3, h4, h5, h6 { font-family: var(--gs-font); letter-spacing: -0.02em; }
-  .page-header { text-align: center; margin-bottom: 32px; }
-  .page-header h1 { font-size: 1.6rem; font-weight: 700; margin-bottom: 6px; }
-  .page-header p { color: var(--gs-muted); font-size: 0.86rem; }
-  .toc { max-width: 900px; margin: 0 auto 40px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
-  .toc a { text-decoration: none; }
+_EXTRA_STYLE = """
   .tech-card {
     max-width: 900px; margin: 0 auto 32px; border: 1px solid var(--gs-border);
     border-radius: 18px; background: var(--gs-surface); box-shadow: 0 1px 4px rgba(0,0,0,0.06);
@@ -232,28 +145,11 @@ _HTML_STYLE = """
   .job-card .card-body { padding: 18px 20px; }
   .job-card .job-title { font-size: 0.92rem; font-weight: 700; margin: 0; }
   .job-card .badge { font-size: 0.68rem; }
-  .md-render { font-size: 0.82rem; color: #333; }
-  .md-render h1, .md-render h2, .md-render h3, .md-render h4 { font-size: 0.86rem; margin: 10px 0 4px; color: var(--gs-text); }
-  .md-render p { margin: 4px 0; }
-  .md-render ul, .md-render ol { padding-left: 20px; margin: 4px 0 8px; }
-  .md-render li { margin: 2px 0; }
-  .md-render table { width: 100%; border-collapse: collapse; font-size: 0.78rem; margin: 8px 0; }
-  .md-render th, .md-render td { border: 1px solid var(--gs-border); padding: 6px 8px; text-align: left; }
-  .md-render th { background: var(--gs-bg); font-weight: 600; color: var(--gs-muted); }
-  .empty { color: #98989d; font-size: 0.82rem; font-style: italic; }
   .other-sections .accordion-button {
     font-size: 0.82rem; font-weight: 600; color: var(--gs-muted); background: var(--gs-bg);
   }
   .other-sections .accordion-button:not(.collapsed) { color: var(--gs-text); background: var(--gs-bg); box-shadow: none; }
   .other-sections .accordion-button:focus { box-shadow: none; }
-"""
-
-_RENDER_SCRIPT = """
-document.querySelectorAll('.md-render[data-md-b64]').forEach(function (el) {
-  var raw = decodeURIComponent(escape(atob(el.dataset.mdB64)));
-  var parsed = marked.parse(raw);
-  el.innerHTML = (window.DOMPurify ? DOMPurify.sanitize(parsed) : parsed);
-});
 """
 
 
@@ -269,29 +165,29 @@ def _build_html(items: list) -> str:
         )
 
         analysis = it.get('expertise_analysis', '')
-        sections = _split_top_sections(analysis)
-        deepdive_idx = next((idx for idx, s in enumerate(sections) if _is_deepdive_section(s)), None)
+        sections = mmd.split_top_sections(analysis)
+        deepdive_idx = next((idx for idx, s in enumerate(sections) if mmd.is_deepdive_section(s)), None)
 
         if deepdive_idx is not None:
             deepdive_section = sections[deepdive_idx]
             other_sections = sections[:deepdive_idx] + sections[deepdive_idx + 1:]
             # 섹션 자체의 '## 2. ...' 헤더 행은 우리가 별도 타이틀로 그리므로 본문에서 제외
             deepdive_body = deepdive_section.split('\n', 1)[1] if '\n' in deepdive_section else ''
-            intro_raw, job_blocks_raw = _split_job_blocks(deepdive_body)
+            intro_raw, job_blocks_raw = mmd.split_job_blocks(deepdive_body)
 
             deepdive_lead = (
-                f'<p class="deepdive-lead md-render" data-md-b64="{_b64(intro_raw)}"></p>'
+                f'<p class="deepdive-lead md-render" data-md-b64="{mmd.b64_encode(intro_raw)}"></p>'
                 if intro_raw.strip() else ''
             )
             job_cards = []
             for jb in job_blocks_raw:
-                title = html.escape(_extract_job_title(jb))
-                diff = _extract_difficulty(jb)
+                title = html.escape(mmd.extract_job_title(jb))
+                diff = mmd.extract_difficulty(jb)
                 diff_badge = (
-                    f'<span class="badge rounded-pill {_DIFFICULTY_BADGE.get(diff, "text-bg-secondary")}">'
+                    f'<span class="badge rounded-pill {mmd.DIFFICULTY_BADGE.get(diff, "text-bg-secondary")}">'
                     f'채용난이도 {diff}</span>'
                 ) if diff else ''
-                body = _job_body(jb)
+                body = mmd.job_body(jb)
                 job_cards.append(f'''<div class="col-md-6">
   <div class="job-card card">
     <div class="card-body">
@@ -299,7 +195,7 @@ def _build_html(items: list) -> str:
         <p class="job-title mb-0">{title}</p>
         {diff_badge}
       </div>
-      <div class="md-render" data-md-b64="{_b64(body)}"></div>
+      <div class="md-render" data-md-b64="{mmd.b64_encode(body)}"></div>
     </div>
   </div>
 </div>''')
@@ -325,7 +221,7 @@ def _build_html(items: list) -> str:
       </button>
     </h2>
     <div id="{anchor}-more" class="accordion-collapse collapse">
-      <div class="accordion-body md-render" data-md-b64="{_b64(other_raw)}"></div>
+      <div class="accordion-body md-render" data-md-b64="{mmd.b64_encode(other_raw)}"></div>
     </div>
   </div>
 </div>'''
@@ -342,29 +238,14 @@ def _build_html(items: list) -> str:
   </div>
 </section>''')
 
-    return f'''<!doctype html>
-<html lang="ko">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>2026 MIT 10대 기술 — R&amp;D 전문성 매핑</title>
-<link rel="stylesheet" href="{_BOOTSTRAP_CSS}">
-<link rel="stylesheet" href="{_BOOTSTRAP_ICONS_CSS}">
-<style>{_HTML_STYLE}</style>
-</head>
-<body>
-<div class="page-header">
-  <h1>2026 MIT 10대 기술 — R&amp;D 필수 전문성 및 직무 딥다이브 매핑</h1>
-  <p>기술별 필요 직무·전문성 분석 (R&amp;D Project Specialist Agent)</p>
-</div>
-<nav class="toc">{''.join(toc_links)}</nav>
-{''.join(cards)}
-<script src="{_MARKED_JS}"></script>
-<script src="{_DOMPURIFY_JS}"></script>
-<script src="{_BOOTSTRAP_JS}"></script>
-<script>{_RENDER_SCRIPT}</script>
-</body>
-</html>'''
+    body_html = f'<nav class="toc">{"".join(toc_links)}</nav>\n{"".join(cards)}'
+    return mmd.html_page(
+        title='2026 MIT 10대 기술 — R&D 전문성 매핑',
+        heading='2026 MIT 10대 기술 — R&amp;D 필수 전문성 및 직무 딥다이브 매핑',
+        subtitle='기술별 필요 직무·전문성 분석 (R&amp;D Project Specialist Agent)',
+        body_html=body_html,
+        extra_style=_EXTRA_STYLE,
+    )
 
 
 def process(use_llm: bool = False) -> bool:

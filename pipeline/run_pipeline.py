@@ -81,6 +81,25 @@
     → data/processed/job_profile_info_sait.json 로 변환
     ※ 처리기: pipeline/process_job_profile_sait.py
 
+[등급/Lv 기준표] ★ 원천 파일 없이 정적 데이터로 생성 (run_pipeline.py에서 자동 실행)
+  → data/processed/core_technology_grade_info.json (핵심기술 등급 S/A/B 개요)
+  → data/processed/tech_ownership_lv_info.json (보유기술 Lv 1~5 개요)
+  ※ 처리기: pipeline/process_rubrics.py
+
+[연구원 보유 전문성 분석 / MIT10 적합도 매칭] ★ 사내 LLM 필요, 비용이 커서
+  run_pipeline.py 자동 실행에는 포함하지 않음. 위 데이터가 모두 준비된 후
+  아래 순서로 별도 실행:
+    1) python pipeline/process_researcher_expertise.py
+       → data/processed/연구원 보유 전문성 분석.json
+         (학력/과제이력/직무이력/핵심기술/보유기술/논문/특허를 종합해 사내
+          LLM이 강점 분야·핵심 기술 역량·도메인 지식을 구조화된 JSON으로 분석.
+          논문 저널 권위도는 data/processed/journal_authority.json 에 캐시)
+    2) python pipeline/process_mit10.py --llm  (아직 안 했다면)
+    3) python pipeline/process_mit10_researcher_fit.py
+       → data/processed/mit10_fit_by_tech.json, mit10_fit_by_researcher.json,
+         mit10_researcher_fit.html
+         (사내 임베딩으로 1차 후보를 추린 뒤 사내 LLM이 최종 적합도 판단)
+
 출력 위치: data/processed/
 """
 
@@ -304,6 +323,18 @@ def run():
     process_job_profile_standard()
     from process_job_profile_sait import process as process_job_profile_sait
     process_job_profile_sait()
+
+    # ── 11-3. 등급/Lv 기준표(정적 참조 데이터) ────────────────────────────
+    from process_rubrics import process as process_rubrics
+    process_rubrics()
+
+    # ※ 연구원별 보유 전문성 분석(사내 LLM, process_researcher_expertise.py)과
+    #   MIT10-연구원 적합도 매칭(process_mit10_researcher_fit.py)은 비용이 크고
+    #   위 데이터가 모두 준비된 후에만 의미가 있어 자동 실행에 포함하지 않는다.
+    #   준비가 끝나면 아래를 순서대로 별도 실행:
+    #     python pipeline/process_researcher_expertise.py
+    #     python pipeline/process_mit10.py --llm   (아직 안 했다면)
+    #     python pipeline/process_mit10_researcher_fit.py
 
     # ── 12. DATABASE_URL 설정 시 PostgreSQL 적재 ────────────────────────
     try:
