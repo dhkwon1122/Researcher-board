@@ -45,6 +45,9 @@ services:
       # LLM(OpenAI 호환). 사내 온프레미스 vllm. (포트 8000 가정 — 다르면 .env 로 덮어씀)
       LLM_BASE_URL: ${LLM_BASE_URL:-http://75.12.15.121:8000/v1}
       LLM_MODEL: ${LLM_MODEL:-thinkingcap}
+      LLM_API_KEY: ${LLM_API_KEY:-}          # 무인증이면 공란
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-180}        # reasoning 모델은 느릴 수 있어 넉넉히
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-2048} # 사고+SQL 여유(잘리면 빈 응답)
       # 런타임 프록시가 있어도 내부 대상(vllm 75.12.15.121, DB, ollama 등)은 프록시 우회.
       NO_PROXY: "localhost,127.0.0.1,::1,host.docker.internal,ollama,db,75.12.15.121,samsungds.net,*.samsungds.net,*.samsung.net,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
       no_proxy: "localhost,127.0.0.1,::1,host.docker.internal,ollama,db,75.12.15.121,samsungds.net,*.samsungds.net,*.samsung.net,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
