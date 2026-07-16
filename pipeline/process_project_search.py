@@ -2,8 +2,9 @@
 과제별 유사 기업/학계 탐색 모듈 (사내 Confluence + 사내 LLM)
 
 data/processed/project_confl_address.csv의 각 과제에 대해:
-  1) 컨플루언스 페이지 본문을 가져와 사내 LLM으로 과제 정보를 요약(핵심 기술/
-     최종 산출물/기술적 난제/국영문 키워드).
+  1) project_summary.py로 컨플루언스 페이지를 요약(핵심 기술/최종 산출물/
+     기술적 난제/국영문 키워드) — process_project_expertise.py와 공유하는
+     캐시(project_summary_cache.json)를 사용해 중복 조회를 피한다.
   2) "R&D Enterprise & Academia Discovery Agent" 역할의 사내 LLM에게 위 요약을
      전달해, 유사 연구를 진행 중인 국내외 기업·스타트업·대학 연구실을 탐색.
   3) 탐색 리포트의 기업/학계 표(마크다운 테이블)를 파싱해 CSV로 저장.
@@ -26,7 +27,6 @@ Output:
 """
 
 import csv
-import json
 import os
 import re
 import sys
@@ -37,24 +37,8 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(BASE_DIR, 'data', 'processed')
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import confluence_client  # noqa: E402
-from llm_client import call_llm, extract_json  # noqa: E402
-
-_MAX_PAGE_CHARS = 6000
-
-_SUMMARY_SYSTEM_PROMPT = """당신은 R&D 과제 문서 분석 전문가입니다. 입력된 과제 관련 문서(Monthly Report,
-과제계획서 등) 원문에서 다음 정보를 정확하게 추출하세요. 문서에 명시되지 않은
-내용은 추정하지 말고 "확인 불가"라고 쓰세요.
-
-반드시 아래 JSON 형식으로만 출력하고, 그 외 텍스트는 출력하지 마세요.
-{
-  "core_tech": "분석된 핵심 연구 대상 기술",
-  "deliverable": "최종 산출물(Deliverables)",
-  "challenge": "현재 직면한 기술적 장벽/난제",
-  "keywords_kr": ["국문 키워드1", "국문 키워드2"],
-  "keywords_en": ["English keyword1", "English keyword2"]
-}
-"""
+import project_summary  # noqa: E402
+from llm_client import call_llm  # noqa: E402
 
 # R&D Enterprise & Academia Discovery Agent — 원문 페르소나/프로세스는 그대로 두고,
 # Output Format에는 CSV 추출에 필요한 "홈페이지"/"확신도" 컬럼과, 할루시네이션을
@@ -143,16 +127,6 @@ def _read_projects() -> pd.DataFrame:
     if not os.path.exists(path):
         return pd.DataFrame()
     return pd.read_csv(path, encoding='utf-8-sig', dtype=str).fillna('')
-
-
-def _summarize_project(page_text: str) -> dict:
-    raw = call_llm(page_text[:_MAX_PAGE_CHARS], _SUMMARY_SYSTEM_PROMPT, temperature=0.1, max_tokens=800)
-    if not raw:
-        return None
-    try:
-        return json.loads(extract_json(raw))
-    except json.JSONDecodeError:
-        return None
 
 
 def _discovery_user_prompt(project_name: str, summary: dict) -> str:
@@ -276,6 +250,7 @@ def process() -> bool:
               '(process_project_confl.py 먼저 실행)')
         return False
 
+    summary_cache = project_summary.load_cache()
     all_rows = []
     print(f'[process_project_search] 과제 {len(projects)}건 처리 중...')
     for _, proj in projects.iterrows():
@@ -283,15 +258,9 @@ def process() -> bool:
         project_name = proj['project_name']
         confl_address = proj['confl_address']
 
-        try:
-            page_text = confluence_client.fetch_page_text(confl_address)
-        except confluence_client.ConfluenceError as exc:
-            print(f'  [{project_name}] 컨플루언스 조회 실패 — 건너뜀: {exc}')
-            continue
-
-        summary = _summarize_project(page_text)
+        summary = project_summary.get_project_summary(project_name, confl_address, summary_cache)
         if summary is None:
-            print(f'  [{project_name}] 과제 요약 실패 — 건너뜀')
+            print(f'  [{project_name}] 건너뜀')
             continue
 
         report = _discover(project_name, summary)
@@ -310,6 +279,8 @@ def process() -> bool:
 
         print(f'  [{project_name}] {len(industry_rows) + len(academia_rows)}건 발굴 '
               f'(기업 {len(industry_rows)} / 학계 {len(academia_rows)})')
+
+    project_summary.save_cache(summary_cache)
 
     result = pd.DataFrame(all_rows, columns=_OUT_COLS)
 
