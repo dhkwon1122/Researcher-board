@@ -113,15 +113,26 @@
       (컨플루언스 페이지를 사내 LLM으로 요약 후, "R&D Enterprise & Academia
        Discovery Agent" 역할로 유사 기업/스타트업/대학연구실을 탐색)
     python pipeline/process_project_expertise.py
-    → data/processed/project_expertise_analysis.json
+    → data/processed/project_expertise_analysis.json / .html
       (컨플루언스 페이지를 사내 LLM으로 요약 후, process_mit10.py와 동일한
        "R&D Project Specialist Agent" 역할로 과제별 필요 직무·전문성 딥다이브
-       분석을 생성)
+       분석을 생성. 2026MITTech10.html과 동일한 방식으로 HTML도 함께 생성)
     ※ 두 스크립트 모두 project_summary.py를 통해 컨플루언스 요약 결과를
        data/processed/project_summary_cache.json 에 공유 캐시하므로, 같은
        과제를 두 번 요약하지 않는다.
     ※ Confluence 접속: pipeline/llm_config.py의 CONFLUENCE_TOKEN(PAT) 필요
        (llm_config.example.py 참고). atlassian-python-api 패키지 설치 필요.
+
+[사내 과제 ↔ 연구원 적합도 매칭] ★ 사내 LLM 필요, 비용이 커서 자동 실행에는
+  포함하지 않음. project_expertise_analysis.json과 연구원 보유 전문성 분석.json
+  준비 후 별도 실행:
+    python pipeline/process_project_researcher_fit.py
+    → data/processed/project_fit_by_project.json,
+      project_fit_by_researcher.json, project_researcher_fit.html
+      (mit10_researcher_fit과 동일한 방식 — 임베딩 1차 후보 추출 + 사내 LLM
+       "R&D Talent Matching Agent"로 과제 기준/인별 기준 두 방향 적합도 판단.
+       매칭 로직은 pipeline/researcher_fit.py를 process_mit10_researcher_fit.py와
+       공유)
 
 출력 위치: data/processed/
 """

@@ -51,35 +51,6 @@ def _clean(val) -> str:
     return '' if s.lower() in ('nan', 'none', 'nat') else s
 
 
-_EXTRA_STYLE = """
-  .tech-card {
-    max-width: 900px; margin: 0 auto 32px; border: 1px solid var(--gs-border);
-    border-radius: 18px; background: var(--gs-surface); box-shadow: 0 1px 4px rgba(0,0,0,0.06);
-  }
-  .tech-card .card-body { padding: 28px 32px; }
-  .tech-header .badge { font-size: 0.7rem; }
-  .tech-header h2 { font-size: 1.2rem; font-weight: 700; margin: 0; }
-  .tech-desc { color: #444; font-size: 0.86rem; margin: 6px 0 22px; }
-  .deepdive-title {
-    font-size: 1rem; font-weight: 700; color: var(--gs-accent); margin: 0 0 4px;
-    display: flex; align-items: center; gap: 8px;
-  }
-  .deepdive-lead { color: var(--gs-muted); font-size: 0.8rem; margin: 0 0 16px; }
-  .job-card {
-    border: 1px solid var(--gs-border); border-left: 3px solid var(--gs-accent);
-    border-radius: 12px; background: #fafafa; height: 100%;
-  }
-  .job-card .card-body { padding: 18px 20px; }
-  .job-card .job-title { font-size: 0.92rem; font-weight: 700; margin: 0; }
-  .job-card .badge { font-size: 0.68rem; }
-  .other-sections .accordion-button {
-    font-size: 0.82rem; font-weight: 600; color: var(--gs-muted); background: var(--gs-bg);
-  }
-  .other-sections .accordion-button:not(.collapsed) { color: var(--gs-text); background: var(--gs-bg); box-shadow: none; }
-  .other-sections .accordion-button:focus { box-shadow: none; }
-"""
-
-
 def _build_html(items: list) -> str:
     toc_links = []
     cards = []
@@ -91,67 +62,10 @@ def _build_html(items: list) -> str:
             f'{rank or i}. {html.escape(it["name"])}</a>'
         )
 
-        analysis = it.get('expertise_analysis', '')
-        sections = mmd.split_top_sections(analysis)
-        deepdive_idx = next((idx for idx, s in enumerate(sections) if mmd.is_deepdive_section(s)), None)
-
-        if deepdive_idx is not None:
-            deepdive_section = sections[deepdive_idx]
-            other_sections = sections[:deepdive_idx] + sections[deepdive_idx + 1:]
-            # 섹션 자체의 '## 2. ...' 헤더 행은 우리가 별도 타이틀로 그리므로 본문에서 제외
-            deepdive_body = deepdive_section.split('\n', 1)[1] if '\n' in deepdive_section else ''
-            intro_raw, job_blocks_raw = mmd.split_job_blocks(deepdive_body)
-
-            deepdive_lead = (
-                f'<p class="deepdive-lead md-render" data-md-b64="{mmd.b64_encode(intro_raw)}"></p>'
-                if intro_raw.strip() else ''
-            )
-            job_cards = []
-            for jb in job_blocks_raw:
-                title = html.escape(mmd.extract_job_title(jb))
-                diff = mmd.extract_difficulty(jb)
-                diff_badge = (
-                    f'<span class="badge rounded-pill {mmd.DIFFICULTY_BADGE.get(diff, "text-bg-secondary")}">'
-                    f'채용난이도 {diff}</span>'
-                ) if diff else ''
-                body = mmd.job_body(jb)
-                job_cards.append(f'''<div class="col-md-6">
-  <div class="job-card card">
-    <div class="card-body">
-      <div class="d-flex justify-content-between align-items-start gap-2 mb-2">
-        <p class="job-title mb-0">{title}</p>
-        {diff_badge}
-      </div>
-      <div class="md-render" data-md-b64="{mmd.b64_encode(body)}"></div>
-    </div>
-  </div>
-</div>''')
-            deepdive_html = f'''<p class="deepdive-title"><i class="bi bi-diagram-3-fill"></i> R&amp;D 필수 전문성 및 직무 딥다이브 매핑</p>
-{deepdive_lead}
-<div class="row row-cols-1 row-cols-lg-2 g-3">{''.join(job_cards)}</div>'''
-        else:
-            deepdive_html = (
-                '<p class="deepdive-title"><i class="bi bi-diagram-3-fill"></i> '
-                'R&amp;D 필수 전문성 및 직무 딥다이브 매핑</p>'
-                '<p class="empty">전문성 분석 데이터 없음 (python pipeline/process_mit10.py --llm 실행 필요)</p>'
-            )
-            other_sections = []
-
-        other_html = ''
-        if other_sections:
-            other_raw = '\n\n'.join(other_sections)
-            other_html = f'''<div class="other-sections accordion accordion-flush mt-4">
-  <div class="accordion-item">
-    <h2 class="accordion-header">
-      <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#{anchor}-more">
-        프로젝트 개요 · 인력 수급 매트릭스 · HR 제언 더 보기
-      </button>
-    </h2>
-    <div id="{anchor}-more" class="accordion-collapse collapse">
-      <div class="accordion-body md-render" data-md-b64="{mmd.b64_encode(other_raw)}"></div>
-    </div>
-  </div>
-</div>'''
+        deepdive_html, other_html = mmd.render_expertise_html(
+            it.get('expertise_analysis', ''), anchor,
+            empty_message='전문성 분석 데이터 없음 (python pipeline/process_mit10.py --llm 실행 필요)',
+        )
 
         rank_badge = f'<span class="badge text-bg-dark rounded-pill">#{rank}</span>' if rank is not None else ''
         cards.append(f'''<section class="tech-card card" id="{anchor}">
@@ -171,7 +85,7 @@ def _build_html(items: list) -> str:
         heading='2026 MIT 10대 기술 — R&amp;D 필수 전문성 및 직무 딥다이브 매핑',
         subtitle='기술별 필요 직무·전문성 분석 (R&amp;D Project Specialist Agent)',
         body_html=body_html,
-        extra_style=_EXTRA_STYLE,
+        extra_style=mmd.EXPERTISE_CARD_STYLE,
     )
 
 
