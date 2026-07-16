@@ -64,6 +64,34 @@ TABLE_HINTS = {
     'succession': '승계 계획',
 }
 
+# 컬럼 의미(한국어) — 이름이 모호하지 않은 것만. 스키마 프롬프트에 컬럼별로 붙는다.
+COLUMN_DESC = {
+    'researcher_id': '사번(8자리, 전 테이블 공통 조인키)',
+    'name': '연구원 이름',
+    'department': '부서명',
+    'position': '직급(CL)',
+    'gender': '성별',
+    'birth_year': '출생연도(YYYY)',
+    'year': '연도(YYYY)',
+    'grade': "평가등급: '가'(최상)~'나'~'다'~'라'~'마'(최하)",
+    'score': '평가점수(등급 환산: 가95·나85·다75·라65·마55)',
+    'degree': '최종학위(박사/석사/학사/전문대/고교)',
+    'selected': '인센티브 선정 여부(True/False)',
+    'evaluator_group': "리더십 평가자그룹(본인/상사/동료/부서원/'타인평균')",
+    'overall_score': '리더십 종합점수',
+    '미래통찰': '리더십 역량점수', '성과창출': '리더십 역량점수',
+    '몰입촉진': '리더십 역량점수', '인재육성': '리더십 역량점수',
+    '자기관리': '리더십 역량점수', '저해행동': '리더십 역량점수(낮을수록 좋음)',
+    'status': "특허 진행상태(원문). '등록' 포함=등록특허, '출원' 포함=출원",
+    'patent_grade': '특허 등급', 'is_lead_inventor': '대표발명자 여부',
+    'pub_year': '논문 게재연도', 'impact_factor': '논문 Impact Factor(숫자)',
+    'citation_count': '피인용수(숫자)', 'is_corresponding': '교신저자 여부',
+    'contribution': '논문 기여도(%)', 'author_rank': '저자 순위(숫자)',
+    'cert_name': "자격/어학명(예: TOEIC)", 'award_name': '수상명',
+    'commenter_type': "코멘트 작성자유형(부서장/리더십_*/종합요약)",
+    'rank_type': '승계 준비도(Ready Now/Ready Later)',
+}
+
 # 값 예시를 뽑지 않을(자유텍스트/식별자) 컬럼 이름 패턴
 _SKIP_SAMPLE = re.compile(
     r'(_id$|^id$|name|title|raw|summary|strengths|improvements|knox|date|url|path)',
@@ -115,14 +143,18 @@ def build_schema_prompt(engine, *, use_cache: bool = True) -> str:
             if hint:
                 header += f'  -- {hint}'
             lines = [header]
-            # 저카디널리티 컬럼의 실제 값 예시 (필터 정확도에 큰 도움)
+            # 컬럼별 의미(설명) + 저카디널리티 컬럼의 실제 값 예시(필터 정확도에 도움)
             for c in cols:
-                if _SKIP_SAMPLE.search(c):
+                desc = COLUMN_DESC.get(c)
+                vals = None if _SKIP_SAMPLE.search(c) else _sample_values(conn, t, c)
+                if not desc and not vals:
                     continue
-                vals = _sample_values(conn, t, c)
+                parts = []
+                if desc:
+                    parts.append(desc)
                 if vals:
-                    shown = ', '.join(vals[:15])
-                    lines.append(f'    {c} 값 예: {shown}')
+                    parts.append('값 예: ' + ', '.join(vals[:15]))
+                lines.append(f'    {c} — ' + ' / '.join(parts))
             blocks.append('\n'.join(lines))
 
     prompt = '\n'.join(blocks)
