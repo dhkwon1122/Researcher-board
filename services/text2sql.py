@@ -9,6 +9,7 @@ Text2SQL: 자연어 질문 → 로컬 LLM 이 PostgreSQL SELECT 생성 → 안�
 권장: DB 에 SELECT 전용 read-only 롤을 부여(문서 참고).
 """
 
+import os
 import re
 
 from services.db import get_engine
@@ -16,6 +17,11 @@ from services.llm import chat, LLMError
 
 DEFAULT_LIMIT = 200
 STATEMENT_TIMEOUT_MS = 10_000
+# SQL 생성 최대 토큰(reasoning 모델은 사고+SQL 이라 넉넉히). env LLM_MAX_TOKENS 로 조정.
+try:
+    _GEN_MAX_TOKENS = int(os.environ.get('LLM_MAX_TOKENS', '1024'))
+except ValueError:
+    _GEN_MAX_TOKENS = 1024
 
 # 문자열 리터럴 제거 후 스캔할 금지 토큰 (쓰기/DDL/권한/세션/시스템 함수)
 _FORBIDDEN = re.compile(
@@ -125,8 +131,29 @@ def build_schema_prompt(engine, *, use_cache: bool = True) -> str:
 
 
 def _extract_sql(raw: str) -> str:
-    """LLM 응답에서 코드펜스/설명을 걷어내고 SELECT/WITH 이후만 취한다."""
-    txt = re.sub(r'```(?:sql)?', '', raw, flags=re.IGNORECASE).replace('```', '').strip()
+    """LLM 응답에서 실제 SQL만 추출.
+
+    reasoning 모델(<think>...</think>)과 코드펜스, 설명 텍스트를 견고하게 처리:
+      1) <think> 블록 제거(닫힘 없으면 </think> 뒤만 사용)
+      2) ```sql ... ``` 코드펜스가 있으면 '마지막' 블록 사용(추론 후 최종 답)
+      3) 남은 텍스트에서 SELECT/WITH 이후만 취함
+    """
+    txt = raw or ''
+
+    # 1) reasoning 모델의 사고 블록 제거
+    txt = re.sub(r'<think>.*?</think>', '', txt, flags=re.IGNORECASE | re.DOTALL)
+    low = txt.lower()
+    if '</think>' in low:                      # 닫힘만 있고 열림이 잘린 경우
+        txt = txt[low.rfind('</think>') + len('</think>'):]
+
+    # 2) 코드펜스가 있으면 마지막 SQL 블록을 우선 사용
+    fences = re.findall(r'```(?:sql)?\s*(.*?)```', txt, flags=re.IGNORECASE | re.DOTALL)
+    if fences:
+        txt = fences[-1]
+    else:
+        txt = re.sub(r'```(?:sql)?', '', txt, flags=re.IGNORECASE).replace('```', '')
+
+    # 3) SELECT/WITH 부터
     m = re.search(r'\b(with|select)\b', txt, flags=re.IGNORECASE)
     if m:
         txt = txt[m.start():]
@@ -186,7 +213,8 @@ def _messages(schema: str, question: str):
 
 def generate_sql(question: str, schema: str) -> str:
     """스키마 + few-shot + 질문 → LLM → SQL 문자열."""
-    raw = chat(_messages(schema, question), temperature=0.0, max_tokens=512)
+    # reasoning 모델은 사고에 토큰을 많이 쓰므로 넉넉히(잘리면 SQL 미완성).
+    raw = chat(_messages(schema, question), temperature=0.0, max_tokens=_GEN_MAX_TOKENS)
     sql = _extract_sql(raw)
     if not sql:
         raise Text2SQLError('LLM 이 SQL 을 생성하지 못했습니다. 질문을 더 구체적으로 적어보세요.')
@@ -200,7 +228,7 @@ def repair_sql(question: str, schema: str, bad_sql: str, error: str) -> str:
     msgs.append({'role': 'user', 'content':
                  f'That SQL failed with error:\n{error}\n'
                  'Return a corrected single SELECT query only.'})
-    raw = chat(msgs, temperature=0.0, max_tokens=512)
+    raw = chat(msgs, temperature=0.0, max_tokens=_GEN_MAX_TOKENS)
     sql = _extract_sql(raw)
     if not sql:
         raise Text2SQLError('SQL 재생성 실패.')
