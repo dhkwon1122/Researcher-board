@@ -35,6 +35,21 @@ def norm_researcher_id_col(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+_FORMULA_TRIGGER_CHARS = ('=', '+', '-', '@', '\t', '\r')
+
+
+def excel_safe_text(val) -> str:
+    """CSV 텍스트가 '-', '=', '+', '@'로 시작하면 Excel이 수식으로 오인해
+    #NAME? 등의 오류를 낸다(예: '- 대사공학 역량...' → #NAME?). 이런 값 앞에
+    작은따옴표(')를 붙여 Excel이 텍스트로 인식하게 한다 — Excel은 화면에는
+    이 작은따옴표를 표시하지 않는다.
+    """
+    s = str(val) if val is not None else ''
+    if s and s[0] in _FORMULA_TRIGGER_CHARS:
+        return "'" + s
+    return s
+
+
 def _is_blank_cell(value) -> bool:
     return value is None or str(value).strip() in ('', 'nan', 'None', 'NaT')
 

@@ -63,7 +63,7 @@ COL_WRITE_DATE   = '작성일'
 # ─────────────────────────────────────────────────────────────────────────────
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import read_xlsx
+from excel_reader import excel_safe_text, read_xlsx
 
 _CONTENT_COLS = [
     'task_collabo', 'task_goal', 'task_value', 'task_howtoget',
@@ -146,6 +146,11 @@ def process() -> bool:
     after = len(result)
 
     result = result.sort_values('task_name').reset_index(drop=True)
+
+    # '- 대사공학 역량...' 처럼 '-'(또는 '=', '+', '@')로 시작하는 값을 Excel이
+    # 수식으로 오인해 #NAME? 오류를 내는 문제 방지 (CSV에 저장하기 직전에만 적용)
+    for col in _CONTENT_COLS:
+        result[col] = result[col].apply(excel_safe_text)
 
     os.makedirs(OUT_DIR, exist_ok=True)
     out_path = os.path.join(OUT_DIR, 'tasks_information.csv')
