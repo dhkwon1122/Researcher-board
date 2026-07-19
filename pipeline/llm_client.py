@@ -100,7 +100,26 @@ def call_llm(prompt: str, system_prompt: str, *, temperature: float = 0.2, max_t
         _throttle()
         resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
         resp.raise_for_status()
-        return resp.json()['choices'][0]['message']['content'].strip()
+        choice = resp.json()['choices'][0]
+        message = choice.get('message', {})
+        content = message.get('content')
+        if content:
+            return content.strip()
+
+        # 일부 추론형(reasoning) 모델은 사고 과정을 reasoning_content 등 별도
+        # 필드에 담고 content는 비워 두거나(특히 max_tokens가 작아 사고 과정만으로
+        # 토큰 예산을 다 쓴 경우) null로 반환한다. 크래시 대신 대체 필드를
+        # 시도하고, 그래도 없으면 원인을 알 수 있도록 로그를 남긴다.
+        reasoning = message.get('reasoning_content') or message.get('reasoning')
+        finish_reason = choice.get('finish_reason')
+        if reasoning:
+            print(f'  [LLM 경고] content가 비어 있어 reasoning_content로 대체 사용 '
+                  f'(profile={profile}, finish_reason={finish_reason})')
+            return reasoning.strip()
+        print(f'  [LLM 경고] 응답 content가 비어 있음 (profile={profile}, finish_reason={finish_reason}, '
+              f'max_tokens={max_tokens}) — 추론형 모델은 사고 과정에 토큰을 많이 쓰므로 '
+              f'max_tokens를 늘려야 할 수 있습니다.')
+        return ''
     except requests.HTTPError as exc:
         status = exc.response.status_code
         body   = exc.response.text[:300]
