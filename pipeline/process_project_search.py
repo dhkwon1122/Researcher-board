@@ -250,6 +250,7 @@ def process() -> bool:
               '(process_project_confl.py 먼저 실행)')
         return False
 
+    page_cache = project_summary.load_page_cache()
     summary_cache = project_summary.load_cache()
     all_rows = []
     print(f'[process_project_search] 과제 {len(projects)}건 처리 중...')
@@ -258,7 +259,7 @@ def process() -> bool:
         project_name = proj['project_name']
         confl_address = proj['confl_address']
 
-        summary = project_summary.get_project_summary(project_name, confl_address, summary_cache)
+        summary = project_summary.get_project_summary(project_name, confl_address, page_cache, summary_cache)
         if summary is None:
             print(f'  [{project_name}] 건너뜀')
             continue
@@ -280,6 +281,7 @@ def process() -> bool:
         print(f'  [{project_name}] {len(industry_rows) + len(academia_rows)}건 발굴 '
               f'(기업 {len(industry_rows)} / 학계 {len(academia_rows)})')
 
+    project_summary.save_page_cache(page_cache)
     project_summary.save_cache(summary_cache)
 
     result = pd.DataFrame(all_rows, columns=_OUT_COLS)

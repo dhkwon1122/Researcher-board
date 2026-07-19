@@ -16,11 +16,15 @@ Source:
   data/processed/project_confl_address.csv (dep_name, project_name, confl_address)
 
 Output:
-  data/processed/project_expertise_analysis.json
-  data/processed/project_expertise_analysis.html
+  data/processed/project_expertise_analysis.json[.<profile>]
+  data/processed/project_expertise_analysis[.<profile>].html
+
+두 사내 LLM 비교(profile 인자):
+  python pipeline/process_project_expertise.py                    # 기존 LLM(profile='default')
+  python pipeline/process_project_expertise.py --profile thinkingcap  # 2번째 LLM
 
 사용법:
-  python pipeline/process_project_expertise.py
+  python pipeline/process_project_expertise.py [--profile thinkingcap]
 """
 
 import html
@@ -71,7 +75,7 @@ def _project_desc_line(item: dict) -> str:
     return ' · '.join(parts)
 
 
-def _build_html(items: list) -> str:
+def _build_html(items: list, profile: str = 'default') -> str:
     toc_links = []
     cards = []
     for i, it in enumerate(items, start=1):
@@ -101,38 +105,41 @@ def _build_html(items: list) -> str:
   </div>
 </section>''')
 
+    profile_note = f' ({profile})' if profile != 'default' else ''
     body_html = f'<nav class="toc">{"".join(toc_links)}</nav>\n{"".join(cards)}'
     return mmd.html_page(
-        title='사내 과제 — R&D 전문성 매핑',
-        heading='사내 과제 — R&amp;D 필수 전문성 및 직무 딥다이브 매핑',
+        title=f'사내 과제 — R&D 전문성 매핑{profile_note}',
+        heading=f'사내 과제 — R&amp;D 필수 전문성 및 직무 딥다이브 매핑{profile_note}',
         subtitle='과제별 필요 직무·전문성 분석 (R&amp;D Project Specialist Agent)',
         body_html=body_html,
         extra_style=mmd.EXPERTISE_CARD_STYLE,
     )
 
 
-def process() -> bool:
+def process(profile: str = 'default') -> bool:
     projects = _read_projects()
     if projects.empty:
         print('[process_project_expertise] project_confl_address.csv 없음 — 종료 '
               '(process_project_confl.py 먼저 실행)')
         return False
 
-    summary_cache = project_summary.load_cache()
+    page_cache = project_summary.load_page_cache()
+    summary_cache = project_summary.load_cache(profile)
     results = []
-    print(f'[process_project_expertise] 과제 {len(projects)}건 전문성 분석 중...')
+    print(f'[process_project_expertise] 과제 {len(projects)}건 전문성 분석 중 (profile={profile})...')
     for _, proj in projects.iterrows():
         dep_name = proj['dep_name']
         project_name = proj['project_name']
         confl_address = proj['confl_address']
 
-        summary = project_summary.get_project_summary(project_name, confl_address, summary_cache)
+        summary = project_summary.get_project_summary(project_name, confl_address, page_cache, summary_cache,
+                                                        profile=profile)
         if summary is None:
             print(f'  [{project_name}] 건너뜀')
             continue
 
         description = _summary_description(summary)
-        expertise_analysis = mmd.analyze_expertise(project_name, description)
+        expertise_analysis = mmd.analyze_expertise(project_name, description, profile=profile)
         if not expertise_analysis:
             print(f'  [{project_name}] 전문성 분석 실패 — 건너뜀')
             continue
@@ -149,20 +156,22 @@ def process() -> bool:
         })
         print(f'  [{project_name}] 분석 완료')
 
-    project_summary.save_cache(summary_cache)
+    project_summary.save_page_cache(page_cache)
+    project_summary.save_cache(summary_cache, profile)
 
+    suffix = mmd.profile_suffix(profile)
     os.makedirs(OUT_DIR, exist_ok=True)
-    out_path = os.path.join(OUT_DIR, 'project_expertise_analysis.json')
+    out_path = os.path.join(OUT_DIR, f'project_expertise_analysis{suffix}.json')
     with open(out_path, 'w', encoding='utf-8') as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
-    print(f'[OK]   project_expertise_analysis.json 저장 ({len(results)}건)')
+    print(f'[OK]   project_expertise_analysis{suffix}.json 저장 ({len(results)}건)')
 
-    html_path = os.path.join(OUT_DIR, 'project_expertise_analysis.html')
+    html_path = os.path.join(OUT_DIR, f'project_expertise_analysis{suffix}.html')
     with open(html_path, 'w', encoding='utf-8') as f:
-        f.write(_build_html(results))
-    print('[OK]   project_expertise_analysis.html 저장')
+        f.write(_build_html(results, profile))
+    print(f'[OK]   project_expertise_analysis{suffix}.html 저장')
     return True
 
 
 if __name__ == '__main__':
-    process()
+    process(profile=mmd.parse_profile_arg(sys.argv))

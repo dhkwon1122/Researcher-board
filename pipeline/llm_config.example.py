@@ -27,6 +27,13 @@ CONTENT_TYPE     = 'application/json'
 ACCEPT           = 'application/json'
 # Prompt-Msg-Id / Completion-Msg-Id 는 호출마다 uuid 로 자동 생성됩니다.
 
+# ── 2번째 사내 LLM (비교용, 인증/헤더 불필요) ───────────────────────────────────
+# call_llm(..., profile='thinkingcap')으로 호출 시 사용. Content-Type 외 별도
+# 인증/헤더가 필요 없는 단순 OpenAI 호환 엔드포인트.
+LLM2_API_URL = 'http://75.12.15.121:8000/v1/chat/completions'
+LLM2_MODEL   = 'thinkingcap'
+LLM2_TIMEOUT = 300              # 초
+
 # ── 사내 Confluence 접속 정보 (개인 액세스 토큰, PAT 방식) ──────────────────────
 # base URL은 별도로 설정하지 않고, project_confl_address.csv의 각 행 confl_address
 # (컨플루언스 페이지 URL) 에서 그때그때 추출해서 사용합니다.

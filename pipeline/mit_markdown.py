@@ -14,6 +14,22 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from llm_client import call_llm
 
+
+def profile_suffix(profile: str) -> str:
+    """출력/캐시 파일명에 붙일 접미사. 'default' profile은 기존 파일명을 그대로
+    유지(하위 호환)하고, 그 외 profile은 '.<profile>'을 붙인다."""
+    return '' if profile == 'default' else f'.{profile}'
+
+
+def parse_profile_arg(argv: list, default: str = 'default') -> str:
+    """CLI 인자에서 '--profile NAME' 형태를 파싱. 없으면 default 반환."""
+    if '--profile' in argv:
+        idx = argv.index('--profile')
+        if idx + 1 < len(argv):
+            return argv[idx + 1]
+    return default
+
+
 # R&D Project Specialist Agent — 사내 LLM 시스템 프롬프트 (원문 그대로 사용).
 # process_mit10.py(MIT10 기술)와 process_project_expertise.py(사내 과제) 양쪽에서
 # 동일한 페르소나로 "필수 직무·전문성 딥다이브 매핑"을 생성하는 데 재사용한다.
@@ -79,15 +95,16 @@ HR 담당자 및 R&D 부서장이 신규 인력 채용, 내부 인력 재배치,
 """
 
 
-def analyze_expertise(name: str, description: str) -> str:
+def analyze_expertise(name: str, description: str, profile: str = 'default') -> str:
     """R&D Project Specialist Agent 역할의 LLM 분석을 호출. 실패 시 빈 문자열.
     name: 연구 기술명(MIT10 기술명 또는 사내 과제명 등)
-    description: 연구 내용(기술 설명 또는 과제 요약)"""
+    description: 연구 내용(기술 설명 또는 과제 요약)
+    profile: 'default'(기존 사내 LLM) 또는 'thinkingcap'(2번째 사내 LLM, 비교용)"""
     prompt = f"""다음 기술에 대해 분석해 주세요.
 
 연구 기술명: {name}
 연구 내용: {description}"""
-    return call_llm(prompt, RD_SPECIALIST_SYSTEM_PROMPT, temperature=0.2, max_tokens=4000)
+    return call_llm(prompt, RD_SPECIALIST_SYSTEM_PROMPT, temperature=0.2, max_tokens=4000, profile=profile)
 
 
 # ── 마크다운 섹션/직무 블록 파싱 ────────────────────────────────────────────

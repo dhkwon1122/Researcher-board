@@ -12,6 +12,11 @@ process_project_researcher_fit.py(사내 과제 ↔ 연구원)가 동일한 로�
 ※ LLM 프롬프트에는 researcher_id/이름을 절대 포함하지 않는다. 후보를
   "후보자 A/B/C..."로 익명 라벨링해 전달하고, 결과는 호출부에서 다시
   researcher_id로 매핑한다.
+
+두 사내 LLM 비교(profile 인자): match_by_target/match_by_researcher/
+run_matching_llm은 profile을 받아 최종 판단 LLM 호출에만 반영한다.
+compute_embeddings(BGE-M3 임베딩)는 두 profile이 항상 공유하며 profile
+인자를 받지 않는다(임베딩 모델은 비교 대상이 아님).
 """
 
 import json
@@ -155,14 +160,14 @@ def _label_of(i: int) -> str:
 
 
 def run_matching_llm(system_prompt: str, subject_block: str, candidate_texts: list,
-                      label_prefix: str, result_key: str) -> list:
+                      label_prefix: str, result_key: str, profile: str = 'default') -> list:
     """익명 라벨(예: 후보자 A/B/C)로 후보들을 제시하고 LLM 판정을 받아
     [{'idx', 'fit_score', 'reason'}, ...] 형태로 반환(라벨→인덱스로 역매핑)."""
     labels = [f'{label_prefix} {_label_of(i)}' for i in range(len(candidate_texts))]
     cand_block = '\n\n'.join(f'[{lbl}]\n{txt}' for lbl, txt in zip(labels, candidate_texts))
     prompt = f'{subject_block}\n\n[후보 목록]\n{cand_block}\n\n위 정보를 바탕으로 각 후보의 적합도를 판단해 주세요.'
 
-    raw = call_llm(prompt, system_prompt, temperature=0.2, max_tokens=2000)
+    raw = call_llm(prompt, system_prompt, temperature=0.2, max_tokens=2000, profile=profile)
     if not raw:
         return []
     try:
@@ -188,7 +193,8 @@ def compute_embeddings(job_texts: list, researcher_texts: list):
 
 
 def match_by_target(jobs: list, researcher_ids: list, researcher_texts: list,
-                     job_texts: list, sims: np.ndarray, log_prefix: str = '') -> list:
+                     job_texts: list, sims: np.ndarray, log_prefix: str = '',
+                     profile: str = 'default') -> list:
     """직무별 상위 K명 연구원을 추출한 뒤 LLM 판단.
     반환: [{'target_id','target_name','job_title','rankings':[{'researcher_id','fit_score','reason'}]}]"""
     results = []
@@ -196,7 +202,8 @@ def match_by_target(jobs: list, researcher_ids: list, researcher_texts: list,
         top_idx = top_k_idx(sims[:, j_idx], min(TOP_K, len(researcher_ids)))
         candidate_texts = [researcher_texts[i] for i in top_idx]
         subject_block = f'[직무 요구사항]\n{job_texts[j_idx]}'
-        judged = run_matching_llm(SYSTEM_PROMPT_BY_TARGET, subject_block, candidate_texts, '후보자', 'rankings')
+        judged = run_matching_llm(SYSTEM_PROMPT_BY_TARGET, subject_block, candidate_texts, '후보자', 'rankings',
+                                   profile=profile)
         rankings = [
             {'researcher_id': researcher_ids[top_idx[r['idx']]], 'fit_score': r['fit_score'], 'reason': r['reason']}
             for r in judged
@@ -210,7 +217,8 @@ def match_by_target(jobs: list, researcher_ids: list, researcher_texts: list,
 
 
 def match_by_researcher(jobs: list, researcher_ids: list, researcher_texts: list,
-                         job_texts: list, sims: np.ndarray, log_prefix: str = '') -> list:
+                         job_texts: list, sims: np.ndarray, log_prefix: str = '',
+                         profile: str = 'default') -> list:
     """연구원별 상위 K건 직무를 추출한 뒤 LLM 판단.
     반환: [{'researcher_id','matches':[{'target_id','target_name','job_title','fit_score','reason'}]}]"""
     results = []
@@ -219,7 +227,8 @@ def match_by_researcher(jobs: list, researcher_ids: list, researcher_texts: list
         candidate_jobs = [jobs[i] for i in top_idx]
         candidate_texts = [job_texts[i] for i in top_idx]
         subject_block = f'[연구원 전문성 프로필]\n{researcher_texts[r_idx]}'
-        judged = run_matching_llm(SYSTEM_PROMPT_BY_RESEARCHER, subject_block, candidate_texts, '후보 직무', 'matches')
+        judged = run_matching_llm(SYSTEM_PROMPT_BY_RESEARCHER, subject_block, candidate_texts, '후보 직무', 'matches',
+                                  profile=profile)
         matches = [
             {
                 'target_id': candidate_jobs[m['idx']]['target_id'],

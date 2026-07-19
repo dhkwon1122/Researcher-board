@@ -105,34 +105,72 @@
     → data/processed/project_confl_address.csv 로 변환
     ※ 처리기: pipeline/process_project_confl.py
 
-[유사 기업/학계 탐색 · 과제 전문성 분석] ★ 사내 Confluence + 사내 LLM 필요,
-  비용이 커서 run_pipeline.py 자동 실행에는 포함하지 않음.
-  project_confl_address.csv 준비 후 별도 실행:
+[유사 기업/학계 탐색] ★ 사내 Confluence + 사내 LLM 필요, 비용이 커서
+  run_pipeline.py 자동 실행에는 포함하지 않음. project_confl_address.csv
+  준비 후 별도 실행:
     python pipeline/process_project_search.py
     → data/processed/project_searched_list.csv
       (컨플루언스 페이지를 사내 LLM으로 요약 후, "R&D Enterprise & Academia
        Discovery Agent" 역할로 유사 기업/스타트업/대학연구실을 탐색)
-    python pipeline/process_project_expertise.py
-    → data/processed/project_expertise_analysis.json / .html
-      (컨플루언스 페이지를 사내 LLM으로 요약 후, process_mit10.py와 동일한
-       "R&D Project Specialist Agent" 역할로 과제별 필요 직무·전문성 딥다이브
-       분석을 생성. 2026MITTech10.html과 동일한 방식으로 HTML도 함께 생성)
-    ※ 두 스크립트 모두 project_summary.py를 통해 컨플루언스 요약 결과를
-       data/processed/project_summary_cache.json 에 공유 캐시하므로, 같은
-       과제를 두 번 요약하지 않는다.
     ※ Confluence 접속: pipeline/llm_config.py의 CONFLUENCE_TOKEN(PAT) 필요
        (llm_config.example.py 참고). atlassian-python-api 패키지 설치 필요.
 
-[사내 과제 ↔ 연구원 적합도 매칭] ★ 사내 LLM 필요, 비용이 커서 자동 실행에는
-  포함하지 않음. project_expertise_analysis.json과 연구원 보유 전문성 분석.json
-  준비 후 별도 실행:
-    python pipeline/process_project_researcher_fit.py
-    → data/processed/project_fit_by_project.json,
-      project_fit_by_researcher.json, project_researcher_fit.html
-      (mit10_researcher_fit과 동일한 방식 — 임베딩 1차 후보 추출 + 사내 LLM
-       "R&D Talent Matching Agent"로 과제 기준/인별 기준 두 방향 적합도 판단.
-       매칭 로직은 pipeline/researcher_fit.py를 process_mit10_researcher_fit.py와
-       공유)
+[과제 전문성 분석 → 연구원 전문성 분석 → 연구원 매칭] ★ 사내 Confluence +
+  사내 LLM 필요, 비용이 커서 run_pipeline.py 자동 실행에는 포함하지 않음.
+  project_confl_address.csv 준비 후, 아래 순서로 별도 실행한다(각 단계는
+  이전 단계의 출력 파일을 입력으로 사용하므로 반드시 이 순서를 지킨다):
+
+    1) python pipeline/process_project_confl.py
+       → data/processed/project_confl_address.csv (소속/과제명/컨플 주소)
+
+    2) python pipeline/process_project_expertise.py   (컨플 요약 + 과제 전문성 분석)
+       → data/processed/project_expertise_analysis.json / .html
+         (컨플루언스 페이지를 사내 LLM으로 요약 후, process_mit10.py와 동일한
+          "R&D Project Specialist Agent" 역할로 과제별 필요 직무·전문성 딥다이브
+          분석을 생성. 2026MITTech10.html과 동일한 방식으로 HTML도 함께 생성)
+
+    3) python pipeline/process_researcher_expertise.py   (연구원 전문성 분석)
+       → data/processed/연구원 보유 전문성 분석.json
+         (학력/과제이력/직무이력/핵심기술/보유기술/논문/특허를 종합해 사내
+          LLM이 강점 분야·핵심 기술 역량·도메인 지식을 구조화된 JSON으로 분석.
+          논문 저널 권위도는 data/processed/journal_authority.json 에 캐시)
+
+    4) python pipeline/process_project_researcher_fit.py   (연구원 매칭)
+       → data/processed/project_fit_by_project.json,
+         project_fit_by_researcher.json, project_researcher_fit.html
+         (mit10_researcher_fit과 동일한 방식 — 임베딩 1차 후보 추출 + 사내 LLM
+          "R&D Talent Matching Agent"로 과제 기준/인별 기준 두 방향 적합도 판단.
+          매칭 로직은 pipeline/researcher_fit.py를 process_mit10_researcher_fit.py와
+          공유)
+
+    ※ 2)~4)는 project_summary.py의 컨플루언스 원문 캐시
+       (data/processed/project_page_cache.json)를 공유하므로, 같은 과제를
+       두 번 조회하지 않는다.
+    ※ Confluence 접속: pipeline/llm_config.py의 CONFLUENCE_TOKEN(PAT) 필요
+       (llm_config.example.py 참고). atlassian-python-api 패키지 설치 필요.
+
+[두 사내 LLM 비교] ★ 위 2)~4) 단계는 모두 --profile 인자로 어떤 사내 LLM을
+  쓸지 선택할 수 있다(예: llm_config.py에 LLM2_API_URL 등을 설정해 둔
+  'thinkingcap' profile). 두 LLM의 결과를 비교하려면 2)~4)를 두 profile로
+  각각 실행한 뒤 비교 리포트를 생성한다:
+
+    2) python pipeline/process_project_expertise.py
+       python pipeline/process_project_expertise.py --profile thinkingcap
+    3) python pipeline/process_researcher_expertise.py
+       python pipeline/process_researcher_expertise.py --profile thinkingcap
+    4) python pipeline/process_project_researcher_fit.py
+       python pipeline/process_project_researcher_fit.py --profile thinkingcap
+    5) python pipeline/process_llm_compare.py
+       → data/processed/llm_comparison.html
+         (컨플요약+과제 전문성 분석 / 연구원 전문성 분석 / 연구원 매칭 3가지를
+          기존 LLM(default)과 thinkingcap 결과로 나란히 비교하고, researcher_id
+          기준 공통/A만/B만 배지로 일치·불일치를 표시. LLM을 호출하지 않고
+          위 JSON 결과만 읽어서 만든다.)
+
+  ※ profile='default'는 기존 파일명을 그대로 쓰고(예: project_expertise_analysis.json),
+     그 외 profile은 파일명에 .<profile>이 붙는다(예: project_expertise_analysis.thinkingcap.json).
+     두 profile 모두 BGE-M3 임베딩(1차 후보 추출)은 항상 공유하며, 최종 LLM
+     판단만 profile별로 달라진다.
 
 출력 위치: data/processed/
 """

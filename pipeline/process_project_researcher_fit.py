@@ -11,19 +11,26 @@ process_project_expertise.py가 만든 과제별 직무 딥다이브 매핑("R&D
 공용 모듈을 사용한다(process_mit10_researcher_fit.py와 공유).
 
 Source:
-  data/processed/project_expertise_analysis.json (process_project_expertise.py)
-  data/processed/연구원 보유 전문성 분석.json      (process_researcher_expertise.py)
-  data/processed/researchers.csv                  (HTML에 이름 표시용)
+  data/processed/project_expertise_analysis[.<profile>].json (process_project_expertise.py)
+  data/processed/연구원 보유 전문성 분석[.<profile>].json      (process_researcher_expertise.py)
+  data/processed/researchers.csv                             (HTML에 이름 표시용)
 
 Output:
-  data/processed/project_fit_by_project.json
-  data/processed/project_fit_by_researcher.json
-  data/processed/project_researcher_fit.html     (두 방향을 한 페이지에 함께 시각화)
+  data/processed/project_fit_by_project[.<profile>].json
+  data/processed/project_fit_by_researcher[.<profile>].json
+  data/processed/project_researcher_fit[.<profile>].html    (두 방향을 한 페이지에 함께 시각화)
 
 ※ LLM 프롬프트에는 researcher_id/이름을 절대 포함하지 않는다.
 
+임베딩(1차 후보 추출)은 profile과 무관하게 항상 공유되며, 최종 LLM 판단만
+profile별로 달라진다.
+
+두 사내 LLM 비교(profile 인자):
+  python pipeline/process_project_researcher_fit.py                    # 기존 LLM(profile='default')
+  python pipeline/process_project_researcher_fit.py --profile thinkingcap  # 2번째 LLM
+
 사용법:
-  python pipeline/process_project_researcher_fit.py
+  python pipeline/process_project_researcher_fit.py [--profile thinkingcap]
 """
 
 import json
@@ -38,17 +45,19 @@ from services.llm import LLMError  # noqa: E402
 OUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'processed')
 
 
-def process() -> bool:
-    projects = fit.read_json(OUT_DIR, 'project_expertise_analysis')
+def process(profile: str = 'default') -> bool:
+    suffix = mmd.profile_suffix(profile)
+
+    projects = fit.read_json(OUT_DIR, f'project_expertise_analysis{suffix}')
     if not projects:
-        print('[process_project_researcher_fit] project_expertise_analysis.json 없음 — 종료 '
-              '(process_project_expertise.py 먼저 실행)')
+        print(f'[process_project_researcher_fit] project_expertise_analysis{suffix}.json 없음 — 종료 '
+              f'(process_project_expertise.py{" --profile " + profile if profile != "default" else ""} 먼저 실행)')
         return False
 
-    researcher_profiles = fit.read_json(OUT_DIR, '연구원 보유 전문성 분석')
+    researcher_profiles = fit.read_json(OUT_DIR, f'연구원 보유 전문성 분석{suffix}')
     if not researcher_profiles:
-        print('[process_project_researcher_fit] 연구원 보유 전문성 분석.json 없음 — 종료 '
-              '(process_researcher_expertise.py 먼저 실행)')
+        print(f'[process_project_researcher_fit] 연구원 보유 전문성 분석{suffix}.json 없음 — 종료 '
+              f'(process_researcher_expertise.py{" --profile " + profile if profile != "default" else ""} 먼저 실행)')
         return False
 
     dep_map = {p.get('project_name'): p.get('dep_name', '') for p in projects}
@@ -80,11 +89,13 @@ def process() -> bool:
 
     sims = fit.cosine_sim_matrix(researcher_emb, job_emb)  # (n_researchers, n_jobs)
 
-    print('[process_project_researcher_fit] 과제 기준 매칭 중...')
-    by_target = fit.match_by_target(jobs, researcher_ids, researcher_texts, job_texts, sims, log_prefix='    ')
+    print(f'[process_project_researcher_fit] 과제 기준 매칭 중 (profile={profile})...')
+    by_target = fit.match_by_target(jobs, researcher_ids, researcher_texts, job_texts, sims, log_prefix='    ',
+                                     profile=profile)
 
-    print('[process_project_researcher_fit] 인별 기준 매칭 중...')
-    by_researcher = fit.match_by_researcher(jobs, researcher_ids, researcher_texts, job_texts, sims, log_prefix='    ')
+    print(f'[process_project_researcher_fit] 인별 기준 매칭 중 (profile={profile})...')
+    by_researcher = fit.match_by_researcher(jobs, researcher_ids, researcher_texts, job_texts, sims, log_prefix='    ',
+                                             profile=profile)
 
     by_project_results = [
         {
@@ -108,18 +119,19 @@ def process() -> bool:
     ]
 
     os.makedirs(OUT_DIR, exist_ok=True)
-    with open(os.path.join(OUT_DIR, 'project_fit_by_project.json'), 'w', encoding='utf-8') as f:
+    with open(os.path.join(OUT_DIR, f'project_fit_by_project{suffix}.json'), 'w', encoding='utf-8') as f:
         json.dump(by_project_results, f, ensure_ascii=False, indent=2)
-    print(f'[OK]   project_fit_by_project.json 저장 ({len(by_project_results)}건)')
+    print(f'[OK]   project_fit_by_project{suffix}.json 저장 ({len(by_project_results)}건)')
 
-    with open(os.path.join(OUT_DIR, 'project_fit_by_researcher.json'), 'w', encoding='utf-8') as f:
+    with open(os.path.join(OUT_DIR, f'project_fit_by_researcher{suffix}.json'), 'w', encoding='utf-8') as f:
         json.dump(by_researcher_results, f, ensure_ascii=False, indent=2)
-    print(f'[OK]   project_fit_by_researcher.json 저장 ({len(by_researcher_results)}건)')
+    print(f'[OK]   project_fit_by_researcher{suffix}.json 저장 ({len(by_researcher_results)}건)')
 
+    profile_note = f' ({profile})' if profile != 'default' else ''
     html_out = fit.build_fit_html(
         by_target, by_researcher, fit.read_researchers(OUT_DIR),
-        page_title='사내 과제 ↔ 연구원 적합도 매칭',
-        heading='사내 과제 ↔ 연구원 적합도 매칭',
+        page_title=f'사내 과제 ↔ 연구원 적합도 매칭{profile_note}',
+        heading=f'사내 과제 ↔ 연구원 적합도 매칭{profile_note}',
         subtitle='과제 기준 / 인별 기준 매칭 결과 (R&D Talent Matching Agent, 임베딩 1차 후보 + 사내 LLM 판단)',
         target_tab_label='과제 기준',
         target_header=lambda item: (
@@ -128,13 +140,13 @@ def process() -> bool:
         target_card_subtitle='이 직무에 적합한 연구원 (적합도 순)',
         researcher_card_subtitle='이 연구원에게 적합한 사내 과제 직무 (적합도 순)',
     )
-    html_path = os.path.join(OUT_DIR, 'project_researcher_fit.html')
+    html_path = os.path.join(OUT_DIR, f'project_researcher_fit{suffix}.html')
     with open(html_path, 'w', encoding='utf-8') as f:
         f.write(html_out)
-    print('[OK]   project_researcher_fit.html 저장')
+    print(f'[OK]   project_researcher_fit{suffix}.html 저장')
 
     return True
 
 
 if __name__ == '__main__':
-    process()
+    process(profile=mmd.parse_profile_arg(sys.argv))

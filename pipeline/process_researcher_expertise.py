@@ -20,15 +20,19 @@ Source:
   data/processed/patents.csv
 
 Output:
-  data/processed/연구원 보유 전문성 분석.json
-  data/processed/journal_authority.json  (저널명별 권위도 평가 캐시 — 누적 재사용)
+  data/processed/연구원 보유 전문성 분석[.<profile>].json
+  data/processed/journal_authority[.<profile>].json  (저널명별 권위도 평가 캐시 — 누적 재사용)
 
 ※ 프롬프트에는 researcher_id/이름 등 개인 식별 정보를 절대 포함하지 않는다.
   이력 내용(과제/직무/기술/논문/특허)만 사내 LLM에 전달하고, 결과는 호출부에서
   researcher_id에 매핑한다.
 
+두 사내 LLM 비교(profile 인자):
+  python pipeline/process_researcher_expertise.py                    # 기존 LLM(profile='default')
+  python pipeline/process_researcher_expertise.py --profile thinkingcap  # 2번째 LLM
+
 사용법:
-  python pipeline/process_researcher_expertise.py
+  python pipeline/process_researcher_expertise.py [--profile thinkingcap]
 """
 
 import json
@@ -43,6 +47,7 @@ OUT_DIR = os.path.join(BASE_DIR, 'data', 'processed')
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from llm_client import call_llm, extract_json  # noqa: E402
+import mit_markdown as mmd  # noqa: E402
 
 _SYSTEM_PROMPT = """# Role
 당신은 R&D 인재 전문성 분석 전문가인 "R&D Talent Profiling Agent"입니다.
@@ -266,26 +271,30 @@ def _unique_journals(pub_df: pd.DataFrame) -> list:
     return sorted({_clean(j) for j in pub_df['journal'] if _clean(j)})
 
 
-def _load_journal_cache() -> dict:
-    path = os.path.join(OUT_DIR, 'journal_authority.json')
+def _journal_cache_path(profile: str) -> str:
+    suffix = mmd.profile_suffix(profile)
+    return os.path.join(OUT_DIR, f'journal_authority{suffix}.json')
+
+
+def _load_journal_cache(profile: str = 'default') -> dict:
+    path = _journal_cache_path(profile)
     if not os.path.exists(path):
         return {}
     with open(path, encoding='utf-8') as f:
         return json.load(f)
 
 
-def _save_journal_cache(cache: dict):
-    path = os.path.join(OUT_DIR, 'journal_authority.json')
-    with open(path, 'w', encoding='utf-8') as f:
+def _save_journal_cache(cache: dict, profile: str = 'default'):
+    with open(_journal_cache_path(profile), 'w', encoding='utf-8') as f:
         json.dump(cache, f, ensure_ascii=False, indent=2)
 
 
-def _update_journal_authority(journals: list, cache: dict) -> dict:
-    """캐시에 없는 저널만 사내 LLM으로 조회해 캐시에 채운다(누적 재사용)."""
+def _update_journal_authority(journals: list, cache: dict, profile: str = 'default') -> dict:
+    """캐시에 없는 저널만 사내 LLM으로 조회해 캐시에 채운다(누적 재사용, profile별 분리)."""
     new_journals = [j for j in journals if j not in cache]
     if not new_journals:
         return cache
-    print(f'[process_researcher_expertise] 저널 권위도 조회 중 (신규 {len(new_journals)}건)...')
+    print(f'[process_researcher_expertise] 저널 권위도 조회 중 (신규 {len(new_journals)}건, profile={profile})...')
     for j in new_journals:
         prompt = (
             f'학술지/저널명: {j}\n'
@@ -293,7 +302,7 @@ def _update_journal_authority(journals: list, cache: dict) -> dict:
             f'권위·명성 수준을 1~2문장으로 평가해 주세요. 확실하지 않으면 "확인 불가"라고 답하세요.\n'
             f'다음 JSON 형식으로만 출력하세요: {{"authority": "평가 내용"}}'
         )
-        raw = call_llm(prompt, _JOURNAL_SYSTEM_PROMPT, max_tokens=300)
+        raw = call_llm(prompt, _JOURNAL_SYSTEM_PROMPT, max_tokens=300, profile=profile)
         authority = ''
         if raw:
             try:
@@ -302,7 +311,7 @@ def _update_journal_authority(journals: list, cache: dict) -> dict:
                 authority = ''
         cache[j] = authority
         print(f'    [{"OK" if authority else "실패"}] {j}')
-    _save_journal_cache(cache)
+    _save_journal_cache(cache, profile)
     return cache
 
 
@@ -332,8 +341,8 @@ def _build_prompt(edu_text, task_text, job_text, core_text, tech_text, pub_text,
 """
 
 
-def _analyze_researcher(prompt: str) -> dict | None:
-    raw = call_llm(prompt, _SYSTEM_PROMPT, temperature=0.2, max_tokens=2500)
+def _analyze_researcher(prompt: str, profile: str = 'default') -> dict | None:
+    raw = call_llm(prompt, _SYSTEM_PROMPT, temperature=0.2, max_tokens=2500, profile=profile)
     if not raw:
         return None
     try:
@@ -362,7 +371,7 @@ def _analyze_researcher(prompt: str) -> dict | None:
     return out if out else None
 
 
-def process() -> bool:
+def process(profile: str = 'default') -> bool:
     researchers = _read_csv('researchers')
     if researchers.empty:
         print('[process_researcher_expertise] researchers.csv 없음 — 종료')
@@ -386,12 +395,12 @@ def process() -> bool:
     lv_map = {str(i['lv']): i['definition'] for i in lv_info}
     std_map, sait_map = _build_job_def_maps(std_defs, sait_defs)
 
-    journal_cache = _load_journal_cache()
-    journal_cache = _update_journal_authority(_unique_journals(publications), journal_cache)
+    journal_cache = _load_journal_cache(profile)
+    journal_cache = _update_journal_authority(_unique_journals(publications), journal_cache, profile)
 
     rids = researchers['researcher_id'].unique()
     results = []
-    print(f'[process_researcher_expertise] 연구원 {len(rids)}명 전문성 분석 중...')
+    print(f'[process_researcher_expertise] 연구원 {len(rids)}명 전문성 분석 중 (profile={profile})...')
     for rid in rids:
         edu_text = _education_text(education[education['researcher_id'] == rid]) if not education.empty else '(데이터 없음)'
         task_text = _task_history_text(
@@ -427,7 +436,7 @@ def process() -> bool:
             continue
 
         prompt = _build_prompt(edu_text, task_text, job_text, core_text, tech_text, pub_text, pat_text)
-        analysis = _analyze_researcher(prompt)
+        analysis = _analyze_researcher(prompt, profile=profile)
         if analysis is None:
             print(f'    [{rid}] 분석 실패')
             continue
@@ -435,14 +444,15 @@ def process() -> bool:
         results.append({'researcher_id': rid, **analysis})
         print(f'    [{rid}] 분석 완료')
 
+    suffix = mmd.profile_suffix(profile)
     os.makedirs(OUT_DIR, exist_ok=True)
-    out_path = os.path.join(OUT_DIR, '연구원 보유 전문성 분석.json')
+    out_path = os.path.join(OUT_DIR, f'연구원 보유 전문성 분석{suffix}.json')
     with open(out_path, 'w', encoding='utf-8') as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
 
-    print(f'[OK]   연구원 보유 전문성 분석.json 저장 ({len(results)}명)')
+    print(f'[OK]   연구원 보유 전문성 분석{suffix}.json 저장 ({len(results)}명)')
     return True
 
 
 if __name__ == '__main__':
-    process()
+    process(profile=mmd.parse_profile_arg(sys.argv))

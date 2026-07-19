@@ -6,6 +6,12 @@ process_comments.py의 호출 방식과 동일한 헤더/인증 규약을 따른
 
 사내 LLM은 초당 5회 호출 제한이 있어, call_llm()은 호출 간 최소 간격을
 두어 초당 최대 MAX_CALLS_PER_SEC(4)회를 넘지 않도록 자체적으로 조절한다.
+
+두 모델 비교(profile 인자):
+  call_llm(prompt, system_prompt)                     → 기존 사내 LLM(profile='default')
+  call_llm(prompt, system_prompt, profile='thinkingcap') → 2번째 사내 LLM
+    (llm_config.py의 LLM2_API_URL/LLM2_MODEL/LLM2_TIMEOUT 사용, 인증/특수
+     헤더 없이 Content-Type만으로 호출)
 """
 
 import re
@@ -42,26 +48,47 @@ def extract_json(text: str) -> str:
     return m.group(0) if m else text
 
 
-def call_llm(prompt: str, system_prompt: str, *, temperature: float = 0.2, max_tokens: int = 1500) -> str:
-    """사내 LLM API 호출 → 응답 텍스트 반환. 미설정/실패 시 빈 문자열."""
+def _request_config(profile: str):
+    """profile에 따른 (url, model, headers, timeout)을 반환. 미지원 profile이면 None."""
+    if profile == 'default':
+        headers = {
+            'Content-Type':      _cfg.CONTENT_TYPE,
+            'Accept':            _cfg.ACCEPT,
+            'x-dep-ticket':      _cfg.LLM_API_KEY,
+            'Send-System-Name':  _cfg.SEND_SYSTEM_NAME,
+            'User-Id':           _cfg.USER_ID,
+            'User-Type':         _cfg.USER_TYPE,
+            'Prompt-Msg-Id':     str(uuid.uuid4()),
+            'Completion-Msg-Id': str(uuid.uuid4()),
+        }
+        return _cfg.LLM_API_URL, _cfg.LLM_MODEL, headers, _cfg.LLM_TIMEOUT
+    if profile == 'thinkingcap':
+        if not hasattr(_cfg, 'LLM2_API_URL'):
+            return None
+        headers = {'Content-Type': 'application/json'}
+        timeout = getattr(_cfg, 'LLM2_TIMEOUT', 300)
+        return _cfg.LLM2_API_URL, _cfg.LLM2_MODEL, headers, timeout
+    return None
+
+
+def call_llm(prompt: str, system_prompt: str, *, temperature: float = 0.2, max_tokens: int = 1500,
+             profile: str = 'default') -> str:
+    """사내 LLM API 호출 → 응답 텍스트 반환. 미설정/실패 시 빈 문자열.
+    profile='default'(기존 사내 LLM) 또는 'thinkingcap'(2번째 사내 LLM, 비교용)."""
     if _cfg is None:
         print('  [LLM 오류] llm_config.py 가 없어 API 호출을 건너뜁니다.')
         return ''
 
     import requests
 
-    headers = {
-        'Content-Type':      _cfg.CONTENT_TYPE,
-        'Accept':            _cfg.ACCEPT,
-        'x-dep-ticket':      _cfg.LLM_API_KEY,
-        'Send-System-Name':  _cfg.SEND_SYSTEM_NAME,
-        'User-Id':           _cfg.USER_ID,
-        'User-Type':         _cfg.USER_TYPE,
-        'Prompt-Msg-Id':     str(uuid.uuid4()),
-        'Completion-Msg-Id': str(uuid.uuid4()),
-    }
+    cfg = _request_config(profile)
+    if cfg is None:
+        print(f'  [LLM 오류] 알 수 없거나 설정되지 않은 profile: {profile}')
+        return ''
+    url, model, headers, timeout = cfg
+
     payload = {
-        'model': _cfg.LLM_MODEL,
+        'model': model,
         'messages': [
             {'role': 'system', 'content': system_prompt},
             {'role': 'user',   'content': prompt},
@@ -71,7 +98,7 @@ def call_llm(prompt: str, system_prompt: str, *, temperature: float = 0.2, max_t
     }
     try:
         _throttle()
-        resp = requests.post(_cfg.LLM_API_URL, json=payload, headers=headers, timeout=_cfg.LLM_TIMEOUT)
+        resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
         resp.raise_for_status()
         return resp.json()['choices'][0]['message']['content'].strip()
     except requests.HTTPError as exc:
