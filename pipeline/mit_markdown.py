@@ -164,6 +164,110 @@ def b64_encode(text: str) -> str:
     return base64.b64encode(text.encode('utf-8')).decode('ascii')
 
 
+def _strip_label(text: str) -> str:
+    return re.sub(r'\*\*', '', text).strip().strip('*').strip()
+
+
+def parse_job_fields(body: str) -> dict:
+    """직무 딥다이브 블록 본문에서 R&D Task/Hard Skills/Domain Knowledge/Junior/
+    Mid/Senior/검증 질문을 파싱한다. LLM 응답마다 마크다운 표현 스타일이 달라도
+    카드가 항상 같은 구조로 보이도록, 고정 라벨(영문 앵커: R&D Task, Hard Skills,
+    Domain Knowledge, Junior, Mid-level, Senior)을 기준으로 값만 뽑아낸다.
+    못 찾은 필드는 빈 값/빈 리스트로 둔다(지어내지 않음)."""
+    fields = {
+        'rd_task': '', 'hard_skills': '', 'domain_knowledge': '',
+        'junior': '', 'mid': '', 'senior': '', 'questions': [],
+    }
+    in_questions = False
+    for raw_line in body.split('\n'):
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        if in_questions:
+            m = re.match(r'^(?:\d+[.\)]|[*\-])\s+(.+)', line)
+            if m and not re.search(r'\*\*[^*]+\*\*\s*[:：]', m.group(1)):
+                fields['questions'].append(_strip_label(m.group(1)))
+                continue
+            in_questions = False  # 목록이 끝났으니 아래에서 다른 필드로 재검사
+
+        m = re.search(r'R&D\s*Task\)?[^:：]*[:：]\*{0,2}\s*(.+)', line, re.IGNORECASE)
+        if m:
+            fields['rd_task'] = _strip_label(m.group(1))
+            continue
+        m = re.search(r'Hard\s*Skills\)[^:：]*[:：]\*{0,2}\s*(.+)', line, re.IGNORECASE)
+        if m:
+            fields['hard_skills'] = _strip_label(m.group(1))
+            continue
+        m = re.search(r'Domain\s*Knowledge\)[^:：]*[:：]\*{0,2}\s*(.+)', line, re.IGNORECASE)
+        if m:
+            fields['domain_knowledge'] = _strip_label(m.group(1))
+            continue
+        m = re.search(r'Junior[^:：]*[:：]\*{0,2}\s*(.+)', line, re.IGNORECASE)
+        if m:
+            fields['junior'] = _strip_label(m.group(1))
+            continue
+        m = re.search(r'Mid[\s\-]?level[^:：]*[:：]\*{0,2}\s*(.+)', line, re.IGNORECASE)
+        if m:
+            fields['mid'] = _strip_label(m.group(1))
+            continue
+        m = re.search(r'Senior[^:：]*[:：]\*{0,2}\s*(.+)', line, re.IGNORECASE)
+        if m:
+            fields['senior'] = _strip_label(m.group(1))
+            continue
+        if re.search(r'검증\s*질문|면접', line):
+            in_questions = True
+            continue
+
+    return fields
+
+
+def render_job_fields_html(fields: dict) -> str:
+    """parse_job_fields() 결과를 항상 동일한 구조의 고정 템플릿으로 렌더링한다
+    (과제/기술마다 LLM 응답 스타일이 달라도 카드 모양이 통일되도록)."""
+    parts = []
+    if fields['rd_task']:
+        parts.append(f'''<div class="job-field">
+  <div class="field-label">R&amp;D Task</div>
+  <p>{html.escape(fields['rd_task'])}</p>
+</div>''')
+
+    skill_items = []
+    if fields['hard_skills']:
+        skill_items.append(f"<li><strong>Hard Skills:</strong> {html.escape(fields['hard_skills'])}</li>")
+    if fields['domain_knowledge']:
+        skill_items.append(f"<li><strong>Domain Knowledge:</strong> {html.escape(fields['domain_knowledge'])}</li>")
+    if skill_items:
+        parts.append(f'''<div class="job-field">
+  <div class="field-label">세부 전문성 및 역량 요구사항</div>
+  <ul>{''.join(skill_items)}</ul>
+</div>''')
+
+    level_items = []
+    if fields['junior']:
+        level_items.append(f"<li><strong>Junior:</strong> {html.escape(fields['junior'])}</li>")
+    if fields['mid']:
+        level_items.append(f"<li><strong>Mid-level:</strong> {html.escape(fields['mid'])}</li>")
+    if fields['senior']:
+        level_items.append(f"<li><strong>Senior:</strong> {html.escape(fields['senior'])}</li>")
+    if level_items:
+        parts.append(f'''<div class="job-field">
+  <div class="field-label">직무 레벨 및 역량 기준</div>
+  <ul>{''.join(level_items)}</ul>
+</div>''')
+
+    if fields['questions']:
+        q_items = ''.join(f'<li>{html.escape(q)}</li>' for q in fields['questions'])
+        parts.append(f'''<div class="job-field">
+  <div class="field-label">지원자 전문성 검증 질문</div>
+  <ol>{q_items}</ol>
+</div>''')
+
+    if not parts:
+        return '<p class="empty">세부 항목을 추출하지 못했습니다.</p>'
+    return '\n'.join(parts)
+
+
 # expertise_analysis(R&D Project Specialist Agent 출력)를 카드로 렌더링할 때
 # 공통으로 쓰는 CSS. process_mit10.py, process_project_expertise.py가 공유한다.
 EXPERTISE_CARD_STYLE = """
@@ -187,6 +291,15 @@ EXPERTISE_CARD_STYLE = """
   .job-card .card-body { padding: 18px 20px; }
   .job-card .job-title { font-size: 0.92rem; font-weight: 700; margin: 0; }
   .job-card .badge { font-size: 0.68rem; }
+  .job-field { margin-bottom: 10px; }
+  .job-field:last-child { margin-bottom: 0; }
+  .job-field .field-label {
+    font-size: 0.68rem; font-weight: 700; color: var(--gs-accent); text-transform: uppercase;
+    letter-spacing: 0.03em; margin-bottom: 3px;
+  }
+  .job-field p { font-size: 0.82rem; margin: 0; color: #333; }
+  .job-field ul, .job-field ol { font-size: 0.82rem; margin: 0; padding-left: 18px; color: #333; }
+  .job-field li { margin: 2px 0; }
   .other-sections .accordion-button {
     font-size: 0.82rem; font-weight: 600; color: var(--gs-muted); background: var(--gs-bg);
   }
@@ -228,7 +341,8 @@ def render_expertise_html(analysis_text: str, anchor: str, *, empty_message: str
             f'<span class="badge rounded-pill {DIFFICULTY_BADGE.get(diff, "text-bg-secondary")}">'
             f'채용난이도 {diff}</span>'
         ) if diff else ''
-        body = job_body(jb)
+        body_fields = parse_job_fields(job_body(jb))
+        body_html = render_job_fields_html(body_fields)
         job_cards.append(f'''<div class="col-md-6">
   <div class="job-card card">
     <div class="card-body">
@@ -236,7 +350,7 @@ def render_expertise_html(analysis_text: str, anchor: str, *, empty_message: str
         <p class="job-title mb-0">{title}</p>
         {diff_badge}
       </div>
-      <div class="md-render" data-md-b64="{b64_encode(body)}"></div>
+      {body_html}
     </div>
   </div>
 </div>''')
