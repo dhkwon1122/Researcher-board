@@ -180,7 +180,7 @@ def _info_hover(icon_id, label, image_filename):
         dbc.Tooltip(
             html.Img(src=f'/raw-image/{quote(image_filename)}',
                      style={'maxWidth': '360px', 'maxHeight': '360px', 'display': 'block'}),
-            target=icon_id, placement='top',
+            target=icon_id, placement='top', className='info-hover-tooltip',
         ),
     ], className='d-flex align-items-center mt-2')
 

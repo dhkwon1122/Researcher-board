@@ -193,9 +193,9 @@ def _right_column():
         dbc.Card(
             dbc.CardBody([
                 html.P('타임라인', style={'fontSize': '0.85rem', 'fontWeight': 600,
-                                       'color': '#1d1d1f'}, className='mb-2'),
-                html.Div(id='tab-timeline'),
-            ]),
+                                       'color': '#1d1d1f', 'flex': '0 0 auto'}, className='mb-2'),
+                html.Div(id='tab-timeline', style={'flex': '1 1 auto', 'minHeight': '0', 'overflow': 'hidden'}),
+            ], style={'height': '100%', 'display': 'flex', 'flexDirection': 'column'}),
             className='shadow-sm profile-card',
             style={'height': f'{SECTION_HEIGHT}px', 'overflow': 'hidden'},
         ),

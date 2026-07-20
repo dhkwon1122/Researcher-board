@@ -226,6 +226,17 @@ h1, h2, h3, h4, h5, h6 {
   font-family: var(--gs-font) !important;
 }
 
+/* 보유 전문성 — 등급/Lv 개요 이미지 호버 툴팁: 검은 배경 제거(이미지만 노출) */
+.info-hover-tooltip .tooltip-inner {
+  background-color: transparent !important;
+  max-width: none;
+  padding: 0;
+  box-shadow: none;
+}
+.info-hover-tooltip .tooltip-arrow::before {
+  display: none;
+}
+
 /* ── 스크롤 가능한 테이블 ── */
 .table-scroll {
   max-height: 360px;

@@ -101,9 +101,12 @@ def timeline_view(task_df, hr_df, pub_df, pat_df, job_df, tasks_info_df, rid):
     header = _header_pills(len(tasks), hr_rows, len(pub), len(pat_dedup), task_df, pub_df, pat_df, rid)
     main_col, main_stores = _build_main_spine(tasks, jobs, hrs, pubs, pats, code_map, today, rid)
 
-    scroll_wrap = html.Div(main_col, style={'maxHeight': '400px', 'overflowY': 'auto', 'overflowX': 'hidden'})
+    scroll_wrap = html.Div(main_col, style={
+        'flex': '1 1 auto', 'minHeight': '0', 'overflowY': 'auto', 'overflowX': 'hidden',
+    })
     stores = [dcc.Store(id='tl-expand-store', data=[]), dcc.Store(id='tl-open-panel', data=None)]
-    return html.Div([header, scroll_wrap, *stores, *main_stores])
+    return html.Div([header, scroll_wrap, *stores, *main_stores],
+                     style={'height': '100%', 'display': 'flex', 'flexDirection': 'column'})
 
 
 def _task_row_height(jobs):
@@ -273,7 +276,7 @@ def _header_pills(task_count, hr_rows, pub_count, pat_count, task_df, pub_df, pa
     return html.Div([
         html.Div(pills, className='d-flex gap-2 flex-wrap'),
         html.Div(panels),
-    ], className='mb-2')
+    ], className='mb-2', style={'flex': '0 0 auto'})
 
 
 def _year_gridlines(pos_fn, min_year, max_year):
@@ -410,7 +413,8 @@ def _build_main_spine(tasks, jobs, hrs, pubs, pats, code_map, today, rid):
             task_jobs = task_jobs_by_idx[task_idx]
             expand_body = _task_expand_body(matched_pubs_by_task[task_idx], matched_pats_by_task[task_idx])
             children.append(_stack_connector(y_px, x_px, color))
-            children.append(_task_card(t, gkey, rank, y_px, x_px, z_index, color, task_jobs, expand_body, task_idx))
+            children.append(_task_card(t, gkey, rank, y_px, x_px, z_index, color, task_jobs))
+            children.append(_task_expand_overlay(expand_body, task_idx, y_px, x_px, it['height'], color))
             task_ref_map[f'{gkey}|{rank}'] = task_idx
             continue
 
@@ -433,7 +437,7 @@ def _stack_connector(y_px, x_px, color):
     })
 
 
-def _task_card(t, gkey, rank, y_px, x_px, z_index, color, jobs, expand_body, task_idx):
+def _task_card(t, gkey, rank, y_px, x_px, z_index, color, jobs):
     start_disp = t['start'].strftime('%y.%m')
     end_disp = '진행중' if t['end_label'] == '진행중' else t['end'].strftime('%y.%m')
     name_disp = truncate(t['task_name'], 60)
@@ -454,10 +458,6 @@ def _task_card(t, gkey, rank, y_px, x_px, z_index, color, jobs, expand_body, tas
             'fontSize': '0.66rem', 'color': _LEGEND_NEUTRAL, 'marginTop': '1px',
         }),
         *job_lines,
-        html.Div(expand_body, id={'type': 'task-expand-body', 'ref': task_idx}, style={
-            'display': 'none', 'marginTop': '6px', 'paddingTop': '6px',
-            'borderTop': f'1px dashed {color}',
-        }),
         dbc.Tooltip(t['task_name'], target=tooltip_id, placement='top'),
     ], id={'type': 'stack-card', 'gkey': gkey, 'idx': rank}, n_clicks=0, style={
         'position': 'absolute', 'top': f'{y_px}px', 'left': f'{x_px}px', 'right': '4px',
@@ -465,6 +465,25 @@ def _task_card(t, gkey, rank, y_px, x_px, z_index, color, jobs, expand_body, tas
         'backgroundColor': '#ffffff', 'border': f'1.3px solid {color}',
         'borderRadius': '10px', 'padding': '5px 10px', 'cursor': 'pointer',
         'boxShadow': '0 1px 4px rgba(0,0,0,0.10)',
+    })
+
+
+# 과제 박스를 펼쳤을 때 나오는 연결 논문/특허 패널. 카드 내부(자식)가 아니라
+# main_col의 형제로 별도 배치한다 — 카드 자신이 z-index를 명시해 별도의 스태킹
+# 컨텍스트를 만들기 때문에, 카드 안에 넣으면 이 패널의 z-index가 카드 바깥의
+# 다른 항목(예: 아래쪽 인사발령 필)에 가려질 수 있다. 형제로 두고 항상 최상위
+# 고정 z-index를 줘 어떤 항목도 이 패널을 가리지 못하게 한다.
+_TASK_EXPAND_Z = 9999
+
+
+def _task_expand_overlay(expand_body, task_idx, y_px, x_px, card_height, color):
+    return html.Div(expand_body, id={'type': 'task-expand-body', 'ref': task_idx}, style={
+        'display': 'none', 'position': 'absolute',
+        'top': f'{y_px + card_height + 4}px', 'left': f'{x_px}px', 'right': '4px',
+        'zIndex': _TASK_EXPAND_Z,
+        'backgroundColor': '#ffffff', 'border': f'1.3px solid {color}',
+        'borderRadius': '8px', 'padding': '8px 10px',
+        'boxShadow': '0 4px 16px rgba(0,0,0,0.18)',
     })
 
 
