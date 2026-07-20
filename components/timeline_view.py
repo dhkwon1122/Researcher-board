@@ -98,7 +98,13 @@ def timeline_view(task_df, hr_df, pub_df, pat_df, job_df, tasks_info_df, rid):
 
     today = pd.Timestamp(datetime.now().date())
     code_map = task_code_map(tasks_info_df)
-    header = _header_pills(len(tasks), hr_rows, len(pub), len(pat_dedup), task_df, pub_df, pat_df, rid)
+    task_names = {t['task_name'] for t in tasks}
+    pub_unlinked = sum(1 for p in pubs
+                        if not linked_task_names(p['project_name'], p['project_code'], task_names, code_map))
+    pat_unlinked = sum(1 for p in pats
+                        if not linked_task_names(p['project_name'], p['project_code'], task_names, code_map))
+    header = _header_pills(len(tasks), hr_rows, len(pub), len(pat_dedup), pub_unlinked, pat_unlinked,
+                            task_df, pub_df, pat_df, rid)
     main_col, main_stores = _build_main_spine(tasks, jobs, hrs, pubs, pats, code_map, today, rid)
 
     scroll_wrap = html.Div(main_col, style={
@@ -203,9 +209,13 @@ def _assign_task_colors(tasks):
     return {name: TASK_COLOR_PALETTE[i % len(TASK_COLOR_PALETTE)] for i, name in enumerate(names)}
 
 
-def _accordion_pill(kind, count, color, radius='999px', border_width='1.5px'):
-    """헤더 요약 pill. 클릭하면 아래에 전체 폭 표가 펼쳐진다(아코디언 — 한 번에 하나만)."""
-    return html.Div(f'{kind} ({count})', id={'type': 'tl-header-pill', 'kind': kind}, n_clicks=0, style={
+def _accordion_pill(kind, count, color, radius='999px', border_width='1.5px', unlinked=None):
+    """헤더 요약 pill. 클릭하면 아래에 전체 폭 표가 펼쳐진다(아코디언 — 한 번에 하나만).
+    unlinked가 주어지면(논문/특허) '(전체) *과제미연결수'를 덧붙인다."""
+    label = f'{kind} ({count})'
+    if unlinked is not None:
+        label += f' *{unlinked}'
+    return html.Div(label, id={'type': 'tl-header-pill', 'kind': kind}, n_clicks=0, style={
         'border': f'{border_width} solid {color}', 'borderRadius': radius,
         'padding': '4px 14px', 'fontSize': '0.78rem', 'fontWeight': 600, 'color': color,
         'cursor': 'pointer', 'userSelect': 'none', 'display': 'inline-block',
@@ -264,15 +274,17 @@ def _hr_table(hr_rows):
     ], bordered=False, hover=True, size='sm', className='mb-0', style={'tableLayout': 'fixed', 'width': '100%'})
 
 
-def _header_pills(task_count, hr_rows, pub_count, pat_count, task_df, pub_df, pat_df, rid):
+def _header_pills(task_count, hr_rows, pub_count, pat_count, pub_unlinked, pat_unlinked,
+                   task_df, pub_df, pat_df, rid):
     kinds = [
-        ('과제', task_count, '#1d1d1f', '8px', tasks_block(task_df, rid)),
-        ('인사발령', len(hr_rows), EVENT_COLORS['인사발령'], '999px', _hr_table(hr_rows)),
-        ('논문', pub_count, EVENT_COLORS['논문'], '999px', publications_tab(pub_df, rid)),
-        ('특허', pat_count, EVENT_COLORS['특허'], '999px', patents_tab(pat_df, rid)),
+        ('과제', task_count, None, '#1d1d1f', '8px', tasks_block(task_df, rid)),
+        ('인사발령', len(hr_rows), None, EVENT_COLORS['인사발령'], '999px', _hr_table(hr_rows)),
+        ('논문', pub_count, pub_unlinked, EVENT_COLORS['논문'], '999px', publications_tab(pub_df, rid)),
+        ('특허', pat_count, pat_unlinked, EVENT_COLORS['특허'], '999px', patents_tab(pat_df, rid)),
     ]
-    pills = [_accordion_pill(kind, count, color, radius) for kind, count, color, radius, _ in kinds]
-    panels = [_accordion_panel(kind, body) for kind, _, _, _, body in kinds]
+    pills = [_accordion_pill(kind, count, color, radius, unlinked=unlinked)
+             for kind, count, unlinked, color, radius, _ in kinds]
+    panels = [_accordion_panel(kind, body) for kind, _, _, _, _, body in kinds]
     return html.Div([
         html.Div(pills, className='d-flex gap-2 flex-wrap'),
         html.Div(panels),
@@ -420,9 +432,12 @@ def _build_main_spine(tasks, jobs, hrs, pubs, pats, code_map, today, rid):
             task_idx = it['ref']
             color = task_colors[t['task_name']]
             task_jobs = task_jobs_by_idx[task_idx]
-            expand_body = _task_expand_body(matched_pubs_by_task[task_idx], matched_pats_by_task[task_idx])
+            matched_pubs = matched_pubs_by_task[task_idx]
+            matched_pats = matched_pats_by_task[task_idx]
+            expand_body = _task_expand_body(matched_pubs, matched_pats)
             children.append(_stack_connector(y_px, x_px, color))
-            children.append(_task_card(t, gkey, rank, y_px, x_px, z_index, color, task_jobs))
+            children.append(_task_card(t, gkey, rank, y_px, x_px, z_index, color, task_jobs,
+                                        len(matched_pubs), len(matched_pats)))
             children.append(_task_expand_overlay(expand_body, task_idx, y_px, x_px, it['height'], color))
             task_ref_map[f'{gkey}|{rank}'] = task_idx
             continue
@@ -446,7 +461,22 @@ def _stack_connector(y_px, x_px, color):
     })
 
 
-def _task_card(t, gkey, rank, y_px, x_px, z_index, color, jobs):
+def _task_counts_badge(pub_count, pat_count):
+    """과제명 우측에 붙는 연결 논문/특허 수 배지. 하나도 없으면 아무것도 표시하지 않는다."""
+    parts = []
+    if pub_count:
+        parts.append(f"{_ICONS['논문']}{pub_count}")
+    if pat_count:
+        parts.append(f"{_ICONS['특허']}{pat_count}")
+    if not parts:
+        return None
+    return html.Span(' '.join(parts), style={
+        'fontSize': '0.66rem', 'color': _LEGEND_NEUTRAL, 'fontWeight': 500,
+        'whiteSpace': 'nowrap', 'flexShrink': '0', 'marginLeft': '6px',
+    })
+
+
+def _task_card(t, gkey, rank, y_px, x_px, z_index, color, jobs, pub_count, pat_count):
     start_disp = t['start'].strftime('%y.%m')
     end_disp = '진행중' if t['end_label'] == '진행중' else t['end'].strftime('%y.%m')
     name_disp = truncate(t['task_name'], 60)
@@ -459,10 +489,19 @@ def _task_card(t, gkey, rank, y_px, x_px, z_index, color, jobs):
         for j in (jobs or [])
     ]
 
-    return html.Div([
+    name_row_children = [
         html.Div(name_disp, id=tooltip_id, className='fw-semibold',
                  style={'fontSize': '0.76rem', 'color': color, 'whiteSpace': 'nowrap',
-                        'overflow': 'hidden', 'textOverflow': 'ellipsis'}),
+                        'overflow': 'hidden', 'textOverflow': 'ellipsis', 'minWidth': '0',
+                        'flex': '0 1 auto'}),
+    ]
+    counts_badge = _task_counts_badge(pub_count, pat_count)
+    if counts_badge is not None:
+        name_row_children.append(counts_badge)
+
+    return html.Div([
+        html.Div(name_row_children, style={'display': 'flex', 'alignItems': 'baseline',
+                                            'justifyContent': 'space-between'}),
         html.Div(f'{start_disp} ~ {end_disp}', style={
             'fontSize': '0.66rem', 'color': _LEGEND_NEUTRAL, 'marginTop': '1px',
         }),
