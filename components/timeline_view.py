@@ -56,8 +56,7 @@ from components.timeline_data import (
 # ── 레이아웃 상수(px) ─────────────────────────────────────────────────────
 _TOP_PAD = 24
 _SPINE_X = 34             # 스파인이 컬럼 왼쪽 끝에서 떨어진 거리(연도 라벨 공간)
-_STACK_BASE_X = _SPINE_X + 26   # 스택(과제 카드/이벤트 필 공통) 맨 앞 카드의 x 위치
-_STACK_OFFSET_PX = 16     # 겹치는 카드가 쌓일 때 한 겹당 우측으로 밀리는 거리
+_STACK_BASE_X = _SPINE_X + 26   # 스택(과제 카드/이벤트 필 공통) 카드의 x 위치(항상 고정)
 
 # 세로 위치는 달력상 절대 시간이 아니라 "탄력적" 척도를 쓴다: 각 항목 사이 간격은
 # 그 앞 항목의 실제 렌더 높이만큼만 확보하고(데이터가 몰린 구간은 그만큼만 촘촘하게
@@ -397,7 +396,10 @@ def _build_main_spine(tasks, jobs, hrs, pubs, pats, code_map, today, rid):
 
     for i, it in enumerate(spine_items):
         gkey, rank = stack_meta[i]
-        x_px = _STACK_BASE_X + rank * _STACK_OFFSET_PX
+        # 세로 위치가 이미 탄력적 축(_build_time_axis)으로 충분히 벌어져 있어 겹칠
+        # 일이 없으므로, 가로 위치는 랭크와 무관하게 항상 맨 왼쪽(_STACK_BASE_X)에
+        # 정렬한다. 랭크는 겹침 그룹 내 z-index(맨 앞으로 가져오기)에만 쓰인다.
+        x_px = _STACK_BASE_X
         z_index = 100 - rank
         y_px = pos_fn(it['anchor'])
 
@@ -516,11 +518,9 @@ def _event_pill(e, gkey, rank, y_px, x_px, z_index, color):
 
 
 # ── 클릭한 카드(과제/이벤트 공통)를 스택 맨 위로 올리는 클라이언트사이드 콜백 ──
-# 이전에는 "현재 left 값 - idx*OFFSET"으로 그룹의 기준 x를 역산했는데, 이는 카드가
-# 한 번도 재배치되지 않았을 때만 성립한다. 재배치 이후에는 idx(고정)와 pos(그때그때
-# 순서)가 달라지므로 역산 결과가 어긋나고, 클릭할 때마다 오차가 누적돼 카드가
-# 한쪽으로 계속 밀려나는 버그가 있었다. 기준 x(_STACK_BASE_X)를 역산 없이 상수로
-# 고정해 이 문제를 근본적으로 없앤다.
+# 세로 위치가 이미 탄력적 축(_build_time_axis)으로 충분히 벌어져 있어 겹칠 일이
+# 없으므로, 가로 위치(left)는 항상 _STACK_BASE_X로 고정하고 건드리지 않는다.
+# 클릭 시에는 z-index만 맨 앞으로 올린다.
 dash.clientside_callback(
     """
     function(n_clicks_list, current_styles, current_order) {
@@ -539,8 +539,6 @@ dash.clientside_callback(
             return [dash_clientside.no_update, dash_clientside.no_update];
         }
         const clickedIdx = triggeredId.idx;
-        const OFFSET = """ + str(_STACK_OFFSET_PX) + """;
-        const BASE = """ + str(_STACK_BASE_X) + """;
 
         const outIds = ctx.outputs_list[0].map(o => o.id.idx);
         let order = (current_order && current_order.length ? current_order : outIds.slice()).slice();
@@ -551,7 +549,6 @@ dash.clientside_callback(
         const newStyles = outIds.map((idx, i) => {
             const pos = order.indexOf(idx);
             const style = Object.assign({}, current_styles[i]);
-            style.left = (BASE + pos * OFFSET) + 'px';
             style.zIndex = 100 - pos;
             return style;
         });
