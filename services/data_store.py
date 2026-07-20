@@ -57,6 +57,7 @@ def read_profile_tables() -> dict[str, pd.DataFrame]:
         'leadership',
         'transfers',
         'tasks',
+        'tasks_information',
         'nurturing',
         'awards',
         'comments',

@@ -1,23 +1,24 @@
 """
 연구원 프로필 — 타임라인 (HTML/CSS 카드 오버레이).
 
-기존에는 Plotly 차트 하나로 전체(스파인·과제 레인·이벤트 라벨·호버)를 그렸으나,
-과제 카드를 "쌓아서 클릭하면 맨 위로" 오는 인터랙션을 자연스럽게 구현하기 위해
-날짜→픽셀 매핑만 Python에서 계산하고, 실제 스파인·카드·필은 모두 일반 Dash HTML
-컴포넌트로 절대 위치시킨다(Plotly 미사용). 클릭 시 순서 변경은 클라이언트사이드
-콜백(서버 왕복 없음)으로 처리한다.
+Support spine(논문·특허·인사발령 전용 컬럼)를 없애고 Main spine 하나로 통합했다.
+과제 카드는 넓어진 폭을 그대로 활용해 좌우로 길게 표시하고, 논문·특허는 그
+과제(project_name/project_code)에 연결되면 평소엔 숨겨져 있다가 과제 카드를
+클릭하면 나타난다(여러 과제 동시 펼침 가능). 어떤 과제에도 연결되지 않는
+논문·특허는 항상 회색 필로 표시된다. 인사발령은 과제 개념이 없어 기존과 동일하게
+항상 파란색으로 표시된다.
 
 구조:
-  ┌ 헤더 필(과제/논문/특허/인사발령 + 개수) ─────────────────────┐
-  ├ Main spine(과제)              │ Support spine(논문·특허·인사발령) ┤
-  │  점선 스파인 + 연도 라벨      │  점선 스파인                      │
-  │  과제 박스 카드                │  타원(pill) 카드                  │
-  │  (겹치는 기간의 과제는 쌓임,   │  (같은 간격 안에 몰린 이벤트도    │
-  │   클릭하면 맨 위로)            │   동일하게 쌓임 + 클릭 시 맨 위로) │
-  └────────────────────────────────┴────────────────────────────────┘
+  ┌ 헤더 필(과제/인사발령/논문/특허 + 개수, 클릭 시 이름+기간 리스트 펼침) ──┐
+  ├ Main spine(과제 + 인사발령 + 회색 미연결 논문/특허 + 펼쳐진 연결 논문/특허) ┤
+  │  점선 스파인 + 연도 라벨                                              │
+  │  (겹치는 기간의 항목은 쌓임, 클릭하면 맨 위로)                         │
+  └──────────────────────────────────────────────────────────────────────┘
 
 과제/이벤트 모두 "겹칠 때 쌓기 + 클릭 시 맨 위로" 로직을 공유한다
 (_group_overlapping, _assign_stack_groups, 클라이언트사이드 콜백).
+과제 클릭 시 "연결된 논문/특허 펼치기"는 별도의 독립된 클라이언트사이드
+콜백(state: tl-expand-store)으로 처리하며, 카드 쌓기 순서 변경과는 무관하다.
 """
 
 from datetime import datetime
@@ -31,8 +32,10 @@ from components.timeline_data import (
     dedupe_patents,
     hr_points,
     job_points,
+    linked_task_names,
     pat_points,
     pub_points,
+    task_code_map,
     task_points,
     truncate,
     yymm,
@@ -43,20 +46,19 @@ _TOP_PAD = 24
 _SPINE_X = 34             # 스파인이 컬럼 왼쪽 끝에서 떨어진 거리(연도 라벨 공간)
 _STACK_BASE_X = _SPINE_X + 26   # 스택(과제 카드/이벤트 필 공통) 맨 앞 카드의 x 위치
 _STACK_OFFSET_PX = 16     # 겹치는 카드가 쌓일 때 한 겹당 우측으로 밀리는 거리
-_TASK_ROW_GAP_PX = 40     # 과제 카드 사이 최소 세로 간격
-_EVENT_ROW_GAP_PX = 38    # 이벤트 필 사이 최소 세로 간격(줄바꿈되는 필도 고려해 여유를 둠)
-_TASK_CARD_WIDTH = 168
+_ROW_GAP_PX = 40          # 과제/이벤트가 하나의 스파인을 공유하므로 최소 세로 간격을 통일
 
 # ── 색상 ──────────────────────────────────────────────────────────────────
 TASK_COLOR_PALETTE = ['#4a7fc1', '#7b6fb0', '#c46b6b', '#c07d97', '#c08a52']
 EVENT_COLORS = {'논문': '#c98a2e', '특허': '#3f8f57', '인사발령': '#0071e3'}
+_UNLINKED_COLOR = '#9a9a9e'   # 과제에 연결되지 않은 논문/특허(항상 표시, 회색)
 _SPINE_COLOR = '#c7c7cc'
 _GRIDLINE = '#e8e8ed'
 _LEGEND_NEUTRAL = '#6e6e73'
 _ICONS = {'논문': '📄', '특허': '💡', '인사발령': '🧭'}
 
 
-def timeline_view(task_df, hr_df, pub_df, pat_df, job_df, rid):
+def timeline_view(task_df, hr_df, pub_df, pat_df, job_df, tasks_info_df, rid):
     task = task_df[task_df['researcher_id'] == rid].copy() if not task_df.empty else pd.DataFrame()
     hr = hr_df[hr_df['researcher_id'] == rid].copy() if not hr_df.empty else pd.DataFrame()
     pub = pub_df[pub_df['researcher_id'] == rid].copy() if not pub_df.empty else pd.DataFrame()
@@ -87,17 +89,14 @@ def timeline_view(task_df, hr_df, pub_df, pat_df, job_df, rid):
     y_range = [min_date - pad, max_date + pad]
     total_height = _chart_height(y_range)
 
-    header = _header_pills(len(tasks), len(pubs), len(pats))
-    main_col, main_stores = _build_main_spine(tasks, jobs, today, rid, y_range, total_height)
-    support_col, support_stores = _build_support_spine(pubs, pats, hrs, rid, y_range, total_height)
+    code_map = task_code_map(tasks_info_df)
+    header = _header_pills(tasks, hrs, pubs, pats)
+    main_col, main_stores = _build_main_spine(tasks, jobs, hrs, pubs, pats, code_map, today, rid, y_range,
+                                               total_height)
 
-    body = dbc.Row([
-        dbc.Col(main_col, style={'flex': '0 0 30%', 'maxWidth': '30%'}),
-        dbc.Col(support_col, style={'flex': '0 0 70%', 'maxWidth': '70%'}),
-    ], className='g-2')
-
-    scroll_wrap = html.Div(body, style={'maxHeight': '520px', 'overflowY': 'auto', 'overflowX': 'hidden'})
-    return html.Div([header, scroll_wrap, *main_stores, *support_stores])
+    scroll_wrap = html.Div(main_col, style={'maxHeight': '520px', 'overflowY': 'auto', 'overflowX': 'hidden'})
+    expand_store = dcc.Store(id='tl-expand-store', data=[])
+    return html.Div([header, scroll_wrap, expand_store, *main_stores])
 
 
 def _chart_height(y_range):
@@ -179,24 +178,38 @@ def _assign_task_colors(tasks):
     return {name: TASK_COLOR_PALETTE[i % len(TASK_COLOR_PALETTE)] for i, name in enumerate(names)}
 
 
-def _header_pills(task_count, pub_count, pat_count):
-    task_box = html.Div(f'과제 ({task_count})', style={
-        'border': '1.5px solid #1d1d1f', 'borderRadius': '8px',
-        'padding': '4px 12px', 'fontSize': '0.78rem', 'fontWeight': 600, 'color': '#1d1d1f',
+def _clickable_pill(kind, count, color, items, radius='999px', border_width='1.5px'):
+    """헤더 요약 pill. 클릭하면 바로 아래에 이름+기간 리스트가 펼쳐진다(다시 클릭하면 접힘)."""
+    pill = html.Div(f'{kind} ({count})', id={'type': 'tl-header-pill', 'kind': kind}, n_clicks=0, style={
+        'border': f'{border_width} solid {color}', 'borderRadius': radius,
+        'padding': '4px 14px', 'fontSize': '0.78rem', 'fontWeight': 600, 'color': color,
+        'cursor': 'pointer', 'userSelect': 'none', 'display': 'inline-block',
     })
+    list_children = (
+        [html.Div(text, style={'fontSize': '0.72rem', 'color': _LEGEND_NEUTRAL, 'padding': '2px 0'})
+         for text in items]
+        if items else [html.Div('데이터 없음', style={'fontSize': '0.72rem', 'color': _LEGEND_NEUTRAL})]
+    )
+    list_box = html.Div(list_children, id={'type': 'tl-header-list', 'kind': kind}, style={
+        'display': 'none', 'marginTop': '4px', 'padding': '8px 12px',
+        'border': f'1px solid {color}', 'borderRadius': '10px', 'backgroundColor': '#fafafa',
+        'maxHeight': '160px', 'overflowY': 'auto', 'minWidth': '220px',
+    })
+    return html.Div([pill, list_box])
 
-    def _oval(text, color):
-        return html.Div(text, style={
-            'border': f'1.5px solid {color}', 'borderRadius': '999px',
-            'padding': '4px 14px', 'fontSize': '0.78rem', 'fontWeight': 600, 'color': color,
-        })
+
+def _header_pills(tasks, hrs, pubs, pats):
+    task_items = [f"{t['task_name']} ({t['start_label']} ~ {t['end_label']})" for t in tasks]
+    hr_items = [f"{h['order_name']} ({h['order_date']})" for h in hrs]
+    pub_items = [f"{p['title']} ({yymm(p['date'])})" for p in pubs]
+    pat_items = [f"{p['title']} ({yymm(p['date'])})" for p in pats]
 
     return html.Div([
-        task_box,
-        _oval(f'논문 ({pub_count})', EVENT_COLORS['논문']),
-        _oval(f'특허 ({pat_count})', EVENT_COLORS['특허']),
-        _oval('인사발령', EVENT_COLORS['인사발령']),
-    ], className='d-flex gap-2 mb-3 flex-wrap')
+        _clickable_pill('과제', len(tasks), '#1d1d1f', task_items, radius='8px'),
+        _clickable_pill('인사발령', len(hrs), EVENT_COLORS['인사발령'], hr_items),
+        _clickable_pill('논문', len(pubs), EVENT_COLORS['논문'], pub_items),
+        _clickable_pill('특허', len(pats), EVENT_COLORS['특허'], pat_items),
+    ], className='d-flex gap-2 mb-3 flex-wrap align-items-start')
 
 
 def _year_gridlines(y_range, total_height):
@@ -231,11 +244,47 @@ def _overlapping_jobs(task, jobs, today):
     return result
 
 
-def _build_main_spine(tasks, jobs, today, rid, y_range, total_height):
-    task_y = _assign_slots([t['start'] for t in tasks], y_range, total_height, _TASK_ROW_GAP_PX)
-    groups = _group_overlapping([{'start': t['start'], 'end': t['end']} for t in tasks])
-    stack_meta, stores = _assign_stack_groups(groups, [t['start'] for t in tasks], f'{rid}-task')
+def _linked_task_ref(project_name, project_code, task_names, code_map, tasks):
+    """이 논문/특허가 연결되는 과제의 tasks 리스트 내 인덱스(0-base)를 반환.
+    여러 과제에 연결되더라도(드묾) 첫 번째 일치 항목만 사용한다.
+    연결된 과제가 없으면 None(= 회색으로 항상 표시)."""
+    matched = linked_task_names(project_name, project_code, task_names, code_map)
+    if not matched:
+        return None
+    matched_set = set(matched)
+    for i, t in enumerate(tasks):
+        if t['task_name'] in matched_set:
+            return i
+    return None
+
+
+def _build_main_spine(tasks, jobs, hrs, pubs, pats, code_map, today, rid, y_range, total_height):
+    task_names = {t['task_name'] for t in tasks}
+    for p in pubs:
+        p['ref'] = _linked_task_ref(p['project_name'], p['project_code'], task_names, code_map, tasks)
+    for p in pats:
+        p['ref'] = _linked_task_ref(p['project_name'], p['project_code'], task_names, code_map, tasks)
+
+    # 하나의 스파인/충돌 도메인에 과제(구간)와 이벤트(시점)를 함께 배치한다.
+    spine_items = (
+        [{'kind': 'task', 'anchor': t['start'], 'interval': {'start': t['start'], 'end': t['end']},
+          'ref': i, 'payload': t}
+         for i, t in enumerate(tasks)]
+        + [{'kind': 'hr', 'anchor': h['date'], 'interval': None, 'ref': None, 'payload': h} for h in hrs]
+        + [{'kind': 'pub', 'anchor': p['date'], 'interval': None, 'ref': p['ref'], 'payload': p} for p in pubs]
+        + [{'kind': 'pat', 'anchor': p['date'], 'interval': None, 'ref': p['ref'], 'payload': p} for p in pats]
+    )
+
+    dates = [it['anchor'] for it in spine_items]
+    y_px_list = _assign_slots(dates, y_range, total_height, _ROW_GAP_PX)
+    point_windows = _event_windows(dates, y_range, total_height, _ROW_GAP_PX)
+    intervals = [it['interval'] if it['interval'] is not None else point_windows[i]
+                 for i, it in enumerate(spine_items)]
+    groups = _group_overlapping(intervals)
+    stack_meta, stores = _assign_stack_groups(groups, dates, f'{rid}-main')
+
     task_colors = _assign_task_colors(tasks)
+    task_ref_map = {}   # f'{gkey}|{rank}' → 과제의 tasks 리스트 인덱스(클라이언트사이드 콜백이 조회)
 
     children = [
         html.Div(style={
@@ -244,17 +293,45 @@ def _build_main_spine(tasks, jobs, today, rid, y_range, total_height):
         }),
         *_year_gridlines(y_range, total_height),
     ]
-    for idx, t in enumerate(tasks):
-        gkey, rank = stack_meta[idx]
+
+    for i, it in enumerate(spine_items):
+        gkey, rank = stack_meta[i]
         x_px = _STACK_BASE_X + rank * _STACK_OFFSET_PX
         z_index = 100 - rank
-        color = task_colors[t['task_name']]
-        task_jobs = _overlapping_jobs(t, jobs, today)
-        children.append(_stack_connector(task_y[idx], x_px, color))
-        children.append(_task_card(t, gkey, rank, task_y[idx], x_px, z_index, color, task_jobs))
+        y_px = y_px_list[i]
+
+        if it['kind'] == 'task':
+            t = it['payload']
+            color = task_colors[t['task_name']]
+            task_jobs = _overlapping_jobs(t, jobs, today)
+            children.append(_stack_connector(y_px, x_px, color))
+            children.append(_task_card(t, gkey, rank, y_px, x_px, z_index, color, task_jobs))
+            task_ref_map[f'{gkey}|{rank}'] = it['ref']
+            continue
+
+        if it['kind'] == 'hr':
+            e = {'date': it['payload']['date'], 'kind': '인사발령', 'text': _hr_pill_text(it['payload']), 'title': None}
+            color = EVENT_COLORS['인사발령']
+            children.append(_stack_connector(y_px, x_px, color))
+            children.append(_event_pill(e, gkey, rank, y_px, x_px, z_index, color))
+            continue
+
+        p = it['payload']
+        kind_label = '논문' if it['kind'] == 'pub' else '특허'
+        text = _pub_pill_text(p) if it['kind'] == 'pub' else _patent_pill_text(p)
+        e = {'date': p['date'], 'kind': kind_label, 'text': text, 'title': p['title']}
+        linked = it['ref'] is not None
+        color = EVENT_COLORS[kind_label] if linked else _UNLINKED_COLOR
+        children.append(_stack_connector(y_px, x_px, color))
+        pill = _event_pill(e, gkey, rank, y_px, x_px, z_index, color)
+        if linked:
+            children.append(html.Div(pill, id={'type': 'linked-pill', 'ref': it['ref']}, style={'display': 'none'}))
+        else:
+            children.append(pill)
 
     main_col = html.Div(children, style={'position': 'relative', 'height': f'{total_height}px',
                                           'paddingBottom': '20px'})
+    stores = [*stores, dcc.Store(id='tl-task-ref-map', data=task_ref_map)]
     return main_col, stores
 
 
@@ -269,7 +346,7 @@ def _stack_connector(y_px, x_px, color):
 def _task_card(t, gkey, rank, y_px, x_px, z_index, color, jobs=None):
     start_disp = t['start'].strftime('%y.%m')
     end_disp = '진행중' if t['end_label'] == '진행중' else t['end'].strftime('%y.%m')
-    name_disp = truncate(t['task_name'], 20)
+    name_disp = truncate(t['task_name'], 60)
     tooltip_id = f'task-tt-{gkey}-{rank}'
 
     job_lines = [
@@ -290,7 +367,7 @@ def _task_card(t, gkey, rank, y_px, x_px, z_index, color, jobs=None):
         dbc.Tooltip(t['task_name'], target=tooltip_id, placement='top'),
     ], id={'type': 'stack-card', 'gkey': gkey, 'idx': rank}, n_clicks=0, style={
         'position': 'absolute', 'top': f'{y_px}px', 'left': f'{x_px}px', 'right': '4px',
-        'zIndex': z_index, 'maxWidth': f'{_TASK_CARD_WIDTH}px',
+        'zIndex': z_index,
         'backgroundColor': '#ffffff', 'border': f'1.3px solid {color}',
         'borderRadius': '10px', 'padding': '5px 10px', 'cursor': 'pointer',
         'boxShadow': '0 1px 4px rgba(0,0,0,0.10)',
@@ -320,40 +397,6 @@ def _hr_pill_text(p):
     dep = f"{p['order_name']}({p['order_dep']})" if p['order_dep'] else p['order_name']
     cl = f"{p['order_cl']}({p['order_assignment']})" if p['order_assignment'] else p['order_cl']
     return '  '.join(x for x in (date_str, dep, cl) if x)
-
-
-def _build_support_spine(pubs, pats, hrs, rid, y_range, total_height):
-    events = []
-    for p in pubs:
-        events.append({'date': p['date'], 'kind': '논문', 'text': _pub_pill_text(p), 'title': p['title']})
-    for p in pats:
-        events.append({'date': p['date'], 'kind': '특허', 'text': _patent_pill_text(p), 'title': p['title']})
-    for p in hrs:
-        events.append({'date': p['date'], 'kind': '인사발령', 'text': _hr_pill_text(p), 'title': None})
-
-    if not events:
-        return html.Div(style={'position': 'relative', 'height': f'{total_height}px'}), []
-
-    dates = [e['date'] for e in events]
-    event_y = _assign_slots(dates, y_range, total_height, _EVENT_ROW_GAP_PX)
-    groups = _group_overlapping(_event_windows(dates, y_range, total_height, _EVENT_ROW_GAP_PX))
-    stack_meta, stores = _assign_stack_groups(groups, dates, f'{rid}-evt')
-
-    children = [html.Div(style={
-        'position': 'absolute', 'top': '0', 'bottom': '0', 'left': f'{_SPINE_X}px',
-        'borderLeft': f'2px dashed {_SPINE_COLOR}',
-    })]
-    for i, e in enumerate(events):
-        gkey, rank = stack_meta[i]
-        x_px = _STACK_BASE_X + rank * _STACK_OFFSET_PX
-        z_index = 100 - rank
-        color = EVENT_COLORS[e['kind']]
-        children.append(_stack_connector(event_y[i], x_px, color))
-        children.append(_event_pill(e, gkey, rank, event_y[i], x_px, z_index, color))
-
-    support_col = html.Div(children, style={'position': 'relative', 'height': f'{total_height}px',
-                                             'paddingBottom': '20px'})
-    return support_col, stores
 
 
 def _event_pill(e, gkey, rank, y_px, x_px, z_index, color):
@@ -429,4 +472,73 @@ dash.clientside_callback(
     Input({'type': 'stack-card', 'gkey': MATCH, 'idx': ALL}, 'n_clicks'),
     State({'type': 'stack-card', 'gkey': MATCH, 'idx': ALL}, 'style'),
     State({'type': 'stack-order', 'gkey': MATCH}, 'data'),
+)
+
+
+# ── 과제 카드 클릭 → 연결된 논문/특허(linked-pill) 펼치기/접기 (여러 과제 동시 펼침 가능) ──
+# 카드 쌓기 순서(위 콜백)와는 독립된 상태(tl-expand-store, 펼쳐진 과제의 ref 목록)로 관리한다.
+# 과제 카드와 이벤트 필이 모두 'stack-card' id를 공유하므로(위 재배치 콜백과 정확히
+# 같은 id 모양이어야 매칭됨 — 여기에 kind/ref 등 키를 더 넣으면 그 콜백의 매칭이
+# 깨진다), 이 콜백은 모든 stack-card 클릭을 받은 뒤 tl-task-ref-map(gkey|idx → 과제
+# 인덱스)에서 찾아 과제 카드 클릭만 처리하고, 이벤트 필 클릭은 무시한다.
+dash.clientside_callback(
+    """
+    function(n_clicks_list, ref_map, current_set, current_pill_styles) {
+        const ctx = dash_clientside.callback_context;
+        if (!ctx.triggered || !ctx.triggered.length) {
+            return [dash_clientside.no_update, dash_clientside.no_update];
+        }
+        const propId = ctx.triggered[0].prop_id;
+        if (!propId.endsWith('.n_clicks')) {
+            return [dash_clientside.no_update, dash_clientside.no_update];
+        }
+        let triggeredId;
+        try {
+            triggeredId = JSON.parse(propId.substring(0, propId.lastIndexOf('.')));
+        } catch (e) {
+            return [dash_clientside.no_update, dash_clientside.no_update];
+        }
+
+        const lookupKey = triggeredId.gkey + '|' + triggeredId.idx;
+        if (!ref_map || !(lookupKey in ref_map)) {
+            return [dash_clientside.no_update, dash_clientside.no_update];
+        }
+        const refIdx = ref_map[lookupKey];
+
+        let expanded = (current_set || []).slice();
+        const pos = expanded.indexOf(refIdx);
+        if (pos === -1) { expanded.push(refIdx); } else { expanded.splice(pos, 1); }
+
+        const outIds = ctx.outputs_list[1].map(o => o.id.ref);
+        const newStyles = outIds.map((ref, i) => {
+            const style = Object.assign({}, current_pill_styles[i]);
+            style.display = expanded.includes(ref) ? 'block' : 'none';
+            return style;
+        });
+
+        return [expanded, newStyles];
+    }
+    """,
+    Output('tl-expand-store', 'data'),
+    Output({'type': 'linked-pill', 'ref': ALL}, 'style'),
+    Input({'type': 'stack-card', 'gkey': ALL, 'idx': ALL}, 'n_clicks'),
+    State('tl-task-ref-map', 'data'),
+    State('tl-expand-store', 'data'),
+    State({'type': 'linked-pill', 'ref': ALL}, 'style'),
+)
+
+
+# ── 헤더 요약 pill 클릭 → 이름+기간 리스트 펼치기/접기 ──
+dash.clientside_callback(
+    """
+    function(n_clicks, current_style) {
+        if (!n_clicks) { return dash_clientside.no_update; }
+        const style = Object.assign({}, current_style);
+        style.display = (n_clicks % 2 === 1) ? 'block' : 'none';
+        return style;
+    }
+    """,
+    Output({'type': 'tl-header-list', 'kind': MATCH}, 'style'),
+    Input({'type': 'tl-header-pill', 'kind': MATCH}, 'n_clicks'),
+    State({'type': 'tl-header-list', 'kind': MATCH}, 'style'),
 )

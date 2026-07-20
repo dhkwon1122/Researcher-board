@@ -19,6 +19,16 @@ np.random.seed(42)
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
 
+# 과제명 목록(과제 수행 이력 샘플 + tasks_information 샘플이 공유) 및 과제코드.
+# 타임라인에서 논문/특허를 과제에 연결하는 project_name/project_code 샘플에도 쓰인다.
+SAMPLE_TASK_NAMES = [
+    'AI 기반 제어 시스템 개발', '차세대 배터리 소재 연구', '로봇 자동화 플랫폼 구축',
+    '반도체 공정 최적화', '스마트 팩토리 시스템', '양자컴퓨팅 알고리즘 연구',
+    '딥러닝 기반 불량 검출', '청정에너지 변환 기술', '지능형 물류 시스템',
+    '차세대 통신 모듈 개발', '수소연료전지 효율화', '나노소재 표면처리 연구',
+]
+TASK_CODE_MAP = {name: f'PRJ-{i + 1:03d}' for i, name in enumerate(SAMPLE_TASK_NAMES)}
+
 DEPARTMENTS = {
     'ORG01': '기계시스템연구팀',
     'ORG02': '소재공정연구팀',
@@ -198,9 +208,30 @@ def generate_incentive_selection(researchers_df, evaluations_df):
     return pd.DataFrame(rows)
 
 
-def generate_publications(researchers_df):
+def _researcher_task_names(tasks_df):
+    """researcher_id → 그 연구원의 과제명 목록. tasks_df가 없거나 비어 있으면 빈 dict."""
+    if tasks_df is None or tasks_df.empty:
+        return {}
+    return {
+        rid: grp['task_name'].tolist()
+        for rid, grp in tasks_df.groupby('researcher_id')
+    }
+
+
+def _sample_project_link(researcher_id, task_names_by_researcher, link_rate=0.4):
+    """샘플 데이터 전용: 이 연구원의 과제 중 하나를 확률적으로 골라
+    (project_name, project_code)를 반환. 연결 없으면 ('', '')."""
+    names = task_names_by_researcher.get(researcher_id) or []
+    if names and random.random() < link_rate:
+        name = random.choice(names)
+        return name, TASK_CODE_MAP.get(name, '')
+    return '', ''
+
+
+def generate_publications(researchers_df, tasks_df=None):
     author_types = ['단독', '제1저자', '공동저자', '교신저자']
     pub_types    = ['SCI', 'SCIE', 'KCI', '국내학술대회', '국제학술대회']
+    task_names_by_researcher = _researcher_task_names(tasks_df)
     rows = []
     for _, r in researchers_df.iterrows():
         n = random.randint(0, 14)
@@ -214,6 +245,7 @@ def generate_publications(researchers_df):
             contrib = round(100 / total) if total > 0 else 100
             author_type = random.choice(author_types)
             is_corr = author_type == '교신저자' or random.random() > 0.8
+            project_name, project_code = _sample_project_link(r['researcher_id'], task_names_by_researcher)
             rows.append({
                 'researcher_id':   r['researcher_id'],
                 'author_type':     author_type,
@@ -231,13 +263,16 @@ def generate_publications(researchers_df):
                 'total_authors': str(total),
                 'author_info':   f'홍길동 외 {total-1}명',
                 'contribution':  str(contrib),
+                'project_name':  project_name,
+                'project_code':  project_code,
             })
     return pd.DataFrame(rows)
 
 
-def generate_patents(researchers_df):
+def generate_patents(researchers_df, tasks_df=None):
     grades = ['S', 'A', 'B', 'C', '']
     grade_a_subs = ['A1', 'A2', '']
+    task_names_by_researcher = _researcher_task_names(tasks_df)
     rows = []
     app_id_counter = 10000
     for _, r in researchers_df.iterrows():
@@ -252,6 +287,7 @@ def generate_patents(researchers_df):
                 reg_year = min(app_year + random.randint(1, 2), 2025)
                 reg_date = date(reg_year, random.randint(1, 12), random.randint(1, 28)).isoformat()
             grade = random.choice(grades)
+            project_name, project_code = _sample_project_link(r['researcher_id'], task_names_by_researcher)
             rows.append({
                 'researcher_id':      r['researcher_id'],
                 'application_id':     f'APP{app_id_counter + i:06d}',
@@ -267,6 +303,8 @@ def generate_patents(researchers_df):
                 'registration_no':    f'{random.randint(1000000, 9999999)}' if is_reg else '',
                 'registration_date':  reg_date,
                 'country':            random.choice(['국내', '국내', '국내', '해외']),
+                'project_name':       project_name,
+                'project_code':       project_code,
             })
         app_id_counter += n + 1
     return pd.DataFrame(rows)
@@ -379,12 +417,7 @@ def generate_transfers(researchers_df):
 
 def generate_tasks(researchers_df):
     """과제 수행 이력 샘플 생성 (tasks.csv 스키마)."""
-    task_names = [
-        'AI 기반 제어 시스템 개발', '차세대 배터리 소재 연구', '로봇 자동화 플랫폼 구축',
-        '반도체 공정 최적화', '스마트 팩토리 시스템', '양자컴퓨팅 알고리즘 연구',
-        '딥러닝 기반 불량 검출', '청정에너지 변환 기술', '지능형 물류 시스템',
-        '차세대 통신 모듈 개발', '수소연료전지 효율화', '나노소재 표면처리 연구',
-    ]
+    task_names = SAMPLE_TASK_NAMES
     input_rates = [25, 30, 50, 70, 100]
     rows = []
     for _, r in researchers_df.iterrows():
@@ -406,6 +439,16 @@ def generate_tasks(researchers_df):
                 'input_rate': random.choice(input_rates),
             })
     return pd.DataFrame(rows).sort_values(['researcher_id', 'start_date'])
+
+
+def generate_tasks_information():
+    """과제 참조정보 샘플 생성 (tasks_information.csv 스키마: task_name, task_code).
+    타임라인에서 tasks.csv의 task_name → task_code를 조회해, patents.csv/
+    publications.csv의 project_code와 연결하는 다리로 쓴다."""
+    return pd.DataFrame([
+        {'task_name': name, 'task_code': code}
+        for name, code in TASK_CODE_MAP.items()
+    ])
 
 
 def generate_succession(researchers_df):
@@ -723,6 +766,35 @@ def main():
             'incentive_selection', generate_incentive_selection, researchers, evaluations)
         skip_inc_save = False
 
+    # 과제 수행 이력: xlsb 파일 우선, 없으면 샘플 생성
+    # (논문/특허 샘플이 project_name/project_code로 실제 과제와 연결되도록,
+    #  논문/특허보다 먼저 생성해 tasks를 넘겨준다.)
+    tasks_file = os.path.join(RAW_DIR, '개인별과제투입기간데이터_260114.xlsb')
+    if os.path.exists(tasks_file):
+        from process_tasks import process as _process_tasks
+        _process_tasks()
+        tasks = pd.read_csv(os.path.join(OUTPUT_DIR, 'tasks.csv'),
+                            encoding='utf-8-sig', dtype=str)
+        log['tasks'] = '[RAW]   개인별과제투입기간데이터_260114.xlsb'
+        skip_tasks_save = True
+    else:
+        tasks, log['tasks'] = _load_or_gen('tasks', generate_tasks, researchers)
+        skip_tasks_save = False
+
+    # 과제 참조정보(과제코드): '과제정보.xlsx' 우선, 없으면 샘플 tasks에서 파생
+    taskinfo_file = os.path.join(RAW_DIR, '과제정보.xlsx')
+    if os.path.exists(taskinfo_file):
+        from process_task_information import process as _process_task_information
+        _process_task_information()
+        tasks_information = pd.read_csv(os.path.join(OUTPUT_DIR, 'tasks_information.csv'),
+                                         encoding='utf-8-sig', dtype=str)
+        log['tasks_information'] = '[RAW]   과제정보.xlsx'
+        skip_taskinfo_save = True
+    else:
+        tasks_information = generate_tasks_information()
+        log['tasks_information'] = f'[샘플]  tasks_information ({len(tasks_information)}행 생성)'
+        skip_taskinfo_save = False
+
     # 논문: '개인별논문현황_2016_2026.xlsx' 우선 → publications_raw → 샘플 생성
     pub_file = os.path.join(RAW_DIR, '개인별논문현황_2016_2026.xlsx')
     if os.path.exists(pub_file):
@@ -735,7 +807,7 @@ def main():
         log['publications'] = '[RAW]   개인별논문현황_2016_2026.xlsx'
         skip_pub_save = True
     else:
-        publications, log['publications'] = _load_or_gen('publications', generate_publications, researchers)
+        publications, log['publications'] = _load_or_gen('publications', generate_publications, researchers, tasks)
         skip_pub_save = False
 
     # 특허: '특허 리스트.xlsx' 우선 → patents_raw → 샘플 생성
@@ -750,7 +822,7 @@ def main():
         log['patents'] = '[RAW]   특허 리스트.xlsx'
         skip_patent_save = True
     else:
-        patents, log['patents'] = _load_or_gen('patents', generate_patents, researchers)
+        patents, log['patents'] = _load_or_gen('patents', generate_patents, researchers, tasks)
         skip_patent_save = False
 
     tech_transfers, log['technology_transfer'] = _load_or_gen('technology_transfer', generate_technology_transfer, researchers)
@@ -789,19 +861,6 @@ def main():
 
     transfers,  log['transfers']   = _load_or_gen('transfers',  generate_transfers,  researchers)
     succession, log['succession']  = _load_or_gen('succession', generate_succession, researchers)
-
-    # 과제 수행 이력: xlsb 파일 우선, 없으면 샘플 생성
-    tasks_file = os.path.join(RAW_DIR, '개인별과제투입기간데이터_260114.xlsb')
-    if os.path.exists(tasks_file):
-        from process_tasks import process as _process_tasks
-        _process_tasks()
-        tasks = pd.read_csv(os.path.join(OUTPUT_DIR, 'tasks.csv'),
-                            encoding='utf-8-sig', dtype=str)
-        log['tasks'] = '[RAW]   개인별과제투입기간데이터_260114.xlsb'
-        skip_tasks_save = True
-    else:
-        tasks, log['tasks'] = _load_or_gen('tasks', generate_tasks, researchers)
-        skip_tasks_save = False
 
     # 양성이력: '양성_인력_현황.xlsx' 우선 → nurturing_raw → 샘플 생성
     nurturing_file = os.path.join(RAW_DIR, '양성_인력_현황.xlsx')
@@ -867,6 +926,7 @@ def main():
         'education':           education,
         'transfers':           transfers,
         'tasks':               tasks,
+        'tasks_information':   tasks_information,
         'comments':            comments,
         'succession':          succession,
         'nurturing':           nurturing,
@@ -886,6 +946,7 @@ def main():
             ('awards',              skip_awd_save),
             ('comments',            skip_cmt_save),
             ('tasks',               skip_tasks_save),
+            ('tasks_information',   skip_taskinfo_save),
         ] if flag
     }
 

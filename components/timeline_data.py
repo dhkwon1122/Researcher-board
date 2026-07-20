@@ -151,6 +151,8 @@ def pub_points(pub_df):
             'journal': clean(row.get('journal', '')),
             'author_type': clean(row.get('author_type', '')),
             'contribution': clean(row.get('contribution', '')),
+            'project_name': clean(row.get('project_name', '')),
+            'project_code': clean(row.get('project_code', '')),
         })
     points.sort(key=lambda p: p['date'])
     return points
@@ -179,9 +181,45 @@ def pat_points(pat_df):
             'grade_a': grade_a,
             'share': share,
             'is_lead': is_lead,
+            'project_name': clean(row.get('project_name', '')),
+            'project_code': clean(row.get('project_code', '')),
         })
     points.sort(key=lambda p: p['date'])
     return points
+
+
+def task_code_map(tasks_info_df) -> dict:
+    """task_name → task_code. tasks_information.csv(process_task_information.py)를
+    과제명 기준 다리 삼아, patents.csv/publications.csv의 project_code와 tasks.csv의
+    과제(task_name)를 연결하는 데 쓴다. 과제명 하나에 코드 하나로 가정."""
+    if tasks_info_df is None or tasks_info_df.empty:
+        return {}
+    if 'task_name' not in tasks_info_df.columns or 'task_code' not in tasks_info_df.columns:
+        return {}
+    df = tasks_info_df.drop_duplicates('task_name')
+    result = {}
+    for _, row in df.iterrows():
+        name = clean(row.get('task_name', ''))
+        if name:
+            result[name] = clean(row.get('task_code', ''))
+    return result
+
+
+def linked_task_names(project_name: str, project_code: str, task_names: set, code_map: dict) -> list:
+    """특허/논문 한 건의 project_name/project_code가 이 연구원의 어떤 과제
+    (task_name)에 연결되는지 반환. 과제코드가 있으면 코드로 우선 매칭하고,
+    코드가 없거나 일치하는 과제가 없으면 과제명 문자열 일치로 폴백한다.
+    연결된 과제가 없으면 빈 리스트(= 회색 아이콘으로 표시할 항목)."""
+    code = clean(project_code)
+    name = clean(project_name)
+
+    if code:
+        matched = [t for t in task_names if code_map.get(t) == code]
+        if matched:
+            return matched
+    if name and name in task_names:
+        return [name]
+    return []
 
 
 def dedupe_patents(pat):

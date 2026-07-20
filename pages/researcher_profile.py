@@ -363,7 +363,7 @@ def update_profile(rid):
             leadership_default,
             comments_block(tables['comments'], rid),
             timeline_view(tables['tasks'], tables['hr_orders'], tables['publications'],
-                          tables['patents'], tables['job_profile'], rid),
+                          tables['patents'], tables['job_profile'], tables['tasks_information'], rid),
             owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid),
         )
     except Exception as exc:

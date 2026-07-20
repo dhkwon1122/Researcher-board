@@ -11,6 +11,11 @@
       등록번호 있음        → '등록'
       등록번호 없고 출원번호 있음 → '출원'
       둘 다 없음           → '' (공란)
+  - project_name/project_code: 원본에 '과제명'/'과제코드' 컬럼이 있으면 함께
+    저장(OPTIONAL_COLS). 타임라인(components/timeline_data.py)에서 이 특허가
+    어떤 과제(task_name/task_code)에 속하는지 연결하는 데 쓰인다. 원본에
+    해당 컬럼이 없거나 값이 비어 있으면 빈 문자열로 남고, 타임라인에서는
+    "과제에 속하지 않는 특허"로 표시된다.
 
 컬럼 설정 (실제 파일 헤더에 맞게 상단 상수 수정):
   COL_ID      : 사번 컬럼명
@@ -45,6 +50,9 @@ COL_GRADE    = '현재등급'
 COL_GRADE_A  = '현재등급 - A급구분'
 
 # 있으면 추가로 가져오는 선택 컬럼 (원본명 → CSV 컬럼명)
+# project_name/project_code: 타임라인에서 특허를 과제(task_name/task_code)와
+# 연결하는 데 사용(components/timeline_data.py). 원본에 없으면 빈 값으로 남고,
+# 이 경우 타임라인에서는 "과제에 속하지 않는 특허"로 표시된다.
 OPTIONAL_COLS = [
     ('출원번호', 'application_no'),
     ('출원일',   'application_date'),
@@ -54,6 +62,8 @@ OPTIONAL_COLS = [
     ('등록일자', 'registration_date'),  # '등록일' 없으면 '등록일자' 시도
     ('국가',     'country'),
     ('국가명',   'country'),   # '국가' 없으면 '국가명' 시도
+    ('과제명',   'project_name'),
+    ('과제코드', 'project_code'),
 ]
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -128,7 +138,7 @@ def process() -> bool:
                 result[dst_col] = df[src_col].astype(str).str.strip()
             filled.add(dst_col)
     for dst_col in ['application_no', 'application_date', 'registration_no',
-                    'registration_date', 'country']:
+                    'registration_date', 'country', 'project_name', 'project_code']:
         if dst_col not in result.columns:
             result[dst_col] = ''
 

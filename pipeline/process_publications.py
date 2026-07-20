@@ -15,6 +15,11 @@ Output : data/processed/publications.csv
   총저자수       → total_authors (정수)
   전체 저자정보 → author_info + 기여도 파생
     └ 마지막 '(기여도 : XX%)' 추출 → contribution 컬럼 (정수 %, 없으면 빈 문자열)
+  과제명   → project_name (선택, 원본에 없으면 빈 문자열)
+  과제코드 → project_code (선택, 원본에 없으면 빈 문자열)
+    └ 타임라인(components/timeline_data.py)에서 이 논문이 어떤 과제
+      (task_name/task_code)에 속하는지 연결하는 데 쓰인다. 값이 없거나
+      매칭되는 과제가 없으면 "과제에 속하지 않는 논문"으로 표시된다.
 """
 
 import os
@@ -49,6 +54,10 @@ REQUIRED_COLS = [
     COL_JOURNAL, COL_PUB_TYPE, COL_DATE, COL_RANK,
     COL_TOTAL, COL_AUTHOR_INFO,
 ]
+
+# 있으면 추가로 가져오는 선택 컬럼(없어도 처리 계속, 빈 문자열로 채움)
+COL_PROJECT_NAME = '과제명'
+COL_PROJECT_CODE = '과제코드'
 
 _CONTRIBUTION_RE = re.compile(r'\(기여도\s*:\s*(\d+)\s*%\)\s*$')
 
@@ -130,6 +139,9 @@ def process():
         'author_info':    df[COL_AUTHOR_INFO].apply(_strip_contribution),
         'contribution':   df[COL_AUTHOR_INFO].apply(_extract_contribution),
     })
+
+    result['project_name'] = df[COL_PROJECT_NAME].astype(str).str.strip() if COL_PROJECT_NAME in df.columns else ''
+    result['project_code'] = df[COL_PROJECT_CODE].astype(str).str.strip() if COL_PROJECT_CODE in df.columns else ''
 
     # pub_year: pub_date 앞 4자리
     result['pub_year'] = result['pub_date'].str[:4].where(
