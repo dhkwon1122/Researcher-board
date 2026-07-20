@@ -44,8 +44,9 @@ LLM2_MAX_TOKENS_MULTIPLIER = 3
 LLM2_CALL_INTERVAL = 1.0
 
 # ReadTimeout/연결 오류 시 자동 재시도 횟수와 백오프 시작 시간(초, 회차마다
-# 2배씩 증가). 두 profile 모두 공통 적용.
-LLM_MAX_RETRIES   = 2
+# 2배씩 증가). 두 profile 모두 공통 적용. 사내 LLM API 호출이 불안정할 때
+# 값을 더 늘려도 된다.
+LLM_MAX_RETRIES   = 5
 LLM_RETRY_BACKOFF = 5.0
 
 # ── 사내 Confluence 접속 정보 (개인 액세스 토큰, PAT 방식) ──────────────────────

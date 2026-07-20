@@ -111,7 +111,7 @@ def call_llm(prompt: str, system_prompt: str, *, temperature: float = 0.2, max_t
         'max_tokens':  max_tokens,
     }
 
-    max_retries = getattr(_cfg, 'LLM_MAX_RETRIES', 2)
+    max_retries = getattr(_cfg, 'LLM_MAX_RETRIES', 5)
     retry_backoff = getattr(_cfg, 'LLM_RETRY_BACKOFF', 5.0)
 
     resp = None
