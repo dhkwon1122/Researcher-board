@@ -33,12 +33,13 @@ dash.register_page(
 
 CURRENT_YEAR = datetime.now().year
 
-# 중단 좌(사진+정보 / 과제·논문·특허 탭)/우(타임라인) 영역의 절대 높이 — 양쪽
-# 전체 합이 서로 일치해 하단이 맞춰지도록 한다. 사진+정보, 탭 두 박스 모두 각각
-# 고정 높이(둘 다 SECTION_HEIGHT의 절반)를 갖고, 넘치는 내용은 내부 스크롤로 처리.
-SECTION_HEIGHT = 700
+# 좌(사진+정보 / 보유 전문성 / 인물 코멘트·리더십, 세로 스택)/우(타임라인) 영역의
+# 절대 높이 — 좌측 3블록 합계와 우측 타임라인 카드 높이가 같아 하단이 맞도록 한다.
+# 블록마다 각각 고정 높이를 갖고, 넘치는 내용은 내부 스크롤로 처리.
 PHOTO_INFO_HEIGHT = 350
 TABS_SECTION_HEIGHT = 350
+COMMENTS_HEIGHT = 400
+SECTION_HEIGHT = PHOTO_INFO_HEIGHT + TABS_SECTION_HEIGHT + COMMENTS_HEIGHT
 TABS_CONTENT_HEIGHT = 260
 
 
@@ -94,9 +95,6 @@ def layout(id=None, **_kwargs):
             _left_stack_col(),
             _right_column(),
         ], className='g-3 mb-3'),
-        dbc.Row([
-            _comments_col(),
-        ], className='g-3 mb-3'),
     ])
 
 
@@ -133,15 +131,18 @@ def _selector_card(dept_opts, res_opts, default_dept, default_rid):
 
 
 def _left_stack_col():
-    """사진+정보 카드 + 보유 전문성 카드를 세로로 쌓은 왼쪽 묶음.
-    둘 다 각각 절대값(PHOTO_INFO_HEIGHT / TABS_SECTION_HEIGHT, 합계 SECTION_HEIGHT)으로
-    높이를 고정해, 오른쪽 타임라인 카드와 하단이 맞도록 한다. 넘치는 내용은 내부 스크롤."""
+    """사진+정보 / 보유 전문성 / 인물 코멘트·리더십 카드를 세로로 쌓은 왼쪽 묶음.
+    셋 다 각각 절대값(PHOTO_INFO_HEIGHT / TABS_SECTION_HEIGHT / COMMENTS_HEIGHT,
+    합계 SECTION_HEIGHT)으로 높이를 고정해, 오른쪽 타임라인 카드(전체 높이를 씀)와
+    하단이 맞도록 한다. 넘치는 내용은 내부 스크롤."""
     return dbc.Col(
         html.Div([
             html.Div(_photo_info_card(),
                      style={'flex': '0 0 auto', 'height': f'{PHOTO_INFO_HEIGHT}px', 'overflow': 'hidden'}),
             html.Div(_owned_expertise_stack_card(),
                      style={'flex': '0 0 auto', 'height': f'{TABS_SECTION_HEIGHT}px', 'overflow': 'hidden'}),
+            html.Div(_comments_card(),
+                     style={'flex': '0 0 auto', 'height': f'{COMMENTS_HEIGHT}px', 'overflow': 'hidden'}),
         ], style={'height': f'{SECTION_HEIGHT}px', 'display': 'flex', 'flexDirection': 'column'}),
         md=6,
     )
@@ -202,9 +203,12 @@ def _right_column():
     )
 
 
-def _comments_col():
+_COMMENTS_PANE_HEIGHT = COMMENTS_HEIGHT - 70   # 카드 패딩 + 탭 네비게이션 높이만큼 제외
+
+
+def _comments_card():
     comments_pane = html.Div([
-        html.Div(id='comments-block', style={'maxHeight': '280px', 'overflowY': 'auto'}),
+        html.Div(id='comments-block', style={'maxHeight': '200px', 'overflowY': 'auto'}),
         html.Hr(className='my-2'),
         dbc.Row([
             dbc.Col(
@@ -248,17 +252,15 @@ def _comments_col():
                   config={'displayModeBar': False}),
     ])
 
-    return dbc.Col(
-        dbc.Card(
-            dbc.CardBody(
-                dbc.Tabs([
-                    dbc.Tab(comments_pane, label='인물 코멘트 (부서장 · 부서원)', tab_id='comments'),
-                    dbc.Tab(leadership_pane, label='리더십 진단', tab_id='leadership'),
-                ], id='bottom-right-tabs', active_tab='comments'),
-            ),
-            className='shadow-sm profile-card h-100',
+    return dbc.Card(
+        dbc.CardBody(
+            dbc.Tabs([
+                dbc.Tab(comments_pane, label='인물 코멘트 (부서장 · 부서원)', tab_id='comments'),
+                dbc.Tab(leadership_pane, label='리더십 진단', tab_id='leadership'),
+            ], id='bottom-right-tabs', active_tab='comments'),
+            style={'maxHeight': f'{_COMMENTS_PANE_HEIGHT}px', 'overflowY': 'auto'},
         ),
-        md=12,
+        className='shadow-sm profile-card h-100',
     )
 
 

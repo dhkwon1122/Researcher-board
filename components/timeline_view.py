@@ -117,33 +117,40 @@ def _build_time_axis(anchors):
     달력상 절대 시간이 아니라 "탄력적" 세로 위치를 만든다: 앞 항목의 실제 렌더
     높이만큼만 간격을 주고(데이터가 몰린 구간은 그만큼만 촘촘 = 팽창), 실제 날짜
     차이는 _GAP_CAP_DAYS로 상한을 둬(빈 기간은 압축) 아무리 오래 비어 있어도
-    고정된 픽셀 이상 차지하지 않는다.
+    고정된 픽셀 이상 차지하지 않는다. 최근이 위(작은 y), 과거가 아래(큰 y)다.
     반환: (pos_fn, total_height). pos_fn(date)는 anchors에 없는 임의 날짜(연도
     경계 등)도 인접한 두 anchor 사이 실제 날짜 비율로 보간해 반환한다."""
     height_by_date = {}
     for a in anchors:
         height_by_date[a['date']] = max(height_by_date.get(a['date'], 0), a['height'])
-    uniq = sorted(height_by_date)
+    uniq = sorted(height_by_date)  # 오래된 것[0] → 최근 것[-1]
+    n = len(uniq)
 
-    y = [float(_TOP_PAD)]
-    for i in range(1, len(uniq)):
-        gap_days = (uniq[i] - uniq[i - 1]).days
-        step = height_by_date[uniq[i - 1]] + _ROW_BUFFER_PX + _PX_PER_DAY * min(gap_days, _GAP_CAP_DAYS)
-        y.append(y[-1] + step)
-    total_height = y[-1] + height_by_date[uniq[-1]] + _TOP_PAD
+    # y[i]는 uniq[i]의 세로 위치. 최근(n-1)이 맨 위(_TOP_PAD)이고, 과거로 갈수록
+    # (인덱스가 작아질수록) 그 다음(더 최근) 항목의 실제 높이 + 여백 + 압축된
+    # 날짜 차이만큼 아래로 내려간다.
+    y = [0.0] * n
+    y[n - 1] = float(_TOP_PAD)
+    for i in range(n - 2, -1, -1):
+        gap_days = (uniq[i + 1] - uniq[i]).days
+        step = height_by_date[uniq[i + 1]] + _ROW_BUFFER_PX + _PX_PER_DAY * min(gap_days, _GAP_CAP_DAYS)
+        y[i] = y[i + 1] + step
+    total_height = y[0] + height_by_date[uniq[0]] + _TOP_PAD
 
     def pos(d):
         idx = bisect.bisect_left(uniq, d)
-        if idx < len(uniq) and uniq[idx] == d:
+        if idx < n and uniq[idx] == d:
             return y[idx]
         if idx == 0:
+            # uniq[0](가장 오래된 anchor)보다 더 과거 → 그보다 아래(더 큰 y)
             gap_days = (uniq[0] - d).days
-            return y[0] - (_ROW_BUFFER_PX + _PX_PER_DAY * min(gap_days, _GAP_CAP_DAYS))
-        if idx >= len(uniq):
+            return y[0] + height_by_date[uniq[0]] + _ROW_BUFFER_PX + _PX_PER_DAY * min(gap_days, _GAP_CAP_DAYS)
+        if idx >= n:
+            # uniq[-1](가장 최근 anchor)보다 더 미래 → 그보다 위(더 작은 y)
             gap_days = (d - uniq[-1]).days
-            return y[-1] + height_by_date[uniq[-1]] + _ROW_BUFFER_PX + _PX_PER_DAY * min(gap_days, _GAP_CAP_DAYS)
-        d0, d1 = uniq[idx - 1], uniq[idx]
-        y0, y1 = y[idx - 1], y[idx]
+            return y[-1] - (_ROW_BUFFER_PX + _PX_PER_DAY * min(gap_days, _GAP_CAP_DAYS))
+        d0, d1 = uniq[idx - 1], uniq[idx]   # d0: 과거, d1: 최근
+        y0, y1 = y[idx - 1], y[idx]         # y0 > y1 (과거일수록 아래)
         span_days = (d1 - d0).days
         if span_days <= 0:
             return y0
