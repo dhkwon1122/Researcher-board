@@ -88,7 +88,7 @@ def _get_page_text(project_name: str, confl_address: str, page_cache: dict):
 
 
 def _summarize(page_text: str, profile: str = 'default'):
-    raw = call_llm(page_text[:_MAX_PAGE_CHARS], _SUMMARY_SYSTEM_PROMPT, temperature=0.1, max_tokens=800,
+    raw = call_llm(page_text[:_MAX_PAGE_CHARS], _SUMMARY_SYSTEM_PROMPT, temperature=0.1, max_tokens=2000,
                     profile=profile)
     if not raw:
         # call_llm() 자체에서 이미 실패 원인(HTTP 오류/빈 응답 등)을 로그로 남긴다.

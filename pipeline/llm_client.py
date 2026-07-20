@@ -6,6 +6,11 @@ process_comments.py의 호출 방식과 동일한 헤더/인증 규약을 따른
 
 사내 LLM은 초당 5회 호출 제한이 있어, call_llm()은 호출 간 최소 간격을
 두어 초당 최대 MAX_CALLS_PER_SEC(4)회를 넘지 않도록 자체적으로 조절한다.
+profile='thinkingcap'은 응답이 느리거나 서버 부하에 민감할 수 있어
+LLM2_CALL_INTERVAL(초, llm_config.py)만큼 추가 간격을 둘 수 있다.
+
+ReadTimeout/연결 오류는 일시적인 경우가 많아 LLM_MAX_RETRIES회까지
+지수 백오프(LLM_RETRY_BACKOFF초부터 2배씩 증가)로 자동 재시도한다.
 
 두 모델 비교(profile 인자):
   call_llm(prompt, system_prompt)                     → 기존 사내 LLM(profile='default')
@@ -30,12 +35,16 @@ _last_call_lock = threading.Lock()
 _last_call_time = 0.0
 
 
-def _throttle():
-    """직전 호출과의 간격이 _MIN_INTERVAL 미만이면 그만큼 대기해 호출 속도를 제한한다."""
+def _throttle(profile: str = 'default'):
+    """직전 호출과의 간격이 최소 간격 미만이면 그만큼 대기해 호출 속도를 제한한다.
+    profile='thinkingcap'은 llm_config.LLM2_CALL_INTERVAL(기본 1.0초)만큼
+    추가 간격을 둔다(응답이 느리거나 서버 부하에 민감한 모델을 배려)."""
     global _last_call_time
+    extra_interval = getattr(_cfg, 'LLM2_CALL_INTERVAL', 1.0) if profile == 'thinkingcap' and _cfg else 0.0
+    min_interval = max(_MIN_INTERVAL, extra_interval)
     with _last_call_lock:
         now = time.monotonic()
-        wait = _MIN_INTERVAL - (now - _last_call_time)
+        wait = min_interval - (now - _last_call_time)
         if wait > 0:
             time.sleep(wait)
         _last_call_time = time.monotonic()
@@ -87,6 +96,11 @@ def call_llm(prompt: str, system_prompt: str, *, temperature: float = 0.2, max_t
         return ''
     url, model, headers, timeout = cfg
 
+    if profile == 'thinkingcap':
+        # 추론형 모델은 최종 답변 전에 사고 과정에도 토큰을 쓰므로 요청 시
+        # max_tokens를 배수 적용해 여유를 준다(기본 3배, LLM2_MAX_TOKENS_MULTIPLIER로 조정 가능).
+        max_tokens = max_tokens * getattr(_cfg, 'LLM2_MAX_TOKENS_MULTIPLIER', 3)
+
     payload = {
         'model': model,
         'messages': [
@@ -96,10 +110,37 @@ def call_llm(prompt: str, system_prompt: str, *, temperature: float = 0.2, max_t
         'temperature': temperature,
         'max_tokens':  max_tokens,
     }
+
+    max_retries = getattr(_cfg, 'LLM_MAX_RETRIES', 2)
+    retry_backoff = getattr(_cfg, 'LLM_RETRY_BACKOFF', 5.0)
+
+    resp = None
+    for attempt in range(max_retries + 1):
+        try:
+            _throttle(profile)
+            resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
+            resp.raise_for_status()
+            break
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+            if attempt < max_retries:
+                wait = retry_backoff * (2 ** attempt)
+                print(f'  [LLM 재시도] {type(exc).__name__} — {wait:.0f}초 후 재시도 '
+                      f'({attempt + 1}/{max_retries}, profile={profile})')
+                time.sleep(wait)
+                continue
+            print(f'  [LLM 오류] {max_retries}회 재시도 후에도 실패 (profile={profile}): '
+                  f'{type(exc).__name__}: {exc}')
+            return ''
+        except requests.HTTPError as exc:
+            status = exc.response.status_code
+            body   = exc.response.text[:300]
+            print(f'  [LLM HTTP 오류] {status} — {body}')
+            return ''
+        except Exception as exc:
+            print(f'  [LLM 오류] {type(exc).__name__}: {exc}')
+            return ''
+
     try:
-        _throttle()
-        resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
-        resp.raise_for_status()
         choice = resp.json()['choices'][0]
         message = choice.get('message', {})
         content = message.get('content')
@@ -119,11 +160,6 @@ def call_llm(prompt: str, system_prompt: str, *, temperature: float = 0.2, max_t
         print(f'  [LLM 경고] 응답 content가 비어 있음 (profile={profile}, finish_reason={finish_reason}, '
               f'max_tokens={max_tokens}) — 추론형 모델은 사고 과정에 토큰을 많이 쓰므로 '
               f'max_tokens를 늘려야 할 수 있습니다.')
-        return ''
-    except requests.HTTPError as exc:
-        status = exc.response.status_code
-        body   = exc.response.text[:300]
-        print(f'  [LLM HTTP 오류] {status} — {body}')
         return ''
     except Exception as exc:
         print(f'  [LLM 오류] {type(exc).__name__}: {exc}')

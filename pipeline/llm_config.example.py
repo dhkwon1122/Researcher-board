@@ -34,6 +34,20 @@ LLM2_API_URL = 'http://75.12.15.121:8000/v1/chat/completions'
 LLM2_MODEL   = 'thinkingcap'
 LLM2_TIMEOUT = 300              # 초
 
+# thinkingcap처럼 최종 답변 전에 사고 과정(reasoning)에도 토큰을 쓰는 모델은
+# max_tokens가 부족하면 사고 과정만 쓰다 끝나 답변(JSON 등)을 못 내는 경우가
+# 있다. 호출 시 요청한 max_tokens에 이 배수를 곱해 여유를 준다.
+LLM2_MAX_TOKENS_MULTIPLIER = 3
+
+# thinkingcap 호출 간 최소 간격(초). 응답이 느리거나 서버 부하에 민감한 모델을
+# 배려해 초당 호출 제한과 별개로 추가 대기 시간을 둔다.
+LLM2_CALL_INTERVAL = 1.0
+
+# ReadTimeout/연결 오류 시 자동 재시도 횟수와 백오프 시작 시간(초, 회차마다
+# 2배씩 증가). 두 profile 모두 공통 적용.
+LLM_MAX_RETRIES   = 2
+LLM_RETRY_BACKOFF = 5.0
+
 # ── 사내 Confluence 접속 정보 (개인 액세스 토큰, PAT 방식) ──────────────────────
 # base URL은 별도로 설정하지 않고, project_confl_address.csv의 각 행 confl_address
 # (컨플루언스 페이지 URL) 에서 그때그때 추출해서 사용합니다.
