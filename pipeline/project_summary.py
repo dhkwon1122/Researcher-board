@@ -91,10 +91,14 @@ def _summarize(page_text: str, profile: str = 'default'):
     raw = call_llm(page_text[:_MAX_PAGE_CHARS], _SUMMARY_SYSTEM_PROMPT, temperature=0.1, max_tokens=800,
                     profile=profile)
     if not raw:
+        # call_llm() 자체에서 이미 실패 원인(HTTP 오류/빈 응답 등)을 로그로 남긴다.
         return None
     try:
         return json.loads(extract_json(raw))
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
+        preview = raw[:300].replace('\n', ' ')
+        print(f'  [LLM 경고] 과제 요약 응답이 JSON 형식이 아님 (profile={profile}): {exc}\n'
+              f'    원본 응답 미리보기: {preview}')
         return None
 
 
