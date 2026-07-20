@@ -211,9 +211,10 @@ def _assign_task_colors(tasks):
 
 def _accordion_pill(kind, count, color, radius='999px', border_width='1.5px', unlinked=None):
     """헤더 요약 pill. 클릭하면 아래에 전체 폭 표가 펼쳐진다(아코디언 — 한 번에 하나만).
-    unlinked가 주어지면(논문/특허) '(전체) *과제미연결수'를 덧붙인다."""
+    unlinked가 0보다 크면(논문/특허) '(전체) *과제미연결수'를 덧붙인다. 미연결이
+    하나도 없으면(0) 굳이 표시하지 않는다."""
     label = f'{kind} ({count})'
-    if unlinked is not None:
+    if unlinked:
         label += f' *{unlinked}'
     return html.Div(label, id={'type': 'tl-header-pill', 'kind': kind}, n_clicks=0, style={
         'border': f'{border_width} solid {color}', 'borderRadius': radius,
@@ -500,8 +501,7 @@ def _task_card(t, gkey, rank, y_px, x_px, z_index, color, jobs, pub_count, pat_c
         name_row_children.append(counts_badge)
 
     return html.Div([
-        html.Div(name_row_children, style={'display': 'flex', 'alignItems': 'baseline',
-                                            'justifyContent': 'space-between'}),
+        html.Div(name_row_children, style={'display': 'flex', 'alignItems': 'baseline'}),
         html.Div(f'{start_disp} ~ {end_disp}', style={
             'fontSize': '0.66rem', 'color': _LEGEND_NEUTRAL, 'marginTop': '1px',
         }),
