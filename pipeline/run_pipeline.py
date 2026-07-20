@@ -65,14 +65,6 @@
                         ※ '임직원_직무이력.xlsx' 가 있으면 자동 추출 (별도 raw 불필요)
                            처리기: pipeline/process_job_profile.py
 
-[2026 MIT 10대 기술] ★ 전용 원천 파일에서 자동 추출 (별도 raw 불필요)
-  2026MIT10대기술.xlsx (No., 기술명, 설명)
-    → data/processed/2026MITTech10.json / 2026MITTech10.html 로 변환
-    ※ 처리기: pipeline/process_mit10.py
-       run_pipeline.py 에서는 JSON+HTML 변환까지만 자동 실행되며, 기술별 필요
-       전문성 분석(사내 LLM, R&D Project Specialist Agent 역할)을 포함하려면
-       별도 실행: python pipeline/process_mit10.py --llm
-
 [직무정보 참조 데이터] ★ 전용 원천 파일에서 자동 추출 (별도 raw 불필요)
   직무정보_표준.xlsx (직무, 정의)
     → data/processed/job_profile_info_standard.json 로 변환
@@ -85,20 +77,6 @@
   → data/processed/core_technology_grade_info.json (핵심기술 등급 S/A/B 개요)
   → data/processed/tech_ownership_lv_info.json (보유기술 Lv 1~5 개요)
   ※ 처리기: pipeline/process_rubrics.py
-
-[연구원 보유 전문성 분석 / MIT10 적합도 매칭] ★ 사내 LLM 필요, 비용이 커서
-  run_pipeline.py 자동 실행에는 포함하지 않음. 위 데이터가 모두 준비된 후
-  아래 순서로 별도 실행:
-    1) python pipeline/process_researcher_expertise.py
-       → data/processed/연구원 보유 전문성 분석.json
-         (학력/과제이력/직무이력/핵심기술/보유기술/논문/특허를 종합해 사내
-          LLM이 강점 분야·핵심 기술 역량·도메인 지식을 구조화된 JSON으로 분석.
-          논문 저널 권위도는 data/processed/journal_authority.json 에 캐시)
-    2) python pipeline/process_mit10.py --llm  (아직 안 했다면)
-    3) python pipeline/process_mit10_researcher_fit.py
-       → data/processed/mit10_fit_by_tech.json, mit10_fit_by_researcher.json,
-         mit10_researcher_fit.html
-         (사내 임베딩으로 1차 후보를 추린 뒤 사내 LLM이 최종 적합도 판단)
 
 [과제별 컨플루언스 주소] ★ 전용 원천 파일에서 자동 추출 (별도 raw 불필요)
   과제별컨플.xlsx (소속, 과제명, 컨플 주소)
@@ -125,9 +103,9 @@
 
     2) python pipeline/process_project_expertise.py   (컨플 요약 + 과제 전문성 분석)
        → data/processed/project_expertise_analysis.json / .html
-         (컨플루언스 페이지를 사내 LLM으로 요약 후, process_mit10.py와 동일한
-          "R&D Project Specialist Agent" 역할로 과제별 필요 직무·전문성 딥다이브
-          분석을 생성. 2026MITTech10.html과 동일한 방식으로 HTML도 함께 생성)
+         (컨플루언스 페이지를 사내 LLM으로 요약 후, "R&D Project Specialist Agent"
+          역할로 과제별 필요 직무·전문성 딥다이브 분석을 생성. Bootstrap 5 +
+          marked.js/DOMPurify로 HTML도 함께 생성)
 
     3) python pipeline/process_researcher_expertise.py   (연구원 전문성 분석)
        → data/processed/연구원 보유 전문성 분석.json
@@ -138,10 +116,9 @@
     4) python pipeline/process_project_researcher_fit.py   (연구원 매칭)
        → data/processed/project_fit_by_project.json,
          project_fit_by_researcher.json, project_researcher_fit.html
-         (mit10_researcher_fit과 동일한 방식 — 임베딩 1차 후보 추출 + 사내 LLM
-          "R&D Talent Matching Agent"로 과제 기준/인별 기준 두 방향 적합도 판단.
-          매칭 로직은 pipeline/researcher_fit.py를 process_mit10_researcher_fit.py와
-          공유)
+         (임베딩 1차 후보 추출 + 사내 LLM "R&D Talent Matching Agent"로 과제
+          기준/인별 기준 두 방향 적합도 판단. 매칭 로직은 pipeline/researcher_fit.py
+          공용 모듈을 사용)
 
     ※ 2)~4)는 project_summary.py의 컨플루언스 원문 캐시
        (data/processed/project_page_cache.json)를 공유하므로, 같은 과제를
@@ -386,29 +363,17 @@ def run():
     from process_comments import process as process_comments
     process_comments(use_llm=False)
 
-    # ── 11-1. 2026 MIT 10대 기술: JSON 변환 (전문성 분석은 --llm 옵션으로 별도 실행) ─
-    from process_mit10 import process as process_mit10
-    process_mit10(use_llm=False)
-
-    # ── 11-2. 직무정보 참조 데이터: 표준/부서 직무정의 JSON 변환 ──────────
+    # ── 11-1. 직무정보 참조 데이터: 표준/부서 직무정의 JSON 변환 ──────────
     from process_job_profile_standard import process as process_job_profile_standard
     process_job_profile_standard()
     from process_job_profile_sait import process as process_job_profile_sait
     process_job_profile_sait()
 
-    # ── 11-3. 등급/Lv 기준표(정적 참조 데이터) ────────────────────────────
+    # ── 11-2. 등급/Lv 기준표(정적 참조 데이터) ────────────────────────────
     from process_rubrics import process as process_rubrics
     process_rubrics()
 
-    # ※ 연구원별 보유 전문성 분석(사내 LLM, process_researcher_expertise.py)과
-    #   MIT10-연구원 적합도 매칭(process_mit10_researcher_fit.py)은 비용이 크고
-    #   위 데이터가 모두 준비된 후에만 의미가 있어 자동 실행에 포함하지 않는다.
-    #   준비가 끝나면 아래를 순서대로 별도 실행:
-    #     python pipeline/process_researcher_expertise.py
-    #     python pipeline/process_mit10.py --llm   (아직 안 했다면)
-    #     python pipeline/process_mit10_researcher_fit.py
-
-    # ── 11-4. 과제별 컨플루언스 주소 ───────────────────────────────────────
+    # ── 11-3. 과제별 컨플루언스 주소 ───────────────────────────────────────
     from process_project_confl import process as process_project_confl
     process_project_confl()
 

@@ -47,7 +47,7 @@ OUT_DIR = os.path.join(BASE_DIR, 'data', 'processed')
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from llm_client import call_llm, extract_json  # noqa: E402
-import mit_markdown as mmd  # noqa: E402
+import rd_specialist_markdown as mmd  # noqa: E402
 
 _SYSTEM_PROMPT = """# Role
 당신은 R&D 인재 전문성 분석 전문가인 "R&D Talent Profiling Agent"입니다.

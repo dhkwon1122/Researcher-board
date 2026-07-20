@@ -1,8 +1,7 @@
 """
 연구 대상("기술" 또는 사내 "과제")과 연구원 간 적합도 매칭 공용 로직.
 
-process_mit10_researcher_fit.py(MIT10 기술 ↔ 연구원)와
-process_project_researcher_fit.py(사내 과제 ↔ 연구원)가 동일한 로직을 공유한다.
+process_project_researcher_fit.py(사내 과제 ↔ 연구원)가 이 로직을 사용한다.
 
 연구원/직무가 많아지면 전수 비교(LLM 호출)가 비현실적이므로, 먼저 사내
 임베딩(services/llm.embed, BGE-M3)으로 코사인 유사도 상위 후보만 추린 뒤,
@@ -274,8 +273,8 @@ def build_fit_html(by_target: list, by_researcher: list, researchers_df: pd.Data
                     target_tab_label: str, target_header, target_card_subtitle: str,
                     researcher_card_subtitle: str) -> str:
     """target_header(item) -> str: by_target 카드 제목을 렌더링하는 콜백
-    (예: MIT10은 '#1 기술명 — 직무명', 과제는 '부서 · 과제명 — 직무명')."""
-    import mit_markdown as mmd
+    (예: 과제는 '부서 · 과제명 — 직무명')."""
+    import rd_specialist_markdown as mmd
 
     name_map = {}
     if not researchers_df.empty:

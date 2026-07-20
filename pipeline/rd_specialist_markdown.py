@@ -1,8 +1,8 @@
 """
 "R&D Project Specialist Agent" 계열 LLM이 생성하는 마크다운(## 섹션, ### 직무
-블록)을 다루는 공용 유틸리티. process_mit10.py, process_mit10_researcher_fit.py,
-process_project_expertise.py 등 여러 스크립트가 동일한 페르소나/파싱/HTML 렌더링
-인프라를 재사용하기 위해 분리했다.
+블록)을 다루는 공용 유틸리티. process_project_expertise.py, process_researcher_expertise.py,
+process_project_researcher_fit.py, process_llm_compare.py 등 여러 스크립트가 동일한
+페르소나/파싱/HTML 렌더링 인프라를 재사용하기 위해 분리했다.
 """
 
 import base64
@@ -31,8 +31,8 @@ def parse_profile_arg(argv: list, default: str = 'default') -> str:
 
 
 # R&D Project Specialist Agent — 사내 LLM 시스템 프롬프트 (원문 그대로 사용).
-# process_mit10.py(MIT10 기술)와 process_project_expertise.py(사내 과제) 양쪽에서
-# 동일한 페르소나로 "필수 직무·전문성 딥다이브 매핑"을 생성하는 데 재사용한다.
+# process_project_expertise.py(사내 과제) 등 여러 스크립트가 동일한 페르소나로
+# "필수 직무·전문성 딥다이브 매핑"을 생성하는 데 재사용한다.
 RD_SPECIALIST_SYSTEM_PROMPT = """# Role
 당신은 R&D 연구개발 과제 및 기술 분석 전문가인 "R&D Project Specialist Agent"입니다.
 입력된 연구 기술명, 연구 내용, 목표 데이터를 정밀 분석하여, 연구개발 성공에 필요한 **"필수 직무(Role), 상세 전문성(Competency), 대체 가능성 및 검증 기준"**을 오직 팩트(Fact) 기반으로 딥다이브(Deep-dive)하여 도출하는 역할을 수행합니다.
@@ -97,7 +97,7 @@ HR 담당자 및 R&D 부서장이 신규 인력 채용, 내부 인력 재배치,
 
 def analyze_expertise(name: str, description: str, profile: str = 'default') -> str:
     """R&D Project Specialist Agent 역할의 LLM 분석을 호출. 실패 시 빈 문자열.
-    name: 연구 기술명(MIT10 기술명 또는 사내 과제명 등)
+    name: 연구 기술명(사내 과제명 등)
     description: 연구 내용(기술 설명 또는 과제 요약)
     profile: 'default'(기존 사내 LLM) 또는 'thinkingcap'(2번째 사내 LLM, 비교용)"""
     prompt = f"""다음 기술에 대해 분석해 주세요.
@@ -286,7 +286,7 @@ def render_job_fields_html(fields: dict) -> str:
 
 
 # expertise_analysis(R&D Project Specialist Agent 출력)를 카드로 렌더링할 때
-# 공통으로 쓰는 CSS. process_mit10.py, process_project_expertise.py가 공유한다.
+# 공통으로 쓰는 CSS. process_project_expertise.py 등 여러 스크립트가 공유한다.
 EXPERTISE_CARD_STYLE = """
   .tech-card {
     max-width: 900px; margin: 0 auto 32px; border: 1px solid var(--gs-border);
@@ -328,7 +328,7 @@ EXPERTISE_CARD_STYLE = """
 def render_expertise_html(analysis_text: str, anchor: str, *, empty_message: str) -> tuple:
     """expertise_analysis 마크다운에서 딥다이브 매핑 카드 HTML과 나머지 섹션
     아코디언 HTML을 만들어 (deepdive_html, other_html) 튜플로 반환한다.
-    process_mit10.py, process_project_expertise.py가 공유한다."""
+    process_project_expertise.py 등 여러 스크립트가 공유한다."""
     sections = split_top_sections(analysis_text)
     deepdive_idx = next((idx for idx, s in enumerate(sections) if is_deepdive_section(s)), None)
 

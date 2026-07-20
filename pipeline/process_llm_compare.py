@@ -46,7 +46,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(BASE_DIR, 'data', 'processed')
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import mit_markdown as mmd  # noqa: E402
+import rd_specialist_markdown as mmd  # noqa: E402
 
 PROFILE_LABEL = {'default': '① 기존 LLM', 'thinkingcap': '② thinkingcap'}
 

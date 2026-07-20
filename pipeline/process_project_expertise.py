@@ -5,12 +5,10 @@ data/processed/project_confl_address.csv의 각 과제에 대해:
   1) project_summary.py로 컨플루언스 페이지를 요약(핵심 기술/최종 산출물/
      기술적 난제/국영문 키워드) — process_project_search.py와 공유하는 캐시
      (project_summary_cache.json)를 사용해 중복 조회를 피한다.
-  2) process_mit10.py의 "R&D Project Specialist Agent" 페르소나를 그대로
-     재사용해(mit_markdown.analyze_expertise), MIT10 기술 대신 이 과제에 대해
-     동일한 형식(연구개발 프로젝트 개요 / R&D 필수 전문성 및 직무 딥다이브 매핑 /
-     인력 수급 매트릭스 / HR 제언)의 전문성 분석을 생성한다.
-  3) 2026MITTech10.html과 동일한 방식(Bootstrap 5 + marked.js/DOMPurify)으로
-     project_expertise_analysis.html을 생성한다.
+  2) "R&D Project Specialist Agent" 페르소나(rd_specialist_markdown.analyze_expertise)로
+     이 과제에 대해 동일한 형식(연구개발 프로젝트 개요 / R&D 필수 전문성 및 직무
+     딥다이브 매핑 / 인력 수급 매트릭스 / HR 제언)의 전문성 분석을 생성한다.
+  3) Bootstrap 5 + marked.js/DOMPurify로 project_expertise_analysis.html을 생성한다.
 
 Source:
   data/processed/project_confl_address.csv (dep_name, project_name, confl_address)
@@ -38,7 +36,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(BASE_DIR, 'data', 'processed')
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import mit_markdown as mmd  # noqa: E402
+import rd_specialist_markdown as mmd  # noqa: E402
 import project_summary  # noqa: E402
 
 

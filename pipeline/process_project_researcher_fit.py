@@ -8,7 +8,7 @@ process_project_expertise.py가 만든 과제별 직무 딥다이브 매핑("R&D
   2) 인별 기준: 각 연구원이 사내 어떤 과제의 어떤 직무와 맞는지
 
 매칭 로직(임베딩 1차 후보 추출 + 사내 LLM 최종 판단)은 pipeline/researcher_fit.py
-공용 모듈을 사용한다(process_mit10_researcher_fit.py와 공유).
+공용 모듈을 사용한다.
 
 Source:
   data/processed/project_expertise_analysis[.<profile>].json (process_project_expertise.py)
@@ -38,7 +38,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import mit_markdown as mmd  # noqa: E402
+import rd_specialist_markdown as mmd  # noqa: E402
 import researcher_fit as fit  # noqa: E402
 from services.llm import LLMError  # noqa: E402
 
