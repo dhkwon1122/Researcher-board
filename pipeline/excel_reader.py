@@ -96,7 +96,13 @@ def read_xlsx(file_path: str, sheet: int | str = 0, header_row: int | str = 0) -
         else:
             ws = wb.sheets[sheet]
 
-        data = ws.used_range.value
+        # xlwings는 used_range가 실제로는 여러 열이어도 시트 상태에 따라 1행/1열로
+        # 판단되면 .value가 중첩 리스트가 아닌 평평한(flat) 1차원 리스트를 반환한다.
+        # 이 경우 아래의 "행 하나로 감싸기" 처리가 열 전체를 하나의 헤더/행으로
+        # 잘못 취급해, 모든 데이터가 첫 번째 컬럼에 뭉쳐 들어가는 원인이 된다.
+        # options(ndim=2)로 항상 중첩 리스트(2차원)를 강제해 이 문제를 근본적으로
+        # 없앤다.
+        data = ws.used_range.options(ndim=2).value
 
         if not data:
             return pd.DataFrame()
