@@ -10,3 +10,4 @@ data/processed/
 *.xlsx
 saml/certs/*.key
 saml/certs/*.pem
+config/users.json
