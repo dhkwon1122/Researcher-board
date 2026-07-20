@@ -8,7 +8,7 @@ import dash
 import dash_bootstrap_components as dbc
 from dash import Input, Output, State, callback, dcc, html, no_update
 
-from components.detail_tabs import owned_expertise_block, patents_tab, publications_tab
+from components.detail_tabs import owned_expertise_block
 from components.profile_sections import (
     avatar,
     award_block,
@@ -19,8 +19,6 @@ from components.profile_sections import (
     leadership_year_options,
     nurturing_block,
     photo_block,
-    tasks_block,
-    transfer_block,
 )
 from components.timeline_view import timeline_view
 from services.comments import upsert_comment
@@ -98,7 +96,6 @@ def layout(id=None, **_kwargs):
         ], className='g-3 mb-3'),
         dbc.Row([
             _comments_col(),
-            _detail_tabs_col(),
         ], className='g-3 mb-3'),
     ])
 
@@ -190,23 +187,6 @@ def _owned_expertise_stack_card():
     )
 
 
-def _task_pub_pat_card():
-    tab_content_style = {'maxHeight': f'{TABS_CONTENT_HEIGHT}px', 'overflowY': 'auto'}
-    return dbc.Card(
-        dbc.CardBody(
-            dbc.Tabs([
-                dbc.Tab(html.Div(id='tab-tasks', style=tab_content_style),
-                        label='과제 수행 이력', tab_id='tasks'),
-                dbc.Tab(html.Div(id='tab-publications', style=tab_content_style),
-                        label='논문', tab_id='publications'),
-                dbc.Tab(html.Div(id='tab-patents', style=tab_content_style),
-                        label='특허', tab_id='patents'),
-            ], id='task-pub-pat-tabs', active_tab='tasks'),
-        ),
-        className='shadow-sm profile-card h-100',
-    )
-
-
 def _right_column():
     return dbc.Col(
         dbc.Card(
@@ -220,10 +200,6 @@ def _right_column():
         ),
         md=6,
     )
-
-
-def _detail_tabs_col():
-    return dbc.Col(_task_pub_pat_card(), md=6)
 
 
 def _comments_col():
@@ -282,7 +258,7 @@ def _comments_col():
             ),
             className='shadow-sm profile-card h-100',
         ),
-        md=6,
+        md=12,
     )
 
 
@@ -294,7 +270,6 @@ def _empty_profile_output():
     prompt = html.Div('연구원을 선택하세요.', className='text-muted p-3')
     return (
         avatar('?'), html.Div(), html.Div(), html.Div(), html.Div(),
-        html.Div(), html.Div(), html.Div(),
         [], None, html.Div(), prompt, prompt,
     )
 
@@ -320,9 +295,6 @@ def filter_by_dept(dept, current_rid):
     Output('eval-incentive-block', 'children'),
     Output('nurturing-block', 'children'),
     Output('award-block', 'children'),
-    Output('tab-tasks', 'children'),
-    Output('tab-publications', 'children'),
-    Output('tab-patents', 'children'),
     Output('leadership-year', 'options'),
     Output('leadership-year', 'value'),
     Output('comments-block', 'children'),
@@ -355,10 +327,6 @@ def update_profile(rid):
             evaluation_incentive_block(tables['evaluations'], tables['incentive_selection'], rid, years),
             nurturing_block(tables['nurturing'], rid),
             award_block(tables['awards'], rid),
-            tasks_block(tables['tasks'], rid) if not tables['tasks'].empty
-            else transfer_block(tables['transfers'], rid),
-            publications_tab(tables['publications'], rid),
-            patents_tab(tables['patents'], rid),
             leadership_options,
             leadership_default,
             comments_block(tables['comments'], rid),
@@ -376,7 +344,6 @@ def update_profile(rid):
         )
         return (
             avatar('?'), err_div, html.Div(), html.Div(), html.Div(),
-            html.Div(), html.Div(), html.Div(),
             [], None, html.Div(), err_div, err_div,
         )
 

@@ -61,9 +61,15 @@ def _parse_rate(val) -> str:
 _EMPTY = {'', 'nan', 'none', 'nat'}
 
 
+def _same_month(d1: str, d2: str) -> bool:
+    """두 'YYYY-MM-DD' 날짜가 같은 해·같은 달인지."""
+    return len(d1) >= 7 and len(d2) >= 7 and d1[:7] == d2[:7]
+
+
 def _merge_consecutive_periods(df: pd.DataFrame) -> pd.DataFrame:
-    """같은 (researcher_id, task_name) 내에서
-    종료일 == 다음 시작일인 연속 구간을 하나로 병합.
+    """같은 (researcher_id, task_name) 내에서 이어지는 구간을 하나로 병합.
+    "이어짐"의 기준: 종료일 == 다음 시작일(정확히 일치)이거나, 종료월과 다음
+    시작월이 같은 달(월 단위 재참여, 예: 1/15 종료 후 1/28 재참여)인 경우.
     병합 시 최초 시작일 · 마지막 종료일 사용, 투입률은 최신 값.
     """
     result = []
@@ -83,8 +89,8 @@ def _merge_consecutive_periods(df: pd.DataFrame) -> pd.DataFrame:
             if ne.lower() in _EMPTY:
                 ne = ''
 
-            # 연속 조건: 이전 종료일 == 다음 시작일
-            if cur_e != '' and ns == cur_e:
+            # 연속 조건: 이전 종료일 == 다음 시작일, 또는 같은 달 안에서 재참여
+            if cur_e != '' and (ns == cur_e or _same_month(cur_e, ns)):
                 cur_e = ne   # '' (ongoing) 또는 더 늦은 날짜
                 cur_r = nr
             else:

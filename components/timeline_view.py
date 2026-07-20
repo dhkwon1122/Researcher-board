@@ -1,23 +1,25 @@
 """
 연구원 프로필 — 타임라인 (HTML/CSS 카드 오버레이).
 
-Support spine(논문·특허·인사발령 전용 컬럼)를 없애고 Main spine 하나로 통합했다.
-과제 카드는 넓어진 폭을 그대로 활용해 좌우로 길게 표시하고, 논문·특허는 그
-과제(project_name/project_code)에 연결되면 평소엔 숨겨져 있다가 과제 카드를
-클릭하면 나타난다(여러 과제 동시 펼침 가능). 어떤 과제에도 연결되지 않는
-논문·특허는 항상 회색 필로 표시된다. 인사발령은 과제 개념이 없어 기존과 동일하게
-항상 파란색으로 표시된다.
+Main spine 하나로 과제와 인사발령만 표시한다. 논문·특허는 스파인에 별도 항목으로
+나타나지 않고, (1) 상단 요약 pill(과제/인사발령/논문/특허)을 클릭하면 그 종류의
+전체 표(기존 "과제 수행 이력/논문/특허" 탭 카드에 있던 것과 동일한 컴포넌트,
+개수 포함)가 타임라인 카드 전체 폭으로 펼쳐지고(아코디언 — 한 번에 하나만),
+(2) 과제 카드를 클릭하면 그 과제(project_name/project_code로 연결 + 그 과제
+인스턴스 기간 내에 발표/출원된 것만)에 해당하는 논문·특허가 과제 박스 자체가
+확장되며 안에 나열된다. 과제에 연결되지 않은 논문·특허는 타임라인에는 전혀
+나타나지 않는다(요약 pill을 눌렀을 때의 전체 표에서는 그대로 확인 가능).
 
 구조:
-  ┌ 헤더 필(과제/인사발령/논문/특허 + 개수, 클릭 시 이름+기간 리스트 펼침) ──┐
-  ├ Main spine(과제 + 인사발령 + 회색 미연결 논문/특허 + 펼쳐진 연결 논문/특허) ┤
-  │  점선 스파인 + 연도 라벨                                              │
+  ┌ 헤더 필(과제/인사발령/논문/특허 + 개수, 클릭 시 전체 폭 표 아코디언) ──┐
+  ├ Main spine(과제 + 인사발령만; 과제 클릭 시 박스 안에 연결 논문/특허 나열) ┤
+  │  점선 스파인 + 연도 라벨(현재 시점까지만)                              │
   │  (겹치는 기간의 항목은 쌓임, 클릭하면 맨 위로)                         │
   └──────────────────────────────────────────────────────────────────────┘
 
-과제/이벤트 모두 "겹칠 때 쌓기 + 클릭 시 맨 위로" 로직을 공유한다
+과제/인사발령 모두 "겹칠 때 쌓기 + 클릭 시 맨 위로" 로직을 공유한다
 (_group_overlapping, _assign_stack_groups, 클라이언트사이드 콜백).
-과제 클릭 시 "연결된 논문/특허 펼치기"는 별도의 독립된 클라이언트사이드
+과제 클릭 시 "박스 안에 연결 논문/특허 펼치기"는 별도의 독립된 클라이언트사이드
 콜백(state: tl-expand-store)으로 처리하며, 카드 쌓기 순서 변경과는 무관하다.
 """
 
@@ -28,6 +30,8 @@ import dash_bootstrap_components as dbc
 import pandas as pd
 from dash import ALL, MATCH, Input, Output, State, dcc, html
 
+from components.detail_tabs import patents_tab, publications_tab
+from components.profile_sections import tasks_block
 from components.timeline_data import (
     dedupe_patents,
     hr_points,
@@ -51,7 +55,6 @@ _ROW_GAP_PX = 40          # 과제/이벤트가 하나의 스파인을 공유하
 # ── 색상 ──────────────────────────────────────────────────────────────────
 TASK_COLOR_PALETTE = ['#4a7fc1', '#7b6fb0', '#c46b6b', '#c07d97', '#c08a52']
 EVENT_COLORS = {'논문': '#c98a2e', '특허': '#3f8f57', '인사발령': '#0071e3'}
-_UNLINKED_COLOR = '#9a9a9e'   # 과제에 연결되지 않은 논문/특허(항상 표시, 회색)
 _SPINE_COLOR = '#c7c7cc'
 _GRIDLINE = '#e8e8ed'
 _LEGEND_NEUTRAL = '#6e6e73'
@@ -79,24 +82,22 @@ def timeline_view(task_df, hr_df, pub_df, pat_df, job_df, tasks_info_df, rid):
         return html.Div('타임라인 데이터 없음', className='text-muted p-3')
 
     today = pd.Timestamp(datetime.now().date())
-    all_dates = (
-        [d for t in tasks for d in (t['start'], t['end'])]
-        + [p['date'] for p in hrs] + [p['date'] for p in pubs] + [p['date'] for p in pats]
-    )
+    # 스파인에는 과제/인사발령만 나타나므로 표시 범위도 이 둘의 날짜만 기준으로
+    # 계산한다. 상단은 오늘을 넘지 않는다(미래로 여백을 주지 않음).
+    all_dates = [d for t in tasks for d in (t['start'], t['end'])] + [p['date'] for p in hrs]
     min_date = min(all_dates) if all_dates else today
-    max_date = max(all_dates + [today])
-    pad = max(pd.Timedelta(days=20), (max_date - min_date) * 0.04)
-    y_range = [min_date - pad, max_date + pad]
+    pad = max(pd.Timedelta(days=20), (today - min_date) * 0.04)
+    y_range = [min_date - pad, today]
     total_height = _chart_height(y_range)
 
     code_map = task_code_map(tasks_info_df)
-    header = _header_pills(tasks, hrs, pubs, pats)
+    header = _header_pills(len(tasks), len(hr), len(pub), len(pat_dedup), task_df, hr_df, pub_df, pat_df, rid)
     main_col, main_stores = _build_main_spine(tasks, jobs, hrs, pubs, pats, code_map, today, rid, y_range,
                                                total_height)
 
-    scroll_wrap = html.Div(main_col, style={'maxHeight': '520px', 'overflowY': 'auto', 'overflowX': 'hidden'})
-    expand_store = dcc.Store(id='tl-expand-store', data=[])
-    return html.Div([header, scroll_wrap, expand_store, *main_stores])
+    scroll_wrap = html.Div(main_col, style={'maxHeight': '400px', 'overflowY': 'auto', 'overflowX': 'hidden'})
+    stores = [dcc.Store(id='tl-expand-store', data=[]), dcc.Store(id='tl-open-panel', data=None)]
+    return html.Div([header, scroll_wrap, *stores, *main_stores])
 
 
 def _chart_height(y_range):
@@ -178,38 +179,66 @@ def _assign_task_colors(tasks):
     return {name: TASK_COLOR_PALETTE[i % len(TASK_COLOR_PALETTE)] for i, name in enumerate(names)}
 
 
-def _clickable_pill(kind, count, color, items, radius='999px', border_width='1.5px'):
-    """헤더 요약 pill. 클릭하면 바로 아래에 이름+기간 리스트가 펼쳐진다(다시 클릭하면 접힘)."""
-    pill = html.Div(f'{kind} ({count})', id={'type': 'tl-header-pill', 'kind': kind}, n_clicks=0, style={
+def _accordion_pill(kind, count, color, radius='999px', border_width='1.5px'):
+    """헤더 요약 pill. 클릭하면 아래에 전체 폭 표가 펼쳐진다(아코디언 — 한 번에 하나만)."""
+    return html.Div(f'{kind} ({count})', id={'type': 'tl-header-pill', 'kind': kind}, n_clicks=0, style={
         'border': f'{border_width} solid {color}', 'borderRadius': radius,
         'padding': '4px 14px', 'fontSize': '0.78rem', 'fontWeight': 600, 'color': color,
         'cursor': 'pointer', 'userSelect': 'none', 'display': 'inline-block',
     })
-    list_children = (
-        [html.Div(text, style={'fontSize': '0.72rem', 'color': _LEGEND_NEUTRAL, 'padding': '2px 0'})
-         for text in items]
-        if items else [html.Div('데이터 없음', style={'fontSize': '0.72rem', 'color': _LEGEND_NEUTRAL})]
-    )
-    list_box = html.Div(list_children, id={'type': 'tl-header-list', 'kind': kind}, style={
-        'display': 'none', 'marginTop': '4px', 'padding': '8px 12px',
-        'border': f'1px solid {color}', 'borderRadius': '10px', 'backgroundColor': '#fafafa',
-        'maxHeight': '160px', 'overflowY': 'auto', 'minWidth': '220px',
+
+
+def _accordion_panel(kind, body):
+    return html.Div(body, id={'type': 'tl-header-panel', 'kind': kind}, style={
+        'display': 'none', 'marginTop': '6px', 'padding': '10px 14px',
+        'border': f'1px solid {_GRIDLINE}', 'borderRadius': '10px', 'backgroundColor': '#fafafa',
+        'maxHeight': '240px', 'overflowY': 'auto',
     })
-    return html.Div([pill, list_box])
 
 
-def _header_pills(tasks, hrs, pubs, pats):
-    task_items = [f"{t['task_name']} ({t['start_label']} ~ {t['end_label']})" for t in tasks]
-    hr_items = [f"{h['order_name']} ({h['order_date']})" for h in hrs]
-    pub_items = [f"{p['title']} ({yymm(p['date'])})" for p in pubs]
-    pat_items = [f"{p['title']} ({yymm(p['date'])})" for p in pats]
+def _hr_table(hr_df, rid):
+    """인사발령 표: order_date/order_name/order_dep/order_cl/order_assignment."""
+    rows = (hr_df[hr_df['researcher_id'] == rid].sort_values('order_date', ascending=False)
+            if not hr_df.empty else pd.DataFrame())
+    if rows.empty:
+        return html.Div('인사발령 이력 없음', className='text-muted small')
 
+    table_rows = [
+        html.Tr([
+            html.Td(str(row.get('order_date', '')), className='small text-muted', style={'wordBreak': 'break-word'}),
+            html.Td(str(row.get('order_name', '')), className='small', style={'wordBreak': 'break-word'}),
+            html.Td(str(row.get('order_dep', '')), className='small text-muted', style={'wordBreak': 'break-word'}),
+            html.Td(str(row.get('order_cl', '')), className='small', style={'wordBreak': 'break-word'}),
+            html.Td(str(row.get('order_assignment', '')), className='small text-muted',
+                    style={'wordBreak': 'break-word'}),
+        ])
+        for _, row in rows.iterrows()
+    ]
+    return dbc.Table([
+        html.Thead(html.Tr([
+            html.Th('일자', style={'fontSize': '0.72rem', 'width': '16%'}),
+            html.Th('발령명', style={'fontSize': '0.72rem', 'width': '26%'}),
+            html.Th('부서', style={'fontSize': '0.72rem', 'width': '22%'}),
+            html.Th('구분', style={'fontSize': '0.72rem', 'width': '18%'}),
+            html.Th('배치', style={'fontSize': '0.72rem', 'width': '18%'}),
+        ]), className='table-light'),
+        html.Tbody(table_rows),
+    ], bordered=False, hover=True, size='sm', className='mb-0', style={'tableLayout': 'fixed', 'width': '100%'})
+
+
+def _header_pills(task_count, hr_count, pub_count, pat_count, task_df, hr_df, pub_df, pat_df, rid):
+    kinds = [
+        ('과제', task_count, '#1d1d1f', '8px', tasks_block(task_df, rid)),
+        ('인사발령', hr_count, EVENT_COLORS['인사발령'], '999px', _hr_table(hr_df, rid)),
+        ('논문', pub_count, EVENT_COLORS['논문'], '999px', publications_tab(pub_df, rid)),
+        ('특허', pat_count, EVENT_COLORS['특허'], '999px', patents_tab(pat_df, rid)),
+    ]
+    pills = [_accordion_pill(kind, count, color, radius) for kind, count, color, radius, _ in kinds]
+    panels = [_accordion_panel(kind, body) for kind, _, _, _, body in kinds]
     return html.Div([
-        _clickable_pill('과제', len(tasks), '#1d1d1f', task_items, radius='8px'),
-        _clickable_pill('인사발령', len(hrs), EVENT_COLORS['인사발령'], hr_items),
-        _clickable_pill('논문', len(pubs), EVENT_COLORS['논문'], pub_items),
-        _clickable_pill('특허', len(pats), EVENT_COLORS['특허'], pat_items),
-    ], className='d-flex gap-2 mb-3 flex-wrap align-items-start')
+        html.Div(pills, className='d-flex gap-2 flex-wrap'),
+        html.Div(panels),
+    ], className='mb-2')
 
 
 def _year_gridlines(y_range, total_height):
@@ -244,35 +273,65 @@ def _overlapping_jobs(task, jobs, today):
     return result
 
 
-def _linked_task_ref(project_name, project_code, task_names, code_map, tasks):
-    """이 논문/특허가 연결되는 과제의 tasks 리스트 내 인덱스(0-base)를 반환.
-    여러 과제에 연결되더라도(드묾) 첫 번째 일치 항목만 사용한다.
-    연결된 과제가 없으면 None(= 회색으로 항상 표시)."""
-    matched = linked_task_names(project_name, project_code, task_names, code_map)
-    if not matched:
+def _resolve_item_task(item, task_names, code_map, tasks):
+    """논문/특허 한 건이 이 연구원의 어떤 과제 인스턴스(tasks 리스트의 인덱스)에
+    속하는지 반환. project_name/project_code로 연결되고, 그중 이 항목의 날짜가
+    실제로 속하는 인스턴스가 있을 때만 그 인덱스를 반환한다. 연결된 과제가 없거나,
+    연결은 되지만 그 어떤 인스턴스의 기간에도 속하지 않으면 None(타임라인에 표시 안 함)."""
+    linked = linked_task_names(item['project_name'], item['project_code'], task_names, code_map)
+    if not linked:
         return None
-    matched_set = set(matched)
-    for i, t in enumerate(tasks):
-        if t['task_name'] in matched_set:
+    linked_set = set(linked)
+    candidates = [i for i, t in enumerate(tasks) if t['task_name'] in linked_set]
+    for i in candidates:
+        t = tasks[i]
+        if t['start'] <= item['date'] <= t['end']:
             return i
     return None
+
+
+def _task_expand_body(matched_pubs, matched_pats):
+    """과제 박스를 클릭해 펼쳤을 때 안에 나열할 연결 논문/특허 목록(없으면 안내 문구)."""
+    if not matched_pubs and not matched_pats:
+        return html.P('연결된 논문/특허 없음', className='empty',
+                       style={'fontSize': '0.68rem', 'color': _LEGEND_NEUTRAL, 'margin': 0})
+    items = [
+        html.Div(f"{_ICONS['논문']} {_pub_pill_text(p)} · {p['title']}",
+                  style={'fontSize': '0.66rem', 'color': '#333', 'marginTop': '2px',
+                         'whiteSpace': 'normal', 'overflowWrap': 'break-word'})
+        for p in matched_pubs
+    ] + [
+        html.Div(f"{_ICONS['특허']} {_patent_pill_text(p)} · {p['title']}",
+                  style={'fontSize': '0.66rem', 'color': '#333', 'marginTop': '2px',
+                         'whiteSpace': 'normal', 'overflowWrap': 'break-word'})
+        for p in matched_pats
+    ]
+    return html.Div(items)
 
 
 def _build_main_spine(tasks, jobs, hrs, pubs, pats, code_map, today, rid, y_range, total_height):
     task_names = {t['task_name'] for t in tasks}
     for p in pubs:
-        p['ref'] = _linked_task_ref(p['project_name'], p['project_code'], task_names, code_map, tasks)
+        p['ref'] = _resolve_item_task(p, task_names, code_map, tasks)
     for p in pats:
-        p['ref'] = _linked_task_ref(p['project_name'], p['project_code'], task_names, code_map, tasks)
+        p['ref'] = _resolve_item_task(p, task_names, code_map, tasks)
 
-    # 하나의 스파인/충돌 도메인에 과제(구간)와 이벤트(시점)를 함께 배치한다.
+    matched_pubs_by_task = {i: [] for i in range(len(tasks))}
+    matched_pats_by_task = {i: [] for i in range(len(tasks))}
+    for p in pubs:
+        if p['ref'] is not None:
+            matched_pubs_by_task[p['ref']].append(p)
+    for p in pats:
+        if p['ref'] is not None:
+            matched_pats_by_task[p['ref']].append(p)
+
+    # 스파인에는 과제(구간)와 인사발령(시점)만 배치한다. 논문/특허는 스파인에
+    # 따로 나타나지 않고, 연결된 과제 박스를 펼쳤을 때 그 안에만 나열된다.
     spine_items = (
         [{'kind': 'task', 'anchor': t['start'], 'interval': {'start': t['start'], 'end': t['end']},
           'ref': i, 'payload': t}
          for i, t in enumerate(tasks)]
         + [{'kind': 'hr', 'anchor': h['date'], 'interval': None, 'ref': None, 'payload': h} for h in hrs]
-        + [{'kind': 'pub', 'anchor': p['date'], 'interval': None, 'ref': p['ref'], 'payload': p} for p in pubs]
-        + [{'kind': 'pat', 'anchor': p['date'], 'interval': None, 'ref': p['ref'], 'payload': p} for p in pats]
     )
 
     dates = [it['anchor'] for it in spine_items]
@@ -302,32 +361,19 @@ def _build_main_spine(tasks, jobs, hrs, pubs, pats, code_map, today, rid, y_rang
 
         if it['kind'] == 'task':
             t = it['payload']
+            task_idx = it['ref']
             color = task_colors[t['task_name']]
             task_jobs = _overlapping_jobs(t, jobs, today)
+            expand_body = _task_expand_body(matched_pubs_by_task[task_idx], matched_pats_by_task[task_idx])
             children.append(_stack_connector(y_px, x_px, color))
-            children.append(_task_card(t, gkey, rank, y_px, x_px, z_index, color, task_jobs))
-            task_ref_map[f'{gkey}|{rank}'] = it['ref']
+            children.append(_task_card(t, gkey, rank, y_px, x_px, z_index, color, task_jobs, expand_body, task_idx))
+            task_ref_map[f'{gkey}|{rank}'] = task_idx
             continue
 
-        if it['kind'] == 'hr':
-            e = {'date': it['payload']['date'], 'kind': '인사발령', 'text': _hr_pill_text(it['payload']), 'title': None}
-            color = EVENT_COLORS['인사발령']
-            children.append(_stack_connector(y_px, x_px, color))
-            children.append(_event_pill(e, gkey, rank, y_px, x_px, z_index, color))
-            continue
-
-        p = it['payload']
-        kind_label = '논문' if it['kind'] == 'pub' else '특허'
-        text = _pub_pill_text(p) if it['kind'] == 'pub' else _patent_pill_text(p)
-        e = {'date': p['date'], 'kind': kind_label, 'text': text, 'title': p['title']}
-        linked = it['ref'] is not None
-        color = EVENT_COLORS[kind_label] if linked else _UNLINKED_COLOR
+        e = {'date': it['payload']['date'], 'kind': '인사발령', 'text': _hr_pill_text(it['payload']), 'title': None}
+        color = EVENT_COLORS['인사발령']
         children.append(_stack_connector(y_px, x_px, color))
-        pill = _event_pill(e, gkey, rank, y_px, x_px, z_index, color)
-        if linked:
-            children.append(html.Div(pill, id={'type': 'linked-pill', 'ref': it['ref']}, style={'display': 'none'}))
-        else:
-            children.append(pill)
+        children.append(_event_pill(e, gkey, rank, y_px, x_px, z_index, color))
 
     main_col = html.Div(children, style={'position': 'relative', 'height': f'{total_height}px',
                                           'paddingBottom': '20px'})
@@ -343,7 +389,7 @@ def _stack_connector(y_px, x_px, color):
     })
 
 
-def _task_card(t, gkey, rank, y_px, x_px, z_index, color, jobs=None):
+def _task_card(t, gkey, rank, y_px, x_px, z_index, color, jobs, expand_body, task_idx):
     start_disp = t['start'].strftime('%y.%m')
     end_disp = '진행중' if t['end_label'] == '진행중' else t['end'].strftime('%y.%m')
     name_disp = truncate(t['task_name'], 60)
@@ -364,6 +410,10 @@ def _task_card(t, gkey, rank, y_px, x_px, z_index, color, jobs=None):
             'fontSize': '0.66rem', 'color': _LEGEND_NEUTRAL, 'marginTop': '1px',
         }),
         *job_lines,
+        html.Div(expand_body, id={'type': 'task-expand-body', 'ref': task_idx}, style={
+            'display': 'none', 'marginTop': '6px', 'paddingTop': '6px',
+            'borderTop': f'1px dashed {color}',
+        }),
         dbc.Tooltip(t['task_name'], target=tooltip_id, placement='top'),
     ], id={'type': 'stack-card', 'gkey': gkey, 'idx': rank}, n_clicks=0, style={
         'position': 'absolute', 'top': f'{y_px}px', 'left': f'{x_px}px', 'right': '4px',
@@ -475,15 +525,17 @@ dash.clientside_callback(
 )
 
 
-# ── 과제 카드 클릭 → 연결된 논문/특허(linked-pill) 펼치기/접기 (여러 과제 동시 펼침 가능) ──
-# 카드 쌓기 순서(위 콜백)와는 독립된 상태(tl-expand-store, 펼쳐진 과제의 ref 목록)로 관리한다.
-# 과제 카드와 이벤트 필이 모두 'stack-card' id를 공유하므로(위 재배치 콜백과 정확히
-# 같은 id 모양이어야 매칭됨 — 여기에 kind/ref 등 키를 더 넣으면 그 콜백의 매칭이
-# 깨진다), 이 콜백은 모든 stack-card 클릭을 받은 뒤 tl-task-ref-map(gkey|idx → 과제
-# 인덱스)에서 찾아 과제 카드 클릭만 처리하고, 이벤트 필 클릭은 무시한다.
+# ── 과제 카드 클릭 → 박스 안의 연결 논문/특허(task-expand-body) 펼치기/접기 ──
+# (여러 과제 동시 펼침 가능). 카드 쌓기 순서(위 콜백)와는 독립된 상태
+# (tl-expand-store, 펼쳐진 과제의 ref 목록)로 관리한다.
+# 과제 카드와 인사발령 필이 모두 'stack-card' id를 공유하므로(위 재배치 콜백과
+# 정확히 같은 id 모양이어야 매칭됨 — 여기에 kind/ref 등 키를 더 넣으면 그
+# 콜백의 매칭이 깨진다), 이 콜백은 모든 stack-card 클릭을 받은 뒤
+# tl-task-ref-map(gkey|idx → 과제 인덱스)에서 찾아 과제 카드 클릭만 처리하고,
+# 인사발령 필 클릭은 무시한다.
 dash.clientside_callback(
     """
-    function(n_clicks_list, ref_map, current_set, current_pill_styles) {
+    function(n_clicks_list, ref_map, current_set, current_body_styles) {
         const ctx = dash_clientside.callback_context;
         if (!ctx.triggered || !ctx.triggered.length) {
             return [dash_clientside.no_update, dash_clientside.no_update];
@@ -511,7 +563,7 @@ dash.clientside_callback(
 
         const outIds = ctx.outputs_list[1].map(o => o.id.ref);
         const newStyles = outIds.map((ref, i) => {
-            const style = Object.assign({}, current_pill_styles[i]);
+            const style = Object.assign({}, current_body_styles[i]);
             style.display = expanded.includes(ref) ? 'block' : 'none';
             return style;
         });
@@ -520,25 +572,49 @@ dash.clientside_callback(
     }
     """,
     Output('tl-expand-store', 'data'),
-    Output({'type': 'linked-pill', 'ref': ALL}, 'style'),
+    Output({'type': 'task-expand-body', 'ref': ALL}, 'style'),
     Input({'type': 'stack-card', 'gkey': ALL, 'idx': ALL}, 'n_clicks'),
     State('tl-task-ref-map', 'data'),
     State('tl-expand-store', 'data'),
-    State({'type': 'linked-pill', 'ref': ALL}, 'style'),
+    State({'type': 'task-expand-body', 'ref': ALL}, 'style'),
 )
 
 
-# ── 헤더 요약 pill 클릭 → 이름+기간 리스트 펼치기/접기 ──
+# ── 헤더 요약 pill 클릭 → 전체 폭 표 아코디언 펼치기/접기 (한 번에 하나만) ──
 dash.clientside_callback(
     """
-    function(n_clicks, current_style) {
-        if (!n_clicks) { return dash_clientside.no_update; }
-        const style = Object.assign({}, current_style);
-        style.display = (n_clicks % 2 === 1) ? 'block' : 'none';
-        return style;
+    function(n_clicks_list, current_open, current_panel_styles) {
+        const ctx = dash_clientside.callback_context;
+        if (!ctx.triggered || !ctx.triggered.length) {
+            return [dash_clientside.no_update, dash_clientside.no_update];
+        }
+        const propId = ctx.triggered[0].prop_id;
+        if (!propId.endsWith('.n_clicks')) {
+            return [dash_clientside.no_update, dash_clientside.no_update];
+        }
+        let triggeredId;
+        try {
+            triggeredId = JSON.parse(propId.substring(0, propId.lastIndexOf('.')));
+        } catch (e) {
+            return [dash_clientside.no_update, dash_clientside.no_update];
+        }
+
+        const clickedKind = triggeredId.kind;
+        const newOpen = (current_open === clickedKind) ? null : clickedKind;
+
+        const outIds = ctx.outputs_list[1].map(o => o.id.kind);
+        const newStyles = outIds.map((kind, i) => {
+            const style = Object.assign({}, current_panel_styles[i]);
+            style.display = (kind === newOpen) ? 'block' : 'none';
+            return style;
+        });
+
+        return [newOpen, newStyles];
     }
     """,
-    Output({'type': 'tl-header-list', 'kind': MATCH}, 'style'),
-    Input({'type': 'tl-header-pill', 'kind': MATCH}, 'n_clicks'),
-    State({'type': 'tl-header-list', 'kind': MATCH}, 'style'),
+    Output('tl-open-panel', 'data'),
+    Output({'type': 'tl-header-panel', 'kind': ALL}, 'style'),
+    Input({'type': 'tl-header-pill', 'kind': ALL}, 'n_clicks'),
+    State('tl-open-panel', 'data'),
+    State({'type': 'tl-header-panel', 'kind': ALL}, 'style'),
 )

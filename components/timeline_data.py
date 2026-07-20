@@ -50,25 +50,12 @@ def yymm(ts):
     return ts.strftime('%y.%m') if isinstance(ts, pd.Timestamp) else ''
 
 
-def has_input_rate(val) -> bool:
-    """투입률이 0이거나 비어있으면 False (해당 과제는 목록/타임라인에서 제외)."""
-    s = str(val).strip() if val is not None else ''
-    if not s or s.lower() in ('nan', 'none', 'nat'):
-        return False
-    try:
-        return float(s) > 0
-    except (ValueError, TypeError):
-        return False
-
-
 def task_points(task_df):
     if task_df.empty:
         return []
     today = pd.Timestamp(datetime.now().date())
     points = []
     for _, row in task_df.iterrows():
-        if not has_input_rate(row.get('input_rate')):
-            continue
         start = parse_ts(row.get('start_date'))
         if start is None:
             continue

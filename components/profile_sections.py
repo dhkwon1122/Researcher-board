@@ -328,22 +328,6 @@ def _fmt_rate(val) -> str:
         return '-'
 
 
-def _has_input_rate(val) -> bool:
-    """투입률이 0이거나 비어있으면 False (해당 과제는 목록/타임라인에서 제외)."""
-    try:
-        if pd.isna(val):
-            return False
-    except (TypeError, ValueError):
-        pass
-    s = str(val).strip()
-    if s.lower() in _TASK_EMPTY:
-        return False
-    try:
-        return float(s) > 0
-    except (ValueError, TypeError):
-        return False
-
-
 def _has_min_duration(start_raw, end_raw, min_days: int = 30) -> bool:
     """과제 참여기간(종료일-시작일)이 min_days 이하이면 False (해당 과제는 제외).
     종료일이 비어있으면(진행중) 오늘 날짜를 종료일로 간주해 계산한다.
@@ -381,13 +365,11 @@ def _fmt_period(start_raw, end_raw) -> str:
 
 
 def tasks_block(task_df, rid: str):
-    """과제 수행 이력 테이블 (tasks.csv 기반). 투입률이 0이거나 없는 과제,
-    참여기간(종료일-시작일)이 30일 이하인 과제는 제외."""
+    """과제 수행 이력 테이블 (tasks.csv 기반). 투입률 0도 포함하고, 참여기간
+    (종료일-시작일)이 30일 이하인 과제만 제외한다(타임라인 스파인과 동일 기준)."""
     rows = (task_df[task_df['researcher_id'] == rid]
             .sort_values('start_date', ascending=False)
             if not task_df.empty else pd.DataFrame())
-    if not rows.empty:
-        rows = rows[rows['input_rate'].apply(_has_input_rate)]
     if not rows.empty:
         rows = rows[rows.apply(lambda r: _has_min_duration(r.get('start_date'), r.get('end_date')), axis=1)]
     if rows.empty:
