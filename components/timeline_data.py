@@ -110,10 +110,10 @@ def hr_points(hr_df):
             continue
         points.append({
             'date': date,
-            'order_date': str(row.get('order_date', '')).strip(),
-            'order_name': str(row.get('order_name', '')).strip(),
-            'order_dep': str(row.get('order_dep', '')).strip(),
-            'order_cl': str(row.get('order_cl', '')).strip(),
+            'order_date': clean(row.get('order_date', '')),
+            'order_name': clean(row.get('order_name', '')),
+            'order_dep': clean(row.get('order_dep', '')),
+            'order_cl': clean(row.get('order_cl', '')),
             'order_assignment': clean(row.get('order_assignment', '')),
         })
     points.sort(key=lambda p: p['date'])

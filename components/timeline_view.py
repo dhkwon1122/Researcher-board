@@ -17,12 +17,20 @@ Main spine 하나로 과제와 인사발령만 표시한다. 논문·특허는 �
   │  (겹치는 기간의 항목은 쌓임, 클릭하면 맨 위로)                         │
   └──────────────────────────────────────────────────────────────────────┘
 
+세로 위치는 달력상 절대 시간이 아니라 "탄력적" 척도를 쓴다(_build_time_axis).
+항목 사이 간격은 그 앞 항목의 실제 렌더 높이만큼만 확보해(데이터가 몰린 구간은
+그만큼만 촘촘하게 = 팽창), 진짜 날짜 차이는 상한(_GAP_CAP_DAYS)을 둬 압축한다
+— 데이터가 없는 구간이 아무리 길어도 고정된 픽셀 이상 차지하지 않는다. 이
+방식이 과제 카드(여러 줄)와 인사발령 필(한 줄)의 실제 높이 차이도 반영하므로,
+두 종류가 시각적으로 겹치는 문제도 함께 해결한다.
+
 과제/인사발령 모두 "겹칠 때 쌓기 + 클릭 시 맨 위로" 로직을 공유한다
 (_group_overlapping, _assign_stack_groups, 클라이언트사이드 콜백).
 과제 클릭 시 "박스 안에 연결 논문/특허 펼치기"는 별도의 독립된 클라이언트사이드
 콜백(state: tl-expand-store)으로 처리하며, 카드 쌓기 순서 변경과는 무관하다.
 """
 
+import bisect
 from datetime import datetime
 
 import dash
@@ -50,7 +58,15 @@ _TOP_PAD = 24
 _SPINE_X = 34             # 스파인이 컬럼 왼쪽 끝에서 떨어진 거리(연도 라벨 공간)
 _STACK_BASE_X = _SPINE_X + 26   # 스택(과제 카드/이벤트 필 공통) 맨 앞 카드의 x 위치
 _STACK_OFFSET_PX = 16     # 겹치는 카드가 쌓일 때 한 겹당 우측으로 밀리는 거리
-_ROW_GAP_PX = 40          # 과제/이벤트가 하나의 스파인을 공유하므로 최소 세로 간격을 통일
+
+# 세로 위치는 달력상 절대 시간이 아니라 "탄력적" 척도를 쓴다: 각 항목 사이 간격은
+# 그 앞 항목의 실제 렌더 높이만큼만 확보하고(데이터가 몰린 구간은 그만큼만 촘촘하게
+# 표시 = 팽창), 달력상 진짜 간격은 _GAP_CAP_DAYS로 상한을 둬 아무리 오래 비어 있는
+# 기간이라도 고정된 픽셀 이상은 차지하지 않는다(압축). _build_time_axis() 참고.
+_ROW_BUFFER_PX = 10       # 항목 사이 최소 여백(데이터가 아무리 몰려도 이만큼은 띄움)
+_GAP_CAP_DAYS = 60        # 이보다 먼 실제 날짜 차이는 전부 동일하게(상한만큼만) 압축
+_PX_PER_DAY = 1.0         # 상한 이내 날짜 차이 1일당 추가 픽셀
+_HR_ROW_HEIGHT = 32       # 인사발령 필 1건의 대략적 렌더 높이(px)
 
 # ── 색상 ──────────────────────────────────────────────────────────────────
 TASK_COLOR_PALETTE = ['#4a7fc1', '#7b6fb0', '#c46b6b', '#c07d97', '#c08a52']
@@ -63,17 +79,17 @@ _ICONS = {'논문': '📄', '특허': '💡', '인사발령': '🧭'}
 
 def timeline_view(task_df, hr_df, pub_df, pat_df, job_df, tasks_info_df, rid):
     task = task_df[task_df['researcher_id'] == rid].copy() if not task_df.empty else pd.DataFrame()
-    hr = hr_df[hr_df['researcher_id'] == rid].copy() if not hr_df.empty else pd.DataFrame()
+    hr_rows = filter_hr_rows(hr_df, rid)
     pub = pub_df[pub_df['researcher_id'] == rid].copy() if not pub_df.empty else pd.DataFrame()
     pat = pat_df[pat_df['researcher_id'] == rid].copy() if not pat_df.empty else pd.DataFrame()
     job = job_df[job_df['researcher_id'] == rid].copy() if not job_df.empty else pd.DataFrame()
     pat_dedup = dedupe_patents(pat) if not pat.empty else pat
 
-    if task.empty and hr.empty and pub.empty and pat.empty:
+    if task.empty and hr_rows.empty and pub.empty and pat.empty:
         return html.Div('타임라인 데이터 없음', className='text-muted p-3')
 
     tasks = task_points(task)
-    hrs = hr_points(hr)
+    hrs = hr_points(hr_rows)
     pubs = pub_points(pub)
     pats = pat_points(pat_dedup)
     jobs = job_points(job)
@@ -82,49 +98,59 @@ def timeline_view(task_df, hr_df, pub_df, pat_df, job_df, tasks_info_df, rid):
         return html.Div('타임라인 데이터 없음', className='text-muted p-3')
 
     today = pd.Timestamp(datetime.now().date())
-    # 스파인에는 과제/인사발령만 나타나므로 표시 범위도 이 둘의 날짜만 기준으로
-    # 계산한다. 상단은 오늘을 넘지 않는다(미래로 여백을 주지 않음).
-    all_dates = [d for t in tasks for d in (t['start'], t['end'])] + [p['date'] for p in hrs]
-    min_date = min(all_dates) if all_dates else today
-    pad = max(pd.Timedelta(days=20), (today - min_date) * 0.04)
-    y_range = [min_date - pad, today]
-    total_height = _chart_height(y_range)
-
     code_map = task_code_map(tasks_info_df)
-    header = _header_pills(len(tasks), len(hr), len(pub), len(pat_dedup), task_df, hr_df, pub_df, pat_df, rid)
-    main_col, main_stores = _build_main_spine(tasks, jobs, hrs, pubs, pats, code_map, today, rid, y_range,
-                                               total_height)
+    header = _header_pills(len(tasks), hr_rows, len(pub), len(pat_dedup), task_df, pub_df, pat_df, rid)
+    main_col, main_stores = _build_main_spine(tasks, jobs, hrs, pubs, pats, code_map, today, rid)
 
     scroll_wrap = html.Div(main_col, style={'maxHeight': '400px', 'overflowY': 'auto', 'overflowX': 'hidden'})
     stores = [dcc.Store(id='tl-expand-store', data=[]), dcc.Store(id='tl-open-panel', data=None)]
     return html.Div([header, scroll_wrap, *stores, *main_stores])
 
 
-def _chart_height(y_range):
-    """세로 타임라인 실제 픽셀 높이 — 기간이 길수록 커지고, 카드는 고정 높이로 스크롤."""
-    years = max((y_range[1] - y_range[0]).days / 365, 1)
-    return int(min(2200, max(460, 165 * years)))
+def _task_row_height(jobs):
+    """과제 카드의 대략적 렌더 높이(px) 추정(이름/기간 2줄 + 직무 줄 수 + 여백)."""
+    return 48 + len(jobs or []) * 13
 
 
-def _date_to_y(d, y_range, total_height):
-    total_days = max((y_range[1] - y_range[0]).days, 1)
-    usable = max(total_height - _TOP_PAD * 2, 10)
-    px_per_day = usable / total_days
-    return _TOP_PAD + (y_range[1] - d).days * px_per_day
+def _build_time_axis(anchors):
+    """anchors: [{'date': Timestamp, 'height': px}, ...] (최소 1개, 중복 날짜 허용).
+    달력상 절대 시간이 아니라 "탄력적" 세로 위치를 만든다: 앞 항목의 실제 렌더
+    높이만큼만 간격을 주고(데이터가 몰린 구간은 그만큼만 촘촘 = 팽창), 실제 날짜
+    차이는 _GAP_CAP_DAYS로 상한을 둬(빈 기간은 압축) 아무리 오래 비어 있어도
+    고정된 픽셀 이상 차지하지 않는다.
+    반환: (pos_fn, total_height). pos_fn(date)는 anchors에 없는 임의 날짜(연도
+    경계 등)도 인접한 두 anchor 사이 실제 날짜 비율로 보간해 반환한다."""
+    height_by_date = {}
+    for a in anchors:
+        height_by_date[a['date']] = max(height_by_date.get(a['date'], 0), a['height'])
+    uniq = sorted(height_by_date)
 
+    y = [float(_TOP_PAD)]
+    for i in range(1, len(uniq)):
+        gap_days = (uniq[i] - uniq[i - 1]).days
+        step = height_by_date[uniq[i - 1]] + _ROW_BUFFER_PX + _PX_PER_DAY * min(gap_days, _GAP_CAP_DAYS)
+        y.append(y[-1] + step)
+    total_height = y[-1] + height_by_date[uniq[-1]] + _TOP_PAD
 
-def _assign_slots(dates, y_range, total_height, min_gap_px):
-    """최신 날짜부터 훑으며 최소 픽셀 간격을 강제한 y(px) 목록을 입력 순서 그대로 반환."""
-    order = sorted(range(len(dates)), key=lambda i: dates[i], reverse=True)
-    y_px = [0.0] * len(dates)
-    prev_y = None
-    for i in order:
-        y = _date_to_y(dates[i], y_range, total_height)
-        if prev_y is not None and y < prev_y + min_gap_px:
-            y = prev_y + min_gap_px
-        y_px[i] = y
-        prev_y = y
-    return y_px
+    def pos(d):
+        idx = bisect.bisect_left(uniq, d)
+        if idx < len(uniq) and uniq[idx] == d:
+            return y[idx]
+        if idx == 0:
+            gap_days = (uniq[0] - d).days
+            return y[0] - (_ROW_BUFFER_PX + _PX_PER_DAY * min(gap_days, _GAP_CAP_DAYS))
+        if idx >= len(uniq):
+            gap_days = (d - uniq[-1]).days
+            return y[-1] + height_by_date[uniq[-1]] + _ROW_BUFFER_PX + _PX_PER_DAY * min(gap_days, _GAP_CAP_DAYS)
+        d0, d1 = uniq[idx - 1], uniq[idx]
+        y0, y1 = y[idx - 1], y[idx]
+        span_days = (d1 - d0).days
+        if span_days <= 0:
+            return y0
+        frac = (d - d0).days / span_days
+        return y0 + frac * (y1 - y0)
+
+    return pos, total_height
 
 
 def _group_overlapping(items):
@@ -146,17 +172,6 @@ def _group_overlapping(items):
     if current:
         groups.append(current)
     return groups
-
-
-def _event_windows(dates, y_range, total_height, gap_px):
-    """단일 날짜 이벤트에도 과제와 동일한 겹침 그룹핑을 적용하기 위해, 최소 간격
-    (gap_px)의 절반만큼 앞뒤로 넓힌 가상 구간을 만든다 — 이 구간이 겹치면(=서로
-    너무 가까워 세로 간격 강제 시 압축이 필요했을 이벤트) 하나의 그룹으로 쌓는다."""
-    total_days = max((y_range[1] - y_range[0]).days, 1)
-    usable = max(total_height - _TOP_PAD * 2, 10)
-    px_per_day = usable / total_days
-    half_gap = pd.Timedelta(days=(gap_px / 2) / px_per_day)
-    return [{'start': d - half_gap, 'end': d + half_gap} for d in dates]
 
 
 def _assign_stack_groups(groups, dates, prefix):
@@ -196,40 +211,54 @@ def _accordion_panel(kind, body):
     })
 
 
-def _hr_table(hr_df, rid):
-    """인사발령 표: order_date/order_name/order_dep/order_cl/order_assignment."""
+def _hr_cell(val) -> str:
+    s = str(val).strip() if val is not None else ''
+    return '-' if s.lower() in ('', 'nan', 'none', 'nat') else s
+
+
+def filter_hr_rows(hr_df, rid):
+    """이 연구원의 인사발령 행 중, order_date가 '→'(연속 표시용 특수값으로 추정)인
+    행을 제외하고 최신순 정렬해 반환. 헤더 pill 개수와 표에서 공통으로 쓴다."""
     rows = (hr_df[hr_df['researcher_id'] == rid].sort_values('order_date', ascending=False)
             if not hr_df.empty else pd.DataFrame())
     if rows.empty:
+        return rows
+    return rows[rows['order_date'].astype(str).str.strip() != '→']
+
+
+def _hr_table(hr_rows):
+    """인사발령 표: 발령일(order_date)/발령명(order_name)/부서(order_dep)/
+    직급명(order_cl)/직책명(order_assignment). 값이 없으면 '-'."""
+    if hr_rows.empty:
         return html.Div('인사발령 이력 없음', className='text-muted small')
 
     table_rows = [
         html.Tr([
-            html.Td(str(row.get('order_date', '')), className='small text-muted', style={'wordBreak': 'break-word'}),
-            html.Td(str(row.get('order_name', '')), className='small', style={'wordBreak': 'break-word'}),
-            html.Td(str(row.get('order_dep', '')), className='small text-muted', style={'wordBreak': 'break-word'}),
-            html.Td(str(row.get('order_cl', '')), className='small', style={'wordBreak': 'break-word'}),
-            html.Td(str(row.get('order_assignment', '')), className='small text-muted',
+            html.Td(_hr_cell(row.get('order_date')), className='small text-muted', style={'wordBreak': 'break-word'}),
+            html.Td(_hr_cell(row.get('order_name')), className='small', style={'wordBreak': 'break-word'}),
+            html.Td(_hr_cell(row.get('order_dep')), className='small text-muted', style={'wordBreak': 'break-word'}),
+            html.Td(_hr_cell(row.get('order_cl')), className='small', style={'wordBreak': 'break-word'}),
+            html.Td(_hr_cell(row.get('order_assignment')), className='small text-muted',
                     style={'wordBreak': 'break-word'}),
         ])
-        for _, row in rows.iterrows()
+        for _, row in hr_rows.iterrows()
     ]
     return dbc.Table([
         html.Thead(html.Tr([
-            html.Th('일자', style={'fontSize': '0.72rem', 'width': '16%'}),
+            html.Th('발령일', style={'fontSize': '0.72rem', 'width': '16%'}),
             html.Th('발령명', style={'fontSize': '0.72rem', 'width': '26%'}),
             html.Th('부서', style={'fontSize': '0.72rem', 'width': '22%'}),
-            html.Th('구분', style={'fontSize': '0.72rem', 'width': '18%'}),
-            html.Th('배치', style={'fontSize': '0.72rem', 'width': '18%'}),
+            html.Th('직급명', style={'fontSize': '0.72rem', 'width': '18%'}),
+            html.Th('직책명', style={'fontSize': '0.72rem', 'width': '18%'}),
         ]), className='table-light'),
         html.Tbody(table_rows),
     ], bordered=False, hover=True, size='sm', className='mb-0', style={'tableLayout': 'fixed', 'width': '100%'})
 
 
-def _header_pills(task_count, hr_count, pub_count, pat_count, task_df, hr_df, pub_df, pat_df, rid):
+def _header_pills(task_count, hr_rows, pub_count, pat_count, task_df, pub_df, pat_df, rid):
     kinds = [
         ('과제', task_count, '#1d1d1f', '8px', tasks_block(task_df, rid)),
-        ('인사발령', hr_count, EVENT_COLORS['인사발령'], '999px', _hr_table(hr_df, rid)),
+        ('인사발령', len(hr_rows), EVENT_COLORS['인사발령'], '999px', _hr_table(hr_rows)),
         ('논문', pub_count, EVENT_COLORS['논문'], '999px', publications_tab(pub_df, rid)),
         ('특허', pat_count, EVENT_COLORS['특허'], '999px', patents_tab(pat_df, rid)),
     ]
@@ -241,13 +270,11 @@ def _header_pills(task_count, hr_count, pub_count, pat_count, task_df, hr_df, pu
     ], className='mb-2')
 
 
-def _year_gridlines(y_range, total_height):
+def _year_gridlines(pos_fn, min_year, max_year):
     children = []
-    for yr in range(y_range[0].year, y_range[1].year + 1):
+    for yr in range(min_year, max_year + 1):
         d = pd.Timestamp(year=yr, month=1, day=1)
-        if d < y_range[0] or d > y_range[1]:
-            continue
-        y_px = _date_to_y(d, y_range, total_height)
+        y_px = pos_fn(d)
         children.append(html.Div(str(yr), style={
             'position': 'absolute', 'top': f'{y_px - 7}px', 'left': '0px',
             'width': f'{_SPINE_X - 8}px', 'textAlign': 'right',
@@ -309,7 +336,7 @@ def _task_expand_body(matched_pubs, matched_pats):
     return html.Div(items)
 
 
-def _build_main_spine(tasks, jobs, hrs, pubs, pats, code_map, today, rid, y_range, total_height):
+def _build_main_spine(tasks, jobs, hrs, pubs, pats, code_map, today, rid):
     task_names = {t['task_name'] for t in tasks}
     for p in pubs:
         p['ref'] = _resolve_item_task(p, task_names, code_map, tasks)
@@ -325,22 +352,30 @@ def _build_main_spine(tasks, jobs, hrs, pubs, pats, code_map, today, rid, y_rang
         if p['ref'] is not None:
             matched_pats_by_task[p['ref']].append(p)
 
+    task_jobs_by_idx = [_overlapping_jobs(t, jobs, today) for t in tasks]
+
     # 스파인에는 과제(구간)와 인사발령(시점)만 배치한다. 논문/특허는 스파인에
     # 따로 나타나지 않고, 연결된 과제 박스를 펼쳤을 때 그 안에만 나열된다.
     spine_items = (
         [{'kind': 'task', 'anchor': t['start'], 'interval': {'start': t['start'], 'end': t['end']},
-          'ref': i, 'payload': t}
+          'ref': i, 'payload': t, 'height': _task_row_height(task_jobs_by_idx[i])}
          for i, t in enumerate(tasks)]
-        + [{'kind': 'hr', 'anchor': h['date'], 'interval': None, 'ref': None, 'payload': h} for h in hrs]
+        + [{'kind': 'hr', 'anchor': h['date'], 'interval': {'start': h['date'], 'end': h['date']},
+            'ref': None, 'payload': h, 'height': _HR_ROW_HEIGHT} for h in hrs]
     )
 
     dates = [it['anchor'] for it in spine_items]
-    y_px_list = _assign_slots(dates, y_range, total_height, _ROW_GAP_PX)
-    point_windows = _event_windows(dates, y_range, total_height, _ROW_GAP_PX)
-    intervals = [it['interval'] if it['interval'] is not None else point_windows[i]
-                 for i, it in enumerate(spine_items)]
+    intervals = [it['interval'] for it in spine_items]
     groups = _group_overlapping(intervals)
     stack_meta, stores = _assign_stack_groups(groups, dates, f'{rid}-main')
+
+    # 오늘을 높이 0짜리 anchor로 포함시켜, 스파인이 정확히 현재 시점에서 끝나도록
+    # 한다(마지막 실제 항목 이후로 미래 방향 여백이 무한정 늘어나지 않게).
+    anchors = [{'date': it['anchor'], 'height': it['height']} for it in spine_items] + [{'date': today, 'height': 0}]
+    pos_fn, total_height = _build_time_axis(anchors)
+
+    min_year = min([d.year for d in dates] + [today.year])
+    max_year = today.year
 
     task_colors = _assign_task_colors(tasks)
     task_ref_map = {}   # f'{gkey}|{rank}' → 과제의 tasks 리스트 인덱스(클라이언트사이드 콜백이 조회)
@@ -350,20 +385,20 @@ def _build_main_spine(tasks, jobs, hrs, pubs, pats, code_map, today, rid, y_rang
             'position': 'absolute', 'top': '0', 'bottom': '0', 'left': f'{_SPINE_X}px',
             'borderLeft': f'2px dashed {_SPINE_COLOR}',
         }),
-        *_year_gridlines(y_range, total_height),
+        *_year_gridlines(pos_fn, min_year, max_year),
     ]
 
     for i, it in enumerate(spine_items):
         gkey, rank = stack_meta[i]
         x_px = _STACK_BASE_X + rank * _STACK_OFFSET_PX
         z_index = 100 - rank
-        y_px = y_px_list[i]
+        y_px = pos_fn(it['anchor'])
 
         if it['kind'] == 'task':
             t = it['payload']
             task_idx = it['ref']
             color = task_colors[t['task_name']]
-            task_jobs = _overlapping_jobs(t, jobs, today)
+            task_jobs = task_jobs_by_idx[task_idx]
             expand_body = _task_expand_body(matched_pubs_by_task[task_idx], matched_pats_by_task[task_idx])
             children.append(_stack_connector(y_px, x_px, color))
             children.append(_task_card(t, gkey, rank, y_px, x_px, z_index, color, task_jobs, expand_body, task_idx))
