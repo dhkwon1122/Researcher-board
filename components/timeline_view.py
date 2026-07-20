@@ -5,10 +5,10 @@ Main spine 하나로 과제와 인사발령만 표시한다. 논문·특허는 �
 나타나지 않고, (1) 상단 요약 pill(과제/인사발령/논문/특허)을 클릭하면 그 종류의
 전체 표(기존 "과제 수행 이력/논문/특허" 탭 카드에 있던 것과 동일한 컴포넌트,
 개수 포함)가 타임라인 카드 전체 폭으로 펼쳐지고(아코디언 — 한 번에 하나만),
-(2) 과제 카드를 클릭하면 그 과제(project_name/project_code로 연결 + 그 과제
-인스턴스 기간 내에 발표/출원된 것만)에 해당하는 논문·특허가 과제 박스 자체가
-확장되며 안에 나열된다. 과제에 연결되지 않은 논문·특허는 타임라인에는 전혀
-나타나지 않는다(요약 pill을 눌렀을 때의 전체 표에서는 그대로 확인 가능).
+(2) 과제 카드를 클릭하면 그 과제에 project_name/project_code로 연결된 논문·특허가
+(참여기간과 무관하게) 과제 박스 자체가 확장되며 안에 나열된다. 과제에 전혀
+연결되지 않은 논문·특허는 타임라인에는 나타나지 않는다(요약 pill을 눌렀을 때의
+전체 표에서만 확인 가능).
 
 구조:
   ┌ 헤더 필(과제/인사발령/논문/특허 + 개수, 클릭 시 전체 폭 표 아코디언) ──┐
@@ -311,19 +311,28 @@ def _overlapping_jobs(task, jobs, today):
 
 def _resolve_item_task(item, task_names, code_map, tasks):
     """논문/특허 한 건이 이 연구원의 어떤 과제 인스턴스(tasks 리스트의 인덱스)에
-    속하는지 반환. project_name/project_code로 연결되고, 그중 이 항목의 날짜가
-    실제로 속하는 인스턴스가 있을 때만 그 인덱스를 반환한다. 연결된 과제가 없거나,
-    연결은 되지만 그 어떤 인스턴스의 기간에도 속하지 않으면 None(타임라인에 표시 안 함)."""
+    속하는지 반환. project_name/project_code로 연결되면 참여기간과 무관하게
+    그 과제에 우선 연결한다(논문은 연구 종료 후 게재되는 경우가 많아, 기간
+    내로 제한하면 실제로 연결된 항목 대부분이 걸러지는 문제가 있었다).
+    같은 과제명이 여러 시점에 걸쳐 여러 번 수행된 경우(인스턴스 여러 개)에는
+    이 항목의 날짜가 속하는 인스턴스를 우선 고르고, 어느 기간에도 속하지
+    않으면 날짜가 가장 가까운 인스턴스를 고른다. project_name/code로 아예
+    연결되는 과제가 없으면 None(타임라인 요약 카드에서만 노출)."""
     linked = linked_task_names(item['project_name'], item['project_code'], task_names, code_map)
     if not linked:
         return None
     linked_set = set(linked)
     candidates = [i for i, t in enumerate(tasks) if t['task_name'] in linked_set]
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
     for i in candidates:
         t = tasks[i]
         if t['start'] <= item['date'] <= t['end']:
             return i
-    return None
+    return min(candidates, key=lambda i: min(abs((item['date'] - tasks[i]['start']).days),
+                                              abs((item['date'] - tasks[i]['end']).days)))
 
 
 def _task_expand_body(matched_pubs, matched_pats):
