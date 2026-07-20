@@ -1,6 +1,6 @@
 """
 논문 현황 전처리
-Source : data/raw/개인별논문현황_2016_2026.xlsx  (헤더: 3번째 행, header_row=2)
+Source : data/raw/개인별논문현황_2016_2026.xlsx  (헤더: 1번째 행, header_row=0)
 Output : data/processed/publications.csv
 
 컬럼 매핑:
@@ -117,8 +117,8 @@ def process():
         print(f'[process_publications] 파일 없음: {SOURCE}')
         return
 
-    print(f'[process_publications] 읽는 중: {SOURCE}  (헤더: 3번째 행)')
-    df = read_xlsx(SOURCE, header_row=2)
+    print(f'[process_publications] 읽는 중: {SOURCE}  (헤더: 1번째 행)')
+    df = read_xlsx(SOURCE, header_row=0)
 
     missing = [c for c in REQUIRED_COLS if c not in df.columns]
     if missing:
