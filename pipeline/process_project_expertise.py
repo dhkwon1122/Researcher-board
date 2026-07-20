@@ -61,16 +61,33 @@ def _summary_description(summary: dict) -> str:
     return '\n'.join(parts)
 
 
-def _project_desc_line(item: dict) -> str:
-    keywords = ', '.join((item.get('keywords_kr') or []) + (item.get('keywords_en') or []))
-    parts = [
-        f"핵심 기술: {item.get('core_tech') or '확인 불가'}",
-        f"최종 산출물: {item.get('deliverable') or '확인 불가'}",
-        f"기술적 난제: {item.get('challenge') or '확인 불가'}",
-    ]
-    if keywords:
-        parts.append(f'키워드: {keywords}')
-    return ' · '.join(parts)
+# 국영문 키워드 pill 배지에 순환 적용할 색상 팔레트(다양한 색으로 구분)
+_KEYWORD_PILL_COLORS = [
+    '#0071e3', '#c9822e', '#3f8f57', '#c46b6b', '#7b6fb0', '#0c9aa8', '#c07d97', '#5f7a3d',
+]
+
+
+def _keyword_pills_html(keywords: list) -> str:
+    if not keywords:
+        return ''
+    pills = ''.join(
+        f'<span class="kw-pill" style="background-color:{_KEYWORD_PILL_COLORS[i % len(_KEYWORD_PILL_COLORS)]}">'
+        f'{html.escape(kw)}</span>'
+        for i, kw in enumerate(keywords)
+    )
+    return f'<div class="kw-pill-row">{pills}</div>'
+
+
+def _project_desc_html(item: dict) -> str:
+    """컨플루언스 요약(핵심 기술/최종 산출물/기술적 난제)을 항목별 줄바꿈으로,
+    국영문 키워드는 키워드별 색상 pill 배지로 렌더링."""
+    keywords = (item.get('keywords_kr') or []) + (item.get('keywords_en') or [])
+    lines = ''.join([
+        f"<p><strong>핵심 기술:</strong> {html.escape(item.get('core_tech') or '확인 불가')}</p>",
+        f"<p><strong>최종 산출물:</strong> {html.escape(item.get('deliverable') or '확인 불가')}</p>",
+        f"<p><strong>기술적 난제:</strong> {html.escape(item.get('challenge') or '확인 불가')}</p>",
+    ])
+    return f'<div class="tech-desc">{lines}{_keyword_pills_html(keywords)}</div>'
 
 
 def _build_html(items: list, profile: str = 'default') -> str:
@@ -97,7 +114,7 @@ def _build_html(items: list, profile: str = 'default') -> str:
     <div class="tech-header d-flex align-items-center gap-2 mb-1">
       {dep_badge}<h2>{html.escape(it['project_name'])}</h2>
     </div>
-    <p class="tech-desc">{html.escape(_project_desc_line(it))}</p>
+    {_project_desc_html(it)}
     {deepdive_html}
     {other_html}
   </div>

@@ -46,6 +46,7 @@ HR 담당자 및 R&D 부서장이 신규 인력 채용, 내부 인력 재배치,
 3. **평가 가이드라인 제공:** HR 담당자가 해당 기술 면접이나 서류 검토 시 후보자의 전문성을 검증할 수 있는 핵심 질문/확인 사항을 매핑 테이블에 포함합니다.
 4. **선행연구소 특성 반영(양산 직무 제외 원칙):** 분석 대상 조직은 완제품 양산(Mass Production)이 목표가 아니라, 실현 가능성(Feasibility)을 검증하는 선행연구소입니다. 신뢰성(Reliability) 엔지니어링, 품질보증/품질관리(QA/QC), 양산 스케일업을 위한 생산기술·공정 엔지니어링, 수율/설비 개선 등 "완제품 양산 단계"에만 필요한 직무는 필수 직무에서 제외하세요. 단, 개념 검증(PoC)이나 시제품 제작 수준에서 실현 가능성을 확인하기 위해 최소한으로 필요한 생산기술·공정 엔지니어링 직무는 포함할 수 있습니다(양산 최적화가 아니라 "이 기술이 실제로 동작하는지 검증"하는 목적일 때만). 원천기술 확보, 이론/알고리즘 개발, 선행 실험·연구 등 선행연구 성격의 직무를 우선적으로 선정하세요.
 5. **직무 개수 제한(최대 5개, 상한이지 목표치가 아님):** 딥다이브 매핑에 포함하는 직무는 최대 5개까지만 선정하세요. 위 4번 기준(선행연구 우선, 양산 단계 제외)을 통과하는 후보가 5개를 초과하면 연구 성공에 가장 핵심적인 직무 5개만 남기고 우선순위가 낮은 직무는 생략하세요. 반대로 후보가 5개 미만이면 억지로 5개를 채우지 말고 실제 해당하는 개수만큼만(예: 3개) 작성하세요.
+6. **연구개발 직접 수행 직무만 선정(관리·기획·행정 직무 제외):** 프로젝트 매니저(PM), 사업 기획/기획 담당, 학술 기획 연구원, 행정 지원 등 연구개발을 직접 수행하지 않고 관리·기획·조율·행정 역할을 맡는 직무는 필수 직무에서 제외하세요. 딥다이브 매핑에는 실제로 연구·설계·구현·실험 등 기술적 R&D 작업을 손으로 직접 수행하는 기술 직무만 포함합니다.
 
 ---
 
@@ -242,50 +243,54 @@ def parse_job_fields(body: str) -> dict:
     return fields
 
 
+_FIELD_EMPTY_TEXT = '정보 없음'
+
+
+def _field_text(value: str) -> str:
+    return html.escape(value) if value else _FIELD_EMPTY_TEXT
+
+
 def render_job_fields_html(fields: dict) -> str:
-    """parse_job_fields() 결과를 항상 동일한 구조의 고정 템플릿으로 렌더링한다
-    (과제/기술마다 LLM 응답 스타일이 달라도 카드 모양이 통일되도록)."""
-    parts = []
-    if fields['rd_task']:
-        parts.append(f'''<div class="job-field">
+    """parse_job_fields() 결과를 항상 동일한 구조의 고정 템플릿으로 렌더링한다.
+    과제/직무마다 LLM 응답 스타일이 달라 일부 항목이 파싱되지 않더라도, 4개
+    소항목(R&D Task / 세부 전문성 및 역량 요구사항 / 직무 레벨 및 역량 기준 /
+    지원자 전문성 검증 질문)을 항상 같은 순서로 표시하고(값이 없으면 안내 문구로
+    채움), 섹션 자체를 생략하지 않는다 — 모든 과제·모든 직무 카드가 항상 동일한
+    포맷으로 보이도록 하기 위함이다."""
+    rd_task_block = f'''<div class="job-field">
   <div class="field-label">R&amp;D Task</div>
-  <p>{html.escape(fields['rd_task'])}</p>
-</div>''')
+  <p>{_field_text(fields['rd_task'])}</p>
+</div>'''
 
-    skill_items = []
-    if fields['hard_skills']:
-        skill_items.append(f"<li><strong>Hard Skills:</strong> {html.escape(fields['hard_skills'])}</li>")
-    if fields['domain_knowledge']:
-        skill_items.append(f"<li><strong>Domain Knowledge:</strong> {html.escape(fields['domain_knowledge'])}</li>")
-    if skill_items:
-        parts.append(f'''<div class="job-field">
+    skill_items = (
+        f"<li><strong>Hard Skills:</strong> {_field_text(fields['hard_skills'])}</li>"
+        f"<li><strong>Domain Knowledge:</strong> {_field_text(fields['domain_knowledge'])}</li>"
+    )
+    skill_block = f'''<div class="job-field">
   <div class="field-label">세부 전문성 및 역량 요구사항</div>
-  <ul>{''.join(skill_items)}</ul>
-</div>''')
+  <ul>{skill_items}</ul>
+</div>'''
 
-    level_items = []
-    if fields['junior']:
-        level_items.append(f"<li><strong>Junior:</strong> {html.escape(fields['junior'])}</li>")
-    if fields['mid']:
-        level_items.append(f"<li><strong>Mid-level:</strong> {html.escape(fields['mid'])}</li>")
-    if fields['senior']:
-        level_items.append(f"<li><strong>Senior:</strong> {html.escape(fields['senior'])}</li>")
-    if level_items:
-        parts.append(f'''<div class="job-field">
+    level_items = (
+        f"<li><strong>Junior:</strong> {_field_text(fields['junior'])}</li>"
+        f"<li><strong>Mid-level:</strong> {_field_text(fields['mid'])}</li>"
+        f"<li><strong>Senior:</strong> {_field_text(fields['senior'])}</li>"
+    )
+    level_block = f'''<div class="job-field">
   <div class="field-label">직무 레벨 및 역량 기준</div>
-  <ul>{''.join(level_items)}</ul>
-</div>''')
+  <ul>{level_items}</ul>
+</div>'''
 
     if fields['questions']:
         q_items = ''.join(f'<li>{html.escape(q)}</li>' for q in fields['questions'])
-        parts.append(f'''<div class="job-field">
+    else:
+        q_items = f'<li>{_FIELD_EMPTY_TEXT}</li>'
+    questions_block = f'''<div class="job-field">
   <div class="field-label">지원자 전문성 검증 질문</div>
   <ol>{q_items}</ol>
-</div>''')
+</div>'''
 
-    if not parts:
-        return '<p class="empty">세부 항목을 추출하지 못했습니다.</p>'
-    return '\n'.join(parts)
+    return '\n'.join([rd_task_block, skill_block, level_block, questions_block])
 
 
 # expertise_analysis(R&D Project Specialist Agent 출력)를 카드로 렌더링할 때
@@ -299,6 +304,13 @@ EXPERTISE_CARD_STYLE = """
   .tech-header .badge { font-size: 0.7rem; }
   .tech-header h2 { font-size: 1.2rem; font-weight: 700; margin: 0; }
   .tech-desc { color: #444; font-size: 0.86rem; margin: 6px 0 22px; }
+  .tech-desc p { margin: 0 0 4px; }
+  .tech-desc p:last-child { margin-bottom: 0; }
+  .kw-pill-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .kw-pill {
+    display: inline-block; border-radius: 999px; padding: 3px 12px;
+    font-size: 0.72rem; font-weight: 600; color: #fff; white-space: nowrap;
+  }
   .deepdive-title {
     font-size: 1rem; font-weight: 700; color: var(--gs-accent); margin: 0 0 4px;
     display: flex; align-items: center; gap: 8px;
