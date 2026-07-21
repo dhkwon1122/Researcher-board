@@ -19,6 +19,11 @@ Source:
   data/processed/publications.csv                    (저널 권위도는 LLM으로 별도 조회/캐시)
   data/processed/patents.csv
 
+저널 권위도 캐시(journal_authority[.<profile>].json)는 평가 값이 실제로 채워진
+저널은 건너뛰고, 값이 비어 있는(신규거나 이전 조회 실패로 남은) 저널만 매번
+재조회한다. 캐시와 무관하게 전체 저널을 다시 확인하려면:
+  python pipeline/process_researcher_expertise.py --refresh-journals
+
 Output:
   data/processed/연구원 보유 전문성 분석[.<profile>].json
   data/processed/연구원 보유 전문성 분석[.<profile>].html  (연구원별 카드 리포트)
@@ -39,7 +44,7 @@ Output:
     포맷은 항상 동일하다.
 
 사용법:
-  python pipeline/process_researcher_expertise.py [--profile thinkingcap] [--html-only]
+  python pipeline/process_researcher_expertise.py [--profile thinkingcap] [--html-only] [--refresh-journals]
 """
 
 import html
@@ -309,13 +314,19 @@ def _save_journal_cache(cache: dict, profile: str = 'default'):
         json.dump(cache, f, ensure_ascii=False, indent=2)
 
 
-def _update_journal_authority(journals: list, cache: dict, profile: str = 'default') -> dict:
-    """캐시에 없는 저널만 사내 LLM으로 조회해 캐시에 채운다(누적 재사용, profile별 분리)."""
-    new_journals = [j for j in journals if j not in cache]
-    if not new_journals:
+def _update_journal_authority(journals: list, cache: dict, profile: str = 'default', force: bool = False) -> dict:
+    """캐시에 실제 평가 값이 채워진 저널은 건너뛰고, 값이 비어 있는 저널(신규거나
+    이전 조회가 실패해 빈 문자열로 남은 것)만 사내 LLM으로 재조회한다(누적 재사용,
+    profile별 분리). 단순히 캐시에 키가 있는지가 아니라 값이 실제로 있는지로
+    판단해야, 실패했던 저널이 캐시에 빈 값으로 영구히 박제되지 않는다.
+    force=True(--refresh-journals)면 캐시 값과 무관하게 전달된 저널 전체를
+    다시 조회한다."""
+    targets = journals if force else [j for j in journals if not cache.get(j)]
+    if not targets:
         return cache
-    print(f'[process_researcher_expertise] 저널 권위도 조회 중 (신규 {len(new_journals)}건, profile={profile})...')
-    for j in new_journals:
+    label = '전체 재조회' if force else '신규/미확인'
+    print(f'[process_researcher_expertise] 저널 권위도 조회 중 ({label} {len(targets)}건, profile={profile})...')
+    for j in targets:
         prompt = (
             f'학술지/저널명: {j}\n'
             f'이 저널의 SCI/SCIE 여부, 대략적인 impact factor 수준, 해당 분야에서의 '
@@ -493,7 +504,7 @@ def render_html(profile: str = 'default') -> bool:
     return True
 
 
-def process(profile: str = 'default') -> bool:
+def process(profile: str = 'default', refresh_journals: bool = False) -> bool:
     researchers = _read_csv('researchers')
     if researchers.empty:
         print('[process_researcher_expertise] researchers.csv 없음 — 종료')
@@ -518,7 +529,8 @@ def process(profile: str = 'default') -> bool:
     std_map, sait_map = _build_job_def_maps(std_defs, sait_defs)
 
     journal_cache = _load_journal_cache(profile)
-    journal_cache = _update_journal_authority(_unique_journals(publications), journal_cache, profile)
+    journal_cache = _update_journal_authority(_unique_journals(publications), journal_cache, profile,
+                                               force=refresh_journals)
 
     rids = researchers['researcher_id'].unique()
     results = []
@@ -583,4 +595,4 @@ if __name__ == '__main__':
     if '--html-only' in sys.argv:
         render_html(_profile)
     else:
-        process(profile=_profile)
+        process(profile=_profile, refresh_journals='--refresh-journals' in sys.argv)
