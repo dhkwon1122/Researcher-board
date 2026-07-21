@@ -61,23 +61,6 @@ def _summary_description(summary: dict) -> str:
     return '\n'.join(parts)
 
 
-# 국영문 키워드 pill 배지에 순환 적용할 색상 팔레트(다양한 색으로 구분)
-_KEYWORD_PILL_COLORS = [
-    '#0071e3', '#c9822e', '#3f8f57', '#c46b6b', '#7b6fb0', '#0c9aa8', '#c07d97', '#5f7a3d',
-]
-
-
-def _keyword_pills_html(keywords: list) -> str:
-    if not keywords:
-        return ''
-    pills = ''.join(
-        f'<span class="kw-pill" style="background-color:{_KEYWORD_PILL_COLORS[i % len(_KEYWORD_PILL_COLORS)]}">'
-        f'{html.escape(kw)}</span>'
-        for i, kw in enumerate(keywords)
-    )
-    return f'<div class="kw-pill-row">{pills}</div>'
-
-
 def _project_desc_html(item: dict) -> str:
     """컨플루언스 요약(핵심 기술/최종 산출물/기술적 난제)을 항목별 줄바꿈으로,
     국영문 키워드는 키워드별 색상 pill 배지로 렌더링."""
@@ -87,7 +70,7 @@ def _project_desc_html(item: dict) -> str:
         f"<p><strong>최종 산출물:</strong> {html.escape(item.get('deliverable') or '확인 불가')}</p>",
         f"<p><strong>기술적 난제:</strong> {html.escape(item.get('challenge') or '확인 불가')}</p>",
     ])
-    return f'<div class="tech-desc">{lines}{_keyword_pills_html(keywords)}</div>'
+    return f'<div class="tech-desc">{lines}{mmd.keyword_pills_html(keywords)}</div>'
 
 
 def _build_html(items: list, profile: str = 'default') -> str:

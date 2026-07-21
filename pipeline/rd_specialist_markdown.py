@@ -181,6 +181,25 @@ def deepdive_jobs(analysis_text: str) -> list:
     ]
 
 
+# 키워드 pill 배지에 순환 적용할 색상 팔레트(다양한 색으로 구분). process_project_expertise.py,
+# process_researcher_expertise.py 등 키워드를 pill로 보여주는 모든 리포트가 공유한다.
+KEYWORD_PILL_COLORS = [
+    '#0071e3', '#c9822e', '#3f8f57', '#c46b6b', '#7b6fb0', '#0c9aa8', '#c07d97', '#5f7a3d',
+]
+
+
+def keyword_pills_html(keywords: list) -> str:
+    """키워드 목록을 색상이 순환되는 타원형(pill) 배지 목록 HTML로 렌더링. 빈 목록이면 빈 문자열."""
+    if not keywords:
+        return ''
+    pills = ''.join(
+        f'<span class="kw-pill" style="background-color:{KEYWORD_PILL_COLORS[i % len(KEYWORD_PILL_COLORS)]}">'
+        f'{html.escape(kw)}</span>'
+        for i, kw in enumerate(keywords)
+    )
+    return f'<div class="kw-pill-row">{pills}</div>'
+
+
 def b64_encode(text: str) -> str:
     return base64.b64encode(text.encode('utf-8')).decode('ascii')
 

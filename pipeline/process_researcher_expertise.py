@@ -3,7 +3,7 @@
 
 한 연구원의 학력/전공, 과제 이력, 직무 이력, 핵심기술, 보유기술, 논문, 특허
 데이터를 모두 모아 "R&D Talent Profiling Agent" 역할의 사내 LLM에게 분석을
-맡기고, 결과를 구조화된 JSON으로 저장한다.
+맡기고, 결과를 구조화된 JSON과 사람이 보는 HTML 리포트로 저장한다.
 
 Source:
   data/processed/researchers.csv
@@ -21,6 +21,7 @@ Source:
 
 Output:
   data/processed/연구원 보유 전문성 분석[.<profile>].json
+  data/processed/연구원 보유 전문성 분석[.<profile>].html  (연구원별 카드 리포트)
   data/processed/journal_authority[.<profile>].json  (저널명별 권위도 평가 캐시 — 누적 재사용)
 
 ※ 프롬프트에는 researcher_id/이름 등 개인 식별 정보를 절대 포함하지 않는다.
@@ -31,10 +32,17 @@ Output:
   python pipeline/process_researcher_expertise.py                    # 기존 LLM(profile='default')
   python pipeline/process_researcher_expertise.py --profile thinkingcap  # 2번째 LLM
 
+이미 저장된 JSON을 LLM 재호출 없이 HTML로만 다시 만들기:
+  python pipeline/process_researcher_expertise.py --html-only
+  python pipeline/process_researcher_expertise.py --html-only --profile thinkingcap
+  ※ default/thinkingcap 모두 _build_html() 하나로만 렌더링하므로 두 산출물의
+    포맷은 항상 동일하다.
+
 사용법:
-  python pipeline/process_researcher_expertise.py [--profile thinkingcap]
+  python pipeline/process_researcher_expertise.py [--profile thinkingcap] [--html-only]
 """
 
+import html
 import json
 import os
 import re
@@ -90,6 +98,18 @@ _JOURNAL_SYSTEM_PROMPT = '당신은 학술 저널/학회의 권위도를 평가�
 
 _HARD_SKILL_KEYS = ['languages_frameworks', 'hardware_equipment_control', 'analysis_simulation_tools']
 _DOMAIN_KEYS = ['academic_theoretical_background', 'industry_standards', 'patent_trend_understanding']
+
+# HTML 리포트에서 hard_skills/domain_knowledge 하위 키를 표시할 때 쓰는 한글 라벨
+_HARD_SKILL_LABELS = [
+    ('languages_frameworks', '개발 언어 및 프레임워크'),
+    ('hardware_equipment_control', '하드웨어 및 장비 제어'),
+    ('analysis_simulation_tools', '분석 및 시뮬레이션 툴'),
+]
+_DOMAIN_LABELS = [
+    ('academic_theoretical_background', '학술적/이론적 배경'),
+    ('industry_standards', '산업/기술 표준 및 규격'),
+    ('patent_trend_understanding', '특허 및 트렌드 이해도'),
+]
 
 
 def _clean(val) -> str:
@@ -371,6 +391,108 @@ def _analyze_researcher(prompt: str, profile: str = 'default') -> dict | None:
     return out if out else None
 
 
+def _skill_block_html(title: str, data: dict, labels: list) -> str:
+    """hard_skills/domain_knowledge 중 하나를 job-field 카드 블록으로 렌더링.
+    LLM이 근거 없다고 판단해 아예 생략한 키는 항목 자체를 표시하지 않는다."""
+    items = [f'<li><strong>{label}:</strong> {html.escape(data[key])}</li>' for key, label in labels if data.get(key)]
+    if not items:
+        return ''
+    return f'''<div class="job-field">
+  <div class="field-label">{title}</div>
+  <ul>{''.join(items)}</ul>
+</div>'''
+
+
+def _researcher_card_html(item: dict, name_map: dict, anchor: str) -> str:
+    rid = item.get('researcher_id', '')
+    name = name_map.get(rid, '')
+
+    field_badges = ''.join(
+        f'<span class="badge rounded-pill text-bg-dark me-1 mb-1">{html.escape(f)}</span>'
+        for f in (item.get('strength_fields') or [])
+    )
+    strength_html = f'<p class="mb-2">{field_badges}</p>' if field_badges else ''
+    strength_html += mmd.keyword_pills_html(item.get('strength_keywords') or [])
+    if not strength_html:
+        strength_html = '<p class="empty">강점 분야/키워드 데이터 없음</p>'
+
+    body_html = (
+        _skill_block_html('Hard Skills', item.get('hard_skills') or {}, _HARD_SKILL_LABELS)
+        + _skill_block_html('Domain Knowledge', item.get('domain_knowledge') or {}, _DOMAIN_LABELS)
+    )
+    if not body_html:
+        body_html = '<p class="empty">세부 항목 데이터 없음</p>'
+
+    return f'''<section class="tech-card card" id="{anchor}">
+  <div class="card-body">
+    <div class="tech-header d-flex align-items-center gap-2 mb-1">
+      <h2>{html.escape(rid)} {html.escape(name)}</h2>
+    </div>
+    <div class="tech-desc">{strength_html}</div>
+    {body_html}
+  </div>
+</section>'''
+
+
+def _build_html(results: list, profile: str, researchers_df: pd.DataFrame) -> str:
+    """연구원 보유 전문성 분석[.profile].json → 사람이 보는 HTML 리포트.
+    default/thinkingcap 어느 profile을 넘겨도 항상 이 한 함수로만 렌더링하므로
+    두 산출물의 포맷은 항상 동일하다."""
+    name_map = {}
+    if not researchers_df.empty:
+        name_map = researchers_df.set_index('researcher_id')['name'].to_dict()
+
+    toc_links = []
+    cards = []
+    for i, item in enumerate(results, start=1):
+        rid = item.get('researcher_id', '')
+        anchor = f'researcher-{i}'
+        label = f'{rid} {name_map.get(rid, "")}'.strip()
+        toc_links.append(
+            f'<a class="btn btn-sm btn-outline-primary rounded-pill" href="#{anchor}">{html.escape(label)}</a>'
+        )
+        cards.append(_researcher_card_html(item, name_map, anchor))
+
+    profile_note = f' ({profile})' if profile != 'default' else ''
+    body_html = f'<nav class="toc">{"".join(toc_links)}</nav>\n{"".join(cards)}'
+    return mmd.html_page(
+        title=f'연구원 보유 전문성 분석{profile_note}',
+        heading=f'연구원 보유 전문성 분석{profile_note}',
+        subtitle='연구원별 강점 분야·전문성 프로필 (R&amp;D Talent Profiling Agent)',
+        body_html=body_html,
+        extra_style=mmd.EXPERTISE_CARD_STYLE,
+    )
+
+
+def _write_html(results: list, profile: str, researchers_df: pd.DataFrame):
+    suffix = mmd.profile_suffix(profile)
+    html_out = _build_html(results, profile, researchers_df)
+    html_path = os.path.join(OUT_DIR, f'연구원 보유 전문성 분석{suffix}.html')
+    with open(html_path, 'w', encoding='utf-8') as f:
+        f.write(html_out)
+    print(f'[OK]   연구원 보유 전문성 분석{suffix}.html 저장 ({len(results)}명)')
+
+
+def render_html(profile: str = 'default') -> bool:
+    """이미 저장된 연구원 보유 전문성 분석[.profile].json을 읽어 .html만 다시
+    만든다(LLM 재호출 없음). 새로 분석하지 않고 기존 JSON을 리포트로 보고 싶을 때
+    'python pipeline/process_researcher_expertise.py --html-only [--profile ...]'로 실행한다."""
+    suffix = mmd.profile_suffix(profile)
+    json_path = os.path.join(OUT_DIR, f'연구원 보유 전문성 분석{suffix}.json')
+    if not os.path.exists(json_path):
+        print(f'[process_researcher_expertise] 연구원 보유 전문성 분석{suffix}.json 없음 — 종료 '
+              f'(python pipeline/process_researcher_expertise.py'
+              f'{" --profile " + profile if profile != "default" else ""} 먼저 실행)')
+        return False
+
+    with open(json_path, encoding='utf-8') as f:
+        results = json.load(f)
+
+    researchers = _read_csv('researchers')
+    _write_html(results, profile, researchers)
+    return True
+
+
 def process(profile: str = 'default') -> bool:
     researchers = _read_csv('researchers')
     if researchers.empty:
@@ -451,8 +573,14 @@ def process(profile: str = 'default') -> bool:
         json.dump(results, f, ensure_ascii=False, indent=2)
 
     print(f'[OK]   연구원 보유 전문성 분석{suffix}.json 저장 ({len(results)}명)')
+
+    _write_html(results, profile, researchers)
     return True
 
 
 if __name__ == '__main__':
-    process(profile=mmd.parse_profile_arg(sys.argv))
+    _profile = mmd.parse_profile_arg(sys.argv)
+    if '--html-only' in sys.argv:
+        render_html(_profile)
+    else:
+        process(profile=_profile)

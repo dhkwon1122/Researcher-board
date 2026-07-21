@@ -108,10 +108,12 @@
           marked.js/DOMPurify로 HTML도 함께 생성)
 
     3) python pipeline/process_researcher_expertise.py   (연구원 전문성 분석)
-       → data/processed/연구원 보유 전문성 분석.json
+       → data/processed/연구원 보유 전문성 분석.json / .html
          (학력/과제이력/직무이력/핵심기술/보유기술/논문/특허를 종합해 사내
           LLM이 강점 분야·핵심 기술 역량·도메인 지식을 구조화된 JSON으로 분석.
-          논문 저널 권위도는 data/processed/journal_authority.json 에 캐시)
+          논문 저널 권위도는 data/processed/journal_authority.json 에 캐시.
+          이미 저장된 JSON을 LLM 재호출 없이 HTML로만 다시 만들려면
+          --html-only 옵션 사용)
 
     4) python pipeline/process_project_researcher_fit.py   (연구원 매칭)
        → data/processed/project_fit_by_project.json,
