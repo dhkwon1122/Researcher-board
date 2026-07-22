@@ -64,6 +64,16 @@
                         job_end_date_1, ... (사람마다 최대 직무 구간 수만큼 반복)
                         ※ '임직원_직무이력.xlsx' 가 있으면 자동 추출 (별도 raw 불필요)
                            처리기: pipeline/process_job_profile.py
+  (업무목표는 별도 _raw 폴백 없음, 아래 전용 파일 항목 참고)
+
+[업무목표] ★ 전용 원천 파일 3개에서 자동 추출 (별도 raw 불필요)
+  업무목표24.xlsx / 업무목표25.xlsx / 업무목표26.xlsx (사번, 목표명, 상세설명)
+    → data/processed/work_objective.csv (researcher_id, work_objective24~26)
+      한 연구원이 한 해에 목표를 여러 개 작성했으면 "- 목표명 - 상세설명" 줄로
+      이어붙여 그 해 컬럼 하나에 담는다. process_researcher_expertise.py의
+      8번째 입력 소스로 쓰인다(LLM 호출 없이 순수 엑셀 전처리만 수행).
+    ※ 처리기: pipeline/process_work_objective.py
+       (사번/목표명/상세설명 컬럼명 등 설정은 해당 파일 상단에서 변경)
 
 [직무정보 참조 데이터] ★ 전용 원천 파일에서 자동 추출 (별도 raw 불필요)
   직무정보_표준.xlsx (직무, 정의)
@@ -109,10 +119,10 @@
 
     3) python pipeline/process_researcher_expertise.py   (연구원 전문성 분석)
        → data/processed/연구원 보유 전문성 분석.json / .html
-         (학력/과제이력/직무이력/핵심기술/보유기술/논문/특허를 종합해 사내
-          LLM이 강점 분야·핵심 기술 역량·도메인 지식을 구조화된 JSON으로 분석.
-          논문 저널 권위도는 data/processed/journal_authority.json 에 캐시.
-          이미 저장된 JSON을 LLM 재호출 없이 HTML로만 다시 만들려면
+         (학력/과제이력/직무이력/핵심기술/보유기술/논문/특허/업무목표(24~26년)를
+          종합해 사내 LLM이 강점 분야·핵심 기술 역량·도메인 지식을 구조화된
+          JSON으로 분석. 논문 저널 권위도는 data/processed/journal_authority.json
+          에 캐시. 이미 저장된 JSON을 LLM 재호출 없이 HTML로만 다시 만들려면
           --html-only 옵션 사용)
 
     4) python pipeline/process_project_researcher_fit.py   (연구원 매칭)
@@ -357,6 +367,12 @@ def run():
             print(f'  [OK]   job_profile.csv (job_profile_raw 폴백, {len(df)}행)')
         else:
             missing.append('job_profile (임직원_직무이력.xlsx 또는 job_profile_raw)')
+
+    # ── 9-4. 업무목표: 업무목표24/25/26.xlsx (LLM 호출 없음, 폴백 없음) ──
+    from process_work_objective import process as process_work_objective
+    wobj_ok = process_work_objective()
+    if not wobj_ok:
+        missing.append('work_objective (업무목표24/25/26.xlsx)')
 
     # ── 10. 나머지 테이블 (researchers, publications, technology_transfer, transfers, certifications, succession) ──
     for table in TABLES:

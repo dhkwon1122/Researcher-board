@@ -18,6 +18,7 @@ Source:
   data/processed/tech_ownership_lv_info.json         (Lv 1~5 개요)
   data/processed/publications.csv                    (저널 권위도는 LLM으로 별도 조회/캐시)
   data/processed/patents.csv
+  data/processed/work_objective.csv                  (24~26년 업무목표, process_work_objective.py가 생성)
 
 저널 권위도 캐시(journal_authority[.<profile>].json)는 평가 값이 실제로 채워진
 저널은 건너뛰고, 값이 비어 있는(신규거나 이전 조회 실패로 남은) 저널만 매번
@@ -79,7 +80,10 @@ HR 담당자와 R&D 부서장이 이 연구원의 전문성을 객관적으로 �
 2. 판단 근거가 있지만 확신이 부족하면 해당 값에 "확인 불가"라고 쓰세요.
 3. 판단 근거가 되는 데이터가 전혀 없는 항목은 그 키 자체를 결과 JSON에서
    생략하세요(빈 문자열이나 지어낸 내용을 넣지 마세요).
-4. 반드시 아래 JSON 형식으로만 출력하고, 그 외 텍스트는 출력하지 마세요.
+4. [업무목표] 항목은 연구원마다 작성 성실도·분량 차이가 커서, 내용이 소략하다는
+   이유만으로 전문성을 낮게 판단하지 마세요. 다른 항목에 이미 충분한 근거가
+   있다면 업무목표는 보조 참고 자료로만 활용하세요.
+5. 반드시 아래 JSON 형식으로만 출력하고, 그 외 텍스트는 출력하지 마세요.
 
 # Output Format (JSON)
 {
@@ -290,6 +294,17 @@ def _patents_text(pat_rows: pd.DataFrame) -> str:
     return '\n'.join(lines) if lines else '(데이터 없음)'
 
 
+def _work_objective_text(row) -> str:
+    if row is None:
+        return '(데이터 없음)'
+    lines = []
+    for year, col in (('2024', 'work_objective24'), ('2025', 'work_objective25'), ('2026', 'work_objective26')):
+        val = _clean(row.get(col, ''))
+        if val:
+            lines.append(f'[{year}년]\n{val}')
+    return '\n'.join(lines) if lines else '(데이터 없음)'
+
+
 def _unique_journals(pub_df: pd.DataFrame) -> list:
     if pub_df.empty or 'journal' not in pub_df.columns:
         return []
@@ -346,7 +361,7 @@ def _update_journal_authority(journals: list, cache: dict, profile: str = 'defau
     return cache
 
 
-def _build_prompt(edu_text, task_text, job_text, core_text, tech_text, pub_text, pat_text) -> str:
+def _build_prompt(edu_text, task_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text) -> str:
     return f"""아래는 한 연구원의 이력 데이터입니다. 개인 식별 정보(이름/사번 등)는 제외되어 있습니다.
 
 [학력]
@@ -369,6 +384,9 @@ def _build_prompt(edu_text, task_text, job_text, core_text, tech_text, pub_text,
 
 [특허]
 {pat_text}
+
+[업무목표 (24~26년, 참고용 — 작성 분량은 개인차가 크므로 보조 자료로만 활용)]
+{obj_text}
 """
 
 
@@ -518,6 +536,7 @@ def process(profile: str = 'default', refresh_journals: bool = False) -> bool:
     tech_ownership = _read_csv('tech_ownership')
     publications = _read_csv('publications')
     patents = _read_csv('patents')
+    work_objective = _read_csv('work_objective')
 
     grade_info = _read_json('core_technology_grade_info')
     lv_info = _read_json('tech_ownership_lv_info')
@@ -564,12 +583,19 @@ def process(profile: str = 'default', refresh_journals: bool = False) -> bool:
         pat_rows = patents[patents['researcher_id'] == rid] if not patents.empty else pd.DataFrame()
         pat_text = _patents_text(pat_rows)
 
+        obj_row = None
+        if not work_objective.empty:
+            rows = work_objective[work_objective['researcher_id'] == rid]
+            obj_row = rows.iloc[0] if not rows.empty else None
+        obj_text = _work_objective_text(obj_row)
+
         # 판단 근거가 될 데이터가 전혀 없으면 LLM 호출 자체를 건너뛴다.
-        if all(t == '(데이터 없음)' for t in (edu_text, task_text, job_text, core_text, tech_text, pub_text, pat_text)):
+        if all(t == '(데이터 없음)' for t in
+               (edu_text, task_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text)):
             print(f'    [{rid}] 데이터 없음 — 건너뜀')
             continue
 
-        prompt = _build_prompt(edu_text, task_text, job_text, core_text, tech_text, pub_text, pat_text)
+        prompt = _build_prompt(edu_text, task_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text)
         analysis = _analyze_researcher(prompt, profile=profile)
         if analysis is None:
             print(f'    [{rid}] 분석 실패')
