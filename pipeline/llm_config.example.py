@@ -9,9 +9,16 @@
 
   3. llm_config.py 는 .gitignore 에 등록되어 있으므로
      형상관리(git)에 포함되지 않습니다.
+
+※ 우선순위: LLM2_MODEL('thinkingcap')이 1순위(default) LLM, LLM_MODEL
+  ('gpt-4o')은 2순위 LLM이다. 이 파일의 변수 이름(LLM_*/LLM2_*) 자체는
+  바뀌지 않았고, pipeline/llm_client.py의 라우팅에서 profile='default'
+  호출이 LLM2_*(thinkingcap)를, profile='thinkingcap' 호출이 LLM_*(gpt-4o)를
+  사용하도록 반전되어 있다. 아무 옵션 없이 파이프라인을 실행하면 LLM2_*
+  (thinkingcap)가 호출된다.
 """
 
-# ── API 기본 정보 ─────────────────────────────────────────────────────────────
+# ── API 기본 정보 (2순위 LLM, gpt-4o) ─────────────────────────────────────────
 LLM_API_URL = 'http://apigw.samsungds.net:8000/gpt-oss/1/chat/completions'
 LLM_MODEL   = 'gpt-4o'       # 사내 모델명으로 교체
 LLM_TIMEOUT = 300              # 초
@@ -27,9 +34,9 @@ CONTENT_TYPE     = 'application/json'
 ACCEPT           = 'application/json'
 # Prompt-Msg-Id / Completion-Msg-Id 는 호출마다 uuid 로 자동 생성됩니다.
 
-# ── 2번째 사내 LLM (비교용, 인증/헤더 불필요) ───────────────────────────────────
-# call_llm(..., profile='thinkingcap')으로 호출 시 사용. Content-Type 외 별도
-# 인증/헤더가 필요 없는 단순 OpenAI 호환 엔드포인트.
+# ── 1순위(default) LLM: thinkingcap (인증/헤더 불필요) ───────────────────────────
+# 아무 옵션 없이 call_llm(prompt, system_prompt)만 호출해도 이 설정이 사용된다.
+# Content-Type 외 별도 인증/헤더가 필요 없는 단순 OpenAI 호환 엔드포인트.
 LLM2_API_URL = 'http://75.12.15.121:8000/v1/chat/completions'
 LLM2_MODEL   = 'thinkingcap'
 LLM2_TIMEOUT = 300              # 초

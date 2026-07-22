@@ -2,21 +2,33 @@
 사내 LLM 호출 공용 유틸리티
 
 pipeline/llm_config.py 설정을 사용해 사내 LLM API를 호출한다.
-process_comments.py의 호출 방식과 동일한 헤더/인증 규약을 따른다.
+
+※ 1순위(default)/2순위 우선순위 변경 안내
+  profile 문자열('default'/'thinkingcap') 자체와 각 스크립트의 --profile
+  플래그·기본값·결과 파일명 접미사 규칙(rd_specialist_markdown.profile_suffix)은
+  하위 호환을 위해 그대로 유지한다. 대신 이 파일 안에서 각 profile 문자열이
+  가리키는 실제 물리 엔드포인트/헤더 방식만 서로 바꿔, 아무 옵션 없이 실행하는
+  기본 호출(profile='default')이 이제 1순위인 thinkingcap(LLM2_* 설정, 단순
+  Content-Type 헤더)을 호출하고, profile='thinkingcap'을 명시했을 때 2순위인
+  기존 gpt-4o(LLM_* 설정, 인증 헤더 포함)를 호출하도록 라우팅한다.
+  → --profile thinkingcap 이라는 이름과 실제로 호출되는 물리 모델이 서로
+    반대라는 점에 주의할 것(이름은 유지, 라우팅만 반전).
 
 사내 LLM은 초당 5회 호출 제한이 있어, call_llm()은 호출 간 최소 간격을
 두어 초당 최대 MAX_CALLS_PER_SEC(4)회를 넘지 않도록 자체적으로 조절한다.
-profile='thinkingcap'은 응답이 느리거나 서버 부하에 민감할 수 있어
-LLM2_CALL_INTERVAL(초, llm_config.py)만큼 추가 간격을 둘 수 있다.
+profile='default'(=1순위 thinkingcap 물리 엔드포인트)는 응답이 느리거나
+서버 부하에 민감할 수 있어 LLM2_CALL_INTERVAL(초, llm_config.py)만큼 추가
+간격을 둔다.
 
 ReadTimeout/연결 오류는 일시적인 경우가 많아 LLM_MAX_RETRIES회까지
 지수 백오프(LLM_RETRY_BACKOFF초부터 2배씩 증가)로 자동 재시도한다.
 
-두 모델 비교(profile 인자):
-  call_llm(prompt, system_prompt)                     → 기존 사내 LLM(profile='default')
-  call_llm(prompt, system_prompt, profile='thinkingcap') → 2번째 사내 LLM
+두 모델 비교(profile 인자, 값 자체는 하위 호환 유지 / 물리 라우팅은 반전됨):
+  call_llm(prompt, system_prompt)                     → 1순위(default) thinkingcap
     (llm_config.py의 LLM2_API_URL/LLM2_MODEL/LLM2_TIMEOUT 사용, 인증/특수
      헤더 없이 Content-Type만으로 호출)
+  call_llm(prompt, system_prompt, profile='thinkingcap') → 2순위 기존 gpt-4o
+    (llm_config.py의 LLM_API_URL/LLM_MODEL/LLM_TIMEOUT + 인증 헤더 사용)
 """
 
 import re
@@ -37,10 +49,10 @@ _last_call_time = 0.0
 
 def _throttle(profile: str = 'default'):
     """직전 호출과의 간격이 최소 간격 미만이면 그만큼 대기해 호출 속도를 제한한다.
-    profile='thinkingcap'은 llm_config.LLM2_CALL_INTERVAL(기본 1.0초)만큼
-    추가 간격을 둔다(응답이 느리거나 서버 부하에 민감한 모델을 배려)."""
+    profile='default'(1순위 thinkingcap 물리 엔드포인트)는 llm_config.LLM2_CALL_INTERVAL
+    (기본 1.0초)만큼 추가 간격을 둔다(응답이 느리거나 서버 부하에 민감한 모델을 배려)."""
     global _last_call_time
-    extra_interval = getattr(_cfg, 'LLM2_CALL_INTERVAL', 1.0) if profile == 'thinkingcap' and _cfg else 0.0
+    extra_interval = getattr(_cfg, 'LLM2_CALL_INTERVAL', 1.0) if profile == 'default' and _cfg else 0.0
     min_interval = max(_MIN_INTERVAL, extra_interval)
     with _last_call_lock:
         now = time.monotonic()
@@ -58,8 +70,18 @@ def extract_json(text: str) -> str:
 
 
 def _request_config(profile: str):
-    """profile에 따른 (url, model, headers, timeout)을 반환. 미지원 profile이면 None."""
+    """profile에 따른 (url, model, headers, timeout)을 반환. 미지원 profile이면 None.
+
+    ※ profile='default'(1순위)는 LLM2_*(thinkingcap) 물리 엔드포인트를,
+      profile='thinkingcap'(2순위)은 LLM_*(기존 gpt-4o) 물리 엔드포인트를
+      가리키도록 라우팅이 반전되어 있다(문자열 자체의 하위 호환 유지 목적)."""
     if profile == 'default':
+        if not hasattr(_cfg, 'LLM2_API_URL'):
+            return None
+        headers = {'Content-Type': 'application/json'}
+        timeout = getattr(_cfg, 'LLM2_TIMEOUT', 300)
+        return _cfg.LLM2_API_URL, _cfg.LLM2_MODEL, headers, timeout
+    if profile == 'thinkingcap':
         headers = {
             'Content-Type':      _cfg.CONTENT_TYPE,
             'Accept':            _cfg.ACCEPT,
@@ -71,19 +93,14 @@ def _request_config(profile: str):
             'Completion-Msg-Id': str(uuid.uuid4()),
         }
         return _cfg.LLM_API_URL, _cfg.LLM_MODEL, headers, _cfg.LLM_TIMEOUT
-    if profile == 'thinkingcap':
-        if not hasattr(_cfg, 'LLM2_API_URL'):
-            return None
-        headers = {'Content-Type': 'application/json'}
-        timeout = getattr(_cfg, 'LLM2_TIMEOUT', 300)
-        return _cfg.LLM2_API_URL, _cfg.LLM2_MODEL, headers, timeout
     return None
 
 
 def call_llm(prompt: str, system_prompt: str, *, temperature: float = 0.2, max_tokens: int = 1500,
              profile: str = 'default') -> str:
     """사내 LLM API 호출 → 응답 텍스트 반환. 미설정/실패 시 빈 문자열.
-    profile='default'(기존 사내 LLM) 또는 'thinkingcap'(2번째 사내 LLM, 비교용)."""
+    profile='default'(1순위, thinkingcap 물리 엔드포인트) 또는
+    'thinkingcap'(2순위, 기존 gpt-4o 물리 엔드포인트, 비교용)."""
     if _cfg is None:
         print('  [LLM 오류] llm_config.py 가 없어 API 호출을 건너뜁니다.')
         return ''
@@ -96,9 +113,10 @@ def call_llm(prompt: str, system_prompt: str, *, temperature: float = 0.2, max_t
         return ''
     url, model, headers, timeout = cfg
 
-    if profile == 'thinkingcap':
-        # 추론형 모델은 최종 답변 전에 사고 과정에도 토큰을 쓰므로 요청 시
-        # max_tokens를 배수 적용해 여유를 준다(기본 3배, LLM2_MAX_TOKENS_MULTIPLIER로 조정 가능).
+    if profile == 'default':
+        # 1순위(thinkingcap)는 추론형 모델로 최종 답변 전에 사고 과정에도 토큰을
+        # 쓰므로 요청 시 max_tokens를 배수 적용해 여유를 준다(기본 3배,
+        # LLM2_MAX_TOKENS_MULTIPLIER로 조정 가능).
         max_tokens = max_tokens * getattr(_cfg, 'LLM2_MAX_TOKENS_MULTIPLIER', 3)
 
     payload = {
