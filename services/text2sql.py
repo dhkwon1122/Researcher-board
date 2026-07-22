@@ -162,6 +162,16 @@ def build_schema_prompt(engine, *, use_cache: bool = True) -> str:
     return prompt
 
 
+def _strip_think(raw: str) -> str:
+    """reasoning 모델의 <think>...</think> 사고 블록 제거(닫힘만 있으면 뒤만 사용)."""
+    txt = raw or ''
+    txt = re.sub(r'<think>.*?</think>', '', txt, flags=re.IGNORECASE | re.DOTALL)
+    low = txt.lower()
+    if '</think>' in low:
+        txt = txt[low.rfind('</think>') + len('</think>'):]
+    return txt
+
+
 def _extract_sql(raw: str) -> str:
     """LLM 응답에서 실제 SQL만 추출.
 
@@ -170,13 +180,7 @@ def _extract_sql(raw: str) -> str:
       2) ```sql ... ``` 코드펜스가 있으면 '마지막' 블록 사용(추론 후 최종 답)
       3) 남은 텍스트에서 SELECT/WITH 이후만 취함
     """
-    txt = raw or ''
-
-    # 1) reasoning 모델의 사고 블록 제거
-    txt = re.sub(r'<think>.*?</think>', '', txt, flags=re.IGNORECASE | re.DOTALL)
-    low = txt.lower()
-    if '</think>' in low:                      # 닫힘만 있고 열림이 잘린 경우
-        txt = txt[low.rfind('</think>') + len('</think>'):]
+    txt = _strip_think(raw)
 
     # 2) 코드펜스가 있으면 마지막 SQL 블록을 우선 사용
     fences = re.findall(r'```(?:sql)?\s*(.*?)```', txt, flags=re.IGNORECASE | re.DOTALL)
@@ -361,3 +365,48 @@ def _execute(engine, safe_sql: str):
         conn.execute(text(f"SET LOCAL statement_timeout = '{STATEMENT_TIMEOUT_MS}ms'"))
         result = conn.execute(text(safe_sql))
         return list(result.keys()), [list(r) for r in result.fetchall()]
+
+
+ANSWER_MAX_ROWS = 60   # 답변 요약 시 LLM 에 전달할 최대 행 수
+
+
+def summarize_result(question: str, columns: list, rows: list) -> str:
+    """SQL 조회 결과를 사용자용 한국어 자연어 답변으로 요약."""
+    shown = rows[:ANSWER_MAX_ROWS]
+    header = ' | '.join(str(c) for c in columns)
+    body = '\n'.join(
+        ' | '.join('' if v is None else str(v) for v in r) for r in shown
+    )
+    note = (f'\n(총 {len(rows)}행 중 {len(shown)}행만 표시)'
+            if len(rows) > ANSWER_MAX_ROWS else '')
+    prompt = (
+        f'질문: {question}\n\n'
+        f'아래는 이 질문에 대한 DB 조회 결과입니다.\n'
+        f'{header}\n{body}{note}\n\n'
+        '이 결과를 바탕으로 사용자에게 한국어로 간결하고 자연스럽게 답하세요. '
+        '표를 그대로 나열하지 말고 핵심(건수·주요 항목·순위 등)을 요약하세요. '
+        '데이터에 없는 내용은 추측하지 마세요.'
+    )
+    messages = [
+        {'role': 'system', 'content':
+         '너는 HR 데이터 분석 어시스턴트다. 조회 결과를 사람이 읽기 쉬운 한국어 답변으로 요약한다.'},
+        {'role': 'user', 'content': prompt},
+    ]
+    return _strip_think(chat(messages, temperature=0.2, max_tokens=_GEN_MAX_TOKENS)).strip()
+
+
+def answer(question: str) -> dict:
+    """
+    자연어 질문 → SQL 실행 결과 + LLM 자연어 답변.
+      {'sql', 'columns', 'rows', 'error', 'answer'}
+    answer 는 사용자에게 보여줄 자연어 요약(실패/미가용 시 None → 표만 노출).
+    """
+    res = run_query(question)
+    res['answer'] = None
+    if res['error'] or not res['rows']:
+        return res
+    try:
+        res['answer'] = summarize_result(question, res['columns'], res['rows'])
+    except LLMError:
+        res['answer'] = None   # 요약 실패해도 SQL/표는 그대로 보여줌
+    return res
