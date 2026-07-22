@@ -13,7 +13,7 @@ from dash import Input, Output, State, callback, dash_table, dcc, html, no_updat
 from components.detail_tabs import _is_registered
 from services.data_store import read_processed
 from services.db import db_enabled
-from services.text2sql import run_query
+from services.text2sql import answer as t2s_answer
 
 dash.register_page(
     __name__,
@@ -448,61 +448,87 @@ def ai_search(n_clicks, n_submit, question):
             color='warning', className='mb-0',
         )
 
-    res = run_query(question)
+    res = t2s_answer(question)
 
+    # ── 사용자에게 보여줄 답변 영역 (에러/자연어 답변/결과없음) ──────────────
     if res['error']:
-        children = [dbc.Alert(
+        answer_block = dbc.Alert(
             [html.I(className='bi bi-exclamation-triangle me-2'), res['error']],
-            color='danger', className='mb-2')]
-        if res.get('sql'):
-            children.append(_sql_block(res['sql']))
-        return children
+            color='danger', className='mb-2')
+    elif res.get('answer'):
+        answer_block = dbc.Card(
+            dbc.CardBody([
+                html.Div([html.I(className='bi bi-stars me-2 text-primary'),
+                          html.Strong('답변')], className='mb-2'),
+                dcc.Markdown(res['answer'], className='mb-0',
+                             style={'fontSize': '0.95rem'}),
+            ]),
+            className='mb-2 border-primary shadow-sm',
+        )
+    elif not res['rows']:
+        answer_block = dbc.Alert('조건에 맞는 결과가 없습니다.',
+                                 color='secondary', className='mb-2')
+    else:
+        answer_block = dbc.Alert('결과를 아래 “상세 보기”에서 확인하세요.',
+                                 color='secondary', className='mb-2')
 
-    cols = res['columns']
-    rows = res['rows']
+    # ── 상세(기본 숨김): 실행된 SQL + 결과표 ─────────────────────────────
+    detail = []
+    if res.get('sql'):
+        detail.append(_sql_block(res['sql']))
 
-    # 컬럼 헤더 한국어 라벨 (키는 유지)
-    _labels = {'researcher_id': '사번', 'name': '이름'}
-    clickable = 'researcher_id' in cols   # 프로필 이동 가능 여부
+    cols, rows = res['columns'], res['rows']
+    clickable = 'researcher_id' in cols
+    if rows:
+        _labels = {'researcher_id': '사번', 'name': '이름'}
+        detail.append(html.Div(f'{len(rows)}건', className='text-muted small mb-2'))
+        detail.append(dash_table.DataTable(
+            id='t2s-table',
+            columns=[{'name': _labels.get(c, c), 'id': c} for c in cols],
+            data=[dict(zip(cols, r)) for r in rows],
+            page_action='native', page_size=20, sort_action='native',
+            style_as_list_view=True, style_table={'overflowX': 'auto'},
+            style_header={'backgroundColor': '#1e3a5f', 'color': 'white',
+                          'fontWeight': '600', 'fontSize': '0.8rem', 'textAlign': 'center'},
+            style_cell={'fontSize': '0.82rem', 'padding': '5px 10px',
+                        'textAlign': 'left', 'maxWidth': '260px',
+                        'overflow': 'hidden', 'textOverflow': 'ellipsis',
+                        'cursor': 'pointer' if clickable else 'default'},
+            style_cell_conditional=[
+                {'if': {'column_id': 'name'}, 'fontWeight': '600', 'color': '#1e3a5f'}],
+            style_data_conditional=[
+                {'if': {'row_index': 'odd'}, 'backgroundColor': '#f9fbfd'},
+                {'if': {'state': 'active'}, 'backgroundColor': '#dbeafe',
+                 'border': '1px solid #3b82f6'}],
+        ))
+        if clickable:
+            detail.append(html.P(
+                [html.I(className='bi bi-hand-index me-1'),
+                 '행을 클릭하면 해당 연구원 프로필로 이동합니다.'],
+                className='text-muted small mt-2 mb-0'))
 
-    table = dash_table.DataTable(
-        id='t2s-table',
-        columns=[{'name': _labels.get(c, c), 'id': c} for c in cols],
-        data=[dict(zip(cols, r)) for r in rows],
-        page_action='native',
-        page_size=20,
-        sort_action='native',
-        style_as_list_view=True,
-        style_table={'overflowX': 'auto'},
-        style_header={'backgroundColor': '#1e3a5f', 'color': 'white',
-                      'fontWeight': '600', 'fontSize': '0.8rem', 'textAlign': 'center'},
-        style_cell={'fontSize': '0.82rem', 'padding': '5px 10px',
-                    'textAlign': 'left', 'maxWidth': '260px',
-                    'overflow': 'hidden', 'textOverflow': 'ellipsis',
-                    'cursor': 'pointer' if clickable else 'default'},
-        style_cell_conditional=[
-            {'if': {'column_id': 'name'}, 'fontWeight': '600', 'color': '#1e3a5f'},
-        ],
-        style_data_conditional=[
-            {'if': {'row_index': 'odd'}, 'backgroundColor': '#f9fbfd'},
-            {'if': {'state': 'active'}, 'backgroundColor': '#dbeafe',
-             'border': '1px solid #3b82f6'},
-        ],
-    )
-    count = html.Div(f'{len(rows)}건', className='text-muted small mb-2')
-    if not rows:
-        count = dbc.Alert('조건에 맞는 결과가 없습니다.', color='secondary', className='mb-2')
-
-    children = [_sql_block(res['sql']), count, table]
-    if clickable and rows:
-        children.append(html.P(
-            [html.I(className='bi bi-hand-index me-1'),
-             '행을 클릭하면 해당 연구원 프로필로 이동합니다.'],
-            className='text-muted small mt-2 mb-0'))
+    children = [answer_block]
+    if detail:
+        children.append(dbc.Button(
+            [html.I(className='bi bi-chevron-expand me-1'), '상세 보기 (실행된 SQL · 결과표)'],
+            id='t2s-detail-toggle', color='link', size='sm',
+            className='px-0 text-decoration-none'))
+        children.append(dbc.Collapse(detail, id='t2s-detail', is_open=False))
     return children
 
 
-# ── 콜백 5: AI 검색 결과 행 클릭 → 프로필 이동 ──────────────────────────────
+# ── 콜백 5: 상세 보기(SQL·결과표) 토글 ──────────────────────────────────────
+@callback(
+    Output('t2s-detail', 'is_open'),
+    Input('t2s-detail-toggle', 'n_clicks'),
+    State('t2s-detail', 'is_open'),
+    prevent_initial_call=True,
+)
+def toggle_t2s_detail(n_clicks, is_open):
+    return not is_open
+
+
+# ── 콜백 6: AI 검색 결과 행 클릭 → 프로필 이동 ──────────────────────────────
 @callback(
     Output('list-url', 'href', allow_duplicate=True),
     Input('t2s-table', 'active_cell'),
