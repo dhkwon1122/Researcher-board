@@ -122,6 +122,14 @@
           기준/인별 기준 두 방향 적합도 판단. 매칭 로직은 pipeline/researcher_fit.py
           공용 모듈을 사용)
 
+    5) python pipeline/process_researcher_similarity.py   (선택: 연구원 ↔ 연구원 유사도)
+       → data/processed/researcher_similarity.json, researcher_similarity.html
+         (3)의 연구원 전문성 프로필을 BGE-M3로 임베딩해 코사인 유사도를 계산 —
+          과제(프로젝트) 라벨과 무관하게 실제 전문성이 겹치는 연구원을 직접
+          찾아낸다(예: 서로 다른 과제 소속이어도 둘 다 AI를 하면 유사도가 높게
+          나옴). 사내 chat LLM은 호출하지 않고 임베딩만 사용한다. 3)의 출력만
+          있으면 되므로 4)와 무관하게 바로 실행 가능)
+
     ※ 2)~4)는 project_summary.py의 컨플루언스 원문 캐시
        (data/processed/project_page_cache.json)를 공유하므로, 같은 과제를
        두 번 조회하지 않는다.
