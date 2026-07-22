@@ -7,15 +7,31 @@
 만든 연구원별 전문성 프로필(강점 분야/강점 키워드/Hard Skills/Domain
 Knowledge)을 BGE-M3로 임베딩하고 코사인 유사도를 계산한다.
 
-사내 chat LLM은 호출하지 않는다(순수 임베딩 유사도) — 판단·설명이 아니라
-"의미적으로 얼마나 가까운가"만 필요하므로 비용이 거의 들지 않는다. 임베딩은
-표현이 달라도("AI" vs "인공지능") 의미가 비슷하면 가깝게 나오므로, 과제명이
-전혀 달라도 실제로 비슷한 일을 하는 연구원을 찾아낼 수 있다.
+1단계(임베딩)는 사내 chat LLM을 호출하지 않는다(순수 임베딩 유사도) — 후보를
+추리는 데는 "의미적으로 얼마나 가까운가"만 필요하므로 비용이 거의 들지 않는다.
+임베딩은 표현이 달라도("AI" vs "인공지능") 의미가 비슷하면 가깝게 나오므로,
+과제명이 전혀 달라도 실제로 비슷한 일을 하는 연구원을 찾아낼 수 있다.
 
 매칭 로직(코사인 유사도, top-K 추출)은 pipeline/researcher_fit.py 공용 모듈을
 그대로 재사용한다(process_project_researcher_fit.py가 과제↔연구원 매칭에
 쓰는 것과 동일한 함수들이며, 임베딩 자체는 두 스크립트가 다시 계산한다 —
 비교 대상 텍스트 집합이 다르기 때문).
+
+2단계(LLM 판정, top-K 후보에 대해서만): 임베딩 점수만으로는 "왜 유사한지",
+"단어만 겹치고 실제 업무는 다른 건 아닌지"를 알 수 없다. 그래서 top-K로
+추려진 후보 쌍에 대해서만 "R&D Peer Similarity Agent" 페르소나가 두 프로필을
+나란히 보고 (동일 분야/인접 분야/낮음) 정성적 등급, 구체적 근거, 표면적
+어휘 일치 여부를 판정한다.
+
+  ※ 재현성: LLM 호출은 temperature=0으로 고정하고, 한 번 판정한 쌍은
+    researcher_pair_judgment[.<profile>].json에 영구 캐시한다(신규거나
+    이전에 실패해 값이 비어 있는 쌍만 다음 실행 때 재시도 — journal_authority
+    캐시와 동일한 방식). 캐시가 있는 한 재실행해도 같은 값이 그대로 나온다.
+  ※ 대칭성: A~B와 B~A는 같은 질문이므로, researcher_id를 정렬한 고정 키
+    ("A|B", A<B)로 쌍을 관리해 실제로는 딱 한 번만 판정하고, 그 결과를
+    A쪽 목록과 B쪽 목록 양쪽에 그대로 재사용한다 — 방향에 따라 등급/근거가
+    서로 어긋나는 일이 생기지 않는다.
+  ※ 캐시 무시하고 전체 쌍을 다시 판정하려면 --refresh-judgments 사용.
 
 Source:
   data/processed/연구원 보유 전문성 분석[.<profile>].json (process_researcher_expertise.py)
@@ -24,14 +40,16 @@ Source:
 Output:
   data/processed/researcher_similarity[.<profile>].json
   data/processed/researcher_similarity[.<profile>].html
+  data/processed/researcher_pair_judgment[.<profile>].json (쌍 판정 캐시 — 누적 재사용)
 
-profile 인자는 "어떤 LLM이 만든 연구원 전문성 분석 결과를 비교할지"를 고른다
-(임베딩 모델 자체는 항상 BGE-M3로 고정이며 profile과 무관하다):
-  python pipeline/process_researcher_similarity.py                    # 기존 LLM(profile='default') 분석 기준
-  python pipeline/process_researcher_similarity.py --profile thinkingcap  # 2번째 LLM 분석 기준
+profile 인자는 "어떤 LLM이 만든 연구원 전문성 분석 결과를 비교할지"와
+"판정 LLM으로 어떤 사내 LLM을 쓸지"를 함께 고른다(임베딩 모델 자체는 항상
+BGE-M3로 고정이며 profile과 무관하다):
+  python pipeline/process_researcher_similarity.py                    # 기존 LLM(profile='default') 분석/판정 기준
+  python pipeline/process_researcher_similarity.py --profile thinkingcap  # 2번째 LLM 분석/판정 기준
 
 사용법:
-  python pipeline/process_researcher_similarity.py [--profile thinkingcap] [--top-k 5]
+  python pipeline/process_researcher_similarity.py [--profile thinkingcap] [--top-k 5] [--refresh-judgments]
 """
 
 import html
@@ -52,6 +70,34 @@ import researcher_fit as fit  # noqa: E402
 from services.llm import LLMError  # noqa: E402
 
 DEFAULT_TOP_K = fit.TOP_K
+
+_PAIR_JUDGE_SYSTEM_PROMPT = """# Role
+당신은 두 연구원의 전문성 프로필을 비교해, 실제로 얼마나 유사한 분야/업무를
+다루는지 판단하는 "R&D Peer Similarity Agent"입니다.
+
+# Goal
+두 연구원이 서로 다른 과제(프로젝트)에 소속돼 있더라도(예: 하나는 CPO 과제,
+하나는 CPU 과제) 과제명과 무관하게, 실제 보유 전문성이 얼마나 겹치는지
+객관적으로 판단합니다.
+
+# Guidelines & Constraints
+1. 철저한 팩트 기반: 두 프로필에 명시된 내용만 근거로 삼고, 언급되지 않은
+   내용을 임의로 추정해 유사하다고 판단하지 마세요.
+2. 표면적 어휘 일치와 실질적 업무 일치를 구분하세요. 예를 들어 둘 다
+   "Python"을 언급해도 실제 응용 분야(예: 신호처리 vs 자연어처리)가 다르면
+   낮은 등급으로 판단하고, evidence에 그 이유를 명시하세요. 단어만 겹치고
+   실질적 업무 영역이 다르면 surface_only를 true로 표시하세요.
+3. 반드시 아래 JSON 형식으로만 출력하고, 그 외 텍스트는 출력하지 마세요.
+
+# Output Format (JSON)
+{
+  "level": "동일 분야" 또는 "인접 분야" 또는 "낮음",
+  "evidence": "구체적으로 겹치거나 겹치지 않는 스킬/키워드 근거(1~2문장)",
+  "surface_only": true 또는 false
+}
+"""
+
+_LEVEL_VALUES = ('동일 분야', '인접 분야', '낮음')
 
 
 def _read_expertise(profile: str) -> list:
@@ -90,6 +136,136 @@ def compute_similarity(profiles: list, top_k: int = DEFAULT_TOP_K) -> list:
     return results
 
 
+def _pair_key(id_a: str, id_b: str) -> str:
+    """A~B와 B~A를 같은 키로 취급하는 대칭 캐시 키(researcher_id 정렬)."""
+    a, b = sorted([id_a, id_b])
+    return f'{a}|{b}'
+
+
+def _pair_cache_path(profile: str) -> str:
+    suffix = mmd.profile_suffix(profile)
+    return os.path.join(OUT_DIR, f'researcher_pair_judgment{suffix}.json')
+
+
+def _load_pair_cache(profile: str = 'default') -> dict:
+    path = _pair_cache_path(profile)
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding='utf-8') as f:
+        return json.load(f)
+
+
+def _save_pair_cache(cache: dict, profile: str = 'default'):
+    with open(_pair_cache_path(profile), 'w', encoding='utf-8') as f:
+        json.dump(cache, f, ensure_ascii=False, indent=2)
+
+
+def _collect_pairs(results: list) -> set:
+    """top-K 유사도 목록에 등장하는 모든 (researcher_id, researcher_id) 쌍을
+    방향과 무관하게 유일하게 모은다(정렬된 튜플이므로 A-B와 B-A는 하나로 합쳐짐)."""
+    pairs = set()
+    for item in results:
+        rid = item['researcher_id']
+        for s in item['similar']:
+            pairs.add(tuple(sorted([rid, s['researcher_id']])))
+    return pairs
+
+
+def _judge_pair(text_a: str, text_b: str, profile: str = 'default') -> dict | None:
+    """두 연구원 프로필 텍스트를 "R&D Peer Similarity Agent"에게 판정시킨다.
+    temperature=0으로 고정해 같은 입력엔 항상 같은(또는 최대한 안정적인) 결과가
+    나오도록 한다. 실패하거나 형식이 어긋나면 None(캐시에는 빈 값으로 남아
+    다음 실행 때 재시도됨)."""
+    prompt = (
+        f'[연구원 A 전문성 프로필]\n{text_a}\n\n'
+        f'[연구원 B 전문성 프로필]\n{text_b}\n\n'
+        f'위 두 연구원이 실제로 유사한 분야/업무 전문성을 갖고 있는지 판단해 주세요.'
+    )
+    raw = fit.call_llm(prompt, _PAIR_JUDGE_SYSTEM_PROMPT, temperature=0.0, max_tokens=400, profile=profile)
+    if not raw:
+        return None
+    try:
+        data = json.loads(fit.extract_json(raw))
+    except json.JSONDecodeError:
+        return None
+    level = data.get('level', '')
+    if level not in _LEVEL_VALUES:
+        return None
+    return {
+        'level': level,
+        'evidence': str(data.get('evidence', '')),
+        'surface_only': bool(data.get('surface_only', False)),
+    }
+
+
+def _update_pair_judgments(pairs: set, text_by_id: dict, cache: dict, profile: str = 'default',
+                            force: bool = False) -> dict:
+    """캐시에 실제 판정 값이 있는 쌍은 건너뛰고, 값이 비어 있는 쌍(신규거나
+    이전 판정이 실패한 것)만 LLM으로 재판정한다(누적 재사용, profile별 분리).
+    쌍은 _pair_key()의 정렬된 키로 관리하므로 A-B/B-A를 합쳐 한 번만 판정하고,
+    그 결과를 양쪽 모두에서 재사용한다(대칭성 보장). force=True
+    (--refresh-judgments)면 캐시와 무관하게 전달된 쌍 전체를 다시 판정한다."""
+    targets = [p for p in pairs if force or not cache.get(_pair_key(*p))]
+    if not targets:
+        return cache
+    label = '전체 재판정' if force else '신규/미확인'
+    print(f'[process_researcher_similarity] 연구원 쌍 LLM 판정 중 ({label} {len(targets)}쌍, profile={profile})...')
+    for a, b in targets:
+        key = _pair_key(a, b)
+        judged = _judge_pair(text_by_id[a], text_by_id[b], profile=profile)
+        cache[key] = judged or {}
+        print(f"    [{'OK' if judged else '실패'}] {a} - {b}")
+    _save_pair_cache(cache, profile)
+    return cache
+
+
+def attach_pair_judgments(results: list, profiles: list, profile: str = 'default', force: bool = False) -> list:
+    """compute_similarity() 결과의 각 similar 항목에 LLM 판정(level/evidence/
+    surface_only)을 덧붙인다. 캐시 미스만 새로 판정하고, 판정을 아예 구하지
+    못한 쌍은 빈 값으로 남아 HTML에서는 조용히 생략된다(임베딩 점수만 표시)."""
+    text_by_id = {p['researcher_id']: fit.researcher_profile_text(p) for p in profiles}
+    pairs = _collect_pairs(results)
+    cache = _load_pair_cache(profile)
+    cache = _update_pair_judgments(pairs, text_by_id, cache, profile, force=force)
+
+    for item in results:
+        rid = item['researcher_id']
+        for s in item['similar']:
+            judged = cache.get(_pair_key(rid, s['researcher_id'])) or {}
+            s['level'] = judged.get('level', '')
+            s['evidence'] = judged.get('evidence', '')
+            s['surface_only'] = judged.get('surface_only', False)
+    return results
+
+
+_LEVEL_BADGE = {'동일 분야': 'text-bg-success', '인접 분야': 'text-bg-warning', '낮음': 'text-bg-secondary'}
+
+
+def _similar_row_html(s: dict, name_map: dict) -> str:
+    name = f"{html.escape(s['researcher_id'])} {html.escape(name_map.get(s['researcher_id'], ''))}".strip()
+    evidence = s.get('evidence') or ''
+    reason_html = f'<div class="reason">{html.escape(evidence)}</div>' if evidence else ''
+    if evidence and s.get('surface_only'):
+        reason_html += '<div class="reason">⚠ 단어만 겹치고 실제 업무 영역은 다를 수 있음</div>'
+
+    level = s.get('level') or ''
+    level_badge = (
+        f'<span class="badge rounded-pill {_LEVEL_BADGE.get(level, "text-bg-secondary")}">{html.escape(level)}</span>'
+        if level else ''
+    )
+
+    return f'''<div class="rank-row d-flex justify-content-between align-items-start gap-2">
+  <div>
+    <div class="name">{name}</div>
+    {reason_html}
+  </div>
+  <div class="d-flex flex-column align-items-end gap-1">
+    <span class="badge rounded-pill text-bg-primary">유사도 {round(s['score'] * 100)}%</span>
+    {level_badge}
+  </div>
+</div>'''
+
+
 def _build_html(results: list, profile: str, researchers_df: pd.DataFrame, top_k: int) -> str:
     name_map = {}
     if not researchers_df.empty:
@@ -106,11 +282,7 @@ def _build_html(results: list, profile: str, researchers_df: pd.DataFrame, top_k
         )
 
         rows = ''.join(
-            f'''<div class="rank-row d-flex justify-content-between align-items-start gap-2">
-  <div class="name">{html.escape(s['researcher_id'])} {html.escape(name_map.get(s['researcher_id'], ''))}</div>
-  <span class="badge rounded-pill text-bg-primary">유사도 {round(s['score'] * 100)}%</span>
-</div>'''
-            for s in item['similar']
+            _similar_row_html(s, name_map) for s in item['similar']
         ) or '<p class="empty">비교할 다른 연구원 데이터 없음</p>'
 
         cards.append(f'''<div class="fit-card card" id="{anchor}">
@@ -132,7 +304,7 @@ def _build_html(results: list, profile: str, researchers_df: pd.DataFrame, top_k
     )
 
 
-def process(profile: str = 'default', top_k: int = DEFAULT_TOP_K) -> bool:
+def process(profile: str = 'default', top_k: int = DEFAULT_TOP_K, refresh_judgments: bool = False) -> bool:
     profiles = _read_expertise(profile)
     if not profiles:
         suffix = mmd.profile_suffix(profile)
@@ -150,6 +322,8 @@ def process(profile: str = 'default', top_k: int = DEFAULT_TOP_K) -> bool:
     except LLMError as exc:
         print(f'[process_researcher_similarity] 임베딩 실패 — 종료: {exc}')
         return False
+
+    results = attach_pair_judgments(results, profiles, profile=profile, force=refresh_judgments)
 
     suffix = mmd.profile_suffix(profile)
     os.makedirs(OUT_DIR, exist_ok=True)
@@ -180,4 +354,8 @@ def _parse_top_k_arg(argv: list, default: int) -> int:
 
 
 if __name__ == '__main__':
-    process(profile=mmd.parse_profile_arg(sys.argv), top_k=_parse_top_k_arg(sys.argv, DEFAULT_TOP_K))
+    process(
+        profile=mmd.parse_profile_arg(sys.argv),
+        top_k=_parse_top_k_arg(sys.argv, DEFAULT_TOP_K),
+        refresh_judgments='--refresh-judgments' in sys.argv,
+    )
