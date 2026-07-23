@@ -23,9 +23,6 @@ import sys
 
 import pandas as pd
 
-RAW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
-
 INCENTIVE_FILE = '핵심이력.xlsx'
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
@@ -35,7 +32,8 @@ YEAR_COLS = {'22': 2022, '23': 2023, '24': 2024, '25': 2025, '26': 2026}
 # ─────────────────────────────────────────────────────────────────────────────
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import read_xlsx, norm_id
+from paths import RAW_DIR, OUT_DIR  # noqa: E402
+from excel_reader import is_blank, read_xlsx, norm_id
 
 
 def _norm_col(c) -> str:
@@ -86,7 +84,7 @@ def process() -> bool:
         for col, year in sorted(avail.items(), key=lambda x: x[1]):
             val = row.get(col, None)
             val_str = str(val).strip() if val is not None else ''
-            if val_str in ('', 'nan', 'None', 'NaT'):
+            if is_blank(val_str):
                 selected = False
                 category = ''
             else:

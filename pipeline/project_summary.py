@@ -24,11 +24,11 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from paths import OUT_DIR  # noqa: E402
 import confluence_client  # noqa: E402
 import pdf_reader  # noqa: E402
 from llm_client import call_llm, extract_json  # noqa: E402
 
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
 PAGE_CACHE_PATH = os.path.join(OUT_DIR, 'project_page_cache.json')
 
 _MAX_PAGE_CHARS = 6000

@@ -30,9 +30,6 @@ import sys
 
 import pandas as pd
 
-RAW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
-
 JOB_PROFILE_FILE = '임직원_직무이력.xlsx'
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
@@ -44,7 +41,8 @@ COL_END   = '종료일'
 # ─────────────────────────────────────────────────────────────────────────────
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import read_xlsx, norm_id
+from paths import RAW_DIR, OUT_DIR  # noqa: E402
+from excel_reader import clean_str as _clean, read_xlsx, norm_id
 
 
 def _parse_date(val):
@@ -55,11 +53,6 @@ def _parse_date(val):
         return pd.Timestamp(s)
     except (ValueError, TypeError):
         return None
-
-
-def _clean(val) -> str:
-    s = str(val).strip() if val is not None else ''
-    return '' if s.lower() in ('nan', 'none', 'nat') else s
 
 
 def _merge_consecutive(records):

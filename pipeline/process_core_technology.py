@@ -21,9 +21,6 @@ import sys
 
 import pandas as pd
 
-RAW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
-
 CORE_TECH_FILE = '핵심기술.xlsx'
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
@@ -34,6 +31,7 @@ COL_GRADE = '등급'
 # ─────────────────────────────────────────────────────────────────────────────
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import read_xlsx, norm_id
 
 

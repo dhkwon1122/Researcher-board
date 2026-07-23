@@ -37,9 +37,6 @@ from datetime import datetime
 
 import pandas as pd
 
-RAW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
-
 LEADERSHIP_FILE = '리더십진단.xlsx'
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
@@ -63,7 +60,8 @@ DIMS = list(COMPETENCY.keys())
 OTHERS_GROUPS = {'동료', '상사', '부서원'}
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import read_xlsx, norm_id
+from paths import RAW_DIR, OUT_DIR  # noqa: E402
+from excel_reader import clean_str, is_blank, read_xlsx, norm_id
 
 
 def process() -> bool:
@@ -126,7 +124,7 @@ def process() -> bool:
     for _, row in df.iterrows():
         s = str(row.get(COL_STR, '')).strip() if COL_STR in df.columns else ''
         i = str(row.get(COL_IMP,  '')).strip() if COL_IMP  in df.columns else ''
-        if s in ('', 'nan', 'None') and i in ('', 'nan', 'None'):
+        if is_blank(s) and is_blank(i):
             continue
         cmt_rows.append({
             'researcher_id':   row['researcher_id'],
@@ -134,8 +132,8 @@ def process() -> bool:
             'commenter_type':  f'리더십_{str(row[COL_GROUP]).strip()}',
             'comment_raw':     '',
             'comment_summary': '',
-            'strengths':       '' if s in ('nan', 'None') else s,
-            'improvements':    '' if i in ('nan', 'None') else i,
+            'strengths':       clean_str(s),
+            'improvements':    clean_str(i),
         })
     if cmt_rows:
         cmt_df = pd.DataFrame(cmt_rows)

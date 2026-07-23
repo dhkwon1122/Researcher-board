@@ -20,11 +20,9 @@ import sys
 
 import pandas as pd
 
-DATA_RAW = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
-DATA_OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import read_xlsx, norm_researcher_id_col
+from paths import RAW_DIR as DATA_RAW, OUT_DIR as DATA_OUT  # noqa: E402
+from excel_reader import is_blank, read_xlsx, norm_researcher_id_col
 from llm_client import call_llm, extract_json
 
 COLS = ['researcher_id', 'year', 'commenter_type',
@@ -81,7 +79,7 @@ def summarize_researcher(rid: str, rows: pd.DataFrame) -> dict | None:
     mgr = rows[rows['commenter_type'] == '부서장']
     for _, r in mgr.iterrows():
         raw = str(r.get('comment_raw', '')).strip()
-        if raw and raw not in ('nan', 'None'):
+        if not is_blank(raw):
             yr = str(r.get('year', ''))
             parts.append(f'[{yr} 부서장] {raw}')
 
@@ -92,9 +90,9 @@ def summarize_researcher(rid: str, rows: pd.DataFrame) -> dict | None:
         s = str(r.get('strengths', '')).strip()
         i = str(r.get('improvements', '')).strip()
         yr = str(r.get('year', ''))
-        if s and s not in ('nan', 'None'):
+        if not is_blank(s):
             parts.append(f'[{yr} {c_type} 강점] {s}')
-        if i and i not in ('nan', 'None'):
+        if not is_blank(i):
             parts.append(f'[{yr} {c_type} 개선점] {i}')
 
     if not parts:

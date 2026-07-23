@@ -25,9 +25,6 @@ import sys
 
 import pandas as pd
 
-RAW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
-
 EDUCATION_FILE = '임직원_학력.xlsx'
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
@@ -52,7 +49,8 @@ HIGHER_DEGREES = {'박사', '석사', '학사'}
 DEG_ORDER = {'박사': 0, '석사': 1, '학사': 2, '전문대': 3, '고교': 4}
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import read_xlsx, norm_id
+from paths import RAW_DIR, OUT_DIR  # noqa: E402
+from excel_reader import clean_str, is_blank, read_xlsx, norm_id
 
 
 def _normalize_degree(val: str) -> str:
@@ -68,7 +66,7 @@ def _extract_year(year_val, date_val) -> str:
     """학위 취득 연도 우선, 없으면 졸업일에서 연도 추출."""
     for v in (year_val, date_val):
         s = str(v).strip()
-        if s in ('', 'nan', 'None', 'NaT', 'NaN'):
+        if is_blank(s):
             continue
         try:
             y = int(float(s))
@@ -129,8 +127,8 @@ def process() -> bool:
             rows.append({
                 'researcher_id':   rid,
                 'degree':          deg,
-                'school':          school if school not in ('nan', 'None') else '',
-                'major':           major  if major  not in ('nan', 'None') else '',
+                'school':          clean_str(school),
+                'major':           clean_str(major),
                 'graduation_year': row['_grad_year'],
             })
 

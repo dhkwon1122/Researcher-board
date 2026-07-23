@@ -25,9 +25,8 @@ import sys
 import numpy as np
 import pandas as pd
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from paths import BASE_DIR  # noqa: E402
 sys.path.insert(0, BASE_DIR)
 from llm_client import call_llm, extract_json  # noqa: E402
 from services.llm import LLMError, embed  # noqa: E402,F401 (embed/LLMError는 호출부에서도 사용)

@@ -60,10 +60,8 @@ import sys
 import numpy as np
 import pandas as pd
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT_DIR = os.path.join(BASE_DIR, 'data', 'processed')
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from paths import BASE_DIR, OUT_DIR  # noqa: E402
 sys.path.insert(0, BASE_DIR)
 import rd_specialist_markdown as mmd  # noqa: E402
 import researcher_fit as fit  # noqa: E402

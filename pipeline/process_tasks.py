@@ -17,10 +17,7 @@ import sys
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RAW_DIR  = os.path.join(BASE_DIR, 'data', 'raw')
-OUT_DIR  = os.path.join(BASE_DIR, 'data', 'processed')
+from paths import RAW_DIR, OUT_DIR  # noqa: E402
 
 SOURCE = os.path.join(RAW_DIR, '개인별과제투입기간데이터_260114.xlsb')
 OUTPUT = os.path.join(OUT_DIR, 'tasks.csv')
@@ -30,18 +27,6 @@ COL_TASK  = '과제명'
 COL_START = '시작일'
 COL_END   = '해제일'
 COL_RATE  = '투입률'
-
-
-def _parse_date(val) -> str:
-    """YYYYMMDD(숫자 or 문자열) → YYYY-MM-DD. 변환 불가 시 빈 문자열."""
-    if val is None:
-        return ''
-    s = str(val).strip().split('.')[0]  # 20230101.0 처리
-    if s in ('', 'nan', 'None', 'NaT'):
-        return ''
-    if len(s) == 8 and s.isdigit():
-        return f'{s[:4]}-{s[4:6]}-{s[6:]}'
-    return s
 
 
 def _parse_rate(val) -> str:
@@ -108,7 +93,7 @@ def _merge_consecutive_periods(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def process() -> bool:
-    from excel_reader import norm_id, read_xlsx
+    from excel_reader import norm_id, parse_yyyymmdd, read_xlsx
 
     if not os.path.exists(SOURCE):
         print(f'[process_tasks] 파일 없음: {SOURCE}')
@@ -127,8 +112,8 @@ def process() -> bool:
     result = pd.DataFrame({
         'researcher_id': df[COL_ID].apply(norm_id),
         'task_name':     df[COL_TASK].astype(str).str.strip(),
-        'start_date':    df[COL_START].apply(_parse_date),
-        'end_date':      df[COL_END].apply(_parse_date),
+        'start_date':    df[COL_START].apply(parse_yyyymmdd),
+        'end_date':      df[COL_END].apply(parse_yyyymmdd),
         'input_rate':    df[COL_RATE].apply(_parse_rate),
     })
 

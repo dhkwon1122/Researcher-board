@@ -11,9 +11,12 @@ Confluence 원문을 썼을 때와 동일하게 진행된다.
 """
 
 import os
+import sys
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PDF_DIR = os.path.join(BASE_DIR, 'data', 'raw', 'conflue_MPR')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from paths import RAW_DIR  # noqa: E402
+
+PDF_DIR = os.path.join(RAW_DIR, 'conflue_MPR')
 
 
 class PdfNotFoundError(RuntimeError):

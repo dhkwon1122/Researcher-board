@@ -24,9 +24,6 @@ import sys
 
 import pandas as pd
 
-RAW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
-
 TECH_OWNERSHIP_FILE = '보유기술.xlsx'
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
@@ -40,7 +37,8 @@ def _slot_cols(i):
 # ─────────────────────────────────────────────────────────────────────────────
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import read_xlsx, norm_id
+from paths import RAW_DIR, OUT_DIR  # noqa: E402
+from excel_reader import is_blank, read_xlsx, norm_id
 
 
 def _normalize_e_support(val) -> str:
@@ -51,7 +49,7 @@ def _normalize_e_support(val) -> str:
 def _clean_num(val) -> str:
     """Excel에서 숫자로 읽혀 '3.0'처럼 붙는 불필요한 소수점 제거(정수값인 경우만)."""
     s = str(val).strip()
-    if s in ('', 'nan', 'None', 'NaT'):
+    if is_blank(s):
         return ''
     try:
         f = float(s)
@@ -63,7 +61,7 @@ def _clean_num(val) -> str:
 def _scale_portion(val) -> str:
     """보유율(N)은 원본이 0.1/0.2 같은 비율로 들어오므로 100을 곱해 10/20(%)로 변환."""
     s = str(val).strip()
-    if s in ('', 'nan', 'None', 'NaT'):
+    if is_blank(s):
         return ''
     try:
         f = float(s) * 100

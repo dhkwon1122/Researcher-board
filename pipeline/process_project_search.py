@@ -33,10 +33,8 @@ import sys
 
 import pandas as pd
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT_DIR = os.path.join(BASE_DIR, 'data', 'processed')
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from paths import OUT_DIR  # noqa: E402
 import project_summary  # noqa: E402
 from llm_client import call_llm  # noqa: E402
 

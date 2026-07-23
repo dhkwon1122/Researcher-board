@@ -18,7 +18,7 @@ def norm_id(val) -> str:
     Excel이 숫자로 읽은 12345.0 → '00012345'
     """
     s = str(val).strip()
-    if s in ('', 'nan', 'None', 'NaT'):
+    if is_blank(s):
         return ''
     try:
         return str(int(float(s))).zfill(8)
@@ -33,6 +33,56 @@ def norm_researcher_id_col(df: pd.DataFrame) -> pd.DataFrame:
         df['researcher_id'] = df['researcher_id'].apply(norm_id)
         df = df[df['researcher_id'] != '']   # 빈 ID 행 제거
     return df
+
+
+_BLANK_STRINGS = ('nan', 'none', 'nat', '<na>')
+
+
+def is_blank(val) -> bool:
+    """엑셀 셀 값이 사실상 비어 있는지 판정(None/빈 문자열/nan·None·NaT류 문자열,
+    대소문자 무관)."""
+    if val is None:
+        return True
+    return str(val).strip().lower() in ('',) + _BLANK_STRINGS
+
+
+def clean_str(val) -> str:
+    """엑셀 셀 값을 정리된 문자열로 변환. 비어 있으면(is_blank) 빈 문자열,
+    아니면 앞뒤 공백만 제거한 원본 문자열(대소문자는 유지)."""
+    if val is None:
+        return ''
+    s = str(val).strip()
+    return '' if s.lower() in _BLANK_STRINGS else s
+
+
+def parse_yyyymmdd(val) -> str:
+    """YYYYMMDD(숫자 또는 문자열) 또는 이미 YYYY-MM-DD 형식인 값 → 'YYYY-MM-DD'.
+    변환 불가/빈 값이면 빈 문자열. (실수형으로 읽힌 20230101.0 도 처리)"""
+    if val is None:
+        return ''
+    s = str(val).strip().split('.')[0]
+    if is_blank(s):
+        return ''
+    if len(s) == 8 and s.isdigit():
+        return f'{s[:4]}-{s[4:6]}-{s[6:]}'
+    if len(s) >= 10 and s[4] == '-':
+        return s[:10]
+    return s
+
+
+def parse_flexible_date(val) -> str:
+    """다양한 날짜 표기(YYYYMMDD, YYYY-MM-DD, YYYY/MM/DD 등)를 pandas가 인식하는
+    한 자유롭게 파싱해 'YYYY-MM-DD'로 반환. 빈 값이면 빈 문자열, 파싱 실패 시
+    원본 문자열(strip만 적용)을 그대로 반환."""
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return ''
+    s = str(val).strip()
+    if is_blank(s):
+        return ''
+    try:
+        return pd.to_datetime(s).strftime('%Y-%m-%d')
+    except Exception:
+        return s
 
 
 _FORMULA_TRIGGER_CHARS = ('=', '+', '-', '@', '\t', '\r')
@@ -51,7 +101,7 @@ def excel_safe_text(val) -> str:
 
 
 def _is_blank_cell(value) -> bool:
-    return value is None or str(value).strip() in ('', 'nan', 'None', 'NaT')
+    return is_blank(value)
 
 
 def _first_nonblank_row(rows: list[list]) -> int:

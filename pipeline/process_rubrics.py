@@ -12,8 +12,10 @@ tech_grade/lv 값의 의미를 LLM에게 설명하는 용도로 사용한다.
 
 import json
 import os
+import sys
 
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from paths import OUT_DIR  # noqa: E402
 
 GRADE_INFO = [
     {

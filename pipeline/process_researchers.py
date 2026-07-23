@@ -28,9 +28,6 @@ from datetime import date, datetime
 
 import pandas as pd
 
-RAW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
-
 RESEARCHERS_FILE = '인력현황.xlsx'
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
@@ -51,7 +48,8 @@ POSITION_YEAR_REF = date(2027, 3, 1)
 # ─────────────────────────────────────────────────────────────────────────────
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import read_xlsx, norm_id
+from paths import RAW_DIR, OUT_DIR  # noqa: E402
+from excel_reader import is_blank, read_xlsx, norm_id
 
 
 def _parse_date(val) -> date | None:
@@ -61,7 +59,7 @@ def _parse_date(val) -> date | None:
     if isinstance(val, (date, datetime)):
         return val.date() if isinstance(val, datetime) else val
     s = str(val).strip()
-    if s in ('', 'nan', 'None', 'NaT'):
+    if is_blank(s):
         return None
     for fmt in ('%Y-%m-%d', '%Y/%m/%d', '%Y.%m.%d', '%Y%m%d'):
         try:

@@ -27,12 +27,9 @@ import sys
 
 import pandas as pd
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RAW_DIR = os.path.join(BASE_DIR, 'data', 'raw')
-OUT_DIR = os.path.join(BASE_DIR, 'data', 'processed')
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import read_xlsx, norm_id
+from paths import RAW_DIR, OUT_DIR  # noqa: E402
+from excel_reader import clean_str, read_xlsx, norm_id
 
 # 원본 컬럼 이름 (파일에 없으면 아래 값을 실제 헤더명으로 수정)
 COL_ID = '사번'
@@ -47,14 +44,9 @@ YEAR_FILES = {
 }
 
 
-def _is_blank(val) -> bool:
-    s = str(val).strip() if val is not None else ''
-    return s == '' or s.lower() in ('nan', 'none', 'nat')
-
-
 def _combine_row(name, detail) -> str:
-    name = '' if _is_blank(name) else str(name).strip()
-    detail = '' if _is_blank(detail) else str(detail).strip()
+    name = clean_str(name)
+    detail = clean_str(detail)
     if name and detail:
         return f'- {name} - {detail}'
     if name or detail:

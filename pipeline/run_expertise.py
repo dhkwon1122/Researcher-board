@@ -38,10 +38,8 @@ import sys
 
 import pandas as pd
 
-RAW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import read_xlsx, norm_researcher_id_col
 
 
@@ -58,63 +56,46 @@ def _read_raw(name: str) -> pd.DataFrame | None:
     return None
 
 
+def _run_with_fallback(process_fn, table: str, hint: str, missing: list) -> bool:
+    """전용 처리기(process_fn)를 실행하고, 실패하면 {table}_raw 폴백을 시도한다.
+    폴백까지 실패하면 missing에 '{table} ({hint})' 안내를 추가한다."""
+    if process_fn():
+        return True
+    df = _read_raw(table)
+    if df is not None:
+        out_path = os.path.join(OUT_DIR, f'{table}.csv')
+        df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+        print(f'  [OK]   {table}.csv ({table}_raw 폴백, {len(df)}행)')
+        return True
+    missing.append(f'{table} ({hint})')
+    return False
+
+
 def run():
     os.makedirs(OUT_DIR, exist_ok=True)
     missing = []
 
     # ── 1. 연구원 기본정보: 인력현황.xlsx 우선, 없으면 researchers_raw 폴백 ─
     from process_researchers import process as process_researchers
-    res_ok = process_researchers()
-    if not res_ok:
-        df = _read_raw('researchers')
-        if df is not None:
-            out_path = os.path.join(OUT_DIR, 'researchers.csv')
-            df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
-            print(f'  [OK]   researchers.csv (researchers_raw 폴백, {len(df)}행)')
-        else:
-            missing.append('researchers (인력현황.xlsx 또는 researchers_raw)')
+    _run_with_fallback(process_researchers, 'researchers', '인력현황.xlsx 또는 researchers_raw', missing)
 
     # ── 2. 학력: 임직원_학력.xlsx 우선, 없으면 education_raw 폴백 ──────
     from process_education import process as process_education
-    edu_ok = process_education()
-    if not edu_ok:
-        df = _read_raw('education')
-        if df is not None:
-            out_path = os.path.join(OUT_DIR, 'education.csv')
-            df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
-            print(f'  [OK]   education.csv (education_raw 폴백, {len(df)}행)')
-        else:
-            missing.append('education (임직원_학력.xlsx 또는 education_raw)')
+    _run_with_fallback(process_education, 'education', '임직원_학력.xlsx 또는 education_raw', missing)
 
     # ── 3. 과제 수행 이력: 개인별과제투입기간데이터_260114.xlsb (폴백 없음) ─
     from process_tasks import process as process_tasks
-    tasks_ok = process_tasks()
-    if not tasks_ok:
+    if not process_tasks():
         missing.append('tasks (개인별과제투입기간데이터_260114.xlsb)')
 
     # ── 4. 과제 정보: 과제정보.xlsx 우선, 없으면 tasks_information_raw 폴백 ─
     from process_task_information import process as process_task_information
-    tinfo_ok = process_task_information()
-    if not tinfo_ok:
-        df = _read_raw('tasks_information')
-        if df is not None:
-            out_path = os.path.join(OUT_DIR, 'tasks_information.csv')
-            df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
-            print(f'  [OK]   tasks_information.csv (tasks_information_raw 폴백, {len(df)}행)')
-        else:
-            missing.append('tasks_information (과제정보.xlsx 또는 tasks_information_raw)')
+    _run_with_fallback(process_task_information, 'tasks_information',
+                        '과제정보.xlsx 또는 tasks_information_raw', missing)
 
     # ── 5. 직무이력: 임직원_직무이력.xlsx 우선, 없으면 job_profile_raw 폴백 ─
     from process_job_profile import process as process_job_profile
-    jobp_ok = process_job_profile()
-    if not jobp_ok:
-        df = _read_raw('job_profile')
-        if df is not None:
-            out_path = os.path.join(OUT_DIR, 'job_profile.csv')
-            df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
-            print(f'  [OK]   job_profile.csv (job_profile_raw 폴백, {len(df)}행)')
-        else:
-            missing.append('job_profile (임직원_직무이력.xlsx 또는 job_profile_raw)')
+    _run_with_fallback(process_job_profile, 'job_profile', '임직원_직무이력.xlsx 또는 job_profile_raw', missing)
 
     # ── 6. 직무정보 참조 데이터: 표준/부서 직무정의 JSON 변환 (폴백 없음) ──
     from process_job_profile_standard import process as process_job_profile_standard
@@ -124,15 +105,8 @@ def run():
 
     # ── 7. 핵심기술: 핵심기술.xlsx 우선, 없으면 core_technology_raw 폴백 ─
     from process_core_technology import process as process_core_technology
-    ctech_ok = process_core_technology()
-    if not ctech_ok:
-        df = _read_raw('core_technology')
-        if df is not None:
-            out_path = os.path.join(OUT_DIR, 'core_technology.csv')
-            df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
-            print(f'  [OK]   core_technology.csv (core_technology_raw 폴백, {len(df)}행)')
-        else:
-            missing.append('core_technology (핵심기술.xlsx 또는 core_technology_raw)')
+    _run_with_fallback(process_core_technology, 'core_technology',
+                        '핵심기술.xlsx 또는 core_technology_raw', missing)
 
     # ── 8. 등급/Lv 기준표(정적 참조 데이터, 폴백 없음) ────────────────────
     from process_rubrics import process as process_rubrics
@@ -140,50 +114,26 @@ def run():
 
     # ── 9. 보유기술: 보유기술.xlsx 우선, 없으면 tech_ownership_raw 폴백 ─
     from process_tech_ownership import process as process_tech_ownership
-    town_ok = process_tech_ownership()
-    if not town_ok:
-        df = _read_raw('tech_ownership')
-        if df is not None:
-            out_path = os.path.join(OUT_DIR, 'tech_ownership.csv')
-            df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
-            print(f'  [OK]   tech_ownership.csv (tech_ownership_raw 폴백, {len(df)}행)')
-        else:
-            missing.append('tech_ownership (보유기술.xlsx 또는 tech_ownership_raw)')
+    _run_with_fallback(process_tech_ownership, 'tech_ownership',
+                        '보유기술.xlsx 또는 tech_ownership_raw', missing)
 
     # ── 10. 논문 현황: 개인별논문현황_2016_2026.xlsx 우선, 없으면 publications_raw 폴백 ─
     from process_publications import process as process_publications
-    pub_ok = process_publications()
-    if not pub_ok:
-        df = _read_raw('publications')
-        if df is not None:
-            out_path = os.path.join(OUT_DIR, 'publications.csv')
-            df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
-            print(f'  [OK]   publications.csv (publications_raw 폴백, {len(df)}행)')
-        else:
-            missing.append('publications (개인별논문현황_2016_2026.xlsx 또는 publications_raw)')
+    _run_with_fallback(process_publications, 'publications',
+                        '개인별논문현황_2016_2026.xlsx 또는 publications_raw', missing)
 
     # ── 11. 특허: 특허 리스트.xlsx 우선, 없으면 patents_raw 폴백 ──────
     from process_patents import process as process_patents
-    pat_ok = process_patents()
-    if not pat_ok:
-        df = _read_raw('patents')
-        if df is not None:
-            out_path = os.path.join(OUT_DIR, 'patents.csv')
-            df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
-            print(f'  [OK]   patents.csv (patents_raw 폴백, {len(df)}행)')
-        else:
-            missing.append('patents (특허 리스트.xlsx 또는 patents_raw)')
+    _run_with_fallback(process_patents, 'patents', '특허 리스트.xlsx 또는 patents_raw', missing)
 
     # ── 12. 업무목표: 업무목표24/25/26.xlsx (폴백 없음) ──────────────────
     from process_work_objective import process as process_work_objective
-    wobj_ok = process_work_objective()
-    if not wobj_ok:
+    if not process_work_objective():
         missing.append('work_objective (업무목표24/25/26.xlsx)')
 
     # ── 13. 과제별 컨플루언스 주소: 과제별컨플.xlsx (폴백 없음) ───────────
     from process_project_confl import process as process_project_confl
-    confl_ok = process_project_confl()
-    if not confl_ok:
+    if not process_project_confl():
         missing.append('project_confl_address (과제별컨플.xlsx)')
 
     if missing:

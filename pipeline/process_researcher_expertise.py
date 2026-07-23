@@ -56,10 +56,9 @@ import sys
 
 import pandas as pd
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT_DIR = os.path.join(BASE_DIR, 'data', 'processed')
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from paths import OUT_DIR  # noqa: E402
+from excel_reader import clean_str as _clean  # noqa: E402
 from llm_client import call_llm, extract_json  # noqa: E402
 import rd_specialist_markdown as mmd  # noqa: E402
 
@@ -119,11 +118,6 @@ _DOMAIN_LABELS = [
     ('industry_standards', '산업/기술 표준 및 규격'),
     ('patent_trend_understanding', '특허 및 트렌드 이해도'),
 ]
-
-
-def _clean(val) -> str:
-    s = str(val).strip() if val is not None else ''
-    return '' if s.lower() in ('nan', 'none', 'nat', '<na>') else s
 
 
 def _read_csv(name: str) -> pd.DataFrame:

@@ -20,10 +20,8 @@ import sys
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import read_xlsx
-
-RAW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
+from paths import RAW_DIR, OUT_DIR  # noqa: E402
+from excel_reader import clean_str as _clean, read_xlsx
 
 SOURCE_FILE = '과제별컨플.xlsx'
 
@@ -32,11 +30,6 @@ COL_DEP = '소속'
 COL_PROJECT = '과제명'
 COL_CONFL = '컨플 주소'
 # ─────────────────────────────────────────────────────────────────────────────
-
-
-def _clean(val) -> str:
-    s = str(val).strip() if val is not None else ''
-    return '' if s.lower() in ('nan', 'none', 'nat') else s
 
 
 def process() -> bool:

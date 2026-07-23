@@ -31,9 +31,6 @@ import sys
 
 import pandas as pd
 
-RAW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
-
 ORDERS_FILE = '인사발령이력.xlsx'
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
@@ -46,21 +43,10 @@ COL_ASSIGNMENT = '직책명'
 # ─────────────────────────────────────────────────────────────────────────────
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import read_xlsx, norm_id
+from paths import RAW_DIR, OUT_DIR  # noqa: E402
+from excel_reader import parse_yyyymmdd, read_xlsx, norm_id
 
 _PAREN_RE = re.compile(r'[\(（][^)）]*[\)）]')
-
-
-def _parse_date(val) -> str:
-    """YYYYMMDD(숫자 or 문자열) → YYYY-MM-DD. 변환 불가 시 빈 문자열."""
-    if val is None:
-        return ''
-    s = str(val).strip().split('.')[0]
-    if s in ('', 'nan', 'None', 'NaT'):
-        return ''
-    if len(s) == 8 and s.isdigit():
-        return f'{s[:4]}-{s[4:6]}-{s[6:]}'
-    return s
 
 
 def _strip_paren(val) -> str:
@@ -95,7 +81,7 @@ def process() -> bool:
 
     result = pd.DataFrame({
         'researcher_id':    df['researcher_id'],
-        'order_date':       df[COL_DATE].apply(_parse_date),
+        'order_date':       df[COL_DATE].apply(parse_yyyymmdd),
         'order_name':       _col(COL_NAME),
         'order_dep':        _col(COL_DEP),
         'order_cl':         df[COL_CL].apply(_strip_paren) if COL_CL in df.columns

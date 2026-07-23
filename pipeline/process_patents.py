@@ -34,9 +34,6 @@ import sys
 
 import pandas as pd
 
-RAW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
-
 PATENT_FILE = '특허 리스트.xlsx'
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
@@ -68,23 +65,10 @@ OPTIONAL_COLS = [
 # ─────────────────────────────────────────────────────────────────────────────
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import read_xlsx, norm_id
+from paths import RAW_DIR, OUT_DIR  # noqa: E402
+from excel_reader import is_blank, parse_yyyymmdd, read_xlsx, norm_id
 
 _DATE_DST_COLS = {'application_date', 'registration_date'}
-
-
-def _parse_date(val) -> str:
-    """YYYYMMDD(숫자 or 문자열) 또는 YYYY-MM-DD → YYYY-MM-DD. 변환 불가 시 원본 문자열."""
-    if val is None:
-        return ''
-    s = str(val).strip().split('.')[0]
-    if s in ('', 'nan', 'None', 'NaT'):
-        return ''
-    if len(s) == 8 and s.isdigit():
-        return f'{s[:4]}-{s[4:6]}-{s[6:]}'
-    if len(s) >= 10 and s[4] == '-':
-        return s[:10]
-    return s
 
 
 def process() -> bool:
@@ -133,7 +117,7 @@ def process() -> bool:
             continue
         if src_col in df.columns:
             if dst_col in _DATE_DST_COLS:
-                result[dst_col] = df[src_col].apply(_parse_date)
+                result[dst_col] = df[src_col].apply(parse_yyyymmdd)
             else:
                 result[dst_col] = df[src_col].astype(str).str.strip()
             filled.add(dst_col)
@@ -144,7 +128,7 @@ def process() -> bool:
 
     # ── status 도출: 등록번호 있으면 '등록', 없고 출원번호 있으면 '출원', 둘 다 없으면 공란 ──
     def _has_value(series):
-        return ~series.astype(str).str.strip().isin(['', 'nan', 'None'])
+        return ~series.apply(is_blank)
 
     result['status'] = ''
     result.loc[_has_value(result['application_no']), 'status'] = '출원'

@@ -29,10 +29,7 @@ import sys
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RAW_DIR  = os.path.join(BASE_DIR, 'data', 'raw')
-OUT_DIR  = os.path.join(BASE_DIR, 'data', 'processed')
+from paths import RAW_DIR, OUT_DIR  # noqa: E402
 
 SOURCE = os.path.join(RAW_DIR, '개인별논문현황_2016_2026.xlsx')
 OUTPUT = os.path.join(OUT_DIR, 'publications.csv')
@@ -60,21 +57,6 @@ COL_PROJECT_NAME = '과제명'
 COL_PROJECT_CODE = '과제코드'
 
 _CONTRIBUTION_RE = re.compile(r'\(기여도\s*:\s*(\d+)\s*%\)\s*$')
-
-
-def _parse_date(val) -> str:
-    """YYYYMMDD(숫자 또는 문자열) → YYYY-MM-DD. 변환 불가 시 빈 문자열."""
-    if val is None:
-        return ''
-    s = str(val).strip().split('.')[0]
-    if s in ('', 'nan', 'None', 'NaT'):
-        return ''
-    if len(s) == 8 and s.isdigit():
-        return f'{s[:4]}-{s[4:6]}-{s[6:]}'
-    # 이미 YYYY-MM-DD 형태인 경우
-    if len(s) >= 10 and s[4] == '-':
-        return s[:10]
-    return s
 
 
 def _parse_int(val) -> str:
@@ -111,7 +93,7 @@ def _parse_is_corresponding(val) -> bool:
 
 
 def process() -> bool:
-    from excel_reader import norm_id, read_xlsx
+    from excel_reader import norm_id, parse_yyyymmdd, read_xlsx
 
     if not os.path.exists(SOURCE):
         print(f'[process_publications] 파일 없음: {SOURCE}')
@@ -133,7 +115,7 @@ def process() -> bool:
         'title':          df[COL_TITLE].astype(str).str.strip(),
         'journal':        df[COL_JOURNAL].astype(str).str.strip(),
         'pub_type':       df[COL_PUB_TYPE].astype(str).str.strip(),
-        'pub_date':       df[COL_DATE].apply(_parse_date),
+        'pub_date':       df[COL_DATE].apply(parse_yyyymmdd),
         'author_rank':    df[COL_RANK].apply(_parse_int),
         'total_authors':  df[COL_TOTAL].apply(_parse_int),
         'author_info':    df[COL_AUTHOR_INFO].apply(_strip_contribution),

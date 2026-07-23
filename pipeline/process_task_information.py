@@ -44,9 +44,6 @@ import sys
 
 import pandas as pd
 
-RAW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
-
 TASK_INFO_FILE = '과제정보.xlsx'
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
@@ -63,7 +60,8 @@ COL_WRITE_DATE   = '작성일'
 # ─────────────────────────────────────────────────────────────────────────────
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import excel_safe_text, read_xlsx
+from paths import RAW_DIR, OUT_DIR  # noqa: E402
+from excel_reader import excel_safe_text, is_blank, parse_yyyymmdd, read_xlsx
 
 _CONTENT_COLS = [
     'task_collabo', 'task_goal', 'task_value', 'task_howtoget',
@@ -71,23 +69,9 @@ _CONTENT_COLS = [
 ]
 
 
-def _parse_date(val) -> str:
-    """YYYYMMDD(숫자 or 문자열) 또는 YYYY-MM-DD → YYYY-MM-DD. 변환 불가 시 원본 문자열."""
-    if val is None:
-        return ''
-    s = str(val).strip().split('.')[0]
-    if s in ('', 'nan', 'None', 'NaT'):
-        return ''
-    if len(s) == 8 and s.isdigit():
-        return f'{s[:4]}-{s[4:6]}-{s[6:]}'
-    if len(s) >= 10 and s[4] == '-':
-        return s[:10]
-    return s
-
-
 def _filled_count(row) -> int:
     """task_collabo~task_futureusage 중 값이 채워진 컬럼 수."""
-    return sum(1 for c in _CONTENT_COLS if str(row[c]).strip() not in ('', 'nan', 'None'))
+    return sum(1 for c in _CONTENT_COLS if not is_blank(row[c]))
 
 
 def _dedupe_by_name(df: pd.DataFrame) -> pd.DataFrame:
@@ -138,7 +122,7 @@ def process() -> bool:
         'task_expectissue':  _col(COL_EXPECTISSUE),
         'task_Activityplan': _col(COL_ACTIVITYPLAN),
         'task_futureusage':  _col(COL_FUTUREUSAGE),
-        'write_date':        df[COL_WRITE_DATE].apply(_parse_date),
+        'write_date':        df[COL_WRITE_DATE].apply(parse_yyyymmdd),
     })
 
     before = len(result)

@@ -17,9 +17,6 @@ import sys
 
 import pandas as pd
 
-RAW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
-
 # ── 설정 (사내 파일 구조에 맞게 수정) ────────────────────────────────────────
 
 # 연구원 식별 컬럼 (사번, 직원번호, EMP_ID 등)
@@ -49,7 +46,8 @@ GRADE_TO_SCORE = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import read_xlsx, norm_id
+from paths import RAW_DIR, OUT_DIR  # noqa: E402
+from excel_reader import is_blank, read_xlsx, norm_id
 
 TP_FILE = 'T&P_기본_인사_정보.xlsx'
 
@@ -59,7 +57,7 @@ def _parse_birth_year(val) -> int | None:
     if val is None or (isinstance(val, float) and pd.isna(val)):
         return None
     val_str = str(val).strip()
-    if val_str in ('', 'nan', 'None', 'NaT'):
+    if is_blank(val_str):
         return None
     # YYYYMMDD 또는 YYYY-MM-DD 형식: 앞 4자리가 숫자이면 연도
     if len(val_str) >= 4 and val_str[:4].isdigit():

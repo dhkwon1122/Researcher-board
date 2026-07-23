@@ -38,11 +38,10 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from paths import OUT_DIR  # noqa: E402
 import rd_specialist_markdown as mmd  # noqa: E402
 import researcher_fit as fit  # noqa: E402
 from services.llm import LLMError  # noqa: E402
-
-OUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'processed')
 
 
 def process(profile: str = 'default') -> bool:

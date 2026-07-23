@@ -20,11 +20,11 @@ import sys
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from services.db import get_engine  # noqa: E402
+from paths import OUT_DIR as DATA_DIR  # noqa: E402
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(BASE_DIR, 'data', 'processed')
 SCHEMA_SQL = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.sql')
 
 # read_processed / read_profile_tables 에서 다루는 테이블 전체

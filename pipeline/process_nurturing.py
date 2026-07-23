@@ -17,9 +17,6 @@ import sys
 
 import pandas as pd
 
-RAW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
-
 NURTURING_FILE = '양성_인력_현황.xlsx'
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
@@ -36,20 +33,8 @@ COL_SERVICE_END = '의무근무 종료일'
 # ─────────────────────────────────────────────────────────────────────────────
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import read_xlsx, norm_id
-
-
-def _fmt_date(val) -> str:
-    """날짜 값을 YYYY-MM-DD 문자열로 변환."""
-    if val is None or (isinstance(val, float) and pd.isna(val)):
-        return ''
-    s = str(val).strip()
-    if s in ('', 'nan', 'None', 'NaT'):
-        return ''
-    try:
-        return pd.to_datetime(s).strftime('%Y-%m-%d')
-    except Exception:
-        return s
+from paths import RAW_DIR, OUT_DIR  # noqa: E402
+from excel_reader import parse_flexible_date as _fmt_date, read_xlsx, norm_id
 
 
 def process() -> bool:
