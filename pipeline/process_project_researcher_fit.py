@@ -45,6 +45,13 @@ from services.llm import LLMError  # noqa: E402
 
 
 def process(profile: str = 'default') -> bool:
+    print('[process_project_researcher_fit] BGE-M3 임베딩 서버 연결 확인 중...')
+    try:
+        fit.check_embed_server()
+    except LLMError as exc:
+        print(f'[process_project_researcher_fit] BGE-M3 임베딩 서버 확인 실패 — 종료: {exc}')
+        return False
+
     suffix = mmd.profile_suffix(profile)
 
     projects = fit.read_json(OUT_DIR, f'project_expertise_analysis{suffix}')

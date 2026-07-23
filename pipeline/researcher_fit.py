@@ -183,6 +183,13 @@ def run_matching_llm(system_prompt: str, subject_block: str, candidate_texts: li
     return out
 
 
+def check_embed_server():
+    """본격적인 작업(JSON 로딩, 직무/연구원 텍스트 구성 등) 전에 BGE-M3 임베딩
+    서버가 응답하는지 가볍게 먼저 확인한다. 실패 시 LLMError를 그대로 전파한다
+    (호출부가 잡아서 '서버가 기동 중인지 확인하세요' 안내 후 즉시 종료할 수 있도록)."""
+    embed(['ping'])
+
+
 def compute_embeddings(job_texts: list, researcher_texts: list):
     """실패 시 LLMError를 그대로 전파한다(호출부가 잡아서 처리)."""
     job_emb = np.array(embed(job_texts), dtype=np.float32)
