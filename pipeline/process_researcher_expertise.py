@@ -61,7 +61,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import OUT_DIR  # noqa: E402
 from excel_reader import clean_str as _clean  # noqa: E402
-from llm_client import call_llm, extract_json  # noqa: E402
+from llm_client import call_llm, extract_json, max_concurrency, run_concurrent  # noqa: E402
 import journal_authority  # noqa: E402
 import rd_specialist_markdown as mmd  # noqa: E402
 
@@ -496,8 +496,17 @@ def process(profile: str = 'default', refresh_journals: bool = False) -> bool:
     success_count = 0
     fail_count = 0
     skip_count = 0
-    print(f'[process_researcher_expertise] 연구원 {total}명 전문성 분석 중 (profile={profile})...')
-    for idx, rid in enumerate(rids, start=1):
+    completed = 0
+
+    def _progress_checkpoint():
+        if completed % 10 == 0 or completed == total:
+            print(f'    (완료인원 {completed}명/전체 {total}명, {success_count}명 성공, '
+                  f'{fail_count}명 실패, {skip_count}명 건너뜀)')
+
+    # 1단계: 연구원별 프롬프트 구성(로컬 데이터 처리, LLM 호출 없음) + 데이터
+    # 없는 연구원은 이 단계에서 바로 건너뜀 처리한다.
+    prepared = []  # [(rid, prompt), ...] — LLM 분석이 실제로 필요한 연구원만
+    for rid in rids:
         edu_text = _education_text(education[education['researcher_id'] == rid]) if not education.empty else '(데이터 없음)'
         task_text = _task_history_text(
             tasks[tasks['researcher_id'] == rid] if not tasks.empty else pd.DataFrame(), tasks_info
@@ -537,20 +546,38 @@ def process(profile: str = 'default', refresh_journals: bool = False) -> bool:
                (edu_text, task_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text)):
             print(f'    [{rid}] 데이터 없음 — 건너뜀')
             skip_count += 1
-        else:
-            prompt = _build_prompt(edu_text, task_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text)
-            analysis = _analyze_researcher(prompt, profile=profile)
-            if analysis is None:
+            completed += 1
+            _progress_checkpoint()
+            continue
+
+        prompt = _build_prompt(edu_text, task_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text)
+        prepared.append((rid, prompt))
+
+    # 2단계: 실제 LLM 분석은 profile의 동시 호출 허용치만큼 동시에 실행한다.
+    # 개별 연구원 분석 중 예기치 못한 예외가 나도(run_concurrent가 잡아 반환)
+    # 다른 연구원 분석은 계속 진행하고, 실패한 연구원만 에러와 함께 로그로
+    # 남겨 추후 원인 파악·동시성 조정에 활용할 수 있게 한다.
+    if prepared:
+        workers = max_concurrency(profile)
+        print(f'[process_researcher_expertise] 연구원 {len(prepared)}명 LLM 분석 시작 '
+              f'(전체 {total}명 중 {skip_count}명 건너뜀, 동시 {workers}건, profile={profile})...')
+
+        tasks_ = [(lambda p=prompt: _analyze_researcher(p, profile=profile)) for _, prompt in prepared]
+        task_results = run_concurrent(tasks_, max_workers=workers)
+
+        for (rid, _), (analysis, error) in zip(prepared, task_results):
+            completed += 1
+            if error is not None:
+                print(f'    [{rid}] 분석 오류: {type(error).__name__}: {error}')
+                fail_count += 1
+            elif analysis is None:
                 print(f'    [{rid}] 분석 실패')
                 fail_count += 1
             else:
                 results.append({'researcher_id': rid, **analysis})
                 print(f'    [{rid}] 분석 완료')
                 success_count += 1
-
-        if idx % 10 == 0 or idx == total:
-            print(f'    (완료인원 {idx}명/전체 {total}명, {success_count}명 성공, '
-                  f'{fail_count}명 실패, {skip_count}명 건너뜀)')
+            _progress_checkpoint()
 
     suffix = mmd.profile_suffix(profile)
     os.makedirs(OUT_DIR, exist_ok=True)

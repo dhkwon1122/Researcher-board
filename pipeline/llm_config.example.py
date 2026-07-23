@@ -46,9 +46,16 @@ LLM2_TIMEOUT = 300              # 초
 # 있다. 호출 시 요청한 max_tokens에 이 배수를 곱해 여유를 준다.
 LLM2_MAX_TOKENS_MULTIPLIER = 3
 
-# thinkingcap 호출 간 최소 간격(초). 응답이 느리거나 서버 부하에 민감한 모델을
-# 배려해 초당 호출 제한과 별개로 추가 대기 시간을 둔다.
-LLM2_CALL_INTERVAL = 1.0
+# thinkingcap은 전용 vLLM 서버(예: RTX PRO 6000 Blackwell 96GB 1장)에서 서빙되는
+# 것을 전제로, 시간 기반 간격 대신 "동시 호출 허용 개수"로 부하를 조절한다.
+# vLLM은 continuous batching으로 여러 요청을 한꺼번에 배치 처리하므로, 순차
+# 호출보다 동시에 여러 건을 보내는 편이 훨씬 효율적이다.
+#   예) Qwen3.6-27B-NVFP4 같은 4bit 양자화 모델은 가중치가 약 13~14GB로 작아
+#       96GB 카드에서 KV 캐시 여유가 크다 — 8~16 정도로 시작해 서버 로그(큐
+#       대기·타임아웃 증가 여부)를 보며 올리거나 낮추면 된다.
+#   실제 안전한 값은 모델 크기/양자화, 프롬프트 길이, vLLM 자체 설정
+#   (--max-num-seqs 등)에 따라 달라지므로 반드시 실측으로 조정할 것.
+LLM2_MAX_CONCURRENT = 8
 
 # ReadTimeout/연결 오류 시 자동 재시도 횟수와 백오프 시작 시간(초, 회차마다
 # 2배씩 증가). 두 profile 모두 공통 적용. 사내 LLM API 호출이 불안정할 때

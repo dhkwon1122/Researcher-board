@@ -33,7 +33,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import OUT_DIR  # noqa: E402
 from excel_reader import clean_str  # noqa: E402
-from llm_client import call_llm, extract_json  # noqa: E402
+from llm_client import call_llm, extract_json, max_concurrency, run_concurrent  # noqa: E402
 import rd_specialist_markdown as mmd  # noqa: E402
 
 _JOURNAL_SYSTEM_PROMPT = '당신은 학술 저널/학회의 권위도를 평가하는 전문가입니다. 요청한 JSON 형식만 출력하세요.'
@@ -64,33 +64,53 @@ def save_cache(cache: dict, profile: str = 'default'):
         json.dump(cache, f, ensure_ascii=False, indent=2)
 
 
+def _fetch_authority(journal: str, profile: str) -> str:
+    prompt = (
+        f'학술지/저널명: {journal}\n'
+        f'이 저널의 SCI/SCIE 여부, 대략적인 impact factor 수준, 해당 분야에서의 '
+        f'권위·명성 수준을 1~2문장으로 평가해 주세요. 확실하지 않으면 "확인 불가"라고 답하세요.\n'
+        f'다음 JSON 형식으로만 출력하세요: {{"authority": "평가 내용"}}'
+    )
+    raw = call_llm(prompt, _JOURNAL_SYSTEM_PROMPT, max_tokens=300, profile=profile)
+    if not raw:
+        return ''
+    try:
+        return json.loads(extract_json(raw)).get('authority', '')
+    except json.JSONDecodeError:
+        return ''
+
+
 def update_authority(journals: list, cache: dict, profile: str = 'default', force: bool = False) -> dict:
     """캐시에 실제 평가 값이 채워진 저널은 건너뛰고, 값이 비어 있는 저널(신규거나
     이전 조회가 실패해 빈 문자열로 남은 것)만 사내 LLM으로 재조회한다(누적 재사용,
     profile별 분리). force=True(--refresh-journals)면 캐시 값과 무관하게 전달된
     저널 전체를 다시 조회한다. 호출부가 로드/저장을 위임하므로, 이 함수 안에서
-    저장까지 마친다(배치 처리 중간에 실패해도 이미 평가한 저널은 남도록)."""
+    저장까지 마친다(배치 처리 중간에 실패해도 이미 평가한 저널은 남도록).
+
+    profile의 동시 호출 허용치(llm_client.max_concurrency)만큼 스레드풀로 동시
+    조회한다 — 전용 vLLM 서버(thinkingcap)는 continuous batching으로 여러
+    요청을 한꺼번에 처리하는 편이 순차 호출보다 훨씬 빠르다. 개별 저널 조회
+    중 예기치 못한 예외가 나도(run_concurrent가 잡아 반환) 다른 저널 조회는
+    계속 진행하고, 실패한 저널만 에러와 함께 로그로 남긴다."""
     targets = journals if force else [j for j in journals if not cache.get(j)]
     if not targets:
         return cache
     label = '전체 재조회' if force else '신규/미확인'
-    print(f'[journal_authority] 저널 권위도 조회 중 ({label} {len(targets)}건, profile={profile})...')
-    for j in targets:
-        prompt = (
-            f'학술지/저널명: {j}\n'
-            f'이 저널의 SCI/SCIE 여부, 대략적인 impact factor 수준, 해당 분야에서의 '
-            f'권위·명성 수준을 1~2문장으로 평가해 주세요. 확실하지 않으면 "확인 불가"라고 답하세요.\n'
-            f'다음 JSON 형식으로만 출력하세요: {{"authority": "평가 내용"}}'
-        )
-        raw = call_llm(prompt, _JOURNAL_SYSTEM_PROMPT, max_tokens=300, profile=profile)
-        authority = ''
-        if raw:
-            try:
-                authority = json.loads(extract_json(raw)).get('authority', '')
-            except json.JSONDecodeError:
-                authority = ''
-        cache[j] = authority
-        print(f'    [{"OK" if authority else "실패"}] {j}')
+    workers = max_concurrency(profile)
+    print(f'[journal_authority] 저널 권위도 조회 중 ({label} {len(targets)}건, profile={profile}, '
+          f'동시 {workers}건)...')
+
+    tasks = [(lambda j=j: _fetch_authority(j, profile)) for j in targets]
+    results = run_concurrent(tasks, max_workers=workers)
+
+    for journal, (authority, error) in zip(targets, results):
+        if error is not None:
+            print(f'    [에러] {journal}: {type(error).__name__}: {error}')
+            cache[journal] = ''
+        else:
+            cache[journal] = authority or ''
+            print(f'    [{"OK" if authority else "실패"}] {journal}')
+
     save_cache(cache, profile)
     return cache
 

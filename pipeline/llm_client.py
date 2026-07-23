@@ -14,14 +14,33 @@ pipeline/llm_config.py 설정을 사용해 사내 LLM API를 호출한다.
   → --profile thinkingcap 이라는 이름과 실제로 호출되는 물리 모델이 서로
     반대라는 점에 주의할 것(이름은 유지, 라우팅만 반전).
 
-사내 LLM은 초당 5회 호출 제한이 있어, call_llm()은 호출 간 최소 간격을
-두어 초당 최대 MAX_CALLS_PER_SEC(4)회를 넘지 않도록 자체적으로 조절한다.
-profile='default'(=1순위 thinkingcap 물리 엔드포인트)는 응답이 느리거나
-서버 부하에 민감할 수 있어 LLM2_CALL_INTERVAL(초, llm_config.py)만큼 추가
-간격을 둔다.
+profile='thinkingcap'(2순위, 기존 gpt-4o 물리 엔드포인트 — 사내 공용 게이트웨이)은
+자체적으로 초당 5회 호출 제한이 있어, call_llm()이 호출 간 최소 간격을 두어
+초당 최대 MAX_CALLS_PER_SEC(4)회를 넘지 않도록 자체적으로 조절한다(시간 기반
+순차 제한).
+
+profile='default'(1순위 thinkingcap 물리 엔드포인트 — 전용 vLLM 서버)는 위와
+반대로 시간 기반 간격 대신 "동시 요청 수 제한(세마포어)"으로 부하를 조절한다.
+vLLM은 여러 요청을 continuous batching으로 동시에 처리하도록 설계되어 있어,
+요청을 순차로 띄엄띄엄 보내는 것보다 여러 요청을 동시에 보내고 서버가 배치로
+처리하게 하는 편이 훨씬 효율적이기 때문이다. 동시 허용 개수는
+llm_config.LLM2_MAX_CONCURRENT(기본 8)로 조정한다 — 전용 GPU의 VRAM 여유,
+모델 크기/양자화에 맞춰 값을 올리거나 낮출 수 있다. run_concurrent()를 쓰면
+호출부가 여러 건을 한꺼번에 스레드풀로 넘기고, 이 세마포어가 실제 동시
+요청 수를 안전하게 제한해 준다.
 
 ReadTimeout/연결 오류는 일시적인 경우가 많아 LLM_MAX_RETRIES회까지
 지수 백오프(LLM_RETRY_BACKOFF초부터 2배씩 증가)로 자동 재시도한다.
+
+동시 호출 유틸리티:
+  run_concurrent(tasks, max_workers=None) — 인자 없는 callable 목록을 스레드풀로
+  동시 실행하고, 각각의 (결과, 예외) 튜플을 원래 순서대로 반환한다. 개별 작업이
+  예기치 못한 예외를 던져도 잡아서 반환할 뿐 다른 작업이나 배치 전체를 중단시키지
+  않는다 — 호출부가 error가 있는 항목만 로그로 남겨 추후 동시성/설정을 조정하는
+  데 쓸 수 있다(call_llm() 자체가 이미 처리하는 재시도/HTTP오류/타임아웃과는
+  별개로, 그 바깥에서 발생하는 예상 못한 예외에 대한 안전망).
+  max_concurrency(profile) — profile에 설정된 동시 호출 허용치를 반환한다.
+  호출부가 스레드풀 크기를 이 값에 맞춰 잡을 때 사용한다.
 
 두 모델 비교(profile 인자, 값 자체는 하위 호환 유지 / 물리 라우팅은 반전됨):
   call_llm(prompt, system_prompt)                     → 1순위(default) thinkingcap
@@ -31,6 +50,7 @@ ReadTimeout/연결 오류는 일시적인 경우가 많아 LLM_MAX_RETRIES회까
     (llm_config.py의 LLM_API_URL/LLM_MODEL/LLM_TIMEOUT + 인증 헤더 사용)
 """
 
+import concurrent.futures
 import re
 import threading
 import time
@@ -46,20 +66,70 @@ _MIN_INTERVAL = 1.0 / MAX_CALLS_PER_SEC
 _last_call_lock = threading.Lock()
 _last_call_time = 0.0
 
+_semaphore_lock = threading.Lock()
+_semaphores: dict[str, threading.Semaphore] = {}
+
 
 def _throttle(profile: str = 'default'):
-    """직전 호출과의 간격이 최소 간격 미만이면 그만큼 대기해 호출 속도를 제한한다.
-    profile='default'(1순위 thinkingcap 물리 엔드포인트)는 llm_config.LLM2_CALL_INTERVAL
-    (기본 1.0초)만큼 추가 간격을 둔다(응답이 느리거나 서버 부하에 민감한 모델을 배려)."""
+    """profile='thinkingcap'(2순위, 기존 gpt-4o 물리 엔드포인트 — 사내 공용
+    게이트웨이)만 시간 기반으로 제한한다. 게이트웨이 자체의 초당 호출 제한을
+    넘지 않도록 직전 호출과의 간격이 MAX_CALLS_PER_SEC 미만이면 대기한다.
+    profile='default'(1순위 thinkingcap 물리 엔드포인트, 전용 vLLM 서버)는 이
+    함수에서 아무것도 하지 않는다 — 부하 조절은 call_llm() 쪽의 동시 요청 수
+    제한(세마포어, _get_semaphore 참고)으로 대신한다."""
+    if profile != 'thinkingcap':
+        return
     global _last_call_time
-    extra_interval = getattr(_cfg, 'LLM2_CALL_INTERVAL', 1.0) if profile == 'default' and _cfg else 0.0
-    min_interval = max(_MIN_INTERVAL, extra_interval)
     with _last_call_lock:
         now = time.monotonic()
-        wait = min_interval - (now - _last_call_time)
+        wait = _MIN_INTERVAL - (now - _last_call_time)
         if wait > 0:
             time.sleep(wait)
         _last_call_time = time.monotonic()
+
+
+def max_concurrency(profile: str = 'default') -> int:
+    """profile에 대해 설정된 동시 호출 허용치. run_concurrent()로 여러 건을
+    한꺼번에 넘길 때 스레드풀 크기를 이 값에 맞추면 된다(세마포어 자체는
+    call_llm() 내부에서 이 값과 무관하게 항상 강제 적용됨).
+    profile='default'(전용 vLLM 서버)만 동시 처리 대상이며, llm_config.
+    LLM2_MAX_CONCURRENT(기본 8)로 조정한다. profile='thinkingcap'(사내 공용
+    게이트웨이)은 시간 기반 순차 제한만 적용하므로 1을 반환한다."""
+    if profile == 'default':
+        return max(1, getattr(_cfg, 'LLM2_MAX_CONCURRENT', 8) if _cfg else 8)
+    return 1
+
+
+def _get_semaphore(profile: str) -> threading.Semaphore:
+    with _semaphore_lock:
+        sem = _semaphores.get(profile)
+        if sem is None:
+            sem = threading.Semaphore(max_concurrency(profile))
+            _semaphores[profile] = sem
+        return sem
+
+
+def run_concurrent(tasks: list, max_workers: int | None = None) -> list:
+    """인자 없는 callable 목록(tasks)을 스레드풀로 동시 실행한다.
+    각 작업의 결과를 (결과, 예외) 튜플로 tasks와 같은 순서로 반환한다 — 개별
+    작업이 예기치 못한 예외를 던져도 잡아서 반환할 뿐, 다른 작업이나 배치
+    전체를 중단시키지 않는다. call_llm() 자체가 이미 처리하는 재시도/HTTP
+    오류/타임아웃(실패 시 빈 문자열 반환, 예외를 던지지 않음)과는 별개로,
+    그 바깥(예: 응답 파싱 로직의 버그 등)에서 발생하는 예상 못한 예외에 대한
+    안전망이다. 호출부는 error가 있는 항목만 로그로 남겨 추후 원인을 파악하고
+    동시성 설정을 조정하는 데 활용할 수 있다."""
+    if not tasks:
+        return []
+    results: list = [None] * len(tasks)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_idx = {executor.submit(task): i for i, task in enumerate(tasks)}
+        for future in concurrent.futures.as_completed(future_to_idx):
+            i = future_to_idx[future]
+            try:
+                results[i] = (future.result(), None)
+            except Exception as exc:  # noqa: BLE001
+                results[i] = (None, exc)
+    return results
 
 
 def extract_json(text: str) -> str:
@@ -131,13 +201,20 @@ def call_llm(prompt: str, system_prompt: str, *, temperature: float = 0.2, max_t
 
     max_retries = getattr(_cfg, 'LLM_MAX_RETRIES', 5)
     retry_backoff = getattr(_cfg, 'LLM_RETRY_BACKOFF', 5.0)
+    semaphore = _get_semaphore(profile) if profile == 'default' else None
 
     resp = None
     for attempt in range(max_retries + 1):
         try:
             _throttle(profile)
-            resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
-            resp.raise_for_status()
+            if semaphore is not None:
+                semaphore.acquire()
+            try:
+                resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
+                resp.raise_for_status()
+            finally:
+                if semaphore is not None:
+                    semaphore.release()
             break
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
             if attempt < max_retries:
