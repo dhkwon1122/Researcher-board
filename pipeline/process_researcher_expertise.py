@@ -16,14 +16,16 @@ Source:
   data/processed/core_technology_grade_info.json     (등급 S/A/B 개요)
   data/processed/tech_ownership.csv                  (tech_1~5/lv_1~5/portion_1~5)
   data/processed/tech_ownership_lv_info.json         (Lv 1~5 개요)
-  data/processed/publications.csv                    (저널 권위도는 LLM으로 별도 조회/캐시)
+  data/processed/publications.csv                    (저널 권위도는 journal_authority.py가 별도 조회/캐시)
   data/processed/patents.csv
   data/processed/work_objective.csv                  (24~26년 업무목표, process_work_objective.py가 생성)
 
-저널 권위도 캐시(journal_authority[.<profile>].json)는 평가 값이 실제로 채워진
-저널은 건너뛰고, 값이 비어 있는(신규거나 이전 조회 실패로 남은) 저널만 매번
-재조회한다. 캐시와 무관하게 전체 저널을 다시 확인하려면:
+저널 권위도 조회/캐시 로직은 pipeline/journal_authority.py로 분리되어 있다.
+평가 값이 실제로 채워진 저널은 건너뛰고, 값이 비어 있는(신규거나 이전 조회
+실패로 남은) 저널만 매번 재조회한다. 캐시와 무관하게 전체 저널을 다시
+확인하려면(둘 다 동일하게 동작 — 이 파일 실행 시 자동으로 함께 호출됨):
   python pipeline/process_researcher_expertise.py --refresh-journals
+  python pipeline/journal_authority.py --refresh-journals   (독립 실행)
 
 Output:
   data/processed/연구원 보유 전문성 분석[.<profile>].json
@@ -60,6 +62,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import OUT_DIR  # noqa: E402
 from excel_reader import clean_str as _clean  # noqa: E402
 from llm_client import call_llm, extract_json  # noqa: E402
+import journal_authority  # noqa: E402
 import rd_specialist_markdown as mmd  # noqa: E402
 
 _SYSTEM_PROMPT = """# Role
@@ -101,8 +104,6 @@ HR 담당자와 R&D 부서장이 이 연구원의 전문성을 객관적으로 �
 }
 ※ hard_skills/domain_knowledge의 하위 항목은 판단 근거가 전혀 없으면 키를 생략하세요.
 """
-
-_JOURNAL_SYSTEM_PROMPT = '당신은 학술 저널/학회의 권위도를 평가하는 전문가입니다. 요청한 JSON 형식만 출력하세요.'
 
 _HARD_SKILL_KEYS = ['languages_frameworks', 'hardware_equipment_control', 'analysis_simulation_tools']
 _DOMAIN_KEYS = ['academic_theoretical_background', 'industry_standards', 'patent_trend_understanding']
@@ -299,62 +300,6 @@ def _work_objective_text(row) -> str:
     return '\n'.join(lines) if lines else '(데이터 없음)'
 
 
-def _unique_journals(pub_df: pd.DataFrame) -> list:
-    if pub_df.empty or 'journal' not in pub_df.columns:
-        return []
-    return sorted({_clean(j) for j in pub_df['journal'] if _clean(j)})
-
-
-def _journal_cache_path(profile: str) -> str:
-    suffix = mmd.profile_suffix(profile)
-    return os.path.join(OUT_DIR, f'journal_authority{suffix}.json')
-
-
-def _load_journal_cache(profile: str = 'default') -> dict:
-    path = _journal_cache_path(profile)
-    if not os.path.exists(path):
-        return {}
-    with open(path, encoding='utf-8') as f:
-        return json.load(f)
-
-
-def _save_journal_cache(cache: dict, profile: str = 'default'):
-    with open(_journal_cache_path(profile), 'w', encoding='utf-8') as f:
-        json.dump(cache, f, ensure_ascii=False, indent=2)
-
-
-def _update_journal_authority(journals: list, cache: dict, profile: str = 'default', force: bool = False) -> dict:
-    """캐시에 실제 평가 값이 채워진 저널은 건너뛰고, 값이 비어 있는 저널(신규거나
-    이전 조회가 실패해 빈 문자열로 남은 것)만 사내 LLM으로 재조회한다(누적 재사용,
-    profile별 분리). 단순히 캐시에 키가 있는지가 아니라 값이 실제로 있는지로
-    판단해야, 실패했던 저널이 캐시에 빈 값으로 영구히 박제되지 않는다.
-    force=True(--refresh-journals)면 캐시 값과 무관하게 전달된 저널 전체를
-    다시 조회한다."""
-    targets = journals if force else [j for j in journals if not cache.get(j)]
-    if not targets:
-        return cache
-    label = '전체 재조회' if force else '신규/미확인'
-    print(f'[process_researcher_expertise] 저널 권위도 조회 중 ({label} {len(targets)}건, profile={profile})...')
-    for j in targets:
-        prompt = (
-            f'학술지/저널명: {j}\n'
-            f'이 저널의 SCI/SCIE 여부, 대략적인 impact factor 수준, 해당 분야에서의 '
-            f'권위·명성 수준을 1~2문장으로 평가해 주세요. 확실하지 않으면 "확인 불가"라고 답하세요.\n'
-            f'다음 JSON 형식으로만 출력하세요: {{"authority": "평가 내용"}}'
-        )
-        raw = call_llm(prompt, _JOURNAL_SYSTEM_PROMPT, max_tokens=300, profile=profile)
-        authority = ''
-        if raw:
-            try:
-                authority = json.loads(extract_json(raw)).get('authority', '')
-            except json.JSONDecodeError:
-                authority = ''
-        cache[j] = authority
-        print(f'    [{"OK" if authority else "실패"}] {j}')
-    _save_journal_cache(cache, profile)
-    return cache
-
-
 def _build_prompt(edu_text, task_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text) -> str:
     return f"""아래는 한 연구원의 이력 데이터입니다. 개인 식별 정보(이름/사번 등)는 제외되어 있습니다.
 
@@ -541,14 +486,18 @@ def process(profile: str = 'default', refresh_journals: bool = False) -> bool:
     lv_map = {str(i['lv']): i['definition'] for i in lv_info}
     std_map, sait_map = _build_job_def_maps(std_defs, sait_defs)
 
-    journal_cache = _load_journal_cache(profile)
-    journal_cache = _update_journal_authority(_unique_journals(publications), journal_cache, profile,
-                                               force=refresh_journals)
+    journal_cache = journal_authority.load_cache(profile)
+    journal_cache = journal_authority.update_authority(
+        journal_authority.unique_journals(publications), journal_cache, profile, force=refresh_journals)
 
     rids = researchers['researcher_id'].unique()
+    total = len(rids)
     results = []
-    print(f'[process_researcher_expertise] 연구원 {len(rids)}명 전문성 분석 중 (profile={profile})...')
-    for rid in rids:
+    success_count = 0
+    fail_count = 0
+    skip_count = 0
+    print(f'[process_researcher_expertise] 연구원 {total}명 전문성 분석 중 (profile={profile})...')
+    for idx, rid in enumerate(rids, start=1):
         edu_text = _education_text(education[education['researcher_id'] == rid]) if not education.empty else '(데이터 없음)'
         task_text = _task_history_text(
             tasks[tasks['researcher_id'] == rid] if not tasks.empty else pd.DataFrame(), tasks_info
@@ -587,16 +536,21 @@ def process(profile: str = 'default', refresh_journals: bool = False) -> bool:
         if all(t == '(데이터 없음)' for t in
                (edu_text, task_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text)):
             print(f'    [{rid}] 데이터 없음 — 건너뜀')
-            continue
+            skip_count += 1
+        else:
+            prompt = _build_prompt(edu_text, task_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text)
+            analysis = _analyze_researcher(prompt, profile=profile)
+            if analysis is None:
+                print(f'    [{rid}] 분석 실패')
+                fail_count += 1
+            else:
+                results.append({'researcher_id': rid, **analysis})
+                print(f'    [{rid}] 분석 완료')
+                success_count += 1
 
-        prompt = _build_prompt(edu_text, task_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text)
-        analysis = _analyze_researcher(prompt, profile=profile)
-        if analysis is None:
-            print(f'    [{rid}] 분석 실패')
-            continue
-
-        results.append({'researcher_id': rid, **analysis})
-        print(f'    [{rid}] 분석 완료')
+        if idx % 10 == 0 or idx == total:
+            print(f'    (완료인원 {idx}명/전체 {total}명, {success_count}명 성공, '
+                  f'{fail_count}명 실패, {skip_count}명 건너뜀)')
 
     suffix = mmd.profile_suffix(profile)
     os.makedirs(OUT_DIR, exist_ok=True)

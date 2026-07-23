@@ -137,9 +137,14 @@
        → data/processed/연구원 보유 전문성 분석.json / .html
          (학력/과제이력/직무이력/핵심기술/보유기술/논문/특허/업무목표(24~26년)를
           종합해 사내 LLM이 강점 분야·핵심 기술 역량·도메인 지식을 구조화된
-          JSON으로 분석. 논문 저널 권위도는 data/processed/journal_authority.json
-          에 캐시. 이미 저장된 JSON을 LLM 재호출 없이 HTML로만 다시 만들려면
-          --html-only 옵션 사용)
+          JSON으로 분석. 진행 중 10명 처리될 때마다 "(완료인원 N명/전체 N명,
+          N명 성공, N명 실패, N명 건너뜀)" 요약을 출력. 이미 저장된 JSON을
+          LLM 재호출 없이 HTML로만 다시 만들려면 --html-only 옵션 사용)
+       ※ 논문 저널 권위도 조회는 pipeline/journal_authority.py로 분리되어 있다
+          (data/processed/journal_authority.json 캐시). 이 파일 실행 시 자동으로
+          함께 호출되며, 캐시만 갱신하고 싶으면 독립적으로도 실행 가능:
+          python pipeline/journal_authority.py [--profile thinkingcap] [--refresh-journals]
+          ※ 사내 LLM 호출(비용 발생) — run_pipeline.py 자동 실행에는 포함되지 않음
 
     4) python pipeline/process_project_researcher_fit.py   (연구원 매칭)
        → data/processed/project_fit_by_project.json,

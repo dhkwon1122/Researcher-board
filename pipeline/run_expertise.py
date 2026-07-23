@@ -24,6 +24,9 @@ researchers/education/tasks/publications/patents 등)은 이 파일에도
   1) python pipeline/process_project_expertise.py      (과제 전문성 분석)
      python pipeline/process_project_search.py         (선택: 유사 기업/학계 탐색)
   2) python pipeline/process_researcher_expertise.py   (연구원 전문성 분석)
+     ※ 논문 저널 권위도 조회(pipeline/journal_authority.py)가 이 단계 실행 시
+       자동으로 함께 호출된다. 독립적으로 캐시만 갱신하려면:
+       python pipeline/journal_authority.py [--profile thinkingcap] [--refresh-journals]
   3) python pipeline/process_project_researcher_fit.py (과제·연구원 매칭)
   4) python pipeline/process_researcher_similarity.py  (선택: 연구원 ↔ 연구원 유사도)
   ※ 두 사내 LLM(thinkingcap/gpt-4o)을 비교하려면 각 단계를 --profile thinkingcap로
@@ -143,6 +146,7 @@ def run():
         print('\n전문성 분석 전처리 완료 — 이어서 아래 순서로 직접 실행하세요 (사내 LLM 호출, 비용 발생):')
         print('  1) python pipeline/process_project_expertise.py')
         print('  2) python pipeline/process_researcher_expertise.py')
+        print('       (논문 저널 권위도 조회 pipeline/journal_authority.py가 자동으로 함께 호출됨)')
         print('  3) python pipeline/process_project_researcher_fit.py')
         print('  4) python pipeline/process_researcher_similarity.py   (선택)')
 
