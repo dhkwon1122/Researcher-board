@@ -28,7 +28,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import BASE_DIR  # noqa: E402
 sys.path.insert(0, BASE_DIR)
-from llm_client import call_llm, extract_json  # noqa: E402
+from llm_client import call_llm, extract_json, max_concurrency, run_concurrent  # noqa: E402
 from services.llm import LLMError, embed  # noqa: E402,F401 (embed/LLMError는 호출부에서도 사용)
 
 TOP_K = 5
@@ -200,15 +200,33 @@ def compute_embeddings(job_texts: list, researcher_texts: list):
 def match_by_target(jobs: list, researcher_ids: list, researcher_texts: list,
                      job_texts: list, sims: np.ndarray, log_prefix: str = '',
                      profile: str = 'default') -> list:
-    """직무별 상위 K명 연구원을 추출한 뒤 LLM 판단.
+    """직무별 상위 K명 연구원을 추출한 뒤 LLM 판단. 후보 추출(로컬 계산)은 순차로
+    준비하고, 실제 LLM 판단 호출은 profile의 동시 호출 허용치만큼 스레드풀로
+    동시에 실행한다(journal_authority.py/process_researcher_expertise.py와 동일한
+    패턴) — 개별 직무 판단 중 예기치 못한 예외가 나도 다른 직무 판단은 계속
+    진행하고, 실패한 직무만 에러와 함께 로그로 남긴다(판단 결과 없음으로 처리).
     반환: [{'target_id','target_name','job_title','rankings':[{'researcher_id','fit_score','reason'}]}]"""
-    results = []
+    prepared = []
     for j_idx, job in enumerate(jobs):
         top_idx = top_k_idx(sims[:, j_idx], min(TOP_K, len(researcher_ids)))
         candidate_texts = [researcher_texts[i] for i in top_idx]
         subject_block = f'[직무 요구사항]\n{job_texts[j_idx]}'
-        judged = run_matching_llm(SYSTEM_PROMPT_BY_TARGET, subject_block, candidate_texts, '후보자', 'rankings',
-                                   profile=profile)
+        prepared.append((job, top_idx, subject_block, candidate_texts))
+
+    workers = max_concurrency(profile)
+    tasks = [
+        (lambda sb=subject_block, ct=candidate_texts: run_matching_llm(
+            SYSTEM_PROMPT_BY_TARGET, sb, ct, '후보자', 'rankings', profile=profile))
+        for _, _, subject_block, candidate_texts in prepared
+    ]
+    task_results = run_concurrent(tasks, max_workers=workers)
+
+    results = []
+    for (job, top_idx, _, _), (judged, error) in zip(prepared, task_results):
+        if error is not None:
+            print(f"{log_prefix}[{job['target_name']} / {job['title']}] 판단 오류: "
+                  f"{type(error).__name__}: {error}")
+            judged = []
         rankings = [
             {'researcher_id': researcher_ids[top_idx[r['idx']]], 'fit_score': r['fit_score'], 'reason': r['reason']}
             for r in judged
@@ -224,16 +242,30 @@ def match_by_target(jobs: list, researcher_ids: list, researcher_texts: list,
 def match_by_researcher(jobs: list, researcher_ids: list, researcher_texts: list,
                          job_texts: list, sims: np.ndarray, log_prefix: str = '',
                          profile: str = 'default') -> list:
-    """연구원별 상위 K건 직무를 추출한 뒤 LLM 판단.
+    """연구원별 상위 K건 직무를 추출한 뒤 LLM 판단. match_by_target과 동일하게
+    후보 추출은 순차 준비, 실제 LLM 판단은 동시 실행한다.
     반환: [{'researcher_id','matches':[{'target_id','target_name','job_title','fit_score','reason'}]}]"""
-    results = []
+    prepared = []
     for r_idx, rid in enumerate(researcher_ids):
         top_idx = top_k_idx(sims[r_idx, :], min(TOP_K, len(jobs)))
         candidate_jobs = [jobs[i] for i in top_idx]
         candidate_texts = [job_texts[i] for i in top_idx]
         subject_block = f'[연구원 전문성 프로필]\n{researcher_texts[r_idx]}'
-        judged = run_matching_llm(SYSTEM_PROMPT_BY_RESEARCHER, subject_block, candidate_texts, '후보 직무', 'matches',
-                                  profile=profile)
+        prepared.append((rid, candidate_jobs, subject_block, candidate_texts))
+
+    workers = max_concurrency(profile)
+    tasks = [
+        (lambda sb=subject_block, ct=candidate_texts: run_matching_llm(
+            SYSTEM_PROMPT_BY_RESEARCHER, sb, ct, '후보 직무', 'matches', profile=profile))
+        for _, _, subject_block, candidate_texts in prepared
+    ]
+    task_results = run_concurrent(tasks, max_workers=workers)
+
+    results = []
+    for (rid, candidate_jobs, _, _), (judged, error) in zip(prepared, task_results):
+        if error is not None:
+            print(f'{log_prefix}[{rid}] 판단 오류: {type(error).__name__}: {error}')
+            judged = []
         matches = [
             {
                 'target_id': candidate_jobs[m['idx']]['target_id'],
@@ -245,7 +277,7 @@ def match_by_researcher(jobs: list, researcher_ids: list, researcher_texts: list
             for m in judged
         ]
         results.append({'researcher_id': rid, 'matches': matches})
-        print(f'{log_prefix}[{rid}] 후보 {len(top_idx)}건 중 {len(matches)}건 판단')
+        print(f'{log_prefix}[{rid}] 후보 {len(candidate_jobs)}건 중 {len(matches)}건 판단')
     return results
 
 

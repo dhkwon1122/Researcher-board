@@ -36,6 +36,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import OUT_DIR  # noqa: E402
 import rd_specialist_markdown as mmd  # noqa: E402
 import project_summary  # noqa: E402
+from llm_client import max_concurrency, run_concurrent  # noqa: E402
 
 
 def _read_projects() -> pd.DataFrame:
@@ -121,8 +122,12 @@ def process(profile: str = 'default') -> bool:
 
     page_cache = project_summary.load_page_cache()
     summary_cache = project_summary.load_cache(profile)
-    results = []
     print(f'[process_project_expertise] 과제 {len(projects)}건 전문성 분석 중 (profile={profile})...')
+
+    # 1단계: 과제별 컨플루언스/PDF 요약 준비(순차) — Confluence 조회·요약 캐시
+    # (page_cache/summary_cache)는 공유 dict이므로 한 스레드(메인)에서만 읽고
+    # 쓴다. 요약이 없는(신규 캐시 미스 실패) 과제는 이 단계에서 바로 건너뛴다.
+    prepared = []
     for _, proj in projects.iterrows():
         dep_name = proj['dep_name']
         project_name = proj['project_name']
@@ -133,27 +138,48 @@ def process(profile: str = 'default') -> bool:
         if summary is None:
             print(f'  [{project_name}] 건너뜀')
             continue
-
-        description = _summary_description(summary)
-        expertise_analysis = mmd.analyze_expertise(project_name, description, profile=profile)
-        if not expertise_analysis:
-            print(f'  [{project_name}] 전문성 분석 실패 — 건너뜀')
-            continue
-
-        results.append({
-            'dep_name': dep_name,
-            'project_name': project_name,
-            'core_tech': summary.get('core_tech', ''),
-            'deliverable': summary.get('deliverable', ''),
-            'challenge': summary.get('challenge', ''),
-            'keywords_kr': summary.get('keywords_kr') or [],
-            'keywords_en': summary.get('keywords_en') or [],
-            'expertise_analysis': expertise_analysis,
-        })
-        print(f'  [{project_name}] 분석 완료')
+        prepared.append((dep_name, project_name, summary))
 
     project_summary.save_page_cache(page_cache)
     project_summary.save_cache(summary_cache, profile)
+
+    # 2단계: 실제 R&D Project Specialist Agent 딥다이브 분석(사내 LLM 호출)은
+    # profile의 동시 호출 허용치만큼 스레드풀로 동시에 실행한다(요약 단계와
+    # 달리 공유 캐시 없이 순수 LLM 호출 + 결과 반환뿐이라 동시 실행이 안전하다).
+    # 개별 과제 분석 중 예기치 못한 예외가 나도 다른 과제 분석은 계속 진행하고,
+    # 실패한 과제만 에러와 함께 로그로 남긴다.
+    results = []
+    if prepared:
+        workers = max_concurrency(profile)
+        print(f'[process_project_expertise] 과제 {len(prepared)}건 딥다이브 분석 시작 '
+              f'(동시 {workers}건, profile={profile})...')
+
+        tasks = [
+            (lambda name=project_name, desc=_summary_description(summary): mmd.analyze_expertise(
+                name, desc, profile=profile))
+            for _, project_name, summary in prepared
+        ]
+        task_results = run_concurrent(tasks, max_workers=workers)
+
+        for (dep_name, project_name, summary), (expertise_analysis, error) in zip(prepared, task_results):
+            if error is not None:
+                print(f'  [{project_name}] 분석 오류: {type(error).__name__}: {error}')
+                continue
+            if not expertise_analysis:
+                print(f'  [{project_name}] 전문성 분석 실패 — 건너뜀')
+                continue
+
+            results.append({
+                'dep_name': dep_name,
+                'project_name': project_name,
+                'core_tech': summary.get('core_tech', ''),
+                'deliverable': summary.get('deliverable', ''),
+                'challenge': summary.get('challenge', ''),
+                'keywords_kr': summary.get('keywords_kr') or [],
+                'keywords_en': summary.get('keywords_en') or [],
+                'expertise_analysis': expertise_analysis,
+            })
+            print(f'  [{project_name}] 분석 완료')
 
     suffix = mmd.profile_suffix(profile)
     os.makedirs(OUT_DIR, exist_ok=True)
