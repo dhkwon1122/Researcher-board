@@ -31,6 +31,11 @@ researchers/education/tasks/publications/patents 등)은 이 파일에도
   4) python pipeline/process_researcher_similarity.py  (선택: 연구원 ↔ 연구원 유사도)
   ※ 두 사내 LLM(thinkingcap/gpt-4o)을 비교하려면 각 단계를 --profile thinkingcap로
     한 번 더 실행한 뒤 python pipeline/process_llm_compare.py
+  ※ 위 1~3단계(journal_authority 포함)는 모두 개별 항목(과제/연구원/저널 등)
+    단위 LLM 호출을 profile의 동시 호출 허용치만큼 스레드풀로 병렬 실행한다.
+    profile='default'(전용 vLLM 서버)는 llm_config.LLM2_MAX_CONCURRENT(기본
+    8)만큼 동시 호출하고, profile='thinkingcap'(사내 공용 게이트웨이)는 기존
+    처럼 시간 기반 순차 제한(초당 최대 4건)을 따른다.
 
 출력 위치: data/processed/
 """
@@ -149,6 +154,8 @@ def run():
         print('       (논문 저널 권위도 조회 pipeline/journal_authority.py가 자동으로 함께 호출됨)')
         print('  3) python pipeline/process_project_researcher_fit.py')
         print('  4) python pipeline/process_researcher_similarity.py   (선택)')
+        print('  ※ 1~3단계는 profile의 동시 호출 허용치만큼 병렬로 LLM을 호출합니다')
+        print('     (llm_config.LLM2_MAX_CONCURRENT, profile=default 기본 8건).')
 
 
 if __name__ == '__main__':

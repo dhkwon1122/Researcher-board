@@ -73,28 +73,30 @@ def _project_desc_html(item: dict) -> str:
 
 
 def _build_html(items: list, profile: str = 'default') -> str:
+    """과제(project_confl_address.csv의 '소속' → dep_name)를 '플랫폼/팀'으로
+    라벨링해 그룹핑해 보여준다. 과제 단위 데이터라 researchers.csv의
+    org_code(비공식소속부서명/'과제/파트')에 대응하는 하위 그룹 데이터는 없다."""
+    anchored = [(f'project-{i}', it) for i, it in enumerate(items, start=1)]
+
     toc_links = []
-    cards = []
-    for i, it in enumerate(items, start=1):
-        anchor = f'project-{i}'
+    for anchor, it in anchored:
         toc_links.append(
             f'<a class="btn btn-sm btn-outline-primary rounded-pill" href="#{anchor}">'
             f'{html.escape(it["project_name"])}</a>'
         )
 
-        deepdive_html, other_html = mmd.render_expertise_html(
-            it.get('expertise_analysis', ''), anchor,
-            empty_message='전문성 분석 데이터 없음 (python pipeline/process_project_expertise.py 실행 필요)',
-        )
-
-        dep_badge = (
-            f'<span class="badge text-bg-dark rounded-pill">{html.escape(it["dep_name"])}</span>'
-            if it.get('dep_name') else ''
-        )
-        cards.append(f'''<section class="tech-card card" id="{anchor}">
+    sections = []
+    for dep_name, dep_pairs in mmd.group_ordered(anchored, lambda pair: pair[1].get('dep_name', '')):
+        sections.append(f'<h2 class="group-heading-1">플랫폼/팀: {html.escape(dep_name)}</h2>')
+        for anchor, it in dep_pairs:
+            deepdive_html, other_html = mmd.render_expertise_html(
+                it.get('expertise_analysis', ''), anchor,
+                empty_message='전문성 분석 데이터 없음 (python pipeline/process_project_expertise.py 실행 필요)',
+            )
+            sections.append(f'''<section class="tech-card card" id="{anchor}">
   <div class="card-body">
     <div class="tech-header d-flex align-items-center gap-2 mb-1">
-      {dep_badge}<h2>{html.escape(it['project_name'])}</h2>
+      <h2>{html.escape(it['project_name'])}</h2>
     </div>
     {_project_desc_html(it)}
     {deepdive_html}
@@ -103,7 +105,7 @@ def _build_html(items: list, profile: str = 'default') -> str:
 </section>''')
 
     profile_note = f' ({profile})' if profile != 'default' else ''
-    body_html = f'<nav class="toc">{"".join(toc_links)}</nav>\n{"".join(cards)}'
+    body_html = f'<nav class="toc">{"".join(toc_links)}</nav>\n{"".join(sections)}'
     return mmd.html_page(
         title=f'사내 과제 — R&D 전문성 매핑{profile_note}',
         heading=f'사내 과제 — R&amp;D 필수 전문성 및 직무 딥다이브 매핑{profile_note}',

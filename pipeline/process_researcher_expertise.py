@@ -405,24 +405,41 @@ def _researcher_card_html(item: dict, name_map: dict, anchor: str) -> str:
 def _build_html(results: list, profile: str, researchers_df: pd.DataFrame) -> str:
     """연구원 보유 전문성 분석[.profile].json → 사람이 보는 HTML 리포트.
     default/thinkingcap 어느 profile을 넘겨도 항상 이 한 함수로만 렌더링하므로
-    두 산출물의 포맷은 항상 동일하다."""
-    name_map = {}
+    두 산출물의 포맷은 항상 동일하다.
+
+    researchers.csv의 department(현소속부서명) → '플랫폼/팀', org_code(비공식
+    소속부서명) → '과제/파트'로 라벨링해 2단계로 그룹핑해 보여준다(JSON 구조
+    자체는 그대로 flat list — process_project_researcher_fit.py 등이 이 JSON을
+    그대로 읽으므로 하위 호환 유지)."""
+    name_map, dept_map, org_map = {}, {}, {}
     if not researchers_df.empty:
-        name_map = researchers_df.set_index('researcher_id')['name'].to_dict()
+        indexed = researchers_df.set_index('researcher_id')
+        name_map = indexed['name'].to_dict()
+        dept_map = indexed['department'].to_dict()
+        org_map = indexed['org_code'].to_dict()
+
+    anchor_of = {item.get('researcher_id', ''): f'researcher-{i}' for i, item in enumerate(results, start=1)}
 
     toc_links = []
-    cards = []
-    for i, item in enumerate(results, start=1):
+    for item in results:
         rid = item.get('researcher_id', '')
-        anchor = f'researcher-{i}'
         label = f'{rid} {name_map.get(rid, "")}'.strip()
         toc_links.append(
-            f'<a class="btn btn-sm btn-outline-primary rounded-pill" href="#{anchor}">{html.escape(label)}</a>'
+            f'<a class="btn btn-sm btn-outline-primary rounded-pill" href="#{anchor_of[rid]}">'
+            f'{html.escape(label)}</a>'
         )
-        cards.append(_researcher_card_html(item, name_map, anchor))
+
+    sections = []
+    for dept, dept_items in mmd.group_ordered(results, lambda it: dept_map.get(it.get('researcher_id', ''), '')):
+        sections.append(f'<h2 class="group-heading-1">플랫폼/팀: {html.escape(dept)}</h2>')
+        for org, org_items in mmd.group_ordered(dept_items, lambda it: org_map.get(it.get('researcher_id', ''), '')):
+            sections.append(f'<h3 class="group-heading-2">과제/파트: {html.escape(org)}</h3>')
+            for item in org_items:
+                rid = item.get('researcher_id', '')
+                sections.append(_researcher_card_html(item, name_map, anchor_of[rid]))
 
     profile_note = f' ({profile})' if profile != 'default' else ''
-    body_html = f'<nav class="toc">{"".join(toc_links)}</nav>\n{"".join(cards)}'
+    body_html = f'<nav class="toc">{"".join(toc_links)}</nav>\n{"".join(sections)}'
     return mmd.html_page(
         title=f'연구원 보유 전문성 분석{profile_note}',
         heading=f'연구원 보유 전문성 분석{profile_note}',

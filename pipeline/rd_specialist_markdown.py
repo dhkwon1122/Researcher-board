@@ -30,6 +30,19 @@ def parse_profile_arg(argv: list, default: str = 'default') -> str:
     return default
 
 
+def group_ordered(items: list, key_fn) -> list:
+    """items를 key_fn(item) 그룹 키 기준으로 묶어 [(key, [item, ...]), ...]로 반환.
+    HTML 리포트를 부서/조직 등 기준으로 시각적으로 묶어 보여줄 때 사용
+    (process_researcher_expertise.py, process_project_expertise.py). 그룹은
+    키 문자열 기준 정렬하되, 빈 키('미분류')는 항상 맨 뒤로 보낸다."""
+    groups: dict = {}
+    for item in items:
+        key = key_fn(item) or '미분류'
+        groups.setdefault(key, []).append(item)
+    keys = sorted(groups.keys(), key=lambda k: (k == '미분류', k))
+    return [(k, groups[k]) for k in keys]
+
+
 # R&D Project Specialist Agent — 사내 LLM 시스템 프롬프트 (원문 그대로 사용).
 # process_project_expertise.py(사내 과제) 등 여러 스크립트가 동일한 페르소나로
 # "필수 직무·전문성 딥다이브 매핑"을 생성하는 데 재사용한다.
@@ -356,6 +369,17 @@ EXPERTISE_CARD_STYLE = """
   }
   .other-sections .accordion-button:not(.collapsed) { color: var(--gs-text); background: var(--gs-bg); box-shadow: none; }
   .other-sections .accordion-button:focus { box-shadow: none; }
+  .group-heading-1 {
+    max-width: 900px; margin: 40px auto 6px; padding-bottom: 8px;
+    font-size: 1.1rem; font-weight: 800; color: var(--gs-text);
+    border-bottom: 2px solid var(--gs-accent);
+  }
+  .group-heading-1:first-child { margin-top: 0; }
+  .group-heading-2 {
+    max-width: 900px; margin: 18px auto 10px;
+    font-size: 0.8rem; font-weight: 700; color: var(--gs-muted);
+    text-transform: uppercase; letter-spacing: 0.03em;
+  }
 """
 
 
