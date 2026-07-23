@@ -110,12 +110,12 @@ def _parse_is_corresponding(val) -> bool:
     return s in ('y', 'yes', '예', 'o', '○', '1', 'true', '교신')
 
 
-def process():
+def process() -> bool:
     from excel_reader import norm_id, read_xlsx
 
     if not os.path.exists(SOURCE):
         print(f'[process_publications] 파일 없음: {SOURCE}')
-        return
+        return False
 
     print(f'[process_publications] 읽는 중: {SOURCE}  (헤더: 1번째 행)')
     df = read_xlsx(SOURCE, header_row=0)
@@ -124,7 +124,7 @@ def process():
     if missing:
         print(f'[process_publications] 컬럼 없음: {missing}')
         print(f'  실제 컬럼: {list(df.columns)}')
-        return
+        return False
 
     result = pd.DataFrame({
         'researcher_id':  df[COL_ID].apply(norm_id),
@@ -154,6 +154,7 @@ def process():
     os.makedirs(OUT_DIR, exist_ok=True)
     result.to_csv(OUTPUT, index=False, encoding='utf-8-sig')
     print(f'[process_publications] 저장 완료: {OUTPUT}  ({len(result)}행)')
+    return True
 
 
 if __name__ == '__main__':

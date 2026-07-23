@@ -107,12 +107,12 @@ def _merge_consecutive_periods(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(result)
 
 
-def process():
+def process() -> bool:
     from excel_reader import norm_id, read_xlsx
 
     if not os.path.exists(SOURCE):
         print(f'[process_tasks] 파일 없음: {SOURCE}')
-        return
+        return False
 
     print(f'[process_tasks] 읽는 중: {SOURCE}')
     df = read_xlsx(SOURCE)
@@ -122,7 +122,7 @@ def process():
     if missing:
         print(f'[process_tasks] 컬럼 없음: {missing}')
         print(f'  실제 컬럼: {list(df.columns)}')
-        return
+        return False
 
     result = pd.DataFrame({
         'researcher_id': df[COL_ID].apply(norm_id),
@@ -141,6 +141,7 @@ def process():
     os.makedirs(OUT_DIR, exist_ok=True)
     result.to_csv(OUTPUT, index=False, encoding='utf-8-sig')
     print(f'[process_tasks] 저장 완료: {OUTPUT}  ({len(result)}행)')
+    return True
 
 
 if __name__ == '__main__':

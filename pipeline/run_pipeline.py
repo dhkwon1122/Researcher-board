@@ -23,6 +23,8 @@
                            처리기: pipeline/process_awards.py
   publications_raw    : researcher_id, title, journal, pub_year,
                         impact_factor, citation_count, is_corresponding
+                        ※ '개인별논문현황_2016_2026.xlsx' 가 있으면 자동 추출 (별도 raw 불필요)
+                           처리기: pipeline/process_publications.py
   patents_raw         : researcher_id, application_id, title, title_ko, status,
                         share_ratio, is_lead_inventor, patent_grade, patent_grade_a_sub,
                         application_no, application_date, registration_no,
@@ -64,7 +66,7 @@
                         job_end_date_1, ... (사람마다 최대 직무 구간 수만큼 반복)
                         ※ '임직원_직무이력.xlsx' 가 있으면 자동 추출 (별도 raw 불필요)
                            처리기: pipeline/process_job_profile.py
-  (업무목표는 별도 _raw 폴백 없음, 아래 전용 파일 항목 참고)
+  (업무목표·과제 수행 이력은 별도 _raw 폴백 없음, 아래 전용 파일 항목 참고)
 
 [업무목표] ★ 전용 원천 파일 3개에서 자동 추출 (별도 raw 불필요)
   업무목표24.xlsx / 업무목표25.xlsx / 업무목표26.xlsx (사번, 목표명, 상세설명)
@@ -74,6 +76,14 @@
       8번째 입력 소스로 쓰인다(LLM 호출 없이 순수 엑셀 전처리만 수행).
     ※ 처리기: pipeline/process_work_objective.py
        (사번/목표명/상세설명 컬럼명 등 설정은 해당 파일 상단에서 변경)
+
+[과제 수행 이력] ★ 전용 원천 파일에서 자동 추출 (별도 raw 불필요, 폴백 없음)
+  개인별과제투입기간데이터_260114.xlsb (KNOXID, 과제명, 시작일, 해제일, 투입률)
+    → data/processed/tasks.csv (researcher_id, task_name, start_date, end_date,
+      input_rate). 대시보드 타임라인과 process_researcher_expertise.py의
+      과제 수행 이력 입력 소스로 모두 쓰인다.
+    ※ 처리기: pipeline/process_tasks.py
+       (KNOXID 등 컬럼명 설정은 해당 파일 상단에서 변경)
 
 [직무정보 참조 데이터] ★ 전용 원천 파일에서 자동 추출 (별도 raw 불필요)
   직무정보_표준.xlsx (직무, 정의)
@@ -105,10 +115,16 @@
 
 [과제 전문성 분석 → 연구원 전문성 분석 → 연구원 매칭] ★ 사내 Confluence +
   사내 LLM 필요, 비용이 커서 run_pipeline.py 자동 실행에는 포함하지 않음.
-  project_confl_address.csv 준비 후, 아래 순서로 별도 실행한다(각 단계는
-  이전 단계의 출력 파일을 입력으로 사용하므로 반드시 이 순서를 지킨다):
+  입력 데이터 전처리는 pipeline/run_expertise.py 로 한 번에 준비한 뒤(내부적으로
+  process_project_confl.py 포함, researchers/education/tasks/... 등 이 분석에
+  필요한 모든 전처리를 실행), 아래 순서로 별도 실행한다(각 단계는 이전 단계의
+  출력 파일을 입력으로 사용하므로 반드시 이 순서를 지킨다):
 
-    1) python pipeline/process_project_confl.py
+    0) python pipeline/run_expertise.py
+       → project_confl_address.csv 등 이 아래 1)~4) 단계에 필요한 입력을 모두 준비
+         (LLM 호출 없음, 비용 발생 없음)
+
+    1) python pipeline/process_project_confl.py   (run_expertise.py에 포함되어 있어 개별 실행 불필요)
        → data/processed/project_confl_address.csv (소속/과제명/컨플 주소)
 
     2) python pipeline/process_project_expertise.py   (컨플 요약 + 과제 전문성 분석)
@@ -184,9 +200,8 @@ OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data',
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from excel_reader import read_xlsx, norm_researcher_id_col
 
-# 평가·특허·양성이력·시상·학력·리더십·인센티브·연구원기본정보는 전용 처리기에서 추출하므로 목록에서 제외
+# 평가·특허·양성이력·시상·학력·리더십·인센티브·연구원기본정보·논문은 전용 처리기에서 추출하므로 목록에서 제외
 TABLES = [
-    'publications',
     'technology_transfer',
     'transfers',
     'certifications',
@@ -374,7 +389,25 @@ def run():
     if not wobj_ok:
         missing.append('work_objective (업무목표24/25/26.xlsx)')
 
-    # ── 10. 나머지 테이블 (researchers, publications, technology_transfer, transfers, certifications, succession) ──
+    # ── 9-5. 논문 현황: 개인별논문현황_2016_2026.xlsx 우선, 없으면 publications_raw 폴백 ─
+    from process_publications import process as process_publications
+    pub_ok = process_publications()
+    if not pub_ok:
+        df = _read_raw('publications')
+        if df is not None:
+            out_path = os.path.join(OUT_DIR, 'publications.csv')
+            df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+            print(f'  [OK]   publications.csv (publications_raw 폴백, {len(df)}행)')
+        else:
+            missing.append('publications (개인별논문현황_2016_2026.xlsx 또는 publications_raw)')
+
+    # ── 9-6. 과제 수행 이력: 개인별과제투입기간데이터_260114.xlsb (LLM 호출 없음, 폴백 없음) ─
+    from process_tasks import process as process_tasks
+    tasks_ok = process_tasks()
+    if not tasks_ok:
+        missing.append('tasks (개인별과제투입기간데이터_260114.xlsb)')
+
+    # ── 10. 나머지 테이블 (technology_transfer, transfers, certifications, succession) ──
     for table in TABLES:
         df = _read_raw(table)
         if df is None:
