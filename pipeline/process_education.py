@@ -1,7 +1,9 @@
 """
 학력 처리 모듈
 
-원천 파일: data/raw/임직원_학력.xlsx
+원천: source_reader.read_source('education')
+  → DB education_stg 테이블 또는 data/raw_csv/education.csv
+  (1단계 xlsx_to_raw_csv.py가 data/raw/임직원_학력.xlsx를 DRM 제거해 만든 사본)
 출력 파일: data/processed/education.csv
 
 읽는 컬럼:
@@ -25,10 +27,7 @@ import sys
 
 import pandas as pd
 
-RAW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
-
-EDUCATION_FILE = '임직원_학력.xlsx'
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
 COL_ID        = '사번'
@@ -52,7 +51,8 @@ HIGHER_DEGREES = {'박사', '석사', '학사'}
 DEG_ORDER = {'박사': 0, '석사': 1, '학사': 2, '전문대': 3, '고교': 4}
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import read_xlsx, norm_id
+from excel_reader import norm_id
+from source_reader import read_source
 
 
 def _normalize_degree(val: str) -> str:
@@ -84,12 +84,11 @@ def _extract_year(year_val, date_val) -> str:
 
 
 def process() -> bool:
-    raw_path = os.path.join(RAW_DIR, EDUCATION_FILE)
-    if not os.path.exists(raw_path):
-        print(f'[SKIP] {EDUCATION_FILE} 파일 없음 — education_raw 폴백 시도')
+    df = read_source('education')
+    if df is None:
+        print('[SKIP] education 원천 데이터 없음 '
+              '(DB education_stg 또는 data/raw_csv/education.csv) — education_raw 폴백 시도')
         return False
-
-    df = read_xlsx(raw_path)
     df.columns = [str(c).strip() for c in df.columns]
 
     if COL_ID not in df.columns:

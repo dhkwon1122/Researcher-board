@@ -1,7 +1,9 @@
 """
 인센티브 선정 이력 처리 모듈
 
-원천 파일: data/raw/핵심이력.xlsx
+원천: source_reader.read_source('incentive_selection')
+  → DB incentive_selection_stg 테이블 또는 data/raw_csv/incentive_selection.csv
+  (1단계 xlsx_to_raw_csv.py가 data/raw/핵심이력.xlsx를 DRM 제거해 만든 사본)
 출력 파일: data/processed/incentive_selection.csv
 
 읽는 컬럼:
@@ -23,10 +25,7 @@ import sys
 
 import pandas as pd
 
-RAW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
-
-INCENTIVE_FILE = '핵심이력.xlsx'
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
 COL_ID = '사번'
@@ -35,7 +34,8 @@ YEAR_COLS = {'22': 2022, '23': 2023, '24': 2024, '25': 2025, '26': 2026}
 # ─────────────────────────────────────────────────────────────────────────────
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import read_xlsx, norm_id
+from excel_reader import norm_id
+from source_reader import read_source
 
 
 def _norm_col(c) -> str:
@@ -51,12 +51,11 @@ def _norm_col(c) -> str:
 
 
 def process() -> bool:
-    raw_path = os.path.join(RAW_DIR, INCENTIVE_FILE)
-    if not os.path.exists(raw_path):
-        print(f'[SKIP] {INCENTIVE_FILE} 파일 없음 — incentive_raw 폴백 시도')
+    df = read_source('incentive_selection')
+    if df is None:
+        print('[SKIP] incentive_selection 원천 데이터 없음 '
+              '(DB incentive_selection_stg 또는 data/raw_csv/incentive_selection.csv) — incentive_raw 폴백 시도')
         return False
-
-    df = read_xlsx(raw_path)
     df.columns = [_norm_col(c) for c in df.columns]
 
     if COL_ID not in df.columns:

@@ -1,7 +1,9 @@
 """
 특허 리스트 처리 모듈
 
-원천 파일: data/raw/특허 리스트.xlsx
+원천: source_reader.read_source('patents')
+  → DB patents_stg 테이블 또는 data/raw_csv/patents.csv
+  (1단계 xlsx_to_raw_csv.py가 data/raw/특허 리스트.xlsx를 DRM 제거해 만든 사본)
 출력 파일: data/processed/patents.csv
 
 처리 로직:
@@ -26,10 +28,7 @@ import sys
 
 import pandas as pd
 
-RAW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
-
-PATENT_FILE = '특허 리스트.xlsx'
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
 COL_ID       = '사번'
@@ -54,16 +53,16 @@ OPTIONAL_COLS = [
 # ─────────────────────────────────────────────────────────────────────────────
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import read_xlsx, norm_id
+from excel_reader import norm_id
+from source_reader import read_source
 
 
 def process() -> bool:
-    raw_path = os.path.join(RAW_DIR, PATENT_FILE)
-    if not os.path.exists(raw_path):
-        print(f'[SKIP] {PATENT_FILE} 파일 없음 — patents_raw 폴백 시도')
+    df = read_source('patents')
+    if df is None:
+        print('[SKIP] patents 원천 데이터 없음 '
+              '(DB patents_stg 또는 data/raw_csv/patents.csv) — patents_raw 폴백 시도')
         return False
-
-    df = read_xlsx(raw_path)
 
     # 컬럼명 앞뒤 공백·숨김문자 제거 (Excel에서 흔히 발생)
     df.columns = [str(c).strip() for c in df.columns]

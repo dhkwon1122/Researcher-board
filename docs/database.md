@@ -77,6 +77,28 @@ DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/researcher_b
 
 ## 3. 데이터 적재
 
+### 3-0. (선택) DRM 원본 → raw CSV → DB 스테이징
+
+DRM xlsx를 직접 다루는 경우 아래 2단계를 먼저 거친다 — 자세한 구조는
+`docs/data_pipeline.md` 참고.
+
+```bash
+# ① Windows(Excel 설치 PC)에서: DRM xlsx → data/raw_csv/*.csv (전 컬럼, DRM 제거)
+python pipeline\xlsx_to_raw_csv.py
+
+# data/raw_csv/ 를 리눅스 서버로 복사한 뒤
+
+# ② 리눅스 서버에서: raw CSV → Postgres {name}_stg 스테이징 테이블
+python pipeline/load_raw_to_db.py
+```
+
+`DATABASE_URL` 이 설정돼 있으면 `run_pipeline.py`가 시작할 때 ②를 자동으로
+호출하므로, 보통은 `data/raw_csv/`만 서버에 올려두고 아래 3-1을 실행하면 된다.
+DB 없이 CSV만으로 개발할 때는 이 단계를 건너뛰어도 된다 — process_*.py가
+`data/raw_csv/*.csv`를 직접 읽는다.
+
+### 3-1. 최종 테이블 적재
+
 ```bash
 pip install -r requirements.txt          # sqlalchemy, psycopg2-binary, python-dotenv 포함
 python pipeline/load_to_db.py            # schema.sql 적용 + CSV 15개 → DB 적재
@@ -85,7 +107,8 @@ python pipeline/load_to_db.py            # schema.sql 적용 + CSV 15개 → DB 
 `load_to_db.py` 는 `pipeline/schema.sql` 을 먼저 실행(테이블·제약·인덱스 생성)한 뒤
 각 테이블을 `TRUNCATE` 하고 해당 CSV를 적재한다. 반복 실행해도 안전(멱등).
 
-전체 파이프라인 실행 시에도 `DATABASE_URL` 이 감지되면 마지막에 자동 적재된다.
+전체 파이프라인 실행 시에도 `DATABASE_URL` 이 감지되면 raw 스테이징 적재(3-0-②)와
+최종 적재(3-1)가 모두 자동으로 실행된다.
 ```bash
 python pipeline/run_pipeline.py
 ```
@@ -112,6 +135,12 @@ python app.py        # http://<사내IP>:8050
 | 테이블 | 비고 |
 |--------|------|
 | researchers, evaluations, education, incentive_selection, leadership, transfers, tasks, nurturing, awards, publications, patents, technology_transfer, certifications, succession | 조회용 |
+
+이와 별개로 `load_raw_to_db.py`가 만드는 `{name}_stg` 스테이징 테이블(예:
+`researchers_stg`, `publications_stg` 등, 총 10개 — 목록은 `pipeline/sources.py`)
+이 있다. 원본 xlsx 헤더를 그대로 보존한 전 컬럼 TEXT 테이블로, `process_*.py`가
+읽어서 위 최종 테이블로 가공하는 중간 산출물이다. 화면 코드는 이 테이블을
+직접 조회하지 않는다.
 | comments | upsert (UNIQUE: researcher_id, year, commenter_type) |
 
 ---

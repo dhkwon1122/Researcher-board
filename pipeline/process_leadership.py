@@ -1,7 +1,9 @@
 """
 리더십 진단 처리 모듈
 
-원천 파일: data/raw/리더십진단.xlsx
+원천: source_reader.read_source('leadership')
+  → DB leadership_stg 테이블 또는 data/raw_csv/leadership.csv
+  (1단계 xlsx_to_raw_csv.py가 data/raw/리더십진단.xlsx를 DRM 제거해 만든 사본)
 출력 파일:
   data/processed/leadership.csv          — 그룹별 역량 점수
   data/processed/leadership_comments.csv — 강점·개선점 주관식
@@ -37,10 +39,7 @@ from datetime import datetime
 
 import pandas as pd
 
-RAW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
-
-LEADERSHIP_FILE = '리더십진단.xlsx'
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
 COL_ID    = '진단대상자ID'
@@ -63,16 +62,16 @@ DIMS = list(COMPETENCY.keys())
 OTHERS_GROUPS = {'동료', '상사', '부서원'}
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import read_xlsx, norm_id
+from excel_reader import norm_id
+from source_reader import read_source
 
 
 def process() -> bool:
-    raw_path = os.path.join(RAW_DIR, LEADERSHIP_FILE)
-    if not os.path.exists(raw_path):
-        print(f'[SKIP] {LEADERSHIP_FILE} 파일 없음 — leadership_raw 폴백 시도')
+    df = read_source('leadership')
+    if df is None:
+        print('[SKIP] leadership 원천 데이터 없음 '
+              '(DB leadership_stg 또는 data/raw_csv/leadership.csv) — leadership_raw 폴백 시도')
         return False
-
-    df = read_xlsx(raw_path)
 
     # 컬럼명 정규화: xlwings가 숫자 헤더를 float로 읽으면 '1.0' → '1' 변환
     def _norm_col(c):

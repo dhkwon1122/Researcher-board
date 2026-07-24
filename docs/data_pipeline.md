@@ -1,22 +1,41 @@
 # 데이터 파이프라인 점검표 (source → goal → logic)
 
-원천 Excel(`data/raw/`) → 처리기(`pipeline/`) → 결과 CSV(`data/processed/`) →
-(선택) PostgreSQL 적재. 오케스트레이터: `pipeline/run_pipeline.py`.
+**3단계 구조**:
+1. **DRM 제거** (`pipeline/xlsx_to_raw_csv.py`, Windows) — `data/raw/`의 DRM xlsx
+   원본을 컬럼 선택 없이 **전체 그대로** `data/raw_csv/{name}.csv`로 변환.
+2. **DB 스테이징 적재** (`pipeline/load_raw_to_db.py`, Linux) — `data/raw_csv/*.csv`를
+   PostgreSQL `{name}_stg` 테이블(전 컬럼 TEXT, 원본 헤더 그대로)에 적재.
+   `run_pipeline.py`가 시작 시 자동 호출한다(`DATABASE_URL` 없으면 아무 것도 안 함).
+3. **후처리** (`pipeline/process_*.py`) — `source_reader.read_source(name)`으로
+   DB 스테이징 테이블(우선) 또는 로컬 `data/raw_csv/{name}.csv`(폴백)를 읽어
+   컬럼 매핑·정규화·파생 계산 후 `data/processed/*.csv` 생성 →
+   (`DATABASE_URL` 있으면) `pipeline/load_to_db.py`가 최종 테이블에 적재.
+
+DB 없이도 동작한다 — 1단계 산출물(`data/raw_csv/*.csv`)만 있으면 3단계가 그
+CSV를 직접 읽는다. 2단계는 "DRM 제거된 원본 사본을 DB에도 보관"하는 용도.
+오케스트레이터: `pipeline/run_pipeline.py`.
 
 ## 공통 규칙
-- **읽기**: `excel_reader.read_xlsx()` — 사내 DRM xlsx는 **xlwings(Excel COM)**,
-  그 외/리눅스는 **openpyxl(pandas) 폴백**. `.xlsb`는 pyxlsb.
+- **읽기**: 1단계(`xlsx_to_raw_csv.py`)만 `excel_reader.read_xlsx()`를 사용한다
+  (사내 DRM xlsx는 **xlwings/Excel COM**, 그 외/리눅스는 **openpyxl(pandas) 폴백**,
+  `.xlsb`는 pyxlsb). 3단계 처리기들은 xlsx를 직접 열지 않고
+  `source_reader.read_source(name)`만 호출한다 — 그래서 리눅스 서버에서도
+  Excel/xlwings 없이 후처리가 가능하다.
 - **사번 정규화**: 전 처리기 공통 `norm_id()` → **8자리 제로패딩 문자열**
   (`12345.0` → `'00012345'`), 빈 사번 행 제거.
+- **원천 매니페스트**: `pipeline/sources.py` — (스테이징명, 원본 xlsx 파일명, header_row)
+  10개 항목. 새 원천 파일을 추가할 때는 여기에 한 줄만 추가.
 - **출력**: `data/processed/*.csv`, `utf-8-sig`.
-- **이중 소스(폴백)**: 전용 처리기가 원본 파일을 못 찾으면(`return False`)
-  run_pipeline이 `{table}_raw.xlsx/csv`를 **변환 없이 통과** 저장.
+- **이중 소스(폴백)**: 전용 처리기가 원천 데이터를 못 찾으면(`return False`)
+  run_pipeline이 `{table}_raw.xlsx/csv`(최종 스키마로 미리 준비된 파일)를
+  **변환 없이 통과** 저장. 이 폴백 파일은 3단계 매니페스트와 무관하게 기존 방식 유지.
 - **LLM**: `process_comments`(종합요약, `--llm` 옵션)에서만 사용.
 
 ## 처리 순서 (run_pipeline.run)
-researchers → evaluations(T&P) → patents → nurturing → awards → education →
-leadership → incentive → **publications** → (passthrough: technology_transfer,
-transfers, certifications, succession) → comments → (DATABASE_URL 있으면 DB 적재)
+(DATABASE_URL 있으면 raw 스테이징 적재) → researchers → evaluations(T&P) →
+patents → nurturing → awards → education → leadership → incentive →
+**publications** → (passthrough: technology_transfer, transfers, certifications,
+succession) → comments → (DATABASE_URL 있으면 최종 테이블 DB 적재)
 
 ---
 
@@ -189,6 +208,12 @@ strengths, improvements
 2. **전용 변환기 없는 4개 테이블** — raw 스키마가 최종 컬럼과 정확히 일치해야 함.
 3. **특허 진행상태 원문 유지** — 집계/등록판정은 앱 화면(`_is_registered`)에서.
    '등록'을 포함하나 미등록인 상태(`등록전 종료`,`등록료불납`)는 제외 처리됨.
-4. **DRM/xlwings 의존** — DRM xlsx는 Windows+Excel+xlwings 필요(리눅스는 못 읽음).
+4. **DRM/xlwings 의존은 1단계로 격리됨** — `xlsx_to_raw_csv.py`만 Windows+Excel+
+   xlwings가 필요하다. 3단계(`process_*.py`)는 `source_reader.read_source()`만
+   호출하므로 리눅스 서버에서 xlwings 없이 실행 가능(DB 또는 raw_csv만 있으면 됨).
 5. **파일명·`COL_*` 하드코딩** — 각 처리기 상단 상수가 실제 헤더와 일치해야 함.
+   원본 파일명·header_row는 `pipeline/sources.py`에서 관리.
 6. **evaluations가 researchers 보강** — 이름/성별/생년이 T&P에서도 나와 정합성 확인 권장.
+7. **raw_csv/스테이징 데이터에는 사내 인사정보 원문이 그대로 담긴다** —
+   `data/raw_csv/`는 `.gitignore`로 커밋 제외되며, DB 전송 시에도 사내망 밖으로
+   나가지 않도록 주의(현재 스크립트는 로컬 파일 이동/직접 접속만 가정).

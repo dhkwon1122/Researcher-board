@@ -1,7 +1,9 @@
 """
 시상 이력 처리 모듈
 
-원천 파일: data/raw/시상 세부사항.xlsx
+원천: source_reader.read_source('awards')
+  → DB awards_stg 테이블 또는 data/raw_csv/awards.csv
+  (1단계 xlsx_to_raw_csv.py가 data/raw/시상 세부사항.xlsx를 DRM 제거해 만든 사본)
 출력 파일: data/processed/awards.csv
 
 읽는 컬럼:
@@ -16,10 +18,7 @@ import sys
 
 import pandas as pd
 
-RAW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
-
-AWARDS_FILE = '시상 세부사항.xlsx'
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
 COL_ID          = '사번'
@@ -31,7 +30,8 @@ COL_DESC        = '설명'
 # ─────────────────────────────────────────────────────────────────────────────
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import read_xlsx, norm_id
+from excel_reader import norm_id
+from source_reader import read_source
 
 
 def _fmt_date(val) -> str:
@@ -47,12 +47,11 @@ def _fmt_date(val) -> str:
 
 
 def process() -> bool:
-    raw_path = os.path.join(RAW_DIR, AWARDS_FILE)
-    if not os.path.exists(raw_path):
-        print(f'[SKIP] {AWARDS_FILE} 파일 없음 — awards_raw 폴백 시도')
+    df = read_source('awards')
+    if df is None:
+        print('[SKIP] awards 원천 데이터 없음 '
+              '(DB awards_stg 또는 data/raw_csv/awards.csv) — awards_raw 폴백 시도')
         return False
-
-    df = read_xlsx(raw_path)
     df.columns = [str(c).strip() for c in df.columns]
 
     if COL_ID not in df.columns:

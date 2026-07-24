@@ -1,10 +1,23 @@
 """
 전체 데이터 파이프라인 실행 스크립트
 
+── 3단계 구조 ────────────────────────────────────────────────────────────
+  1단계 (Windows, 수동)  : pipeline/xlsx_to_raw_csv.py
+      data/raw/ 의 DRM xlsx → 전 컬럼 그대로 data/raw_csv/*.csv (DRM 제거)
+  2단계 (Linux, 자동 호출): pipeline/load_raw_to_db.py
+      data/raw_csv/*.csv → Postgres `{name}_stg` 스테이징 테이블
+      (DATABASE_URL 설정 시 이 스크립트가 실행 시작 시 자동으로 호출한다)
+  3단계 (본 스크립트)     : process_*.py 각 처리기가 source_reader.read_source()로
+      스테이징 테이블(DB) 또는 data/raw_csv/*.csv를 읽어 컬럼 매핑·가공 후
+      data/processed/*.csv 생성 → (DATABASE_URL 있으면) 최종 테이블 적재
+
+  DB 없이도 동작한다: 1단계 산출물(data/raw_csv/*.csv)만 있으면 3단계가
+  그 CSV를 직접 읽는다. 2단계는 순수히 "원본 사본을 DB에도 보관"하는 용도.
+
 사용법:
   python pipeline/run_pipeline.py
 
-── 원천 파일 위치: data/raw/ ────────────────────────────────────────────────
+── 원천 파일 위치: data/raw/ (1단계 입력) ───────────────────────────────────
 
 [평가 데이터] ★ T&P 파일에서 자동 추출 (별도 raw 파일 불필요)
   T&P_기본_인사_정보.xlsx
@@ -87,6 +100,14 @@ def _read_raw(name: str) -> pd.DataFrame | None:
 def run():
     os.makedirs(OUT_DIR, exist_ok=True)
     missing = []
+
+    # ── -1. 2단계: raw CSV(1단계 산출물) → DB 스테이징 테이블 적재 ──────────
+    # DATABASE_URL 미설정이면 아무 것도 하지 않음(3단계가 raw_csv를 직접 읽음).
+    try:
+        from load_raw_to_db import load as load_raw_to_db
+        load_raw_to_db()
+    except Exception as exc:
+        print(f'[run_pipeline] raw 스테이징 적재 건너뜀: {exc}')
 
     # ── 0. 연구원 기본정보: 인력현황.xlsx 우선, 없으면 researchers_raw 폴백 ─
     from process_researchers import process as process_researchers
