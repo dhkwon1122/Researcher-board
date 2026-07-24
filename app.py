@@ -269,7 +269,6 @@ navbar = dbc.Navbar(
 
 app.layout = html.Div(
     [
-        dcc.Location(id='_auth-location', refresh=False),
         navbar,
         dbc.Container(dash.page_container, fluid=True, className='px-4 py-3'),
     ],
@@ -279,7 +278,7 @@ app.layout = html.Div(
 
 @callback(
     Output('_navbar-user', 'children'),
-    Input('_auth-location', 'pathname'),
+    Input('_pages_location', 'pathname'),
 )
 def refresh_navbar_user(_):
     from services.auth import can, get_current_user, role_label
