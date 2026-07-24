@@ -97,11 +97,19 @@ def update_authority(journals: list, cache: dict, profile: str = 'default', forc
         return cache
     label = '전체 재조회' if force else '신규/미확인'
     workers = max_concurrency(profile)
-    print(f'[journal_authority] 저널 권위도 조회 중 ({label} {len(targets)}건, profile={profile}, '
+    total = len(targets)
+    print(f'[journal_authority] 저널 권위도 조회 중 ({label} {total}건, profile={profile}, '
           f'동시 {workers}건)...')
+    completed = 0
+
+    def _on_complete(_i, _result, _error):
+        nonlocal completed
+        completed += 1
+        if completed % 10 == 0 or completed == total:
+            print(f'    (진행: {completed}/{total} 완료)')
 
     tasks = [(lambda j=j: _fetch_authority(j, profile)) for j in targets]
-    results = run_concurrent(tasks, max_workers=workers)
+    results = run_concurrent(tasks, max_workers=workers, on_complete=_on_complete)
 
     for journal, (authority, error) in zip(targets, results):
         if error is not None:

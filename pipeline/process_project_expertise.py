@@ -154,24 +154,39 @@ def process(profile: str = 'default') -> bool:
     results = []
     if prepared:
         workers = max_concurrency(profile)
-        print(f'[process_project_expertise] 과제 {len(prepared)}건 딥다이브 분석 시작 '
+        deepdive_total = len(prepared)
+        print(f'[process_project_expertise] 과제 {deepdive_total}건 딥다이브 분석 시작 '
               f'(동시 {workers}건, profile={profile})...')
+        completed = 0
+
+        # run_concurrent()는 제출된 작업을 전부 마칠 때까지 반환하지 않으므로,
+        # 실시간 진행 로그는 on_complete 콜백에서 찍는다(반환값을 받은 뒤
+        # 순회하며 출력하면 전체가 다 끝난 뒤에야 한꺼번에 찍힌다).
+        def _on_complete(i, expertise_analysis, error):
+            nonlocal completed
+            project_name = prepared[i][1]
+            completed += 1
+            if error is not None:
+                print(f'  [{project_name}] 분석 오류: {type(error).__name__}: {error}')
+            elif not expertise_analysis:
+                print(f'  [{project_name}] 전문성 분석 실패 — 건너뜀')
+            else:
+                print(f'  [{project_name}] 분석 완료')
+            if completed % 5 == 0 or completed == deepdive_total:
+                print(f'    (진행: {completed}/{deepdive_total} 완료)')
 
         tasks = [
             (lambda name=project_name, desc=_summary_description(summary): mmd.analyze_expertise(
                 name, desc, profile=profile))
             for _, project_name, summary in prepared
         ]
-        task_results = run_concurrent(tasks, max_workers=workers)
+        task_results = run_concurrent(tasks, max_workers=workers, on_complete=_on_complete)
 
-        for (dep_name, project_name, summary), (expertise_analysis, error) in zip(prepared, task_results):
-            if error is not None:
-                print(f'  [{project_name}] 분석 오류: {type(error).__name__}: {error}')
-                continue
+        # 위 콜백에서 이미 출력을 끝냈으므로, 여기서는 결과만 원래 순서대로 모은다
+        # (완료 순서는 스레드 스케줄링에 따라 달라지므로).
+        for (dep_name, project_name, summary), (expertise_analysis, _error) in zip(prepared, task_results):
             if not expertise_analysis:
-                print(f'  [{project_name}] 전문성 분석 실패 — 건너뜀')
                 continue
-
             results.append({
                 'dep_name': dep_name,
                 'project_name': project_name,
@@ -182,7 +197,6 @@ def process(profile: str = 'default') -> bool:
                 'keywords_en': summary.get('keywords_en') or [],
                 'expertise_analysis': expertise_analysis,
             })
-            print(f'  [{project_name}] 분석 완료')
 
     suffix = mmd.profile_suffix(profile)
     os.makedirs(OUT_DIR, exist_ok=True)

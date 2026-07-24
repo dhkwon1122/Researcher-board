@@ -214,12 +214,22 @@ def match_by_target(jobs: list, researcher_ids: list, researcher_texts: list,
         prepared.append((job, top_idx, subject_block, candidate_texts))
 
     workers = max_concurrency(profile)
+    total = len(prepared)
+    print(f'{log_prefix}과제 기준 매칭 {total}건 판단 시작 (동시 {workers}건, profile={profile})...')
+    completed = 0
+
+    def _on_complete(_i, _result, _error):
+        nonlocal completed
+        completed += 1
+        if completed % 5 == 0 or completed == total:
+            print(f'{log_prefix}    (진행: {completed}/{total} 완료)')
+
     tasks = [
         (lambda sb=subject_block, ct=candidate_texts: run_matching_llm(
             SYSTEM_PROMPT_BY_TARGET, sb, ct, '후보자', 'rankings', profile=profile))
         for _, _, subject_block, candidate_texts in prepared
     ]
-    task_results = run_concurrent(tasks, max_workers=workers)
+    task_results = run_concurrent(tasks, max_workers=workers, on_complete=_on_complete)
 
     results = []
     for (job, top_idx, _, _), (judged, error) in zip(prepared, task_results):
@@ -254,12 +264,22 @@ def match_by_researcher(jobs: list, researcher_ids: list, researcher_texts: list
         prepared.append((rid, candidate_jobs, subject_block, candidate_texts))
 
     workers = max_concurrency(profile)
+    total = len(prepared)
+    print(f'{log_prefix}인별 기준 매칭 {total}건 판단 시작 (동시 {workers}건, profile={profile})...')
+    completed = 0
+
+    def _on_complete(_i, _result, _error):
+        nonlocal completed
+        completed += 1
+        if completed % 5 == 0 or completed == total:
+            print(f'{log_prefix}    (진행: {completed}/{total} 완료)')
+
     tasks = [
         (lambda sb=subject_block, ct=candidate_texts: run_matching_llm(
             SYSTEM_PROMPT_BY_RESEARCHER, sb, ct, '후보 직무', 'matches', profile=profile))
         for _, _, subject_block, candidate_texts in prepared
     ]
-    task_results = run_concurrent(tasks, max_workers=workers)
+    task_results = run_concurrent(tasks, max_workers=workers, on_complete=_on_complete)
 
     results = []
     for (rid, candidate_jobs, _, _), (judged, error) in zip(prepared, task_results):

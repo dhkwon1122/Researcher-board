@@ -109,7 +109,7 @@ def _get_semaphore(profile: str) -> threading.Semaphore:
         return sem
 
 
-def run_concurrent(tasks: list, max_workers: int | None = None) -> list:
+def run_concurrent(tasks: list, max_workers: int | None = None, on_complete=None) -> list:
     """인자 없는 callable 목록(tasks)을 스레드풀로 동시 실행한다.
     각 작업의 결과를 (결과, 예외) 튜플로 tasks와 같은 순서로 반환한다 — 개별
     작업이 예기치 못한 예외를 던져도 잡아서 반환할 뿐, 다른 작업이나 배치
@@ -117,7 +117,16 @@ def run_concurrent(tasks: list, max_workers: int | None = None) -> list:
     오류/타임아웃(실패 시 빈 문자열 반환, 예외를 던지지 않음)과는 별개로,
     그 바깥(예: 응답 파싱 로직의 버그 등)에서 발생하는 예상 못한 예외에 대한
     안전망이다. 호출부는 error가 있는 항목만 로그로 남겨 추후 원인을 파악하고
-    동시성 설정을 조정하는 데 활용할 수 있다."""
+    동시성 설정을 조정하는 데 활용할 수 있다.
+
+    on_complete(index, result, error): 지정하면 각 작업이 끝나는 즉시(제출
+    순서가 아니라 실제 완료되는 순서대로) 호출된다. run_concurrent() 자체는
+    ThreadPoolExecutor가 제출된 작업을 전부 마칠 때까지 반환하지 않으므로,
+    실행 도중 진행 상황(완료 건수 등)을 실시간으로 보여주고 싶은 호출부는
+    반드시 이 콜백을 써야 한다 — 반환값을 받은 뒤 순회하며 출력하면 배치가
+    다 끝난 뒤에야 로그가 한꺼번에 찍힌다. 이 콜백은 run_concurrent를 호출한
+    스레드에서 순차적으로 실행되므로(as_completed 루프 자체가 그 스레드에서
+    돎) 별도 락 없이 카운터를 증가시켜도 안전하다."""
     if not tasks:
         return []
     results: list = [None] * len(tasks)
@@ -126,9 +135,12 @@ def run_concurrent(tasks: list, max_workers: int | None = None) -> list:
         for future in concurrent.futures.as_completed(future_to_idx):
             i = future_to_idx[future]
             try:
-                results[i] = (future.result(), None)
+                result, error = future.result(), None
             except Exception as exc:  # noqa: BLE001
-                results[i] = (None, exc)
+                result, error = None, exc
+            results[i] = (result, error)
+            if on_complete is not None:
+                on_complete(i, result, error)
     return results
 
 

@@ -595,10 +595,13 @@ def process(profile: str = 'default', refresh_journals: bool = False) -> bool:
         print(f'[process_researcher_expertise] 연구원 {len(prepared)}명 LLM 분석 시작 '
               f'(전체 {total}명 중 {skip_count}명 건너뜀, 동시 {workers}건, profile={profile})...')
 
-        tasks_ = [(lambda p=prompt: _analyze_researcher(p, profile=profile)) for _, prompt in prepared]
-        task_results = run_concurrent(tasks_, max_workers=workers)
-
-        for (rid, _), (analysis, error) in zip(prepared, task_results):
+        # run_concurrent()는 제출된 작업을 전부 마칠 때까지 반환하지 않으므로,
+        # 실시간 진행 상황(완료/성공/실패 수 갱신 + 체크포인트 출력)은 반드시
+        # on_complete 콜백에서 처리해야 한다 — 반환값을 받은 뒤 순회하며
+        # 출력하면 전체가 다 끝난 뒤에야 로그가 한꺼번에 찍힌다.
+        def _on_analysis_complete(i, analysis, error):
+            nonlocal completed, success_count, fail_count
+            rid = prepared[i][0]
             completed += 1
             if error is not None:
                 print(f'    [{rid}] 분석 오류: {type(error).__name__}: {error}')
@@ -607,10 +610,18 @@ def process(profile: str = 'default', refresh_journals: bool = False) -> bool:
                 print(f'    [{rid}] 분석 실패')
                 fail_count += 1
             else:
-                results.append({'researcher_id': rid, **analysis})
                 print(f'    [{rid}] 분석 완료')
                 success_count += 1
             _progress_checkpoint()
+
+        tasks_ = [(lambda p=prompt: _analyze_researcher(p, profile=profile)) for _, prompt in prepared]
+        task_results = run_concurrent(tasks_, max_workers=workers, on_complete=_on_analysis_complete)
+
+        # 위 콜백에서 이미 분류/출력을 끝냈으므로, 여기서는 결과만 원래 순서(rids
+        # 순서)대로 다시 모은다(완료 순서는 스레드 스케줄링에 따라 달라지므로).
+        for (rid, _), (analysis, _error) in zip(prepared, task_results):
+            if analysis is not None:
+                results.append({'researcher_id': rid, **analysis})
 
     suffix = mmd.profile_suffix(profile)
     os.makedirs(OUT_DIR, exist_ok=True)

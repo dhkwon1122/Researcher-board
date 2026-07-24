@@ -99,11 +99,11 @@ def process(profile: str = 'default') -> bool:
 
     sims = fit.cosine_sim_matrix(researcher_emb, job_emb)  # (n_researchers, n_jobs)
 
-    print(f'[process_project_researcher_fit] 과제 기준 매칭 중 (profile={profile})...')
+    print('[process_project_researcher_fit] 과제 기준 매칭:')
     by_target = fit.match_by_target(jobs, researcher_ids, researcher_texts, job_texts, sims, log_prefix='    ',
                                      profile=profile)
 
-    print(f'[process_project_researcher_fit] 인별 기준 매칭 중 (profile={profile})...')
+    print('[process_project_researcher_fit] 인별 기준 매칭:')
     by_researcher = fit.match_by_researcher(jobs, researcher_ids, researcher_texts, job_texts, sims, log_prefix='    ',
                                              profile=profile)
 
