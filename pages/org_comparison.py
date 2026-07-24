@@ -122,7 +122,8 @@ def _incentive_string(r_inc):
 
 # ─── 후보 카드 빌더 ─────────────────────────────────────────────────────────────
 
-def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur, inc):
+def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur, inc,
+                    show_eval: bool = True, show_incentive: bool = True):
     rid    = str(r_info['researcher_id'])
     name   = str(r_info.get('name', '-'))
 
@@ -181,16 +182,34 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur, inc):
     line1, line2 = _info_lines(r_info)
     r_eva = eva[eva['researcher_id'] == rid] if not eva.empty else pd.DataFrame()
     r_inc = inc[inc['researcher_id'] == rid] if not inc.empty else pd.DataFrame()
-    eval_str = _eval_string(r_eva)
-    inc_str  = _incentive_string(r_inc)
+
+    eval_str = _eval_string(r_eva) if show_eval else None
+    inc_str  = _incentive_string(r_inc) if show_incentive else None
+
+    grade_items = []
+    if show_eval and eval_str is not None:
+        grade_items += [
+            html.Span('평가 ', className='text-muted small'),
+            html.Span(eval_str, className='small fw-bold me-3',
+                      style={'letterSpacing': '0.15em'}),
+        ]
+    if show_incentive and inc_str is not None:
+        grade_items += [
+            html.Span('인센티브 ', className='text-muted small'),
+            html.Span(inc_str, className='small fw-bold',
+                      style={'letterSpacing': '0.15em'}),
+        ]
+    if not grade_items:
+        grade_items = [
+            html.I(className='bi bi-lock-fill me-1 text-secondary'),
+            html.Span('평가/인센티브 정보 — 접근 권한 없음',
+                      className='text-muted small'),
+        ]
+
     basic_section = html.Div([
         html.P(line1, className='small fw-bold mb-0 text-center'),
         html.P(line2, className='small text-muted mb-2 text-center'),
-        html.Div(
-            f'{eval_str} / {inc_str}',
-            className='small fw-bold text-center',
-            style={'letterSpacing': '0.15em'},
-        ),
+        html.Div(grade_items, className='d-flex flex-wrap align-items-center'),
     ], className='bg-light rounded p-2')
 
     # 주요 양성이력
@@ -254,7 +273,8 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur, inc):
 
 # ─── 부서 섹션 빌더 ─────────────────────────────────────────────────────────────
 
-def _dept_section(dept_name, suc_dept, res, eva, edu, awd, nur, inc):
+def _dept_section(dept_name, suc_dept, res, eva, edu, awd, nur, inc,
+                  show_eval: bool = True, show_incentive: bool = True):
     """동일 현소속부서명 소속 우수 연구원을 한 행(섹션)으로 표시.
     표시 순서 고정: Ready Now 1→2, Ready Later 1→2 (최대 4명).
     """
@@ -264,7 +284,6 @@ def _dept_section(dept_name, suc_dept, res, eva, edu, awd, nur, inc):
     s = suc_dept.copy()
     s['rank_order'] = pd.to_numeric(s['rank_order'], errors='coerce').fillna(99).astype(int)
 
-    # 4개 슬롯 고정 순서
     SLOTS = [
         ('Ready Now',   1),
         ('Ready Now',   2),
@@ -285,6 +304,7 @@ def _dept_section(dept_name, suc_dept, res, eva, edu, awd, nur, inc):
         card = _candidate_card(
             r_rows.iloc[0], rank_type, rank_order,
             eva, edu, awd, nur, inc,
+            show_eval=show_eval, show_incentive=show_incentive,
         )
         cards.append(dbc.Col(card, lg=3, md=6, className='mb-2'))
 
@@ -303,6 +323,10 @@ def _dept_section(dept_name, suc_dept, res, eva, edu, awd, nur, inc):
 # ─── 레이아웃 ────────────────────────────────────────────────────────────────────
 
 def layout():
+    from services.auth import can
+    show_eval = can('view_evaluation')
+    show_incentive = can('view_incentive')
+
     try:
         res = _r('researchers')
         eva = _r('evaluations')
@@ -344,7 +368,8 @@ def layout():
     sections = []
     for dept_name in sorted(suc['department'].unique()):
         suc_dept = suc[suc['department'] == dept_name]
-        sec = _dept_section(dept_name, suc_dept, res, eva, edu, awd, nur, inc)
+        sec = _dept_section(dept_name, suc_dept, res, eva, edu, awd, nur, inc,
+                            show_eval=show_eval, show_incentive=show_incentive)
         if sec:
             sections.append(sec)
 

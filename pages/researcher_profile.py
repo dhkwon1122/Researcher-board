@@ -39,6 +39,20 @@ dash.register_page(
 CURRENT_YEAR = datetime.now().year
 
 
+def _locked_block(label: str = ''):
+    """접근 권한 없음 플레이스홀더."""
+    return html.Div(
+        [
+            html.I(className='bi bi-lock-fill me-2 text-secondary'),
+            html.Span(
+                f'{label} — 접근 권한이 없습니다.' if label else '접근 권한이 없습니다.',
+                className='text-muted small',
+            ),
+        ],
+        className='text-center py-3',
+    )
+
+
 def _load_selector_data():
     try:
         res_df = read_processed('researchers').sort_values(['department', 'name'])
@@ -65,6 +79,10 @@ def _load_selector_data():
 
 
 def layout(id=None, **_kwargs):
+    from services.auth import can
+    show_eval = can('view_evaluation')
+    show_comments = can('view_comments')
+
     dept_opts, all_opts, by_dept = _load_selector_data()
     default_rid = all_opts[0]['value'] if all_opts else None
     default_dept = ''
@@ -89,12 +107,12 @@ def layout(id=None, **_kwargs):
         _selector_card(dept_opts, res_opts, default_dept, default_rid),
         dbc.Row([
             _left_column(),
-            _middle_column(),
+            _middle_column(show_eval),
             _right_column(),
         ], className='g-3 mb-3'),
         dbc.Row([
             _detail_tabs_col(),
-            _comments_col(),
+            _comments_col(show_comments),
         ], className='g-3 mb-3'),
     ])
 
@@ -144,7 +162,8 @@ def _left_column():
     ], md=3)
 
 
-def _middle_column():
+def _middle_column(show_eval: bool = True):
+    eval_title = '평가 / 인센티브 이력'
     return dbc.Col([
         dbc.Row([
             dbc.Col(
@@ -156,7 +175,13 @@ def _middle_column():
             ),
             dbc.Col(
                 _card([
-                    html.P('평가 / 인센티브 이력', className='fw-semibold text-muted small mb-2'),
+                    html.Div([
+                        html.I(
+                            className='bi bi-lock-fill me-1 text-secondary',
+                            style={} if not show_eval else {'display': 'none'},
+                        ),
+                        html.Span(eval_title, className='fw-semibold text-muted small'),
+                    ], className='mb-2'),
                     html.Div(id='eval-incentive-block'),
                 ], body_class='p-3', card_class='shadow-sm h-100'),
                 md=5,
@@ -199,12 +224,24 @@ def _detail_tabs_col():
     )
 
 
-def _comments_col():
+def _comments_col(show_comments: bool = True):
+    """코멘트 컬럼. show_comments=False 이면 입력 폼을 잠금 상태로 렌더링."""
     return dbc.Col(
         _card([
-            html.P('인물 코멘트 (부서장 / 부서원)', className='fw-semibold text-muted small mb-2'),
-            html.Div(id='comments-block', style={'maxHeight': '280px', 'overflowY': 'auto'}),
+            html.Div([
+                html.I(
+                    className='bi bi-lock-fill me-1 text-secondary',
+                    style={} if not show_comments else {'display': 'none'},
+                ),
+                html.Span(
+                    '인물 코멘트 (부서장 / 부서원)',
+                    className='fw-semibold text-muted small',
+                ),
+            ], className='mb-2'),
+            html.Div(id='comments-block',
+                     style={'maxHeight': '280px', 'overflowY': 'auto'}),
             html.Hr(className='my-2'),
+            # 입력 폼 — 권한 없으면 disabled 처리
             dbc.Row([
                 dbc.Col(
                     dcc.Dropdown(
@@ -213,6 +250,7 @@ def _comments_col():
                                  for y in range(CURRENT_YEAR, CURRENT_YEAR - 5, -1)],
                         value=CURRENT_YEAR,
                         clearable=False,
+                        disabled=not show_comments,
                         style={'minWidth': '100px'},
                     ),
                     width='auto',
@@ -226,14 +264,26 @@ def _comments_col():
                         ],
                         value='부서장',
                         clearable=False,
+                        disabled=not show_comments,
                         style={'minWidth': '100px'},
                     ),
                     width='auto',
                 ),
             ], className='g-2 mb-2'),
-            dbc.Textarea(id='comment-text', placeholder='코멘트를 입력하세요...',
-                         rows=3, className='mb-2'),
-            dbc.Button('저장', id='comment-save-btn', color='primary', size='sm'),
+            dbc.Textarea(
+                id='comment-text',
+                placeholder='코멘트를 입력하세요...' if show_comments else '접근 권한이 없습니다.',
+                rows=3,
+                className='mb-2',
+                disabled=not show_comments,
+            ),
+            dbc.Button(
+                '저장',
+                id='comment-save-btn',
+                color='primary',
+                size='sm',
+                disabled=not show_comments,
+            ),
             html.Div(id='comment-status', className='mt-2 small'),
         ], body_class='p-3', card_class='shadow-sm mb-0 h-100'),
         md=5,
@@ -284,6 +334,14 @@ def filter_by_dept(dept, current_rid):
 )
 def update_profile(rid):
     import sys
+    from services.auth import can, get_current_user
+
+    if get_current_user() is None:
+        return _empty_profile_output()
+
+    show_eval = can('view_evaluation')
+    show_comments = can('view_comments')
+
     if not rid:
         return _empty_profile_output()
 
@@ -301,17 +359,28 @@ def update_profile(rid):
         years = [CURRENT_YEAR - 2, CURRENT_YEAR - 1, CURRENT_YEAR]
         leadership_options, leadership_default = leadership_year_options(tables['leadership'], rid)
 
+        eval_content = (
+            evaluation_incentive_block(tables['evaluations'], tables['incentive_selection'], rid, years)
+            if show_eval
+            else _locked_block()
+        )
+        comments_content = (
+            comments_block(tables['comments'], rid)
+            if show_comments
+            else _locked_block()
+        )
+
         return (
             photo_block(rid, str(researcher.get('name', '')), researcher, CURRENT_YEAR),
             education_block(tables['education'], rid),
-            evaluation_incentive_block(tables['evaluations'], tables['incentive_selection'], rid, years),
+            eval_content,
             nurturing_block(tables['nurturing'], rid),
             award_block(tables['awards'], rid),
             tasks_block(tables['tasks'], rid) if not tables['tasks'].empty
             else transfer_block(tables['transfers'], rid),
             leadership_options,
             leadership_default,
-            comments_block(tables['comments'], rid),
+            comments_content,
             publications_tab(tables['publications'], rid),
             patents_tab(tables['patents'], rid),
             technology_transfer_tab(tables['technology_transfer'], rid),
@@ -350,6 +419,10 @@ def update_leadership(rid, year):
     prevent_initial_call=True,
 )
 def save_comment(n_clicks, rid, year, author_type, text):
+    from services.auth import can
+    if not can('view_comments'):
+        return dbc.Alert('코멘트 작성 권한이 없습니다.',
+                         color='warning', className='py-1 px-2 mb-0')
     if not rid or not year or not text or not text.strip():
         return dbc.Alert('연구원, 연도, 코멘트를 모두 입력하세요.',
                          color='warning', className='py-1 px-2 mb-0')
