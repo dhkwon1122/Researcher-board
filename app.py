@@ -299,6 +299,7 @@ def refresh_navbar_user(_):
         dbc.NavLink(
             [html.I(className='bi bi-box-arrow-right me-1'), '로그아웃'],
             href='/logout', className='text-white small px-0',
+            external_link=True,
         ),
     ]
     return items
