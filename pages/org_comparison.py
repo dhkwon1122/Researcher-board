@@ -13,7 +13,7 @@ from dash import ClientsideFunction, Input, Output, clientside_callback, dcc, ht
 
 from components.profile_sections import load_photo_src
 
-dash.register_page(__name__, path='/', name='조직별 비교', title='조직별 우수 연구원 비교')
+dash.register_page(__name__, path='/org-comparison', name='조직별 비교', title='조직별 우수 연구원 비교')
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
 
@@ -265,7 +265,7 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur, inc,
 
     return html.A(
         card,
-        href=f'/researcher-profile?id={rid}',
+        href=f'/?id={rid}',
         style={'textDecoration': 'none', 'color': 'inherit',
                'display': 'block', 'height': '100%'},
     )

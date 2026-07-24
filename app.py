@@ -241,12 +241,12 @@ navbar = dbc.Navbar(
             dbc.Nav(
                 [
                     dbc.NavItem(dbc.NavLink(
-                        [html.I(className='bi bi-people-fill me-1'), '조직별 비교'],
+                        [html.I(className='bi bi-person-badge-fill me-1'), '연구원 프로필'],
                         href='/', active='exact', className='text-white',
                     )),
                     dbc.NavItem(dbc.NavLink(
-                        [html.I(className='bi bi-person-badge-fill me-1'), '연구원 프로필'],
-                        href='/researcher-profile', active='exact', className='text-white',
+                        [html.I(className='bi bi-people-fill me-1'), '조직별 비교'],
+                        href='/org-comparison', active='exact', className='text-white',
                     )),
                     dbc.NavItem(dbc.NavLink(
                         [html.I(className='bi bi-table me-1'), '연구원 목록'],

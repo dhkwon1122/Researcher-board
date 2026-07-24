@@ -412,7 +412,7 @@ def navigate_to_profile(active_cell, virtual_data):
         if match.empty:
             return no_update
         rid = match.iloc[0]['researcher_id']
-        return f'/researcher-profile?id={rid}'
+        return f'/?id={rid}'
     except Exception:
         return no_update
 
@@ -522,4 +522,4 @@ def t2s_row_click(active_cell, data):
     rid = data[row_idx].get('researcher_id')
     if not rid:
         return no_update
-    return f'/researcher-profile?id={str(rid).zfill(8)}'
+    return f'/?id={str(rid).zfill(8)}'
