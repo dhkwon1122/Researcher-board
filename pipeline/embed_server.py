@@ -29,6 +29,16 @@ _SERVER_SCRIPT = os.path.join(BASE_DIR, 'services', 'bge_server.py')
 
 
 def _is_pid_alive(pid: int) -> bool:
+    if os.name == 'nt':
+        # Windows에서는 os.kill(pid, 0)이 POSIX와 달리 프로세스 생존 확인용이
+        # 아니다(0은 CTRL_C_EVENT로 취급됨) — OpenProcess로 직접 확인한다.
+        import ctypes
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return True
     try:
         os.kill(pid, 0)
     except OSError:
@@ -69,10 +79,17 @@ def ensure_embed_server(wait_timeout: float = 180.0, poll_interval: float = 2.0)
             return False
         print(f'[embed_server] BGE-M3 서버 응답 없음 — 백그라운드로 자동 기동 (로그: {_LOG_PATH})')
         log_file = open(_LOG_PATH, 'a', encoding='utf-8')
+        # 호출 스크립트가 끝나도 서버 프로세스가 계속 살아있도록 분리한다.
+        # start_new_session(setsid)은 POSIX 전용 — Windows에서 그대로 쓰면
+        # CreateProcess가 WinError 87(매개 변수가 틀립니다)로 실패한다.
+        if os.name == 'nt':
+            detach_kwargs = {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS}
+        else:
+            detach_kwargs = {'start_new_session': True}
         proc = subprocess.Popen(
             [sys.executable, _SERVER_SCRIPT],
             stdout=log_file, stderr=subprocess.STDOUT,
-            start_new_session=True,  # 호출 스크립트가 끝나도 계속 살아있도록 분리
+            **detach_kwargs,
         )
         with open(_PID_PATH, 'w', encoding='utf-8') as f:
             f.write(str(proc.pid))
