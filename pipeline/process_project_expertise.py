@@ -79,12 +79,14 @@ def _build_html(items: list, profile: str = 'default') -> str:
     org_code(비공식소속부서명/'과제/파트')에 대응하는 하위 그룹 데이터는 없다."""
     anchored = [(f'project-{i}', it) for i, it in enumerate(items, start=1)]
 
-    toc_links = []
-    for anchor, it in anchored:
-        toc_links.append(
-            f'<a class="btn btn-sm btn-outline-primary rounded-pill" href="#{anchor}">'
-            f'{html.escape(it["project_name"])}</a>'
-        )
+    def _toc_pill(anchor: str, it: dict) -> str:
+        return (f'<a class="btn btn-sm btn-outline-primary rounded-pill" href="#{anchor}">'
+                f'{html.escape(it["project_name"])}</a>')
+
+    toc_html = mmd.grouped_nav_html(
+        anchored, lambda pair: pair[1].get('dep_name', ''), '플랫폼/팀',
+        lambda anchor, it: _toc_pill(anchor, it),
+    )
 
     sections = []
     for dep_name, dep_pairs in mmd.group_ordered(anchored, lambda pair: pair[1].get('dep_name', '')):
@@ -106,7 +108,7 @@ def _build_html(items: list, profile: str = 'default') -> str:
 </section>''')
 
     profile_note = f' ({profile})' if profile != 'default' else ''
-    body_html = f'<nav class="toc">{"".join(toc_links)}</nav>\n{"".join(sections)}'
+    body_html = f'{toc_html}\n{"".join(sections)}'
     return mmd.html_page(
         title=f'사내 과제 — R&D 전문성 매핑{profile_note}',
         heading=f'사내 과제 — R&amp;D 필수 전문성 및 직무 딥다이브 매핑{profile_note}',

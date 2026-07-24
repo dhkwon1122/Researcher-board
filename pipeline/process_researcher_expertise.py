@@ -376,14 +376,7 @@ def _researcher_card_html(item: dict, name_map: dict, anchor: str) -> str:
     rid = item.get('researcher_id', '')
     name = name_map.get(rid, '')
 
-    field_badges = ''.join(
-        f'<span class="badge rounded-pill text-bg-dark me-1 mb-1">{html.escape(f)}</span>'
-        for f in (item.get('strength_fields') or [])
-    )
-    strength_html = f'<p class="mb-2">{field_badges}</p>' if field_badges else ''
-    strength_html += mmd.keyword_pills_html(item.get('strength_keywords') or [])
-    if not strength_html:
-        strength_html = '<p class="empty">강점 분야/키워드 데이터 없음</p>'
+    strength_html = mmd.strength_summary_html(item)
 
     body_html = (
         _skill_block_html('Hard Skills', item.get('hard_skills') or {}, _HARD_SKILL_LABELS)
@@ -421,14 +414,17 @@ def _build_html(results: list, profile: str, researchers_df: pd.DataFrame) -> st
 
     anchor_of = {item.get('researcher_id', ''): f'researcher-{i}' for i, item in enumerate(results, start=1)}
 
-    toc_links = []
-    for item in results:
+    def _toc_pill(anchor: str, item: dict) -> str:
         rid = item.get('researcher_id', '')
         label = f'{rid} {name_map.get(rid, "")}'.strip()
-        toc_links.append(
-            f'<a class="btn btn-sm btn-outline-primary rounded-pill" href="#{anchor_of[rid]}">'
-            f'{html.escape(label)}</a>'
-        )
+        return f'<a class="btn btn-sm btn-outline-primary rounded-pill" href="#{anchor}">{html.escape(label)}</a>'
+
+    anchored = [(anchor_of[item.get('researcher_id', '')], item) for item in results]
+    toc_html = mmd.grouped_nav_html(
+        anchored, lambda pair: dept_map.get(pair[1].get('researcher_id', ''), ''), '플랫폼/팀',
+        lambda anchor, item: _toc_pill(anchor, item),
+        level2_key_fn=lambda pair: org_map.get(pair[1].get('researcher_id', ''), ''), level2_label='과제/파트',
+    )
 
     sections = []
     for dept, dept_items in mmd.group_ordered(results, lambda it: dept_map.get(it.get('researcher_id', ''), '')):
@@ -440,7 +436,7 @@ def _build_html(results: list, profile: str, researchers_df: pd.DataFrame) -> st
                 sections.append(_researcher_card_html(item, name_map, anchor_of[rid]))
 
     profile_note = f' ({profile})' if profile != 'default' else ''
-    body_html = f'<nav class="toc">{"".join(toc_links)}</nav>\n{"".join(sections)}'
+    body_html = f'{toc_html}\n{"".join(sections)}'
     return mmd.html_page(
         title=f'연구원 보유 전문성 분석{profile_note}',
         heading=f'연구원 보유 전문성 분석{profile_note}',

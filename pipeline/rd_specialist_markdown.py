@@ -43,6 +43,53 @@ def group_ordered(items: list, key_fn) -> list:
     return [(k, groups[k]) for k in keys]
 
 
+def grouped_nav_html(anchored: list, level1_key_fn, level1_label: str, pill_html_fn,
+                      level2_key_fn=None, level2_label: str = '') -> str:
+    """[(anchor, item), ...] 목록을 level1(→level2, 선택) 기준으로 그룹핑한 TOC(nav)
+    HTML을 만든다. pill_html_fn(anchor, item) -> str로 개별 항목을 렌더링한다.
+    process_researcher_expertise.py/process_researcher_similarity.py(부서→과제
+    2단계)와 process_project_expertise.py(부서만 1단계, level2_key_fn=None)가
+    공유한다."""
+    sections = []
+    for l1_val, l1_pairs in group_ordered(anchored, level1_key_fn):
+        sections.append(f'<h2 class="group-heading-1">{level1_label}: {html.escape(l1_val)}</h2>')
+        if level2_key_fn is None:
+            pills = ''.join(pill_html_fn(anchor, item) for anchor, item in l1_pairs)
+            sections.append(f'<div class="toc-pill-row">{pills}</div>')
+        else:
+            for l2_val, l2_pairs in group_ordered(l1_pairs, level2_key_fn):
+                sections.append(f'<h3 class="group-heading-2">{level2_label}: {html.escape(l2_val)}</h3>')
+                pills = ''.join(pill_html_fn(anchor, item) for anchor, item in l2_pairs)
+                sections.append(f'<div class="toc-pill-row">{pills}</div>')
+    return f'<nav class="toc-grouped">{"".join(sections)}</nav>'
+
+
+def dept_org_badges_html(department: str, org_code: str) -> str:
+    """부서(department, '플랫폼/팀')·과제(org_code, '과제/파트') 배지를 Bootstrap
+    아이콘과 함께 렌더링. 둘 다 비어 있으면 빈 문자열."""
+    badges = []
+    if department:
+        badges.append(f'<span class="badge rounded-pill text-bg-secondary org-badge">'
+                       f'<i class="bi bi-building"></i> {html.escape(department)}</span>')
+    if org_code:
+        badges.append(f'<span class="badge rounded-pill text-bg-info org-badge">'
+                       f'<i class="bi bi-folder2"></i> {html.escape(org_code)}</span>')
+    return ''.join(badges)
+
+
+def strength_summary_html(item: dict) -> str:
+    """strength_fields를 배지로, strength_keywords를 색상 pill로 보여주는 '핵심요약'
+    블록. 연구원 보유 전문성 분석.html 카드와 연구원 유사도 카드(본인/유사 연구원
+    양쪽)가 공유한다."""
+    field_badges = ''.join(
+        f'<span class="badge rounded-pill text-bg-dark me-1 mb-1">{html.escape(f)}</span>'
+        for f in (item.get('strength_fields') or [])
+    )
+    out = f'<p class="mb-2">{field_badges}</p>' if field_badges else ''
+    out += keyword_pills_html(item.get('strength_keywords') or [])
+    return out or '<p class="empty">강점 분야/키워드 데이터 없음</p>'
+
+
 # R&D Project Specialist Agent — 사내 LLM 시스템 프롬프트 (원문 그대로 사용).
 # process_project_expertise.py(사내 과제) 등 여러 스크립트가 동일한 페르소나로
 # "필수 직무·전문성 딥다이브 매핑"을 생성하는 데 재사용한다.
@@ -485,6 +532,13 @@ BASE_HTML_STYLE = """
   .page-header p { color: var(--gs-muted); font-size: 0.86rem; }
   .toc { max-width: 900px; margin: 0 auto 40px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
   .toc a { text-decoration: none; }
+  .toc-grouped { max-width: 900px; margin: 0 auto 40px; }
+  .toc-grouped a { text-decoration: none; }
+  .toc-pill-row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-bottom: 6px; }
+  .org-badge { font-size: 0.7rem; font-weight: 600; }
+  .org-badge .bi { margin-right: 2px; }
+  .reason-list { font-size: 0.78rem; color: #444; margin: 4px 0 0; padding-left: 18px; }
+  .reason-list li { margin: 1px 0; }
   .md-render { font-size: 0.82rem; color: #333; }
   .md-render h1, .md-render h2, .md-render h3, .md-render h4 { font-size: 0.86rem; margin: 10px 0 4px; color: var(--gs-text); }
   .md-render p { margin: 4px 0; }

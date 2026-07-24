@@ -89,12 +89,15 @@ _PAIR_JUDGE_SYSTEM_PROMPT = """# Role
    "Python"을 언급해도 실제 응용 분야(예: 신호처리 vs 자연어처리)가 다르면
    낮은 등급으로 판단하고, evidence에 그 이유를 명시하세요. 단어만 겹치고
    실질적 업무 영역이 다르면 surface_only를 true로 표시하세요.
-3. 반드시 아래 JSON 형식으로만 출력하고, 그 외 텍스트는 출력하지 마세요.
+3. evidence는 서술형 문장이 아니라 개조식(명사형으로 끝나는 간결한 구/절)
+   근거 1~3개를 배열로 작성하세요. 예: "두 사람 모두 강화학습 기반 로봇
+   제어 전문성 보유"가 아니라 "강화학습 기반 로봇 제어 전문성 공통 보유".
+4. 반드시 아래 JSON 형식으로만 출력하고, 그 외 텍스트는 출력하지 마세요.
 
 # Output Format (JSON)
 {
   "level": "동일 분야" 또는 "인접 분야" 또는 "낮음",
-  "evidence": "구체적으로 겹치거나 겹치지 않는 스킬/키워드 근거(1~2문장)",
+  "evidence": ["개조식 근거 1", "개조식 근거 2"],
   "surface_only": true 또는 false
 }
 """
@@ -195,9 +198,15 @@ def _judge_pair(text_a: str, text_b: str, profile: str = 'default') -> dict | No
     level = data.get('level', '')
     if level not in _LEVEL_VALUES:
         return None
+    raw_evidence = data.get('evidence', '')
+    # 개조식 근거는 리스트로 그대로 저장(화면에서 불릿으로 렌더링). 예전
+    # 캐시(서술형 문자열)와의 하위 호환을 위해 문자열이면 그대로 문자열로 남긴다
+    # (--refresh-judgments로 재판정하기 전까지는 기존 캐시 값을 그대로 보여줌).
+    evidence = [str(e) for e in raw_evidence if str(e).strip()] if isinstance(raw_evidence, list) \
+        else str(raw_evidence)
     return {
         'level': level,
-        'evidence': str(data.get('evidence', '')),
+        'evidence': evidence,
         'surface_only': bool(data.get('surface_only', False)),
     }
 
@@ -268,11 +277,26 @@ def attach_pair_judgments(results: list, profiles: list, profile: str = 'default
 _LEVEL_BADGE = {'동일 분야': 'text-bg-success', '인접 분야': 'text-bg-warning', '낮음': 'text-bg-secondary'}
 
 
-def _similar_row_html(s: dict, name_map: dict) -> str:
-    name = f"{html.escape(s['researcher_id'])} {html.escape(name_map.get(s['researcher_id'], ''))}".strip()
-    evidence = s.get('evidence') or ''
-    reason_html = f'<div class="reason">{html.escape(evidence)}</div>' if evidence else ''
-    if evidence and s.get('surface_only'):
+def _reason_html(evidence) -> str:
+    """evidence가 리스트(신규 개조식 판정)면 불릿 목록으로, 문자열(예전 서술형
+    캐시)이면 기존처럼 문단으로 렌더링한다 — 캐시를 --refresh-judgments 없이
+    그대로 둬도 예전 형식이 깨지지 않는다."""
+    if isinstance(evidence, list) and evidence:
+        items = ''.join(f'<li>{html.escape(e)}</li>' for e in evidence)
+        return f'<ul class="reason-list">{items}</ul>'
+    if isinstance(evidence, str) and evidence:
+        return f'<div class="reason">{html.escape(evidence)}</div>'
+    return ''
+
+
+def _similar_row_html(s: dict, name_map: dict, dept_map: dict, org_map: dict, profile_by_id: dict) -> str:
+    rid = s['researcher_id']
+    name = f'{html.escape(rid)} {html.escape(name_map.get(rid, ""))}'.strip()
+    org_badges = mmd.dept_org_badges_html(dept_map.get(rid, ''), org_map.get(rid, ''))
+    summary_html = mmd.strength_summary_html(profile_by_id.get(rid, {}))
+
+    reason_html = _reason_html(s.get('evidence'))
+    if s.get('evidence') and s.get('surface_only'):
         reason_html += '<div class="reason">⚠ 단어만 겹치고 실제 업무 영역은 다를 수 있음</div>'
 
     level = s.get('level') or ''
@@ -283,7 +307,8 @@ def _similar_row_html(s: dict, name_map: dict) -> str:
 
     return f'''<div class="rank-row d-flex justify-content-between align-items-start gap-2">
   <div>
-    <div class="name">{name}</div>
+    <div class="name">{name} {org_badges}</div>
+    <div class="similar-summary mt-1">{summary_html}</div>
     {reason_html}
   </div>
   <div class="d-flex flex-column align-items-end gap-1">
@@ -293,35 +318,55 @@ def _similar_row_html(s: dict, name_map: dict) -> str:
 </div>'''
 
 
-def _build_html(results: list, profile: str, researchers_df: pd.DataFrame, top_k: int) -> str:
-    name_map = {}
+def _build_html(results: list, profile: str, researchers_df: pd.DataFrame, top_k: int,
+                 profile_by_id: dict) -> str:
+    """researchers.csv의 department('플랫폼/팀')·org_code('과제/파트')로 TOC를
+    2단계 그룹핑하고, 각 카드는 이름 아래 본인의 전문성 핵심요약(strength_fields/
+    strength_keywords)을 먼저 보여준 뒤 유사 연구원 목록을 보여준다 — 각 유사
+    연구원 행에도 부서·과제 배지와 동일한 핵심요약을 표시한다."""
+    name_map, dept_map, org_map = {}, {}, {}
     if not researchers_df.empty:
-        name_map = researchers_df.set_index('researcher_id')['name'].to_dict()
+        indexed = researchers_df.set_index('researcher_id')
+        name_map = indexed['name'].to_dict()
+        dept_map = indexed['department'].to_dict()
+        org_map = indexed['org_code'].to_dict()
 
-    toc_links = []
-    cards = []
-    for i, item in enumerate(results, start=1):
+    anchor_of = {item['researcher_id']: f'researcher-{i}' for i, item in enumerate(results, start=1)}
+
+    def _toc_pill(anchor: str, item: dict) -> str:
         rid = item['researcher_id']
-        anchor = f'researcher-{i}'
         label = f'{rid} {name_map.get(rid, "")}'.strip()
-        toc_links.append(
-            f'<a class="btn btn-sm btn-outline-primary rounded-pill" href="#{anchor}">{html.escape(label)}</a>'
-        )
+        return f'<a class="btn btn-sm btn-outline-primary rounded-pill" href="#{anchor}">{html.escape(label)}</a>'
+
+    anchored = [(anchor_of[item['researcher_id']], item) for item in results]
+    toc_html = mmd.grouped_nav_html(
+        anchored, lambda pair: dept_map.get(pair[1]['researcher_id'], ''), '플랫폼/팀',
+        lambda anchor, item: _toc_pill(anchor, item),
+        level2_key_fn=lambda pair: org_map.get(pair[1]['researcher_id'], ''), level2_label='과제/파트',
+    )
+
+    cards = []
+    for item in results:
+        rid = item['researcher_id']
+        anchor = anchor_of[rid]
+        label = f'{rid} {name_map.get(rid, "")}'.strip()
 
         rows = ''.join(
-            _similar_row_html(s, name_map) for s in item['similar']
+            _similar_row_html(s, name_map, dept_map, org_map, profile_by_id) for s in item['similar']
         ) or '<p class="empty">비교할 다른 연구원 데이터 없음</p>'
 
         cards.append(f'''<div class="fit-card card" id="{anchor}">
   <div class="card-body">
     <h3>{html.escape(label)}</h3>
-    <p class="subtitle">과제와 무관하게, 전문성이 가장 유사한 연구원 Top {top_k}</p>
+    <hr class="mt-1 mb-2">
+    <div class="subject-summary">{mmd.strength_summary_html(profile_by_id.get(rid, {}))}</div>
+    <p class="subtitle mt-2">과제와 무관하게, 전문성이 가장 유사한 연구원 Top {top_k}</p>
     {rows}
   </div>
 </div>''')
 
     profile_note = f' ({profile})' if profile != 'default' else ''
-    body_html = f'<nav class="toc">{"".join(toc_links)}</nav>\n{"".join(cards)}'
+    body_html = f'{toc_html}\n{"".join(cards)}'
     return mmd.html_page(
         title=f'연구원 ↔ 연구원 유사도{profile_note}',
         heading=f'연구원 ↔ 연구원 유사도{profile_note}',
@@ -363,7 +408,8 @@ def process(profile: str = 'default', top_k: int = DEFAULT_TOP_K, refresh_judgme
                                  profile=profile)
 
     researchers_df = fit.read_researchers(OUT_DIR)
-    html_out = _build_html(results, profile, researchers_df, top_k)
+    profile_by_id = {p['researcher_id']: p for p in profiles}
+    html_out = _build_html(results, profile, researchers_df, top_k, profile_by_id)
     html_path = os.path.join(OUT_DIR, f'researcher_similarity{suffix}.html')
     with open(html_path, 'w', encoding='utf-8') as f:
         f.write(html_out)
