@@ -133,13 +133,14 @@ def process(profile: str = 'default') -> bool:
     with open(os.path.join(OUT_DIR, f'project_fit_by_project{suffix}.json'), 'w', encoding='utf-8') as f:
         f.write(by_project_json)
     print(f'[OK]   project_fit_by_project{suffix}.json 저장 ({len(by_project_results)}건)')
-    result_archive.archive_copy('과제_연구원간_매칭', '과제, 연구원간 매칭_과제기준', 'json', by_project_json, profile=profile)
+    result_archive.archive_copy('03. 과제별_연구원별_매칭', '과제별, 연구원별 매칭_과제기준', 'json', by_project_json,
+                                 profile=profile)
 
     by_researcher_json = json.dumps(by_researcher_results, ensure_ascii=False, indent=2)
     with open(os.path.join(OUT_DIR, f'project_fit_by_researcher{suffix}.json'), 'w', encoding='utf-8') as f:
         f.write(by_researcher_json)
     print(f'[OK]   project_fit_by_researcher{suffix}.json 저장 ({len(by_researcher_results)}건)')
-    result_archive.archive_copy('과제_연구원간_매칭', '과제, 연구원간 매칭_인별기준', 'json', by_researcher_json,
+    result_archive.archive_copy('03. 과제별_연구원별_매칭', '과제별, 연구원별 매칭_인별기준', 'json', by_researcher_json,
                                  profile=profile)
 
     profile_note = f' ({profile})' if profile != 'default' else ''
@@ -159,7 +160,7 @@ def process(profile: str = 'default') -> bool:
     with open(html_path, 'w', encoding='utf-8') as f:
         f.write(html_out)
     print(f'[OK]   project_researcher_fit{suffix}.html 저장')
-    result_archive.archive_copy('과제_연구원간_매칭', '과제, 연구원간 매칭', 'html', html_out, profile=profile)
+    result_archive.archive_copy('03. 과제별_연구원별_매칭', '과제별, 연구원별 매칭', 'html', html_out, profile=profile)
 
     return True
 

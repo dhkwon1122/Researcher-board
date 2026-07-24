@@ -46,10 +46,11 @@ analysis_dep.csv(전문성 분석 부서.xlsx 전처리, 선택)는 process_rese
     profile='default'(전용 vLLM 서버)는 llm_config.LLM2_MAX_CONCURRENT(기본
     8)만큼 동시 호출하고, profile='thinkingcap'(사내 공용 게이트웨이)는 기존
     처럼 시간 기반 순차 제한(초당 최대 4건)을 따른다.
-  ※ 1~3단계는 각자 data/processed/의 '현재본' json/html(파이프라인 체인·비교용,
-    매번 덮어씀)은 그대로 유지하면서, 실행할 때마다 data/raw/result/ 아래
-    산출물별 폴더(과제분석/연구원분석/과제_연구원간_매칭)에 실행 시각이 붙은
-    사본을 추가로 쌓는다(result_archive.py, 이력 누적·덮어쓰기 없음).
+  ※ 1~4단계는 각자 data/processed/의 '현재본' json/html(파이프라인 체인·비교용,
+    매번 덮어씀)은 그대로 유지하면서, 실행할 때마다 data/processed/result/ 아래
+    산출물별 폴더(01. 과제분석/02. 연구원분석/03. 과제별_연구원별_매칭/
+    04. 연구원_연구원_유사도_매칭)에 실행 시각이 붙은 사본을 추가로 쌓는다
+    (result_archive.py, 이력 누적·덮어쓰기 없음).
 
 출력 위치: data/processed/
 """

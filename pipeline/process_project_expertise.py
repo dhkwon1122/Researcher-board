@@ -205,14 +205,14 @@ def process(profile: str = 'default') -> bool:
     with open(out_path, 'w', encoding='utf-8') as f:
         f.write(json_text)
     print(f'[OK]   project_expertise_analysis{suffix}.json 저장 ({len(results)}건)')
-    result_archive.archive_copy('과제분석', '과제 전문성 분석', 'json', json_text, profile=profile)
+    result_archive.archive_copy('01. 과제분석', '과제 전문성 분석', 'json', json_text, profile=profile)
 
     html_out = _build_html(results, profile)
     html_path = os.path.join(OUT_DIR, f'project_expertise_analysis{suffix}.html')
     with open(html_path, 'w', encoding='utf-8') as f:
         f.write(html_out)
     print(f'[OK]   project_expertise_analysis{suffix}.html 저장')
-    result_archive.archive_copy('과제분석', '과제 전문성 분석', 'html', html_out, profile=profile)
+    result_archive.archive_copy('01. 과제분석', '과제 전문성 분석', 'html', html_out, profile=profile)
     return True
 
 

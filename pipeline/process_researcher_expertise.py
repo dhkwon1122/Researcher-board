@@ -457,7 +457,7 @@ def _write_html(results: list, profile: str, researchers_df: pd.DataFrame):
     with open(html_path, 'w', encoding='utf-8') as f:
         f.write(html_out)
     print(f'[OK]   연구원 보유 전문성 분석{suffix}.html 저장 ({len(results)}명)')
-    result_archive.archive_copy('연구원분석', '연구원 보유 전문성 분석', 'html', html_out, profile=profile)
+    result_archive.archive_copy('02. 연구원분석', '연구원 보유 전문성 분석', 'html', html_out, profile=profile)
 
 
 def render_html(profile: str = 'default') -> bool:
@@ -631,7 +631,7 @@ def process(profile: str = 'default', refresh_journals: bool = False) -> bool:
         f.write(json_text)
 
     print(f'[OK]   연구원 보유 전문성 분석{suffix}.json 저장 ({len(results)}명)')
-    result_archive.archive_copy('연구원분석', '연구원 보유 전문성 분석', 'json', json_text, profile=profile)
+    result_archive.archive_copy('02. 연구원분석', '연구원 보유 전문성 분석', 'json', json_text, profile=profile)
 
     _write_html(results, profile, researchers)
     return True

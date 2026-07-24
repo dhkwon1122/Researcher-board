@@ -42,6 +42,10 @@ Output:
   data/processed/researcher_similarity[.<profile>].html
   data/processed/researcher_pair_judgment[.<profile>].json (쌍 판정 캐시 — 누적 재사용)
 
+위 json/html의 '현재본'(data/processed, 매번 덮어씀)과는 별개로, 실행 시각이
+붙은 사본을 data/processed/result/04. 연구원_연구원_유사도_매칭/ 아래에
+추가로 남겨 이력이 누적되도록 한다(result_archive.py, 덮어쓰기 없음).
+
 profile 인자는 "어떤 LLM이 만든 연구원 전문성 분석 결과를 비교할지"와
 "판정 LLM으로 어떤 사내 LLM을 쓸지"를 함께 고른다(임베딩 모델 자체는 항상
 BGE-M3로 고정이며 profile과 무관하다):
@@ -65,6 +69,7 @@ from paths import BASE_DIR, OUT_DIR  # noqa: E402
 sys.path.insert(0, BASE_DIR)
 import rd_specialist_markdown as mmd  # noqa: E402
 import researcher_fit as fit  # noqa: E402
+import result_archive  # noqa: E402
 from services.llm import LLMError  # noqa: E402
 
 DEFAULT_TOP_K = fit.TOP_K
@@ -326,9 +331,12 @@ def process(profile: str = 'default', top_k: int = DEFAULT_TOP_K, refresh_judgme
     suffix = mmd.profile_suffix(profile)
     os.makedirs(OUT_DIR, exist_ok=True)
     out_path = os.path.join(OUT_DIR, f'researcher_similarity{suffix}.json')
+    json_text = json.dumps(results, ensure_ascii=False, indent=2)
     with open(out_path, 'w', encoding='utf-8') as f:
-        json.dump(results, f, ensure_ascii=False, indent=2)
+        f.write(json_text)
     print(f'[OK]   researcher_similarity{suffix}.json 저장 ({len(results)}명)')
+    result_archive.archive_copy('04. 연구원_연구원_유사도_매칭', '연구원_연구원_유사도_분석', 'json', json_text,
+                                 profile=profile)
 
     researchers_df = fit.read_researchers(OUT_DIR)
     html_out = _build_html(results, profile, researchers_df, top_k)
@@ -336,6 +344,8 @@ def process(profile: str = 'default', top_k: int = DEFAULT_TOP_K, refresh_judgme
     with open(html_path, 'w', encoding='utf-8') as f:
         f.write(html_out)
     print(f'[OK]   researcher_similarity{suffix}.html 저장')
+    result_archive.archive_copy('04. 연구원_연구원_유사도_매칭', '연구원_연구원_유사도_분석', 'html', html_out,
+                                 profile=profile)
 
     return True
 
