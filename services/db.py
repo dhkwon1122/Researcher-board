@@ -82,7 +82,8 @@ def get_engine():
         _engine = None
         return None
     try:
-        _engine = create_engine(url, pool_pre_ping=True, future=True)
+        _engine = create_engine(url, pool_pre_ping=True, future=True,
+                                connect_args={'connect_timeout': 5})
     except Exception as exc:  # 잘못된 URL 등
         print(f'[db] Engine 생성 실패, CSV로 폴백: {exc}')
         _engine = None
