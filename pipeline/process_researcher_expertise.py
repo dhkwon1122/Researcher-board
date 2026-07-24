@@ -64,6 +64,7 @@ from excel_reader import clean_str as _clean  # noqa: E402
 from llm_client import call_llm, extract_json, max_concurrency, run_concurrent  # noqa: E402
 import journal_authority  # noqa: E402
 import rd_specialist_markdown as mmd  # noqa: E402
+import result_archive  # noqa: E402
 
 _SYSTEM_PROMPT = """# Role
 당신은 R&D 인재 전문성 분석 전문가인 "R&D Talent Profiling Agent"입니다.
@@ -456,6 +457,7 @@ def _write_html(results: list, profile: str, researchers_df: pd.DataFrame):
     with open(html_path, 'w', encoding='utf-8') as f:
         f.write(html_out)
     print(f'[OK]   연구원 보유 전문성 분석{suffix}.html 저장 ({len(results)}명)')
+    result_archive.archive_copy('연구원분석', '연구원 보유 전문성 분석', 'html', html_out, profile=profile)
 
 
 def render_html(profile: str = 'default') -> bool:
@@ -483,6 +485,20 @@ def process(profile: str = 'default', refresh_journals: bool = False) -> bool:
     if researchers.empty:
         print('[process_researcher_expertise] researchers.csv 없음 — 종료')
         return False
+
+    analysis_dep = _read_csv('analysis_dep')
+    if not analysis_dep.empty and 'department' in analysis_dep.columns:
+        allowed_depts = set(analysis_dep['department'])
+        before = len(researchers)
+        researchers = researchers[researchers['department'].isin(allowed_depts)]
+        print(f'[process_researcher_expertise] 분석 대상 부서 필터 적용(analysis_dep.csv, '
+              f'{len(allowed_depts)}개 부서): {before}명 → {len(researchers)}명')
+        if researchers.empty:
+            print('[process_researcher_expertise] 필터 적용 후 대상 연구원 없음 — 종료')
+            return False
+    else:
+        print('[process_researcher_expertise] analysis_dep.csv 없음 — 부서 필터 없이 전체 연구원 분석 '
+              '(python pipeline/process_analysis_dep.py로 생성 가능)')
 
     education = _read_csv('education')
     tasks = _read_csv('tasks')
@@ -599,10 +615,12 @@ def process(profile: str = 'default', refresh_journals: bool = False) -> bool:
     suffix = mmd.profile_suffix(profile)
     os.makedirs(OUT_DIR, exist_ok=True)
     out_path = os.path.join(OUT_DIR, f'연구원 보유 전문성 분석{suffix}.json')
+    json_text = json.dumps(results, ensure_ascii=False, indent=2)
     with open(out_path, 'w', encoding='utf-8') as f:
-        json.dump(results, f, ensure_ascii=False, indent=2)
+        f.write(json_text)
 
     print(f'[OK]   연구원 보유 전문성 분석{suffix}.json 저장 ({len(results)}명)')
+    result_archive.archive_copy('연구원분석', '연구원 보유 전문성 분석', 'json', json_text, profile=profile)
 
     _write_html(results, profile, researchers)
     return True

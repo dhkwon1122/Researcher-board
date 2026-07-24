@@ -37,6 +37,7 @@ from paths import OUT_DIR  # noqa: E402
 import rd_specialist_markdown as mmd  # noqa: E402
 import project_summary  # noqa: E402
 from llm_client import max_concurrency, run_concurrent  # noqa: E402
+import result_archive  # noqa: E402
 
 
 def _read_projects() -> pd.DataFrame:
@@ -186,14 +187,18 @@ def process(profile: str = 'default') -> bool:
     suffix = mmd.profile_suffix(profile)
     os.makedirs(OUT_DIR, exist_ok=True)
     out_path = os.path.join(OUT_DIR, f'project_expertise_analysis{suffix}.json')
+    json_text = json.dumps(results, ensure_ascii=False, indent=2)
     with open(out_path, 'w', encoding='utf-8') as f:
-        json.dump(results, f, ensure_ascii=False, indent=2)
+        f.write(json_text)
     print(f'[OK]   project_expertise_analysis{suffix}.json 저장 ({len(results)}건)')
+    result_archive.archive_copy('과제분석', '과제 전문성 분석', 'json', json_text, profile=profile)
 
+    html_out = _build_html(results, profile)
     html_path = os.path.join(OUT_DIR, f'project_expertise_analysis{suffix}.html')
     with open(html_path, 'w', encoding='utf-8') as f:
-        f.write(_build_html(results, profile))
+        f.write(html_out)
     print(f'[OK]   project_expertise_analysis{suffix}.html 저장')
+    result_archive.archive_copy('과제분석', '과제 전문성 분석', 'html', html_out, profile=profile)
     return True
 
 

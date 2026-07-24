@@ -17,7 +17,12 @@ researchers/education/tasks/publications/patents 등)은 이 파일에도
   job_profile.csv, job_profile_info_standard.json, job_profile_info_sait.json,
   core_technology.csv, core_technology_grade_info.json, tech_ownership.csv,
   tech_ownership_lv_info.json, publications.csv, patents.csv,
-  work_objective.csv, project_confl_address.csv
+  work_objective.csv, project_confl_address.csv, analysis_dep.csv
+
+analysis_dep.csv(전문성 분석 부서.xlsx 전처리, 선택)는 process_researcher_expertise.py가
+연구원 전문성 분석 대상 부서를 거르는 데 쓰인다 — 연구원의 department(researchers.csv,
+현소속부서명)가 이 목록에 있을 때만 분석 대상에 포함한다. 파일이 없으면 부서
+필터 없이 전체 연구원을 분석한다(정상 동작이므로 missing 목록에 포함되지 않음).
 
 이 스크립트가 실행하지 않는 것 (사내 Confluence + 사내 LLM 필요, 비용 발생 —
 위 전처리가 끝난 뒤 아래 순서로 직접 실행):
@@ -36,6 +41,10 @@ researchers/education/tasks/publications/patents 등)은 이 파일에도
     profile='default'(전용 vLLM 서버)는 llm_config.LLM2_MAX_CONCURRENT(기본
     8)만큼 동시 호출하고, profile='thinkingcap'(사내 공용 게이트웨이)는 기존
     처럼 시간 기반 순차 제한(초당 최대 4건)을 따른다.
+  ※ 1~3단계는 각자 data/processed/의 '현재본' json/html(파이프라인 체인·비교용,
+    매번 덮어씀)은 그대로 유지하면서, 실행할 때마다 data/raw/result/ 아래
+    산출물별 폴더(과제분석/연구원분석/과제_연구원간_매칭)에 실행 시각이 붙은
+    사본을 추가로 쌓는다(result_archive.py, 이력 누적·덮어쓰기 없음).
 
 출력 위치: data/processed/
 """
@@ -143,6 +152,12 @@ def run():
     from process_project_confl import process as process_project_confl
     if not process_project_confl():
         missing.append('project_confl_address (과제별컨플.xlsx)')
+
+    # ── 14. 전문성 분석 대상 부서: 전문성 분석 부서.xlsx (폴백 없음, 선택) ──
+    # 없어도 process_researcher_expertise.py가 부서 필터 없이 전체 연구원을
+    # 분석하므로(정상 동작) missing 목록에는 추가하지 않는다.
+    from process_analysis_dep import process as process_analysis_dep
+    process_analysis_dep()
 
     if missing:
         print(f'\n누락된 원천 파일: {missing}')
