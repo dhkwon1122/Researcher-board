@@ -9,7 +9,13 @@
   - source_reader.py   (3단계)         : process_*.py가 read_source(name)으로 원천 조회
 
 새 원천 파일을 추가하려면 이 목록에 한 줄만 추가하면 된다(header_row는 실제
-헤더가 몇 번째 행인지 — 대부분 0, 개인별논문현황만 2).
+헤더가 몇 번째 행인지 — 파일마다 다르니 아래 SOURCES 값을 확인할 것).
+원본 파일의 실제 헤더 위치와 다르면 첫 데이터 행이 컬럼명으로 잘못 들어가므로,
+새 파일을 열어볼 수 있으면 반드시 실제 헤더 행을 확인할 것.
+(comments_raw.xlsx는 현재 실존하는 원본이 없음 — 부서장 코멘트는 아직 별도
+ DRM 소스가 없어 리더십진단의 강점/개선점만 실데이터이고 나머지는 생성 데이터.
+ 원본이 없어도 1·3단계 모두 [SKIP]으로 안전하게 넘어가며 리더십진단 코멘트는
+ 별도 경로로 정상 병합된다. 추후 실제 파일이 생기면 header_row 확인 필요.)
 
 ※ 전용 처리기가 없는 4개 테이블(technology_transfer/transfers/certifications/
   succession)은 원본 파일이 이미 최종 스키마 컬럼명으로 준비되므로 이 매니페스트에
@@ -17,14 +23,14 @@
 """
 
 SOURCES = [
-    ('researchers', '인력현황.xlsx', 0),
-    ('evaluations', 'T&P_기본_인사_정보.xlsx', 0),
-    ('patents', '특허 리스트.xlsx', 0),
-    ('nurturing', '양성_인력_현황.xlsx', 0),
-    ('awards', '시상 세부사항.xlsx', 0),
-    ('education', '임직원_학력.xlsx', 0),
-    ('leadership', '리더십진단.xlsx', 0),
-    ('incentive_selection', '핵심이력.xlsx', 0),
-    ('publications', '개인별논문현황_2016_2026.xlsx', 2),
-    ('comments', 'comments_raw.xlsx', 0),
+    ('researchers', '인력현황.xlsx', 1),               # 2번째 행
+    ('evaluations', 'T&P_기본_인사_정보.xlsx', 8),      # 9번째 행
+    ('patents', '특허 리스트.xlsx', 0),                 # 1번째 행
+    ('nurturing', '양성_인력_현황.xlsx', 1),            # 2번째 행
+    ('awards', '시상 세부사항.xlsx', 8),                # 9번째 행
+    ('education', '임직원_학력.xlsx', 1),               # 2번째 행
+    ('leadership', '리더십진단.xlsx', 0),               # 1번째 행
+    ('incentive_selection', '핵심이력.xlsx', 0),        # 1번째 행
+    ('publications', '개인별논문현황_2016_2026.xlsx', 2),  # 3번째 행
+    ('comments', 'comments_raw.xlsx', 0),               # 원본 없음 — 없으면 [SKIP]
 ]
