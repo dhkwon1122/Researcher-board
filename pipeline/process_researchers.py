@@ -1,7 +1,9 @@
 """
 연구원 기본 정보 처리 모듈
 
-원천 파일: data/raw/인력현황.xlsx
+원천: source_reader.read_source('researchers')
+  → DB researchers_stg 테이블 또는 data/raw_csv/researchers.csv
+  (1단계 xlsx_to_raw_csv.py가 data/raw/인력현황.xlsx를 DRM 제거해 만든 사본)
 출력 파일: data/processed/researchers.csv
 
 읽는 컬럼:
@@ -28,10 +30,7 @@ from datetime import date, datetime
 
 import pandas as pd
 
-RAW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
-
-RESEARCHERS_FILE = '인력현황.xlsx'
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
 COL_ID         = '사원번호'
@@ -51,7 +50,8 @@ POSITION_YEAR_REF = date(2027, 3, 1)
 # ─────────────────────────────────────────────────────────────────────────────
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import read_xlsx, norm_id
+from excel_reader import norm_id
+from source_reader import read_source
 
 
 def _parse_date(val) -> date | None:
@@ -76,12 +76,11 @@ def _date_str(d: date | None) -> str:
 
 
 def process() -> bool:
-    raw_path = os.path.join(RAW_DIR, RESEARCHERS_FILE)
-    if not os.path.exists(raw_path):
-        print(f'[SKIP] {RESEARCHERS_FILE} 파일 없음 — researchers_raw 폴백 시도')
+    df = read_source('researchers')
+    if df is None:
+        print('[SKIP] researchers 원천 데이터 없음 '
+              '(DB researchers_stg 또는 data/raw_csv/researchers.csv) — researchers_raw 폴백 시도')
         return False
-
-    df = read_xlsx(raw_path)
     # 컬럼명 좌우 공백 제거 (탭 포함)
     df.columns = [str(c).strip() for c in df.columns]
 

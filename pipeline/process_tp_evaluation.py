@@ -1,7 +1,9 @@
 """
 T&P 기본 인사 정보 파일에서 연봉등급(평가)·이름·성별·생년월일을 추출
 
-원천 파일 위치: data/raw/T&P_기본_인사_정보.xlsx
+원천: source_reader.read_source('evaluations')
+  → DB evaluations_stg 테이블 또는 data/raw_csv/evaluations.csv
+  (1단계 xlsx_to_raw_csv.py가 data/raw/T&P_기본_인사_정보.xlsx를 DRM 제거해 만든 사본)
 
 추출 항목:
   - evaluations.csv : 2024/2025/2026 연봉등급 → 가/나/다/라/마 + 환산 점수
@@ -17,7 +19,6 @@ import sys
 
 import pandas as pd
 
-RAW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
 
 # ── 설정 (사내 파일 구조에 맞게 수정) ────────────────────────────────────────
@@ -49,9 +50,8 @@ GRADE_TO_SCORE = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import read_xlsx, norm_id
-
-TP_FILE = 'T&P_기본_인사_정보.xlsx'
+from excel_reader import norm_id
+from source_reader import read_source
 
 
 def _parse_birth_year(val) -> int | None:
@@ -83,13 +83,11 @@ def process():
         researcher_updates 컬럼: researcher_id, name, gender, birth_year
         (추출되지 않은 컬럼은 포함되지 않을 수 있음)
     """
-    raw_path = os.path.join(RAW_DIR, TP_FILE)
-    if not os.path.exists(raw_path):
-        print(f'[SKIP] {raw_path} 파일 없음')
+    df = read_source('evaluations')
+    if df is None:
+        print('[SKIP] evaluations 원천 데이터 없음 '
+              '(DB evaluations_stg 또는 data/raw_csv/evaluations.csv)')
         return False, None
-
-    print(f'[READ] {TP_FILE} (xlwings)')
-    df = read_xlsx(raw_path)
 
     if df.empty:
         print('[SKIP] 파일 읽기 결과가 비어 있습니다.')

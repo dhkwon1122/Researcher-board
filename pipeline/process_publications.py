@@ -1,6 +1,9 @@
 """
 논문 현황 전처리
-Source : data/raw/개인별논문현황_2016_2026.xlsx  (헤더: 3번째 행, header_row=2)
+Source : source_reader.read_source('publications')
+         → DB publications_stg 테이블 또는 data/raw_csv/publications.csv
+         (1단계 xlsx_to_raw_csv.py가 data/raw/개인별논문현황_2016_2026.xlsx를
+          DRM 제거해 만든 사본 — 헤더 행 위치(3번째 행)는 그 단계에서 이미 처리됨)
 Output : data/processed/publications.csv
 
 컬럼 매핑:
@@ -26,10 +29,8 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RAW_DIR  = os.path.join(BASE_DIR, 'data', 'raw')
 OUT_DIR  = os.path.join(BASE_DIR, 'data', 'processed')
 
-SOURCE = os.path.join(RAW_DIR, '개인별논문현황_2016_2026.xlsx')
 OUTPUT = os.path.join(OUT_DIR, 'publications.csv')
 
 # 원본 컬럼 이름
@@ -102,14 +103,14 @@ def _parse_is_corresponding(val) -> bool:
 
 
 def process():
-    from excel_reader import norm_id, read_xlsx
+    from excel_reader import norm_id
+    from source_reader import read_source
 
-    if not os.path.exists(SOURCE):
-        print(f'[process_publications] 파일 없음: {SOURCE}')
+    df = read_source('publications')
+    if df is None:
+        print('[process_publications] 원천 데이터 없음 '
+              '(DB publications_stg 또는 data/raw_csv/publications.csv)')
         return False
-
-    print(f'[process_publications] 읽는 중: {SOURCE}  (헤더: 3번째 행)')
-    df = read_xlsx(SOURCE, header_row=2)
 
     missing = [c for c in REQUIRED_COLS if c not in df.columns]
     if missing:

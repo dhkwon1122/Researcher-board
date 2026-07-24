@@ -2,7 +2,9 @@
 코멘트 처리 모듈
 
 처리 흐름:
-  data/raw/comments_raw.xlsx        — 부서장 코멘트 (선택)
+  source_reader.read_source('comments')   — 부서장 코멘트 (선택)
+    → DB comments_stg 테이블 또는 data/raw_csv/comments.csv
+    (1단계 xlsx_to_raw_csv.py가 data/raw/comments_raw.xlsx를 DRM 제거해 만든 사본)
   data/processed/leadership_comments.csv — 리더십진단 강점·개선점 (process_leadership이 생성)
   ↓
   data/processed/comments.csv       — 모든 코멘트 통합
@@ -21,13 +23,13 @@ import sys
 
 import pandas as pd
 
-DATA_RAW = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'raw')
 DATA_OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
 
 # pipeline 디렉터리 + 프로젝트 루트를 path 에 추가 (services.llm 임포트용)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from excel_reader import read_xlsx, norm_researcher_id_col
+from excel_reader import norm_researcher_id_col
+from source_reader import read_source
 
 COLS = ['researcher_id', 'year', 'commenter_type',
         'comment_raw', 'comment_summary', 'strengths', 'improvements']
@@ -169,13 +171,13 @@ def process(use_llm: bool = False):
     """
     results = []
 
-    # ── 부서장 코멘트 (comments_raw.xlsx) ────────────────────────────────────
-    raw_path = os.path.join(DATA_RAW, 'comments_raw.xlsx')
-    if os.path.exists(raw_path):
-        df = norm_researcher_id_col(read_xlsx(raw_path))
+    # ── 부서장 코멘트 (comments_raw.xlsx → comments 원천) ────────────────────
+    df = read_source('comments')
+    if df is not None:
+        df = norm_researcher_id_col(df)
         required = {'researcher_id', 'year', 'comment_raw'}
         if not required.issubset(df.columns):
-            print(f'[WARN] comments_raw.xlsx 필수 컬럼 누락: {required - set(df.columns)}')
+            print(f'[WARN] comments 원천 필수 컬럼 누락: {required - set(df.columns)}')
         else:
             # researchers 이름 조회
             res_path = os.path.join(DATA_OUT, 'researchers.csv')
@@ -204,7 +206,7 @@ def process(use_llm: bool = False):
                 })
             print(f'  부서장 코멘트 {len(df)}행 처리')
     else:
-        print(f'[SKIP] comments_raw.xlsx 없음')
+        print('[SKIP] comments 원천 데이터 없음 (DB comments_stg 또는 data/raw_csv/comments.csv)')
 
     out_df = pd.DataFrame(results)
 
