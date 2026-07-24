@@ -78,9 +78,12 @@ def read_xlsx(file_path: str, sheet: int | str = 0, header_row: int = 0) -> pd.D
         headers = data[header_row]
         rows = data[header_row + 1:]
 
-        valid_cols = [(i, h) for i, h in enumerate(headers) if h is not None]
-        clean_headers = [str(h).strip() for _, h in valid_cols]
-        clean_rows = [[row[i] if i < len(row) else None for i, _ in valid_cols]
+        # 헤더 셀이 비어 있어도(None) 그 컬럼의 데이터는 버리지 않고 보존한다.
+        # (엑셀에서 헤더 없이 값만 채워진 컬럼이 있을 수 있음 — "전체 컬럼 보존"이 목표)
+        n_cols = len(headers)
+        clean_headers = [str(h).strip() if h is not None else f'Unnamed_{i}'
+                          for i, h in enumerate(headers)]
+        clean_rows = [[row[i] if i < len(row) else None for i in range(n_cols)]
                       for row in rows]
 
         return pd.DataFrame(clean_rows, columns=clean_headers)
