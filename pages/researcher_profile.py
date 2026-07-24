@@ -31,7 +31,7 @@ from services.data_store import read_processed, read_profile_tables
 
 dash.register_page(
     __name__,
-    path='/researcher-profile',
+    path='/',
     name='연구원 프로필',
     title='연구원 개별 프로필',
 )
