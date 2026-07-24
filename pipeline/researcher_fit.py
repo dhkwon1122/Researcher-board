@@ -16,8 +16,17 @@ process_project_researcher_fit.py(사내 과제 ↔ 연구원)가 이 로직을 
 run_matching_llm은 profile을 받아 최종 판단 LLM 호출에만 반영한다.
 compute_embeddings(BGE-M3 임베딩)는 두 profile이 항상 공유하며 profile
 인자를 받지 않는다(임베딩 모델은 비교 대상이 아님).
+
+임베딩은 텍스트 내용 해시 기준으로 캐시(cached_embed, embedding_cache.json)해
+재사용한다 — process_project_researcher_fit.py(과제↔연구원)와
+process_researcher_similarity.py(연구원↔연구원)가 같은 연구원 프로필
+텍스트(researcher_profile_text)를 각자 다시 임베딩하지 않고 캐시를 공유한다.
+캐시 키가 텍스트 내용 자체의 해시라, 연구원 전문성 분석이 갱신돼 텍스트가
+바뀌면 자동으로 새 항목으로 취급돼 별도 새로고침 옵션 없이도 항상 최신
+텍스트에 맞는 임베딩을 쓴다.
 """
 
+import hashlib
 import json
 import os
 import sys
@@ -26,12 +35,14 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from paths import BASE_DIR  # noqa: E402
+from paths import BASE_DIR, OUT_DIR  # noqa: E402
 sys.path.insert(0, BASE_DIR)
 from llm_client import call_llm, extract_json, max_concurrency, run_concurrent  # noqa: E402
 from services.llm import LLMError, embed  # noqa: E402,F401 (embed/LLMError는 호출부에서도 사용)
 
 TOP_K = 5
+
+_EMBED_CACHE_PATH = os.path.join(OUT_DIR, 'embedding_cache.json')
 
 FIT_BADGE = {'상': 'text-bg-success', '중': 'text-bg-warning', '하': 'text-bg-danger'}
 
@@ -190,10 +201,46 @@ def check_embed_server():
     embed(['ping'])
 
 
+def _text_hash(text: str) -> str:
+    return hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+
+def _load_embed_cache() -> dict:
+    if not os.path.exists(_EMBED_CACHE_PATH):
+        return {}
+    with open(_EMBED_CACHE_PATH, encoding='utf-8') as f:
+        return json.load(f)
+
+
+def _save_embed_cache(cache: dict):
+    os.makedirs(OUT_DIR, exist_ok=True)
+    with open(_EMBED_CACHE_PATH, 'w', encoding='utf-8') as f:
+        json.dump(cache, f)
+
+
+def cached_embed(texts: list) -> np.ndarray:
+    """embed()를 텍스트 내용 해시 기준으로 캐시해 재사용한다. 임베딩은 profile과
+    무관하게 항상 같은 BGE-M3 결과이므로, process_project_researcher_fit.py와
+    process_researcher_similarity.py가 같은 연구원 프로필 텍스트를 각자 다시
+    임베딩하지 않고 이 캐시(embedding_cache.json)를 공유한다. 캐시에 없는
+    텍스트만 모아 한 번에 embed() 호출하고(실패 시 LLMError 그대로 전파),
+    결과를 캐시에 채운 뒤 저장한다."""
+    cache = _load_embed_cache()
+    hashes = [_text_hash(t) for t in texts]
+    missing_idx = [i for i, h in enumerate(hashes) if h not in cache]
+    if missing_idx:
+        new_vectors = embed([texts[i] for i in missing_idx])
+        for i, vec in zip(missing_idx, new_vectors):
+            cache[hashes[i]] = vec
+        _save_embed_cache(cache)
+    return np.array([cache[h] for h in hashes], dtype=np.float32)
+
+
 def compute_embeddings(job_texts: list, researcher_texts: list):
-    """실패 시 LLMError를 그대로 전파한다(호출부가 잡아서 처리)."""
-    job_emb = np.array(embed(job_texts), dtype=np.float32)
-    researcher_emb = np.array(embed(researcher_texts), dtype=np.float32)
+    """실패 시 LLMError를 그대로 전파한다(호출부가 잡아서 처리). cached_embed로
+    텍스트 해시 기준 캐시를 사용한다."""
+    job_emb = cached_embed(job_texts)
+    researcher_emb = cached_embed(researcher_texts)
     return job_emb, researcher_emb
 
 

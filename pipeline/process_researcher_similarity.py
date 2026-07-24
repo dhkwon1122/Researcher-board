@@ -61,7 +61,6 @@ import json
 import os
 import sys
 
-import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -120,7 +119,9 @@ def compute_similarity(profiles: list, top_k: int = DEFAULT_TOP_K) -> list:
     researcher_ids = [p['researcher_id'] for p in profiles]
     texts = [fit.researcher_profile_text(p) for p in profiles]
 
-    embeddings = np.array(fit.embed(texts), dtype=np.float32)
+    # 텍스트 해시 기준 캐시(fit.cached_embed) — process_project_researcher_fit.py가
+    # 같은 연구원 프로필 텍스트를 이미 임베딩해 뒀다면 재계산하지 않는다.
+    embeddings = fit.cached_embed(texts)
     sims = fit.cosine_sim_matrix(embeddings, embeddings)
 
     n = len(researcher_ids)
