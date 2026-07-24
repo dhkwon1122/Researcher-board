@@ -207,17 +207,40 @@ def _update_pair_judgments(pairs: set, text_by_id: dict, cache: dict, profile: s
     이전 판정이 실패한 것)만 LLM으로 재판정한다(누적 재사용, profile별 분리).
     쌍은 _pair_key()의 정렬된 키로 관리하므로 A-B/B-A를 합쳐 한 번만 판정하고,
     그 결과를 양쪽 모두에서 재사용한다(대칭성 보장). force=True
-    (--refresh-judgments)면 캐시와 무관하게 전달된 쌍 전체를 다시 판정한다."""
+    (--refresh-judgments)면 캐시와 무관하게 전달된 쌍 전체를 다시 판정한다.
+
+    profile의 동시 호출 허용치(fit.max_concurrency)만큼 스레드풀로 동시 판정한다
+    (journal_authority.py 등과 동일한 패턴) — 개별 쌍 판정 중 예기치 못한 예외가
+    나도(fit.run_concurrent가 잡아 반환) 다른 쌍 판정은 계속 진행하고, 실패한
+    쌍만 에러와 함께 로그로 남긴다. on_complete 콜백으로 진행 상황을 실시간으로
+    출력한다(run_concurrent 자체는 전체가 끝나야 반환하므로)."""
     targets = [p for p in pairs if force or not cache.get(_pair_key(*p))]
     if not targets:
         return cache
     label = '전체 재판정' if force else '신규/미확인'
-    print(f'[process_researcher_similarity] 연구원 쌍 LLM 판정 중 ({label} {len(targets)}쌍, profile={profile})...')
-    for a, b in targets:
+    workers = fit.max_concurrency(profile)
+    total = len(targets)
+    print(f'[process_researcher_similarity] 연구원 쌍 LLM 판정 중 ({label} {total}쌍, profile={profile}, '
+          f'동시 {workers}건)...')
+    completed = 0
+
+    def _on_complete(_i, _result, _error):
+        nonlocal completed
+        completed += 1
+        if completed % 10 == 0 or completed == total:
+            print(f'    (진행: {completed}/{total} 완료)')
+
+    tasks = [(lambda a=a, b=b: _judge_pair(text_by_id[a], text_by_id[b], profile=profile)) for a, b in targets]
+    task_results = fit.run_concurrent(tasks, max_workers=workers, on_complete=_on_complete)
+
+    for (a, b), (judged, error) in zip(targets, task_results):
         key = _pair_key(a, b)
-        judged = _judge_pair(text_by_id[a], text_by_id[b], profile=profile)
-        cache[key] = judged or {}
-        print(f"    [{'OK' if judged else '실패'}] {a} - {b}")
+        if error is not None:
+            print(f'    [에러] {a} - {b}: {type(error).__name__}: {error}')
+            cache[key] = {}
+        else:
+            cache[key] = judged or {}
+            print(f"    [{'OK' if judged else '실패'}] {a} - {b}")
     _save_pair_cache(cache, profile)
     return cache
 

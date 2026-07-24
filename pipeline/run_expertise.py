@@ -30,7 +30,8 @@ analysis_dep.csv(전문성 분석 부서.xlsx 전처리, 선택)는 process_rese
 필터 없이 전체 연구원을 분석한다(정상 동작이므로 missing 목록에 포함되지 않음).
 
 이 스크립트가 실행하지 않는 것 (사내 Confluence + 사내 LLM 필요, 비용 발생 —
-위 전처리가 끝난 뒤 아래 순서로 직접 실행):
+위 전처리가 끝난 뒤 아래 순서로 직접 실행, 또는 pipeline/run_analysis.py로
+한 번에 순차 실행):
   1) python pipeline/process_project_expertise.py      (과제 전문성 분석)
      python pipeline/process_project_search.py         (선택: 유사 기업/학계 탐색)
   2) python pipeline/process_researcher_expertise.py   (연구원 전문성 분석)
