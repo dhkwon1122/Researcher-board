@@ -9,6 +9,11 @@ researchers/education/tasks/publications/patents 등)은 이 파일에도
 스크립트이므로, 대시보드만 쓰는 사람도 run_pipeline.py만으로 충분하고
 전문성 분석만 쓰는 사람도 run_expertise.py만으로 충분하다.
 
+실행 마지막에 BGE-M3 임베딩 서버(services/bge_server.py)가 응답하는지 확인하고,
+응답하지 않으면 백그라운드로 자동 기동해 둔다(pipeline/embed_server.py) — 이
+스크립트 자체는 임베딩을 쓰지 않지만, 바로 이어서 실행할
+process_project_researcher_fit.py를 위해 모델 로딩 시간을 미리 없애 둔다.
+
 사용법:
   python pipeline/run_expertise.py
 
@@ -171,6 +176,15 @@ def run():
         print('  4) python pipeline/process_researcher_similarity.py   (선택)')
         print('  ※ 1~3단계는 profile의 동시 호출 허용치만큼 병렬로 LLM을 호출합니다')
         print('     (llm_config.LLM2_MAX_CONCURRENT, profile=default 기본 8건).')
+
+    # ── BGE-M3 임베딩 서버 사전 기동 ────────────────────────────────────
+    # 이 스크립트 자체는 임베딩/LLM을 호출하지 않지만, 바로 다음 실행할
+    # process_project_researcher_fit.py(임베딩 1차 후보 추출)를 위해 미리
+    # 띄워 둔다 — 이미 응답 중이면 재기동하지 않고, 응답하지 않으면 백그라운드로
+    # 새로 기동해 모델 로딩을 지금 끝내 둔다.
+    print('\nBGE-M3 임베딩 서버 사전 기동 확인 중 (다음 단계 process_project_researcher_fit.py 대비)...')
+    from embed_server import ensure_embed_server
+    ensure_embed_server()
 
 
 if __name__ == '__main__':

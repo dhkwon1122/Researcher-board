@@ -25,6 +25,11 @@ Output:
 임베딩(1차 후보 추출)은 profile과 무관하게 항상 공유되며, 최종 LLM 판단만
 profile별로 달라진다.
 
+실행 시작 시 BGE-M3 임베딩 서버가 응답하는지 먼저 확인하고, 응답하지 않으면
+services/bge_server.py를 백그라운드로 자동 기동한 뒤 준비될 때까지 기다린다
+(pipeline/embed_server.py). 이미 다른 실행이 띄워 둔 서버가 있으면 재사용하고
+새로 기동하지 않는다.
+
 두 사내 LLM 비교(profile 인자):
   python pipeline/process_project_researcher_fit.py                    # 기존 LLM(profile='default')
   python pipeline/process_project_researcher_fit.py --profile thinkingcap  # 2번째 LLM
@@ -39,6 +44,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import OUT_DIR  # noqa: E402
+import embed_server  # noqa: E402
 import rd_specialist_markdown as mmd  # noqa: E402
 import researcher_fit as fit  # noqa: E402
 import result_archive  # noqa: E402
@@ -46,11 +52,8 @@ from services.llm import LLMError  # noqa: E402
 
 
 def process(profile: str = 'default') -> bool:
-    print('[process_project_researcher_fit] BGE-M3 임베딩 서버 연결 확인 중...')
-    try:
-        fit.check_embed_server()
-    except LLMError as exc:
-        print(f'[process_project_researcher_fit] BGE-M3 임베딩 서버 확인 실패 — 종료: {exc}')
+    if not embed_server.ensure_embed_server():
+        print('[process_project_researcher_fit] BGE-M3 임베딩 서버를 사용할 수 없어 종료합니다.')
         return False
 
     suffix = mmd.profile_suffix(profile)
