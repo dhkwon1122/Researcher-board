@@ -33,6 +33,12 @@ Knowledge)을 BGE-M3로 임베딩하고 코사인 유사도를 계산한다.
     서로 어긋나는 일이 생기지 않는다.
   ※ 캐시 무시하고 전체 쌍을 다시 판정하려면 --refresh-judgments 사용.
 
+3단계(근속 라벨): researchers.csv의 hire_date로 그때그때(저장하지 않고 실행
+시점 기준) 근속=round((오늘-hire_date).days/365, 2)을 계산해, 5년 미만이면
+Junior, 5년 이상이면 Senior 라벨을 결과에 붙인다. 매칭 로직(누가 누구와
+유사한지) 자체는 바꾸지 않고, 대상자 본인과 각 유사 연구원에 라벨만
+추가한다 — hire_date가 없으면 라벨 없이(''), HTML에서는 배지를 생략한다.
+
 Source:
   data/processed/연구원 보유 전문성 분석[.<profile>].json (process_researcher_expertise.py)
   data/processed/researchers.csv                          (HTML에 이름 표시용)
@@ -60,6 +66,7 @@ import html
 import json
 import os
 import sys
+from datetime import date, datetime
 
 import pandas as pd
 
@@ -274,7 +281,49 @@ def attach_pair_judgments(results: list, profiles: list, profile: str = 'default
     return results
 
 
+_TENURE_JUNIOR_THRESHOLD = 5.0
+
+
+def _tenure_level(hire_date_str) -> str:
+    """근속=round((오늘-hire_date).days/365, 2)를 그때그때 계산해(저장하지 않음)
+    5년 미만이면 'Junior', 5년 이상이면 'Senior'를 반환한다. hire_date가 없거나
+    형식이 안 맞으면 빈 문자열(미분류 — 호출부가 배지 없이 처리)."""
+    s = str(hire_date_str or '').strip()
+    if not s:
+        return ''
+    try:
+        hire_dt = datetime.strptime(s[:10], '%Y-%m-%d').date()
+    except ValueError:
+        return ''
+    tenure = round((date.today() - hire_dt).days / 365, 2)
+    return 'Junior' if tenure < _TENURE_JUNIOR_THRESHOLD else 'Senior'
+
+
+def attach_tenure_levels(results: list, researchers_df: pd.DataFrame) -> list:
+    """researchers.csv의 hire_date로부터 근속 Junior(5년 미만)/Senior(5년 이상)
+    라벨을 결과에 붙인다 — compute_similarity()/attach_pair_judgments()의 매칭
+    로직(누가 누구와 유사한지)은 그대로 두고, 대상자 본인과 각 유사 연구원
+    항목에 tenure_level 필드만 추가한다."""
+    hire_map = {}
+    if not researchers_df.empty and 'hire_date' in researchers_df.columns:
+        hire_map = researchers_df.set_index('researcher_id')['hire_date'].to_dict()
+
+    for item in results:
+        item['tenure_level'] = _tenure_level(hire_map.get(item['researcher_id'], ''))
+        for s in item['similar']:
+            s['tenure_level'] = _tenure_level(hire_map.get(s['researcher_id'], ''))
+    return results
+
+
 _LEVEL_BADGE = {'동일 분야': 'text-bg-success', '인접 분야': 'text-bg-warning', '낮음': 'text-bg-secondary'}
+_TENURE_BADGE = {'Junior': 'text-bg-info', 'Senior': 'text-bg-dark'}
+
+
+def _tenure_badge_html(tenure_level: str) -> str:
+    if not tenure_level:
+        return ''
+    css = _TENURE_BADGE.get(tenure_level, 'text-bg-secondary')
+    return f'<span class="badge rounded-pill {css}">{html.escape(tenure_level)}</span>'
 
 
 def _reason_html(evidence) -> str:
@@ -293,6 +342,7 @@ def _similar_row_html(s: dict, name_map: dict, dept_map: dict, org_map: dict, pr
     rid = s['researcher_id']
     name = f'{html.escape(rid)} {html.escape(name_map.get(rid, ""))}'.strip()
     org_badges = mmd.dept_org_badges_html(dept_map.get(rid, ''), org_map.get(rid, ''))
+    tenure_badge = _tenure_badge_html(s.get('tenure_level', ''))
     summary_html = mmd.strength_summary_html(profile_by_id.get(rid, {}))
 
     reason_html = _reason_html(s.get('evidence'))
@@ -307,7 +357,7 @@ def _similar_row_html(s: dict, name_map: dict, dept_map: dict, org_map: dict, pr
 
     return f'''<div class="rank-row d-flex justify-content-between align-items-start gap-2">
   <div>
-    <div class="name">{name} {org_badges}</div>
+    <div class="name">{name} {tenure_badge} {org_badges}</div>
     <div class="similar-summary mt-1">{summary_html}</div>
     {reason_html}
   </div>
@@ -350,6 +400,7 @@ def _build_html(results: list, profile: str, researchers_df: pd.DataFrame, top_k
         rid = item['researcher_id']
         anchor = anchor_of[rid]
         label = f'{rid} {name_map.get(rid, "")}'.strip()
+        tenure_badge = _tenure_badge_html(item.get('tenure_level', ''))
 
         rows = ''.join(
             _similar_row_html(s, name_map, dept_map, org_map, profile_by_id) for s in item['similar']
@@ -357,7 +408,7 @@ def _build_html(results: list, profile: str, researchers_df: pd.DataFrame, top_k
 
         cards.append(f'''<div class="fit-card card" id="{anchor}">
   <div class="card-body">
-    <h3>{html.escape(label)}</h3>
+    <h3>{html.escape(label)} {tenure_badge}</h3>
     <hr class="mt-1 mb-2">
     <div class="subject-summary">{mmd.strength_summary_html(profile_by_id.get(rid, {}))}</div>
     <p class="subtitle mt-2">과제와 무관하게, 전문성이 가장 유사한 연구원 Top {top_k}</p>
@@ -397,6 +448,9 @@ def process(profile: str = 'default', top_k: int = DEFAULT_TOP_K, refresh_judgme
 
     results = attach_pair_judgments(results, profiles, profile=profile, force=refresh_judgments)
 
+    researchers_df = fit.read_researchers(OUT_DIR)
+    results = attach_tenure_levels(results, researchers_df)
+
     suffix = mmd.profile_suffix(profile)
     os.makedirs(OUT_DIR, exist_ok=True)
     out_path = os.path.join(OUT_DIR, f'researcher_similarity{suffix}.json')
@@ -407,7 +461,6 @@ def process(profile: str = 'default', top_k: int = DEFAULT_TOP_K, refresh_judgme
     result_archive.archive_copy('04. 연구원_연구원_유사도_매칭', '연구원_연구원_유사도_분석', 'json', json_text,
                                  profile=profile)
 
-    researchers_df = fit.read_researchers(OUT_DIR)
     profile_by_id = {p['researcher_id']: p for p in profiles}
     html_out = _build_html(results, profile, researchers_df, top_k, profile_by_id)
     html_path = os.path.join(OUT_DIR, f'researcher_similarity{suffix}.html')
