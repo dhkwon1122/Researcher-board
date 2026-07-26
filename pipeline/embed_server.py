@@ -54,11 +54,28 @@ def _health_ok() -> bool:
         return False
 
 
-def ensure_embed_server(wait_timeout: float = 180.0, poll_interval: float = 2.0) -> bool:
+_DEFAULT_WAIT_TIMEOUT = 600.0  # 10분 — BGE-M3 첫 로딩+첫 추론(CPU 환경 등)은 오래 걸릴 수 있음
+
+
+def ensure_embed_server(wait_timeout: float | None = None, poll_interval: float = 2.0) -> bool:
     """BGE-M3 임베딩 서버가 이미 응답하면 True를 바로 반환한다(재기동 없음).
     응답하지 않으면 services/bge_server.py를 백그라운드로 기동하고, 최대
     wait_timeout초 동안 poll_interval초 간격으로 준비 여부를 확인한다.
-    시간 내 준비되지 않으면 False(호출부가 로그 경로를 안내하며 종료할 수 있음)."""
+    시간 내 준비되지 않으면 False(호출부가 로그 경로를 안내하며 종료할 수 있음).
+
+    wait_timeout 기본값은 EMBED_SERVER_WAIT_TIMEOUT 환경변수(없으면 600초)를
+    따른다. 모델 로딩 자체는 포트가 열리기 전이라 헬스체크가 곧바로(순간적인
+    연결 실패로) 반환되지만, 로딩이 끝난 직후 첫 실제 추론 요청은 CPU 환경 등에서
+    응답까지 꽤 걸릴 수 있어 그동안 헬스체크 한 번이 블로킹된다 — 너무 짧은
+    타임아웃을 주면 서버가 실제로는 정상 응답했는데도(로그에 '200 OK'가 남음)
+    이 함수는 그 응답을 못 보고 먼저 포기해 버릴 수 있다. 서버는 한 번 뜨면
+    다음 실행부터 그대로 재사용되므로, 넉넉하게 기다리는 편이 유리하다."""
+    if wait_timeout is None:
+        try:
+            wait_timeout = float(os.environ.get('EMBED_SERVER_WAIT_TIMEOUT', str(_DEFAULT_WAIT_TIMEOUT)))
+        except ValueError:
+            wait_timeout = _DEFAULT_WAIT_TIMEOUT
+
     if _health_ok():
         return True
 
@@ -94,12 +111,18 @@ def ensure_embed_server(wait_timeout: float = 180.0, poll_interval: float = 2.0)
         with open(_PID_PATH, 'w', encoding='utf-8') as f:
             f.write(str(proc.pid))
 
-    print(f'[embed_server] 서버 준비 대기 중(최대 {wait_timeout:.0f}초 — 모델 로딩에 시간이 걸릴 수 있음)...')
-    deadline = time.monotonic() + wait_timeout
+    print(f'[embed_server] 서버 준비 대기 중(최대 {wait_timeout:.0f}초 — 첫 로딩/첫 추론은 오래 걸릴 수 있음)...')
+    start = time.monotonic()
+    deadline = start + wait_timeout
+    last_heartbeat = start
     while time.monotonic() < deadline:
         if _health_ok():
             print('[embed_server] BGE-M3 서버 준비 완료')
             return True
+        now = time.monotonic()
+        if now - last_heartbeat >= 30:
+            print(f'[embed_server] 아직 대기 중... ({now - start:.0f}초 경과, 로그: {_LOG_PATH})')
+            last_heartbeat = now
         time.sleep(poll_interval)
 
     print(f'[embed_server] {wait_timeout:.0f}초 내에 서버가 준비되지 않았습니다 — 로그 확인: {_LOG_PATH}')
