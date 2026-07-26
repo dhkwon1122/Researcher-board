@@ -17,6 +17,15 @@ Knowledge)을 BGE-M3로 임베딩하고 코사인 유사도를 계산한다.
 쓰는 것과 동일한 함수들이며, 임베딩 자체는 두 스크립트가 다시 계산한다 —
 비교 대상 텍스트 집합이 다르기 때문).
 
+근속 그룹별 top-K: 대상 연구원의 근속(Junior/Senior, 아래 3단계 참고)을 알 수
+있으면, 후보를 Junior/Senior로 나눠 그룹별로 각각 top_k명씩(최대 top_k*2명)
+찾는다 — "이 사람과 전문성이 가장 비슷한 Junior top_k명"과 "가장 비슷한
+Senior top_k명"을 함께 보여주기 위함이다. 후보 중 hire_date가 없어 근속을
+모르는 사람은 어느 그룹에도 들어가지 못하므로 이 그룹별 검색에서는 제외된다.
+대상 연구원 본인의 근속을 모르면(hire_date 없음) 그룹 구분 없이 기존처럼
+전체 후보 중 top_k명을 찾는다(하위 호환 폴백). --top-k는 이제 "그룹당 개수"
+(대상자 근속을 아는 경우) 또는 "전체 개수"(모르는 경우, 폴백)를 의미한다.
+
 2단계(LLM 판정, top-K 후보에 대해서만): 임베딩 점수만으로는 "왜 유사한지",
 "단어만 겹치고 실제 업무는 다른 건 아닌지"를 알 수 없다. 그래서 top-K로
 추려진 후보 쌍에 대해서만 "R&D Peer Similarity Agent" 페르소나가 두 프로필을
@@ -68,6 +77,7 @@ import os
 import sys
 from datetime import date, datetime
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -121,11 +131,29 @@ def _read_expertise(profile: str) -> list:
         return json.load(f)
 
 
-def compute_similarity(profiles: list, top_k: int = DEFAULT_TOP_K) -> list:
+def _top_within(idx_pool: list, row, k: int) -> list:
+    """idx_pool(후보 인덱스 부분집합) 안에서만 row 기준 상위 k개 인덱스를 고른다
+    (fit.top_k_idx를 그대로 재사용하기 위해, 후보가 아닌 위치는 -inf로 마스킹)."""
+    if not idx_pool or k <= 0:
+        return []
+    mask = np.full(len(row), -np.inf)
+    for j in idx_pool:
+        mask[j] = row[j]
+    return fit.top_k_idx(mask, min(k, len(idx_pool)))
+
+
+def compute_similarity(profiles: list, top_k: int = DEFAULT_TOP_K, tenure_map: dict | None = None) -> list:
     """profiles: 연구원 보유 전문성 분석.json의 원소 리스트(researcher_id 포함).
+    tenure_map: researcher_id -> 'Junior'/'Senior'/''(모름). 대상 연구원의
+    근속을 알 수 있으면, 후보를 Junior/Senior로 나눠 그룹별로 각각 top_k명씩
+    (최대 top_k*2명) 찾는다 — 후보 중 근속을 모르는 사람은 어느 그룹에도
+    속하지 못해 이 검색에서 제외된다. 대상 연구원 본인의 근속을 모르면
+    그룹 구분 없이 기존처럼 전체 후보 중 top_k명을 찾는다(하위 호환 폴백).
+
     반환: [{'researcher_id', 'similar': [{'researcher_id', 'score'}, ...]}, ...]
-    similar은 자기 자신을 제외하고 유사도 내림차순 상위 top_k. score는 코사인
-    유사도(-1~1, 실제로는 임베딩 특성상 대부분 0~1 범위)를 소수 4자리로 반올림."""
+    similar은 자기 자신을 제외한 유사도 내림차순. score는 코사인 유사도
+    (-1~1, 실제로는 임베딩 특성상 대부분 0~1 범위)를 소수 4자리로 반올림."""
+    tenure_map = tenure_map or {}
     researcher_ids = [p['researcher_id'] for p in profiles]
     texts = [fit.researcher_profile_text(p) for p in profiles]
 
@@ -135,15 +163,23 @@ def compute_similarity(profiles: list, top_k: int = DEFAULT_TOP_K) -> list:
     sims = fit.cosine_sim_matrix(embeddings, embeddings)
 
     n = len(researcher_ids)
-    k = min(top_k, n - 1) if n > 1 else 0
 
     results = []
     for i in range(n):
         row = sims[i].copy()
         row[i] = -1.0  # 자기 자신은 후보에서 제외
-        top_idx = fit.top_k_idx(row, k) if k > 0 else []
+
+        subject_level = tenure_map.get(researcher_ids[i], '')
+        if not subject_level:
+            k = min(top_k, n - 1) if n > 1 else 0
+            top_idx = fit.top_k_idx(row, k) if k > 0 else []
+        else:
+            junior_idx = [j for j in range(n) if j != i and tenure_map.get(researcher_ids[j], '') == 'Junior']
+            senior_idx = [j for j in range(n) if j != i and tenure_map.get(researcher_ids[j], '') == 'Senior']
+            top_idx = _top_within(junior_idx, row, top_k) + _top_within(senior_idx, row, top_k)
+
         similar = [
-            {'researcher_id': researcher_ids[j], 'score': round(float(sims[i, j]), 4)}
+            {'researcher_id': researcher_ids[j], 'score': round(float(row[j]), 4)}
             for j in top_idx
         ]
         results.append({'researcher_id': researcher_ids[i], 'similar': similar})
@@ -299,19 +335,25 @@ def _tenure_level(hire_date_str) -> str:
     return 'Junior' if tenure < _TENURE_JUNIOR_THRESHOLD else 'Senior'
 
 
-def attach_tenure_levels(results: list, researchers_df: pd.DataFrame) -> list:
-    """researchers.csv의 hire_date로부터 근속 Junior(5년 미만)/Senior(5년 이상)
-    라벨을 결과에 붙인다 — compute_similarity()/attach_pair_judgments()의 매칭
-    로직(누가 누구와 유사한지)은 그대로 두고, 대상자 본인과 각 유사 연구원
-    항목에 tenure_level 필드만 추가한다."""
-    hire_map = {}
-    if not researchers_df.empty and 'hire_date' in researchers_df.columns:
-        hire_map = researchers_df.set_index('researcher_id')['hire_date'].to_dict()
+def build_tenure_map(researchers_df: pd.DataFrame) -> dict:
+    """researcher_id -> 'Junior'/'Senior'/''(모름) 매핑을 한 번만 계산해,
+    compute_similarity()의 그룹별 검색과 attach_tenure_levels()의 라벨 표시가
+    같은 맵을 재사용하도록 한다."""
+    if researchers_df.empty or 'hire_date' not in researchers_df.columns:
+        return {}
+    hire_map = researchers_df.set_index('researcher_id')['hire_date'].to_dict()
+    return {rid: _tenure_level(hd) for rid, hd in hire_map.items()}
 
+
+def attach_tenure_levels(results: list, tenure_map: dict) -> list:
+    """build_tenure_map()이 계산한 근속 Junior(5년 미만)/Senior(5년 이상) 라벨을
+    결과에 붙인다 — compute_similarity()/attach_pair_judgments()의 매칭 로직
+    (누가 누구와 유사한지)은 그대로 두고, 대상자 본인과 각 유사 연구원 항목에
+    tenure_level 필드만 추가한다."""
     for item in results:
-        item['tenure_level'] = _tenure_level(hire_map.get(item['researcher_id'], ''))
+        item['tenure_level'] = tenure_map.get(item['researcher_id'], '')
         for s in item['similar']:
-            s['tenure_level'] = _tenure_level(hire_map.get(s['researcher_id'], ''))
+            s['tenure_level'] = tenure_map.get(s['researcher_id'], '')
     return results
 
 
@@ -411,7 +453,8 @@ def _build_html(results: list, profile: str, researchers_df: pd.DataFrame, top_k
     <h3>{html.escape(label)} {tenure_badge}</h3>
     <hr class="mt-1 mb-2">
     <div class="subject-summary">{mmd.strength_summary_html(profile_by_id.get(rid, {}))}</div>
-    <p class="subtitle mt-2">과제와 무관하게, 전문성이 가장 유사한 연구원 Top {top_k}</p>
+    <p class="subtitle mt-2">과제와 무관하게 전문성이 가장 유사한 연구원 —
+      근속을 알 수 있으면 Junior/Senior 그룹별 각 Top {top_k}, 모르면 전체 Top {top_k}</p>
     {rows}
   </div>
 </div>''')
@@ -439,17 +482,18 @@ def process(profile: str = 'default', top_k: int = DEFAULT_TOP_K, refresh_judgme
         print('[process_researcher_similarity] 비교할 연구원이 2명 미만 — 종료')
         return False
 
+    researchers_df = fit.read_researchers(OUT_DIR)
+    tenure_map = build_tenure_map(researchers_df)
+
     print(f'[process_researcher_similarity] 연구원 {len(profiles)}명 임베딩 계산 중 (profile={profile})...')
     try:
-        results = compute_similarity(profiles, top_k=top_k)
+        results = compute_similarity(profiles, top_k=top_k, tenure_map=tenure_map)
     except LLMError as exc:
         print(f'[process_researcher_similarity] 임베딩 실패 — 종료: {exc}')
         return False
 
     results = attach_pair_judgments(results, profiles, profile=profile, force=refresh_judgments)
-
-    researchers_df = fit.read_researchers(OUT_DIR)
-    results = attach_tenure_levels(results, researchers_df)
+    results = attach_tenure_levels(results, tenure_map)
 
     suffix = mmd.profile_suffix(profile)
     os.makedirs(OUT_DIR, exist_ok=True)
