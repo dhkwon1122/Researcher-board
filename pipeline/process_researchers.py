@@ -6,13 +6,13 @@
 
 읽는 컬럼:
   사원번호, 성명, 현소속부서명, CL, 비공식소속부서명, 직무,
-  국적, 근속기준일_그룹입사일, 법적생년월일성별, 성별,
+  국적, 그룹근속년수, 법적생년월일성별, 성별,
   승격산정기준일자, Knox ID
 
 계산 항목:
   birth_year    : 법적생년월일성별 앞 4자리
   age           : 올해연도 - birth_year  (표시 전용, CSV에는 저장 안 함)
-  hire_date     : 근속기준일_그룹입사일 (YYYY-MM-DD)
+  hire_date     : 그룹근속년수 (YYYY-MM-DD)
   tenure        : (오늘 - hire_date).days / 365, 소수 첫째자리 (표시 전용)
   promotion_date: 승격산정기준일자 (YYYY-MM-DD)
   position_year : ceil((2027-03-01 - promotion_date).days / 365) (표시 전용)
@@ -38,7 +38,7 @@ COL_POSITION   = 'CL'
 COL_ORG        = '비공식소속부서명'
 COL_JOB        = '직무'
 COL_NATION     = '국적'
-COL_HIRE_DATE  = '근속기준일_그룹입사일'
+COL_HIRE_DATE  = '그룹근속년수'
 COL_BIRTH_SEX  = '법적생년월일성별'
 COL_GENDER     = '성별'
 COL_PROMO_DATE = '승격산정기준일자'
