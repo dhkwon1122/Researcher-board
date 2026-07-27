@@ -345,104 +345,8 @@ def attach_tenure_levels(results: list, tenure_map: dict) -> list:
     return results
 
 
-_LEVEL_CLASS = {'동일 분야': 'same', '인접 분야': 'adjacent', '낮음': 'low'}
+_LEVEL_CLASS = {'동일 분야': 'good', '인접 분야': 'warn', '낮음': 'low'}
 _TENURE_CLASS = {'Junior': 'junior', 'Senior': 'senior'}
-
-# 부서별 사이드바 내비게이션 + 요약 통계 + 표 형태 매칭 목록의 "엔터프라이즈 콘솔"
-# 디자인. Bootstrap/marked.js CDN 없이 완전히 독립적인 정적 페이지로 렌더링한다
-# (이 리포트는 자유 형식 마크다운이 없어 marked.js가 필요 없다).
-_CONSOLE_STYLE = """
-  :root {
-    --bg: #f3f4f7; --sidebar: #ffffff; --panel: #ffffff; --line: #e2e4ea;
-    --ink: #1a1d29; --ink-soft: #6b7080;
-    --accent: #4453d6; --accent-weak: rgba(68,83,214,0.08);
-    --good: #1f8a5f; --good-weak: rgba(31,138,95,0.1);
-    --warn: #a3720a; --warn-weak: rgba(163,114,10,0.1);
-    --low: #6b7080; --low-weak: rgba(107,112,128,0.1);
-    --danger: #b23b3b;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #101218; --sidebar: #171a22; --panel: #171a22; --line: #272b36;
-      --ink: #e7e8ee; --ink-soft: #8b8fa3;
-      --accent: #8b97f5; --accent-weak: rgba(139,151,245,0.12);
-      --good: #5fbf90; --good-weak: rgba(95,191,144,0.12);
-      --warn: #d1a444; --warn-weak: rgba(209,164,68,0.12);
-      --low: #8b8fa3; --low-weak: rgba(139,143,163,0.12);
-      --danger: #d9776e;
-    }
-  }
-  * { box-sizing: border-box; }
-  html, body { height: 100%; }
-  body {
-    background: var(--bg); color: var(--ink);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    margin: 0; display: flex; min-height: 100vh;
-  }
-  .sidebar {
-    width: 250px; flex-shrink: 0; background: var(--sidebar); border-right: 1px solid var(--line);
-    padding: 22px 16px; position: sticky; top: 0; height: 100vh; overflow-y: auto;
-  }
-  .sidebar h1 { font-size: 0.98rem; font-weight: 800; margin: 4px 6px 2px; letter-spacing: -0.01em; }
-  .sidebar .tagline { font-size: 0.72rem; color: var(--ink-soft); margin: 0 6px 20px; line-height: 1.5; }
-  .nav-group { margin-bottom: 4px; }
-  .nav-group-label {
-    font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.08em;
-    color: var(--ink-soft); font-weight: 700; padding: 10px 6px 4px;
-  }
-  .nav-item {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 6px 8px; border-radius: 6px; font-size: 0.82rem;
-    text-decoration: none; color: var(--ink);
-  }
-  .nav-item:hover { background: var(--accent-weak); }
-  .nav-item .n-count { font-size: 0.68rem; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
-  main { flex: 1; min-width: 0; padding: 32px 40px 100px; }
-  .content { max-width: 900px; }
-  .stat-row { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; margin-bottom: 28px; }
-  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
-  .stat .num { font-size: 1.5rem; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
-  .stat .lbl { font-size: 0.72rem; color: var(--ink-soft); margin-top: 2px; }
-  .dept-heading {
-    font-size: 0.78rem; font-weight: 700; color: var(--ink-soft); text-transform: uppercase;
-    letter-spacing: 0.06em; margin: 32px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line);
-  }
-  .dept-heading:first-of-type { margin-top: 0; }
-  .org-heading { font-size: 0.72rem; color: var(--ink-soft); margin: 16px 0 8px; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; margin-bottom: 14px; }
-  .card-top { display: flex; align-items: center; gap: 10px; margin-bottom: 3px; }
-  .card-top h3 { margin: 0; font-size: 1rem; font-weight: 700; }
-  .badge { font-size: 0.66rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
-  .badge.senior { background: var(--accent-weak); color: var(--accent); }
-  .badge.junior { background: var(--low-weak); color: var(--ink-soft); }
-  .chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 14px; }
-  .chip { font-size: 0.7rem; padding: 3px 9px; border-radius: 6px; background: var(--accent-weak); color: var(--accent); font-weight: 600; }
-  .chip.kw { background: var(--bg); color: var(--ink-soft); border: 1px solid var(--line); }
-  .table-wrap { overflow-x: auto; }
-  table.match-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
-  table.match-table th {
-    text-align: left; font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.05em;
-    color: var(--ink-soft); font-weight: 700; padding: 6px 8px; border-bottom: 1px solid var(--line);
-  }
-  table.match-table td { padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  table.match-table tr:last-child td { border-bottom: none; }
-  .m-name { font-weight: 700; }
-  .m-dept { font-size: 0.72rem; color: var(--ink-soft); }
-  .m-score { font-variant-numeric: tabular-nums; font-weight: 700; white-space: nowrap; }
-  .level-pill { display: inline-block; font-size: 0.68rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
-  .level-pill.same { background: var(--good-weak); color: var(--good); }
-  .level-pill.adjacent { background: var(--warn-weak); color: var(--warn); }
-  .level-pill.low { background: var(--low-weak); color: var(--low); }
-  .m-ev, .m-ev-text { margin: 0; padding-left: 16px; color: var(--ink-soft); font-size: 0.78rem; }
-  .m-ev-text { padding-left: 0; }
-  .m-ev li { margin: 1px 0; }
-  .m-warn { color: var(--danger); font-size: 0.74rem; margin-top: 2px; }
-  .empty { color: var(--ink-soft); font-size: 0.82rem; font-style: italic; }
-  @media (max-width: 820px) {
-    .sidebar { display: none; }
-    main { padding: 24px 18px 80px; }
-  }
-"""
 
 
 def _tenure_badge_html(tenure_level: str) -> str:
@@ -485,7 +389,7 @@ def _match_row_html(s: dict, name_map: dict, dept_map: dict, org_map: dict) -> s
     tenure_badge = _tenure_badge_html(s.get('tenure_level', ''))
     level = s.get('level') or ''
     level_pill = (
-        f'<span class="level-pill {_LEVEL_CLASS.get(level, "low")}">{html.escape(level)}</span>'
+        f'<span class="pill {_LEVEL_CLASS.get(level, "low")}">{html.escape(level)}</span>'
         if level else ''
     )
     return f'''<tr>
@@ -551,32 +455,17 @@ def _build_html(results: list, researchers_df: pd.DataFrame, top_k: int, profile
   {table}
 </div>''')
 
-    return f'''<!doctype html>
-<html lang="ko">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>연구원 ↔ 연구원 유사도</title>
-<style>{_CONSOLE_STYLE}</style>
-</head>
-<body>
-<nav class="sidebar">
-  <h1>유사도 콘솔</h1>
-  <p class="tagline">과제 단위가 아닌 실제 보유 전문성 임베딩 기반 유사도 · 근속 그룹별 각 Top {top_k}</p>
-  <div>{"".join(nav_groups)}</div>
-</nav>
-<main>
-  <div class="content">
-    <div class="stat-row">
-      <div class="stat"><div class="num">{total}</div><div class="lbl">분석 대상 연구원</div></div>
-      <div class="stat"><div class="num">{high_conf}</div><div class="lbl">고신뢰 매칭 (70%+)</div></div>
-      <div class="stat"><div class="num">{flagged}</div><div class="lbl">표면 일치 주의 플래그</div></div>
-    </div>
-    {"".join(sections)}
-  </div>
-</main>
-</body>
-</html>'''
+    sidebar = (
+        '<h1>유사도 콘솔</h1>'
+        f'<p class="tagline">과제 단위가 아닌 실제 보유 전문성 임베딩 기반 유사도 · 근속 그룹별 각 Top {top_k}</p>'
+        f'{"".join(nav_groups)}'
+    )
+    stats = mmd.stat_row_html([
+        (total, '분석 대상 연구원'),
+        (high_conf, '고신뢰 매칭 (70%+)'),
+        (flagged, '표면 일치 주의 플래그'),
+    ])
+    return mmd.console_page('연구원 ↔ 연구원 유사도', sidebar, stats + ''.join(sections))
 
 
 def process(top_k: int = DEFAULT_TOP_K, refresh_judgments: bool = False) -> bool:

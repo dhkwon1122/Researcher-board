@@ -353,49 +353,50 @@ def _analyze_researcher(prompt: str) -> dict | None:
     return out if out else None
 
 
-def _skill_block_html(title: str, data: dict, labels: list) -> str:
-    """hard_skills/domain_knowledge 중 하나를 job-field 카드 블록으로 렌더링.
-    LLM이 근거 없다고 판단해 아예 생략한 키는 항목 자체를 표시하지 않는다."""
-    items = [f'<li><strong>{label}:</strong> {html.escape(data[key])}</li>' for key, label in labels if data.get(key)]
+def _kv_block_html(title: str, data: dict, labels: list) -> str:
+    """hard_skills/domain_knowledge 중 하나를 kv-block으로 렌더링. LLM이 근거
+    없다고 판단해 아예 생략한 키는 항목 자체를 표시하지 않는다."""
+    items = [f'<dt>{label}</dt><dd>{html.escape(data[key])}</dd>' for key, label in labels if data.get(key)]
     if not items:
         return ''
-    return f'''<div class="job-field">
-  <div class="field-label">{title}</div>
-  <ul>{''.join(items)}</ul>
-</div>'''
+    return f'<div class="kv-block"><div class="kv-title">{title}</div><dl class="kv">{"".join(items)}</dl></div>'
 
 
 def _researcher_card_html(item: dict, name_map: dict, anchor: str) -> str:
     rid = item.get('researcher_id', '')
     name = name_map.get(rid, '')
 
-    strength_html = mmd.strength_summary_html(item)
+    fields = item.get('strength_fields') or []
+    keywords = item.get('strength_keywords') or []
+    if fields or keywords:
+        chip_row = (
+            ''.join(f'<span class="chip">{html.escape(f)}</span>' for f in fields)
+            + ''.join(f'<span class="chip kw">{html.escape(k)}</span>' for k in keywords)
+        )
+        chip_row = f'<div class="chip-row">{chip_row}</div>'
+    else:
+        chip_row = '<p class="empty">강점 분야/키워드 데이터 없음</p>'
 
-    body_html = (
-        _skill_block_html('Hard Skills', item.get('hard_skills') or {}, _HARD_SKILL_LABELS)
-        + _skill_block_html('Domain Knowledge', item.get('domain_knowledge') or {}, _DOMAIN_LABELS)
+    kv_blocks = (
+        _kv_block_html('Hard Skills', item.get('hard_skills') or {}, _HARD_SKILL_LABELS)
+        + _kv_block_html('Domain Knowledge', item.get('domain_knowledge') or {}, _DOMAIN_LABELS)
     )
-    if not body_html:
-        body_html = '<p class="empty">세부 항목 데이터 없음</p>'
+    body_html = f'<div class="kv-grid">{kv_blocks}</div>' if kv_blocks else '<p class="empty">세부 항목 데이터 없음</p>'
 
-    return f'''<section class="tech-card card" id="{anchor}">
-  <div class="card-body">
-    <div class="tech-header d-flex align-items-center gap-2 mb-1">
-      <h2>{html.escape(rid)} {html.escape(name)}</h2>
-    </div>
-    <div class="tech-desc">{strength_html}</div>
-    {body_html}
-  </div>
-</section>'''
+    return f'''<div class="card" id="{anchor}">
+  <div class="card-top"><h3>{html.escape(rid)} {html.escape(name)}</h3></div>
+  {chip_row}
+  {body_html}
+</div>'''
 
 
 def _build_html(results: list, researchers_df: pd.DataFrame) -> str:
-    """연구원 보유 전문성 분석.json → 사람이 보는 HTML 리포트.
+    """연구원 보유 전문성 분석.json → 사람이 보는 콘솔형 HTML 리포트.
 
     researchers.csv의 department(현소속부서명) → '플랫폼/팀', org_code(비공식
-    소속부서명) → '과제/파트'로 라벨링해 2단계로 그룹핑해 보여준다(JSON 구조
-    자체는 그대로 flat list — process_project_researcher_fit.py 등이 이 JSON을
-    그대로 읽으므로 하위 호환 유지)."""
+    소속부서명) → '과제/파트'로 라벨링해 좌측 사이드바·본문 모두 2단계로
+    그룹핑해 보여준다(JSON 구조 자체는 그대로 flat list — process_project_researcher_fit.py
+    등이 이 JSON을 그대로 읽으므로 하위 호환 유지)."""
     name_map, dept_map, org_map = {}, {}, {}
     if not researchers_df.empty:
         indexed = researchers_df.set_index('researcher_id')
@@ -403,37 +404,42 @@ def _build_html(results: list, researchers_df: pd.DataFrame) -> str:
         dept_map = indexed['department'].to_dict()
         org_map = indexed['org_code'].to_dict()
 
-    anchor_of = {item.get('researcher_id', ''): f'researcher-{i}' for i, item in enumerate(results, start=1)}
+    anchor_of = {item.get('researcher_id', ''): f'r-{item.get("researcher_id", "")}' for item in results}
 
-    def _toc_pill(anchor: str, item: dict) -> str:
-        rid = item.get('researcher_id', '')
-        label = f'{rid} {name_map.get(rid, "")}'.strip()
-        return f'<a class="btn btn-sm btn-outline-primary rounded-pill" href="#{anchor}">{html.escape(label)}</a>'
+    nav_groups = []
+    for dept, items in mmd.group_ordered(results, lambda it: dept_map.get(it.get('researcher_id', ''), '')):
+        entries = ''.join(
+            f'<a class="nav-item" href="#{anchor_of[it.get("researcher_id", "")]}">'
+            f'<span>{html.escape(name_map.get(it.get("researcher_id", ""), it.get("researcher_id", "")))}</span></a>'
+            for it in items
+        )
+        nav_groups.append(f'<div class="nav-group"><div class="nav-group-label">{html.escape(dept)}</div>{entries}</div>')
 
-    anchored = [(anchor_of[item.get('researcher_id', '')], item) for item in results]
-    toc_html = mmd.grouped_nav_html(
-        anchored, lambda pair: dept_map.get(pair[1].get('researcher_id', ''), ''), '플랫폼/팀',
-        lambda anchor, item: _toc_pill(anchor, item),
-        level2_key_fn=lambda pair: org_map.get(pair[1].get('researcher_id', ''), ''), level2_label='과제/파트',
-    )
+    total = len(results)
+    hard_count = sum(1 for it in results if it.get('hard_skills'))
+    domain_count = sum(1 for it in results if it.get('domain_knowledge'))
+    stats = mmd.stat_row_html([
+        (total, '분석 대상 연구원'),
+        (hard_count, 'Hard Skills 데이터 보유'),
+        (domain_count, 'Domain Knowledge 데이터 보유'),
+    ])
 
     sections = []
     for dept, dept_items in mmd.group_ordered(results, lambda it: dept_map.get(it.get('researcher_id', ''), '')):
-        sections.append(f'<h2 class="group-heading-1">플랫폼/팀: {html.escape(dept)}</h2>')
+        sections.append(f'<div class="dept-heading">{html.escape(dept)}</div>')
         for org, org_items in mmd.group_ordered(dept_items, lambda it: org_map.get(it.get('researcher_id', ''), '')):
-            sections.append(f'<h3 class="group-heading-2">과제/파트: {html.escape(org)}</h3>')
+            if org and org != '미분류':
+                sections.append(f'<div class="org-heading">{html.escape(org)}</div>')
             for item in org_items:
                 rid = item.get('researcher_id', '')
                 sections.append(_researcher_card_html(item, name_map, anchor_of[rid]))
 
-    body_html = f'{toc_html}\n{"".join(sections)}'
-    return mmd.html_page(
-        title='연구원 보유 전문성 분석',
-        heading='연구원 보유 전문성 분석',
-        subtitle='연구원별 강점 분야·전문성 프로필 (R&amp;D Talent Profiling Agent)',
-        body_html=body_html,
-        extra_style=mmd.EXPERTISE_CARD_STYLE,
+    sidebar = (
+        '<h1>연구원 전문성 콘솔</h1>'
+        '<p class="tagline">학력·과제이력·직무이력·기술·논문·특허 종합 분석 (R&amp;D Talent Profiling Agent)</p>'
+        f'{"".join(nav_groups)}'
     )
+    return mmd.console_page('연구원 보유 전문성 분석', sidebar, stats + ''.join(sections))
 
 
 def _write_html(results: list, researchers_df: pd.DataFrame):

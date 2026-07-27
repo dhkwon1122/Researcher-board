@@ -39,7 +39,7 @@ TOP_K = 5
 
 _EMBED_CACHE_PATH = os.path.join(OUT_DIR, 'embedding_cache.json')
 
-FIT_BADGE = {'상': 'text-bg-success', '중': 'text-bg-warning', '하': 'text-bg-danger'}
+FIT_VARIANT = {'상': 'good', '중': 'warn', '하': 'low'}
 
 _HARD_SKILL_LABELS = [
     ('languages_frameworks', '개발 언어 및 프레임워크'),
@@ -341,98 +341,102 @@ def match_by_researcher(jobs: list, researcher_ids: list, researcher_texts: list
     return results
 
 
-EXTRA_STYLE = """
-  .fit-card {
-    max-width: 960px; margin: 0 auto 24px; border: 1px solid var(--gs-border);
-    border-radius: 16px; background: var(--gs-surface); box-shadow: 0 1px 4px rgba(0,0,0,0.06);
-  }
-  .fit-card .card-body { padding: 22px 26px; }
-  .fit-card h3 { font-size: 1rem; font-weight: 700; margin: 0 0 2px; }
-  .fit-card .subtitle { color: var(--gs-muted); font-size: 0.78rem; margin: 0 0 14px; }
-  .rank-row {
-    border: 1px solid var(--gs-border); border-radius: 10px; padding: 10px 14px; margin-bottom: 8px;
-    background: #fafafa;
-  }
-  .rank-row:last-child { margin-bottom: 0; }
-  .rank-row .name { font-weight: 700; font-size: 0.86rem; }
-  .rank-row .reason { font-size: 0.78rem; color: #444; margin-top: 3px; }
-  .nav-tabs .nav-link { font-weight: 600; color: var(--gs-muted); }
-  .nav-tabs .nav-link.active { color: var(--gs-text); }
-"""
-
-
-def fit_badge(score: str) -> str:
-    css = FIT_BADGE.get(score, 'text-bg-secondary')
-    return f'<span class="badge rounded-pill {css}">적합도 {score or "-"}</span>'
+def _fit_pill_html(score: str) -> str:
+    variant = FIT_VARIANT.get(score, 'low')
+    return f'<span class="pill {variant}">적합도 {score or "-"}</span>'
 
 
 def build_fit_html(by_target: list, by_researcher: list, researchers_df: pd.DataFrame, *,
-                    page_title: str, heading: str, subtitle: str,
-                    target_tab_label: str, target_header, target_card_subtitle: str,
-                    researcher_card_subtitle: str) -> str:
-    """target_header(item) -> str: by_target 카드 제목을 렌더링하는 콜백
+                    page_title: str, target_tab_label: str, researcher_tab_label: str,
+                    target_header, target_card_subtitle: str, researcher_card_subtitle: str) -> str:
+    """콘솔형 리포트(사이드바 + 요약 통계 + CSS 전용 라디오 탭 "과제 기준"/"인별
+    기준" + 표 형태 적합도 목록)로 렌더링한다.
+    target_header(item) -> str: by_target 카드 제목을 렌더링하는 콜백
     (예: 과제는 '부서 · 과제명 — 직무명')."""
+    import html
     import rd_specialist_markdown as mmd
 
     name_map = {}
     if not researchers_df.empty:
         name_map = researchers_df.set_index('researcher_id')['name'].to_dict()
 
-    target_cards = []
-    for item in by_target:
+    anchor_t = {i: f't-{i}' for i in range(len(by_target))}
+    anchor_r = {i: f'r-{i}' for i in range(len(by_researcher))}
+
+    nav_target = ''.join(
+        f'<a class="nav-item" href="#{anchor_t[i]}">{html.escape(target_header(item))}</a>'
+        for i, item in enumerate(by_target)
+    )
+    nav_researcher = ''.join(
+        f'<a class="nav-item" href="#{anchor_r[i]}">'
+        f'{html.escape(item["researcher_id"])} {html.escape(name_map.get(item["researcher_id"], ""))}</a>'
+        for i, item in enumerate(by_researcher)
+    )
+    sidebar = (
+        f'<h1>{page_title}</h1>'
+        '<p class="tagline">임베딩 1차 후보 + 사내 LLM 최종 판단 (R&amp;D Talent Matching Agent)</p>'
+        f'<div class="nav-group"><div class="nav-group-label">{target_tab_label}</div>{nav_target}</div>'
+        f'<div class="nav-group"><div class="nav-group-label">{researcher_tab_label}</div>{nav_researcher}</div>'
+    )
+
+    total_targets = len(by_target)
+    total_candidates = sum(len(t['rankings']) for t in by_target)
+    high_fit = sum(1 for t in by_target for r in t['rankings'] if r['fit_score'] == '상')
+    stats = mmd.stat_row_html([
+        (total_targets, f'매칭 대상 {target_tab_label}'),
+        (total_candidates, '총 후보 판단 건수'),
+        (high_fit, '적합도 "상" 건수'),
+    ])
+
+    target_sections = []
+    for i, item in enumerate(by_target):
         rows = ''.join(
-            f'''<div class="rank-row d-flex justify-content-between align-items-start gap-2">
-  <div>
-    <div class="name">{r['researcher_id']} {name_map.get(r['researcher_id'], '')}</div>
-    <div class="reason">{r['reason']}</div>
-  </div>
-  {fit_badge(r['fit_score'])}
-</div>'''
+            f'''<tr>
+  <td class="m-name">{html.escape(r['researcher_id'])} {html.escape(name_map.get(r['researcher_id'], ''))}</td>
+  <td>{_fit_pill_html(r['fit_score'])}</td>
+  <td><p class="m-ev-text">{html.escape(r['reason'])}</p></td>
+</tr>'''
             for r in item['rankings']
-        ) or '<p class="empty">판단 결과 없음</p>'
-        target_cards.append(f'''<div class="fit-card card">
-  <div class="card-body">
-    <h3>{target_header(item)}</h3>
-    <p class="subtitle">{target_card_subtitle}</p>
-    {rows}
-  </div>
+        ) or '<tr><td colspan="3" class="empty">판단 결과 없음</td></tr>'
+        target_sections.append(f'''<div class="card" id="{anchor_t[i]}">
+  <div class="card-top"><h3>{html.escape(target_header(item))}</h3></div>
+  <p class="card-sub">{html.escape(target_card_subtitle)}</p>
+  <div class="table-wrap"><table class="match-table">
+    <thead><tr><th>연구원</th><th>적합도</th><th>판단 근거</th></tr></thead>
+    <tbody>{rows}</tbody>
+  </table></div>
 </div>''')
 
-    researcher_cards = []
-    for item in by_researcher:
+    researcher_sections = []
+    for i, item in enumerate(by_researcher):
         rid = item['researcher_id']
         rows = ''.join(
-            f'''<div class="rank-row d-flex justify-content-between align-items-start gap-2">
-  <div>
-    <div class="name">{m['target_name']} — {m['job_title']}</div>
-    <div class="reason">{m['reason']}</div>
-  </div>
-  {fit_badge(m['fit_score'])}
-</div>'''
+            f'''<tr>
+  <td class="m-name">{html.escape(m['target_name'])} — {html.escape(m['job_title'])}</td>
+  <td>{_fit_pill_html(m['fit_score'])}</td>
+  <td><p class="m-ev-text">{html.escape(m['reason'])}</p></td>
+</tr>'''
             for m in item['matches']
-        ) or '<p class="empty">판단 결과 없음</p>'
-        researcher_cards.append(f'''<div class="fit-card card">
-  <div class="card-body">
-    <h3>{rid} {name_map.get(rid, '')}</h3>
-    <p class="subtitle">{researcher_card_subtitle}</p>
-    {rows}
-  </div>
+        ) or '<tr><td colspan="3" class="empty">판단 결과 없음</td></tr>'
+        researcher_sections.append(f'''<div class="card" id="{anchor_r[i]}">
+  <div class="card-top"><h3>{html.escape(rid)} {html.escape(name_map.get(rid, ''))}</h3></div>
+  <p class="card-sub">{html.escape(researcher_card_subtitle)}</p>
+  <div class="table-wrap"><table class="match-table">
+    <thead><tr><th>과제 · 직무</th><th>적합도</th><th>판단 근거</th></tr></thead>
+    <tbody>{rows}</tbody>
+  </table></div>
 </div>''')
 
-    body_html = f'''<ul class="nav nav-tabs justify-content-center mb-4" id="fit-tabs" role="tablist">
-  <li class="nav-item" role="presentation">
-    <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#by-target" type="button">{target_tab_label}</button>
-  </li>
-  <li class="nav-item" role="presentation">
-    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#by-researcher" type="button">인별 기준</button>
-  </li>
-</ul>
-<div class="tab-content">
-  <div class="tab-pane fade show active" id="by-target">{''.join(target_cards)}</div>
-  <div class="tab-pane fade" id="by-researcher">{''.join(researcher_cards)}</div>
+    body = f'''<div class="tabs">
+  <input type="radio" name="tab" id="tab-a" checked>
+  <input type="radio" name="tab" id="tab-b">
+  {stats}
+  <div class="tab-bar">
+    <label for="tab-a">{target_tab_label}</label>
+    <label for="tab-b">{researcher_tab_label}</label>
+  </div>
+  <div class="panel-a">{"".join(target_sections)}</div>
+  <div class="panel-b">{"".join(researcher_sections)}</div>
 </div>'''
 
-    return mmd.html_page(
-        title=page_title, heading=heading, subtitle=subtitle,
-        body_html=body_html, extra_style=EXTRA_STYLE,
-    )
+    return mmd.console_page(page_title, sidebar, body)

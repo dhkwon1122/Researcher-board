@@ -133,9 +133,8 @@ def process() -> bool:
     html_out = fit.build_fit_html(
         by_target, by_researcher, fit.read_researchers(OUT_DIR),
         page_title='사내 과제 ↔ 연구원 적합도 매칭',
-        heading='사내 과제 ↔ 연구원 적합도 매칭',
-        subtitle='과제 기준 / 인별 기준 매칭 결과 (R&D Talent Matching Agent, 임베딩 1차 후보 + 사내 LLM 판단)',
         target_tab_label='과제 기준',
+        researcher_tab_label='인별 기준',
         target_header=lambda item: (
             f"{dep_map.get(item['target_name'], '')} · {item['target_name']} — {item['job_title']}"
         ),

@@ -1,11 +1,13 @@
 """
 "R&D Project Specialist Agent" 계열 LLM이 생성하는 마크다운(## 섹션, ### 직무
 블록)을 다루는 공용 유틸리티. process_project_expertise.py, process_researcher_expertise.py,
-process_project_researcher_fit.py 등 여러 스크립트가 동일한 페르소나/파싱/HTML
-렌더링 인프라를 재사용하기 위해 분리했다.
+process_project_researcher_fit.py 등 여러 스크립트가 동일한 페르소나/파싱 로직과,
+그 결과를 보여주는 "콘솔"형 HTML 리포트 공용 인프라(CONSOLE_STYLE/console_page/
+stat_row_html)를 재사용하기 위해 분리했다. 네 개 리포트(연구원 유사도/과제 전문성/
+연구원 전문성/과제-연구원 매칭)가 모두 이 공용 인프라 위에서 렌더링되므로, 색상
+토큰이나 사이드바·카드 스타일을 바꾸려면 이 파일만 고치면 된다.
 """
 
-import base64
 import html
 import os
 import re
@@ -18,7 +20,7 @@ from llm_client import call_llm
 def group_ordered(items: list, key_fn) -> list:
     """items를 key_fn(item) 그룹 키 기준으로 묶어 [(key, [item, ...]), ...]로 반환.
     HTML 리포트를 부서/조직 등 기준으로 시각적으로 묶어 보여줄 때 사용
-    (process_researcher_expertise.py, process_project_expertise.py). 그룹은
+    (process_researcher_expertise.py, process_project_expertise.py 등). 그룹은
     키 문자열 기준 정렬하되, 빈 키('미분류')는 항상 맨 뒤로 보낸다."""
     groups: dict = {}
     for item in items:
@@ -26,53 +28,6 @@ def group_ordered(items: list, key_fn) -> list:
         groups.setdefault(key, []).append(item)
     keys = sorted(groups.keys(), key=lambda k: (k == '미분류', k))
     return [(k, groups[k]) for k in keys]
-
-
-def grouped_nav_html(anchored: list, level1_key_fn, level1_label: str, pill_html_fn,
-                      level2_key_fn=None, level2_label: str = '') -> str:
-    """[(anchor, item), ...] 목록을 level1(→level2, 선택) 기준으로 그룹핑한 TOC(nav)
-    HTML을 만든다. pill_html_fn(anchor, item) -> str로 개별 항목을 렌더링한다.
-    process_researcher_expertise.py/process_researcher_similarity.py(부서→과제
-    2단계)와 process_project_expertise.py(부서만 1단계, level2_key_fn=None)가
-    공유한다."""
-    sections = []
-    for l1_val, l1_pairs in group_ordered(anchored, level1_key_fn):
-        sections.append(f'<h2 class="group-heading-1">{level1_label}: {html.escape(l1_val)}</h2>')
-        if level2_key_fn is None:
-            pills = ''.join(pill_html_fn(anchor, item) for anchor, item in l1_pairs)
-            sections.append(f'<div class="toc-pill-row">{pills}</div>')
-        else:
-            for l2_val, l2_pairs in group_ordered(l1_pairs, level2_key_fn):
-                sections.append(f'<h3 class="group-heading-2">{level2_label}: {html.escape(l2_val)}</h3>')
-                pills = ''.join(pill_html_fn(anchor, item) for anchor, item in l2_pairs)
-                sections.append(f'<div class="toc-pill-row">{pills}</div>')
-    return f'<nav class="toc-grouped">{"".join(sections)}</nav>'
-
-
-def dept_org_badges_html(department: str, org_code: str) -> str:
-    """부서(department, '플랫폼/팀')·과제(org_code, '과제/파트') 배지를 Bootstrap
-    아이콘과 함께 렌더링. 둘 다 비어 있으면 빈 문자열."""
-    badges = []
-    if department:
-        badges.append(f'<span class="badge rounded-pill text-bg-secondary org-badge">'
-                       f'<i class="bi bi-building"></i> {html.escape(department)}</span>')
-    if org_code:
-        badges.append(f'<span class="badge rounded-pill text-bg-info org-badge">'
-                       f'<i class="bi bi-folder2"></i> {html.escape(org_code)}</span>')
-    return ''.join(badges)
-
-
-def strength_summary_html(item: dict) -> str:
-    """strength_fields를 배지로, strength_keywords를 색상 pill로 보여주는 '핵심요약'
-    블록. 연구원 보유 전문성 분석.html 카드와 연구원 유사도 카드(본인/유사 연구원
-    양쪽)가 공유한다."""
-    field_badges = ''.join(
-        f'<span class="badge rounded-pill text-bg-dark me-1 mb-1">{html.escape(f)}</span>'
-        for f in (item.get('strength_fields') or [])
-    )
-    out = f'<p class="mb-2">{field_badges}</p>' if field_badges else ''
-    out += keyword_pills_html(item.get('strength_keywords') or [])
-    return out or '<p class="empty">강점 분야/키워드 데이터 없음</p>'
 
 
 # R&D Project Specialist Agent — 사내 LLM 시스템 프롬프트 (원문 그대로 사용).
@@ -189,9 +144,6 @@ def split_job_blocks(section_text: str) -> tuple:
     return '\n'.join(intro_lines), ['\n'.join(j) for j in jobs]
 
 
-DIFFICULTY_BADGE = {'상': 'text-bg-danger', '중': 'text-bg-warning', '하': 'text-bg-success'}
-
-
 def extract_difficulty(job_block_text: str):
     m = re.search(r'채용.{0,6}난이도[^:：]*[:：]\*{0,2}\s*\[?\s*(상|중|하)', job_block_text)
     return m.group(1) if m else None
@@ -204,7 +156,7 @@ def extract_job_title(job_block_text: str) -> str:
 
 
 def job_body(job_block_text: str) -> str:
-    """### 헤더 첫 줄을 뗀 나머지 본문(마크다운 렌더용)."""
+    """### 헤더 첫 줄을 뗀 나머지 본문."""
     lines = job_block_text.split('\n', 1)
     return lines[1] if len(lines) > 1 else ''
 
@@ -223,29 +175,6 @@ def deepdive_jobs(analysis_text: str) -> list:
         {'title': extract_job_title(jb), 'difficulty': extract_difficulty(jb), 'body_raw': job_body(jb)}
         for jb in job_blocks_raw
     ]
-
-
-# 키워드 pill 배지에 순환 적용할 색상 팔레트(다양한 색으로 구분). process_project_expertise.py,
-# process_researcher_expertise.py 등 키워드를 pill로 보여주는 모든 리포트가 공유한다.
-KEYWORD_PILL_COLORS = [
-    '#0071e3', '#c9822e', '#3f8f57', '#c46b6b', '#7b6fb0', '#0c9aa8', '#c07d97', '#5f7a3d',
-]
-
-
-def keyword_pills_html(keywords: list) -> str:
-    """키워드 목록을 색상이 순환되는 타원형(pill) 배지 목록 HTML로 렌더링. 빈 목록이면 빈 문자열."""
-    if not keywords:
-        return ''
-    pills = ''.join(
-        f'<span class="kw-pill" style="background-color:{KEYWORD_PILL_COLORS[i % len(KEYWORD_PILL_COLORS)]}">'
-        f'{html.escape(kw)}</span>'
-        for i, kw in enumerate(keywords)
-    )
-    return f'<div class="kw-pill-row">{pills}</div>'
-
-
-def b64_encode(text: str) -> str:
-    return base64.b64encode(text.encode('utf-8')).decode('ascii')
 
 
 def _strip_label(text: str) -> str:
@@ -306,264 +235,165 @@ def parse_job_fields(body: str) -> dict:
     return fields
 
 
-_FIELD_EMPTY_TEXT = '정보 없음'
-
-
-def _field_text(value: str) -> str:
-    return html.escape(value) if value else _FIELD_EMPTY_TEXT
-
-
-def render_job_fields_html(fields: dict) -> str:
-    """parse_job_fields() 결과를 항상 동일한 구조의 고정 템플릿으로 렌더링한다.
-    과제/직무마다 LLM 응답 스타일이 달라 일부 항목이 파싱되지 않더라도, 4개
-    소항목(R&D Task / 세부 전문성 및 역량 요구사항 / 직무 레벨 및 역량 기준 /
-    지원자 전문성 검증 질문)을 항상 같은 순서로 표시하고(값이 없으면 안내 문구로
-    채움), 섹션 자체를 생략하지 않는다 — 모든 과제·모든 직무 카드가 항상 동일한
-    포맷으로 보이도록 하기 위함이다."""
-    rd_task_block = f'''<div class="job-field">
-  <div class="field-label">R&amp;D Task</div>
-  <p>{_field_text(fields['rd_task'])}</p>
-</div>'''
-
-    skill_items = (
-        f"<li><strong>Hard Skills:</strong> {_field_text(fields['hard_skills'])}</li>"
-        f"<li><strong>Domain Knowledge:</strong> {_field_text(fields['domain_knowledge'])}</li>"
-    )
-    skill_block = f'''<div class="job-field">
-  <div class="field-label">세부 전문성 및 역량 요구사항</div>
-  <ul>{skill_items}</ul>
-</div>'''
-
-    level_items = (
-        f"<li><strong>Junior:</strong> {_field_text(fields['junior'])}</li>"
-        f"<li><strong>Mid-level:</strong> {_field_text(fields['mid'])}</li>"
-        f"<li><strong>Senior:</strong> {_field_text(fields['senior'])}</li>"
-    )
-    level_block = f'''<div class="job-field">
-  <div class="field-label">직무 레벨 및 역량 기준</div>
-  <ul>{level_items}</ul>
-</div>'''
-
-    if fields['questions']:
-        q_items = ''.join(f'<li>{html.escape(q)}</li>' for q in fields['questions'])
-    else:
-        q_items = f'<li>{_FIELD_EMPTY_TEXT}</li>'
-    questions_block = f'''<div class="job-field">
-  <div class="field-label">지원자 전문성 검증 질문</div>
-  <ol>{q_items}</ol>
-</div>'''
-
-    return '\n'.join([rd_task_block, skill_block, level_block, questions_block])
-
-
-# expertise_analysis(R&D Project Specialist Agent 출력)를 카드로 렌더링할 때
-# 공통으로 쓰는 CSS. process_project_expertise.py 등 여러 스크립트가 공유한다.
-EXPERTISE_CARD_STYLE = """
-  .tech-card {
-    max-width: 900px; margin: 0 auto 32px; border: 1px solid var(--gs-border);
-    border-radius: 18px; background: var(--gs-surface); box-shadow: 0 1px 4px rgba(0,0,0,0.06);
-  }
-  .tech-card .card-body { padding: 28px 32px; }
-  .tech-header .badge { font-size: 0.7rem; }
-  .tech-header h2 { font-size: 1.2rem; font-weight: 700; margin: 0; }
-  .tech-desc { color: #444; font-size: 0.86rem; margin: 6px 0 22px; }
-  .tech-desc p { margin: 0 0 4px; }
-  .tech-desc p:last-child { margin-bottom: 0; }
-  .kw-pill-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-  .kw-pill {
-    display: inline-block; border-radius: 999px; padding: 3px 12px;
-    font-size: 0.72rem; font-weight: 600; color: #fff; white-space: nowrap;
-  }
-  .deepdive-title {
-    font-size: 1rem; font-weight: 700; color: var(--gs-accent); margin: 0 0 4px;
-    display: flex; align-items: center; gap: 8px;
-  }
-  .deepdive-lead { color: var(--gs-muted); font-size: 0.8rem; margin: 0 0 16px; }
-  .job-card {
-    border: 1px solid var(--gs-border); border-left: 3px solid var(--gs-accent);
-    border-radius: 12px; background: #fafafa; height: 100%;
-  }
-  .job-card .card-body { padding: 18px 20px; }
-  .job-card .job-title { font-size: 0.92rem; font-weight: 700; margin: 0; }
-  .job-card .badge { font-size: 0.68rem; }
-  .job-field { margin-bottom: 10px; }
-  .job-field:last-child { margin-bottom: 0; }
-  .job-field .field-label {
-    font-size: 0.68rem; font-weight: 700; color: var(--gs-accent); text-transform: uppercase;
-    letter-spacing: 0.03em; margin-bottom: 3px;
-  }
-  .job-field p { font-size: 0.82rem; margin: 0; color: #333; }
-  .job-field ul, .job-field ol { font-size: 0.82rem; margin: 0; padding-left: 18px; color: #333; }
-  .job-field li { margin: 2px 0; }
-  .other-sections .accordion-button {
-    font-size: 0.82rem; font-weight: 600; color: var(--gs-muted); background: var(--gs-bg);
-  }
-  .other-sections .accordion-button:not(.collapsed) { color: var(--gs-text); background: var(--gs-bg); box-shadow: none; }
-  .other-sections .accordion-button:focus { box-shadow: none; }
-  .group-heading-1 {
-    max-width: 900px; margin: 40px auto 6px; padding-bottom: 8px;
-    font-size: 1.1rem; font-weight: 800; color: var(--gs-text);
-    border-bottom: 2px solid var(--gs-accent);
-  }
-  .group-heading-1:first-child { margin-top: 0; }
-  .group-heading-2 {
-    max-width: 900px; margin: 18px auto 10px;
-    font-size: 0.8rem; font-weight: 700; color: var(--gs-muted);
-    text-transform: uppercase; letter-spacing: 0.03em;
-  }
-"""
-
-
-def render_expertise_html(analysis_text: str, anchor: str, *, empty_message: str) -> tuple:
-    """expertise_analysis 마크다운에서 딥다이브 매핑 카드 HTML과 나머지 섹션
-    아코디언 HTML을 만들어 (deepdive_html, other_html) 튜플로 반환한다.
-    process_project_expertise.py 등 여러 스크립트가 공유한다."""
-    sections = split_top_sections(analysis_text)
-    deepdive_idx = next((idx for idx, s in enumerate(sections) if is_deepdive_section(s)), None)
-
-    if deepdive_idx is None:
-        deepdive_html = (
-            '<p class="deepdive-title"><i class="bi bi-diagram-3-fill"></i> '
-            'R&amp;D 필수 전문성 및 직무 딥다이브 매핑</p>'
-            f'<p class="empty">{empty_message}</p>'
-        )
-        return deepdive_html, ''
-
-    deepdive_section = sections[deepdive_idx]
-    other_sections = sections[:deepdive_idx] + sections[deepdive_idx + 1:]
-    # 섹션 자체의 '## 2. ...' 헤더 행은 별도 타이틀로 그리므로 본문에서 제외
-    deepdive_body = deepdive_section.split('\n', 1)[1] if '\n' in deepdive_section else ''
-    intro_raw, job_blocks_raw = split_job_blocks(deepdive_body)
-
-    deepdive_lead = (
-        f'<p class="deepdive-lead md-render" data-md-b64="{b64_encode(intro_raw)}"></p>'
-        if intro_raw.strip() else ''
-    )
-    job_cards = []
-    for jb in job_blocks_raw:
-        title = html.escape(extract_job_title(jb))
-        diff = extract_difficulty(jb)
-        diff_badge = (
-            f'<span class="badge rounded-pill {DIFFICULTY_BADGE.get(diff, "text-bg-secondary")}">'
-            f'채용난이도 {diff}</span>'
-        ) if diff else ''
-        body_fields = parse_job_fields(job_body(jb))
-        body_html = render_job_fields_html(body_fields)
-        job_cards.append(f'''<div class="col-md-6">
-  <div class="job-card card">
-    <div class="card-body">
-      <div class="d-flex justify-content-between align-items-start gap-2 mb-2">
-        <p class="job-title mb-0">{title}</p>
-        {diff_badge}
-      </div>
-      {body_html}
-    </div>
-  </div>
-</div>''')
-    deepdive_html = f'''<p class="deepdive-title"><i class="bi bi-diagram-3-fill"></i> R&amp;D 필수 전문성 및 직무 딥다이브 매핑</p>
-{deepdive_lead}
-<div class="row row-cols-1 row-cols-lg-2 g-3">{''.join(job_cards)}</div>'''
-
-    other_html = ''
-    if other_sections:
-        other_raw = '\n\n'.join(other_sections)
-        other_html = f'''<div class="other-sections accordion accordion-flush mt-4">
-  <div class="accordion-item">
-    <h2 class="accordion-header">
-      <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#{anchor}-more">
-        프로젝트 개요 · 인력 수급 매트릭스 · HR 제언 더 보기
-      </button>
-    </h2>
-    <div id="{anchor}-more" class="accordion-collapse collapse">
-      <div class="accordion-body md-render" data-md-b64="{b64_encode(other_raw)}"></div>
-    </div>
-  </div>
-</div>'''
-
-    return deepdive_html, other_html
-
-
-# ── 공용 HTML 인프라(Bootstrap 5 + marked.js/DOMPurify) ─────────────────────
-# 연구원 개별 프로필(app.py)과 동일한 CDN 버전을 사용해 톤을 맞춘다.
-BOOTSTRAP_CSS = 'https://cdn.jsdelivr.net/npm/bootstrap@5.3.6/dist/css/bootstrap.min.css'
-BOOTSTRAP_ICONS_CSS = 'https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css'
-BOOTSTRAP_JS = 'https://cdn.jsdelivr.net/npm/bootstrap@5.3.6/dist/js/bootstrap.bundle.min.js'
-MARKED_JS = 'https://cdn.jsdelivr.net/npm/marked@4/marked.min.js'
-DOMPURIFY_JS = 'https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js'
-
-# 연구원 개별 프로필(assets/custom.css)과 동일한 애플 스타일 팔레트를 그대로 사용
-BASE_HTML_STYLE = """
+# ── 콘솔형 리포트 공용 CSS/셸 ────────────────────────────────────────────────
+# 외부 CDN(Bootstrap/marked.js) 없이 완전히 독립적인 정적 페이지. 연구원 유사도/
+# 과제 전문성/연구원 전문성/과제-연구원 매칭 4개 리포트가 모두 동일한 색상
+# 토큰과 사이드바+요약통계+카드 문법을 공유해 한 가족처럼 보이도록 한다.
+CONSOLE_STYLE = """
   :root {
-    --gs-bg:        #f5f5f7;
-    --gs-surface:   #ffffff;
-    --gs-border:    #e8e8ed;
-    --gs-border-2:  #d2d2d7;
-    --gs-text:      #1d1d1f;
-    --gs-muted:     #6e6e73;
-    --gs-label:     #86868b;
-    --gs-accent:    #0071e3;
-    --gs-font: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text',
-               'Noto Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+    --bg: #f3f4f7; --sidebar: #ffffff; --panel: #ffffff; --line: #e2e4ea;
+    --ink: #1a1d29; --ink-soft: #6b7080;
+    --accent: #4453d6; --accent-weak: rgba(68,83,214,0.08);
+    --good: #1f8a5f; --good-weak: rgba(31,138,95,0.1);
+    --warn: #a3720a; --warn-weak: rgba(163,114,10,0.1);
+    --low: #6b7080; --low-weak: rgba(107,112,128,0.1);
+    --danger: #b23b3b; --danger-weak: rgba(178,59,59,0.1);
   }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101218; --sidebar: #171a22; --panel: #171a22; --line: #272b36;
+      --ink: #e7e8ee; --ink-soft: #8b8fa3;
+      --accent: #8b97f5; --accent-weak: rgba(139,151,245,0.12);
+      --good: #5fbf90; --good-weak: rgba(95,191,144,0.12);
+      --warn: #d1a444; --warn-weak: rgba(209,164,68,0.12);
+      --low: #8b8fa3; --low-weak: rgba(139,143,163,0.12);
+      --danger: #d9776e; --danger-weak: rgba(217,119,110,0.12);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
-    font-family: var(--gs-font); color: var(--gs-text); background-color: var(--gs-bg);
-    -webkit-font-smoothing: antialiased; letter-spacing: -0.011em;
-    padding: 48px 16px 96px;
+    background: var(--bg); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    margin: 0; display: flex; min-height: 100vh;
   }
-  h1, h2, h3, h4, h5, h6 { font-family: var(--gs-font); letter-spacing: -0.02em; }
-  .page-header { text-align: center; margin-bottom: 32px; }
-  .page-header h1 { font-size: 1.6rem; font-weight: 700; margin-bottom: 6px; }
-  .page-header p { color: var(--gs-muted); font-size: 0.86rem; }
-  .toc { max-width: 900px; margin: 0 auto 40px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
-  .toc a { text-decoration: none; }
-  .toc-grouped { max-width: 900px; margin: 0 auto 40px; }
-  .toc-grouped a { text-decoration: none; }
-  .toc-pill-row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-bottom: 6px; }
-  .org-badge { font-size: 0.7rem; font-weight: 600; }
-  .org-badge .bi { margin-right: 2px; }
-  .reason-list { font-size: 0.78rem; color: #444; margin: 4px 0 0; padding-left: 18px; }
-  .reason-list li { margin: 1px 0; }
-  .md-render { font-size: 0.82rem; color: #333; }
-  .md-render h1, .md-render h2, .md-render h3, .md-render h4 { font-size: 0.86rem; margin: 10px 0 4px; color: var(--gs-text); }
-  .md-render p { margin: 4px 0; }
-  .md-render ul, .md-render ol { padding-left: 20px; margin: 4px 0 8px; }
-  .md-render li { margin: 2px 0; }
-  .md-render table { width: 100%; border-collapse: collapse; font-size: 0.78rem; margin: 8px 0; }
-  .md-render th, .md-render td { border: 1px solid var(--gs-border); padding: 6px 8px; text-align: left; }
-  .md-render th { background: var(--gs-bg); font-weight: 600; color: var(--gs-muted); }
-  .empty { color: #98989d; font-size: 0.82rem; font-style: italic; }
+  .sidebar {
+    width: 250px; flex-shrink: 0; background: var(--sidebar); border-right: 1px solid var(--line);
+    padding: 22px 16px; position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  }
+  .sidebar h1 { font-size: 0.98rem; font-weight: 800; margin: 4px 6px 2px; letter-spacing: -0.01em; }
+  .sidebar .tagline { font-size: 0.72rem; color: var(--ink-soft); margin: 0 6px 20px; line-height: 1.5; }
+  .nav-group { margin-bottom: 4px; }
+  .nav-group-label {
+    font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--ink-soft); font-weight: 700; padding: 10px 6px 4px;
+  }
+  .nav-item {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 8px; border-radius: 6px; font-size: 0.82rem;
+    text-decoration: none; color: var(--ink);
+  }
+  .nav-item:hover { background: var(--accent-weak); }
+  .nav-item .n-count { font-size: 0.68rem; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+  main { flex: 1; min-width: 0; padding: 32px 40px 100px; }
+  .content { max-width: 960px; }
+  .stat-row { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; margin-bottom: 28px; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .stat .num { font-size: 1.5rem; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+  .stat .lbl { font-size: 0.72rem; color: var(--ink-soft); margin-top: 2px; }
+  .dept-heading {
+    font-size: 0.78rem; font-weight: 700; color: var(--ink-soft); text-transform: uppercase;
+    letter-spacing: 0.06em; margin: 32px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line);
+  }
+  .dept-heading:first-of-type { margin-top: 0; }
+  .org-heading { font-size: 0.72rem; color: var(--ink-soft); margin: 16px 0 8px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; margin-bottom: 14px; }
+  .card-top { display: flex; align-items: center; gap: 10px; margin-bottom: 3px; }
+  .card-top h3 { margin: 0; font-size: 1rem; font-weight: 700; }
+  .card-sub { font-size: 0.78rem; color: var(--ink-soft); margin-bottom: 12px; }
+  .badge { font-size: 0.66rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+  .badge.senior { background: var(--accent-weak); color: var(--accent); }
+  .badge.junior { background: var(--low-weak); color: var(--ink-soft); }
+  .chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 14px; }
+  .chip { font-size: 0.7rem; padding: 3px 9px; border-radius: 6px; background: var(--accent-weak); color: var(--accent); font-weight: 600; }
+  .chip.kw { background: var(--bg); color: var(--ink-soft); border: 1px solid var(--line); }
+  .table-wrap { overflow-x: auto; }
+  table.match-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+  table.match-table th {
+    text-align: left; font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--ink-soft); font-weight: 700; padding: 6px 8px; border-bottom: 1px solid var(--line);
+  }
+  table.match-table td { padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.match-table tr:last-child td { border-bottom: none; }
+  .m-name { font-weight: 700; }
+  .m-dept { font-size: 0.72rem; color: var(--ink-soft); }
+  .m-score { font-variant-numeric: tabular-nums; font-weight: 700; white-space: nowrap; }
+  .pill { display: inline-block; font-size: 0.68rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+  .pill.good { background: var(--good-weak); color: var(--good); }
+  .pill.warn { background: var(--warn-weak); color: var(--warn); }
+  .pill.low { background: var(--low-weak); color: var(--low); }
+  .pill.danger { background: var(--danger-weak); color: var(--danger); }
+  .m-ev, .m-ev-text { margin: 0; padding-left: 16px; color: var(--ink-soft); font-size: 0.78rem; }
+  .m-ev-text { padding-left: 0; }
+  .m-ev li { margin: 1px 0; }
+  .m-warn { color: var(--danger); font-size: 0.74rem; margin-top: 2px; }
+  .empty { color: var(--ink-soft); font-size: 0.82rem; font-style: italic; }
+  .kv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px,1fr)); gap: 16px; margin-top: 4px; }
+  .kv-block { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  .kv-block .kv-title {
+    font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent);
+    font-weight: 700; margin-bottom: 6px;
+  }
+  dl.kv { margin: 0; font-size: 0.78rem; }
+  dl.kv dt { color: var(--ink-soft); font-weight: 600; margin-top: 6px; }
+  dl.kv dt:first-child { margin-top: 0; }
+  dl.kv dd { margin: 1px 0 0; color: var(--ink); }
+  .job-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px,1fr)); gap: 12px; margin-top: 4px; }
+  .job-card { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+  .job-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+  .job-top h4 { margin: 0; font-size: 0.9rem; font-weight: 700; }
+  details.more { font-size: 0.78rem; margin-top: 6px; }
+  details.more summary { cursor: pointer; color: var(--accent); font-weight: 600; }
+  details.more ol, details.more ul { margin: 6px 0 0; padding-left: 18px; color: var(--ink-soft); }
+  details.more pre.raw-md {
+    margin: 8px 0 0; padding: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.72rem; color: var(--ink-soft);
+    white-space: pre-wrap; word-break: break-word;
+  }
+  /* CSS 전용 탭 (JS 없이 radio + :checked 형제 선택자) */
+  .tabs input { display: none; }
+  .tab-bar { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid var(--line); }
+  .tab-bar label {
+    padding: 9px 16px; font-size: 0.84rem; font-weight: 600; color: var(--ink-soft);
+    cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .panel-a, .panel-b { display: none; }
+  #tab-a:checked ~ .panel-a { display: block; }
+  #tab-b:checked ~ .panel-b { display: block; }
+  #tab-a:checked ~ .tab-bar label[for="tab-a"],
+  #tab-b:checked ~ .tab-bar label[for="tab-b"] {
+    color: var(--accent); border-bottom-color: var(--accent);
+  }
+  @media (max-width: 820px) {
+    .sidebar { display: none; }
+    main { padding: 24px 18px 80px; }
+  }
 """
 
-RENDER_SCRIPT = """
-document.querySelectorAll('.md-render[data-md-b64]').forEach(function (el) {
-  var raw = decodeURIComponent(escape(atob(el.dataset.mdB64)));
-  var parsed = marked.parse(raw);
-  el.innerHTML = (window.DOMPurify ? DOMPurify.sanitize(parsed) : parsed);
-});
-"""
 
-
-def html_page(title: str, heading: str, subtitle: str, body_html: str, extra_style: str = '') -> str:
-    """Bootstrap+marked.js 기반 공용 리포트 페이지 뼈대."""
+def console_page(title: str, sidebar_html: str, body_html: str) -> str:
+    """콘솔형 리포트 공용 페이지 셸. 외부 CDN 없이 완전히 독립적인 정적 HTML
+    문서를 만든다(연구원 유사도/과제 전문성/연구원 전문성/매칭 4개 리포트가
+    공유)."""
     return f'''<!doctype html>
 <html lang="ko">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
-<link rel="stylesheet" href="{BOOTSTRAP_CSS}">
-<link rel="stylesheet" href="{BOOTSTRAP_ICONS_CSS}">
-<style>{BASE_HTML_STYLE}{extra_style}</style>
+<style>{CONSOLE_STYLE}</style>
 </head>
 <body>
-<div class="page-header">
-  <h1>{heading}</h1>
-  <p>{subtitle}</p>
-</div>
-{body_html}
-<script src="{MARKED_JS}"></script>
-<script src="{DOMPURIFY_JS}"></script>
-<script src="{BOOTSTRAP_JS}"></script>
-<script>{RENDER_SCRIPT}</script>
+<nav class="sidebar">{sidebar_html}</nav>
+<main><div class="content">{body_html}</div></main>
 </body>
 </html>'''
+
+
+def stat_row_html(stats: list) -> str:
+    """[(값, 라벨), ...] -> 요약 통계 카드 행 HTML."""
+    cells = ''.join(
+        f'<div class="stat"><div class="num">{v}</div><div class="lbl">{html.escape(l)}</div></div>'
+        for v, l in stats
+    )
+    return f'<div class="stat-row">{cells}</div>'
