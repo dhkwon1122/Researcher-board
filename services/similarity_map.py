@@ -66,6 +66,42 @@ def compute_clusters(df: pd.DataFrame, min_cluster_size: int = 3) -> pd.DataFram
     return df
 
 
+def compute_medium_clusters(df: pd.DataFrame, min_cluster_size: int = 2) -> pd.DataFrame:
+    """1차(소규모) 클러스터 중심좌표를 다시 HDBSCAN으로 묶어, 여러 소규모
+    클러스터를 포괄하는 2차(중규모) 클러스터를 만든다. 노이즈 포인트(cluster=-1)와
+    다른 소규모 클러스터와 묶이지 못한(고립) 소규모 클러스터는 medium_cluster=-1로
+    남는다 — 화면에서는 고립된 소규모 클러스터를 자기 자신만의 상위 경계처럼
+    항상 표시해 처리한다(호출부 책임)."""
+    df = df.copy()
+    small_ids = sorted(c for c in df['cluster'].unique() if c != -1)
+    if len(small_ids) < min_cluster_size:
+        df['medium_cluster'] = -1
+        df['medium_cluster_label'] = ''
+        return df
+
+    from sklearn.cluster import HDBSCAN
+
+    centroids = np.array([
+        df.loc[df['cluster'] == cid, ['x', 'y']].mean().to_numpy()
+        for cid in small_ids
+    ])
+    clusterer = HDBSCAN(min_cluster_size=min_cluster_size, copy=False)
+    medium_labels = clusterer.fit_predict(centroids)
+    small_to_medium = dict(zip(small_ids, medium_labels))
+
+    df['medium_cluster'] = df['cluster'].map(small_to_medium).fillna(-1).astype(int)
+    df.loc[df['cluster'] == -1, 'medium_cluster'] = -1
+
+    medium_cluster_labels = {}
+    for mid in set(medium_labels):
+        if mid == -1:
+            continue
+        members = df[df['medium_cluster'] == mid].to_dict('records')
+        medium_cluster_labels[mid] = _cluster_label(members)
+    df['medium_cluster_label'] = df['medium_cluster'].map(medium_cluster_labels).fillna('')
+    return df
+
+
 def load_similarity_map(n_neighbors: int = 15, random_state: int = 42, min_cluster_size: int = 3) -> tuple:
     """연구원 전문성 임베딩을 UMAP으로 2D에 투영하고, HDBSCAN으로 유사 전문성
     영역을 클러스터링해 자동 이름을 붙인 DataFrame과, 임베딩 캐시가 없어
@@ -73,7 +109,8 @@ def load_similarity_map(n_neighbors: int = 15, random_state: int = 42, min_clust
 
     반환: (df, missing_count)
       df 컬럼: researcher_id, name, department, org_code, strength_fields(list),
-               strength_keywords(list), x, y, cluster, cluster_label
+               strength_keywords(list), x, y, cluster, cluster_label,
+               medium_cluster, medium_cluster_label
       필요 입력 파일이 없거나(연구원 보유 전문성 분석.json/embedding_cache.json)
       좌표를 계산할 만큼 표본이 충분치 않으면(3명 미만) x/y 없는 빈 DataFrame을
       반환한다 — 호출부가 이를 보고 안내 메시지를 보여줄 수 있다."""
@@ -128,4 +165,5 @@ def load_similarity_map(n_neighbors: int = 15, random_state: int = 42, min_clust
     df['x'] = coords[:, 0]
     df['y'] = coords[:, 1]
     df = compute_clusters(df, min_cluster_size=min_cluster_size)
+    df = compute_medium_clusters(df)
     return df, missing
