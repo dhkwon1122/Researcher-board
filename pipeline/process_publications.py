@@ -10,7 +10,13 @@ Output : data/processed/publications.csv
   논문제목       → title
   게재/발표처    → journal
   발표형태       → pub_type
+  진행상태       → paper_status  (텍스트, 예: 최종완료/ACCEPT 완료)
+  발표일         → announce_date  (YYYYMMDD → YYYY-MM-DD)
   실적일         → pub_date  (YYYYMMDD → YYYY-MM-DD), pub_year 파생
+    └ paper_status가 "최종완료" 또는 "ACCEPT 완료"(공백·대소문자 무관)인 행만
+      실적으로 카운트한다. 이 조건을 만족하는데 실적일이 비어 있으면
+      announce_date로 대신 채운다. 조건을 만족하지 않으면 실적일 값이 있어도
+      pub_date를 비운다(행 자체는 남기고 다른 컬럼은 그대로 둔다).
   저자순위       → author_rank  (정수)
   총저자수       → total_authors (정수)
   전체 저자정보 → author_info + 기여도 파생
@@ -41,6 +47,8 @@ COL_CORR        = '교신저자여부'
 COL_TITLE       = '논문제목'
 COL_JOURNAL     = '게재/발표처'
 COL_PUB_TYPE    = '발표형태'
+COL_STATUS      = '진행상태'
+COL_ANNOUNCE    = '발표일'
 COL_DATE        = '실적일'
 COL_RANK        = '저자순위'
 COL_TOTAL       = '총저자수'
@@ -48,9 +56,19 @@ COL_AUTHOR_INFO = '전체 저자정보'
 
 REQUIRED_COLS = [
     COL_ID, COL_AUTHOR_TYPE, COL_CORR, COL_TITLE,
-    COL_JOURNAL, COL_PUB_TYPE, COL_DATE, COL_RANK,
+    COL_JOURNAL, COL_PUB_TYPE, COL_STATUS, COL_ANNOUNCE, COL_DATE, COL_RANK,
     COL_TOTAL, COL_AUTHOR_INFO,
 ]
+
+# 실적일을 유효한 값으로 카운트하는 진행상태(공백 제거 + 대소문자 무관 비교)
+_VALID_STATUS_VALUES = ('최종완료', 'ACCEPT 완료')
+
+
+def _normalize_status(val) -> str:
+    return re.sub(r'\s+', '', str(val or '')).upper()
+
+
+_VALID_STATUS_NORM = {_normalize_status(v) for v in _VALID_STATUS_VALUES}
 
 # 있으면 추가로 가져오는 선택 컬럼(없어도 처리 계속, 빈 문자열로 채움)
 COL_PROJECT_NAME = '과제명'
@@ -108,6 +126,14 @@ def process() -> bool:
         print(f'  실제 컬럼: {list(df.columns)}')
         return False
 
+    paper_status = df[COL_STATUS].astype(str).str.strip()
+    raw_pub_date = df[COL_DATE].apply(parse_yyyymmdd)
+    announce_date = df[COL_ANNOUNCE].apply(parse_yyyymmdd)
+    is_valid_status = paper_status.apply(_normalize_status).isin(_VALID_STATUS_NORM)
+    # 유효한 진행상태에서 실적일이 비어 있으면 발표일로 대체하고,
+    # 유효하지 않은 진행상태면 실적일 값이 있어도 비운다.
+    pub_date = raw_pub_date.mask(raw_pub_date == '', announce_date).where(is_valid_status, '')
+
     result = pd.DataFrame({
         'researcher_id':  df[COL_ID].apply(norm_id),
         'author_type':    df[COL_AUTHOR_TYPE].astype(str).str.strip(),
@@ -115,7 +141,9 @@ def process() -> bool:
         'title':          df[COL_TITLE].astype(str).str.strip(),
         'journal':        df[COL_JOURNAL].astype(str).str.strip(),
         'pub_type':       df[COL_PUB_TYPE].astype(str).str.strip(),
-        'pub_date':       df[COL_DATE].apply(parse_yyyymmdd),
+        'paper_status':   paper_status,
+        'announce_date':  announce_date,
+        'pub_date':       pub_date,
         'author_rank':    df[COL_RANK].apply(_parse_int),
         'total_authors':  df[COL_TOTAL].apply(_parse_int),
         'author_info':    df[COL_AUTHOR_INFO].apply(_strip_contribution),
