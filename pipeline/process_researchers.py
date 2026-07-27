@@ -5,7 +5,7 @@
 출력 파일: data/processed/researchers.csv
 
 읽는 컬럼:
-  사원번호, 성명, 현소속부서명, CL, 비공식소속부서명, 직무,
+  사원번호, 성명, 현소속부서명, CL, 비공식소속부서명, 직무, 4직종,
   국적, 근속 기준일_그룹입사일(YYYYMMDD), 법적생년월일성별, 성별,
   승격산정기준일자, Knox ID
 
@@ -37,6 +37,7 @@ COL_DEPT       = '현소속부서명'
 COL_POSITION   = 'CL'
 COL_ORG        = '비공식소속부서명'
 COL_JOB        = '직무'
+COL_JOB_TYPE   = '4직종'
 COL_NATION     = '국적'
 COL_HIRE_DATE  = '근속 기준일_그룹입사일'
 COL_BIRTH_SEX  = '법적생년월일성별'
@@ -123,6 +124,7 @@ def process() -> bool:
             'org_code':        str(row.get(COL_ORG, '')).strip(),
             'position':        str(row.get(COL_POSITION, '')).strip(),
             'job_function':    str(row.get(COL_JOB, '')).strip(),
+            'job_type':        str(row.get(COL_JOB_TYPE, '')).strip(),
             'nationality':     str(row.get(COL_NATION, '')).strip(),
             'gender':          str(row.get(COL_GENDER, '')).strip(),
             'birth_year':      birth_year,

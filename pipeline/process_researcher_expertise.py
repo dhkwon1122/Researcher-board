@@ -496,6 +496,22 @@ def process(profile: str = 'default', refresh_journals: bool = False) -> bool:
         print('[process_researcher_expertise] analysis_dep.csv 없음 — 부서 필터 없이 전체 연구원 분석 '
               '(python pipeline/process_analysis_dep.py로 생성 가능)')
 
+    # 4직종(job_type)이 '지원'이면 분석 대상에서 제외한다. 단, 직무(job_function)가
+    # '조직총괄' 또는 '자문위원'이면 지원 직종이어도 예외로 포함한다.
+    if 'job_type' in researchers.columns:
+        exclude_mask = researchers['job_type'] == '지원'
+        if 'job_function' in researchers.columns:
+            exclude_mask &= ~researchers['job_function'].isin(['조직총괄', '자문위원'])
+        before = len(researchers)
+        researchers = researchers[~exclude_mask]
+        excluded = before - len(researchers)
+        if excluded:
+            print(f'[process_researcher_expertise] 직종 필터 적용(job_type=지원 제외, '
+                  f'조직총괄/자문위원 예외 포함): {before}명 → {len(researchers)}명 ({excluded}명 제외)')
+        if researchers.empty:
+            print('[process_researcher_expertise] 필터 적용 후 대상 연구원 없음 — 종료')
+            return False
+
     education = _read_csv('education')
     tasks = _read_csv('tasks')
     tasks_info = _read_csv('tasks_information')
