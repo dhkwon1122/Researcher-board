@@ -2,23 +2,24 @@
 전문성 분석 LLM 체인 순차 실행 스크립트
 
 run_expertise.py(전처리, LLM 호출 없음)가 끝난 뒤 사람이 하나씩 실행하던 아래
-5단계를 이 스크립트 하나로 순서대로 실행한다. 각 단계는 사내 LLM(과 일부 단계는
+4단계를 이 스크립트 하나로 순서대로 실행한다. 각 단계는 사내 LLM(과 일부 단계는
 BGE-M3 임베딩)을 호출하므로 비용이 발생한다.
 
   1) process_project_expertise.py   과제 전문성 분석
-  2) process_project_search.py      유사 기업/학계 탐색 (선택 — --skip-search로 건너뛸 수 있음)
-  3) process_researcher_expertise.py 연구원 전문성 분석 (저널 권위도 조회 자동 포함)
-  4) process_project_researcher_fit.py 과제·연구원 매칭 (BGE-M3 임베딩 서버 자동 기동)
-  5) process_researcher_similarity.py  연구원 ↔ 연구원 유사도
+  2) process_researcher_expertise.py 연구원 전문성 분석 (저널 권위도 조회 자동 포함)
+  3) process_project_researcher_fit.py 과제·연구원 매칭 (BGE-M3 임베딩 서버 자동 기동)
+  4) process_researcher_similarity.py  연구원 ↔ 연구원 유사도
 
-한 단계가 실패해도(반환값 False) 이후 단계는 계속 진행한다 — 4단계는
-1·3단계의 산출물을, 5단계는 3단계의 산출물을 입력으로 읽으므로, 앞 단계가
+process_project_search.py(유사 기업/학계 탐색)는 이 체인에 포함되지 않는다 —
+필요하면 별도로 직접 실행: python pipeline/process_project_search.py
+
+한 단계가 실패해도(반환값 False) 이후 단계는 계속 진행한다 — 3단계는
+1·2단계의 산출물을, 4단계는 2단계의 산출물을 입력으로 읽으므로, 앞 단계가
 실패하면 해당 입력을 못 찾아 그 단계도 자연히 실패([process_*] ... 없음 —
-종료 메시지)한다. 마지막에 단계별 성공/실패/건너뜀을 요약해서 보여준다.
+종료 메시지)한다. 마지막에 단계별 성공/실패를 요약해서 보여준다.
 
 사용법:
-  python pipeline/run_analysis.py [--refresh-journals]
-                                   [--refresh-judgments] [--top-k 5] [--skip-search]
+  python pipeline/run_analysis.py [--refresh-journals] [--refresh-judgments] [--top-k 5]
 
 run_expertise.py(전처리)까지 포함해 한 번에 순차 실행하려면 pipeline/run_integration.py를
 쓰면 된다. 전체 실행에 수십 분~수 시간이 걸릴 수 있어 도중에 환경 문제로
@@ -41,31 +42,22 @@ def _parse_top_k_arg(argv: list) -> int | None:
     return None
 
 
-def run(refresh_journals: bool = False, refresh_judgments: bool = False,
-        top_k: int | None = None, skip_search: bool = False):
-    steps = []  # [(단계명, True/False/None(건너뜀)), ...]
+def run(refresh_journals: bool = False, refresh_judgments: bool = False, top_k: int | None = None):
+    steps = []  # [(단계명, True/False), ...]
 
-    print('[run_analysis] 1/5 과제 전문성 분석')
+    print('[run_analysis] 1/4 과제 전문성 분석')
     from process_project_expertise import process as process_project_expertise
     steps.append(('과제 전문성 분석', process_project_expertise()))
 
-    if skip_search:
-        print('[run_analysis] 2/5 유사 기업/학계 탐색 — 건너뜀(--skip-search)')
-        steps.append(('유사 기업/학계 탐색', None))
-    else:
-        print('[run_analysis] 2/5 유사 기업/학계 탐색')
-        from process_project_search import process as process_project_search
-        steps.append(('유사 기업/학계 탐색', process_project_search()))
-
-    print('[run_analysis] 3/5 연구원 전문성 분석')
+    print('[run_analysis] 2/4 연구원 전문성 분석')
     from process_researcher_expertise import process as process_researcher_expertise
     steps.append(('연구원 전문성 분석', process_researcher_expertise(refresh_journals=refresh_journals)))
 
-    print('[run_analysis] 4/5 과제·연구원 매칭')
+    print('[run_analysis] 3/4 과제·연구원 매칭')
     from process_project_researcher_fit import process as process_project_researcher_fit
     steps.append(('과제·연구원 매칭', process_project_researcher_fit()))
 
-    print('[run_analysis] 5/5 연구원 ↔ 연구원 유사도')
+    print('[run_analysis] 4/4 연구원 ↔ 연구원 유사도')
     from process_researcher_similarity import process as process_researcher_similarity
     similarity_kwargs = {'refresh_judgments': refresh_judgments}
     if top_k is not None:
@@ -74,8 +66,7 @@ def run(refresh_journals: bool = False, refresh_judgments: bool = False,
 
     print('\n[run_analysis] 실행 결과 요약:')
     for name, ok in steps:
-        mark = '건너뜀' if ok is None else ('성공' if ok else '실패')
-        print(f'  [{mark}] {name}')
+        print(f'  [{"성공" if ok else "실패"}] {name}')
 
 
 if __name__ == '__main__':
@@ -84,5 +75,4 @@ if __name__ == '__main__':
         refresh_journals='--refresh-journals' in _argv,
         refresh_judgments='--refresh-judgments' in _argv,
         top_k=_parse_top_k_arg(_argv),
-        skip_search='--skip-search' in _argv,
     )
