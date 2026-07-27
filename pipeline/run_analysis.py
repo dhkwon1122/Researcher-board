@@ -16,19 +16,12 @@ BGE-M3 임베딩)을 호출하므로 비용이 발생한다.
 실패하면 해당 입력을 못 찾아 그 단계도 자연히 실패([process_*] ... 없음 —
 종료 메시지)한다. 마지막에 단계별 성공/실패/건너뜀을 요약해서 보여준다.
 
-두 사내 LLM(thinkingcap/gpt-4o) 비교를 위해 두 번 실행하려면 --profile로
-구분해서 각각 실행한 뒤 python pipeline/process_llm_compare.py.
-
 사용법:
-  python pipeline/run_analysis.py [--profile thinkingcap] [--refresh-journals]
+  python pipeline/run_analysis.py [--refresh-journals]
                                    [--refresh-judgments] [--top-k 5] [--skip-search]
 """
 
-import os
 import sys
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import rd_specialist_markdown as mmd  # noqa: E402
 
 
 def _parse_top_k_arg(argv: list) -> int | None:
@@ -42,13 +35,13 @@ def _parse_top_k_arg(argv: list) -> int | None:
     return None
 
 
-def run(profile: str = 'default', refresh_journals: bool = False, refresh_judgments: bool = False,
+def run(refresh_journals: bool = False, refresh_judgments: bool = False,
         top_k: int | None = None, skip_search: bool = False):
     steps = []  # [(단계명, True/False/None(건너뜀)), ...]
 
-    print(f'[run_analysis] 1/5 과제 전문성 분석 (profile={profile})')
+    print('[run_analysis] 1/5 과제 전문성 분석')
     from process_project_expertise import process as process_project_expertise
-    steps.append(('과제 전문성 분석', process_project_expertise(profile=profile)))
+    steps.append(('과제 전문성 분석', process_project_expertise()))
 
     if skip_search:
         print('[run_analysis] 2/5 유사 기업/학계 탐색 — 건너뜀(--skip-search)')
@@ -58,18 +51,17 @@ def run(profile: str = 'default', refresh_journals: bool = False, refresh_judgme
         from process_project_search import process as process_project_search
         steps.append(('유사 기업/학계 탐색', process_project_search()))
 
-    print(f'[run_analysis] 3/5 연구원 전문성 분석 (profile={profile})')
+    print('[run_analysis] 3/5 연구원 전문성 분석')
     from process_researcher_expertise import process as process_researcher_expertise
-    steps.append(('연구원 전문성 분석',
-                   process_researcher_expertise(profile=profile, refresh_journals=refresh_journals)))
+    steps.append(('연구원 전문성 분석', process_researcher_expertise(refresh_journals=refresh_journals)))
 
-    print(f'[run_analysis] 4/5 과제·연구원 매칭 (profile={profile})')
+    print('[run_analysis] 4/5 과제·연구원 매칭')
     from process_project_researcher_fit import process as process_project_researcher_fit
-    steps.append(('과제·연구원 매칭', process_project_researcher_fit(profile=profile)))
+    steps.append(('과제·연구원 매칭', process_project_researcher_fit()))
 
-    print(f'[run_analysis] 5/5 연구원 ↔ 연구원 유사도 (profile={profile})')
+    print('[run_analysis] 5/5 연구원 ↔ 연구원 유사도')
     from process_researcher_similarity import process as process_researcher_similarity
-    similarity_kwargs = {'profile': profile, 'refresh_judgments': refresh_judgments}
+    similarity_kwargs = {'refresh_judgments': refresh_judgments}
     if top_k is not None:
         similarity_kwargs['top_k'] = top_k
     steps.append(('연구원 유사도', process_researcher_similarity(**similarity_kwargs)))
@@ -83,7 +75,6 @@ def run(profile: str = 'default', refresh_journals: bool = False, refresh_judgme
 if __name__ == '__main__':
     _argv = sys.argv
     run(
-        profile=mmd.parse_profile_arg(_argv),
         refresh_journals='--refresh-journals' in _argv,
         refresh_judgments='--refresh-judgments' in _argv,
         top_k=_parse_top_k_arg(_argv),

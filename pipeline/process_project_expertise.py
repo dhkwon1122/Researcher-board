@@ -14,15 +14,11 @@ Source:
   data/processed/project_confl_address.csv (dep_name, project_name, confl_address)
 
 Output:
-  data/processed/project_expertise_analysis.json[.<profile>]
-  data/processed/project_expertise_analysis[.<profile>].html
-
-두 사내 LLM 비교(profile 인자):
-  python pipeline/process_project_expertise.py                    # 기존 LLM(profile='default')
-  python pipeline/process_project_expertise.py --profile thinkingcap  # 2번째 LLM
+  data/processed/project_expertise_analysis.json
+  data/processed/project_expertise_analysis.html
 
 사용법:
-  python pipeline/process_project_expertise.py [--profile thinkingcap]
+  python pipeline/process_project_expertise.py
 """
 
 import html
@@ -73,7 +69,7 @@ def _project_desc_html(item: dict) -> str:
     return f'<div class="tech-desc">{lines}{mmd.keyword_pills_html(keywords)}</div>'
 
 
-def _build_html(items: list, profile: str = 'default') -> str:
+def _build_html(items: list) -> str:
     """과제(project_confl_address.csv의 '소속' → dep_name)를 '플랫폼/팀'으로
     라벨링해 그룹핑해 보여준다. 과제 단위 데이터라 researchers.csv의
     org_code(비공식소속부서명/'과제/파트')에 대응하는 하위 그룹 데이터는 없다."""
@@ -107,18 +103,17 @@ def _build_html(items: list, profile: str = 'default') -> str:
   </div>
 </section>''')
 
-    profile_note = f' ({profile})' if profile != 'default' else ''
     body_html = f'{toc_html}\n{"".join(sections)}'
     return mmd.html_page(
-        title=f'사내 과제 — R&D 전문성 매핑{profile_note}',
-        heading=f'사내 과제 — R&amp;D 필수 전문성 및 직무 딥다이브 매핑{profile_note}',
+        title='사내 과제 — R&D 전문성 매핑',
+        heading='사내 과제 — R&amp;D 필수 전문성 및 직무 딥다이브 매핑',
         subtitle='과제별 필요 직무·전문성 분석 (R&amp;D Project Specialist Agent)',
         body_html=body_html,
         extra_style=mmd.EXPERTISE_CARD_STYLE,
     )
 
 
-def process(profile: str = 'default') -> bool:
+def process() -> bool:
     projects = _read_projects()
     if projects.empty:
         print('[process_project_expertise] project_confl_address.csv 없음 — 종료 '
@@ -126,8 +121,8 @@ def process(profile: str = 'default') -> bool:
         return False
 
     page_cache = project_summary.load_page_cache()
-    summary_cache = project_summary.load_cache(profile)
-    print(f'[process_project_expertise] 과제 {len(projects)}건 전문성 분석 중 (profile={profile})...')
+    summary_cache = project_summary.load_cache()
+    print(f'[process_project_expertise] 과제 {len(projects)}건 전문성 분석 중...')
 
     # 1단계: 과제별 컨플루언스/PDF 요약 준비(순차) — Confluence 조회·요약 캐시
     # (page_cache/summary_cache)는 공유 dict이므로 한 스레드(메인)에서만 읽고
@@ -138,27 +133,26 @@ def process(profile: str = 'default') -> bool:
         project_name = proj['project_name']
         confl_address = proj['confl_address']
 
-        summary = project_summary.get_project_summary(project_name, confl_address, page_cache, summary_cache,
-                                                        profile=profile)
+        summary = project_summary.get_project_summary(project_name, confl_address, page_cache, summary_cache)
         if summary is None:
             print(f'  [{project_name}] 건너뜀')
             continue
         prepared.append((dep_name, project_name, summary))
 
     project_summary.save_page_cache(page_cache)
-    project_summary.save_cache(summary_cache, profile)
+    project_summary.save_cache(summary_cache)
 
     # 2단계: 실제 R&D Project Specialist Agent 딥다이브 분석(사내 LLM 호출)은
-    # profile의 동시 호출 허용치만큼 스레드풀로 동시에 실행한다(요약 단계와
-    # 달리 공유 캐시 없이 순수 LLM 호출 + 결과 반환뿐이라 동시 실행이 안전하다).
-    # 개별 과제 분석 중 예기치 못한 예외가 나도 다른 과제 분석은 계속 진행하고,
+    # 동시 호출 허용치만큼 스레드풀로 동시에 실행한다(요약 단계와 달리 공유
+    # 캐시 없이 순수 LLM 호출 + 결과 반환뿐이라 동시 실행이 안전하다). 개별
+    # 과제 분석 중 예기치 못한 예외가 나도 다른 과제 분석은 계속 진행하고,
     # 실패한 과제만 에러와 함께 로그로 남긴다.
     results = []
     if prepared:
-        workers = max_concurrency(profile)
+        workers = max_concurrency()
         deepdive_total = len(prepared)
         print(f'[process_project_expertise] 과제 {deepdive_total}건 딥다이브 분석 시작 '
-              f'(동시 {workers}건, profile={profile})...')
+              f'(동시 {workers}건)...')
         completed = 0
 
         # run_concurrent()는 제출된 작업을 전부 마칠 때까지 반환하지 않으므로,
@@ -178,8 +172,7 @@ def process(profile: str = 'default') -> bool:
                 print(f'    (진행: {completed}/{deepdive_total} 완료)')
 
         tasks = [
-            (lambda name=project_name, desc=_summary_description(summary): mmd.analyze_expertise(
-                name, desc, profile=profile))
+            (lambda name=project_name, desc=_summary_description(summary): mmd.analyze_expertise(name, desc))
             for _, project_name, summary in prepared
         ]
         task_results = run_concurrent(tasks, max_workers=workers, on_complete=_on_complete)
@@ -200,23 +193,22 @@ def process(profile: str = 'default') -> bool:
                 'expertise_analysis': expertise_analysis,
             })
 
-    suffix = mmd.profile_suffix(profile)
     os.makedirs(OUT_DIR, exist_ok=True)
-    out_path = os.path.join(OUT_DIR, f'project_expertise_analysis{suffix}.json')
+    out_path = os.path.join(OUT_DIR, 'project_expertise_analysis.json')
     json_text = json.dumps(results, ensure_ascii=False, indent=2)
     with open(out_path, 'w', encoding='utf-8') as f:
         f.write(json_text)
-    print(f'[OK]   project_expertise_analysis{suffix}.json 저장 ({len(results)}건)')
-    result_archive.archive_copy('01. 과제분석', '과제 전문성 분석', 'json', json_text, profile=profile)
+    print(f'[OK]   project_expertise_analysis.json 저장 ({len(results)}건)')
+    result_archive.archive_copy('01. 과제분석', '과제 전문성 분석', 'json', json_text)
 
-    html_out = _build_html(results, profile)
-    html_path = os.path.join(OUT_DIR, f'project_expertise_analysis{suffix}.html')
+    html_out = _build_html(results)
+    html_path = os.path.join(OUT_DIR, 'project_expertise_analysis.html')
     with open(html_path, 'w', encoding='utf-8') as f:
         f.write(html_out)
-    print(f'[OK]   project_expertise_analysis{suffix}.html 저장')
-    result_archive.archive_copy('01. 과제분석', '과제 전문성 분석', 'html', html_out, profile=profile)
+    print('[OK]   project_expertise_analysis.html 저장')
+    result_archive.archive_copy('01. 과제분석', '과제 전문성 분석', 'html', html_out)
     return True
 
 
 if __name__ == '__main__':
-    process(profile=mmd.parse_profile_arg(sys.argv))
+    process()

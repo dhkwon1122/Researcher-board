@@ -143,7 +143,7 @@
        ※ 논문 저널 권위도 조회는 pipeline/journal_authority.py로 분리되어 있다
           (data/processed/journal_authority.json 캐시). 이 파일 실행 시 자동으로
           함께 호출되며, 캐시만 갱신하고 싶으면 독립적으로도 실행 가능:
-          python pipeline/journal_authority.py [--profile thinkingcap] [--refresh-journals]
+          python pipeline/journal_authority.py [--refresh-journals]
           ※ 사내 LLM 호출(비용 발생) — run_pipeline.py 자동 실행에는 포함되지 않음
 
     4) python pipeline/process_project_researcher_fit.py   (연구원 매칭)
@@ -166,29 +166,6 @@
        두 번 조회하지 않는다.
     ※ Confluence 접속: pipeline/llm_config.py의 CONFLUENCE_TOKEN(PAT) 필요
        (llm_config.example.py 참고). atlassian-python-api 패키지 설치 필요.
-
-[두 사내 LLM 비교] ★ 위 2)~4) 단계는 모두 --profile 인자로 어떤 사내 LLM을
-  쓸지 선택할 수 있다(예: llm_config.py에 LLM2_API_URL 등을 설정해 둔
-  'thinkingcap' profile). 두 LLM의 결과를 비교하려면 2)~4)를 두 profile로
-  각각 실행한 뒤 비교 리포트를 생성한다:
-
-    2) python pipeline/process_project_expertise.py
-       python pipeline/process_project_expertise.py --profile thinkingcap
-    3) python pipeline/process_researcher_expertise.py
-       python pipeline/process_researcher_expertise.py --profile thinkingcap
-    4) python pipeline/process_project_researcher_fit.py
-       python pipeline/process_project_researcher_fit.py --profile thinkingcap
-    5) python pipeline/process_llm_compare.py
-       → data/processed/llm_comparison.html
-         (컨플요약+과제 전문성 분석 / 연구원 전문성 분석 / 연구원 매칭 3가지를
-          기존 LLM(default)과 thinkingcap 결과로 나란히 비교하고, researcher_id
-          기준 공통/A만/B만 배지로 일치·불일치를 표시. LLM을 호출하지 않고
-          위 JSON 결과만 읽어서 만든다.)
-
-  ※ profile='default'는 기존 파일명을 그대로 쓰고(예: project_expertise_analysis.json),
-     그 외 profile은 파일명에 .<profile>이 붙는다(예: project_expertise_analysis.thinkingcap.json).
-     두 profile 모두 BGE-M3 임베딩(1차 후보 추출)은 항상 공유하며, 최종 LLM
-     판단만 profile별로 달라진다.
 
 출력 위치: data/processed/
 """

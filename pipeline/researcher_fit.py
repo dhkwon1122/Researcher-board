@@ -12,11 +12,6 @@ process_project_researcher_fit.py(사내 과제 ↔ 연구원)가 이 로직을 
   "후보자 A/B/C..."로 익명 라벨링해 전달하고, 결과는 호출부에서 다시
   researcher_id로 매핑한다.
 
-두 사내 LLM 비교(profile 인자): match_by_target/match_by_researcher/
-run_matching_llm은 profile을 받아 최종 판단 LLM 호출에만 반영한다.
-compute_embeddings(BGE-M3 임베딩)는 두 profile이 항상 공유하며 profile
-인자를 받지 않는다(임베딩 모델은 비교 대상이 아님).
-
 임베딩은 텍스트 내용 해시 기준으로 캐시(cached_embed, embedding_cache.json)해
 재사용한다 — process_project_researcher_fit.py(과제↔연구원)와
 process_researcher_similarity.py(연구원↔연구원)가 같은 연구원 프로필
@@ -169,14 +164,14 @@ def _label_of(i: int) -> str:
 
 
 def run_matching_llm(system_prompt: str, subject_block: str, candidate_texts: list,
-                      label_prefix: str, result_key: str, profile: str = 'default') -> list:
+                      label_prefix: str, result_key: str) -> list:
     """익명 라벨(예: 후보자 A/B/C)로 후보들을 제시하고 LLM 판정을 받아
     [{'idx', 'fit_score', 'reason'}, ...] 형태로 반환(라벨→인덱스로 역매핑)."""
     labels = [f'{label_prefix} {_label_of(i)}' for i in range(len(candidate_texts))]
     cand_block = '\n\n'.join(f'[{lbl}]\n{txt}' for lbl, txt in zip(labels, candidate_texts))
     prompt = f'{subject_block}\n\n[후보 목록]\n{cand_block}\n\n위 정보를 바탕으로 각 후보의 적합도를 판단해 주세요.'
 
-    raw = call_llm(prompt, system_prompt, temperature=0.2, max_tokens=2000, profile=profile)
+    raw = call_llm(prompt, system_prompt, temperature=0.2, max_tokens=2000)
     if not raw:
         return []
     try:
@@ -245,11 +240,10 @@ def compute_embeddings(job_texts: list, researcher_texts: list):
 
 
 def match_by_target(jobs: list, researcher_ids: list, researcher_texts: list,
-                     job_texts: list, sims: np.ndarray, log_prefix: str = '',
-                     profile: str = 'default') -> list:
+                     job_texts: list, sims: np.ndarray, log_prefix: str = '') -> list:
     """직무별 상위 K명 연구원을 추출한 뒤 LLM 판단. 후보 추출(로컬 계산)은 순차로
-    준비하고, 실제 LLM 판단 호출은 profile의 동시 호출 허용치만큼 스레드풀로
-    동시에 실행한다(journal_authority.py/process_researcher_expertise.py와 동일한
+    준비하고, 실제 LLM 판단 호출은 동시 호출 허용치만큼 스레드풀로 동시에
+    실행한다(journal_authority.py/process_researcher_expertise.py와 동일한
     패턴) — 개별 직무 판단 중 예기치 못한 예외가 나도 다른 직무 판단은 계속
     진행하고, 실패한 직무만 에러와 함께 로그로 남긴다(판단 결과 없음으로 처리).
     반환: [{'target_id','target_name','job_title','rankings':[{'researcher_id','fit_score','reason'}]}]"""
@@ -260,9 +254,9 @@ def match_by_target(jobs: list, researcher_ids: list, researcher_texts: list,
         subject_block = f'[직무 요구사항]\n{job_texts[j_idx]}'
         prepared.append((job, top_idx, subject_block, candidate_texts))
 
-    workers = max_concurrency(profile)
+    workers = max_concurrency()
     total = len(prepared)
-    print(f'{log_prefix}과제 기준 매칭 {total}건 판단 시작 (동시 {workers}건, profile={profile})...')
+    print(f'{log_prefix}과제 기준 매칭 {total}건 판단 시작 (동시 {workers}건)...')
     completed = 0
 
     def _on_complete(_i, _result, _error):
@@ -273,7 +267,7 @@ def match_by_target(jobs: list, researcher_ids: list, researcher_texts: list,
 
     tasks = [
         (lambda sb=subject_block, ct=candidate_texts: run_matching_llm(
-            SYSTEM_PROMPT_BY_TARGET, sb, ct, '후보자', 'rankings', profile=profile))
+            SYSTEM_PROMPT_BY_TARGET, sb, ct, '후보자', 'rankings'))
         for _, _, subject_block, candidate_texts in prepared
     ]
     task_results = run_concurrent(tasks, max_workers=workers, on_complete=_on_complete)
@@ -297,8 +291,7 @@ def match_by_target(jobs: list, researcher_ids: list, researcher_texts: list,
 
 
 def match_by_researcher(jobs: list, researcher_ids: list, researcher_texts: list,
-                         job_texts: list, sims: np.ndarray, log_prefix: str = '',
-                         profile: str = 'default') -> list:
+                         job_texts: list, sims: np.ndarray, log_prefix: str = '') -> list:
     """연구원별 상위 K건 직무를 추출한 뒤 LLM 판단. match_by_target과 동일하게
     후보 추출은 순차 준비, 실제 LLM 판단은 동시 실행한다.
     반환: [{'researcher_id','matches':[{'target_id','target_name','job_title','fit_score','reason'}]}]"""
@@ -310,9 +303,9 @@ def match_by_researcher(jobs: list, researcher_ids: list, researcher_texts: list
         subject_block = f'[연구원 전문성 프로필]\n{researcher_texts[r_idx]}'
         prepared.append((rid, candidate_jobs, subject_block, candidate_texts))
 
-    workers = max_concurrency(profile)
+    workers = max_concurrency()
     total = len(prepared)
-    print(f'{log_prefix}인별 기준 매칭 {total}건 판단 시작 (동시 {workers}건, profile={profile})...')
+    print(f'{log_prefix}인별 기준 매칭 {total}건 판단 시작 (동시 {workers}건)...')
     completed = 0
 
     def _on_complete(_i, _result, _error):
@@ -323,7 +316,7 @@ def match_by_researcher(jobs: list, researcher_ids: list, researcher_texts: list
 
     tasks = [
         (lambda sb=subject_block, ct=candidate_texts: run_matching_llm(
-            SYSTEM_PROMPT_BY_RESEARCHER, sb, ct, '후보 직무', 'matches', profile=profile))
+            SYSTEM_PROMPT_BY_RESEARCHER, sb, ct, '후보 직무', 'matches'))
         for _, _, subject_block, candidate_texts in prepared
     ]
     task_results = run_concurrent(tasks, max_workers=workers, on_complete=_on_complete)

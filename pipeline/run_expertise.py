@@ -37,16 +37,12 @@ analysis_dep.csv(전문성 분석 부서.xlsx 전처리, 선택)는 process_rese
   2) python pipeline/process_researcher_expertise.py   (연구원 전문성 분석)
      ※ 논문 저널 권위도 조회(pipeline/journal_authority.py)가 이 단계 실행 시
        자동으로 함께 호출된다. 독립적으로 캐시만 갱신하려면:
-       python pipeline/journal_authority.py [--profile thinkingcap] [--refresh-journals]
+       python pipeline/journal_authority.py [--refresh-journals]
   3) python pipeline/process_project_researcher_fit.py (과제·연구원 매칭)
   4) python pipeline/process_researcher_similarity.py  (선택: 연구원 ↔ 연구원 유사도)
-  ※ 두 사내 LLM(thinkingcap/gpt-4o)을 비교하려면 각 단계를 --profile thinkingcap로
-    한 번 더 실행한 뒤 python pipeline/process_llm_compare.py
   ※ 위 1~3단계(journal_authority 포함)는 모두 개별 항목(과제/연구원/저널 등)
-    단위 LLM 호출을 profile의 동시 호출 허용치만큼 스레드풀로 병렬 실행한다.
-    profile='default'(전용 vLLM 서버)는 llm_config.LLM2_MAX_CONCURRENT(기본
-    8)만큼 동시 호출하고, profile='thinkingcap'(사내 공용 게이트웨이)는 기존
-    처럼 시간 기반 순차 제한(초당 최대 4건)을 따른다.
+    단위 LLM 호출을 동시 호출 허용치(llm_config.LLM2_MAX_CONCURRENT, 기본 8)
+    만큼 스레드풀로 병렬 실행한다.
   ※ 1~4단계는 각자 data/processed/의 '현재본' json/html(파이프라인 체인·비교용,
     매번 덮어씀)은 그대로 유지하면서, 실행할 때마다 data/processed/result/ 아래
     산출물별 폴더(01. 과제분석/02. 연구원분석/03. 과제별_연구원별_매칭/
@@ -176,8 +172,8 @@ def run():
         print('       (논문 저널 권위도 조회 pipeline/journal_authority.py가 자동으로 함께 호출됨)')
         print('  3) python pipeline/process_project_researcher_fit.py')
         print('  4) python pipeline/process_researcher_similarity.py   (선택)')
-        print('  ※ 1~3단계는 profile의 동시 호출 허용치만큼 병렬로 LLM을 호출합니다')
-        print('     (llm_config.LLM2_MAX_CONCURRENT, profile=default 기본 8건).')
+        print('  ※ 1~3단계는 동시 호출 허용치만큼 병렬로 LLM을 호출합니다')
+        print('     (llm_config.LLM2_MAX_CONCURRENT, 기본 8건).')
 
     # ── BGE-M3 임베딩 서버 사전 기동 ────────────────────────────────────
     # 이 스크립트 자체는 임베딩/LLM을 호출하지 않지만, 바로 다음 실행할

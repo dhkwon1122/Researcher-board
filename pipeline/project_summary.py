@@ -11,11 +11,9 @@ confl_address가 비어 있는 과제는 data/raw/conflue_MPR/{과제명}.pdf �
 (pdf_reader.py). 이 폴백은 두 스크립트 모두에 공통 적용된다.
 
 캐시는 두 종류다.
-  - 원문 캐시(project_page_cache.json): profile(사내 LLM 모델)과 무관하게
-    공유. Confluence 조회/PDF 추출은 모델 비교 시에도 한 번만 수행한다.
+  - 원문 캐시(project_page_cache.json): Confluence 조회/PDF 추출 결과.
     키는 confl_address가 있으면 그 값, 없으면 'pdf:{project_name}'.
-  - 요약 캐시(project_summary_cache.json / project_summary_cache.<profile>.json):
-    실제 LLM 요약 결과이므로 모델(profile)별로 분리 저장한다. 키는 원문
+  - 요약 캐시(project_summary_cache.json): 실제 LLM 요약 결과. 키는 원문
     캐시와 동일한 규칙(confl_address 또는 'pdf:{project_name}').
 """
 
@@ -48,22 +46,19 @@ _SUMMARY_SYSTEM_PROMPT = """당신은 R&D 과제 문서 분석 전문가입니�
 """
 
 
-def _summary_cache_path(profile: str) -> str:
-    suffix = '' if profile == 'default' else f'.{profile}'
-    return os.path.join(OUT_DIR, f'project_summary_cache{suffix}.json')
+SUMMARY_CACHE_PATH = os.path.join(OUT_DIR, 'project_summary_cache.json')
 
 
-def load_cache(profile: str = 'default') -> dict:
-    path = _summary_cache_path(profile)
-    if not os.path.exists(path):
+def load_cache() -> dict:
+    if not os.path.exists(SUMMARY_CACHE_PATH):
         return {}
-    with open(path, encoding='utf-8') as f:
+    with open(SUMMARY_CACHE_PATH, encoding='utf-8') as f:
         return json.load(f)
 
 
-def save_cache(cache: dict, profile: str = 'default'):
+def save_cache(cache: dict):
     os.makedirs(OUT_DIR, exist_ok=True)
-    with open(_summary_cache_path(profile), 'w', encoding='utf-8') as f:
+    with open(SUMMARY_CACHE_PATH, 'w', encoding='utf-8') as f:
         json.dump(cache, f, ensure_ascii=False, indent=2)
 
 
@@ -85,7 +80,7 @@ def _page_cache_key(project_name: str, confl_address: str) -> str:
 
 
 def _get_page_text(project_name: str, confl_address: str, page_cache: dict):
-    """confl_address 기준 원문 캐시(profile과 무관하게 공유). 실패 시 None.
+    """confl_address 기준 원문 캐시. 실패 시 None.
     confl_address가 비어 있으면 data/raw/conflue_MPR/{project_name}.pdf로
     폴백한다(pdf_reader.py). 캐시 키도 이 경우 'pdf:{project_name}'을 쓴다
     (confl_address가 비어 있는 여러 과제가 같은 '' 키를 공유해 캐시가
@@ -111,9 +106,8 @@ def _get_page_text(project_name: str, confl_address: str, page_cache: dict):
     return page_text
 
 
-def _summarize(page_text: str, profile: str = 'default'):
-    raw = call_llm(page_text[:_MAX_PAGE_CHARS], _SUMMARY_SYSTEM_PROMPT, temperature=0.1, max_tokens=2000,
-                    profile=profile)
+def _summarize(page_text: str):
+    raw = call_llm(page_text[:_MAX_PAGE_CHARS], _SUMMARY_SYSTEM_PROMPT, temperature=0.1, max_tokens=2000)
     if not raw:
         # call_llm() 자체에서 이미 실패 원인(HTTP 오류/빈 응답 등)을 로그로 남긴다.
         return None
@@ -121,16 +115,14 @@ def _summarize(page_text: str, profile: str = 'default'):
         return json.loads(extract_json(raw))
     except json.JSONDecodeError as exc:
         preview = raw[:300].replace('\n', ' ')
-        print(f'  [LLM 경고] 과제 요약 응답이 JSON 형식이 아님 (profile={profile}): {exc}\n'
+        print(f'  [LLM 경고] 과제 요약 응답이 JSON 형식이 아님: {exc}\n'
               f'    원본 응답 미리보기: {preview}')
         return None
 
 
-def get_project_summary(project_name: str, confl_address: str, page_cache: dict, summary_cache: dict,
-                         profile: str = 'default'):
-    """요약 캐시(profile별 분리)를 확인하고, 없으면 원문(page_cache, profile과
-    무관하게 공유 — confl_address가 있으면 Confluence, 없으면
-    data/raw/conflue_MPR/{project_name}.pdf 폴백)을 가져와 지정된 profile의
+def get_project_summary(project_name: str, confl_address: str, page_cache: dict, summary_cache: dict):
+    """요약 캐시를 확인하고, 없으면 원문(page_cache — confl_address가 있으면
+    Confluence, 없으면 data/raw/conflue_MPR/{project_name}.pdf 폴백)을 가져와
     LLM으로 요약해 summary_cache에 채워 넣는다. 호출부가 두 캐시의 로드/저장을
     관리한다(배치 처리 시 루프 밖에서 한 번만). 실패 시 None(캐시에 남기지
     않아 다음 실행 때 재시도)."""
@@ -142,9 +134,9 @@ def get_project_summary(project_name: str, confl_address: str, page_cache: dict,
     if page_text is None:
         return None
 
-    summary = _summarize(page_text, profile=profile)
+    summary = _summarize(page_text)
     if summary is None:
-        print(f'  [{project_name}] 과제 요약 실패 (profile={profile})')
+        print(f'  [{project_name}] 과제 요약 실패')
         return None
 
     summary_cache[cache_key] = summary

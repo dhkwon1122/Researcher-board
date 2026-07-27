@@ -23,10 +23,6 @@ from pipeline.researcher_fit import _text_hash, researcher_profile_text
 from services.data_store import DATA_DIR, read_processed
 
 
-def _profile_suffix(profile: str) -> str:
-    return '' if profile == 'default' else f'.{profile}'
-
-
 def _cluster_label(rows: list) -> str:
     """클러스터 구성원들의 strength_fields 중 가장 흔한 상위 2개를 조합해
     자동으로 영역 이름을 만든다. 강점 분야 데이터가 전혀 없으면 '미분류 영역'."""
@@ -70,8 +66,7 @@ def compute_clusters(df: pd.DataFrame, min_cluster_size: int = 3) -> pd.DataFram
     return df
 
 
-def load_similarity_map(profile: str = 'default', n_neighbors: int = 15,
-                         random_state: int = 42, min_cluster_size: int = 3) -> tuple:
+def load_similarity_map(n_neighbors: int = 15, random_state: int = 42, min_cluster_size: int = 3) -> tuple:
     """연구원 전문성 임베딩을 UMAP으로 2D에 투영하고, HDBSCAN으로 유사 전문성
     영역을 클러스터링해 자동 이름을 붙인 DataFrame과, 임베딩 캐시가 없어
     지도에서 빠진 연구원 수를 반환한다.
@@ -82,8 +77,7 @@ def load_similarity_map(profile: str = 'default', n_neighbors: int = 15,
       필요 입력 파일이 없거나(연구원 보유 전문성 분석.json/embedding_cache.json)
       좌표를 계산할 만큼 표본이 충분치 않으면(3명 미만) x/y 없는 빈 DataFrame을
       반환한다 — 호출부가 이를 보고 안내 메시지를 보여줄 수 있다."""
-    suffix = _profile_suffix(profile)
-    expertise_path = os.path.join(DATA_DIR, f'연구원 보유 전문성 분석{suffix}.json')
+    expertise_path = os.path.join(DATA_DIR, '연구원 보유 전문성 분석.json')
     cache_path = os.path.join(DATA_DIR, 'embedding_cache.json')
 
     if not os.path.exists(expertise_path) or not os.path.exists(cache_path):

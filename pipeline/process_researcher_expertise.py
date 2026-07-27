@@ -28,26 +28,19 @@ Source:
   python pipeline/journal_authority.py --refresh-journals   (독립 실행)
 
 Output:
-  data/processed/연구원 보유 전문성 분석[.<profile>].json
-  data/processed/연구원 보유 전문성 분석[.<profile>].html  (연구원별 카드 리포트)
-  data/processed/journal_authority[.<profile>].json  (저널명별 권위도 평가 캐시 — 누적 재사용)
+  data/processed/연구원 보유 전문성 분석.json
+  data/processed/연구원 보유 전문성 분석.html  (연구원별 카드 리포트)
+  data/processed/journal_authority.json  (저널명별 권위도 평가 캐시 — 누적 재사용)
 
 ※ 프롬프트에는 researcher_id/이름 등 개인 식별 정보를 절대 포함하지 않는다.
   이력 내용(과제/직무/기술/논문/특허)만 사내 LLM에 전달하고, 결과는 호출부에서
   researcher_id에 매핑한다.
 
-두 사내 LLM 비교(profile 인자):
-  python pipeline/process_researcher_expertise.py                    # 기존 LLM(profile='default')
-  python pipeline/process_researcher_expertise.py --profile thinkingcap  # 2번째 LLM
-
 이미 저장된 JSON을 LLM 재호출 없이 HTML로만 다시 만들기:
   python pipeline/process_researcher_expertise.py --html-only
-  python pipeline/process_researcher_expertise.py --html-only --profile thinkingcap
-  ※ default/thinkingcap 모두 _build_html() 하나로만 렌더링하므로 두 산출물의
-    포맷은 항상 동일하다.
 
 사용법:
-  python pipeline/process_researcher_expertise.py [--profile thinkingcap] [--html-only] [--refresh-journals]
+  python pipeline/process_researcher_expertise.py [--html-only] [--refresh-journals]
 """
 
 import html
@@ -330,8 +323,8 @@ def _build_prompt(edu_text, task_text, job_text, core_text, tech_text, pub_text,
 """
 
 
-def _analyze_researcher(prompt: str, profile: str = 'default') -> dict | None:
-    raw = call_llm(prompt, _SYSTEM_PROMPT, temperature=0.2, max_tokens=2500, profile=profile)
+def _analyze_researcher(prompt: str) -> dict | None:
+    raw = call_llm(prompt, _SYSTEM_PROMPT, temperature=0.2, max_tokens=2500)
     if not raw:
         return None
     try:
@@ -396,10 +389,8 @@ def _researcher_card_html(item: dict, name_map: dict, anchor: str) -> str:
 </section>'''
 
 
-def _build_html(results: list, profile: str, researchers_df: pd.DataFrame) -> str:
-    """연구원 보유 전문성 분석[.profile].json → 사람이 보는 HTML 리포트.
-    default/thinkingcap 어느 profile을 넘겨도 항상 이 한 함수로만 렌더링하므로
-    두 산출물의 포맷은 항상 동일하다.
+def _build_html(results: list, researchers_df: pd.DataFrame) -> str:
+    """연구원 보유 전문성 분석.json → 사람이 보는 HTML 리포트.
 
     researchers.csv의 department(현소속부서명) → '플랫폼/팀', org_code(비공식
     소속부서명) → '과제/파트'로 라벨링해 2단계로 그룹핑해 보여준다(JSON 구조
@@ -435,48 +426,44 @@ def _build_html(results: list, profile: str, researchers_df: pd.DataFrame) -> st
                 rid = item.get('researcher_id', '')
                 sections.append(_researcher_card_html(item, name_map, anchor_of[rid]))
 
-    profile_note = f' ({profile})' if profile != 'default' else ''
     body_html = f'{toc_html}\n{"".join(sections)}'
     return mmd.html_page(
-        title=f'연구원 보유 전문성 분석{profile_note}',
-        heading=f'연구원 보유 전문성 분석{profile_note}',
+        title='연구원 보유 전문성 분석',
+        heading='연구원 보유 전문성 분석',
         subtitle='연구원별 강점 분야·전문성 프로필 (R&amp;D Talent Profiling Agent)',
         body_html=body_html,
         extra_style=mmd.EXPERTISE_CARD_STYLE,
     )
 
 
-def _write_html(results: list, profile: str, researchers_df: pd.DataFrame):
-    suffix = mmd.profile_suffix(profile)
-    html_out = _build_html(results, profile, researchers_df)
-    html_path = os.path.join(OUT_DIR, f'연구원 보유 전문성 분석{suffix}.html')
+def _write_html(results: list, researchers_df: pd.DataFrame):
+    html_out = _build_html(results, researchers_df)
+    html_path = os.path.join(OUT_DIR, '연구원 보유 전문성 분석.html')
     with open(html_path, 'w', encoding='utf-8') as f:
         f.write(html_out)
-    print(f'[OK]   연구원 보유 전문성 분석{suffix}.html 저장 ({len(results)}명)')
-    result_archive.archive_copy('02. 연구원분석', '연구원 보유 전문성 분석', 'html', html_out, profile=profile)
+    print(f'[OK]   연구원 보유 전문성 분석.html 저장 ({len(results)}명)')
+    result_archive.archive_copy('02. 연구원분석', '연구원 보유 전문성 분석', 'html', html_out)
 
 
-def render_html(profile: str = 'default') -> bool:
-    """이미 저장된 연구원 보유 전문성 분석[.profile].json을 읽어 .html만 다시
-    만든다(LLM 재호출 없음). 새로 분석하지 않고 기존 JSON을 리포트로 보고 싶을 때
-    'python pipeline/process_researcher_expertise.py --html-only [--profile ...]'로 실행한다."""
-    suffix = mmd.profile_suffix(profile)
-    json_path = os.path.join(OUT_DIR, f'연구원 보유 전문성 분석{suffix}.json')
+def render_html() -> bool:
+    """이미 저장된 연구원 보유 전문성 분석.json을 읽어 .html만 다시 만든다(LLM
+    재호출 없음). 새로 분석하지 않고 기존 JSON을 리포트로 보고 싶을 때
+    'python pipeline/process_researcher_expertise.py --html-only'로 실행한다."""
+    json_path = os.path.join(OUT_DIR, '연구원 보유 전문성 분석.json')
     if not os.path.exists(json_path):
-        print(f'[process_researcher_expertise] 연구원 보유 전문성 분석{suffix}.json 없음 — 종료 '
-              f'(python pipeline/process_researcher_expertise.py'
-              f'{" --profile " + profile if profile != "default" else ""} 먼저 실행)')
+        print('[process_researcher_expertise] 연구원 보유 전문성 분석.json 없음 — 종료 '
+              '(python pipeline/process_researcher_expertise.py 먼저 실행)')
         return False
 
     with open(json_path, encoding='utf-8') as f:
         results = json.load(f)
 
     researchers = _read_csv('researchers')
-    _write_html(results, profile, researchers)
+    _write_html(results, researchers)
     return True
 
 
-def process(profile: str = 'default', refresh_journals: bool = False) -> bool:
+def process(refresh_journals: bool = False) -> bool:
     researchers = _read_csv('researchers')
     if researchers.empty:
         print('[process_researcher_expertise] researchers.csv 없음 — 종료')
@@ -531,9 +518,9 @@ def process(profile: str = 'default', refresh_journals: bool = False) -> bool:
     lv_map = {str(i['lv']): i['definition'] for i in lv_info}
     std_map, sait_map = _build_job_def_maps(std_defs, sait_defs)
 
-    journal_cache = journal_authority.load_cache(profile)
+    journal_cache = journal_authority.load_cache()
     journal_cache = journal_authority.update_authority(
-        journal_authority.unique_journals(publications), journal_cache, profile, force=refresh_journals)
+        journal_authority.unique_journals(publications), journal_cache, force=refresh_journals)
 
     rids = researchers['researcher_id'].unique()
     total = len(rids)
@@ -598,14 +585,14 @@ def process(profile: str = 'default', refresh_journals: bool = False) -> bool:
         prompt = _build_prompt(edu_text, task_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text)
         prepared.append((rid, prompt))
 
-    # 2단계: 실제 LLM 분석은 profile의 동시 호출 허용치만큼 동시에 실행한다.
+    # 2단계: 실제 LLM 분석은 동시 호출 허용치만큼 동시에 실행한다.
     # 개별 연구원 분석 중 예기치 못한 예외가 나도(run_concurrent가 잡아 반환)
     # 다른 연구원 분석은 계속 진행하고, 실패한 연구원만 에러와 함께 로그로
     # 남겨 추후 원인 파악·동시성 조정에 활용할 수 있게 한다.
     if prepared:
-        workers = max_concurrency(profile)
+        workers = max_concurrency()
         print(f'[process_researcher_expertise] 연구원 {len(prepared)}명 LLM 분석 시작 '
-              f'(전체 {total}명 중 {skip_count}명 건너뜀, 동시 {workers}건, profile={profile})...')
+              f'(전체 {total}명 중 {skip_count}명 건너뜀, 동시 {workers}건)...')
 
         # run_concurrent()는 제출된 작업을 전부 마칠 때까지 반환하지 않으므로,
         # 실시간 진행 상황(완료/성공/실패 수 갱신 + 체크포인트 출력)은 반드시
@@ -626,7 +613,7 @@ def process(profile: str = 'default', refresh_journals: bool = False) -> bool:
                 success_count += 1
             _progress_checkpoint()
 
-        tasks_ = [(lambda p=prompt: _analyze_researcher(p, profile=profile)) for _, prompt in prepared]
+        tasks_ = [(lambda p=prompt: _analyze_researcher(p)) for _, prompt in prepared]
         task_results = run_concurrent(tasks_, max_workers=workers, on_complete=_on_analysis_complete)
 
         # 위 콜백에서 이미 분류/출력을 끝냈으므로, 여기서는 결과만 원래 순서(rids
@@ -635,23 +622,21 @@ def process(profile: str = 'default', refresh_journals: bool = False) -> bool:
             if analysis is not None:
                 results.append({'researcher_id': rid, **analysis})
 
-    suffix = mmd.profile_suffix(profile)
     os.makedirs(OUT_DIR, exist_ok=True)
-    out_path = os.path.join(OUT_DIR, f'연구원 보유 전문성 분석{suffix}.json')
+    out_path = os.path.join(OUT_DIR, '연구원 보유 전문성 분석.json')
     json_text = json.dumps(results, ensure_ascii=False, indent=2)
     with open(out_path, 'w', encoding='utf-8') as f:
         f.write(json_text)
 
-    print(f'[OK]   연구원 보유 전문성 분석{suffix}.json 저장 ({len(results)}명)')
-    result_archive.archive_copy('02. 연구원분석', '연구원 보유 전문성 분석', 'json', json_text, profile=profile)
+    print(f'[OK]   연구원 보유 전문성 분석.json 저장 ({len(results)}명)')
+    result_archive.archive_copy('02. 연구원분석', '연구원 보유 전문성 분석', 'json', json_text)
 
-    _write_html(results, profile, researchers)
+    _write_html(results, researchers)
     return True
 
 
 if __name__ == '__main__':
-    _profile = mmd.parse_profile_arg(sys.argv)
     if '--html-only' in sys.argv:
-        render_html(_profile)
+        render_html()
     else:
-        process(profile=_profile, refresh_journals='--refresh-journals' in sys.argv)
+        process(refresh_journals='--refresh-journals' in sys.argv)
