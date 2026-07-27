@@ -13,10 +13,10 @@ Output : data/processed/publications.csv
   진행상태       → paper_status  (텍스트, 예: 최종완료/ACCEPT 완료)
   발표일         → announce_date  (YYYYMMDD → YYYY-MM-DD)
   실적일         → pub_date  (YYYYMMDD → YYYY-MM-DD), pub_year 파생
-    └ paper_status가 "최종완료" 또는 "ACCEPT 완료"(공백·대소문자 무관)인 행만
-      실적으로 카운트한다. 이 조건을 만족하는데 실적일이 비어 있으면
-      announce_date로 대신 채운다. 조건을 만족하지 않으면 실적일 값이 있어도
-      pub_date를 비운다(행 자체는 남기고 다른 컬럼은 그대로 둔다).
+    └ paper_status가 "최종완료" 또는 "ACCEPT 완료"(공백·대소문자 무관)이고
+      실적일 또는 발표일 중 하나라도 있는 행만 결과에 포함한다(실적일이
+      없으면 발표일로 대체). 그 외 행(진행상태가 유효하지 않거나, 유효해도
+      실적일·발표일이 둘 다 없는 경우)은 통째로 제외한다.
   저자순위       → author_rank  (정수)
   총저자수       → total_authors (정수)
   전체 저자정보 → author_info + 기여도 파생
@@ -130,9 +130,16 @@ def process() -> bool:
     raw_pub_date = df[COL_DATE].apply(parse_yyyymmdd)
     announce_date = df[COL_ANNOUNCE].apply(parse_yyyymmdd)
     is_valid_status = paper_status.apply(_normalize_status).isin(_VALID_STATUS_NORM)
-    # 유효한 진행상태에서 실적일이 비어 있으면 발표일로 대체하고,
-    # 유효하지 않은 진행상태면 실적일 값이 있어도 비운다.
-    pub_date = raw_pub_date.mask(raw_pub_date == '', announce_date).where(is_valid_status, '')
+    # 유효한 진행상태에서 실적일이 비어 있으면 발표일로 대체한다.
+    pub_date = raw_pub_date.mask(raw_pub_date == '', announce_date)
+
+    # 진행상태가 유효하지 않거나(최종완료/ACCEPT 완료가 아님), 유효하더라도
+    # 실적일·발표일이 둘 다 없어 실적일을 채울 수 없는 행은 통째로 제외한다.
+    keep = is_valid_status & (pub_date != '')
+    df = df[keep].reset_index(drop=True)
+    paper_status = paper_status[keep].reset_index(drop=True)
+    announce_date = announce_date[keep].reset_index(drop=True)
+    pub_date = pub_date[keep].reset_index(drop=True)
 
     result = pd.DataFrame({
         'researcher_id':  df[COL_ID].apply(norm_id),
