@@ -14,6 +14,11 @@ researchers/education/tasks/publications/patents 등)은 이 파일에도
 스크립트 자체는 임베딩을 쓰지 않지만, 바로 이어서 실행할
 process_project_researcher_fit.py를 위해 모델 로딩 시간을 미리 없애 둔다.
 
+이 스크립트 + run_analysis.py를 한 번에 순차 실행하려면 pipeline/run_integration.py를
+쓰면 된다(전체 실행에 수십 분~수 시간이 걸릴 수 있으므로, 실행 전 반드시
+pipeline/run_ready.py로 사내 LLM/BGE-M3/Confluence 환경이 준비됐는지 먼저
+점검하는 것을 권장 — run_integration.py는 이 점검을 자동으로 먼저 수행한다).
+
 사용법:
   python pipeline/run_expertise.py
 

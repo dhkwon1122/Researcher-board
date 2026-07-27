@@ -19,6 +19,12 @@ BGE-M3 임베딩)을 호출하므로 비용이 발생한다.
 사용법:
   python pipeline/run_analysis.py [--refresh-journals]
                                    [--refresh-judgments] [--top-k 5] [--skip-search]
+
+run_expertise.py(전처리)까지 포함해 한 번에 순차 실행하려면 pipeline/run_integration.py를
+쓰면 된다. 전체 실행에 수십 분~수 시간이 걸릴 수 있어 도중에 환경 문제로
+끊기면 시간 낭비가 크므로, 실행 전 pipeline/run_ready.py로 사내 LLM/BGE-M3/
+Confluence 연결을 먼저 점검하는 것을 권장한다(run_integration.py는 이 점검을
+자동으로 먼저 수행함).
 """
 
 import sys
