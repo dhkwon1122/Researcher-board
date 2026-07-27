@@ -345,64 +345,164 @@ def attach_tenure_levels(results: list, tenure_map: dict) -> list:
     return results
 
 
-_LEVEL_BADGE = {'동일 분야': 'text-bg-success', '인접 분야': 'text-bg-warning', '낮음': 'text-bg-secondary'}
-_TENURE_BADGE = {'Junior': 'text-bg-info', 'Senior': 'text-bg-dark'}
+_LEVEL_CLASS = {'동일 분야': 'same', '인접 분야': 'adjacent', '낮음': 'low'}
+_TENURE_CLASS = {'Junior': 'junior', 'Senior': 'senior'}
+
+# 부서별 사이드바 내비게이션 + 요약 통계 + 표 형태 매칭 목록의 "엔터프라이즈 콘솔"
+# 디자인. Bootstrap/marked.js CDN 없이 완전히 독립적인 정적 페이지로 렌더링한다
+# (이 리포트는 자유 형식 마크다운이 없어 marked.js가 필요 없다).
+_CONSOLE_STYLE = """
+  :root {
+    --bg: #f3f4f7; --sidebar: #ffffff; --panel: #ffffff; --line: #e2e4ea;
+    --ink: #1a1d29; --ink-soft: #6b7080;
+    --accent: #4453d6; --accent-weak: rgba(68,83,214,0.08);
+    --good: #1f8a5f; --good-weak: rgba(31,138,95,0.1);
+    --warn: #a3720a; --warn-weak: rgba(163,114,10,0.1);
+    --low: #6b7080; --low-weak: rgba(107,112,128,0.1);
+    --danger: #b23b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101218; --sidebar: #171a22; --panel: #171a22; --line: #272b36;
+      --ink: #e7e8ee; --ink-soft: #8b8fa3;
+      --accent: #8b97f5; --accent-weak: rgba(139,151,245,0.12);
+      --good: #5fbf90; --good-weak: rgba(95,191,144,0.12);
+      --warn: #d1a444; --warn-weak: rgba(209,164,68,0.12);
+      --low: #8b8fa3; --low-weak: rgba(139,143,163,0.12);
+      --danger: #d9776e;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    margin: 0; display: flex; min-height: 100vh;
+  }
+  .sidebar {
+    width: 250px; flex-shrink: 0; background: var(--sidebar); border-right: 1px solid var(--line);
+    padding: 22px 16px; position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  }
+  .sidebar h1 { font-size: 0.98rem; font-weight: 800; margin: 4px 6px 2px; letter-spacing: -0.01em; }
+  .sidebar .tagline { font-size: 0.72rem; color: var(--ink-soft); margin: 0 6px 20px; line-height: 1.5; }
+  .nav-group { margin-bottom: 4px; }
+  .nav-group-label {
+    font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--ink-soft); font-weight: 700; padding: 10px 6px 4px;
+  }
+  .nav-item {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 8px; border-radius: 6px; font-size: 0.82rem;
+    text-decoration: none; color: var(--ink);
+  }
+  .nav-item:hover { background: var(--accent-weak); }
+  .nav-item .n-count { font-size: 0.68rem; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+  main { flex: 1; min-width: 0; padding: 32px 40px 100px; }
+  .content { max-width: 900px; }
+  .stat-row { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; margin-bottom: 28px; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .stat .num { font-size: 1.5rem; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+  .stat .lbl { font-size: 0.72rem; color: var(--ink-soft); margin-top: 2px; }
+  .dept-heading {
+    font-size: 0.78rem; font-weight: 700; color: var(--ink-soft); text-transform: uppercase;
+    letter-spacing: 0.06em; margin: 32px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line);
+  }
+  .dept-heading:first-of-type { margin-top: 0; }
+  .org-heading { font-size: 0.72rem; color: var(--ink-soft); margin: 16px 0 8px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; margin-bottom: 14px; }
+  .card-top { display: flex; align-items: center; gap: 10px; margin-bottom: 3px; }
+  .card-top h3 { margin: 0; font-size: 1rem; font-weight: 700; }
+  .badge { font-size: 0.66rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+  .badge.senior { background: var(--accent-weak); color: var(--accent); }
+  .badge.junior { background: var(--low-weak); color: var(--ink-soft); }
+  .chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 14px; }
+  .chip { font-size: 0.7rem; padding: 3px 9px; border-radius: 6px; background: var(--accent-weak); color: var(--accent); font-weight: 600; }
+  .chip.kw { background: var(--bg); color: var(--ink-soft); border: 1px solid var(--line); }
+  .table-wrap { overflow-x: auto; }
+  table.match-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+  table.match-table th {
+    text-align: left; font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--ink-soft); font-weight: 700; padding: 6px 8px; border-bottom: 1px solid var(--line);
+  }
+  table.match-table td { padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.match-table tr:last-child td { border-bottom: none; }
+  .m-name { font-weight: 700; }
+  .m-dept { font-size: 0.72rem; color: var(--ink-soft); }
+  .m-score { font-variant-numeric: tabular-nums; font-weight: 700; white-space: nowrap; }
+  .level-pill { display: inline-block; font-size: 0.68rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+  .level-pill.same { background: var(--good-weak); color: var(--good); }
+  .level-pill.adjacent { background: var(--warn-weak); color: var(--warn); }
+  .level-pill.low { background: var(--low-weak); color: var(--low); }
+  .m-ev, .m-ev-text { margin: 0; padding-left: 16px; color: var(--ink-soft); font-size: 0.78rem; }
+  .m-ev-text { padding-left: 0; }
+  .m-ev li { margin: 1px 0; }
+  .m-warn { color: var(--danger); font-size: 0.74rem; margin-top: 2px; }
+  .empty { color: var(--ink-soft); font-size: 0.82rem; font-style: italic; }
+  @media (max-width: 820px) {
+    .sidebar { display: none; }
+    main { padding: 24px 18px 80px; }
+  }
+"""
 
 
 def _tenure_badge_html(tenure_level: str) -> str:
     if not tenure_level:
         return ''
-    css = _TENURE_BADGE.get(tenure_level, 'text-bg-secondary')
-    return f'<span class="badge rounded-pill {css}">{html.escape(tenure_level)}</span>'
+    css = _TENURE_CLASS.get(tenure_level, 'junior')
+    return f'<span class="badge {css}">{html.escape(tenure_level)}</span>'
 
 
-def _reason_html(evidence) -> str:
+def _evidence_html(evidence, surface_only: bool) -> str:
     """evidence가 리스트(신규 개조식 판정)면 불릿 목록으로, 문자열(예전 서술형
-    캐시)이면 기존처럼 문단으로 렌더링한다 — 캐시를 --refresh-judgments 없이
-    그대로 둬도 예전 형식이 깨지지 않는다."""
+    캐시)이면 문단으로 렌더링한다 — 캐시를 --refresh-judgments 없이 그대로 둬도
+    예전 형식이 깨지지 않는다. surface_only면 경고 문구를 덧붙인다."""
     if isinstance(evidence, list) and evidence:
-        items = ''.join(f'<li>{html.escape(e)}</li>' for e in evidence)
-        return f'<ul class="reason-list">{items}</ul>'
-    if isinstance(evidence, str) and evidence:
-        return f'<div class="reason">{html.escape(evidence)}</div>'
-    return ''
+        out = f'<ul class="m-ev">{"".join(f"<li>{html.escape(e)}</li>" for e in evidence)}</ul>'
+    elif isinstance(evidence, str) and evidence:
+        out = f'<p class="m-ev-text">{html.escape(evidence)}</p>'
+    else:
+        out = ''
+    if evidence and surface_only:
+        out += '<div class="m-warn">⚠ 단어만 겹치고 실제 업무 영역은 다를 수 있음</div>'
+    return out
 
 
-def _similar_row_html(s: dict, name_map: dict, dept_map: dict, org_map: dict, profile_by_id: dict) -> str:
+def _chip_row_html(profile: dict) -> str:
+    fields = profile.get('strength_fields') or []
+    keywords = profile.get('strength_keywords') or []
+    if not fields and not keywords:
+        return '<p class="empty">강점 분야/키워드 데이터 없음</p>'
+    chips = ''.join(f'<span class="chip">{html.escape(f)}</span>' for f in fields)
+    chips += ''.join(f'<span class="chip kw">{html.escape(k)}</span>' for k in keywords)
+    return f'<div class="chip-row">{chips}</div>'
+
+
+def _match_row_html(s: dict, name_map: dict, dept_map: dict, org_map: dict) -> str:
     rid = s['researcher_id']
-    name = f'{html.escape(rid)} {html.escape(name_map.get(rid, ""))}'.strip()
-    org_badges = mmd.dept_org_badges_html(dept_map.get(rid, ''), org_map.get(rid, ''))
+    name = html.escape(name_map.get(rid, rid))
+    dept = html.escape(dept_map.get(rid, ''))
+    org = html.escape(org_map.get(rid, ''))
     tenure_badge = _tenure_badge_html(s.get('tenure_level', ''))
-    summary_html = mmd.strength_summary_html(profile_by_id.get(rid, {}))
-
-    reason_html = _reason_html(s.get('evidence'))
-    if s.get('evidence') and s.get('surface_only'):
-        reason_html += '<div class="reason">⚠ 단어만 겹치고 실제 업무 영역은 다를 수 있음</div>'
-
     level = s.get('level') or ''
-    level_badge = (
-        f'<span class="badge rounded-pill {_LEVEL_BADGE.get(level, "text-bg-secondary")}">{html.escape(level)}</span>'
+    level_pill = (
+        f'<span class="level-pill {_LEVEL_CLASS.get(level, "low")}">{html.escape(level)}</span>'
         if level else ''
     )
-
-    return f'''<div class="rank-row d-flex justify-content-between align-items-start gap-2">
-  <div>
-    <div class="name">{name} {tenure_badge} {org_badges}</div>
-    <div class="similar-summary mt-1">{summary_html}</div>
-    {reason_html}
-  </div>
-  <div class="d-flex flex-column align-items-end gap-1">
-    <span class="badge rounded-pill text-bg-primary">유사도 {round(s['score'] * 100)}%</span>
-    {level_badge}
-  </div>
-</div>'''
+    return f'''<tr>
+  <td>
+    <div class="m-name">{name} {tenure_badge}</div>
+    <div class="m-dept">{dept} · {org}</div>
+  </td>
+  <td>{level_pill}</td>
+  <td class="m-score">{round(s['score'] * 100)}%</td>
+  <td>{_evidence_html(s.get('evidence'), s.get('surface_only'))}</td>
+</tr>'''
 
 
 def _build_html(results: list, researchers_df: pd.DataFrame, top_k: int, profile_by_id: dict) -> str:
-    """researchers.csv의 department('플랫폼/팀')·org_code('과제/파트')로 TOC를
-    2단계 그룹핑하고, 각 카드는 이름 아래 본인의 전문성 핵심요약(strength_fields/
-    strength_keywords)을 먼저 보여준 뒤 유사 연구원 목록을 보여준다 — 각 유사
-    연구원 행에도 부서·과제 배지와 동일한 핵심요약을 표시한다."""
+    """researchers.csv의 department('플랫폼/팀')·org_code('과제/파트')로 좌측
+    사이드바 내비게이션과 본문 섹션을 그룹핑하고, 각 카드는 본인의 강점 분야/
+    키워드를 칩으로 보여준 뒤 유사 연구원 목록을 표로 보여준다."""
     name_map, dept_map, org_map = {}, {}, {}
     if not researchers_df.empty:
         indexed = researchers_df.set_index('researcher_id')
@@ -410,50 +510,73 @@ def _build_html(results: list, researchers_df: pd.DataFrame, top_k: int, profile
         dept_map = indexed['department'].to_dict()
         org_map = indexed['org_code'].to_dict()
 
-    anchor_of = {item['researcher_id']: f'researcher-{i}' for i, item in enumerate(results, start=1)}
+    anchor_of = {item['researcher_id']: f'r-{item["researcher_id"]}' for item in results}
 
-    def _toc_pill(anchor: str, item: dict) -> str:
-        rid = item['researcher_id']
-        label = f'{rid} {name_map.get(rid, "")}'.strip()
-        return f'<a class="btn btn-sm btn-outline-primary rounded-pill" href="#{anchor}">{html.escape(label)}</a>'
+    nav_groups = []
+    for dept, items in mmd.group_ordered(results, lambda it: dept_map.get(it['researcher_id'], '')):
+        entries = ''.join(
+            f'<a class="nav-item" href="#{anchor_of[it["researcher_id"]]}">'
+            f'<span>{html.escape(name_map.get(it["researcher_id"], it["researcher_id"]))}</span>'
+            f'<span class="n-count">{len(it["similar"])}</span></a>'
+            for it in items
+        )
+        nav_groups.append(f'<div class="nav-group"><div class="nav-group-label">{html.escape(dept)}</div>{entries}</div>')
 
-    anchored = [(anchor_of[item['researcher_id']], item) for item in results]
-    toc_html = mmd.grouped_nav_html(
-        anchored, lambda pair: dept_map.get(pair[1]['researcher_id'], ''), '플랫폼/팀',
-        lambda anchor, item: _toc_pill(anchor, item),
-        level2_key_fn=lambda pair: org_map.get(pair[1]['researcher_id'], ''), level2_label='과제/파트',
-    )
+    total = len(results)
+    high_conf = sum(1 for it in results for s in it['similar'] if s.get('score', 0) >= 0.7)
+    flagged = sum(1 for it in results for s in it['similar'] if s.get('surface_only'))
 
-    cards = []
-    for item in results:
-        rid = item['researcher_id']
-        anchor = anchor_of[rid]
-        label = f'{rid} {name_map.get(rid, "")}'.strip()
-        tenure_badge = _tenure_badge_html(item.get('tenure_level', ''))
-
-        rows = ''.join(
-            _similar_row_html(s, name_map, dept_map, org_map, profile_by_id) for s in item['similar']
-        ) or '<p class="empty">비교할 다른 연구원 데이터 없음</p>'
-
-        cards.append(f'''<div class="fit-card card" id="{anchor}">
-  <div class="card-body">
-    <h3>{html.escape(label)} {tenure_badge}</h3>
-    <hr class="mt-1 mb-2">
-    <div class="subject-summary">{mmd.strength_summary_html(profile_by_id.get(rid, {}))}</div>
-    <p class="subtitle mt-2">과제와 무관하게 전문성이 가장 유사한 연구원 —
-      근속을 알 수 있으면 Junior/Senior 그룹별 각 Top {top_k}, 모르면 전체 Top {top_k}</p>
-    {rows}
-  </div>
+    sections = []
+    for dept, dept_items in mmd.group_ordered(results, lambda it: dept_map.get(it['researcher_id'], '')):
+        sections.append(f'<div class="dept-heading">{html.escape(dept)}</div>')
+        for org, org_items in mmd.group_ordered(dept_items, lambda it: org_map.get(it['researcher_id'], '')):
+            if org and org != '미분류':
+                sections.append(f'<div class="org-heading">{html.escape(org)}</div>')
+            for item in org_items:
+                rid = item['researcher_id']
+                name = html.escape(name_map.get(rid, rid))
+                tenure_badge = _tenure_badge_html(item.get('tenure_level', ''))
+                if item['similar']:
+                    rows = ''.join(_match_row_html(s, name_map, dept_map, org_map) for s in item['similar'])
+                    table = (
+                        '<div class="table-wrap"><table class="match-table">'
+                        '<thead><tr><th>유사 연구원</th><th>판정</th><th>유사도</th><th>근거</th></tr></thead>'
+                        f'<tbody>{rows}</tbody></table></div>'
+                    )
+                else:
+                    table = '<p class="empty">비교할 다른 연구원 데이터 없음</p>'
+                sections.append(f'''<div class="card" id="{anchor_of[rid]}">
+  <div class="card-top"><h3>{name}</h3>{tenure_badge}</div>
+  {_chip_row_html(profile_by_id.get(rid, {}))}
+  {table}
 </div>''')
 
-    body_html = f'{toc_html}\n{"".join(cards)}'
-    return mmd.html_page(
-        title='연구원 ↔ 연구원 유사도',
-        heading='연구원 ↔ 연구원 유사도',
-        subtitle='과제 단위가 아닌 전문성(강점 분야·키워드·Hard Skills·Domain Knowledge) 임베딩 기반 유사도',
-        body_html=body_html,
-        extra_style=fit.EXTRA_STYLE,
-    )
+    return f'''<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>연구원 ↔ 연구원 유사도</title>
+<style>{_CONSOLE_STYLE}</style>
+</head>
+<body>
+<nav class="sidebar">
+  <h1>유사도 콘솔</h1>
+  <p class="tagline">과제 단위가 아닌 실제 보유 전문성 임베딩 기반 유사도 · 근속 그룹별 각 Top {top_k}</p>
+  <div>{"".join(nav_groups)}</div>
+</nav>
+<main>
+  <div class="content">
+    <div class="stat-row">
+      <div class="stat"><div class="num">{total}</div><div class="lbl">분석 대상 연구원</div></div>
+      <div class="stat"><div class="num">{high_conf}</div><div class="lbl">고신뢰 매칭 (70%+)</div></div>
+      <div class="stat"><div class="num">{flagged}</div><div class="lbl">표면 일치 주의 플래그</div></div>
+    </div>
+    {"".join(sections)}
+  </div>
+</main>
+</body>
+</html>'''
 
 
 def process(top_k: int = DEFAULT_TOP_K, refresh_judgments: bool = False) -> bool:
