@@ -1,3 +1,4 @@
+import json
 import os
 
 import pandas as pd
@@ -46,6 +47,17 @@ def read_processed(name: str, *, dtype: dict | str | None = None) -> pd.DataFram
     if 'researcher_id' in df.columns:
         df['researcher_id'] = df['researcher_id'].astype(str).str.zfill(8)
     return df
+
+
+def read_expertise_profiles() -> dict[str, dict]:
+    """researcher_id -> 연구원 보유 전문성 분석.json 항목(dict) 매핑. 파일이
+    없으면(파이프라인 미실행) 빈 dict — 호출부가 '분석 데이터 없음'으로 처리한다."""
+    path = os.path.join(DATA_DIR, '연구원 보유 전문성 분석.json')
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding='utf-8') as f:
+        profiles = json.load(f)
+    return {p.get('researcher_id', ''): p for p in profiles}
 
 
 def read_profile_tables() -> dict[str, pd.DataFrame]:

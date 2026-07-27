@@ -1,4 +1,13 @@
-"""화면: 연구원 전문성 유사도 지도 (BGE-M3 임베딩 UMAP 2D 시각화 + 클러스터 경계·명명)"""
+"""화면: 보유 전문성 (연구원/연구원↔연구원/연구원↔과제/전문성 유사맵/과제 5개 탭)
+
+연구원/연구원↔연구원/연구원↔과제/과제 4개 탭은 pipeline이 생성한 정적 콘솔 스타일
+HTML 리포트를 그대로 iframe(srcDoc)으로 띄운다 — 별도 Dash 컴포넌트로 재구현하지
+않고 기존 리포트 렌더링을 재사용하기 위함. 전문성 유사맵 탭만 기존 UMAP 산점도
+그대로 유지하며, UMAP 계산(numba JIT)이 무겁기 때문에 탭이 실제 선택될 때만
+계산하도록 지연 렌더링한다.
+"""
+
+import os
 
 import numpy as np
 import dash
@@ -7,10 +16,18 @@ import plotly.express as px
 import plotly.graph_objects as go
 from dash import Input, Output, State, callback, dcc, html
 
+from services.data_store import DATA_DIR
 from services.similarity_map import load_similarity_map
 
-dash.register_page(__name__, path='/researcher-similarity-map', name='유사도 지도',
-                    title='연구원 전문성 유사도 지도')
+dash.register_page(__name__, path='/researcher-similarity-map', name='보유 전문성',
+                    title='연구원 보유 전문성')
+
+_REPORT_FILES = {
+    'researcher': '연구원 보유 전문성 분석.html',
+    'similarity': 'researcher_similarity.html',
+    'fit': 'project_researcher_fit.html',
+    'project': 'project_expertise_analysis.html',
+}
 
 
 def _missing_data_alert() -> dbc.Alert:
@@ -78,7 +95,25 @@ def _add_cluster_overlays(fig, df):
             fig.add_trace(t)
 
 
-def layout(**_kwargs):
+def _iframe_tab(report_key: str):
+    """지정된 리포트 파일(data/processed 아래 정적 HTML)을 srcDoc으로 그대로 임베드.
+    파일이 없으면(해당 파이프라인 스크립트 미실행) 안내 Alert만 보여준다."""
+    filename = _REPORT_FILES[report_key]
+    path = os.path.join(DATA_DIR, filename)
+    if not os.path.exists(path):
+        return dbc.Alert(
+            f'"{filename}" 리포트가 없습니다. 관련 pipeline 스크립트를 먼저 실행하세요.',
+            color='warning', className='mt-3',
+        )
+    with open(path, encoding='utf-8') as f:
+        content = f.read()
+    return html.Iframe(
+        srcDoc=content,
+        style={'width': '100%', 'height': '85vh', 'border': 'none'},
+    )
+
+
+def _map_tab_content():
     df, missing = load_similarity_map()
     if df.empty or 'x' not in df.columns:
         return _missing_data_alert()
@@ -169,6 +204,38 @@ def layout(**_kwargs):
         dcc.Store(id='similarity-map-points', data=df[['researcher_id', 'x', 'y']].to_dict('records')),
         dcc.Location(id='similarity-map-url', refresh=True),
     ])
+
+
+def layout(**_kwargs):
+    return html.Div([
+        html.H5(
+            [html.I(className='bi bi-share-fill me-2 text-primary'), '보유 전문성'],
+            className='fw-bold mb-3 mt-1',
+        ),
+        dbc.Tabs(
+            [
+                dbc.Tab(label='연구원', tab_id='researcher'),
+                dbc.Tab(label='연구원 <-> 연구원', tab_id='similarity'),
+                dbc.Tab(label='연구원 <-> 과제', tab_id='fit'),
+                dbc.Tab(label='전문성 유사맵', tab_id='map'),
+                dbc.Tab(label='과제', tab_id='project'),
+            ],
+            id='expertise-tabs', active_tab='map', className='mb-3',
+        ),
+        dcc.Loading(html.Div(id='expertise-tab-content')),
+    ])
+
+
+@callback(
+    Output('expertise-tab-content', 'children'),
+    Input('expertise-tabs', 'active_tab'),
+)
+def _render_expertise_tab(active_tab):
+    if active_tab == 'map':
+        return _map_tab_content()
+    if active_tab in _REPORT_FILES:
+        return _iframe_tab(active_tab)
+    return dash.no_update
 
 
 @callback(

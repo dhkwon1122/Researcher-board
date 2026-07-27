@@ -124,7 +124,7 @@ navbar = dbc.Navbar(
                     ),
                     dbc.NavItem(
                         dbc.NavLink(
-                            [html.I(className='bi bi-share-fill me-1'), '유사도 지도'],
+                            [html.I(className='bi bi-share-fill me-1'), '보유 전문성'],
                             href='/researcher-similarity-map',
                             active='exact',
                             className='text-white',

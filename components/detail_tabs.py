@@ -152,6 +152,46 @@ _PANEL_TITLE_STYLE = {'fontSize': '0.85rem', 'fontWeight': 600, 'color': '#1d1d1
 _GRADE_PILL_COLOR = '#3f8f57'
 _E_SUPPORT_COLOR = '#0071e3'
 
+_DOMAIN_LABELS = [
+    ('academic_theoretical_background', '학술/이론적 배경'),
+    ('industry_standards', '산업/기술 표준'),
+    ('patent_trend_understanding', '특허/트렌드 이해도'),
+]
+
+
+def llm_summary_block(profile: dict | None):
+    """LLM 요약 — 연구원 보유 전문성 분석.json의 핵심 분야(strength_fields)/
+    키워드(strength_keywords)를 배지로, 도메인 지식(domain_knowledge)을 라벨:값
+    한 줄씩으로 보여준다. 해당 연구원이 분석 대상이 아니거나 아직 파이프라인을
+    실행하지 않아 데이터가 없으면 안내 문구만 표시한다."""
+    if not profile:
+        return html.Div('분석 데이터 없음', className='text-muted small p-1')
+
+    fields = profile.get('strength_fields') or []
+    keywords = profile.get('strength_keywords') or []
+    domain = profile.get('domain_knowledge') or {}
+
+    children = []
+    if fields:
+        children.append(html.Div(
+            [dbc.Badge(f, color='dark', className='me-1 mb-1') for f in fields],
+        ))
+    if keywords:
+        children.append(html.Div(
+            [dbc.Badge(k, color='secondary', className='me-1 mb-1') for k in keywords],
+        ))
+    domain_lines = [
+        html.Div([html.Span(f'{label}: ', className='fw-semibold'), html.Span(domain[key])],
+                  className='small text-muted')
+        for key, label in _DOMAIN_LABELS if domain.get(key)
+    ]
+    if domain_lines:
+        children.append(html.Div(domain_lines, className='mt-1'))
+
+    if not children:
+        return html.Div('분석 데이터 없음', className='text-muted small p-1')
+    return children
+
 
 def _pill(text, bg, fg='#ffffff'):
     return html.Span(text, style={

@@ -8,7 +8,7 @@ import dash
 import dash_bootstrap_components as dbc
 from dash import Input, Output, State, callback, dcc, html, no_update
 
-from components.detail_tabs import owned_expertise_block
+from components.detail_tabs import llm_summary_block, owned_expertise_block
 from components.profile_sections import (
     avatar,
     award_block,
@@ -22,7 +22,7 @@ from components.profile_sections import (
 )
 from components.timeline_view import timeline_view
 from services.comments import upsert_comment
-from services.data_store import read_processed, read_profile_tables
+from services.data_store import read_expertise_profiles, read_processed, read_profile_tables
 
 dash.register_page(
     __name__,
@@ -41,6 +41,10 @@ TABS_SECTION_HEIGHT = 350
 COMMENTS_HEIGHT = 400
 SECTION_HEIGHT = PHOTO_INFO_HEIGHT + TABS_SECTION_HEIGHT + COMMENTS_HEIGHT
 TABS_CONTENT_HEIGHT = 260
+
+# 우측 타임라인 카드 맨 위에 얹는 LLM 요약 블록의 고정 높이. 나머지는 타임라인이
+# flex:1로 채운다(SECTION_HEIGHT 총합 자체는 바꾸지 않아 좌측 스택과 하단이 계속 맞음).
+LLM_SUMMARY_HEIGHT = 150
 
 
 def _load_selector_data():
@@ -192,6 +196,13 @@ def _right_column():
     return dbc.Col(
         dbc.Card(
             dbc.CardBody([
+                html.Div([
+                    html.P('LLM 요약', style={'fontSize': '0.85rem', 'fontWeight': 600,
+                                            'color': '#1d1d1f'}, className='mb-1'),
+                    html.Div(id='llm-summary-block', style={'maxHeight': f'{LLM_SUMMARY_HEIGHT - 28}px',
+                                                             'overflowY': 'auto'}),
+                ], style={'flex': '0 0 auto', 'height': f'{LLM_SUMMARY_HEIGHT}px',
+                          'overflow': 'hidden', 'marginBottom': '8px'}),
                 html.P('타임라인', style={'fontSize': '0.85rem', 'fontWeight': 600,
                                        'color': '#1d1d1f', 'flex': '0 0 auto'}, className='mb-2'),
                 html.Div(id='tab-timeline', style={'flex': '1 1 auto', 'minHeight': '0', 'overflow': 'hidden'}),
@@ -272,7 +283,7 @@ def _empty_profile_output():
     prompt = html.Div('연구원을 선택하세요.', className='text-muted p-3')
     return (
         avatar('?'), html.Div(), html.Div(), html.Div(), html.Div(),
-        [], None, html.Div(), prompt, prompt,
+        [], None, html.Div(), prompt, prompt, prompt,
     )
 
 
@@ -300,6 +311,7 @@ def filter_by_dept(dept, current_rid):
     Output('leadership-year', 'options'),
     Output('leadership-year', 'value'),
     Output('comments-block', 'children'),
+    Output('llm-summary-block', 'children'),
     Output('tab-timeline', 'children'),
     Output('tab-expertise', 'children'),
     Input('researcher-select', 'value'),
@@ -322,6 +334,7 @@ def update_profile(rid):
         researcher = rows.iloc[0]
         years = [CURRENT_YEAR - 2, CURRENT_YEAR - 1, CURRENT_YEAR]
         leadership_options, leadership_default = leadership_year_options(tables['leadership'], rid)
+        profile = read_expertise_profiles().get(rid)
 
         return (
             photo_block(rid, str(researcher.get('name', '')), researcher, CURRENT_YEAR),
@@ -332,6 +345,7 @@ def update_profile(rid):
             leadership_options,
             leadership_default,
             comments_block(tables['comments'], rid),
+            llm_summary_block(profile),
             timeline_view(tables['tasks'], tables['hr_orders'], tables['publications'],
                           tables['patents'], tables['job_profile'], tables['tasks_information'], rid),
             owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid),
@@ -346,7 +360,7 @@ def update_profile(rid):
         )
         return (
             avatar('?'), err_div, html.Div(), html.Div(), html.Div(),
-            [], None, html.Div(), err_div, err_div,
+            [], None, html.Div(), err_div, err_div, err_div,
         )
 
 
