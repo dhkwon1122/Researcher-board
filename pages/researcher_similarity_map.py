@@ -5,7 +5,7 @@ import dash
 import dash_bootstrap_components as dbc
 import plotly.express as px
 import plotly.graph_objects as go
-from dash import Input, Output, callback, dcc, html
+from dash import Input, Output, State, callback, dcc, html
 
 from services.similarity_map import load_similarity_map
 
@@ -125,6 +125,14 @@ def layout(**_kwargs):
         if missing else None
     )
 
+    search_options = [
+        {
+            'label': f"{row['name']}({row['researcher_id']}) : {row['department']} - {row['org_code']}",
+            'value': row['researcher_id'],
+        }
+        for _, row in df.iterrows()
+    ]
+
     return html.Div([
         html.H4('연구원 전문성 유사도 지도', className='mb-1'),
         html.P(
@@ -135,12 +143,30 @@ def layout(**_kwargs):
         missing_note,
         dbc.Card(
             dbc.CardBody(
-                dcc.Graph(
-                    id='similarity-map-graph', figure=fig,
-                    config={'displayModeBar': False, 'scrollZoom': True},
-                ),
+                html.Div([
+                    html.Div(
+                        dcc.Dropdown(
+                            id='similarity-map-search',
+                            options=search_options,
+                            placeholder='이름 또는 사번으로 검색',
+                            clearable=True,
+                            searchable=True,
+                            style={'width': '320px'},
+                        ),
+                        style={
+                            'position': 'absolute', 'top': '10px', 'left': '10px', 'zIndex': 10,
+                            'backgroundColor': 'rgba(255,255,255,0.95)', 'borderRadius': '6px',
+                            'boxShadow': '0 1px 4px rgba(0,0,0,0.15)',
+                        },
+                    ),
+                    dcc.Graph(
+                        id='similarity-map-graph', figure=fig,
+                        config={'displayModeBar': False, 'scrollZoom': True},
+                    ),
+                ], style={'position': 'relative'}),
             ),
         ),
+        dcc.Store(id='similarity-map-points', data=df[['researcher_id', 'x', 'y']].to_dict('records')),
         dcc.Location(id='similarity-map-url', refresh=True),
     ])
 
@@ -155,3 +181,43 @@ def _go_to_profile(click_data):
         return dash.no_update
     rid = click_data['points'][0]['customdata'][0]
     return f'/researcher-profile?id={rid}'
+
+
+_SEARCH_HIGHLIGHT_NAME = '__search_highlight__'
+
+
+@callback(
+    Output('similarity-map-graph', 'figure'),
+    Input('similarity-map-search', 'value'),
+    State('similarity-map-graph', 'figure'),
+    State('similarity-map-points', 'data'),
+    prevent_initial_call=True,
+)
+def _highlight_search_result(selected_rid, current_fig, points):
+    """검색으로 연구원을 선택하면 지도 위 해당 점 주변에 빨간 링을 그리고
+    그 지점으로 확대·포커스한다(프로필 이동은 기존처럼 점 클릭으로 처리).
+    선택 해제 시 하이라이트를 지우고 전체 보기로 되돌린다."""
+    fig = go.Figure(current_fig)
+    fig.data = tuple(t for t in fig.data if t.name != _SEARCH_HIGHLIGHT_NAME)
+
+    match = next((p for p in (points or []) if p['researcher_id'] == selected_rid), None)
+    if not selected_rid or match is None:
+        fig.update_layout(xaxis=dict(autorange=True), yaxis=dict(autorange=True))
+        return fig
+
+    x, y = match['x'], match['y']
+    xs = [p['x'] for p in points]
+    ys = [p['y'] for p in points]
+    pad_x = max((max(xs) - min(xs)) * 0.08, 0.5)
+    pad_y = max((max(ys) - min(ys)) * 0.08, 0.5)
+
+    fig.add_trace(go.Scatter(
+        x=[x], y=[y], mode='markers',
+        marker=dict(size=24, color='rgba(0,0,0,0)', line=dict(width=3, color='#ff3b30')),
+        hoverinfo='skip', showlegend=False, name=_SEARCH_HIGHLIGHT_NAME,
+    ))
+    fig.update_layout(
+        xaxis=dict(range=[x - pad_x, x + pad_x]),
+        yaxis=dict(range=[y - pad_y, y + pad_y]),
+    )
+    return fig
