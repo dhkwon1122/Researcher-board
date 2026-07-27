@@ -108,6 +108,7 @@ def layout(**_kwargs):
     fig.update_layout(
         height=680,
         legend_title_text='플랫폼/팀',
+        dragmode='pan',
         xaxis_title=None, yaxis_title=None,
         xaxis=dict(showticklabels=False, zeroline=False, showgrid=False),
         yaxis=dict(showticklabels=False, zeroline=False, showgrid=False),
@@ -134,7 +135,10 @@ def layout(**_kwargs):
         missing_note,
         dbc.Card(
             dbc.CardBody(
-                dcc.Graph(id='similarity-map-graph', figure=fig, config={'displayModeBar': False}),
+                dcc.Graph(
+                    id='similarity-map-graph', figure=fig,
+                    config={'displayModeBar': False, 'scrollZoom': True},
+                ),
             ),
         ),
         dcc.Location(id='similarity-map-url', refresh=True),
