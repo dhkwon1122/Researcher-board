@@ -15,6 +15,11 @@
   성명      → name            해당 조직 단위 책임자 성명
   직책      → assignment_name 해당 조직 단위 책임자 직책 (예: PL/본부장/파트장)
   코드3     → code3           조직도 상 위계·표시 순서를 나타내는 코드 (예: A0000, B0100, B0101~B0116)
+  부서ID    → dep_id          이 조직 단위 고유 ID
+  상위부서ID → upper_dep_id    상위 조직 단위의 dep_id (없으면 최상위 조직)
+
+dep_id/upper_dep_id는 rd_specialist_markdown.build_org_tree()가 조직도 부모-자식
+관계를 판단하는 기준이다(파일에 적힌 행 순서와 무관하게 정확한 계층을 구성).
 
 컬럼명이 다를 경우 파일 상단의 _COL_MAP을 실제 헤더에 맞게 수정하세요.
 """
@@ -43,6 +48,19 @@ def _clean_int(val) -> str:
     except (ValueError, OverflowError):
         return s
 
+
+def _clean_id(val) -> str:
+    """dep_id/upper_dep_id 값을 정규화. 엑셀이 숫자로 읽어 100.0 처럼 실수형으로
+    들어오면 '100'으로 맞추고, 문자/숫자 혼합 코드(예: ORG01)는 그대로 둔다."""
+    s = _clean(val)
+    if not s:
+        return ''
+    try:
+        f = float(s)
+    except ValueError:
+        return s
+    return str(int(f)) if f.is_integer() else s
+
 # ── 컬럼명 매핑(엑셀 헤더명 → 출력 컬럼명) — 순서 무관, 이름으로 찾아 변환 ──────
 _COL_MAP = {
     '과제파트명': 'project_name',
@@ -52,6 +70,8 @@ _COL_MAP = {
     '성명': 'name',
     '직책': 'assignment_name',
     '코드3': 'code3',
+    '부서ID': 'dep_id',
+    '상위부서ID': 'upper_dep_id',
 }
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -80,6 +100,8 @@ def process() -> bool:
     })
     result['researcher_id'] = result['researcher_id'].apply(norm_id)
     result['team_layer'] = df['조직 레벨'].apply(_clean_int)  # '1.0' 같은 실수형 표기 정리
+    result['dep_id'] = df['부서ID'].apply(_clean_id)
+    result['upper_dep_id'] = df['상위부서ID'].apply(_clean_id)
 
     # 조직 레벨(team_layer)이 없는 행은 조직도에 나타나지 않으므로 제외한다.
     result = result[result['team_layer'] != ''].reset_index(drop=True)

@@ -36,10 +36,9 @@ def group_ordered(items: list, key_fn) -> list:
 
 
 def read_team_refer(out_dir: str) -> list:
-    """team_refer.csv를 파일에 적힌 행 순서 그대로 dict 리스트로 반환한다 —
-    build_org_tree()가 조직도 부모-자식 관계를 '파일 순서 + team_layer'로
-    판단하므로 순서가 중요하다. 파일이 없으면 빈 리스트(호출부가 조직도 없이
-    기존 방식으로 폴백할 수 있도록)."""
+    """team_refer.csv를 dict 리스트로 반환한다(build_org_tree()가 dep_id/
+    upper_dep_id로 부모-자식 관계를 판단하므로 행 순서는 무관). 파일이 없으면
+    빈 리스트(호출부가 조직도 없이 기존 방식으로 폴백할 수 있도록)."""
     path = os.path.join(out_dir, 'team_refer.csv')
     if not os.path.exists(path):
         return []
@@ -49,15 +48,18 @@ def read_team_refer(out_dir: str) -> list:
 
 
 def build_org_tree(rows: list) -> list:
-    """team_refer.csv 행들(파일에 적힌 순서)을 team_layer(조직 레벨, 1~4 숫자)
-    기준 스택 방식으로 계층화한다 — 현재 행 바로 앞에 나온, team_layer가 1
-    작은 행을 부모로 삼는다(엑셀에 이미 계층 순서대로 적혀 있다는 전제). 각
-    노드의 자식들은 code3(조직 위계·표시 순서 코드) 오름차순으로 정렬한다.
+    """team_refer.csv 행들을 dep_id(자신의 조직 ID)/upper_dep_id(상위 조직의
+    dep_id) 기준으로 계층화한다 — 각 행이 자신의 부모를 명시적으로 갖고 있으므로
+    파일에 적힌 행 순서와 무관하게 정확한 계층을 구성한다(예전 team_layer
+    스택 방식은 엑셀이 계층 순서대로 적혀 있다는 전제가 깨지면 잘못된 트리가
+    만들어졌음). upper_dep_id가 비어 있거나, 가리키는 dep_id가 데이터에 없으면
+    최상위 노드로 취급한다. 각 노드의 자식들은 code3(조직 위계·표시 순서 코드)
+    오름차순으로 정렬한다.
     반환: 최상위 노드 리스트, 각 노드는
       {project_name, end_name, team_layer(int), researcher_id, name,
-       assignment_name, code3, children: [...]}"""
-    roots: list = []
-    stack: list = []  # [(team_layer, node), ...]
+       assignment_name, code3, dep_id, upper_dep_id, children: [...]}"""
+    nodes: list = []
+    nodes_by_id: dict = {}
     for row in rows:
         try:
             layer = int(row.get('team_layer') or 0)
@@ -66,14 +68,20 @@ def build_org_tree(rows: list) -> list:
         if layer <= 0:
             continue
         node = {**row, 'team_layer': layer, 'children': []}
-        while stack and stack[-1][0] >= layer:
-            stack.pop()
-        (stack[-1][1]['children'] if stack else roots).append(node)
-        stack.append((layer, node))
+        nodes.append(node)
+        dep_id = (row.get('dep_id') or '').strip()
+        if dep_id:
+            nodes_by_id[dep_id] = node
 
-    def _sort(nodes: list):
-        nodes.sort(key=lambda n: n.get('code3', ''))
-        for n in nodes:
+    roots: list = []
+    for node in nodes:
+        upper_dep_id = (node.get('upper_dep_id') or '').strip()
+        parent = nodes_by_id.get(upper_dep_id) if upper_dep_id else None
+        (parent['children'] if parent is not None else roots).append(node)
+
+    def _sort(items: list):
+        items.sort(key=lambda n: n.get('code3', ''))
+        for n in items:
             _sort(n['children'])
 
     _sort(roots)
