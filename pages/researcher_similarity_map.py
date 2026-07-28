@@ -151,9 +151,12 @@ def _add_cluster_overlays(fig, df):
             fig.add_trace(t)
 
 
-def _iframe_tab(report_key: str):
+def _iframe_tab(report_key: str, scroll_to: str | None = None):
     """지정된 리포트 파일(data/processed 아래 정적 HTML)을 srcDoc으로 그대로 임베드.
-    파일이 없으면(해당 파이프라인 스크립트 미실행) 안내 Alert만 보여준다."""
+    파일이 없으면(해당 파이프라인 스크립트 미실행) 안내 Alert만 보여준다.
+    scroll_to가 주어지면(예: 전문성 유사맵에서 점을 클릭해 이 탭으로 넘어온 경우)
+    로드 직후 해당 id 카드로 자동 스크롤하는 스크립트를 붙인다 — srcDoc은 URL이
+    아니라 인라인 문서라 #fragment로는 스크롤을 지정할 수 없어 스크립트로 처리."""
     filename = _REPORT_FILES[report_key]
     path = os.path.join(DATA_DIR, filename)
     if not os.path.exists(path):
@@ -163,13 +166,64 @@ def _iframe_tab(report_key: str):
         )
     with open(path, encoding='utf-8') as f:
         content = f.read()
+    if scroll_to:
+        import json as _json
+        script = (
+            f'<script>document.addEventListener("DOMContentLoaded",function(){{'
+            f'var el=document.getElementById({_json.dumps(scroll_to)});'
+            f'if(el){{el.scrollIntoView({{block:"start"}});'
+            f'el.style.outline="2px solid #4453d6";el.style.outlineOffset="2px";}}'
+            f'}});</script>'
+        )
+        content = content.replace('</body>', script + '</body>') if '</body>' in content else content + script
     return html.Iframe(
         srcDoc=content,
         style={'width': '100%', 'height': '85vh', 'border': 'none'},
     )
 
 
-def _map_tab_content():
+_SEARCH_HIGHLIGHT_NAME = '__search_highlight__'
+_BLINK_OPACITY = (1.0, 0.25)  # 별 마커가 매 tick마다 번갈아 쓰는 두 불투명도(눈에 띄는 점멸)
+
+
+def _star_highlight_trace(x: float, y: float) -> go.Scatter:
+    """찾는 연구원 위치에 눈에 띄는 별 모양 마커를 그린다(금색 채움 + 빨간
+    테두리) — 점멸(blink)은 _blink_highlight 콜백이 이 트레이스의 opacity를
+    주기적으로 토글해서 만든다."""
+    return go.Scatter(
+        x=[x], y=[y], mode='markers',
+        marker=dict(symbol='star', size=28, color='#ffd60a', line=dict(width=2.5, color='#ff3b30')),
+        hoverinfo='skip', showlegend=False, name=_SEARCH_HIGHLIGHT_NAME,
+    )
+
+
+def _apply_highlight(fig, rid: str | None, points: list):
+    """검색으로 선택되었거나(URL의 highlight_researcher로 진입한 경우 포함)
+    연구원을 지도 위 별 마커로 표시하고 그 지점으로 확대·포커스한다. rid가
+    없거나 지도에 없으면 하이라이트를 지우고 전체 보기로 되돌린다. 반환값은
+    하이라이트가 실제로 적용됐는지(블링크 Interval을 켤지 여부에 사용)."""
+    fig.data = tuple(t for t in fig.data if t.name != _SEARCH_HIGHLIGHT_NAME)
+
+    match = next((p for p in (points or []) if p['researcher_id'] == rid), None)
+    if not rid or match is None:
+        fig.update_layout(xaxis=dict(autorange=True), yaxis=dict(autorange=True))
+        return False
+
+    x, y = match['x'], match['y']
+    xs = [p['x'] for p in points]
+    ys = [p['y'] for p in points]
+    pad_x = max((max(xs) - min(xs)) * 0.08, 0.5)
+    pad_y = max((max(ys) - min(ys)) * 0.08, 0.5)
+
+    fig.add_trace(_star_highlight_trace(x, y))
+    fig.update_layout(
+        xaxis=dict(range=[x - pad_x, x + pad_x]),
+        yaxis=dict(range=[y - pad_y, y + pad_y]),
+    )
+    return True
+
+
+def _map_tab_content(highlighted_rid: str | None = None):
     df, missing = load_similarity_map()
     if df.empty or 'x' not in df.columns:
         return _missing_data_alert()
@@ -224,11 +278,14 @@ def _map_tab_content():
         for _, row in df.iterrows()
     ]
 
+    points = df[['researcher_id', 'x', 'y']].to_dict('records')
+    blink_enabled = _apply_highlight(fig, highlighted_rid, points)
+
     return html.Div([
         html.H4('연구원 전문성 유사도 지도', className='mb-1'),
         html.P(
             'BGE-M3 임베딩(1024차원)을 UMAP으로 2D에 투영한 지도입니다 — 가까이 모인 점일수록 '
-            '실제 보유 전문성이 유사합니다(과제명과 무관). 점을 클릭하면 해당 연구원 프로필로 이동합니다.',
+            '실제 보유 전문성이 유사합니다(과제명과 무관). 점을 클릭하면 "연구원" 탭의 해당 카드로 이동합니다.',
             className='text-muted small mb-3',
         ),
         missing_note,
@@ -239,6 +296,7 @@ def _map_tab_content():
                         dcc.Dropdown(
                             id='similarity-map-search',
                             options=search_options,
+                            value=highlighted_rid,
                             placeholder='이름 또는 사번으로 검색',
                             clearable=True,
                             searchable=True,
@@ -257,12 +315,16 @@ def _map_tab_content():
                 ], style={'position': 'relative'}),
             ),
         ),
-        dcc.Store(id='similarity-map-points', data=df[['researcher_id', 'x', 'y']].to_dict('records')),
-        dcc.Location(id='similarity-map-url', refresh=True),
+        dcc.Store(id='similarity-map-points', data=points),
+        dcc.Interval(id='similarity-map-blink-interval', interval=550, n_intervals=0, disabled=not blink_enabled),
     ])
 
 
-def layout(**_kwargs):
+def layout(highlight_researcher=None, **_kwargs):
+    """highlight_researcher: URL 쿼리 파라미터(예: /researcher-similarity-map
+    ?highlight_researcher=00000001) — 리포트 카드의 '📍 유사맵' 아이콘이
+    target="_top"으로 이 URL을 열면, 전문성 유사맵 탭이 그 연구원을 별 마커로
+    강조·확대한 상태로 바로 보이도록 pending-highlight Store에 태워 둔다."""
     return html.Div([
         html.H5(
             [html.I(className='bi bi-share-fill me-2 text-primary'), '보유 전문성'],
@@ -278,35 +340,51 @@ def layout(**_kwargs):
             ],
             id='expertise-tabs', active_tab='map', className='mb-3',
         ),
-        dcc.Loading(html.Div(id='expertise-tab-content')),
+        dcc.Loading(html.Div(
+            id='expertise-tab-content',
+            children=_map_tab_content(highlighted_rid=highlight_researcher),
+        )),
+        dcc.Store(id='expertise-pending-highlight', data=highlight_researcher),
+        dcc.Store(id='expertise-scroll-target'),
     ])
 
 
 @callback(
-    Output('expertise-tab-content', 'children'),
+    Output('expertise-tab-content', 'children', allow_duplicate=True),
+    Output('expertise-scroll-target', 'data', allow_duplicate=True),
     Input('expertise-tabs', 'active_tab'),
+    State('expertise-pending-highlight', 'data'),
+    State('expertise-scroll-target', 'data'),
+    prevent_initial_call=True,
 )
-def _render_expertise_tab(active_tab):
+def _render_expertise_tab(active_tab, pending_highlight, scroll_target):
+    """탭 전환마다 해당 탭 콘텐츠를 지연 렌더링한다. 최초 진입 시(active_tab의
+    기본값 'map') 콘텐츠는 layout()이 이미 채워 두므로, 이 콜백은 prevent_initial_call
+    로 첫 로드 시에는 실행되지 않고 이후 탭 클릭에만 반응한다."""
     if active_tab == 'map':
-        return _map_tab_content()
+        return _map_tab_content(highlighted_rid=pending_highlight), dash.no_update
     if active_tab in _REPORT_FILES:
-        return _iframe_tab(active_tab)
-    return dash.no_update
+        content = _iframe_tab(active_tab, scroll_to=scroll_target if active_tab == 'researcher' else None)
+        # 한 번 스크롤에 쓰고 나면 비워서, 이후 수동으로 탭을 다시 눌러도 매번
+        # 같은 위치로 재스크롤되지 않게 한다.
+        return content, (None if scroll_target else dash.no_update)
+    return dash.no_update, dash.no_update
 
 
 @callback(
-    Output('similarity-map-url', 'href'),
+    Output('expertise-tabs', 'active_tab'),
+    Output('expertise-scroll-target', 'data', allow_duplicate=True),
     Input('similarity-map-graph', 'clickData'),
     prevent_initial_call=True,
 )
-def _go_to_profile(click_data):
+def _go_to_researcher_card(click_data):
+    """지도에서 점을 클릭하면(과거처럼 별도 프로필 페이지로 이동하지 않고)
+    같은 '보유 전문성' 화면 안에서 '연구원' 탭으로 전환하고, 그 탭의 iframe이
+    렌더링될 때 해당 연구원 카드로 자동 스크롤한다."""
     if not click_data:
-        return dash.no_update
+        return dash.no_update, dash.no_update
     rid = click_data['points'][0]['customdata'][0]
-    return f'/researcher-profile?id={rid}'
-
-
-_SEARCH_HIGHLIGHT_NAME = '__search_highlight__'
+    return 'researcher', f'r-{rid}'
 
 
 @callback(
@@ -369,36 +447,40 @@ def _toggle_small_tier_by_zoom(relayout_data, current_fig, points):
 
 @callback(
     Output('similarity-map-graph', 'figure', allow_duplicate=True),
+    Output('similarity-map-blink-interval', 'disabled', allow_duplicate=True),
+    Output('similarity-map-blink-interval', 'n_intervals', allow_duplicate=True),
     Input('similarity-map-search', 'value'),
     State('similarity-map-graph', 'figure'),
     State('similarity-map-points', 'data'),
     prevent_initial_call=True,
 )
 def _highlight_search_result(selected_rid, current_fig, points):
-    """검색으로 연구원을 선택하면 지도 위 해당 점 주변에 빨간 링을 그리고
-    그 지점으로 확대·포커스한다(프로필 이동은 기존처럼 점 클릭으로 처리).
-    선택 해제 시 하이라이트를 지우고 전체 보기로 되돌린다."""
+    """검색으로 연구원을 선택하면 지도 위 해당 점에 별 마커를 그리고 그
+    지점으로 확대·포커스하며 점멸(blink) Interval을 켠다(다른 연구원을
+    선택하거나 검색을 지우기 전까지 계속 깜빡임 — '다른 곳을 클릭하기 전까지'
+    를 이 화면에서는 '다른 검색 결과를 고르거나 지우기 전까지'로 구현했다:
+    지도 클릭은 이제 연구원 탭으로 이동하는 동작이라 지도 위에서 강조 대상을
+    바꾸는 유일한 방법은 검색뿐이다). 선택 해제 시 하이라이트/점멸을 끄고
+    전체 보기로 되돌린다."""
     fig = go.Figure(current_fig)
-    fig.data = tuple(t for t in fig.data if t.name != _SEARCH_HIGHLIGHT_NAME)
+    blink_on = _apply_highlight(fig, selected_rid, points)
+    return fig, not blink_on, 0
 
-    match = next((p for p in (points or []) if p['researcher_id'] == selected_rid), None)
-    if not selected_rid or match is None:
-        fig.update_layout(xaxis=dict(autorange=True), yaxis=dict(autorange=True))
-        return fig
 
-    x, y = match['x'], match['y']
-    xs = [p['x'] for p in points]
-    ys = [p['y'] for p in points]
-    pad_x = max((max(xs) - min(xs)) * 0.08, 0.5)
-    pad_y = max((max(ys) - min(ys)) * 0.08, 0.5)
-
-    fig.add_trace(go.Scatter(
-        x=[x], y=[y], mode='markers',
-        marker=dict(size=24, color='rgba(0,0,0,0)', line=dict(width=3, color='#ff3b30')),
-        hoverinfo='skip', showlegend=False, name=_SEARCH_HIGHLIGHT_NAME,
-    ))
-    fig.update_layout(
-        xaxis=dict(range=[x - pad_x, x + pad_x]),
-        yaxis=dict(range=[y - pad_y, y + pad_y]),
-    )
-    return fig
+@callback(
+    Output('similarity-map-graph', 'figure', allow_duplicate=True),
+    Input('similarity-map-blink-interval', 'n_intervals'),
+    State('similarity-map-graph', 'figure'),
+    prevent_initial_call=True,
+)
+def _blink_highlight(n_intervals, current_fig):
+    """블링크 Interval이 틱마다 별 마커의 불투명도를 두 값 사이로 토글해
+    눈에 띄게 깜빡이도록 한다."""
+    fig = go.Figure(current_fig)
+    opacity = _BLINK_OPACITY[n_intervals % 2]
+    changed = False
+    for trace in fig.data:
+        if trace.name == _SEARCH_HIGHLIGHT_NAME:
+            trace.marker.opacity = opacity
+            changed = True
+    return fig if changed else dash.no_update

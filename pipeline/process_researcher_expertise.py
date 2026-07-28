@@ -384,7 +384,7 @@ def _researcher_card_html(item: dict, name_map: dict, anchor: str) -> str:
     body_html = f'<div class="kv-grid">{kv_blocks}</div>' if kv_blocks else '<p class="empty">세부 항목 데이터 없음</p>'
 
     return f'''<div class="card" id="{anchor}">
-  <div class="card-top"><h3>{html.escape(rid)} {html.escape(name)}</h3></div>
+  <div class="card-top"><h3>{html.escape(rid)} {html.escape(name)}</h3>{mmd.map_link_html(rid)}</div>
   {chip_row}
   {body_html}
 </div>'''
@@ -406,14 +406,31 @@ def _build_html(results: list, researchers_df: pd.DataFrame) -> str:
 
     anchor_of = {item.get('researcher_id', ''): f'r-{item.get("researcher_id", "")}' for item in results}
 
-    nav_groups = []
-    for dept, items in mmd.group_ordered(results, lambda it: dept_map.get(it.get('researcher_id', ''), '')):
-        entries = ''.join(
-            f'<a class="nav-item" href="#{anchor_of[it.get("researcher_id", "")]}">'
-            f'<span>{html.escape(name_map.get(it.get("researcher_id", ""), it.get("researcher_id", "")))}</span></a>'
-            for it in items
-        )
-        nav_groups.append(f'<div class="nav-group"><div class="nav-group-label">{html.escape(dept)}</div>{entries}</div>')
+    # 조직도(team_refer.csv)가 있으면 트리로, 없으면 기존 부서 평면 목록으로 폴백.
+    analyzed_rids_by_org: dict = {}
+    for it in results:
+        rid = it.get('researcher_id', '')
+        analyzed_rids_by_org.setdefault(org_map.get(rid, ''), []).append(rid)
+
+    org_tree = mmd.build_org_tree(mmd.read_team_refer(OUT_DIR))
+    if org_tree:
+        def _leaf_researchers(node):
+            items = [
+                (f'#{anchor_of[rid]}', name_map.get(rid, rid), None)
+                for rid in analyzed_rids_by_org.get(node.get('project_name', ''), [])
+            ]
+            return mmd.nav_items_html(items)
+
+        nav_groups = [mmd.org_tree_html(org_tree, _leaf_researchers)]
+    else:
+        nav_groups = []
+        for dept, items in mmd.group_ordered(results, lambda it: dept_map.get(it.get('researcher_id', ''), '')):
+            entries = ''.join(
+                f'<a class="nav-item" href="#{anchor_of[it.get("researcher_id", "")]}">'
+                f'<span>{html.escape(name_map.get(it.get("researcher_id", ""), it.get("researcher_id", "")))}</span></a>'
+                for it in items
+            )
+            nav_groups.append(f'<div class="nav-group"><div class="nav-group-label">{html.escape(dept)}</div>{entries}</div>')
 
     total = len(results)
     hard_count = sum(1 for it in results if it.get('hard_skills'))

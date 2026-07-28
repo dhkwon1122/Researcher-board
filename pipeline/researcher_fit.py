@@ -348,30 +348,65 @@ def _fit_pill_html(score: str) -> str:
 
 def build_fit_html(by_target: list, by_researcher: list, researchers_df: pd.DataFrame, *,
                     page_title: str, target_tab_label: str, researcher_tab_label: str,
-                    target_header, target_card_subtitle: str, researcher_card_subtitle: str) -> str:
+                    target_header, target_card_subtitle: str, researcher_card_subtitle: str,
+                    target_dep_map: dict | None = None) -> str:
     """콘솔형 리포트(사이드바 + 요약 통계 + CSS 전용 라디오 탭 "과제 기준"/"인별
     기준" + 표 형태 적합도 목록)로 렌더링한다.
     target_header(item) -> str: by_target 카드 제목을 렌더링하는 콜백
-    (예: 과제는 '부서 · 과제명 — 직무명')."""
+    (예: 과제는 '부서 · 과제명 — 직무명').
+    target_dep_map: {target_name: dep_name} — 조직도(team_refer.csv)가 있으면
+    end_name==dep_name(부서명 텍스트 일치)으로 과제·직무를 해당 조직 노드
+    밑에 붙인다. 없으면(None) 과제 기준 사이드바는 조직도 없이 평면 목록으로."""
     import html
+    import re
     import rd_specialist_markdown as mmd
 
-    name_map = {}
+    name_map, org_map = {}, {}
     if not researchers_df.empty:
-        name_map = researchers_df.set_index('researcher_id')['name'].to_dict()
+        indexed = researchers_df.set_index('researcher_id')
+        name_map = indexed['name'].to_dict()
+        org_map = indexed['org_code'].to_dict()
+    target_dep_map = target_dep_map or {}
 
-    anchor_t = {i: f't-{i}' for i in range(len(by_target))}
-    anchor_r = {i: f'r-{i}' for i in range(len(by_researcher))}
+    def _slug(text: str) -> str:
+        return re.sub(r'[^0-9A-Za-z가-힣]+', '-', text or '').strip('-') or 'x'
 
-    nav_target = ''.join(
-        f'<a class="nav-item" href="#{anchor_t[i]}">{html.escape(target_header(item))}</a>'
-        for i, item in enumerate(by_target)
-    )
-    nav_researcher = ''.join(
-        f'<a class="nav-item" href="#{anchor_r[i]}">'
-        f'{html.escape(item["researcher_id"])} {html.escape(name_map.get(item["researcher_id"], ""))}</a>'
-        for i, item in enumerate(by_researcher)
-    )
+    anchor_t, seen_t = {}, {}
+    for i, item in enumerate(by_target):
+        base = f"t-{_slug(item['target_name'])}-{_slug(item['job_title'])}"
+        seen_t[base] = seen_t.get(base, 0) + 1
+        anchor_t[i] = base if seen_t[base] == 1 else f'{base}-{seen_t[base]}'
+    anchor_r = {i: f'r-{item["researcher_id"]}' for i, item in enumerate(by_researcher)}
+
+    org_tree = mmd.build_org_tree(mmd.read_team_refer(OUT_DIR))
+    if org_tree:
+        targets_by_dep: dict = {}
+        for i, item in enumerate(by_target):
+            dep = target_dep_map.get(item['target_name'], '')
+            targets_by_dep.setdefault(dep, []).append(
+                (f'#{anchor_t[i]}', f"{item['target_name']} — {item['job_title']}", None)
+            )
+        researchers_by_org: dict = {}
+        for i, item in enumerate(by_researcher):
+            rid = item['researcher_id']
+            researchers_by_org.setdefault(org_map.get(rid, ''), []).append(
+                (f'#{anchor_r[i]}', name_map.get(rid, rid), len(item['matches']))
+            )
+
+        nav_target = mmd.org_tree_html(
+            org_tree, lambda node: mmd.nav_items_html(targets_by_dep.get(node.get('end_name', ''), [])))
+        nav_researcher = mmd.org_tree_html(
+            org_tree, lambda node: mmd.nav_items_html(researchers_by_org.get(node.get('project_name', ''), [])))
+    else:
+        nav_target = ''.join(
+            f'<a class="nav-item" href="#{anchor_t[i]}">{html.escape(target_header(item))}</a>'
+            for i, item in enumerate(by_target)
+        )
+        nav_researcher = ''.join(
+            f'<a class="nav-item" href="#{anchor_r[i]}">'
+            f'{html.escape(item["researcher_id"])} {html.escape(name_map.get(item["researcher_id"], ""))}</a>'
+            for i, item in enumerate(by_researcher)
+        )
     sidebar = (
         f'<h1>{page_title}</h1>'
         '<p class="tagline">임베딩 1차 후보 + 사내 LLM 최종 판단 (R&amp;D Talent Matching Agent)</p>'
@@ -419,7 +454,7 @@ def build_fit_html(by_target: list, by_researcher: list, researchers_df: pd.Data
             for m in item['matches']
         ) or '<tr><td colspan="3" class="empty">판단 결과 없음</td></tr>'
         researcher_sections.append(f'''<div class="card" id="{anchor_r[i]}">
-  <div class="card-top"><h3>{html.escape(rid)} {html.escape(name_map.get(rid, ''))}</h3></div>
+  <div class="card-top"><h3>{html.escape(rid)} {html.escape(name_map.get(rid, ''))}</h3>{mmd.map_link_html(rid)}</div>
   <p class="card-sub">{html.escape(researcher_card_subtitle)}</p>
   <div class="table-wrap"><table class="match-table">
     <thead><tr><th>과제 · 직무</th><th>적합도</th><th>판단 근거</th></tr></thead>

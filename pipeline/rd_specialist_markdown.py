@@ -30,6 +30,108 @@ def group_ordered(items: list, key_fn) -> list:
     return [(k, groups[k]) for k in keys]
 
 
+# ── 조직도(팀참조시트/team_refer.csv 기반) ──────────────────────────────────
+# "보유 전문성" 콘솔의 연구원/연구원↔연구원/연구원↔과제 3개 리포트가 좌측
+# 사이드바에 공통으로 쓰는 확장/축소 가능한 조직도 트리 인프라.
+
+
+def read_team_refer(out_dir: str) -> list:
+    """team_refer.csv를 파일에 적힌 행 순서 그대로 dict 리스트로 반환한다 —
+    build_org_tree()가 조직도 부모-자식 관계를 '파일 순서 + team_layer'로
+    판단하므로 순서가 중요하다. 파일이 없으면 빈 리스트(호출부가 조직도 없이
+    기존 방식으로 폴백할 수 있도록)."""
+    path = os.path.join(out_dir, 'team_refer.csv')
+    if not os.path.exists(path):
+        return []
+    import pandas as pd
+    df = pd.read_csv(path, encoding='utf-8-sig', dtype=str).fillna('')
+    return df.to_dict('records')
+
+
+def build_org_tree(rows: list) -> list:
+    """team_refer.csv 행들(파일에 적힌 순서)을 team_layer(조직 레벨, 1~4 숫자)
+    기준 스택 방식으로 계층화한다 — 현재 행 바로 앞에 나온, team_layer가 1
+    작은 행을 부모로 삼는다(엑셀에 이미 계층 순서대로 적혀 있다는 전제). 각
+    노드의 자식들은 code3(조직 위계·표시 순서 코드) 오름차순으로 정렬한다.
+    반환: 최상위 노드 리스트, 각 노드는
+      {project_name, end_name, team_layer(int), researcher_id, name,
+       assignment_name, code3, children: [...]}"""
+    roots: list = []
+    stack: list = []  # [(team_layer, node), ...]
+    for row in rows:
+        try:
+            layer = int(row.get('team_layer') or 0)
+        except (TypeError, ValueError):
+            continue
+        if layer <= 0:
+            continue
+        node = {**row, 'team_layer': layer, 'children': []}
+        while stack and stack[-1][0] >= layer:
+            stack.pop()
+        (stack[-1][1]['children'] if stack else roots).append(node)
+        stack.append((layer, node))
+
+    def _sort(nodes: list):
+        nodes.sort(key=lambda n: n.get('code3', ''))
+        for n in nodes:
+            _sort(n['children'])
+
+    _sort(roots)
+    return roots
+
+
+def nav_items_html(items: list) -> str:
+    """[(href, label, count|None), ...] -> nav-item 링크 목록 HTML. 조직도
+    리프 노드에 붙는 연구원/과제·직무 목록에 재사용한다."""
+    if not items:
+        return ''
+    rows = ''.join(
+        f'<a class="nav-item" href="{href}"><span>{html.escape(label)}</span>'
+        + (f'<span class="n-count">{count}</span>' if count is not None else '')
+        + '</a>'
+        for href, label, count in items
+    )
+    return f'<div class="org-node-people">{rows}</div>'
+
+
+def org_tree_html(tree: list, node_content_fn=None) -> str:
+    """조직도를 <details>/<summary> 중첩 구조로 렌더링한다(JS 없이 클릭으로
+    확장/축소). 라벨은 '{과제명통일}({직책} {성명})' 형식(예: '기계시스템연구팀
+    (PL 정재원)'). node_content_fn(node) -> str|None: 해당 조직 노드에 붙일
+    추가 콘텐츠(nav_items_html로 만든 연구원/과제 목록 등) — 없으면 생략.
+    team_layer 1~2(상위 조직)는 기본으로 펼쳐서 보여준다."""
+    def _label(node: dict) -> str:
+        head = html.escape(node.get('end_name') or node.get('project_name') or '')
+        assignment = (node.get('assignment_name') or '').strip()
+        person = (node.get('name') or '').strip()
+        who = f'{assignment} {person}'.strip()
+        who_html = f' <span class="org-node-who">({html.escape(who)})</span>' if who else ''
+        return f'<span class="org-node-head">{head}</span>{who_html}'
+
+    def _node_html(node: dict) -> str:
+        extra = (node_content_fn(node) if node_content_fn else '') or ''
+        children_html = ''.join(_node_html(c) for c in node['children'])
+        body = f'{extra}{children_html}'
+        if not body:
+            return f'<div class="org-node-leaf">{_label(node)}</div>'
+        open_attr = ' open' if node['team_layer'] <= 2 else ''
+        return f'<details class="org-node"{open_attr}><summary>{_label(node)}</summary>{body}</details>'
+
+    return f'<div class="org-tree">{"".join(_node_html(n) for n in tree)}</div>'
+
+
+def map_link_html(researcher_id: str) -> str:
+    """연구원 카드 우측 상단에 붙는 '전문성 유사맵으로 이동' 아이콘. iframe
+    안에서 그대로 클릭하면 부모(top) 문서를 이동시켜야 하므로 target="_top"
+    필수 — 그래야 iframe 안이 아니라 실제 대시보드가 전문성 유사맵 탭으로
+    전환된다."""
+    href = f'/researcher-similarity-map?highlight_researcher={researcher_id}'
+    return (
+        f'<a class="map-link" href="{href}" target="_top" title="전문성 유사맵에서 위치 보기">'
+        f'📍 유사맵</a>'
+    )
+
+
 # R&D Project Specialist Agent — 사내 LLM 시스템 프롬프트 (원문 그대로 사용).
 # process_project_expertise.py(사내 과제) 등 여러 스크립트가 동일한 페르소나로
 # "필수 직무·전문성 딥다이브 매핑"을 생성하는 데 재사용한다.
@@ -285,6 +387,24 @@ CONSOLE_STYLE = """
   }
   .nav-item:hover { background: var(--accent-weak); }
   .nav-item .n-count { font-size: 0.68rem; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+  /* 조직도(팀참조시트 기반) — JS 없이 <details>/<summary> 중첩으로 확장/축소 */
+  .org-tree { margin-bottom: 4px; }
+  details.org-node { margin: 1px 0; }
+  details.org-node > summary {
+    cursor: pointer; list-style: none; padding: 6px 8px; border-radius: 6px;
+    font-size: 0.8rem; font-weight: 600; color: var(--ink); display: flex; align-items: baseline; gap: 4px;
+  }
+  details.org-node > summary::-webkit-details-marker { display: none; }
+  details.org-node > summary::before { content: '▸'; color: var(--ink-soft); font-size: 0.7rem; }
+  details.org-node[open] > summary::before { content: '▾'; }
+  details.org-node > summary:hover { background: var(--accent-weak); }
+  .org-node-head { font-weight: 700; }
+  .org-node-who { color: var(--ink-soft); font-weight: 500; }
+  .org-node-body { padding-left: 12px; border-left: 1px solid var(--line); margin-left: 8px; }
+  .org-node-leaf {
+    padding: 6px 8px; margin-left: 14px; font-size: 0.8rem; color: var(--ink-soft);
+  }
+  .org-node-people { padding-left: 12px; border-left: 1px solid var(--line); margin: 0 0 4px 8px; }
   main { flex: 1; min-width: 0; padding: 32px 40px 100px; }
   .content { max-width: 960px; }
   .stat-row { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; margin-bottom: 28px; }
@@ -300,6 +420,12 @@ CONSOLE_STYLE = """
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; margin-bottom: 14px; }
   .card-top { display: flex; align-items: center; gap: 10px; margin-bottom: 3px; }
   .card-top h3 { margin: 0; font-size: 1rem; font-weight: 700; }
+  .map-link {
+    margin-left: auto; flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px;
+    font-size: 0.72rem; font-weight: 600; color: var(--ink-soft); text-decoration: none;
+    border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px 3px 8px;
+  }
+  .map-link:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-weak); }
   .card-sub { font-size: 0.78rem; color: var(--ink-soft); margin-bottom: 12px; }
   .badge { font-size: 0.66rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
   .badge.senior { background: var(--accent-weak); color: var(--accent); }

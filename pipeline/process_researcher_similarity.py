@@ -415,16 +415,34 @@ def _build_html(results: list, researchers_df: pd.DataFrame, top_k: int, profile
         org_map = indexed['org_code'].to_dict()
 
     anchor_of = {item['researcher_id']: f'r-{item["researcher_id"]}' for item in results}
+    count_of = {item['researcher_id']: len(item['similar']) for item in results}
 
-    nav_groups = []
-    for dept, items in mmd.group_ordered(results, lambda it: dept_map.get(it['researcher_id'], '')):
-        entries = ''.join(
-            f'<a class="nav-item" href="#{anchor_of[it["researcher_id"]]}">'
-            f'<span>{html.escape(name_map.get(it["researcher_id"], it["researcher_id"]))}</span>'
-            f'<span class="n-count">{len(it["similar"])}</span></a>'
-            for it in items
-        )
-        nav_groups.append(f'<div class="nav-group"><div class="nav-group-label">{html.escape(dept)}</div>{entries}</div>')
+    # 조직도(team_refer.csv)가 있으면 트리로, 없으면 기존 부서 평면 목록으로 폴백.
+    analyzed_rids_by_org: dict = {}
+    for it in results:
+        rid = it['researcher_id']
+        analyzed_rids_by_org.setdefault(org_map.get(rid, ''), []).append(rid)
+
+    org_tree = mmd.build_org_tree(mmd.read_team_refer(OUT_DIR))
+    if org_tree:
+        def _leaf_researchers(node):
+            items = [
+                (f'#{anchor_of[rid]}', name_map.get(rid, rid), count_of.get(rid))
+                for rid in analyzed_rids_by_org.get(node.get('project_name', ''), [])
+            ]
+            return mmd.nav_items_html(items)
+
+        nav_groups = [mmd.org_tree_html(org_tree, _leaf_researchers)]
+    else:
+        nav_groups = []
+        for dept, items in mmd.group_ordered(results, lambda it: dept_map.get(it['researcher_id'], '')):
+            entries = ''.join(
+                f'<a class="nav-item" href="#{anchor_of[it["researcher_id"]]}">'
+                f'<span>{html.escape(name_map.get(it["researcher_id"], it["researcher_id"]))}</span>'
+                f'<span class="n-count">{len(it["similar"])}</span></a>'
+                for it in items
+            )
+            nav_groups.append(f'<div class="nav-group"><div class="nav-group-label">{html.escape(dept)}</div>{entries}</div>')
 
     total = len(results)
     high_conf = sum(1 for it in results for s in it['similar'] if s.get('score', 0) >= 0.7)
@@ -450,7 +468,7 @@ def _build_html(results: list, researchers_df: pd.DataFrame, top_k: int, profile
                 else:
                     table = '<p class="empty">비교할 다른 연구원 데이터 없음</p>'
                 sections.append(f'''<div class="card" id="{anchor_of[rid]}">
-  <div class="card-top"><h3>{name}</h3>{tenure_badge}</div>
+  <div class="card-top"><h3>{name}</h3>{tenure_badge}{mmd.map_link_html(rid)}</div>
   {_chip_row_html(profile_by_id.get(rid, {}))}
   {table}
 </div>''')
