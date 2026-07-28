@@ -463,6 +463,7 @@ def build_fit_html(by_target: list, by_researcher: list, researchers_df: pd.Data
     sidebar = (
         f'<h1>{page_title}</h1>'
         '<p class="tagline">임베딩 1차 후보 + 사내 LLM 최종 판단 (R&amp;D Talent Matching Agent)</p>'
+        f'{mmd.org_search_input_html()}'
         f'<div class="nav-group tab-a-only"><div class="nav-group-label">{target_tab_label}</div>{nav_target}</div>'
         f'<div class="nav-group tab-b-only"><div class="nav-group-label">{researcher_tab_label}</div>{nav_researcher}</div>'
         f'{project_nav_group}'

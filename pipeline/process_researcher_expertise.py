@@ -455,6 +455,7 @@ def _build_html(results: list, researchers_df: pd.DataFrame) -> str:
     sidebar = (
         '<h1>연구원 전문성 콘솔</h1>'
         '<p class="tagline">학력·과제이력·직무이력·기술·논문·특허 종합 분석 (R&amp;D Talent Profiling Agent)</p>'
+        f'{mmd.org_search_input_html()}'
         f'{"".join(nav_groups)}'
     )
     return mmd.console_page('연구원 보유 전문성 분석', sidebar, stats + ''.join(sections))

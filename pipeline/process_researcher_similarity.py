@@ -550,6 +550,7 @@ def _build_html(results: list, researchers_df: pd.DataFrame, profile_by_id: dict
         '<h1>유사도 콘솔</h1>'
         '<p class="tagline">과제 단위가 아닌 실제 보유 전문성 임베딩 기반 유사도 · '
         '근속 시니어 우선 · 근거 있는 매칭만 표시</p>'
+        f'{mmd.org_search_input_html()}'
         f'{"".join(nav_groups)}'
     )
     stats = mmd.stat_row_html([

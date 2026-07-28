@@ -106,6 +106,13 @@ def nested_nav_html(groups: list) -> str:
     return ''.join(parts)
 
 
+def org_search_input_html() -> str:
+    """조직도 바로 위에 붙는 이름/사번(또는 과제·직무명) 검색창. 실제 필터링
+    동작은 _CONSOLE_SCRIPT의 공용 리스너가 처리한다(연구원/연구원↔연구원/
+    연구원↔과제 사이드바가 모두 같은 클래스를 쓰므로 한 군데만 구현하면 됨)."""
+    return '<input type="text" class="org-search-input" placeholder="이름 또는 사번으로 검색">'
+
+
 def nav_items_html(items: list) -> str:
     """[(href, label, count|None), ...] -> nav-item 링크 목록 HTML. 조직도
     리프 노드에 붙는 연구원/과제·직무 목록에 재사용한다."""
@@ -502,6 +509,12 @@ CONSOLE_STYLE = """
   .back-to-top:hover { opacity: 0.85; }
   .sidebar h1 { font-size: 0.98rem; font-weight: 800; margin: 4px 6px 2px; letter-spacing: -0.01em; }
   .sidebar .tagline { font-size: 0.72rem; color: var(--ink-soft); margin: 0 6px 20px; line-height: 1.5; }
+  .org-search-input {
+    width: 100%; box-sizing: border-box; margin: 0 0 14px; padding: 7px 10px;
+    font-size: 0.8rem; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--bg); color: var(--ink);
+  }
+  .org-search-input:focus { outline: none; border-color: var(--accent); }
   .nav-group { margin-bottom: 4px; }
   .nav-group-label {
     font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.08em;
@@ -705,6 +718,31 @@ _CONSOLE_SCRIPT = """
       window.scrollTo({top: 0, behavior: 'smooth'});
     });
   }
+
+  // 조직도 검색(이름/사번 또는 과제·직무명) — 일치하지 않는 nav-item은 숨기고,
+  // 그 결과 화면에 남는 항목이 하나도 없는 조직 노드(details.org-node)는
+  // 통째로 숨긴다. 일치 항목이 있으면 펼쳐서 바로 보이게 한다.
+  document.querySelectorAll('.org-search-input').forEach(function(input){
+    input.addEventListener('input', function(){
+      var q = input.value.trim().toLowerCase();
+      var root = input.closest('.sidebar') || document;
+      root.querySelectorAll('.nav-item').forEach(function(item){
+        var match = !q || item.textContent.toLowerCase().indexOf(q) !== -1;
+        item.style.display = match ? '' : 'none';
+      });
+      var nodes = root.querySelectorAll('details.org-node');
+      for (var i = nodes.length - 1; i >= 0; i--) {
+        var node = nodes[i];
+        if (!q) { node.style.display = ''; continue; }
+        var hasVisible = Array.prototype.some.call(
+          node.querySelectorAll('.nav-item'),
+          function(it){ return it.style.display !== 'none'; }
+        );
+        node.style.display = hasVisible ? '' : 'none';
+        if (hasVisible) node.open = true;
+      }
+    });
+  });
 })();
 """
 
