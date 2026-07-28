@@ -393,14 +393,23 @@ def build_fit_html(by_target: list, by_researcher: list, researchers_df: pd.Data
         anchor_p[i] = base if seen_p[base] == 1 else f'{base}-{seen_p[base]}'
     jobs_by_project = {i: mmd.deepdive_jobs(item.get('expertise_analysis', '')) for i, item in enumerate(project_items)}
 
+    # 과제 기준 사이드바는 부서→과제→직무(1~5개) 2단으로 중첩한다(부서→연구원
+    # 패턴과 동일하게, 과제를 눌러야 그 밑 직무들이 펼쳐짐) — by_target은 실제로
+    # 과제 하나당 여러 개(직무 수만큼) 항목이 있으므로, 부서 안에서 다시 과제
+    # 이름으로 묶어야 한다.
+    targets_by_dep_project: dict = {}
+    target_project_order: dict = {}
+    for i, item in enumerate(by_target):
+        dep = target_dep_map.get(item['target_name'], '')
+        proj = item['target_name']
+        bucket = targets_by_dep_project.setdefault(dep, {})
+        if proj not in bucket:
+            bucket[proj] = []
+            target_project_order.setdefault(dep, []).append(proj)
+        bucket[proj].append((f'#{anchor_t[i]}', item['job_title'], None))
+
     org_tree = mmd.build_org_tree(mmd.read_team_refer(OUT_DIR))
     if org_tree:
-        targets_by_dep: dict = {}
-        for i, item in enumerate(by_target):
-            dep = target_dep_map.get(item['target_name'], '')
-            targets_by_dep.setdefault(dep, []).append(
-                (f'#{anchor_t[i]}', f"{item['target_name']} — {item['job_title']}", None)
-            )
         researchers_by_org: dict = {}
         for i, item in enumerate(by_researcher):
             rid = item['researcher_id']
@@ -413,17 +422,28 @@ def build_fit_html(by_target: list, by_researcher: list, researchers_df: pd.Data
                 (f'#{anchor_p[i]}', item['project_name'], len(jobs_by_project[i]))
             )
 
-        nav_target = mmd.org_tree_html(
-            org_tree, lambda node: mmd.nav_items_html(targets_by_dep.get(node.get('end_name', ''), [])))
+        def _target_nav(node):
+            dep = node.get('end_name', '')
+            return mmd.nested_nav_html([
+                (proj, targets_by_dep_project[dep][proj])
+                for proj in target_project_order.get(dep, [])
+            ])
+
+        nav_target = mmd.org_tree_html(org_tree, _target_nav)
         nav_researcher = mmd.org_tree_html(
             org_tree, lambda node: mmd.nav_items_html(researchers_by_org.get(node.get('project_name', ''), [])))
         nav_project = mmd.org_tree_html(
             org_tree, lambda node: mmd.nav_items_html(projects_by_dep.get(node.get('end_name', ''), [])))
     else:
-        nav_target = ''.join(
-            f'<a class="nav-item" href="#{anchor_t[i]}">{html.escape(target_header(item))}</a>'
-            for i, item in enumerate(by_target)
-        )
+        flat_targets_by_project: dict = {}
+        flat_target_order: list = []
+        for i, item in enumerate(by_target):
+            proj = item['target_name']
+            if proj not in flat_targets_by_project:
+                flat_targets_by_project[proj] = []
+                flat_target_order.append(proj)
+            flat_targets_by_project[proj].append((f'#{anchor_t[i]}', item['job_title'], None))
+        nav_target = mmd.nested_nav_html([(proj, flat_targets_by_project[proj]) for proj in flat_target_order])
         nav_researcher = ''.join(
             f'<a class="nav-item" href="#{anchor_r[i]}">'
             f'{html.escape(item["researcher_id"])} {html.escape(name_map.get(item["researcher_id"], ""))}</a>'

@@ -88,6 +88,24 @@ def build_org_tree(rows: list) -> list:
     return roots
 
 
+def nested_nav_html(groups: list) -> str:
+    """[(그룹명, [(href, label, count|None), ...]), ...] -> 그룹명을 <details>로
+    접고 펼 수 있는 2단 네비게이션 HTML(조직도 org-node와 같은 시각 스타일
+    재사용, 기본은 접힌 상태). 연구원↔과제 리포트의 "과제 기준" 사이드바에서
+    부서 밑에 '과제' 그룹을 두고, 그 안에 직무 목록을 보여줄 때 쓴다(부서→
+    과제→직무 2단 중첩 — 부서→연구원 패턴과 동일한 클릭 경험)."""
+    parts = []
+    for label, items in groups:
+        if not items:
+            continue
+        inner = nav_items_html(items)
+        parts.append(
+            f'<details class="org-node"><summary><span class="org-node-head">{html.escape(label)}</span></summary>'
+            f'<div class="org-node-body">{inner}</div></details>'
+        )
+    return ''.join(parts)
+
+
 def nav_items_html(items: list) -> str:
     """[(href, label, count|None), ...] -> nav-item 링크 목록 HTML. 조직도
     리프 노드에 붙는 연구원/과제·직무 목록에 재사용한다."""
@@ -107,7 +125,11 @@ def org_tree_html(tree: list, node_content_fn=None) -> str:
     확장/축소). 라벨은 '{과제명통일}({직책} {성명})' 형식(예: '기계시스템연구팀
     (PL 정재원)'). node_content_fn(node) -> str|None: 해당 조직 노드에 붙일
     추가 콘텐츠(nav_items_html로 만든 연구원/과제 목록 등) — 없으면 생략.
-    team_layer 1~2(상위 조직)는 기본으로 펼쳐서 보여준다."""
+    team_layer 1~2(상위 조직)는 기본으로 펼쳐서 보여준다. 자신에게도, 하위
+    조직 전체(재귀적으로)에도 연결된 콘텐츠가 하나도 없는 노드는 아예
+    생략한다(회색 텍스트로 보여주지 않음) — 실제 매핑된 대상이 없는 조직을
+    구경만 하게 두지 않기 위함. 하위 노드들은 .org-node-body로 감싸 들여쓰기
+    (padding-left/border-left, CONSOLE_STYLE 참고)가 적용되게 한다."""
     def _label(node: dict) -> str:
         head = html.escape(node.get('end_name') or node.get('project_name') or '')
         assignment = (node.get('assignment_name') or '').strip()
@@ -119,9 +141,9 @@ def org_tree_html(tree: list, node_content_fn=None) -> str:
     def _node_html(node: dict) -> str:
         extra = (node_content_fn(node) if node_content_fn else '') or ''
         children_html = ''.join(_node_html(c) for c in node['children'])
-        body = f'{extra}{children_html}'
-        if not body:
-            return f'<div class="org-node-leaf">{_label(node)}</div>'
+        if not extra and not children_html:
+            return ''
+        body = extra + (f'<div class="org-node-body">{children_html}</div>' if children_html else '')
         open_attr = ' open' if node['team_layer'] <= 2 else ''
         return f'<details class="org-node"{open_attr}><summary>{_label(node)}</summary>{body}</details>'
 
@@ -459,9 +481,15 @@ CONSOLE_STYLE = """
     margin: 0; display: flex; min-height: 100vh;
   }
   .sidebar {
-    width: 250px; flex-shrink: 0; background: var(--sidebar); border-right: 1px solid var(--line);
+    width: 250px; flex-shrink: 0; background: var(--sidebar);
     padding: 22px 16px; position: sticky; top: 0; height: 100vh; overflow-y: auto;
   }
+  /* 사이드바/본문 사이 드래그 리사이즈 바(_CONSOLE_SCRIPT가 mousedown/mousemove로 폭 조절) */
+  .split-divider {
+    width: 6px; flex-shrink: 0; cursor: col-resize; background: var(--line);
+    position: sticky; top: 0; height: 100vh;
+  }
+  .split-divider:hover { background: var(--accent); }
   .sidebar h1 { font-size: 0.98rem; font-weight: 800; margin: 4px 6px 2px; letter-spacing: -0.01em; }
   .sidebar .tagline { font-size: 0.72rem; color: var(--ink-soft); margin: 0 6px 20px; line-height: 1.5; }
   .nav-group { margin-bottom: 4px; }
@@ -490,9 +518,6 @@ CONSOLE_STYLE = """
   .org-node-head { font-weight: 700; }
   .org-node-who { color: var(--ink-soft); font-weight: 500; }
   .org-node-body { padding-left: 12px; border-left: 1px solid var(--line); margin-left: 8px; }
-  .org-node-leaf {
-    padding: 6px 8px; margin-left: 14px; font-size: 0.8rem; color: var(--ink-soft);
-  }
   .org-node-people { padding-left: 12px; border-left: 1px solid var(--line); margin: 0 0 4px 8px; }
   main { flex: 1; min-width: 0; padding: 32px 40px 100px; }
   .content { max-width: 960px; }
@@ -602,16 +627,65 @@ CONSOLE_STYLE = """
   #count-3:checked ~ .sim-sections table.match-table tbody tr:nth-child(n+4) { display: none; }
   #count-5:checked ~ .sim-sections table.match-table tbody tr:nth-child(n+6) { display: none; }
   @media (max-width: 820px) {
-    .sidebar { display: none; }
+    .sidebar, .split-divider { display: none; }
     main { padding: 24px 18px 80px; }
   }
+"""
+
+
+
+# 사이드바 폭 드래그 리사이즈 + 프래그먼트 링크(#anchor) 클릭 스크롤. 이 리포트들은
+# srcDoc iframe으로 임베드되는데(Dash "보유 전문성" 화면), <a href="#anchor">의
+# 브라우저 기본 동작에 맡기면 iframe이 아니라 최상위 Dash 페이지 전체가
+# ".../researcher-similarity-map#anchor"로 새로고침되어(버 실측 확인) 화면
+# 상태가 전부 날아간다 — 그래서 클릭을 가로채 preventDefault 후 같은 문서 안에서
+# 직접 scrollIntoView 한다(이 두 기능을 위해서만 최소한의 JS를 둔다 — 나머지
+# 인터랙션은 전부 CSS 전용 유지).
+_CONSOLE_SCRIPT = """
+(function(){
+  var sidebar = document.querySelector('.sidebar');
+  var divider = document.getElementById('split-divider');
+  if (sidebar && divider) {
+    var dragging = false;
+    divider.addEventListener('mousedown', function(e){
+      dragging = true;
+      document.body.style.userSelect = 'none';
+      document.body.style.cursor = 'col-resize';
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', function(e){
+      if (!dragging) return;
+      var w = Math.min(Math.max(e.clientX, 160), 560);
+      sidebar.style.width = w + 'px';
+    });
+    document.addEventListener('mouseup', function(){
+      if (!dragging) return;
+      dragging = false;
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    });
+  }
+
+  document.addEventListener('click', function(e){
+    var a = e.target.closest('a[href^="#"]');
+    if (!a) return;
+    var id = a.getAttribute('href').slice(1);
+    var el = id && document.getElementById(id);
+    if (!el) return;
+    e.preventDefault();
+    el.scrollIntoView({block: 'start'});
+    el.style.outline = '2px solid #4453d6';
+    el.style.outlineOffset = '2px';
+  });
+})();
 """
 
 
 def console_page(title: str, sidebar_html: str, body_html: str) -> str:
     """콘솔형 리포트 공용 페이지 셸. 외부 CDN 없이 완전히 독립적인 정적 HTML
     문서를 만든다(연구원 유사도/과제 전문성/연구원 전문성/매칭 4개 리포트가
-    공유)."""
+    공유). 사이드바/본문 사이 드래그 리사이즈 바와 프래그먼트 링크 스크롤
+    보정을 위해 _CONSOLE_SCRIPT를 함께 싣는다(그 외 인터랙션은 CSS 전용)."""
     return f'''<!doctype html>
 <html lang="ko">
 <head>
@@ -622,7 +696,9 @@ def console_page(title: str, sidebar_html: str, body_html: str) -> str:
 </head>
 <body>
 <nav class="sidebar">{sidebar_html}</nav>
+<div class="split-divider" id="split-divider"></div>
 <main><div class="content">{body_html}</div></main>
+<script>{_CONSOLE_SCRIPT}</script>
 </body>
 </html>'''
 
