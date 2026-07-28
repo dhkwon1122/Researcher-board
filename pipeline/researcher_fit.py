@@ -350,14 +350,20 @@ def _fit_pill_html(score: str) -> str:
 def build_fit_html(by_target: list, by_researcher: list, researchers_df: pd.DataFrame, *,
                     page_title: str, target_tab_label: str, researcher_tab_label: str,
                     target_header, target_card_subtitle: str, researcher_card_subtitle: str,
-                    target_dep_map: dict | None = None) -> str:
+                    target_dep_map: dict | None = None,
+                    project_items: list | None = None, project_tab_label: str = '과제 전문성') -> str:
     """콘솔형 리포트(사이드바 + 요약 통계 + CSS 전용 라디오 탭 "과제 기준"/"인별
-    기준" + 표 형태 적합도 목록)로 렌더링한다.
+    기준"/"과제 전문성" + 표 형태 적합도 목록)로 렌더링한다.
     target_header(item) -> str: by_target 카드 제목을 렌더링하는 콜백
     (예: 과제는 '부서 · 과제명 — 직무명').
     target_dep_map: {target_name: dep_name} — 조직도(team_refer.csv)가 있으면
     end_name==dep_name(부서명 텍스트 일치)으로 과제·직무를 해당 조직 노드
-    밑에 붙인다. 없으면(None) 과제 기준 사이드바는 조직도 없이 평면 목록으로."""
+    밑에 붙인다. 없으면(None) 과제 기준 사이드바는 조직도 없이 평면 목록으로.
+    project_items: process_project_expertise.py가 만든 과제 전문성 분석 결과
+    리스트(dep_name/project_name/core_tech/... 포함) — 주어지면 3번째 탭
+    "과제 전문성"을 함께 렌더링한다(process_project_expertise.py가 만드는
+    project_expertise_analysis.html과 같은 카드를 재사용, mmd.project_card_html).
+    없으면(None) 기존처럼 2개 탭만 렌더링한다(하위 호환)."""
     import html
     import re
     import rd_specialist_markdown as mmd
@@ -379,6 +385,14 @@ def build_fit_html(by_target: list, by_researcher: list, researchers_df: pd.Data
         anchor_t[i] = base if seen_t[base] == 1 else f'{base}-{seen_t[base]}'
     anchor_r = {i: f'r-{item["researcher_id"]}' for i, item in enumerate(by_researcher)}
 
+    project_items = project_items or []
+    anchor_p, seen_p = {}, {}
+    for i, item in enumerate(project_items):
+        base = f"p-{_slug(item['project_name'])}"
+        seen_p[base] = seen_p.get(base, 0) + 1
+        anchor_p[i] = base if seen_p[base] == 1 else f'{base}-{seen_p[base]}'
+    jobs_by_project = {i: mmd.deepdive_jobs(item.get('expertise_analysis', '')) for i, item in enumerate(project_items)}
+
     org_tree = mmd.build_org_tree(mmd.read_team_refer(OUT_DIR))
     if org_tree:
         targets_by_dep: dict = {}
@@ -393,11 +407,18 @@ def build_fit_html(by_target: list, by_researcher: list, researchers_df: pd.Data
             researchers_by_org.setdefault(org_map.get(rid, ''), []).append(
                 (f'#{anchor_r[i]}', name_map.get(rid, rid), len(item['matches']))
             )
+        projects_by_dep: dict = {}
+        for i, item in enumerate(project_items):
+            projects_by_dep.setdefault(item.get('dep_name', ''), []).append(
+                (f'#{anchor_p[i]}', item['project_name'], len(jobs_by_project[i]))
+            )
 
         nav_target = mmd.org_tree_html(
             org_tree, lambda node: mmd.nav_items_html(targets_by_dep.get(node.get('end_name', ''), [])))
         nav_researcher = mmd.org_tree_html(
             org_tree, lambda node: mmd.nav_items_html(researchers_by_org.get(node.get('project_name', ''), [])))
+        nav_project = mmd.org_tree_html(
+            org_tree, lambda node: mmd.nav_items_html(projects_by_dep.get(node.get('end_name', ''), [])))
     else:
         nav_target = ''.join(
             f'<a class="nav-item" href="#{anchor_t[i]}">{html.escape(target_header(item))}</a>'
@@ -408,11 +429,20 @@ def build_fit_html(by_target: list, by_researcher: list, researchers_df: pd.Data
             f'{html.escape(item["researcher_id"])} {html.escape(name_map.get(item["researcher_id"], ""))}</a>'
             for i, item in enumerate(by_researcher)
         )
+        nav_project = ''.join(
+            f'<a class="nav-item" href="#{anchor_p[i]}">{html.escape(item["project_name"])}</a>'
+            for i, item in enumerate(project_items)
+        )
+    project_nav_group = (
+        f'<div class="nav-group"><div class="nav-group-label">{project_tab_label}</div>{nav_project}</div>'
+        if project_items else ''
+    )
     sidebar = (
         f'<h1>{page_title}</h1>'
         '<p class="tagline">임베딩 1차 후보 + 사내 LLM 최종 판단 (R&amp;D Talent Matching Agent)</p>'
         f'<div class="nav-group"><div class="nav-group-label">{target_tab_label}</div>{nav_target}</div>'
         f'<div class="nav-group"><div class="nav-group-label">{researcher_tab_label}</div>{nav_researcher}</div>'
+        f'{project_nav_group}'
     )
 
     total_targets = len(by_target)
@@ -463,16 +493,27 @@ def build_fit_html(by_target: list, by_researcher: list, researchers_df: pd.Data
   </table></div>
 </div>''')
 
+    project_sections = [
+        mmd.project_card_html(item, jobs_by_project[i], anchor_p[i])
+        for i, item in enumerate(project_items)
+    ]
+    tab_c_input = '<input type="radio" name="tab" id="tab-c">' if project_items else ''
+    tab_c_label = f'<label for="tab-c">{project_tab_label}</label>' if project_items else ''
+    panel_c = f'<div class="panel-c">{"".join(project_sections)}</div>' if project_items else ''
+
     body = f'''<div class="tabs">
   <input type="radio" name="tab" id="tab-a" checked>
   <input type="radio" name="tab" id="tab-b">
+  {tab_c_input}
   {stats}
   <div class="tab-bar">
     <label for="tab-a">{target_tab_label}</label>
     <label for="tab-b">{researcher_tab_label}</label>
+    {tab_c_label}
   </div>
   <div class="panel-a">{"".join(target_sections)}</div>
   <div class="panel-b">{"".join(researcher_sections)}</div>
+  {panel_c}
 </div>'''
 
     return mmd.console_page(page_title, sidebar, body)

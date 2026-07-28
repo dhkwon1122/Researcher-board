@@ -18,19 +18,33 @@ Knowledge)을 BGE-M3로 임베딩하고 코사인 유사도를 계산한다.
 비교 대상 텍스트 집합이 다르기 때문).
 
 근속 그룹별 top-K: 대상 연구원의 근속(Junior/Senior, 아래 3단계 참고)을 알 수
-있으면, 후보를 Junior/Senior로 나눠 그룹별로 각각 top_k명씩(최대 top_k*2명)
-찾는다 — "이 사람과 전문성이 가장 비슷한 Junior top_k명"과 "가장 비슷한
-Senior top_k명"을 함께 보여주기 위함이다. 후보 중 hire_date가 없어 근속을
-모르는 사람은 어느 그룹에도 들어가지 못하므로 이 그룹별 검색에서는 제외된다.
+있으면, 후보를 Junior/Senior로 나눠 그룹별로 각각 후보 pool을 찾는다 —
+"이 사람과 전문성이 가장 비슷한 Senior"와 "가장 비슷한 Junior"를 시니어
+우선 순서로 함께 보여주기 위함이다(결과 리스트는 Senior 그룹을 먼저,
+Junior 그룹을 나중에 이어붙인다). 후보 중 hire_date가 없어 근속을 모르는
+사람은 어느 그룹에도 들어가지 못하므로 이 그룹별 검색에서는 제외된다.
 대상 연구원 본인의 근속을 모르면(hire_date 없음) 그룹 구분 없이 기존처럼
-전체 후보 중 top_k명을 찾는다(하위 호환 폴백). --top-k는 이제 "그룹당 개수"
-(대상자 근속을 아는 경우) 또는 "전체 개수"(모르는 경우, 폴백)를 의미한다.
+전체 후보 중에서 찾는다(하위 호환 폴백).
 
-2단계(LLM 판정, top-K 후보에 대해서만): 임베딩 점수만으로는 "왜 유사한지",
-"단어만 겹치고 실제 업무는 다른 건 아닌지"를 알 수 없다. 그래서 top-K로
-추려진 후보 쌍에 대해서만 "R&D Peer Similarity Agent" 페르소나가 두 프로필을
+그룹별 후보 pool 크기(_CANDIDATE_POOL_K)는 화면에 실제로 표시할 개수(--top-k,
+기본 5)보다 넉넉히 크게 잡는다 — 아래 2단계에서 근거(evidence)가 비어 있는
+후보를 걸러내고 나면 일부가 탈락하므로, 화면의 "표시 개수" 토글(3/5/10,
+아래 참고)을 채우려면 애초에 더 많은 후보를 LLM 판정까지 진행시켜야 한다.
+
+2단계(LLM 판정, 후보 pool 전체에 대해): 임베딩 점수만으로는 "왜 유사한지",
+"단어만 겹치고 실제 업무는 다른 건 아닌지"를 알 수 없다. 그래서 후보 pool로
+추려진 쌍에 대해 "R&D Peer Similarity Agent" 페르소나가 두 프로필을
 나란히 보고 (동일 분야/인접 분야/낮음) 정성적 등급, 구체적 근거, 표면적
 어휘 일치 여부를 판정한다.
+
+  ※ 근거 기반 필터링: 근거(evidence) 없이 유사도 점수만 높은 후보는
+    신뢰도가 낮으므로, LLM 판정 후 evidence가 완전히 비어 있는 후보는
+    최종 유사 연구원 목록에서 제외한다(_drop_empty_evidence). 프롬프트
+    자체도 "낮음" 판정이라도 근거(왜 낮다고 판단했는지)를 반드시 채우도록
+    지시하므로, 실제로는 LLM 호출 자체가 실패한 극히 일부 쌍만 제외된다.
+    필터링 후 최종 목록은 표시 개수 토글의 최댓값(MAX_DISPLAY_K, 10)까지만
+    유지한다 — HTML은 이 목록을 그대로 저장해 두고, 3/5/10 토글은 CSS로
+    행을 숨기고 보여주는 방식이라(재계산 없음) 최댓값만큼 미리 준비해 둔다.
 
   ※ 재현성: LLM 호출은 temperature=0으로 고정하고, 한 번 판정한 쌍은
     researcher_pair_judgment.json에 영구 캐시한다(신규거나 이전에 실패해
@@ -84,6 +98,13 @@ from services.llm import LLMError  # noqa: E402
 
 DEFAULT_TOP_K = fit.TOP_K
 
+# 그룹별 후보 pool 크기 — 화면 표시 개수(top_k)보다 넉넉히 잡아, 근거 없는
+# 후보가 필터링으로 빠지더라도 표시 개수 토글(3/5/10)을 채울 수 있게 한다.
+_CANDIDATE_POOL_K = 10
+
+# 근거 필터링 후 최종적으로 저장/표시할 연구원 수 상한(표시 개수 토글의 최댓값).
+MAX_DISPLAY_K = 10
+
 _PAIR_JUDGE_SYSTEM_PROMPT = """# Role
 당신은 두 연구원의 전문성 프로필을 비교해, 실제로 얼마나 유사한 분야/업무를
 다루는지 판단하는 "R&D Peer Similarity Agent"입니다.
@@ -103,7 +124,14 @@ _PAIR_JUDGE_SYSTEM_PROMPT = """# Role
 3. evidence는 서술형 문장이 아니라 개조식(명사형으로 끝나는 간결한 구/절)
    근거 1~3개를 배열로 작성하세요. 예: "두 사람 모두 강화학습 기반 로봇
    제어 전문성 보유"가 아니라 "강화학습 기반 로봇 제어 전문성 공통 보유".
-4. 반드시 아래 JSON 형식으로만 출력하고, 그 외 텍스트는 출력하지 마세요.
+4. evidence는 "유사하다는 근거"가 아니라 "이 등급으로 판단한 근거"입니다.
+   level이 "낮음"이더라도 evidence를 절대 빈 배열로 남기지 마세요 — 왜
+   낮다고 판단했는지(예: "두 사람 모두 AI 언급하나 응용 분야 상이(신호처리
+   vs 자연어처리)", "공통 도메인 지식 없음, 겹치는 Hard Skill 없음")를 1~3개
+   적으세요. 두 프로필에서 실제로 다른 부분/공통점이 없는 부분을 구체적으로
+   짚으면 됩니다. "근거 없음"처럼 내용 없는 문구만 넣지 말고, 반드시 두
+   프로필의 구체적 내용(분야명, 키워드 등)을 인용해 판단 근거를 남기세요.
+5. 반드시 아래 JSON 형식으로만 출력하고, 그 외 텍스트는 출력하지 마세요.
 
 # Output Format (JSON)
 {
@@ -138,14 +166,19 @@ def _top_within(idx_pool: list, row, k: int) -> list:
 def compute_similarity(profiles: list, top_k: int = DEFAULT_TOP_K, tenure_map: dict | None = None) -> list:
     """profiles: 연구원 보유 전문성 분석.json의 원소 리스트(researcher_id 포함).
     tenure_map: researcher_id -> 'Junior'/'Senior'/''(모름). 대상 연구원의
-    근속을 알 수 있으면, 후보를 Junior/Senior로 나눠 그룹별로 각각 top_k명씩
-    (최대 top_k*2명) 찾는다 — 후보 중 근속을 모르는 사람은 어느 그룹에도
-    속하지 못해 이 검색에서 제외된다. 대상 연구원 본인의 근속을 모르면
-    그룹 구분 없이 기존처럼 전체 후보 중 top_k명을 찾는다(하위 호환 폴백).
+    근속을 알 수 있으면, 후보를 Junior/Senior로 나눠 그룹별로 각각 후보 pool을
+    찾는다(pool 크기는 top_k와 _CANDIDATE_POOL_K 중 큰 값 — 2단계 근거
+    필터링에서 일부가 탈락해도 표시 개수 토글을 채울 수 있도록 넉넉히 확보).
+    결과는 Senior 그룹을 먼저, Junior 그룹을 나중에 이어붙인다(시니어 우선
+    표시). 후보 중 근속을 모르는 사람은 어느 그룹에도 속하지 못해 이 검색에서
+    제외된다. 대상 연구원 본인의 근속을 모르면 그룹 구분 없이 기존처럼 전체
+    후보 중에서 찾는다(하위 호환 폴백).
 
     반환: [{'researcher_id', 'similar': [{'researcher_id', 'score'}, ...]}, ...]
-    similar은 자기 자신을 제외한 유사도 내림차순. score는 코사인 유사도
-    (-1~1, 실제로는 임베딩 특성상 대부분 0~1 범위)를 소수 4자리로 반올림."""
+    similar은 그룹(Senior 우선) 내 유사도 내림차순. score는 코사인 유사도
+    (-1~1, 실제로는 임베딩 특성상 대부분 0~1 범위)를 소수 4자리로 반올림.
+    이 시점의 similar 목록은 아직 근거 필터링 전의 "후보 pool"이며, 최종
+    표시 목록은 attach_pair_judgments() 이후 _drop_empty_evidence()가 정리한다."""
     tenure_map = tenure_map or {}
     researcher_ids = [p['researcher_id'] for p in profiles]
     texts = [fit.researcher_profile_text(p) for p in profiles]
@@ -156,6 +189,7 @@ def compute_similarity(profiles: list, top_k: int = DEFAULT_TOP_K, tenure_map: d
     sims = fit.cosine_sim_matrix(embeddings, embeddings)
 
     n = len(researcher_ids)
+    pool_k = max(top_k, _CANDIDATE_POOL_K)
 
     results = []
     for i in range(n):
@@ -164,12 +198,12 @@ def compute_similarity(profiles: list, top_k: int = DEFAULT_TOP_K, tenure_map: d
 
         subject_level = tenure_map.get(researcher_ids[i], '')
         if not subject_level:
-            k = min(top_k, n - 1) if n > 1 else 0
+            k = min(pool_k, n - 1) if n > 1 else 0
             top_idx = fit.top_k_idx(row, k) if k > 0 else []
         else:
             junior_idx = [j for j in range(n) if j != i and tenure_map.get(researcher_ids[j], '') == 'Junior']
             senior_idx = [j for j in range(n) if j != i and tenure_map.get(researcher_ids[j], '') == 'Senior']
-            top_idx = _top_within(junior_idx, row, top_k) + _top_within(senior_idx, row, top_k)
+            top_idx = _top_within(senior_idx, row, pool_k) + _top_within(junior_idx, row, pool_k)
 
         similar = [
             {'researcher_id': researcher_ids[j], 'score': round(float(row[j]), 4)}
@@ -293,8 +327,10 @@ def _update_pair_judgments(pairs: set, text_by_id: dict, cache: dict, force: boo
 
 def attach_pair_judgments(results: list, profiles: list, force: bool = False) -> list:
     """compute_similarity() 결과의 각 similar 항목에 LLM 판정(level/evidence/
-    surface_only)을 덧붙인다. 캐시 미스만 새로 판정하고, 판정을 아예 구하지
-    못한 쌍은 빈 값으로 남아 HTML에서는 조용히 생략된다(임베딩 점수만 표시)."""
+    surface_only)을 덧붙인다. 캐시 미스만 새로 판정한다. 이 시점의 similar
+    목록은 아직 근거 필터링 전의 후보 pool이며, evidence가 비어 있는 후보를
+    실제로 제외하는 것은 _drop_empty_evidence()가 담당한다(판정 자체를 못
+    구한 쌍은 evidence가 빈 값으로 남아 이후 필터링 대상이 됨)."""
     text_by_id = {p['researcher_id']: fit.researcher_profile_text(p) for p in profiles}
     pairs = _collect_pairs(results)
     cache = _load_pair_cache()
@@ -307,6 +343,25 @@ def attach_pair_judgments(results: list, profiles: list, force: bool = False) ->
             s['level'] = judged.get('level', '')
             s['evidence'] = judged.get('evidence', '')
             s['surface_only'] = judged.get('surface_only', False)
+    return results
+
+
+def _has_evidence(evidence) -> bool:
+    """evidence(리스트 또는 하위호환 문자열)가 실제 내용을 담고 있는지 확인."""
+    if isinstance(evidence, list):
+        return any(str(e).strip() for e in evidence)
+    return bool(str(evidence or '').strip())
+
+
+def _drop_empty_evidence(results: list, max_display: int = MAX_DISPLAY_K) -> list:
+    """근거 없이 유사도만 높은 후보는 신뢰도가 낮으므로 최종 목록에서 제외한다
+    (LLM 판정 자체가 실패한 쌍도 evidence가 비어 있어 함께 제외됨). 각 그룹
+    (Senior 우선/Junior) 내 정렬 순서는 compute_similarity()에서 이미 정해져
+    있으므로 그대로 유지하고, 필터링 후 표시 개수 토글의 최댓값까지만 자른다."""
+    for item in results:
+        item['similar'] = [
+            s for s in item['similar'] if _has_evidence(s.get('evidence'))
+        ][:max_display]
     return results
 
 
@@ -403,12 +458,12 @@ def _match_row_html(s: dict, name_map: dict, dept_map: dict, org_map: dict) -> s
     <div class="m-dept">{dept} · {org}</div>
   </td>
   <td>{level_pill}</td>
-  <td class="m-score">{round(s['score'] * 100)}%</td>
   <td>{_evidence_html(s.get('evidence'), s.get('surface_only'))}</td>
+  <td class="m-score">{round(s['score'] * 100)}%</td>
 </tr>'''
 
 
-def _build_html(results: list, researchers_df: pd.DataFrame, top_k: int, profile_by_id: dict) -> str:
+def _build_html(results: list, researchers_df: pd.DataFrame, profile_by_id: dict) -> str:
     """researchers.csv의 department('플랫폼/팀')·org_code('과제/파트')로 좌측
     사이드바 내비게이션과 본문 섹션을 그룹핑하고, 각 카드는 본인의 강점 분야/
     키워드를 칩으로 보여준 뒤 유사 연구원 목록을 표로 보여준다."""
@@ -467,7 +522,7 @@ def _build_html(results: list, researchers_df: pd.DataFrame, top_k: int, profile
                     rows = ''.join(_match_row_html(s, name_map, dept_map, org_map) for s in item['similar'])
                     table = (
                         '<div class="table-wrap"><table class="match-table">'
-                        '<thead><tr><th>유사 연구원</th><th>판정</th><th>유사도</th><th>근거</th></tr></thead>'
+                        '<thead><tr><th>유사 연구원</th><th>판정</th><th>근거</th><th>유사도</th></tr></thead>'
                         f'<tbody>{rows}</tbody></table></div>'
                     )
                 else:
@@ -480,7 +535,8 @@ def _build_html(results: list, researchers_df: pd.DataFrame, top_k: int, profile
 
     sidebar = (
         '<h1>유사도 콘솔</h1>'
-        f'<p class="tagline">과제 단위가 아닌 실제 보유 전문성 임베딩 기반 유사도 · 근속 그룹별 각 Top {top_k}</p>'
+        '<p class="tagline">과제 단위가 아닌 실제 보유 전문성 임베딩 기반 유사도 · '
+        '근속 시니어 우선 · 근거 있는 매칭만 표시</p>'
         f'{"".join(nav_groups)}'
     )
     stats = mmd.stat_row_html([
@@ -488,7 +544,21 @@ def _build_html(results: list, researchers_df: pd.DataFrame, top_k: int, profile
         (high_conf, '고신뢰 매칭 (70%+)'),
         (flagged, '표면 일치 주의 플래그'),
     ])
-    return mmd.console_page('연구원 ↔ 연구원 유사도', sidebar, stats + ''.join(sections))
+    # 표시 개수(3/5/10) 토글 — JS 없이 radio + 형제 선택자로 행을 숨김/표시.
+    # 데이터는 이미 MAX_DISPLAY_K(10)까지 저장돼 있으므로 재계산 없이 CSS만으로 전환된다.
+    count_toggle = (
+        '<input type="radio" name="cnt" id="count-3" class="cnt-radio">'
+        '<input type="radio" name="cnt" id="count-5" class="cnt-radio" checked>'
+        '<input type="radio" name="cnt" id="count-10" class="cnt-radio">'
+        '<div class="count-bar">'
+        '<span>표시 개수</span>'
+        '<label for="count-3">3명</label>'
+        '<label for="count-5">5명</label>'
+        '<label for="count-10">10명</label>'
+        '</div>'
+    )
+    body = count_toggle + stats + f'<div class="sim-sections">{"".join(sections)}</div>'
+    return mmd.console_page('연구원 ↔ 연구원 유사도', sidebar, body)
 
 
 def process(top_k: int = DEFAULT_TOP_K, refresh_judgments: bool = False) -> bool:
@@ -512,6 +582,7 @@ def process(top_k: int = DEFAULT_TOP_K, refresh_judgments: bool = False) -> bool
         return False
 
     results = attach_pair_judgments(results, profiles, force=refresh_judgments)
+    results = _drop_empty_evidence(results)
     results = attach_tenure_levels(results, tenure_map)
 
     os.makedirs(OUT_DIR, exist_ok=True)
@@ -523,7 +594,7 @@ def process(top_k: int = DEFAULT_TOP_K, refresh_judgments: bool = False) -> bool
     result_archive.archive_copy('04. 연구원_연구원_유사도_매칭', '연구원_연구원_유사도_분석', 'json', json_text)
 
     profile_by_id = {p['researcher_id']: p for p in profiles}
-    html_out = _build_html(results, researchers_df, top_k, profile_by_id)
+    html_out = _build_html(results, researchers_df, profile_by_id)
     html_path = os.path.join(OUT_DIR, 'researcher_similarity.html')
     with open(html_path, 'w', encoding='utf-8') as f:
         f.write(html_out)

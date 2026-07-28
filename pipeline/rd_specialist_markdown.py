@@ -338,6 +338,86 @@ def parse_job_fields(body: str) -> dict:
     return fields
 
 
+# ── 과제/직무 카드 HTML (process_project_expertise.py, researcher_fit.py의
+#    "과제 전문성" 탭이 공유) ─────────────────────────────────────────────────
+
+DIFF_VARIANT = {'상': 'danger', '중': 'warn', '하': 'good'}
+
+
+def job_card_html(job: dict) -> str:
+    """deepdive_jobs()가 뽑은 직무 블록 하나를 job-card로 렌더링. R&D Task/Hard
+    Skills/Domain Knowledge/역량 기준은 parse_job_fields()로 파싱한 값만 표시하고
+    (못 찾은 필드는 생략), 검증 질문은 <details>로 접어서 보여준다(JS 불필요)."""
+    fields = parse_job_fields(job['body_raw'])
+    diff = job.get('difficulty')
+    diff_pill = (
+        f'<span class="pill {DIFF_VARIANT.get(diff, "low")}">채용난이도 {html.escape(diff)}</span>'
+        if diff else ''
+    )
+
+    kv_items = []
+    if fields['rd_task']:
+        kv_items.append(f"<dt>R&amp;D Task</dt><dd>{html.escape(fields['rd_task'])}</dd>")
+    if fields['hard_skills']:
+        kv_items.append(f"<dt>Hard Skills</dt><dd>{html.escape(fields['hard_skills'])}</dd>")
+    if fields['domain_knowledge']:
+        kv_items.append(f"<dt>Domain Knowledge</dt><dd>{html.escape(fields['domain_knowledge'])}</dd>")
+    levels = [
+        f'{label} — {html.escape(fields[key])}'
+        for key, label in (('junior', 'Junior'), ('mid', 'Mid'), ('senior', 'Senior'))
+        if fields[key]
+    ]
+    if levels:
+        kv_items.append(f"<dt>역량 기준</dt><dd>{'<br>'.join(levels)}</dd>")
+    kv_html = f'<dl class="kv">{"".join(kv_items)}</dl>' if kv_items else '<p class="empty">세부 항목 데이터 없음</p>'
+
+    questions_html = ''
+    if fields['questions']:
+        q_items = ''.join(f'<li>{html.escape(q)}</li>' for q in fields['questions'])
+        questions_html = f'<details class="more"><summary>전문성 검증 질문</summary><ol>{q_items}</ol></details>'
+
+    return f'''<div class="job-card">
+  <div class="job-top"><h4>{html.escape(job['title'])}</h4>{diff_pill}</div>
+  {kv_html}
+  {questions_html}
+</div>'''
+
+
+def project_card_html(item: dict, jobs: list, anchor: str) -> str:
+    keywords = (item.get('keywords_kr') or []) + (item.get('keywords_en') or [])
+    overview = (
+        f"<b>핵심 기술</b> {html.escape(item.get('core_tech') or '확인 불가')} · "
+        f"<b>산출물</b> {html.escape(item.get('deliverable') or '확인 불가')} · "
+        f"<b>기술적 난제</b> {html.escape(item.get('challenge') or '확인 불가')}"
+    )
+    chip_row = ''.join(f'<span class="chip">{html.escape(k)}</span>' for k in keywords)
+
+    if jobs:
+        jobs_html = f'<div class="job-grid">{"".join(job_card_html(j) for j in jobs)}</div>'
+    else:
+        jobs_html = '<p class="empty">전문성 분석 데이터 없음 (python pipeline/process_project_expertise.py 실행 필요)</p>'
+
+    # 딥다이브 매핑 외 나머지 섹션(프로젝트 개요/인력 수급 매트릭스/HR 제언)은
+    # 자유 형식 마크다운이라, 외부 마크다운 파서 없이 원문 그대로 접어서 보여준다.
+    analysis_text = item.get('expertise_analysis', '')
+    other_sections = [s for s in split_top_sections(analysis_text) if not is_deepdive_section(s)]
+    other_html = ''
+    if other_sections:
+        raw = html.escape('\n\n'.join(other_sections))
+        other_html = (
+            '<details class="more"><summary>프로젝트 개요·인력 수급 매트릭스·HR 제언 (원문)</summary>'
+            f'<pre class="raw-md">{raw}</pre></details>'
+        )
+
+    return f'''<div class="card" id="{anchor}">
+  <div class="card-top"><h3>{html.escape(item['project_name'])}</h3></div>
+  <p class="card-sub">{overview}</p>
+  <div class="chip-row">{chip_row}</div>
+  {jobs_html}
+  {other_html}
+</div>'''
+
+
 # ── 콘솔형 리포트 공용 CSS/셸 ────────────────────────────────────────────────
 # 외부 CDN(Bootstrap/marked.js) 없이 완전히 독립적인 정적 페이지. 연구원 유사도/
 # 과제 전문성/연구원 전문성/과제-연구원 매칭 4개 리포트가 모두 동일한 색상
@@ -484,13 +564,35 @@ CONSOLE_STYLE = """
     padding: 9px 16px; font-size: 0.84rem; font-weight: 600; color: var(--ink-soft);
     cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
   }
-  .panel-a, .panel-b { display: none; }
+  .panel-a, .panel-b, .panel-c { display: none; }
   #tab-a:checked ~ .panel-a { display: block; }
   #tab-b:checked ~ .panel-b { display: block; }
+  #tab-c:checked ~ .panel-c { display: block; }
   #tab-a:checked ~ .tab-bar label[for="tab-a"],
-  #tab-b:checked ~ .tab-bar label[for="tab-b"] {
+  #tab-b:checked ~ .tab-bar label[for="tab-b"],
+  #tab-c:checked ~ .tab-bar label[for="tab-c"] {
     color: var(--accent); border-bottom-color: var(--accent);
   }
+  /* CSS 전용 표시 개수 토글(연구원 ↔ 연구원 리포트, JS 없이 radio + 형제 선택자로
+     행을 숨김/표시 — 데이터는 이미 서버에서 최대 개수까지 저장돼 있음) */
+  input.cnt-radio { display: none; }
+  .count-bar {
+    display: flex; align-items: center; justify-content: flex-end; gap: 6px;
+    margin-bottom: 16px; position: sticky; top: 0; background: var(--bg);
+    padding: 6px 0; z-index: 3;
+  }
+  .count-bar span { font-size: 0.72rem; color: var(--ink-soft); margin-right: 2px; }
+  .count-bar label {
+    padding: 4px 12px; font-size: 0.78rem; font-weight: 600; color: var(--ink-soft);
+    border: 1px solid var(--line); border-radius: 999px; cursor: pointer;
+  }
+  #count-3:checked ~ .count-bar label[for="count-3"],
+  #count-5:checked ~ .count-bar label[for="count-5"],
+  #count-10:checked ~ .count-bar label[for="count-10"] {
+    background: var(--accent); border-color: var(--accent); color: #fff;
+  }
+  #count-3:checked ~ .sim-sections table.match-table tbody tr:nth-child(n+4) { display: none; }
+  #count-5:checked ~ .sim-sections table.match-table tbody tr:nth-child(n+6) { display: none; }
   @media (max-width: 820px) {
     .sidebar { display: none; }
     main { padding: 24px 18px 80px; }

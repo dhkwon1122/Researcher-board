@@ -60,83 +60,6 @@ def _summary_description(summary: dict) -> str:
     return '\n'.join(parts)
 
 
-_DIFF_VARIANT = {'상': 'danger', '중': 'warn', '하': 'good'}
-
-
-def _job_card_html(job: dict) -> str:
-    """deepdive_jobs()가 뽑은 직무 블록 하나를 job-card로 렌더링. R&D Task/Hard
-    Skills/Domain Knowledge/역량 기준은 parse_job_fields()로 파싱한 값만 표시하고
-    (못 찾은 필드는 생략), 검증 질문은 <details>로 접어서 보여준다(JS 불필요)."""
-    fields = mmd.parse_job_fields(job['body_raw'])
-    diff = job.get('difficulty')
-    diff_pill = (
-        f'<span class="pill {_DIFF_VARIANT.get(diff, "low")}">채용난이도 {html.escape(diff)}</span>'
-        if diff else ''
-    )
-
-    kv_items = []
-    if fields['rd_task']:
-        kv_items.append(f"<dt>R&amp;D Task</dt><dd>{html.escape(fields['rd_task'])}</dd>")
-    if fields['hard_skills']:
-        kv_items.append(f"<dt>Hard Skills</dt><dd>{html.escape(fields['hard_skills'])}</dd>")
-    if fields['domain_knowledge']:
-        kv_items.append(f"<dt>Domain Knowledge</dt><dd>{html.escape(fields['domain_knowledge'])}</dd>")
-    levels = [
-        f'{label} — {html.escape(fields[key])}'
-        for key, label in (('junior', 'Junior'), ('mid', 'Mid'), ('senior', 'Senior'))
-        if fields[key]
-    ]
-    if levels:
-        kv_items.append(f"<dt>역량 기준</dt><dd>{'<br>'.join(levels)}</dd>")
-    kv_html = f'<dl class="kv">{"".join(kv_items)}</dl>' if kv_items else '<p class="empty">세부 항목 데이터 없음</p>'
-
-    questions_html = ''
-    if fields['questions']:
-        q_items = ''.join(f'<li>{html.escape(q)}</li>' for q in fields['questions'])
-        questions_html = f'<details class="more"><summary>전문성 검증 질문</summary><ol>{q_items}</ol></details>'
-
-    return f'''<div class="job-card">
-  <div class="job-top"><h4>{html.escape(job['title'])}</h4>{diff_pill}</div>
-  {kv_html}
-  {questions_html}
-</div>'''
-
-
-def _project_card_html(item: dict, jobs: list, anchor: str) -> str:
-    keywords = (item.get('keywords_kr') or []) + (item.get('keywords_en') or [])
-    overview = (
-        f"<b>핵심 기술</b> {html.escape(item.get('core_tech') or '확인 불가')} · "
-        f"<b>산출물</b> {html.escape(item.get('deliverable') or '확인 불가')} · "
-        f"<b>기술적 난제</b> {html.escape(item.get('challenge') or '확인 불가')}"
-    )
-    chip_row = ''.join(f'<span class="chip">{html.escape(k)}</span>' for k in keywords)
-
-    if jobs:
-        jobs_html = f'<div class="job-grid">{"".join(_job_card_html(j) for j in jobs)}</div>'
-    else:
-        jobs_html = '<p class="empty">전문성 분석 데이터 없음 (python pipeline/process_project_expertise.py 실행 필요)</p>'
-
-    # 딥다이브 매핑 외 나머지 섹션(프로젝트 개요/인력 수급 매트릭스/HR 제언)은
-    # 자유 형식 마크다운이라, 외부 마크다운 파서 없이 원문 그대로 접어서 보여준다.
-    analysis_text = item.get('expertise_analysis', '')
-    other_sections = [s for s in mmd.split_top_sections(analysis_text) if not mmd.is_deepdive_section(s)]
-    other_html = ''
-    if other_sections:
-        raw = html.escape('\n\n'.join(other_sections))
-        other_html = (
-            '<details class="more"><summary>프로젝트 개요·인력 수급 매트릭스·HR 제언 (원문)</summary>'
-            f'<pre class="raw-md">{raw}</pre></details>'
-        )
-
-    return f'''<div class="card" id="{anchor}">
-  <div class="card-top"><h3>{html.escape(item['project_name'])}</h3></div>
-  <p class="card-sub">{overview}</p>
-  <div class="chip-row">{chip_row}</div>
-  {jobs_html}
-  {other_html}
-</div>'''
-
-
 def _build_html(items: list) -> str:
     """과제(project_confl_address.csv의 '소속' → dep_name)를 '플랫폼/팀'으로
     라벨링해 좌측 사이드바와 본문을 그룹핑해 보여준다."""
@@ -164,7 +87,7 @@ def _build_html(items: list) -> str:
     for dept, dept_items in mmd.group_ordered(items, lambda it: it.get('dep_name', '')):
         sections.append(f'<div class="dept-heading">{html.escape(dept)}</div>')
         for it in dept_items:
-            sections.append(_project_card_html(it, jobs_by_project[it['project_name']], anchor_of[it['project_name']]))
+            sections.append(mmd.project_card_html(it, jobs_by_project[it['project_name']], anchor_of[it['project_name']]))
 
     sidebar = (
         '<h1>과제 전문성 콘솔</h1>'

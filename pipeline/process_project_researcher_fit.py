@@ -141,6 +141,7 @@ def process() -> bool:
         target_card_subtitle='이 직무에 적합한 연구원 (적합도 순)',
         researcher_card_subtitle='이 연구원에게 적합한 사내 과제 직무 (적합도 순)',
         target_dep_map=dep_map,
+        project_items=projects,
     )
     html_path = os.path.join(OUT_DIR, 'project_researcher_fit.html')
     with open(html_path, 'w', encoding='utf-8') as f:

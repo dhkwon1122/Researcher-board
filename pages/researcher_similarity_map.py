@@ -1,10 +1,15 @@
-"""화면: 보유 전문성 (연구원/연구원↔연구원/연구원↔과제/전문성 유사맵/과제 5개 탭)
+"""화면: 보유 전문성 (연구원/연구원↔연구원/연구원↔과제/전문성 MAP 4개 탭)
 
-연구원/연구원↔연구원/연구원↔과제/과제 4개 탭은 pipeline이 생성한 정적 콘솔 스타일
+연구원/연구원↔연구원/연구원↔과제 3개 탭은 pipeline이 생성한 정적 콘솔 스타일
 HTML 리포트를 그대로 iframe(srcDoc)으로 띄운다 — 별도 Dash 컴포넌트로 재구현하지
-않고 기존 리포트 렌더링을 재사용하기 위함. 전문성 유사맵 탭만 기존 UMAP 산점도
+않고 기존 리포트 렌더링을 재사용하기 위함. 전문성 MAP 탭만 기존 UMAP 산점도
 그대로 유지하며, UMAP 계산(numba JIT)이 무겁기 때문에 탭이 실제 선택될 때만
 계산하도록 지연 렌더링한다.
+
+"과제 전문성"(구 project_expertise_analysis.html, 예전엔 별도 5번째 탭)은
+연구원↔과제 탭(project_researcher_fit.html) 안의 "과제 기준"/"인별 기준"
+탭 전환 영역에 세 번째 탭으로 통합됐다(researcher_fit.py의 build_fit_html
+참고) — 별도 Dash 탭이 아니라 그 리포트 안의 라디오 탭 중 하나다.
 """
 
 import os
@@ -26,7 +31,6 @@ _REPORT_FILES = {
     'researcher': '연구원 보유 전문성 분석.html',
     'similarity': 'researcher_similarity.html',
     'fit': 'project_researcher_fit.html',
-    'project': 'project_expertise_analysis.html',
 }
 
 
@@ -333,10 +337,9 @@ def layout(highlight_researcher=None, **_kwargs):
         dbc.Tabs(
             [
                 dbc.Tab(label='연구원', tab_id='researcher'),
-                dbc.Tab(label='연구원 <-> 연구원', tab_id='similarity'),
-                dbc.Tab(label='연구원 <-> 과제', tab_id='fit'),
-                dbc.Tab(label='전문성 유사맵', tab_id='map'),
-                dbc.Tab(label='과제', tab_id='project'),
+                dbc.Tab(label='연구원 ↔ 연구원', tab_id='similarity'),
+                dbc.Tab(label='연구원 ↔ 과제', tab_id='fit'),
+                dbc.Tab(label='전문성 MAP', tab_id='map'),
             ],
             id='expertise-tabs', active_tab='map', className='mb-3',
         ),
