@@ -27,7 +27,13 @@ pipeline/run_ready.py로 사내 LLM/BGE-M3/Confluence 환경이 준비됐는지 
   job_profile.csv, job_profile_info_standard.json, job_profile_info_sait.json,
   core_technology.csv, core_technology_grade_info.json, tech_ownership.csv,
   tech_ownership_lv_info.json, publications.csv, patents.csv,
-  work_objective.csv, project_confl_address.csv, analysis_dep.csv
+  work_objective.csv, project_confl_address.csv, analysis_dep.csv, team_refer.csv
+
+team_refer.csv(팀참조시트.xlsx 전처리, 선택)는 조직도(계층 구조) 데이터다 —
+researchers.csv의 org_code와 project_name으로 매핑해 "보유 전문성" 콘솔의
+연구원/연구원↔연구원/연구원↔과제 탭 좌측 사이드바에 트리로 표시하는 데 쓰인다.
+파일이 없으면 각 리포트가 조직도 없이 생성된다(정상 동작이므로 missing 목록에
+포함되지 않음).
 
 analysis_dep.csv(전문성 분석 부서.xlsx 전처리, 선택)는 process_researcher_expertise.py가
 연구원 전문성 분석 대상 부서를 거르는 데 쓰인다 — 연구원의 department(researchers.csv,
@@ -166,6 +172,12 @@ def run():
     # 분석하므로(정상 동작) missing 목록에는 추가하지 않는다.
     from process_analysis_dep import process as process_analysis_dep
     process_analysis_dep()
+
+    # ── 15. 팀참조시트: 조직도 구조 (폴백 없음, 선택) ─────────────────────
+    # 없어도 각 리포트가 조직도 없이(기존 부서/과제·파트 평면 목록으로) 생성되므로
+    # (정상 동작) missing 목록에는 추가하지 않는다.
+    from process_team_refer import process as process_team_refer
+    process_team_refer()
 
     if missing:
         print(f'\n누락된 원천 파일: {missing}')
