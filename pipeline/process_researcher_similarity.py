@@ -353,15 +353,28 @@ def _has_evidence(evidence) -> bool:
     return bool(str(evidence or '').strip())
 
 
-def _drop_empty_evidence(results: list, max_display: int = MAX_DISPLAY_K) -> list:
+def _drop_empty_evidence(results: list, tenure_map: dict, max_display: int = MAX_DISPLAY_K) -> list:
     """근거 없이 유사도만 높은 후보는 신뢰도가 낮으므로 최종 목록에서 제외한다
     (LLM 판정 자체가 실패한 쌍도 evidence가 비어 있어 함께 제외됨). 각 그룹
     (Senior 우선/Junior) 내 정렬 순서는 compute_similarity()에서 이미 정해져
-    있으므로 그대로 유지하고, 필터링 후 표시 개수 토글의 최댓값까지만 자른다."""
+    있으므로 그대로 유지하되, Senior/Junior를 각각 max_display//2씩 따로
+    자른 뒤 이어붙인다 — 필터링된 리스트 전체를 한 번에 자르면(예전 방식)
+    Senior 후보만으로 상한이 다 채워져 Junior가 전부 밀려나 안 보이는
+    문제가 있었다(대상자 근속을 몰라 그룹 구분 없이 검색한 폴백 케이스는
+    남는 자리에 그대로 채운다)."""
+    half = max_display // 2
     for item in results:
-        item['similar'] = [
-            s for s in item['similar'] if _has_evidence(s.get('evidence'))
-        ][:max_display]
+        filtered = [s for s in item['similar'] if _has_evidence(s.get('evidence'))]
+        senior = [s for s in filtered if tenure_map.get(s['researcher_id'], '') == 'Senior'][:half]
+        junior = [s for s in filtered if tenure_map.get(s['researcher_id'], '') == 'Junior'][:max_display - len(senior)]
+        others = [
+            s for s in filtered
+            if tenure_map.get(s['researcher_id'], '') not in ('Senior', 'Junior')
+        ]
+        combined = senior + junior
+        if len(combined) < max_display:
+            combined += others[:max_display - len(combined)]
+        item['similar'] = combined
     return results
 
 
@@ -582,7 +595,7 @@ def process(top_k: int = DEFAULT_TOP_K, refresh_judgments: bool = False) -> bool
         return False
 
     results = attach_pair_judgments(results, profiles, force=refresh_judgments)
-    results = _drop_empty_evidence(results)
+    results = _drop_empty_evidence(results, tenure_map)
     results = attach_tenure_levels(results, tenure_map)
 
     os.makedirs(OUT_DIR, exist_ok=True)

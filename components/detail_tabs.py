@@ -159,11 +159,13 @@ _DOMAIN_LABELS = [
 ]
 
 
-def llm_summary_block(profile: dict | None):
-    """LLM 요약 — 연구원 보유 전문성 분석.json의 핵심 분야(strength_fields)/
+def llm_summary_block(profile: dict | None, similar: list | None = None, name_map: dict | None = None):
+    """전문성 요약(LLM) — 연구원 보유 전문성 분석.json의 핵심 분야(strength_fields)/
     키워드(strength_keywords)를 배지로, 도메인 지식(domain_knowledge)을 라벨:값
-    한 줄씩으로 보여준다. 해당 연구원이 분석 대상이 아니거나 아직 파이프라인을
-    실행하지 않아 데이터가 없으면 안내 문구만 표시한다."""
+    한 줄씩으로 보여준다. similar(researcher_similarity.json의 해당 연구원 항목 중
+    'similar' 리스트, 시니어 우선으로 이미 정렬돼 있음)가 주어지면 시니어 3명·
+    주니어 3명을 유사 연구원 배지로 덧붙인다. 해당 연구원이 분석 대상이 아니거나
+    아직 파이프라인을 실행하지 않아 데이터가 없으면 안내 문구만 표시한다."""
     if not profile:
         return html.Div('분석 데이터 없음', className='text-muted small p-1')
 
@@ -187,6 +189,19 @@ def llm_summary_block(profile: dict | None):
     ]
     if domain_lines:
         children.append(html.Div(domain_lines, className='mt-1'))
+
+    name_map = name_map or {}
+    senior = [s for s in (similar or []) if s.get('tenure_level') == 'Senior'][:3]
+    junior = [s for s in (similar or []) if s.get('tenure_level') == 'Junior'][:3]
+    if senior or junior:
+        def _badge(s, color):
+            rid = s.get('researcher_id', '')
+            return dbc.Badge(name_map.get(rid, rid), color=color, className='me-1 mb-1')
+
+        children.append(html.Div([
+            html.Div('유사 연구원', className='small text-muted fw-semibold mt-2 mb-1'),
+            html.Div([_badge(s, 'primary') for s in senior] + [_badge(s, 'info') for s in junior]),
+        ]))
 
     if not children:
         return html.Div('분석 데이터 없음', className='text-muted small p-1')

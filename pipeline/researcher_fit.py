@@ -454,14 +454,17 @@ def build_fit_html(by_target: list, by_researcher: list, researchers_df: pd.Data
             for i, item in enumerate(project_items)
         )
     project_nav_group = (
-        f'<div class="nav-group"><div class="nav-group-label">{project_tab_label}</div>{nav_project}</div>'
+        f'<div class="nav-group tab-c-only"><div class="nav-group-label">{project_tab_label}</div>{nav_project}</div>'
         if project_items else ''
     )
+    # 사이드바 조직도는 본문 탭(과제 기준/인별 기준/과제 전문성) 중 현재 선택된
+    # 것에 해당하는 것만 보이도록 tab-a/b-only 클래스를 붙인다(CONSOLE_STYLE의
+    # body:has(#tab-x:checked) 규칙이 나머지를 숨김).
     sidebar = (
         f'<h1>{page_title}</h1>'
         '<p class="tagline">임베딩 1차 후보 + 사내 LLM 최종 판단 (R&amp;D Talent Matching Agent)</p>'
-        f'<div class="nav-group"><div class="nav-group-label">{target_tab_label}</div>{nav_target}</div>'
-        f'<div class="nav-group"><div class="nav-group-label">{researcher_tab_label}</div>{nav_researcher}</div>'
+        f'<div class="nav-group tab-a-only"><div class="nav-group-label">{target_tab_label}</div>{nav_target}</div>'
+        f'<div class="nav-group tab-b-only"><div class="nav-group-label">{researcher_tab_label}</div>{nav_researcher}</div>'
         f'{project_nav_group}'
     )
 

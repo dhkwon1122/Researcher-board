@@ -19,7 +19,7 @@ import dash
 import dash_bootstrap_components as dbc
 import plotly.express as px
 import plotly.graph_objects as go
-from dash import Input, Output, State, callback, dcc, html
+from dash import Input, Output, Patch, State, callback, dcc, html
 
 from services.data_store import DATA_DIR
 from services.similarity_map import load_similarity_map
@@ -377,21 +377,25 @@ def _render_expertise_tab(active_tab, pending_highlight, scroll_target):
 @callback(
     Output('expertise-tabs', 'active_tab'),
     Output('expertise-scroll-target', 'data', allow_duplicate=True),
+    Output('similarity-map-blink-interval', 'disabled', allow_duplicate=True),
     Input('similarity-map-graph', 'clickData'),
     prevent_initial_call=True,
 )
 def _go_to_researcher_card(click_data):
     """지도에서 점을 클릭하면(과거처럼 별도 프로필 페이지로 이동하지 않고)
     같은 '보유 전문성' 화면 안에서 '연구원' 탭으로 전환하고, 그 탭의 iframe이
-    렌더링될 때 해당 연구원 카드로 자동 스크롤한다."""
+    렌더링될 때 해당 연구원 카드로 자동 스크롤한다. 탭을 벗어나면 지도 자체가
+    사라지며 Interval도 함께 사라지지만, 명시적으로도 꺼서 점멸이 즉시 멈추게
+    한다."""
     if not click_data:
-        return dash.no_update, dash.no_update
+        return dash.no_update, dash.no_update, dash.no_update
     rid = click_data['points'][0]['customdata'][0]
-    return 'researcher', f'r-{rid}'
+    return 'researcher', f'r-{rid}', True
 
 
 @callback(
     Output('similarity-map-graph', 'figure', allow_duplicate=True),
+    Output('similarity-map-blink-interval', 'disabled', allow_duplicate=True),
     Input('similarity-map-graph', 'relayoutData'),
     State('similarity-map-graph', 'figure'),
     State('similarity-map-points', 'data'),
@@ -401,14 +405,15 @@ def _toggle_small_tier_by_zoom(relayout_data, current_fig, points):
     """사용자가 확대/축소·리셋할 때마다 보이는 x/y 범위를 전체 데이터 범위와
     비교해, _ZOOM_REVEAL_RATIO 이상 확대된 상태에서만 소규모(meta.tier='small')
     경계를 노출한다(visible + 호버텍스트 활성화). 그 외 relayout 이벤트(범위 변화가
-    없는 경우)는 무시한다."""
+    없는 경우)는 무시한다. 사용자가 지도를 드래그·확대/축소하면(이 콜백이 반응할
+    수 있는 이벤트라면 전부) 점멸 중이던 하이라이트도 함께 멈춘다."""
     if not relayout_data or not points:
-        return dash.no_update
+        return dash.no_update, dash.no_update
 
     has_range = 'xaxis.range[0]' in relayout_data and 'xaxis.range[1]' in relayout_data
     is_autorange = bool(relayout_data.get('xaxis.autorange') or relayout_data.get('yaxis.autorange'))
     if not has_range and not is_autorange:
-        return dash.no_update
+        return dash.no_update, dash.no_update
 
     xs = [p['x'] for p in points]
     ys = [p['y'] for p in points]
@@ -433,7 +438,7 @@ def _toggle_small_tier_by_zoom(relayout_data, current_fig, points):
             trace.hoverinfo = new_hoverinfo
             changed = True
     if not changed:
-        return dash.no_update
+        return dash.no_update, True
 
     # State('figure')는 사용자의 실시간 확대/축소를 반영하지 않으므로(relayoutData만
     # 갱신됨), 여기서 현재 확대 상태를 명시적으로 다시 반영하지 않으면 새 figure를
@@ -445,7 +450,7 @@ def _toggle_small_tier_by_zoom(relayout_data, current_fig, points):
             xaxis=dict(range=[relayout_data['xaxis.range[0]'], relayout_data['xaxis.range[1]']]),
             yaxis=dict(range=[relayout_data.get('yaxis.range[0]'), relayout_data.get('yaxis.range[1]')]),
         )
-    return fig
+    return fig, True
 
 
 @callback(
@@ -473,17 +478,14 @@ def _highlight_search_result(selected_rid, current_fig, points):
 @callback(
     Output('similarity-map-graph', 'figure', allow_duplicate=True),
     Input('similarity-map-blink-interval', 'n_intervals'),
-    State('similarity-map-graph', 'figure'),
     prevent_initial_call=True,
 )
-def _blink_highlight(n_intervals, current_fig):
-    """블링크 Interval이 틱마다 별 마커의 불투명도를 두 값 사이로 토글해
-    눈에 띄게 깜빡이도록 한다."""
-    fig = go.Figure(current_fig)
-    opacity = _BLINK_OPACITY[n_intervals % 2]
-    changed = False
-    for trace in fig.data:
-        if trace.name == _SEARCH_HIGHLIGHT_NAME:
-            trace.marker.opacity = opacity
-            changed = True
-    return fig if changed else dash.no_update
+def _blink_highlight(n_intervals):
+    """블링크 Interval이 틱마다 별 마커의 불투명도만 Patch로 부분 갱신한다.
+    이전엔 go.Figure(current_fig)로 전체를 다시 만들어 반환했는데, 그러면
+    Plotly가 모든 트레이스를 다시 그려 화면 전체가 깜빡이는 것처럼 보였다
+    (실제로 재현해 확인한 문제). _apply_highlight()가 항상 하이라이트
+    트레이스를 fig.data 맨 끝에 추가하므로, data[-1]만 콕 집어 바꾸면 된다."""
+    patch = Patch()
+    patch['data'][-1]['marker']['opacity'] = _BLINK_OPACITY[n_intervals % 2]
+    return patch

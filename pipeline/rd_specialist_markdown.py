@@ -151,14 +151,14 @@ def org_tree_html(tree: list, node_content_fn=None) -> str:
 
 
 def map_link_html(researcher_id: str) -> str:
-    """연구원 카드 우측 상단에 붙는 '전문성 유사맵으로 이동' 아이콘. iframe
+    """연구원 카드 우측 상단에 붙는 '전문성 MAP으로 이동' 아이콘. iframe
     안에서 그대로 클릭하면 부모(top) 문서를 이동시켜야 하므로 target="_top"
-    필수 — 그래야 iframe 안이 아니라 실제 대시보드가 전문성 유사맵 탭으로
+    필수 — 그래야 iframe 안이 아니라 실제 대시보드가 전문성 MAP 탭으로
     전환된다."""
     href = f'/researcher-similarity-map?highlight_researcher={researcher_id}'
     return (
-        f'<a class="map-link" href="{href}" target="_top" title="전문성 유사맵에서 위치 보기">'
-        f'📍 유사맵</a>'
+        f'<a class="map-link" href="{href}" target="_top" title="전문성 MAP에서 위치 보기">'
+        f'📍 전문성 MAP</a>'
     )
 
 
@@ -481,7 +481,7 @@ CONSOLE_STYLE = """
     margin: 0; display: flex; min-height: 100vh;
   }
   .sidebar {
-    width: 250px; flex-shrink: 0; background: var(--sidebar);
+    width: 400px; flex-shrink: 0; background: var(--sidebar);
     padding: 22px 16px; position: sticky; top: 0; height: 100vh; overflow-y: auto;
   }
   /* 사이드바/본문 사이 드래그 리사이즈 바(_CONSOLE_SCRIPT가 mousedown/mousemove로 폭 조절) */
@@ -490,6 +490,16 @@ CONSOLE_STYLE = """
     position: sticky; top: 0; height: 100vh;
   }
   .split-divider:hover { background: var(--accent); }
+  /* 스크롤 시에만 나타나는 맨 위로 이동 버튼(우측 하단 고정) */
+  .back-to-top {
+    display: none; position: fixed; right: 24px; bottom: 24px; z-index: 20;
+    width: 44px; height: 44px; border-radius: 50%; border: none;
+    background: var(--accent); color: #fff; font-size: 1.1rem; font-weight: 700;
+    cursor: pointer; box-shadow: 0 2px 10px rgba(0,0,0,0.22);
+    align-items: center; justify-content: center;
+  }
+  .back-to-top.show { display: flex; }
+  .back-to-top:hover { opacity: 0.85; }
   .sidebar h1 { font-size: 0.98rem; font-weight: 800; margin: 4px 6px 2px; letter-spacing: -0.01em; }
   .sidebar .tagline { font-size: 0.72rem; color: var(--ink-soft); margin: 0 6px 20px; line-height: 1.5; }
   .nav-group { margin-bottom: 4px; }
@@ -606,6 +616,14 @@ CONSOLE_STYLE = """
   #tab-c:checked ~ .tab-bar label[for="tab-c"] {
     color: var(--accent); border-bottom-color: var(--accent);
   }
+  /* 사이드바 조직도가 여러 개(과제 기준/인별 기준/과제 전문성) 쌓인 리포트에서,
+     본문 탭(tab-a/b/c) 선택에 맞는 조직도만 보이게 한다. 라디오(#tab-*)는 본문
+     .tabs 안에 있고 사이드바는 그 밖(형제 아님)이라 ~ 형제 선택자로는 닿지
+     않으므로 :has()로 문서 전체에서 검사한다.*/
+  .tab-a-only, .tab-b-only, .tab-c-only { display: none; }
+  body:has(#tab-a:checked) .tab-a-only { display: block; }
+  body:has(#tab-b:checked) .tab-b-only { display: block; }
+  body:has(#tab-c:checked) .tab-c-only { display: block; }
   /* CSS 전용 표시 개수 토글(연구원 ↔ 연구원 리포트, JS 없이 radio + 형제 선택자로
      행을 숨김/표시 — 데이터는 이미 서버에서 최대 개수까지 저장돼 있음) */
   input.cnt-radio { display: none; }
@@ -655,7 +673,7 @@ _CONSOLE_SCRIPT = """
     });
     document.addEventListener('mousemove', function(e){
       if (!dragging) return;
-      var w = Math.min(Math.max(e.clientX, 160), 560);
+      var w = Math.min(Math.max(e.clientX, 160), 500);
       sidebar.style.width = w + 'px';
     });
     document.addEventListener('mouseup', function(){
@@ -677,6 +695,16 @@ _CONSOLE_SCRIPT = """
     el.style.outline = '2px solid #4453d6';
     el.style.outlineOffset = '2px';
   });
+
+  var backTop = document.getElementById('back-to-top');
+  if (backTop) {
+    window.addEventListener('scroll', function(){
+      backTop.classList.toggle('show', window.scrollY > 400);
+    });
+    backTop.addEventListener('click', function(){
+      window.scrollTo({top: 0, behavior: 'smooth'});
+    });
+  }
 })();
 """
 
@@ -698,6 +726,7 @@ def console_page(title: str, sidebar_html: str, body_html: str) -> str:
 <nav class="sidebar">{sidebar_html}</nav>
 <div class="split-divider" id="split-divider"></div>
 <main><div class="content">{body_html}</div></main>
+<button id="back-to-top" class="back-to-top" title="맨 위로" aria-label="맨 위로">↑</button>
 <script>{_CONSOLE_SCRIPT}</script>
 </body>
 </html>'''

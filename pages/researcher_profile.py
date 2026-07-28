@@ -22,7 +22,12 @@ from components.profile_sections import (
 )
 from components.timeline_view import timeline_view
 from services.comments import upsert_comment
-from services.data_store import read_expertise_profiles, read_processed, read_profile_tables
+from services.data_store import (
+    read_expertise_profiles,
+    read_processed,
+    read_profile_tables,
+    read_similar_researchers,
+)
 
 dash.register_page(
     __name__,
@@ -197,7 +202,7 @@ def _right_column():
         dbc.Card(
             dbc.CardBody([
                 html.Div([
-                    html.P('LLM 요약', style={'fontSize': '0.85rem', 'fontWeight': 600,
+                    html.P('전문성 요약(LLM)', style={'fontSize': '0.85rem', 'fontWeight': 600,
                                             'color': '#1d1d1f'}, className='mb-1'),
                     html.Div(id='llm-summary-block', style={'maxHeight': f'{LLM_SUMMARY_HEIGHT - 28}px',
                                                              'overflowY': 'auto'}),
@@ -335,6 +340,8 @@ def update_profile(rid):
         years = [CURRENT_YEAR - 2, CURRENT_YEAR - 1, CURRENT_YEAR]
         leadership_options, leadership_default = leadership_year_options(tables['leadership'], rid)
         profile = read_expertise_profiles().get(rid)
+        similar = read_similar_researchers().get(rid, {}).get('similar', [])
+        name_map = researchers.set_index('researcher_id')['name'].to_dict()
 
         return (
             photo_block(rid, str(researcher.get('name', '')), researcher, CURRENT_YEAR),
@@ -345,7 +352,7 @@ def update_profile(rid):
             leadership_options,
             leadership_default,
             comments_block(tables['comments'], rid),
-            llm_summary_block(profile),
+            llm_summary_block(profile, similar, name_map),
             timeline_view(tables['tasks'], tables['hr_orders'], tables['publications'],
                           tables['patents'], tables['job_profile'], tables['tasks_information'], rid),
             owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid),

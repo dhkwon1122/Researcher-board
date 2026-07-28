@@ -60,6 +60,17 @@ def read_expertise_profiles() -> dict[str, dict]:
     return {p.get('researcher_id', ''): p for p in profiles}
 
 
+def read_similar_researchers() -> dict[str, dict]:
+    """researcher_id -> researcher_similarity.json 항목(dict, 'similar' 리스트
+    포함) 매핑. 파일이 없으면(process_researcher_similarity.py 미실행) 빈 dict."""
+    path = os.path.join(DATA_DIR, 'researcher_similarity.json')
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding='utf-8') as f:
+        results = json.load(f)
+    return {item.get('researcher_id', ''): item for item in results}
+
+
 def read_profile_tables() -> dict[str, pd.DataFrame]:
     names = [
         'researchers',
