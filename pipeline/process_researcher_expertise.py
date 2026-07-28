@@ -324,7 +324,8 @@ def _build_prompt(edu_text, task_text, job_text, core_text, tech_text, pub_text,
 
 
 def _analyze_researcher(prompt: str) -> dict | None:
-    raw = call_llm(prompt, _SYSTEM_PROMPT, temperature=0.2, max_tokens=2500)
+    # 추론형 모델의 사고 과정 토큰 소모를 감안해 여유 있게 잡는다(finish_reason=length 방지).
+    raw = call_llm(prompt, _SYSTEM_PROMPT, temperature=0.2, max_tokens=4000)
     if not raw:
         return None
     try:

@@ -171,7 +171,8 @@ def run_matching_llm(system_prompt: str, subject_block: str, candidate_texts: li
     cand_block = '\n\n'.join(f'[{lbl}]\n{txt}' for lbl, txt in zip(labels, candidate_texts))
     prompt = f'{subject_block}\n\n[후보 목록]\n{cand_block}\n\n위 정보를 바탕으로 각 후보의 적합도를 판단해 주세요.'
 
-    raw = call_llm(prompt, system_prompt, temperature=0.2, max_tokens=2000)
+    # 추론형 모델의 사고 과정 토큰 소모를 감안해 여유 있게 잡는다(finish_reason=length 방지).
+    raw = call_llm(prompt, system_prompt, temperature=0.2, max_tokens=3000)
     if not raw:
         return []
     try:

@@ -221,7 +221,12 @@ def _judge_pair(text_a: str, text_b: str) -> dict | None:
         f'[연구원 B 전문성 프로필]\n{text_b}\n\n'
         f'위 두 연구원이 실제로 유사한 분야/업무 전문성을 갖고 있는지 판단해 주세요.'
     )
-    raw = fit.call_llm(prompt, _PAIR_JUDGE_SYSTEM_PROMPT, temperature=0.0, max_tokens=400)
+    # thinkingcap처럼 최종 답변 전 사고 과정에도 토큰을 쓰는 추론형 모델은 값이
+    # 작으면(예: 400) 사고 과정만으로 예산을 다 써 content가 비고
+    # finish_reason=length 경고가 자주 뜬다 — 자체 서버 운영 중이라 비용 부담이
+    # 없으므로 넉넉하게 잡는다(실제 API 요청 시 LLM2_MAX_TOKENS_MULTIPLIER가 한 번
+    # 더 곱해짐, 기본 3배).
+    raw = fit.call_llm(prompt, _PAIR_JUDGE_SYSTEM_PROMPT, temperature=0.0, max_tokens=1500)
     if not raw:
         return None
     try:

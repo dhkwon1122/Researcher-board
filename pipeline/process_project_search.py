@@ -142,7 +142,8 @@ def _discovery_user_prompt(project_name: str, summary: dict) -> str:
 
 def _discover(project_name: str, summary: dict) -> str:
     prompt = _discovery_user_prompt(project_name, summary)
-    return call_llm(prompt, _DISCOVERY_SYSTEM_PROMPT, temperature=0.2, max_tokens=4000)
+    # 추론형 모델의 사고 과정 토큰 소모를 감안해 여유 있게 잡는다(finish_reason=length 방지).
+    return call_llm(prompt, _DISCOVERY_SYSTEM_PROMPT, temperature=0.2, max_tokens=6000)
 
 
 def _split_bracket_sections(text: str) -> dict:

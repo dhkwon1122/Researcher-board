@@ -49,7 +49,8 @@ def summarize_with_llm(comment_raw: str) -> dict:
 코멘트:
 {comment_raw}"""
 
-    raw = call_llm(prompt, _SYSTEM_PROMPT, max_tokens=1200)
+    # 추론형 모델의 사고 과정 토큰 소모를 감안해 여유 있게 잡는다.
+    raw = call_llm(prompt, _SYSTEM_PROMPT, max_tokens=2000)
     if not raw:
         return {
             'comment_summary': comment_raw[:120] + ('...' if len(comment_raw) > 120 else ''),
@@ -111,7 +112,8 @@ def summarize_researcher(rid: str, rows: pd.DataFrame) -> dict | None:
 평가 내용:
 {combined}"""
 
-    raw = call_llm(prompt, _SYSTEM_PROMPT, max_tokens=1200)
+    # 추론형 모델의 사고 과정 토큰 소모를 감안해 여유 있게 잡는다.
+    raw = call_llm(prompt, _SYSTEM_PROMPT, max_tokens=2000)
     if not raw:
         return None
     try:

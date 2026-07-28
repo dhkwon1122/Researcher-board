@@ -66,7 +66,9 @@ def _fetch_authority(journal: str) -> str:
         f'권위·명성 수준을 1~2문장으로 평가해 주세요. 확실하지 않으면 "확인 불가"라고 답하세요.\n'
         f'다음 JSON 형식으로만 출력하세요: {{"authority": "평가 내용"}}'
     )
-    raw = call_llm(prompt, _JOURNAL_SYSTEM_PROMPT, max_tokens=300)
+    # 추론형 모델은 사고 과정에도 토큰을 쓰므로 짧은 응답이라도 여유를 둔다
+    # (finish_reason=length로 잘리는 것 방지).
+    raw = call_llm(prompt, _JOURNAL_SYSTEM_PROMPT, max_tokens=1000)
     if not raw:
         return ''
     try:
