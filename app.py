@@ -100,16 +100,16 @@ navbar = dbc.Navbar(
                 [
                     dbc.NavItem(
                         dbc.NavLink(
-                            [html.I(className='bi bi-people-fill me-1'), '조직별 비교'],
-                            href='/',
+                            [html.I(className='bi bi-person-badge-fill me-1'), '연구원 프로필'],
+                            href='/researcher-profile',
                             active='exact',
                             className='text-white',
                         )
                     ),
                     dbc.NavItem(
                         dbc.NavLink(
-                            [html.I(className='bi bi-person-badge-fill me-1'), '연구원 프로필'],
-                            href='/researcher-profile',
+                            [html.I(className='bi bi-share-fill me-1'), '보유 전문성'],
+                            href='/researcher-similarity-map',
                             active='exact',
                             className='text-white',
                         )
@@ -124,8 +124,8 @@ navbar = dbc.Navbar(
                     ),
                     dbc.NavItem(
                         dbc.NavLink(
-                            [html.I(className='bi bi-share-fill me-1'), '보유 전문성'],
-                            href='/researcher-similarity-map',
+                            [html.I(className='bi bi-people-fill me-1'), '조직별 비교'],
+                            href='/',
                             active='exact',
                             className='text-white',
                         )
