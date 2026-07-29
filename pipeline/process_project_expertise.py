@@ -60,7 +60,7 @@ def _summary_description(summary: dict) -> str:
     return '\n'.join(parts)
 
 
-def _build_html(items: list) -> str:
+def _build_html(items: list, total_projects: int) -> str:
     """과제(project_confl_address.csv의 '소속' → dep_name)를 '플랫폼/팀'으로
     라벨링해 좌측 사이드바와 본문을 그룹핑해 보여준다."""
     anchor_of = {it['project_name']: f'p-{i}' for i, it in enumerate(items, start=1)}
@@ -78,9 +78,10 @@ def _build_html(items: list) -> str:
 
     all_jobs = [j for jobs in jobs_by_project.values() for j in jobs]
     stats = mmd.stat_row_html([
-        (len(items), '분석 대상 과제'),
+        mmd.coverage_stat(len(items), total_projects, '분석 완료 / 분석 대상 과제'),
         (len(all_jobs), '딥다이브 직무 수'),
         (sum(1 for j in all_jobs if j.get('difficulty') == '상'), '채용난이도 상(외부 영입 필요)'),
+        mmd.generated_at_stat(),
     ])
 
     sections = []
@@ -185,7 +186,7 @@ def process() -> bool:
     print(f'[OK]   project_expertise_analysis.json 저장 ({len(results)}건)')
     result_archive.archive_copy('01. 과제분석', '과제 전문성 분석', 'json', json_text)
 
-    html_out = _build_html(results)
+    html_out = _build_html(results, len(projects))
     html_path = os.path.join(OUT_DIR, 'project_expertise_analysis.html')
     with open(html_path, 'w', encoding='utf-8') as f:
         f.write(html_out)

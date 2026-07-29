@@ -12,6 +12,7 @@ import html
 import os
 import re
 import sys
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from llm_client import call_llm
@@ -544,7 +545,7 @@ CONSOLE_STYLE = """
   .org-node-people { padding-left: 12px; border-left: 1px solid var(--line); margin: 0 0 4px 8px; }
   main { flex: 1; min-width: 0; padding: 32px 40px 100px; }
   .content { max-width: 960px; }
-  .stat-row { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; margin-bottom: 28px; }
+  .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap: 12px; margin-bottom: 28px; }
   .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
   .stat .num { font-size: 1.5rem; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
   .stat .lbl { font-size: 0.72rem; color: var(--ink-soft); margin-top: 2px; }
@@ -777,3 +778,17 @@ def stat_row_html(stats: list) -> str:
         for v, l in stats
     )
     return f'<div class="stat-row">{cells}</div>'
+
+
+def coverage_stat(analyzed: int, total: int, label: str) -> tuple:
+    """실제로 분석/매칭된 인원(또는 과제) 수를 전체 대상 모수 대비로 보여주는
+    커버리지 스탯 카드 하나. total이 0이면(모수를 알 수 없으면) analyzed만
+    표시한다 — 분모가 0이라 나눌 수 없는 극단적 케이스에서도 안전하게 표시."""
+    value = f'{analyzed}/{total}' if total else str(analyzed)
+    return (value, label)
+
+
+def generated_at_stat() -> tuple:
+    """리포트를 실제로 생성한 시각(이 함수가 호출되는 시점) — 화면이 "언제 기준"
+    데이터인지 한눈에 보여주기 위한 스탯 카드 하나."""
+    return (datetime.now().strftime('%Y-%m-%d %H:%M'), '마지막 갱신')

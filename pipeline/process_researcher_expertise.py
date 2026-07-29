@@ -437,9 +437,10 @@ def _build_html(results: list, researchers_df: pd.DataFrame) -> str:
     hard_count = sum(1 for it in results if it.get('hard_skills'))
     domain_count = sum(1 for it in results if it.get('domain_knowledge'))
     stats = mmd.stat_row_html([
-        (total, '분석 대상 연구원'),
+        mmd.coverage_stat(total, len(researchers_df), '분석 완료 / 분석 대상 연구원'),
         (hard_count, 'Hard Skills 데이터 보유'),
         (domain_count, 'Domain Knowledge 데이터 보유'),
+        mmd.generated_at_stat(),
     ])
 
     sections = []
@@ -483,17 +484,16 @@ def render_html() -> bool:
     with open(json_path, encoding='utf-8') as f:
         results = json.load(f)
 
-    researchers = _read_csv('researchers')
+    researchers = _filter_eligible_researchers(_read_csv('researchers'))
     _write_html(results, researchers)
     return True
 
 
-def process(refresh_journals: bool = False) -> bool:
-    researchers = _read_csv('researchers')
-    if researchers.empty:
-        print('[process_researcher_expertise] researchers.csv 없음 — 종료')
-        return False
-
+def _filter_eligible_researchers(researchers: pd.DataFrame) -> pd.DataFrame:
+    """analysis_dep.csv가 있으면 지정된 부서만, job_type='지원'(조직총괄/자문위원
+    예외)는 항상 제외해 분석 대상 연구원만 남긴다. process()와 render_html()이
+    같은 모수를 쓰도록 공유한다 — 커버리지 스탯(분석 완료/분석 대상)의 분모가
+    실행 경로에 따라 달라지면 안 되기 때문."""
     analysis_dep = _read_csv('analysis_dep')
     if not analysis_dep.empty and 'department' in analysis_dep.columns:
         allowed_depts = set(analysis_dep['department'])
@@ -501,9 +501,6 @@ def process(refresh_journals: bool = False) -> bool:
         researchers = researchers[researchers['department'].isin(allowed_depts)]
         print(f'[process_researcher_expertise] 분석 대상 부서 필터 적용(analysis_dep.csv, '
               f'{len(allowed_depts)}개 부서): {before}명 → {len(researchers)}명')
-        if researchers.empty:
-            print('[process_researcher_expertise] 필터 적용 후 대상 연구원 없음 — 종료')
-            return False
     else:
         print('[process_researcher_expertise] analysis_dep.csv 없음 — 부서 필터 없이 전체 연구원 분석 '
               '(python pipeline/process_analysis_dep.py로 생성 가능)')
@@ -520,9 +517,19 @@ def process(refresh_journals: bool = False) -> bool:
         if excluded:
             print(f'[process_researcher_expertise] 직종 필터 적용(job_type=지원 제외, '
                   f'조직총괄/자문위원 예외 포함): {before}명 → {len(researchers)}명 ({excluded}명 제외)')
-        if researchers.empty:
-            print('[process_researcher_expertise] 필터 적용 후 대상 연구원 없음 — 종료')
-            return False
+    return researchers
+
+
+def process(refresh_journals: bool = False) -> bool:
+    researchers = _read_csv('researchers')
+    if researchers.empty:
+        print('[process_researcher_expertise] researchers.csv 없음 — 종료')
+        return False
+
+    researchers = _filter_eligible_researchers(researchers)
+    if researchers.empty:
+        print('[process_researcher_expertise] 필터 적용 후 대상 연구원 없음 — 종료')
+        return False
 
     education = _read_csv('education')
     tasks = _read_csv('tasks')

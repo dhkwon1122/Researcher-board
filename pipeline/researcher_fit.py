@@ -476,6 +476,8 @@ def build_fit_html(by_target: list, by_researcher: list, researchers_df: pd.Data
         (total_targets, f'매칭 대상 {target_tab_label}'),
         (total_candidates, '총 후보 판단 건수'),
         (high_fit, '적합도 "상" 건수'),
+        mmd.coverage_stat(len(by_researcher), len(researchers_df), '매칭 완료 / 전체 연구원'),
+        mmd.generated_at_stat(),
     ])
 
     target_sections = []

@@ -554,9 +554,10 @@ def _build_html(results: list, researchers_df: pd.DataFrame, profile_by_id: dict
         f'{"".join(nav_groups)}'
     )
     stats = mmd.stat_row_html([
-        (total, '분석 대상 연구원'),
+        mmd.coverage_stat(total, len(researchers_df), '유사도 분석 완료 / 전체 연구원'),
         (high_conf, '고신뢰 매칭 (70%+)'),
         (flagged, '표면 일치 주의 플래그'),
+        mmd.generated_at_stat(),
     ])
     # 표시 개수(3/5/10) 토글 — JS 없이 radio + 형제 선택자로 행을 숨김/표시.
     # 데이터는 이미 MAX_DISPLAY_K(10)까지 저장돼 있으므로 재계산 없이 CSS만으로 전환된다.
