@@ -489,7 +489,7 @@ CONSOLE_STYLE = """
     margin: 0; display: flex; min-height: 100vh;
   }
   .sidebar {
-    width: 400px; flex-shrink: 0; background: var(--sidebar);
+    width: 500px; flex-shrink: 0; background: var(--sidebar);
     padding: 22px 16px; position: sticky; top: 0; height: 100vh; overflow-y: auto;
   }
   /* 사이드바/본문 사이 드래그 리사이즈 바(_CONSOLE_SCRIPT가 mousedown/mousemove로 폭 조절) */
@@ -687,7 +687,7 @@ _CONSOLE_SCRIPT = """
     });
     document.addEventListener('mousemove', function(e){
       if (!dragging) return;
-      var w = Math.min(Math.max(e.clientX, 160), 500);
+      var w = Math.min(Math.max(e.clientX, 160), 600);
       sidebar.style.width = w + 'px';
     });
     document.addEventListener('mouseup', function(){
