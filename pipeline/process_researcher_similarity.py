@@ -26,10 +26,11 @@ Junior 그룹을 나중에 이어붙인다). 후보 중 hire_date가 없어 근�
 대상 연구원 본인의 근속을 모르면(hire_date 없음) 그룹 구분 없이 기존처럼
 전체 후보 중에서 찾는다(하위 호환 폴백).
 
-그룹별 후보 pool 크기(_CANDIDATE_POOL_K)는 화면에 실제로 표시할 개수(--top-k,
-기본 5)보다 넉넉히 크게 잡는다 — 아래 2단계에서 근거(evidence)가 비어 있는
-후보를 걸러내고 나면 일부가 탈락하므로, 화면의 "표시 개수" 토글(3/5/10,
-아래 참고)을 채우려면 애초에 더 많은 후보를 LLM 판정까지 진행시켜야 한다.
+그룹별 후보 pool 크기(_CANDIDATE_POOL_K)는 화면에 실제로 표시할 그룹당 최대
+개수(MAX_DISPLAY_K, 10)보다 넉넉히 크게 잡는다 — 아래 2단계에서 근거(evidence)가
+비어 있는 후보를 걸러내고 나면 일부가 탈락하므로, "표시 개수" 토글(3/5/10,
+아래 참고)의 "10"까지 채우려면 애초에 더 많은 후보를 LLM 판정까지 진행시켜야
+한다.
 
 2단계(LLM 판정, 후보 pool 전체에 대해): 임베딩 점수만으로는 "왜 유사한지",
 "단어만 겹치고 실제 업무는 다른 건 아닌지"를 알 수 없다. 그래서 후보 pool로
@@ -42,9 +43,11 @@ Junior 그룹을 나중에 이어붙인다). 후보 중 hire_date가 없어 근�
     최종 유사 연구원 목록에서 제외한다(_drop_empty_evidence). 프롬프트
     자체도 "낮음" 판정이라도 근거(왜 낮다고 판단했는지)를 반드시 채우도록
     지시하므로, 실제로는 LLM 호출 자체가 실패한 극히 일부 쌍만 제외된다.
-    필터링 후 최종 목록은 표시 개수 토글의 최댓값(MAX_DISPLAY_K, 10)까지만
-    유지한다 — HTML은 이 목록을 그대로 저장해 두고, 3/5/10 토글은 CSS로
-    행을 숨기고 보여주는 방식이라(재계산 없음) 최댓값만큼 미리 준비해 둔다.
+    필터링 후 최종 목록은 Senior/Junior 그룹별로 각각 MAX_DISPLAY_K(10)명
+    까지만 유지한다(한쪽이 모자라도 다른 쪽에서 끌어와 채우지 않음 — 화면의
+    "표시 개수" 토글이 "시니어 N + 주니어 N"을 뜻하기 때문). HTML은 이 목록을
+    그대로 저장해 두고, 3/5/10 토글은 CSS로 그룹별 행을 숨기고 보여주는
+    방식이라(재계산 없음) 그룹당 최댓값만큼 미리 준비해 둔다.
 
   ※ 재현성: LLM 호출은 temperature=0으로 고정하고, 한 번 판정한 쌍은
     researcher_pair_judgment.json에 영구 캐시한다(신규거나 이전에 실패해
@@ -98,11 +101,13 @@ from services.llm import LLMError  # noqa: E402
 
 DEFAULT_TOP_K = fit.TOP_K
 
-# 그룹별 후보 pool 크기 — 화면 표시 개수(top_k)보다 넉넉히 잡아, 근거 없는
-# 후보가 필터링으로 빠지더라도 표시 개수 토글(3/5/10)을 채울 수 있게 한다.
-_CANDIDATE_POOL_K = 10
+# 그룹별(Senior/Junior 각각) 후보 pool 크기 — 화면 표시 개수(top_k)보다 넉넉히
+# 잡아, 근거 없는 후보가 필터링으로 빠지더라도 표시 개수 토글(3/5/10, 그룹당
+# 개수)의 최댓값(10)을 그룹별로 채울 수 있게 한다.
+_CANDIDATE_POOL_K = 15
 
-# 근거 필터링 후 최종적으로 저장/표시할 연구원 수 상한(표시 개수 토글의 최댓값).
+# 근거 필터링 후 최종적으로 저장/표시할 연구원 수 상한 — Senior/Junior 그룹별로
+# 각각 이 개수까지 유지한다(표시 개수 토글 3/5/10명은 "그룹당" 개수를 뜻함).
 MAX_DISPLAY_K = 10
 
 _PAIR_JUDGE_SYSTEM_PROMPT = """# Role
@@ -353,28 +358,22 @@ def _has_evidence(evidence) -> bool:
     return bool(str(evidence or '').strip())
 
 
-def _drop_empty_evidence(results: list, tenure_map: dict, max_display: int = MAX_DISPLAY_K) -> list:
+def _drop_empty_evidence(results: list, tenure_map: dict, max_per_group: int = MAX_DISPLAY_K) -> list:
     """근거 없이 유사도만 높은 후보는 신뢰도가 낮으므로 최종 목록에서 제외한다
-    (LLM 판정 자체가 실패한 쌍도 evidence가 비어 있어 함께 제외됨). 각 그룹
-    (Senior 우선/Junior) 내 정렬 순서는 compute_similarity()에서 이미 정해져
-    있으므로 그대로 유지하되, Senior/Junior를 각각 max_display//2씩 따로
-    자른 뒤 이어붙인다 — 필터링된 리스트 전체를 한 번에 자르면(예전 방식)
-    Senior 후보만으로 상한이 다 채워져 Junior가 전부 밀려나 안 보이는
-    문제가 있었다(대상자 근속을 몰라 그룹 구분 없이 검색한 폴백 케이스는
-    남는 자리에 그대로 채운다)."""
-    half = max_display // 2
+    (LLM 판정 자체가 실패한 쌍도 evidence가 비어 있어 함께 제외됨). 화면의
+    표시 개수 토글(3/5/10)은 "시니어 N명 + 주니어 N명"을 뜻하므로, Senior와
+    Junior를 서로 밀어내지 않도록 각각 독립적으로 max_per_group까지만 자른다
+    (한쪽이 모자라면 다른 쪽에서 채우지 않고 있는 만큼만 남긴다). 대상자 근속을
+    몰라 그룹 구분 없이 검색한 폴백 케이스만 별도로 max_per_group까지 자른다."""
     for item in results:
         filtered = [s for s in item['similar'] if _has_evidence(s.get('evidence'))]
-        senior = [s for s in filtered if tenure_map.get(s['researcher_id'], '') == 'Senior'][:half]
-        junior = [s for s in filtered if tenure_map.get(s['researcher_id'], '') == 'Junior'][:max_display - len(senior)]
+        senior = [s for s in filtered if tenure_map.get(s['researcher_id'], '') == 'Senior'][:max_per_group]
+        junior = [s for s in filtered if tenure_map.get(s['researcher_id'], '') == 'Junior'][:max_per_group]
         others = [
             s for s in filtered
             if tenure_map.get(s['researcher_id'], '') not in ('Senior', 'Junior')
-        ]
-        combined = senior + junior
-        if len(combined) < max_display:
-            combined += others[:max_display - len(combined)]
-        item['similar'] = combined
+        ][:max_per_group]
+        item['similar'] = senior + junior + others
     return results
 
 
@@ -532,11 +531,23 @@ def _build_html(results: list, researchers_df: pd.DataFrame, profile_by_id: dict
                 name = html.escape(name_map.get(rid, rid))
                 tenure_badge = _tenure_badge_html(item.get('tenure_level', ''))
                 if item['similar']:
-                    rows = ''.join(_match_row_html(s, name_map, dept_map, org_map) for s in item['similar'])
+                    # 표시 개수(3/5/10) 토글이 "그룹당" 개수를 뜻하므로, Senior/Junior(및
+                    # 근속 미상 폴백)를 별도 <tbody>로 나눠 렌더링한다 — :nth-child 기반
+                    # CSS 토글이 각 tbody 안에서 독립적으로 행 위치를 세기 때문에, 이렇게만
+                    # 나누면 별도 CSS 없이 그룹별 3/5/10 표시가 그대로 적용된다.
+                    groups = [
+                        [s for s in item['similar'] if s.get('tenure_level') == 'Senior'],
+                        [s for s in item['similar'] if s.get('tenure_level') == 'Junior'],
+                        [s for s in item['similar'] if s.get('tenure_level') not in ('Senior', 'Junior')],
+                    ]
+                    tbodies = ''.join(
+                        f'<tbody>{"".join(_match_row_html(s, name_map, dept_map, org_map) for s in g)}</tbody>'
+                        for g in groups if g
+                    )
                     table = (
                         '<div class="table-wrap"><table class="match-table">'
                         '<thead><tr><th>유사 연구원</th><th>판정</th><th>근거</th><th>유사도</th></tr></thead>'
-                        f'<tbody>{rows}</tbody></table></div>'
+                        f'{tbodies}</table></div>'
                     )
                 else:
                     table = '<p class="empty">비교할 다른 연구원 데이터 없음</p>'
@@ -559,8 +570,10 @@ def _build_html(results: list, researchers_df: pd.DataFrame, profile_by_id: dict
         (flagged, '표면 일치 주의 플래그'),
         mmd.generated_at_stat(),
     ])
-    # 표시 개수(3/5/10) 토글 — JS 없이 radio + 형제 선택자로 행을 숨김/표시.
-    # 데이터는 이미 MAX_DISPLAY_K(10)까지 저장돼 있으므로 재계산 없이 CSS만으로 전환된다.
+    # 표시 개수(3/5/10, 그룹당) 토글 — JS 없이 radio + 형제 선택자로 행을 숨김/표시.
+    # Senior/Junior가 각각 별도 <tbody>이므로 CSS의 tr:nth-child가 그룹별로 독립
+    # 적용된다(3명 선택 시 시니어 3 + 주니어 3, 있는 만큼만). 데이터는 이미
+    # MAX_DISPLAY_K(10)까지 그룹별로 저장돼 있으므로 재계산 없이 CSS만으로 전환된다.
     count_toggle = (
         '<input type="radio" name="cnt" id="count-3" class="cnt-radio">'
         '<input type="radio" name="cnt" id="count-5" class="cnt-radio" checked>'

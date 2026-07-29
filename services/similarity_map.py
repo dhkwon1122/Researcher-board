@@ -108,9 +108,9 @@ def load_similarity_map(n_neighbors: int = 15, random_state: int = 42, min_clust
     지도에서 빠진 연구원 수를 반환한다.
 
     반환: (df, missing_count)
-      df 컬럼: researcher_id, name, department, org_code, strength_fields(list),
-               strength_keywords(list), x, y, cluster, cluster_label,
-               medium_cluster, medium_cluster_label
+      df 컬럼: researcher_id, name, department, org_code, e_support('E'/'R'),
+               strength_fields(list), strength_keywords(list), x, y, cluster,
+               cluster_label, medium_cluster, medium_cluster_label
       필요 입력 파일이 없거나(연구원 보유 전문성 분석.json/embedding_cache.json)
       좌표를 계산할 만큼 표본이 충분치 않으면(3명 미만) x/y 없는 빈 DataFrame을
       반환한다 — 호출부가 이를 보고 안내 메시지를 보여줄 수 있다."""
@@ -133,6 +133,11 @@ def load_similarity_map(n_neighbors: int = 15, random_state: int = 42, min_clust
         dept_map = indexed['department'].to_dict()
         org_map = indexed['org_code'].to_dict()
 
+    tech_ownership_df = read_processed('tech_ownership')
+    e_support_map = {}
+    if not tech_ownership_df.empty and 'E_support' in tech_ownership_df.columns:
+        e_support_map = tech_ownership_df.set_index('researcher_id')['E_support'].to_dict()
+
     rows, vectors = [], []
     missing = 0
     for item in profiles:
@@ -147,6 +152,7 @@ def load_similarity_map(n_neighbors: int = 15, random_state: int = 42, min_clust
             'name': name_map.get(rid, ''),
             'department': dept_map.get(rid, '') or '미분류',
             'org_code': org_map.get(rid, '') or '미분류',
+            'e_support': e_support_map.get(rid, ''),
             'strength_fields': item.get('strength_fields') or [],
             'strength_keywords': item.get('strength_keywords') or [],
         })
