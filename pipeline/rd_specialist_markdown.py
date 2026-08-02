@@ -568,9 +568,15 @@ CONSOLE_STYLE = """
   .badge { font-size: 0.66rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
   .badge.senior { background: var(--accent-weak); color: var(--accent); }
   .badge.junior { background: var(--low-weak); color: var(--ink-soft); }
-  .chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 14px; }
+  .chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
   .chip { font-size: 0.7rem; padding: 3px 9px; border-radius: 6px; background: var(--accent-weak); color: var(--accent); font-weight: 600; }
   .chip.kw { background: var(--bg); color: var(--ink-soft); border: 1px solid var(--line); }
+  /* strength_fields/strength_keywords 칩 그룹 위에 붙는 라벨(둘을 구분하기 위함) */
+  .chip-label {
+    font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent);
+    font-weight: 700; margin: 10px 0 4px;
+  }
+  .chip-label:first-child { margin-top: 0; }
   .table-wrap { overflow-x: auto; }
   table.match-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
   table.match-table th {
