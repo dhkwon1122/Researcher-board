@@ -1,19 +1,26 @@
 """
-strength_fields / strength_keywords 표준화 1단계: 현황 집계 + 유사 표기 클러스터링
+strength_fields / strength_keywords 표준화 1~2단계: 현황 집계 + 유사 표기 클러스터링
++ 표준 목록 초안 생성
 
 process_researcher_expertise.py가 자유 생성한 연구원 보유 전문성 분석.json의
 strength_fields/strength_keywords는 통제 어휘집 없이 LLM이 매번 새로 표현을
 만들어내므로("로봇 제어"/"로봇제어"/"로봇공학"처럼) 같은 의미가 표기만 다르게
 쌓인다. 표준화 작업은 3단계(1.전체 현황 검토 → 2.표준 목록 정의 → 3.표준
-목록으로 재할당)로 진행하며, 이 스크립트는 1단계만 수행한다 — 표준 목록을
-자동으로 확정하지 않고, 사람이 2단계(표준 목록 정의)를 진행할 수 있도록
-아래 두 가지를 보여준다.
+목록으로 재할당)로 진행하며, 이 스크립트는 1~2단계를 수행한다.
 
-  1) 원문 표기별 빈도 — 어떤 값이 몇 명에게 쓰였는지(정규화 없이 있는 그대로)
-  2) 유사 표기 클러스터링 — BGE-M3 임베딩 코사인 유사도가 임계값(기본 0.85)
-     이상인 원문들을 하나의 통합 후보 그룹으로 묶어 보여준다. 그룹 내
-     "후보 표준명"은 그 그룹에서 가장 많은 연구원에게 쓰인 원문을 임시로
-     채택한 것일 뿐, 최종 표준명 확정과 그룹 병합/분리 판단은 사람이 한다.
+  1단계(현황 검토, strength_taxonomy_review.json/html): 사람이 눈으로 확인하는
+  용도 — 표준 목록을 자동 확정하지 않는다.
+    1) 원문 표기별 빈도 — 어떤 값이 몇 명에게 쓰였는지(정규화 없이 있는 그대로)
+    2) 유사 표기 클러스터링 — BGE-M3 임베딩 코사인 유사도가 임계값(기본 0.85)
+       이상인 원문들을 하나의 통합 후보 그룹으로 묶어 보여준다.
+
+  2단계(표준 목록 정의, strength_taxonomy.json): 각 클러스터에서 가장 많은
+  연구원에게 쓰인 원문을 표준명으로, 그룹 내 나머지 원문들을 동의어로 삼아
+  초안을 자동 생성한다. 이 초안은 strength_taxonomy_draft.json으로 항상
+  최신 상태로 재생성되고, strength_taxonomy.json(실제로 3단계 재할당/자연어
+  질문 기능이 참조하는 "확정" 표준 목록)에는 파일이 아직 없을 때만
+  부트스트랩으로 한 번 복사한다 — 이미 있으면 사람이 검토·수정한 내용을
+  덮어쓰지 않도록 자동으로 다시 쓰지 않는다(수정은 그 파일을 직접 편집).
 
 strength_fields/strength_keywords는 서로 다른 어휘집이라 따로 집계·클러스터링한다.
 
@@ -21,9 +28,9 @@ Source:
   data/processed/연구원 보유 전문성 분석.json (process_researcher_expertise.py)
 
 Output:
-  data/processed/strength_taxonomy_review.json (프로그램적 재사용 — 2단계 표준 목록
-    정의 작업의 입력 후보로 사용)
-  data/processed/strength_taxonomy_review.html (사람이 보는 리뷰 리포트)
+  data/processed/strength_taxonomy_review.json/html (1단계, 사람이 보는 현황 검토)
+  data/processed/strength_taxonomy_draft.json        (2단계 초안, 매 실행마다 갱신)
+  data/processed/strength_taxonomy.json              (2단계 확정본, 최초 1회만 자동 생성)
 
 사용법:
   python pipeline/build_strength_taxonomy.py [--similarity-threshold 0.85]
@@ -130,6 +137,21 @@ def _cluster_values(value_researchers: dict, threshold: float) -> list:
     return clusters
 
 
+def _clusters_to_taxonomy_entries(clusters: list, prefix: str) -> list:
+    """클러스터 목록 → 표준 목록 항목([{id, standard_name, synonyms}, ...]) 초안.
+    각 그룹에서 가장 많은 연구원에게 쓰인 원문을 표준명으로 임시 채택한다 —
+    최종 이름 확정/그룹 병합·분리 판단은 사람이 strength_taxonomy.json을 직접
+    열어 검토·수정해야 한다(이 함수는 그 초안만 만든다)."""
+    entries = []
+    for i, c in enumerate(clusters, start=1):
+        entries.append({
+            'id': f'{prefix}_{i:03d}',
+            'standard_name': c['candidate_name'],
+            'synonyms': sorted({v for v, _ in c['raw_values']}),
+        })
+    return entries
+
+
 def _cluster_table_html(clusters: list, total_researchers: int) -> str:
     rows = []
     for c in clusters:
@@ -206,6 +228,32 @@ def build(similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD) -> bool:
     with open(json_path, 'w', encoding='utf-8') as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
     print('[OK]   strength_taxonomy_review.json 저장')
+
+    # 2단계(표준 목록 정의) 초안 — 실행할 때마다 최신 클러스터링 기준으로 항상
+    # 다시 생성한다(review 산출물의 일부이므로 사람이 아직 확정하지 않은 후보).
+    taxonomy_draft = {
+        'generated_at': datetime.now().isoformat(),
+        'similarity_threshold': similarity_threshold,
+        'fields': _clusters_to_taxonomy_entries(field_clusters, 'field'),
+        'keywords': _clusters_to_taxonomy_entries(keyword_clusters, 'kw'),
+    }
+    draft_path = os.path.join(OUT_DIR, 'strength_taxonomy_draft.json')
+    with open(draft_path, 'w', encoding='utf-8') as f:
+        json.dump(taxonomy_draft, f, ensure_ascii=False, indent=2)
+    print('[OK]   strength_taxonomy_draft.json 저장(항상 최신 클러스터링 기준으로 재생성)')
+
+    # strength_taxonomy.json은 사람이 검토·수정할 "확정" 표준 목록이므로, 이미
+    # 있으면 자동으로 덮어쓰지 않는다(수작업 수정이 사라지는 것을 방지) — 최초
+    # 실행일 때만 초안을 그대로 채택해 부트스트랩한다.
+    taxonomy_path = os.path.join(OUT_DIR, 'strength_taxonomy.json')
+    if not os.path.exists(taxonomy_path):
+        with open(taxonomy_path, 'w', encoding='utf-8') as f:
+            json.dump(taxonomy_draft, f, ensure_ascii=False, indent=2)
+        print('[OK]   strength_taxonomy.json 최초 생성 — 초안을 그대로 표준 목록으로 채택했습니다. '
+              '검토 후 이 파일을 직접 수정하세요(다음 실행부터는 자동으로 덮어쓰지 않습니다).')
+    else:
+        print('[SKIP] strength_taxonomy.json 이미 존재 — 자동으로 덮어쓰지 않습니다 '
+              '(최신 통합 후보는 strength_taxonomy_draft.json에서 확인 후 직접 반영하세요).')
 
     stats = mmd.stat_row_html([
         (total_researchers, '분석된 연구원 수'),

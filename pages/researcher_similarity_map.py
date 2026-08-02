@@ -21,6 +21,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from dash import Input, Output, Patch, State, callback, dcc, html
 
+from services import nl_query
 from services.data_store import DATA_DIR
 from services.similarity_map import load_similarity_map
 
@@ -327,6 +328,109 @@ def _map_tab_content(highlighted_rid: str | None = None):
     ])
 
 
+def _fit_score_badge(score: str):
+    color = {'상': 'success', '중': 'warning', '하': 'secondary'}.get(score, 'light')
+    return dbc.Badge(score or '-', color=color, className='me-1')
+
+
+def _nl_query_bar() -> html.Div:
+    """자연어 질문 입력창 — "특정 전문성 보유자 찾기"/"과제에 적합한 사람 찾기"/
+    "연구원에게 맞는 과제 찾기" 세 유형(그 밖은 안내만) 질문을 처리한다.
+    자세한 아키텍처는 services/nl_query.py 모듈 docstring 참고."""
+    return html.Div([
+        dbc.InputGroup([
+            dbc.Input(
+                id='nl-query-input', type='text', debounce=False,
+                placeholder='예: "로봇 제어 전문가 찾아줘", "차세대로봇제어 과제에 적합한 사람은?", '
+                            '"정재원 연구원은 지금 과제 말고 어떤 과제에 적합해?"',
+            ),
+            dbc.Button([html.I(className='bi bi-search me-1'), '질문하기'],
+                       id='nl-query-submit', color='primary', n_clicks=0),
+        ], className='mb-2'),
+        dcc.Loading(html.Div(id='nl-query-result')),
+    ], className='mb-3')
+
+
+def _render_nl_result(result: dict):
+    intent = result.get('intent')
+    note = result.get('note', '')
+    items = result.get('items') or []
+
+    if intent in ('error', 'unsupported'):
+        return dbc.Alert(note, color='warning', className='mb-0')
+    if not items:
+        return dbc.Alert(note or '검색 결과가 없습니다.', color='light', className='mb-0 border')
+
+    children = []
+    if note:
+        children.append(html.Div(note, className='small text-muted mb-2'))
+
+    if intent == 'find_researchers_by_expertise':
+        cards = []
+        for it in items:
+            chips = (
+                [dbc.Badge(f, color='dark', className='me-1 mb-1') for f in it['strength_fields']]
+                + [dbc.Badge(k, color='secondary', className='me-1 mb-1') for k in it['strength_keywords']]
+            )
+            cards.append(dbc.Card(dbc.CardBody([
+                html.Div([
+                    html.Span(f"{it['name']} ", className='fw-bold'),
+                    html.Span(f"({it['researcher_id']})", className='text-muted small'),
+                    html.Span(f" · {it['department']}" if it['department'] else '', className='text-muted small'),
+                ]),
+                html.Div(chips, className='mt-1'),
+            ]), className='mb-2'))
+        children.append(html.Div(cards))
+
+    elif intent == 'find_researchers_for_project':
+        rows = [
+            html.Tr([
+                html.Td(it['project_name']), html.Td(it['job_title']),
+                html.Td(f"{it['name']} ({it['researcher_id']})"),
+                html.Td(_fit_score_badge(it['fit_score']) if it['fit_score'] else str(it.get('score', ''))),
+                html.Td(it['reason'], className='small'),
+            ])
+            for it in items
+        ]
+        children.append(dbc.Table(
+            [html.Thead(html.Tr([html.Th('과제'), html.Th('직무'), html.Th('연구원'),
+                                  html.Th('적합도'), html.Th('근거')])),
+             html.Tbody(rows)],
+            bordered=False, hover=True, size='sm', className='mt-2',
+        ))
+
+    elif intent == 'find_projects_for_researcher':
+        rows = [
+            html.Tr([
+                html.Td(it['project_name']), html.Td(it['job_title']), html.Td(it['dep_name']),
+                html.Td(_fit_score_badge(it['fit_score'])), html.Td(it['reason'], className='small'),
+            ])
+            for it in items
+        ]
+        children.append(dbc.Table(
+            [html.Thead(html.Tr([html.Th('과제'), html.Th('직무'), html.Th('소속'),
+                                  html.Th('적합도'), html.Th('근거')])),
+             html.Tbody(rows)],
+            bordered=False, hover=True, size='sm', className='mt-2',
+        ))
+
+    return html.Div(children)
+
+
+@callback(
+    Output('nl-query-result', 'children'),
+    Input('nl-query-submit', 'n_clicks'),
+    Input('nl-query-input', 'n_submit'),
+    State('nl-query-input', 'value'),
+    prevent_initial_call=True,
+)
+def _run_nl_query(_n_clicks, _n_submit, question):
+    if not question or not question.strip():
+        return dbc.Alert('질문을 입력해주세요.', color='warning', className='mb-0')
+    result = nl_query.answer_question(question)
+    return _render_nl_result(result)
+
+
 def layout(highlight_researcher=None, **_kwargs):
     """highlight_researcher: URL 쿼리 파라미터(예: /researcher-similarity-map
     ?highlight_researcher=00000001) — 리포트 카드의 '📍 유사맵' 아이콘이
@@ -337,6 +441,7 @@ def layout(highlight_researcher=None, **_kwargs):
             [html.I(className='bi bi-share-fill me-2 text-primary'), '보유 전문성'],
             className='fw-bold mb-3 mt-1',
         ),
+        _nl_query_bar(),
         dbc.Tabs(
             [
                 dbc.Tab(label='연구원', tab_id='researcher'),

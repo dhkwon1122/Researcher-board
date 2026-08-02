@@ -98,8 +98,15 @@ def extract_json(text: str) -> str:
     return m.group(0) if m else text
 
 
-def call_llm(prompt: str, system_prompt: str, *, temperature: float = 0.2, max_tokens: int = 1500) -> str:
-    """사내 LLM API 호출 → 응답 텍스트 반환. 미설정/실패 시 빈 문자열."""
+def call_llm(prompt: str, system_prompt: str, *, temperature: float = 0.2, max_tokens: int = 1500,
+             max_wait: float | None = None) -> str:
+    """사내 LLM API 호출 → 응답 텍스트 반환. 미설정/실패 시 빈 문자열.
+
+    max_wait: 세마포어(동시 호출 허용치) 슬롯이 비기를 기다릴 최대 시간(초).
+    None(기본)이면 배치 스크립트들처럼 슬롯이 빌 때까지 무한정 기다린다.
+    대시보드 등 사용자가 응답을 실시간으로 기다리는 호출부는 값을 지정해,
+    배치 작업이 슬롯을 다 쓰고 있을 때 무한정 멈춰 있지 않고 빈 문자열로
+    빠르게 실패해 "지금은 바쁘다"는 안내를 보여줄 수 있게 한다."""
     if _cfg is None:
         print('  [LLM 오류] llm_config.py 가 없어 API 호출을 건너뜁니다.')
         return ''
@@ -135,7 +142,13 @@ def call_llm(prompt: str, system_prompt: str, *, temperature: float = 0.2, max_t
     resp = None
     for attempt in range(max_retries + 1):
         try:
-            semaphore.acquire()
+            if max_wait is not None:
+                if not semaphore.acquire(timeout=max_wait):
+                    print(f'  [LLM 대기 초과] {max_wait:.0f}초 안에 동시 호출 슬롯을 얻지 못했습니다 '
+                          f'(다른 작업이 사용 중).')
+                    return ''
+            else:
+                semaphore.acquire()
             try:
                 resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
                 resp.raise_for_status()

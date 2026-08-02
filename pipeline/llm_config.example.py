@@ -36,6 +36,13 @@ LLM2_MAX_TOKENS_MULTIPLIER = 3
 #   (--max-num-seqs 등)에 따라 달라지므로 반드시 실측으로 조정할 것.
 LLM2_MAX_CONCURRENT = 8
 
+# "보유 전문성" 탭의 자연어 질문 기능처럼 사용자가 화면에서 실시간으로 응답을
+# 기다리는 호출은, 배치 파이프라인이 LLM2_MAX_CONCURRENT 슬롯을 모두 쓰고 있을
+# 때 무한정 대기하면 화면이 멈춘 것처럼 보인다. call_llm(..., max_wait=이 값)
+# 으로 호출하면 이 시간(초) 안에 슬롯을 못 얻을 경우 즉시 실패로 처리해
+# "지금은 바쁘다"는 안내를 보여줄 수 있다(배치 스크립트는 기존처럼 무한 대기).
+LLM2_QUERY_MAX_WAIT_SECONDS = 15
+
 # ReadTimeout/연결 오류 시 자동 재시도 횟수와 백오프 시작 시간(초, 회차마다
 # 2배씩 증가). 사내 LLM API 호출이 불안정할 때 값을 더 늘려도 된다.
 LLM_MAX_RETRIES   = 5
