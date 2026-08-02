@@ -446,11 +446,7 @@ def _evidence_html(evidence, surface_only: bool) -> str:
 def _chip_row_html(profile: dict) -> str:
     fields = profile.get('strength_fields') or []
     keywords = profile.get('strength_keywords') or []
-    if not fields and not keywords:
-        return '<p class="empty">강점 분야/키워드 데이터 없음</p>'
-    chips = ''.join(f'<span class="chip">{html.escape(f)}</span>' for f in fields)
-    chips += ''.join(f'<span class="chip kw">{html.escape(k)}</span>' for k in keywords)
-    return f'<div class="chip-row">{chips}</div>'
+    return mmd.strength_section_html(fields, keywords)
 
 
 def _match_row_html(s: dict, name_map: dict, dept_map: dict, org_map: dict) -> str:

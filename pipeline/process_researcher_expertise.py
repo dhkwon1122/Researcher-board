@@ -363,30 +363,13 @@ def _kv_block_html(title: str, data: dict, labels: list) -> str:
     return f'<div class="kv-block"><div class="kv-title">{title}</div><dl class="kv">{"".join(items)}</dl></div>'
 
 
-def _strength_section_html(fields: list, keywords: list) -> str:
-    """강점 분야(chip)와 키워드(chip kw)를 "Strength Field"/"Strength Keywords"
-    라벨로 구분해 보여준다 — 둘 다 칩 하나로 붙여서 보여주면 어떤 게 분야이고
-    어떤 게 키워드인지 구분이 안 되던 문제를 라벨로 해소한다(칩 형태 자체는
-    기존 그대로 유지)."""
-    if not fields and not keywords:
-        return '<p class="empty">강점 분야/키워드 데이터 없음</p>'
-    parts = []
-    if fields:
-        chips = ''.join(f'<span class="chip">{html.escape(f)}</span>' for f in fields)
-        parts.append(f'<div class="chip-label">Strength Field</div><div class="chip-row">{chips}</div>')
-    if keywords:
-        chips = ''.join(f'<span class="chip kw">{html.escape(k)}</span>' for k in keywords)
-        parts.append(f'<div class="chip-label">Strength Keywords</div><div class="chip-row">{chips}</div>')
-    return ''.join(parts)
-
-
 def _researcher_card_html(item: dict, name_map: dict, anchor: str) -> str:
     rid = item.get('researcher_id', '')
     name = name_map.get(rid, '')
 
     fields = item.get('strength_fields') or []
     keywords = item.get('strength_keywords') or []
-    chip_row = _strength_section_html(fields, keywords)
+    chip_row = mmd.strength_section_html(fields, keywords)
 
     kv_blocks = (
         _kv_block_html('Hard Skills', item.get('hard_skills') or {}, _HARD_SKILL_LABELS)

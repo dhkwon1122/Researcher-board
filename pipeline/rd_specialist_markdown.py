@@ -170,6 +170,23 @@ def map_link_html(researcher_id: str) -> str:
     )
 
 
+def strength_section_html(fields: list, keywords: list) -> str:
+    """강점 분야(chip)와 키워드(chip kw)를 "Strength Field"/"Strength Keywords"
+    라벨로 구분해 보여준다 — 둘 다 칩만 이어 붙이면 어떤 게 분야이고 어떤 게
+    키워드인지 구분이 안 되던 문제를 라벨로 해소한다(칩 형태 자체는 기존
+    그대로 유지). 연구원 보유 전문성 분석.html/연구원 유사도.html이 공유."""
+    if not fields and not keywords:
+        return '<p class="empty">강점 분야/키워드 데이터 없음</p>'
+    parts = []
+    if fields:
+        chips = ''.join(f'<span class="chip">{html.escape(f)}</span>' for f in fields)
+        parts.append(f'<div class="chip-label">Strength Field</div><div class="chip-row">{chips}</div>')
+    if keywords:
+        chips = ''.join(f'<span class="chip kw">{html.escape(k)}</span>' for k in keywords)
+        parts.append(f'<div class="chip-label">Strength Keywords</div><div class="chip-row">{chips}</div>')
+    return ''.join(parts)
+
+
 # R&D Project Specialist Agent — 사내 LLM 시스템 프롬프트 (원문 그대로 사용).
 # process_project_expertise.py(사내 과제) 등 여러 스크립트가 동일한 페르소나로
 # "필수 직무·전문성 딥다이브 매핑"을 생성하는 데 재사용한다.

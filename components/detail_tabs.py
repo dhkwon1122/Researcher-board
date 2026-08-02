@@ -175,10 +175,12 @@ def llm_summary_block(profile: dict | None, similar: list | None = None, name_ma
 
     children = []
     if fields:
+        children.append(html.Div('Strength Field', className='small text-muted fw-semibold mb-1'))
         children.append(html.Div(
             [dbc.Badge(f, color='dark', className='me-1 mb-1') for f in fields],
         ))
     if keywords:
+        children.append(html.Div('Strength Keywords', className='small text-muted fw-semibold mt-2 mb-1'))
         children.append(html.Div(
             [dbc.Badge(k, color='secondary', className='me-1 mb-1') for k in keywords],
         ))
