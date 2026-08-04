@@ -130,6 +130,43 @@
    지원. 1차 SQL/키워드 매칭이 0건이거나 애매하면 BGE-M3 임베딩 유사도로 2차
    매칭(`nl_query.py`의 `expand_term()`이 이미 쓰는 패턴과 동일한 폴백 철학).
 
-**다음 단계(미착수)**: 위 4개 결정을 바탕으로 한 구체 설계(새 intent 이름/스키마
-프롬프트 구성/DuckDB 실행 계층/`sanitize_sql` 재사용 범위/동시성 보호 적용) 및
-구현.
+**구체 설계안 확정** (구현 직전 단계):
+
+- **아키텍처**: `nl_query.py`에 4번째 intent `open_data_query` 추가. 라우팅
+  프롬프트(1단계, 가벼움)는 그대로 두고, `open_data_query`로 분류된 질문만
+  스키마 전체를 실은 2단계 프롬프트로 SQL 생성(`text2sql.py`의 `generate_sql()`
+  패턴 재사용, DuckDB 방언).
+- **스키마 소스**: 수동 테이블 목록 대신 `data/processed/*.csv`를 매 질의 시점에
+  동적 스캔(`services.data_store.read_processed()`로 로드 — DB 생기면 자동으로
+  DB를 씀) + LLM 파생 JSON(연구원 보유 전문성 분석/project_fit_by_*)도 flat
+  DataFrame으로 변환해 함께 등록. 한글 파일명은 영문 별칭으로 등록(예:
+  `연구원 보유 전문성 분석.json` → `expertise_profiles`) — 별칭 네이밍은 구현
+  시 자유롭게 정하기로 함.
+- **실행 계층**: DuckDB(신규 의존성, `requirements.txt`에 추가 예정) — pandas
+  DataFrame을 그대로 SQL로 조회, 별도 서버 불필요.
+- **안전장치**: `text2sql.sanitize_sql()` 그대로 재사용(DB 비의존적 순수 문자열
+  검증). SQL 생성 호출은 `services.llm.chat()`이 아니라 `pipeline/llm_client.call_llm(
+  ..., max_wait=...)`로 라우팅해 기존 동시성 보호(세마포어 공유 + 타임아웃)를
+  적용(`text2sql.py`엔 없던 보호를 여기선 적용).
+- **의미 기반 폴백**: SQL 1차 실행이 0건이면, LLM이 SQL과 함께 준
+  `fallback_table`/`fallback_column`/`fallback_term`을 `nl_query.expand_term()`과
+  동일한 패턴(BGE-M3 코사인 유사도, threshold 0.75)으로 재매칭 — 재-SQL 생성
+  없이 끝남.
+- **결과 개수/정렬** (사용자 확정):
+  - SQL 자체 실행 결과는 Python 레이어에서 **항상 상위 50건으로 자름**(SQL의
+    LIMIT 절과 무관하게 사후 slice — `sanitize_sql`이 붙이는 LIMIT은 쿼리
+    자체의 안전장치일 뿐, 응답에 실제로 담기는 건 최대 50건).
+  - **정렬**: 의미 기반 폴백 결과는 코사인 유사도 내림차순(자연스러운 "유사도
+    순"). 일반 SQL 조회 결과는 "유사도"라는 개념이 없으므로, 질문이 순위를
+    암시하면(예: "논문이 가장 많은") LLM이 SQL에 `ORDER BY`를 포함하도록
+    프롬프트에 지시하고, 그 외에는 SQL이 반환한 순서 그대로 — 이 한계를
+    화면에 별도 경고하진 않지만 알아둘 것.
+  - **표시**: 기본 10건만 렌더링하고, 50건까지 받아온 전체 결과는
+    `dcc.Store`에 담아 둔 채 "전체 N건 보기" 버튼으로 펼치는 방식(Dash
+    callback으로 구현 가능, 재질의/재호출 없음 — 이미 받아온 데이터를
+    보여주기만 전환).
+  - **SQL 노출**: "연구원 목록" 탭의 기존 AI 검색과 동일하게, 실행된 SQL을
+    접이식으로 화면에 표시(기존 기능과 UX 통일).
+
+**다음 단계**: 위 설계로 구현 진행 예정. 구현 후 이 섹션은 "완료된 항목"으로
+옮기고 실제 파일 경로/함수명으로 갱신할 것.
