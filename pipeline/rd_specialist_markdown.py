@@ -625,6 +625,10 @@ CONSOLE_STYLE = """
   dl.kv dt { color: var(--ink-soft); font-weight: 600; margin-top: 6px; }
   dl.kv dt:first-child { margin-top: 0; }
   dl.kv dd { margin: 1px 0 0; color: var(--ink); }
+  /* key_responsibilities/domain_knowledge_skill처럼 문장형 항목 리스트를 보여줄 때 씀(kv-block과 짝) */
+  ul.kv-list { margin: 0; padding-left: 18px; font-size: 0.78rem; color: var(--ink); }
+  ul.kv-list li { margin-top: 4px; }
+  ul.kv-list li:first-child { margin-top: 0; }
   .job-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px,1fr)); gap: 12px; margin-top: 4px; }
   .job-card { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
   .job-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 8px; }

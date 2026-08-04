@@ -54,9 +54,9 @@ def _read_expertise() -> list:
 
 
 def _profile_fields_html(profile: dict) -> str:
-    """프로필 원본 필드(강점 분야/키워드/Hard Skills/Domain Knowledge)를
+    """프로필 원본 필드(강점 분야/키워드/주요 역할·책임/전문지식 및 역량)를
     researcher_profile_text()로 이어붙이기 전, 사람이 보기 좋은 형태로 나열
-    (원본 JSON 키를 그대로 보여준다 — researcher_fit 내부 라벨 매핑에 의존하지 않음)."""
+    (원본 JSON 키를 그대로 보여준다 — researcher_fit 내부 로직에 의존하지 않음)."""
     parts = []
     fields = profile.get('strength_fields') or []
     keywords = profile.get('strength_keywords') or []
@@ -66,13 +66,13 @@ def _profile_fields_html(profile: dict) -> str:
     if keywords:
         chips = ''.join(f'<span class="chip kw">{html.escape(k)}</span>' for k in keywords)
         parts.append(f'<div class="chip-row">{chips}</div>')
-    kv_items = [
-        f'<dt>{html.escape(key)}</dt><dd>{html.escape(value)}</dd>'
-        for section in (profile.get('hard_skills') or {}, profile.get('domain_knowledge') or {})
-        for key, value in section.items() if value
+    list_items = [
+        f'<li>{html.escape(v)}</li>'
+        for section in (profile.get('key_responsibilities') or [], profile.get('domain_knowledge_skill') or [])
+        for v in section
     ]
-    if kv_items:
-        parts.append(f'<dl class="kv">{"".join(kv_items)}</dl>')
+    if list_items:
+        parts.append(f'<ul class="kv-list">{"".join(list_items)}</ul>')
     return ''.join(parts) or '<p class="empty">원본 프로필 필드 없음</p>'
 
 

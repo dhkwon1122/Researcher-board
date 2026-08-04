@@ -152,26 +152,21 @@ _PANEL_TITLE_STYLE = {'fontSize': '0.85rem', 'fontWeight': 600, 'color': '#1d1d1
 _GRADE_PILL_COLOR = '#3f8f57'
 _E_SUPPORT_COLOR = '#0071e3'
 
-_DOMAIN_LABELS = [
-    ('academic_theoretical_background', '학술/이론적 배경'),
-    ('industry_standards', '산업/기술 표준'),
-    ('patent_trend_understanding', '특허/트렌드 이해도'),
-]
-
-
 def llm_summary_block(profile: dict | None, similar: list | None = None, name_map: dict | None = None):
     """전문성 요약(LLM) — 연구원 보유 전문성 분석.json의 핵심 분야(strength_fields)/
-    키워드(strength_keywords)를 배지로, 도메인 지식(domain_knowledge)을 라벨:값
-    한 줄씩으로 보여준다. similar(researcher_similarity.json의 해당 연구원 항목 중
-    'similar' 리스트, 시니어 우선으로 이미 정렬돼 있음)가 주어지면 시니어 3명·
-    주니어 3명을 유사 연구원 배지로 덧붙인다. 해당 연구원이 분석 대상이 아니거나
-    아직 파이프라인을 실행하지 않아 데이터가 없으면 안내 문구만 표시한다."""
+    키워드(strength_keywords)를 배지로, 주요 역할·책임(key_responsibilities)/
+    전문지식 및 역량(domain_knowledge_skill)을 불릿 목록으로 보여준다.
+    similar(researcher_similarity.json의 해당 연구원 항목 중 'similar' 리스트,
+    시니어 우선으로 이미 정렬돼 있음)가 주어지면 시니어 3명·주니어 3명을 유사
+    연구원 배지로 덧붙인다. 해당 연구원이 분석 대상이 아니거나 아직 파이프라인을
+    실행하지 않아 데이터가 없으면 안내 문구만 표시한다."""
     if not profile:
         return html.Div('분석 데이터 없음', className='text-muted small p-1')
 
     fields = profile.get('strength_fields') or []
     keywords = profile.get('strength_keywords') or []
-    domain = profile.get('domain_knowledge') or {}
+    responsibilities = profile.get('key_responsibilities') or []
+    domain_skill = profile.get('domain_knowledge_skill') or []
 
     children = []
     if fields:
@@ -184,13 +179,12 @@ def llm_summary_block(profile: dict | None, similar: list | None = None, name_ma
         children.append(html.Div(
             [dbc.Badge(k, color='secondary', className='me-1 mb-1') for k in keywords],
         ))
-    domain_lines = [
-        html.Div([html.Span(f'{label}: ', className='fw-semibold'), html.Span(domain[key])],
-                  className='small text-muted')
-        for key, label in _DOMAIN_LABELS if domain.get(key)
-    ]
-    if domain_lines:
-        children.append(html.Div(domain_lines, className='mt-1'))
+    if responsibilities:
+        children.append(html.Div('주요 역할·책임', className='small text-muted fw-semibold mt-2 mb-1'))
+        children.append(html.Ul([html.Li(r, className='small') for r in responsibilities], className='mb-0 ps-3'))
+    if domain_skill:
+        children.append(html.Div('전문지식 및 역량', className='small text-muted fw-semibold mt-2 mb-1'))
+        children.append(html.Ul([html.Li(d, className='small') for d in domain_skill], className='mb-0 ps-3'))
 
     name_map = name_map or {}
     senior = [s for s in (similar or []) if s.get('tenure_level') == 'Senior'][:3]

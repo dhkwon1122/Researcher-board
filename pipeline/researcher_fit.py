@@ -41,16 +41,6 @@ _EMBED_CACHE_PATH = os.path.join(OUT_DIR, 'embedding_cache.json')
 
 FIT_VARIANT = {'상': 'good', '중': 'warn', '하': 'low'}
 
-_HARD_SKILL_LABELS = [
-    ('languages_frameworks', '개발 언어 및 프레임워크'),
-    ('hardware_equipment_control', '하드웨어 및 장비 제어'),
-    ('analysis_simulation_tools', '분석 및 시뮬레이션 툴'),
-]
-_DOMAIN_LABELS = [
-    ('academic_theoretical_background', '학술적/이론적 배경'),
-    ('industry_standards', '산업/기술 표준 및 규격'),
-    ('patent_trend_understanding', '특허 및 트렌드 이해도'),
-]
 
 SYSTEM_PROMPT_BY_TARGET = """# Role
 당신은 R&D 인재 배치 전문가인 "R&D Talent Matching Agent"입니다. "R&D Project
@@ -132,14 +122,10 @@ def researcher_profile_text(profile: dict) -> str:
         parts.append('강점 분야: ' + ', '.join(profile['strength_fields']))
     if profile.get('strength_keywords'):
         parts.append('강점 키워드: ' + ', '.join(profile['strength_keywords']))
-    hard_skills = profile.get('hard_skills', {})
-    for key, label in _HARD_SKILL_LABELS:
-        if hard_skills.get(key):
-            parts.append(f'{label}: {hard_skills[key]}')
-    domain_knowledge = profile.get('domain_knowledge', {})
-    for key, label in _DOMAIN_LABELS:
-        if domain_knowledge.get(key):
-            parts.append(f'{label}: {domain_knowledge[key]}')
+    if profile.get('key_responsibilities'):
+        parts.append('주요 역할·책임: ' + '; '.join(profile['key_responsibilities']))
+    if profile.get('domain_knowledge_skill'):
+        parts.append('전문지식 및 역량: ' + '; '.join(profile['domain_knowledge_skill']))
     return '\n'.join(parts) if parts else '(전문성 데이터 없음)'
 
 

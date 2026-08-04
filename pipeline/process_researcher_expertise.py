@@ -61,58 +61,54 @@ import result_archive  # noqa: E402
 
 _SYSTEM_PROMPT = """# Role
 당신은 R&D 인재 전문성 분석 전문가인 "R&D Talent Profiling Agent"입니다.
-입력된 한 연구원의 학력, 과제 수행 이력, 직무 이력, 보유 기술/등급, 논문, 특허
-데이터를 정밀 분석하여, 이 연구원이 실제로 보유한 전문성을 오직 팩트(Fact)
-기반으로 도출하는 역할을 수행합니다.
+입력된 한 연구원의 학력, 과제 수행 이력, 직무 이력, 핵심기술, 보유기술, 논문,
+특허, 업무목표 데이터를 정밀 분석하여, 이 연구원이 실제로 맡아온 역할·업무와
+보유한 전문성을 오직 팩트(Fact) 기반으로 도출하는 역할을 수행합니다.
 
 # Goal
-HR 담당자와 R&D 부서장이 이 연구원의 전문성을 객관적으로 파악하고, 향후 프로젝트
-배치·인력 매칭·채용 판단에 활용할 수 있도록 구조화된 전문성 프로필을 제공합니다.
+HR 담당자와 R&D 부서장이 이 연구원이 "실제로 어떤 일을 해왔는지(역할·책임)"와
+"무엇을 할 줄 아는지(전문지식·역량)"를 한눈에 파악하고, 향후 프로젝트 배치·
+인력 매칭·채용 판단에 활용할 수 있도록 구조화된 전문성 프로필을 제공합니다.
 
 # Guidelines & Constraints
-1. 철저한 팩트 기반: 입력 데이터에 명시적으로 드러나지 않는 기술/지식을 임의로
+1. 철저한 팩트 기반: 입력 데이터에 명시적으로 드러나지 않는 내용을 임의로
    추정하여 확정하지 마세요. 데이터로부터 합리적으로 추론 가능한 내용은
    근거와 함께 서술할 수 있습니다.
-2. 판단 근거가 있지만 확신이 부족하면 해당 값에 "확인 불가"라고 쓰세요.
-3. 판단 근거가 되는 데이터가 전혀 없는 항목은 그 키 자체를 결과 JSON에서
-   생략하세요(빈 문자열이나 지어낸 내용을 넣지 마세요).
-4. [업무목표] 항목은 연구원마다 작성 성실도·분량 차이가 커서, 내용이 소략하다는
+2. 판단 근거가 되는 데이터가 전혀 없는 항목은 빈 배열([])로 남기세요(지어낸
+   내용을 채우지 마세요).
+3. [업무목표] 항목은 연구원마다 작성 성실도·분량 차이가 커서, 내용이 소략하다는
    이유만으로 전문성을 낮게 판단하지 마세요. 다른 항목에 이미 충분한 근거가
    있다면 업무목표는 보조 참고 자료로만 활용하세요.
-5. 반드시 아래 JSON 형식으로만 출력하고, 그 외 텍스트는 출력하지 마세요.
+4. key_responsibilities(주요 역할과 책임/업무내용)는 [과제 수행 이력]의 각
+   과제에서 실제로 맡았을 역할, [직무 이력]에 기록된 직무명과 수행 기간,
+   [업무목표]에 명시된 실제 수행 업무를 종합해 도출하세요. 직무명이나 과제명을
+   그대로 나열하지 말고, "실제로 무엇을 했는지/하고 있는지"가 드러나는 구체적
+   행위 중심 표현으로 작성하세요 (예: "로봇 SLAM 알고리즘 설계 및 검증",
+   "센서 캘리브레이션 파이프라인 구축", "신소재 내구성 평가 실험 설계"). 여러
+   과제·직무에 걸쳐 반복되는 역할은 하나로 통합해서 쓰세요. 3~6개를
+   권장하되, 근거가 그보다 적으면 억지로 채우지 마세요.
+5. domain_knowledge_skill(전문지식 및 역량)은 [학력](전공), [핵심기술]/
+   [보유기술](분야·등급·Lv·보유율), [논문]/[특허]를 근거로 이 연구원이 보유한
+   전문지식·기술 역량을 도출하세요. 개발 언어/프레임워크/장비 등 실무적
+   하드 스킬과, 이론적 배경/산업 표준 등 학술적 지식을 따로 구분하지 말고
+   구체적인 항목으로 함께 나열하세요 (예: "PyTorch 기반 강화학습 모델 개발
+   역량", "칼만 필터 기반 센서 융합 이론", "ISO 26262 기능안전 표준 이해").
+   3~6개를 권장하되, 근거가 그보다 적으면 억지로 채우지 마세요.
+6. key_responsibilities와 domain_knowledge_skill은 관점이 다릅니다 —
+   전자는 "실제 수행 업무(무엇을 했는가)", 후자는 "보유 지식·역량(무엇을
+   아는가/할 수 있는가)"입니다. 같은 내용을 두 필드에 중복해서 넣지 마세요.
+7. 반드시 아래 JSON 형식으로만 출력하고, 그 외 텍스트는 출력하지 마세요.
 
 # Output Format (JSON)
 {
   "strength_fields": ["강점 분야1", "강점 분야2"],
   "strength_keywords": ["키워드1", "키워드2", "키워드3"],
-  "hard_skills": {
-    "languages_frameworks": "개발 언어 및 프레임워크 (예: C/C++, Python, PyTorch, ROS2 등) 또는 '확인 불가'",
-    "hardware_equipment_control": "하드웨어 및 장비 제어 (예: MCU, LiDAR 센서 제어, 오실로스코프 활용 등) 또는 '확인 불가'",
-    "analysis_simulation_tools": "분석 및 시뮬레이션 툴 (예: MATLAB, ANSYS, CAD 등) 또는 '확인 불가'"
-  },
-  "domain_knowledge": {
-    "academic_theoretical_background": "학술적/이론적 배경 (예: 선형대수학, 칼만 필터 이론, 신호처리 이론 등) 또는 '확인 불가'",
-    "industry_standards": "산업/기술 표준 및 규격 (예: ISO 26262, ISO 13485 등) 또는 '확인 불가'",
-    "patent_trend_understanding": "해당 분야의 선행 특허 및 최신 논문 동향 분석력 또는 '확인 불가'"
-  }
+  "key_responsibilities": ["주요 역할/책임 1", "주요 역할/책임 2"],
+  "domain_knowledge_skill": ["전문지식/역량 1", "전문지식/역량 2"]
 }
-※ hard_skills/domain_knowledge의 하위 항목은 판단 근거가 전혀 없으면 키를 생략하세요.
 """
 
-_HARD_SKILL_KEYS = ['languages_frameworks', 'hardware_equipment_control', 'analysis_simulation_tools']
-_DOMAIN_KEYS = ['academic_theoretical_background', 'industry_standards', 'patent_trend_understanding']
-
-# HTML 리포트에서 hard_skills/domain_knowledge 하위 키를 표시할 때 쓰는 한글 라벨
-_HARD_SKILL_LABELS = [
-    ('languages_frameworks', '개발 언어 및 프레임워크'),
-    ('hardware_equipment_control', '하드웨어 및 장비 제어'),
-    ('analysis_simulation_tools', '분석 및 시뮬레이션 툴'),
-]
-_DOMAIN_LABELS = [
-    ('academic_theoretical_background', '학술적/이론적 배경'),
-    ('industry_standards', '산업/기술 표준 및 규격'),
-    ('patent_trend_understanding', '특허 및 트렌드 이해도'),
-]
+_PROFILE_LIST_FIELDS = ('strength_fields', 'strength_keywords', 'key_responsibilities', 'domain_knowledge_skill')
 
 
 def _read_csv(name: str) -> pd.DataFrame:
@@ -334,33 +330,23 @@ def _analyze_researcher(prompt: str) -> dict | None:
         return None
 
     out = {}
-    if isinstance(result.get('strength_fields'), list):
-        out['strength_fields'] = result['strength_fields']
-    if isinstance(result.get('strength_keywords'), list):
-        out['strength_keywords'] = result['strength_keywords']
-
-    hard_skills = result.get('hard_skills', {})
-    if isinstance(hard_skills, dict):
-        filtered = {k: v for k, v in hard_skills.items() if k in _HARD_SKILL_KEYS and v}
-        if filtered:
-            out['hard_skills'] = filtered
-
-    domain_knowledge = result.get('domain_knowledge', {})
-    if isinstance(domain_knowledge, dict):
-        filtered = {k: v for k, v in domain_knowledge.items() if k in _DOMAIN_KEYS and v}
-        if filtered:
-            out['domain_knowledge'] = filtered
+    for key in _PROFILE_LIST_FIELDS:
+        if isinstance(result.get(key), list):
+            values = [str(v).strip() for v in result[key] if str(v).strip()]
+            if values:
+                out[key] = values
 
     return out if out else None
 
 
-def _kv_block_html(title: str, data: dict, labels: list) -> str:
-    """hard_skills/domain_knowledge 중 하나를 kv-block으로 렌더링. LLM이 근거
-    없다고 판단해 아예 생략한 키는 항목 자체를 표시하지 않는다."""
-    items = [f'<dt>{label}</dt><dd>{html.escape(data[key])}</dd>' for key, label in labels if data.get(key)]
+def _list_block_html(title: str, items: list) -> str:
+    """key_responsibilities/domain_knowledge_skill 중 하나를 kv-block 스타일의
+    불릿 목록으로 렌더링. LLM이 근거 없다고 판단해 빈 배열로 남긴 항목은
+    블록 자체를 표시하지 않는다."""
     if not items:
         return ''
-    return f'<div class="kv-block"><div class="kv-title">{title}</div><dl class="kv">{"".join(items)}</dl></div>'
+    lis = ''.join(f'<li>{html.escape(v)}</li>' for v in items)
+    return f'<div class="kv-block"><div class="kv-title">{title}</div><ul class="kv-list">{lis}</ul></div>'
 
 
 def _researcher_card_html(item: dict, name_map: dict, anchor: str) -> str:
@@ -372,8 +358,8 @@ def _researcher_card_html(item: dict, name_map: dict, anchor: str) -> str:
     chip_row = mmd.strength_section_html(fields, keywords)
 
     kv_blocks = (
-        _kv_block_html('Hard Skills', item.get('hard_skills') or {}, _HARD_SKILL_LABELS)
-        + _kv_block_html('Domain Knowledge', item.get('domain_knowledge') or {}, _DOMAIN_LABELS)
+        _list_block_html('주요 역할·책임', item.get('key_responsibilities') or [])
+        + _list_block_html('전문지식 및 역량', item.get('domain_knowledge_skill') or [])
     )
     body_html = f'<div class="kv-grid">{kv_blocks}</div>' if kv_blocks else '<p class="empty">세부 항목 데이터 없음</p>'
 
@@ -427,12 +413,12 @@ def _build_html(results: list, researchers_df: pd.DataFrame) -> str:
             nav_groups.append(f'<div class="nav-group"><div class="nav-group-label">{html.escape(dept)}</div>{entries}</div>')
 
     total = len(results)
-    hard_count = sum(1 for it in results if it.get('hard_skills'))
-    domain_count = sum(1 for it in results if it.get('domain_knowledge'))
+    resp_count = sum(1 for it in results if it.get('key_responsibilities'))
+    domain_skill_count = sum(1 for it in results if it.get('domain_knowledge_skill'))
     stats = mmd.stat_row_html([
         mmd.coverage_stat(total, len(researchers_df), '분석 완료 / 분석 대상 연구원'),
-        (hard_count, 'Hard Skills 데이터 보유'),
-        (domain_count, 'Domain Knowledge 데이터 보유'),
+        (resp_count, '주요 역할·책임 데이터 보유'),
+        (domain_skill_count, '전문지식 및 역량 데이터 보유'),
         mmd.generated_at_stat(),
     ])
 
