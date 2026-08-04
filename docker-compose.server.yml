@@ -1,0 +1,25 @@
+# 서버 배포용 오버레이
+# 별도 docker 로 띄운 PostgreSQL 16 컨테이너와 app 을 "같은 docker 네트워크"로
+# 연결해, 호스트 포트를 거치지 않고 컨테이너명으로 직접 통신하게 한다.
+#
+# 사용 순서:
+#   1) postgres 컨테이너가 속한 네트워크 이름 확인
+#        docker inspect -f '{{range $k,$_ := .NetworkSettings.Networks}}{{$k}} {{end}}' <postgres컨테이너명>
+#   2) .env 에 아래 두 값 설정
+#        DB_NETWORK=<위에서 확인한 네트워크명>
+#        DATABASE_URL=postgresql+psycopg2://postgres:비번@<postgres컨테이너명>:5432/researcher_board
+#   3) 기동
+#        docker compose -f docker-compose.yml -f docker-compose.server.yml up -d
+#
+# 참고: postgres 가 호스트에 -p 5432:5432 로 게시돼 있으면 이 오버레이 없이도
+#       DATABASE_URL 을 host.docker.internal:5432 로 두면 동작한다(.env.example 참고).
+services:
+  app:
+    networks:
+      - default        # app 기본 네트워크 유지
+      - dbnet          # 외부 postgres 네트워크 합류
+
+networks:
+  dbnet:
+    external: true
+    name: ${DB_NETWORK:-researcher_board_dbnet}
