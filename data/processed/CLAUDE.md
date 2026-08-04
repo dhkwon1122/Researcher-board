@@ -102,6 +102,36 @@
    매칭/자연어질문이 전부 공유)도 함께 갱신.
 10. **자연어 질문 기능에 개방형 질의(`open_data_query`) 폴백 추가**: 아래
     "완료: 개방형 질의(open_data_query) 확장" 섹션 참고.
+11. **자연어 질문 결과 → 연구원 프로필 엑셀 다운로드**: 아래 "완료: 연구원
+    프로필 엑셀 다운로드" 섹션 참고.
+
+## 완료: 연구원 프로필 엑셀 다운로드
+
+"보유 전문성" 탭 자연어 질문 결과(구조화 3-intent든 open_data_query든)에서
+찾은 연구원 중 원하는 대상을 선택해 인사 프로필을 엑셀로 내보내는 기능.
+컬럼 구성과 각 필드 표기 규칙(날짜 축약, 다중 이력 줄바꿈 표기 등)은 전부
+사용자 인터뷰로 확정한 것을 그대로 코드화했다 — 규칙을 바꾸려면
+`services/researcher_profile_export.py`의 `_COLUMNS`와 `_col_*` 함수만
+고치면 된다.
+
+- **`services/researcher_profile_export.py`** (신규): `build_profile_workbook
+  (researcher_ids)`가 openpyxl로 xlsx 바이트를 만든다. 양식은 바탕체 11pt,
+  전체 셀 검정 테두리, 헤더 행만 볼드, 여러 줄 값은 자동 줄바꿈. 컬럼은 사번/
+  Knox ID/성명(성별·나이)/부서(비공식소속명)/입사일(근속연수)/학력(박→석→학
+  순, "코드)학교 전공" 줄바꿈 나열)/평가('24~'26 등급 슬래시)/직급·연차
+  (승격기준일로부터 다음 3/1까지 연차, 소수 첫째자리 버림)/과제수행이력·
+  양성이력·핵심이력(전부 다중 이력을 줄바꿈으로 나열, 값 없으면 "-"). 값이
+  없는 원천 컬럼(예: 이 저장소 개발 샘플 데이터엔 없는 `knox_id`/`hire_date`/
+  `promotion_date` — 운영 환경에선 `pipeline/process_researchers.py`가
+  채운다)은 전부 "-"로 안전하게 처리.
+- **`pages/researcher_similarity_map.py`**: `_nl_query_bar()`에 "엑셀
+  다운로드" 버튼(`nl-query-excel-btn`, 결과에 researcher_id 후보가 있을
+  때만 표시 — open_data_query 결과 로직에 이미 있던 "컴포넌트는 고정, 속성만
+  콜백 갱신" 패턴 재사용) + 대상 선택 모달(`nl-query-excel-modal`, 체크리스트
+  + 전체선택/해제 토글) + `dcc.Download`. `_extract_candidates(result)`가
+  intent별로(구조화 intent는 `items[].researcher_id`, open_data_query는
+  결과 컬럼에 `researcher_id`가 있을 때만) 후보 목록을 뽑는다. 다운로드
+  파일명은 `연구원_프로필_YYYYMMDDHHMM.xlsx`(분 단위까지).
 
 ## 완료: 개방형 질의(open_data_query) 확장
 

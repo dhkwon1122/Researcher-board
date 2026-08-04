@@ -1,0 +1,270 @@
+"""
+"보유 전문성" 자연어 질문 결과에서 선택한 연구원들의 프로필을 엑셀로 내보낸다
+(`pages/researcher_similarity_map.py`의 "엑셀 다운로드" 버튼 → 모달에서 사용).
+
+컬럼 구성/표기 규칙은 사용자와의 인터뷰로 확정된 것을 그대로 코드화한 것 —
+바꾸려면 아래 `_COLUMNS`와 각 `_col_*` 함수만 수정하면 된다. 규칙 요약:
+  - 사번: researcher_id 8자리 0패딩(data_store.read_processed가 이미 패딩해 줌)
+  - 값이 없으면 전부 "-" (다중 이력 필드는 이력이 하나도 없을 때 셀 전체가 "-")
+  - 날짜는 대부분 'YY(2자리 연도, 예: '24)로 축약 표기 — 원본 협의 그대로
+  - 학력/과제수행이력/양성이력/핵심이력은 한 셀 안에 줄바꿈(\\n)으로 여러 줄
+"""
+import io
+import math
+from datetime import date, datetime
+
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, Side
+from openpyxl.utils import get_column_letter
+
+from services import data_store
+
+_FONT_NAME = '바탕체'
+_FONT_SIZE = 11
+_THIN = Side(style='thin', color='000000')
+_BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
+
+_DEGREE_ORDER = ['박사', '석사', '학사']
+_DEGREE_CODE = {'박사': '박', '석사': '석', '학사': '학'}
+
+_PROMOTION_REF_BASE = date(2027, 3, 1)
+
+
+def _s(v) -> str:
+    """빈 값/NaN을 빈 문자열로 통일."""
+    if v is None:
+        return ''
+    s = str(v).strip()
+    return '' if s.lower() in ('', 'nan', 'none', 'nat') else s
+
+
+def _or_dash(v) -> str:
+    s = _s(v)
+    return s if s else '-'
+
+
+def _yy(date_str) -> str:
+    s = _s(date_str)
+    if len(s) >= 4 and s[:4].isdigit():
+        return "'" + s[2:4]
+    return ''
+
+
+def _next_promotion_ref_date(today: date) -> date:
+    """직급/년차 기준일 — 2027-03-01부터 시작해 오늘을 지나지 않은 첫 3/1."""
+    ref = _PROMOTION_REF_BASE
+    while ref < today:
+        ref = ref.replace(year=ref.year + 1)
+    return ref
+
+
+def _floor1(x: float) -> float:
+    return math.floor(x * 10) / 10
+
+
+def _load_tables() -> dict:
+    return {
+        'researchers': data_store.read_processed('researchers'),
+        'education': data_store.read_processed('education'),
+        'evaluations': data_store.read_processed('evaluations'),
+        'tasks': data_store.read_processed('tasks'),
+        'nurturing': data_store.read_processed('nurturing'),
+        'incentive_selection': data_store.read_processed('incentive_selection'),
+    }
+
+
+def _rows_for(df, researcher_id: str):
+    if df is None or df.empty or 'researcher_id' not in df.columns:
+        return []
+    return df[df['researcher_id'] == researcher_id].to_dict('records')
+
+
+def _col_id(rid, _rows):
+    return rid
+
+
+def _col_knox(_rid, rows):
+    return _or_dash(rows['researcher'].get('knox_id') if rows['researcher'] else None)
+
+
+def _col_name_gender_age(_rid, rows):
+    r = rows['researcher']
+    if not r:
+        return '-'
+    name = _or_dash(r.get('name'))
+    gender = _s(r.get('gender')) or '-'
+    birth_year = _s(r.get('birth_year'))
+    age = f'{datetime.now().year - int(birth_year)}세' if birth_year.isdigit() else '-'
+    return f'{name}\n({gender}/{age})'
+
+
+def _col_dept_task(_rid, rows):
+    r = rows['researcher']
+    if not r:
+        return '-'
+    dept = _or_dash(r.get('department'))
+    org = _or_dash(r.get('org_code'))
+    return f'{dept}\n({org})'
+
+
+def _col_hire_date(_rid, rows):
+    r = rows['researcher']
+    hire_date = _s(r.get('hire_date')) if r else ''
+    if not hire_date:
+        return '-'
+    hd = date.fromisoformat(hire_date[:10])
+    tenure = round((date.today() - hd).days / 365, 2)
+    return f"{hd.strftime('%Y%m%d')}\n{tenure}"
+
+
+def _col_education(_rid, rows):
+    by_degree = {}
+    for e in rows['education']:
+        deg = _s(e.get('degree'))
+        if deg in _DEGREE_CODE:
+            by_degree.setdefault(deg, e)
+    lines = []
+    for deg in _DEGREE_ORDER:
+        e = by_degree.get(deg)
+        if not e:
+            continue
+        code = _DEGREE_CODE[deg]
+        school = _or_dash(e.get('school'))
+        major = _or_dash(e.get('major'))
+        lines.append(f'{code}){school} {major}')
+    return '\n'.join(lines) if lines else '-'
+
+
+def _col_evaluation(_rid, rows):
+    grade_by_year = {_s(e.get('year')): _s(e.get('grade')) for e in rows['evaluations']}
+    parts = [grade_by_year.get(str(y)) or '-' for y in (2024, 2025, 2026)]
+    return '/'.join(parts)
+
+
+def _col_position_year(_rid, rows):
+    r = rows['researcher']
+    if not r:
+        return '-'
+    position = _or_dash(r.get('position'))
+    promo = _s(r.get('promotion_date'))
+    if not promo:
+        return f'{position}\n-'
+    promo_dt = date.fromisoformat(promo[:10])
+    ref = _next_promotion_ref_date(date.today())
+    years = _floor1((ref - promo_dt).days / 365)
+    return f'{position}\n{years}'
+
+
+def _col_tasks(_rid, rows):
+    items = sorted(rows['tasks'], key=lambda t: _s(t.get('start_date')))
+    lines = []
+    for t in items:
+        name = _s(t.get('task_name')) or '-'
+        start = _yy(t.get('start_date')) or '-'
+        end = _yy(t.get('end_date')) or '현재'
+        lines.append(f'{name}({start} ~ {end})')
+    return '\n'.join(lines) if lines else '-'
+
+
+def _col_nurturing(_rid, rows):
+    items = sorted(rows['nurturing'], key=lambda n: _s(n.get('start_date')))
+    lines = []
+    for n in items:
+        start = _yy(n.get('start_date')) or '-'
+        end = _yy(n.get('end_date')) or '-'
+        subcategory = _or_dash(n.get('subcategory'))
+        institution = _or_dash(n.get('institution'))
+        lines.append(f"{start}~{end} / {subcategory} / {institution}")
+    return '\n'.join(lines) if lines else '-'
+
+
+def _col_incentive(_rid, rows):
+    items = [i for i in rows['incentive_selection'] if _s(i.get('selected')).lower() in ('true', '1')]
+    items.sort(key=lambda i: _s(i.get('year')))
+    lines = [f"{_yy(i.get('year'))} : {_or_dash(i.get('category'))}" for i in items]
+    return '\n'.join(lines) if lines else '-'
+
+
+# (헤더, 값 계산 함수) — 순서 = 엑셀 컬럼 순서
+_COLUMNS = [
+    ('사번', _col_id),
+    ('Knox ID', _col_knox),
+    ('성명\n(성별/나이)', _col_name_gender_age),
+    ('부서\n(과제)', _col_dept_task),
+    ('입사일', _col_hire_date),
+    ('학력', _col_education),
+    ("평가\n('24~'26)", _col_evaluation),
+    ('직급/년차', _col_position_year),
+    ('과제수행이력', _col_tasks),
+    ('양성이력', _col_nurturing),
+    ('핵심이력', _col_incentive),
+]
+
+
+def _researcher_row_context(researcher_id: str, tables: dict) -> dict:
+    researcher_rows = _rows_for(tables['researchers'], researcher_id)
+    return {
+        'researcher': researcher_rows[0] if researcher_rows else None,
+        'education': _rows_for(tables['education'], researcher_id),
+        'evaluations': _rows_for(tables['evaluations'], researcher_id),
+        'tasks': _rows_for(tables['tasks'], researcher_id),
+        'nurturing': _rows_for(tables['nurturing'], researcher_id),
+        'incentive_selection': _rows_for(tables['incentive_selection'], researcher_id),
+    }
+
+
+def researcher_name_map() -> dict:
+    """researcher_id -> name 매핑(엑셀 다운로드 후보 라벨 생성용)."""
+    df = data_store.read_processed('researchers')
+    if df.empty or 'name' not in df.columns:
+        return {}
+    return dict(zip(df['researcher_id'], df['name']))
+
+
+def candidate_label(researcher_id: str, name_map: dict | None = None) -> str:
+    """모달 체크리스트에 보여줄 "이름 (사번)" 라벨. 이름 없으면 사번만."""
+    name_map = name_map if name_map is not None else researcher_name_map()
+    name = _s(name_map.get(researcher_id))
+    return f'{name} ({researcher_id})' if name else researcher_id
+
+
+def build_profile_workbook(researcher_ids: list) -> bytes:
+    """선택된 researcher_id 목록으로 엑셀(xlsx) 바이트를 만들어 반환한다.
+    양식: 바탕체 11pt, 전체 검정 테두리, 헤더만 볼드, 줄바꿈 셀은 자동 줄바꿈."""
+    tables = _load_tables()
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = '연구원 프로필'
+
+    header_font = Font(name=_FONT_NAME, size=_FONT_SIZE, bold=True)
+    body_font = Font(name=_FONT_NAME, size=_FONT_SIZE, bold=False)
+    wrap_center = Alignment(wrap_text=True, vertical='center', horizontal='center')
+    wrap_left = Alignment(wrap_text=True, vertical='center', horizontal='left')
+
+    for col_idx, (header, _fn) in enumerate(_COLUMNS, start=1):
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.font = header_font
+        cell.border = _BORDER
+        cell.alignment = wrap_center
+
+    for row_idx, rid in enumerate(researcher_ids, start=2):
+        ctx = _researcher_row_context(rid, tables)
+        for col_idx, (_header, fn) in enumerate(_COLUMNS, start=1):
+            value = fn(rid, ctx)
+            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell.font = body_font
+            cell.border = _BORDER
+            cell.alignment = wrap_left
+
+    widths = [12, 14, 16, 18, 12, 26, 12, 12, 34, 30, 22]
+    for col_idx, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def default_filename() -> str:
+    return f"연구원_프로필_{datetime.now().strftime('%Y%m%d%H%M')}.xlsx"

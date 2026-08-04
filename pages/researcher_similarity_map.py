@@ -22,6 +22,7 @@ import plotly.graph_objects as go
 from dash import Input, Output, Patch, State, callback, dcc, html
 
 from services import nl_query
+from services import researcher_profile_export
 from services.data_store import DATA_DIR
 from services.similarity_map import load_similarity_map
 
@@ -362,6 +363,27 @@ def _nl_query_bar() -> html.Div:
             dcc.Store(id='nl-query-full-result'),
             dcc.Store(id='nl-query-expanded', data=False),
         ])),
+        # 엑셀 다운로드 버튼/모달도 토글 버튼과 같은 이유로 상시 고정 컴포넌트로 둔다.
+        dbc.Button([html.I(className='bi bi-file-earmark-excel me-1'), '엑셀 다운로드'],
+                   id='nl-query-excel-btn', color='success', outline=True, size='sm',
+                   className='mt-2', style={'display': 'none'}, n_clicks=0),
+        dcc.Store(id='nl-query-candidates', data=[]),
+        dbc.Modal([
+            dbc.ModalHeader(dbc.ModalTitle('엑셀로 내보낼 연구원 선택')),
+            dbc.ModalBody([
+                dbc.Button('전체 선택/해제', id='nl-query-excel-selectall-btn',
+                           color='link', size='sm', className='p-0 mb-2', n_clicks=0),
+                dbc.Checklist(id='nl-query-excel-checklist', options=[], value=[],
+                              className='small'),
+            ]),
+            dbc.ModalFooter([
+                dbc.Button('닫기', id='nl-query-excel-close-btn', color='secondary',
+                           outline=True, size='sm', n_clicks=0),
+                dbc.Button('다운로드', id='nl-query-excel-download-btn', color='primary',
+                           size='sm', n_clicks=0),
+            ]),
+        ], id='nl-query-excel-modal', is_open=False),
+        dcc.Download(id='nl-query-excel-download'),
     ], className='mb-3')
 
 
@@ -488,6 +510,46 @@ def _render_nl_result(result: dict, expanded: bool = False):
     return html.Div(children)
 
 
+def _extract_candidates(result: dict) -> list:
+    """결과에서 엑셀 다운로드 후보(사번/라벨) 목록을 뽑는다. 구조화 intent는
+    items[].researcher_id를 그대로 쓰고, open_data_query는 결과 컬럼에
+    researcher_id가 있을 때만(없으면 내보낼 근거가 없음) 그 값으로 이름을
+    조회해 라벨을 만든다."""
+    intent = result.get('intent')
+    seen = set()
+
+    if intent == 'open_data_query':
+        columns = result.get('columns') or []
+        if 'researcher_id' not in columns:
+            return []
+        idx = columns.index('researcher_id')
+        rids = []
+        for row in result.get('rows') or []:
+            if idx >= len(row) or row[idx] is None:
+                continue
+            rid = str(row[idx]).strip().zfill(8)
+            if rid and rid not in seen:
+                seen.add(rid)
+                rids.append(rid)
+        if not rids:
+            return []
+        name_map = researcher_profile_export.researcher_name_map()
+        return [{'researcher_id': r, 'label': researcher_profile_export.candidate_label(r, name_map)}
+                for r in rids]
+
+    items = result.get('items') or []
+    out = []
+    for it in items:
+        rid = str(it.get('researcher_id') or '').strip()
+        if not rid or rid in seen:
+            continue
+        seen.add(rid)
+        rid = rid.zfill(8)
+        name = it.get('name') or ''
+        out.append({'researcher_id': rid, 'label': f'{name} ({rid})' if name else rid})
+    return out
+
+
 @callback(
     Output('nl-query-full-result', 'data'),
     Output('nl-query-expanded', 'data'),
@@ -510,16 +572,20 @@ def _run_nl_query(_n_clicks, _n_submit, question):
     Output('nl-query-result', 'children'),
     Output('nl-query-toggle-btn', 'children'),
     Output('nl-query-toggle-btn', 'style'),
+    Output('nl-query-excel-btn', 'style'),
+    Output('nl-query-candidates', 'data'),
     Input('nl-query-full-result', 'data'),
     Input('nl-query-expanded', 'data'),
     prevent_initial_call=True,
 )
 def _render_nl_query_store(result, expanded):
     if not result:
-        return dash.no_update, dash.no_update, dash.no_update
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
     expanded = bool(expanded)
     label, style = _toggle_button_props(result, expanded)
-    return _render_nl_result(result, expanded), label, style
+    candidates = _extract_candidates(result)
+    excel_style = {'display': 'inline-block'} if candidates else {'display': 'none'}
+    return _render_nl_result(result, expanded), label, style, excel_style, candidates
 
 
 @callback(
@@ -530,6 +596,57 @@ def _render_nl_query_store(result, expanded):
 )
 def _toggle_nl_query_expand(_n_clicks, expanded):
     return not expanded
+
+
+@callback(
+    Output('nl-query-excel-modal', 'is_open'),
+    Output('nl-query-excel-checklist', 'options'),
+    Output('nl-query-excel-checklist', 'value'),
+    Input('nl-query-excel-btn', 'n_clicks'),
+    State('nl-query-candidates', 'data'),
+    prevent_initial_call=True,
+)
+def _open_excel_modal(_n_clicks, candidates):
+    candidates = candidates or []
+    options = [{'label': c['label'], 'value': c['researcher_id']} for c in candidates]
+    all_values = [c['researcher_id'] for c in candidates]
+    return True, options, all_values
+
+
+@callback(
+    Output('nl-query-excel-modal', 'is_open', allow_duplicate=True),
+    Input('nl-query-excel-close-btn', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def _close_excel_modal(_n_clicks):
+    return False
+
+
+@callback(
+    Output('nl-query-excel-checklist', 'value', allow_duplicate=True),
+    Input('nl-query-excel-selectall-btn', 'n_clicks'),
+    State('nl-query-excel-checklist', 'value'),
+    State('nl-query-excel-checklist', 'options'),
+    prevent_initial_call=True,
+)
+def _toggle_excel_selectall(_n_clicks, selected, options):
+    all_values = [o['value'] for o in (options or [])]
+    if selected and len(selected) >= len(all_values):
+        return []
+    return all_values
+
+
+@callback(
+    Output('nl-query-excel-download', 'data'),
+    Input('nl-query-excel-download-btn', 'n_clicks'),
+    State('nl-query-excel-checklist', 'value'),
+    prevent_initial_call=True,
+)
+def _download_excel(_n_clicks, selected):
+    if not selected:
+        return dash.no_update
+    data = researcher_profile_export.build_profile_workbook(selected)
+    return dcc.send_bytes(data, researcher_profile_export.default_filename())
 
 
 def layout(highlight_researcher=None, **_kwargs):
