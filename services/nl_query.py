@@ -12,13 +12,18 @@
   2) 조회(intent별로 이미 있는 배치 산출물을 필터/조회, 필요할 때만 실시간
      임베딩 매칭으로 보완) — 대부분 새 LLM 호출 없이 응답 가능.
 
-지원 intent(사용자 표현은 매우 다양할 수 있으므로, 아래 3가지로 분류가 안 되는
-질문은 전부 "unsupported"로 안내만 반환하고 추측 답변을 만들지 않는다):
-  - find_researchers_by_expertise : 특정 전문성/키워드 보유 연구원 찾기
+지원 intent(사용자 표현은 매우 다양할 수 있으므로, 아래로 분류가 안 되는
+질문은 "unsupported"로 안내만 반환하고 추측 답변을 만들지 않는다):
+  - find_researchers_by_expertise : 이미 요약된 강점 분야/키워드 태그로 연구원 찾기
   - find_researchers_for_project  : 특정 과제(등록된 과제 또는 새 과제 설명)에
     적합한 연구원 찾기
   - find_projects_for_researcher  : 특정 연구원에게 적합한 사내 과제 찾기
     (현재 수행 중인 과제는 기본적으로 제외)
+  - open_data_query : 위 3가지가 다루는 "이미 계산된 결과"로는 답할 수 없는,
+    원천 데이터(학력/전공, 과제 수행 이력, 논문/특허, 평가/인사 이력 등)의
+    특정 항목을 근거로 찾는 개방형 질문. 예) "물리학 전공한 사람 찾아줘",
+    "양자컴 과제 수행 중인 연구원 보여줘", "특허 등록 3건 이상인 연구원".
+    services/open_data_query.py가 자연어 → SQL로 그 자리에서 조회한다.
 
 Source:
   data/processed/연구원 보유 전문성 분석.json      (services.data_store.read_expertise_profiles)
@@ -29,6 +34,7 @@ Source:
   data/processed/strength_taxonomy.json             (build_strength_taxonomy.py 2단계
     확정 표준 목록 — 있으면 동의어 확장에 사용, 없으면 원문 그대로만 매칭)
   data/processed/embedding_cache.json               (BGE-M3 임베딩 캐시, researcher_fit.cached_embed 재사용)
+  data/processed/*.csv 전체                          (open_data_query intent, services.open_data_query 참고)
 
 동시성: 이 모듈의 실시간 LLM 호출(질의 변환)은 llm_config.LLM2_QUERY_MAX_WAIT_SECONDS
 (기본 15초) 안에 동시 호출 슬롯을 못 얻으면 빈 응답으로 빠르게 실패한다 —
@@ -51,6 +57,7 @@ import llm_client  # noqa: E402
 import researcher_fit as fit  # noqa: E402
 from services.llm import LLMError  # noqa: E402
 from services import data_store  # noqa: E402
+from services import open_data_query  # noqa: E402
 
 try:
     import llm_config as _llm_cfg
@@ -66,6 +73,7 @@ _KNOWN_INTENTS = {
     'find_researchers_by_expertise',
     'find_researchers_for_project',
     'find_projects_for_researcher',
+    'open_data_query',
 }
 
 QUERY_SYSTEM_PROMPT = """# Role
@@ -73,8 +81,9 @@ QUERY_SYSTEM_PROMPT = """# Role
 검색 조건으로 바꾸는 "R&D Query Router"입니다. 직접 답을 만들지 않습니다 —
 질문을 분류하고 검색에 필요한 핵심 개체만 뽑아냅니다.
 
-# 지원하는 질문 유형(intent) — 반드시 이 4가지 중 하나로만 분류하세요
-1. find_researchers_by_expertise : 특정 전문성/기술/키워드를 가진 연구원을 찾는 질문
+# 지원하는 질문 유형(intent) — 반드시 이 5가지 중 하나로만 분류하세요
+1. find_researchers_by_expertise : 이미 요약된 "강점 분야/키워드" 태그로 연구원을
+   찾는 질문(태그 자체를 묻는 것이지, 학력·과제이력 같은 원천 데이터 항목이 아님)
    예) "로봇 제어 전문가 찾아줘", "센서 데이터 처리 할 줄 아는 사람 있어?"
 2. find_researchers_for_project : 특정 과제(사내에 이미 등록된 과제명, 또는
    새로 설명하는 과제)에 적합한 연구원을 찾는 질문
@@ -83,13 +92,18 @@ QUERY_SYSTEM_PROMPT = """# Role
    "현재 하고 있는 과제 말고", "지금 과제 제외하고" 같은 표현이 있으면
    exclude_current_project=true, 명시가 없어도 기본값은 true로 두세요.
    예) "정재원 연구원은 지금 과제 말고 어떤 과제에 적합해?"
-4. unsupported : 위 3가지에 해당하지 않는 모든 질문(잡담, 개인정보 요청,
-   이 시스템이 다루지 않는 질문 등) — 억지로 끼워 맞추지 말고 이 값으로
-   분류하고 reason_if_unsupported에 짧게 이유를 적으세요.
+4. open_data_query : 위 세 가지가 다루는 "이미 계산된 요약/매칭 결과"가 아니라,
+   원천 데이터의 구체적 항목(학력/전공, 실제 과제 수행 이력, 논문/특허 실적,
+   직급/근속, 평가/인사 이력 등)을 조건으로 찾거나 집계하는 질문
+   예) "물리학 전공한 사람 찾아줘", "양자컴퓨팅 과제 수행 중인 연구원 보여줘",
+   "특허 등록 3건 이상인 연구원", "부서별 평균 논문 수"
+5. unsupported : 위 4가지에 해당하지 않는 모든 질문(잡담, 이 시스템이 다루지
+   않는 질문 등) — 억지로 끼워 맞추지 말고 이 값으로 분류하고
+   reason_if_unsupported에 짧게 이유를 적으세요.
 
 # Output Format (JSON만 출력하고 그 외 텍스트는 절대 출력하지 마세요)
 {
-  "intent": "find_researchers_by_expertise" | "find_researchers_for_project" | "find_projects_for_researcher" | "unsupported",
+  "intent": "find_researchers_by_expertise" | "find_researchers_for_project" | "find_projects_for_researcher" | "open_data_query" | "unsupported",
   "expertise_terms": ["..."],
   "project_name": "",
   "project_description": "",
@@ -434,6 +448,7 @@ def parse_question(question: str) -> dict:
 
     return {
         'intent': intent,
+        'question': question,
         'expertise_terms': parsed.get('expertise_terms') or [],
         'project_name': parsed.get('project_name') or '',
         'project_description': parsed.get('project_description') or '',
@@ -456,8 +471,12 @@ def execute_query(parsed: dict) -> dict:
         if reason:
             note += f' ({reason})'
         note += (' "특정 전문성 보유자 찾기", "과제에 적합한 사람 찾기", '
-                 '"연구원에게 맞는 과제 찾기" 형태로 질문해 주세요.')
+                 '"연구원에게 맞는 과제 찾기", 또는 학력·과제이력 등 원천 데이터에'
+                 ' 대한 질문 형태로 질문해 주세요.')
         return {'intent': 'unsupported', 'items': [], 'note': note}
+
+    if intent == 'open_data_query':
+        return open_data_query.answer(parsed.get('question') or '')
 
     top_k = parsed.get('top_k') or DEFAULT_TOP_K
     if intent == 'find_researchers_by_expertise':

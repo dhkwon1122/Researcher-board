@@ -333,31 +333,102 @@ def _fit_score_badge(score: str):
     return dbc.Badge(score or '-', color=color, className='me-1')
 
 
+_OPEN_QUERY_PAGE_SIZE = 10
+
+
 def _nl_query_bar() -> html.Div:
     """자연어 질문 입력창 — "특정 전문성 보유자 찾기"/"과제에 적합한 사람 찾기"/
-    "연구원에게 맞는 과제 찾기" 세 유형(그 밖은 안내만) 질문을 처리한다.
-    자세한 아키텍처는 services/nl_query.py 모듈 docstring 참고."""
+    "연구원에게 맞는 과제 찾기"(구조화 조회) + 그 밖의 원천 데이터 개방형 질문
+    (services.open_data_query, SQL 생성)을 처리한다. 자세한 아키텍처는
+    services/nl_query.py, services/open_data_query.py 모듈 docstring 참고."""
     return html.Div([
         dbc.InputGroup([
             dbc.Input(
                 id='nl-query-input', type='text', debounce=False,
                 placeholder='예: "로봇 제어 전문가 찾아줘", "차세대로봇제어 과제에 적합한 사람은?", '
-                            '"정재원 연구원은 지금 과제 말고 어떤 과제에 적합해?"',
+                            '"물리학 전공한 사람 찾아줘"',
             ),
             dbc.Button([html.I(className='bi bi-search me-1'), '질문하기'],
                        id='nl-query-submit', color='primary', n_clicks=0),
         ], className='mb-2'),
-        dcc.Loading(html.Div(id='nl-query-result')),
+        dcc.Loading(html.Div([
+            html.Div(id='nl-query-result'),
+            # 토글 버튼은 레이아웃에 상시 존재(숨김/라벨만 콜백으로 갱신) —
+            # 매 렌더링마다 새로 만들면 Dash가 "새로 나타난 컴포넌트"로 인식해
+            # 클릭 없이도 콜백을 한 번 더 실행시켜(팬텀 토글) 실제 클릭 효과를
+            # 상쇄해 버린다.
+            dbc.Button('', id='nl-query-toggle-btn', color='link', size='sm',
+                       className='p-0 mt-1', style={'display': 'none'}, n_clicks=0),
+            dcc.Store(id='nl-query-full-result'),
+            dcc.Store(id='nl-query-expanded', data=False),
+        ])),
     ], className='mb-3')
 
 
-def _render_nl_result(result: dict):
+def _render_open_data_query_result(result: dict, expanded: bool):
+    """open_data_query intent 전용 렌더링 — 최대 50건 중 기본 10건만 보여주고
+    "전체 보기" 버튼으로 펼친다(재질의 없이 이미 받아온 dcc.Store 데이터를
+    더 보여주기만 함). 실행된 SQL은 접이식으로 함께 표시."""
+    note = result.get('note', '')
+    columns = result.get('columns') or []
+    rows = result.get('rows') or []
+    total = result.get('total_rows', len(rows))
+    sql = result.get('sql', '')
+
+    if not rows:
+        return dbc.Alert(note or '검색 결과가 없습니다.', color='light', className='mb-0 border')
+
+    children = []
+    if note:
+        children.append(html.Div(note, className='small text-muted mb-2'))
+
+    show_n = len(rows) if expanded else min(_OPEN_QUERY_PAGE_SIZE, len(rows))
+    children.append(dbc.Table(
+        [
+            html.Thead(html.Tr([html.Th(str(c)) for c in columns])),
+            html.Tbody([
+                html.Tr([html.Td('' if v is None else str(v)) for v in row])
+                for row in rows[:show_n]
+            ]),
+        ],
+        bordered=False, hover=True, size='sm', responsive=True, className='mt-2',
+    ))
+
+    if total <= _OPEN_QUERY_PAGE_SIZE:
+        children.append(html.Div(f'총 {total}건', className='small text-muted mt-1'))
+
+    if sql:
+        children.append(html.Details([
+            html.Summary('실행된 SQL', className='small text-muted mt-2'),
+            html.Pre(sql, className='small bg-light p-2 mt-1', style={'whiteSpace': 'pre-wrap'}),
+        ]))
+
+    return html.Div(children)
+
+
+def _toggle_button_props(result: dict, expanded: bool):
+    """상시 존재하는 nl-query-toggle-btn의 라벨/표시 스타일을 계산한다."""
+    if result.get('intent') != 'open_data_query':
+        return '', {'display': 'none'}
+    rows = result.get('rows') or []
+    total = result.get('total_rows', len(rows))
+    if not rows or total <= _OPEN_QUERY_PAGE_SIZE:
+        return '', {'display': 'none'}
+    label = '접기' if expanded else f'전체 {total}건 보기'
+    return label, {'display': 'inline-block'}
+
+
+def _render_nl_result(result: dict, expanded: bool = False):
     intent = result.get('intent')
     note = result.get('note', '')
-    items = result.get('items') or []
 
     if intent in ('error', 'unsupported'):
         return dbc.Alert(note, color='warning', className='mb-0')
+
+    if intent == 'open_data_query':
+        return _render_open_data_query_result(result, expanded)
+
+    items = result.get('items') or []
     if not items:
         return dbc.Alert(note or '검색 결과가 없습니다.', color='light', className='mb-0 border')
 
@@ -418,17 +489,47 @@ def _render_nl_result(result: dict):
 
 
 @callback(
-    Output('nl-query-result', 'children'),
+    Output('nl-query-full-result', 'data'),
+    Output('nl-query-expanded', 'data'),
     Input('nl-query-submit', 'n_clicks'),
     Input('nl-query-input', 'n_submit'),
     State('nl-query-input', 'value'),
     prevent_initial_call=True,
 )
 def _run_nl_query(_n_clicks, _n_submit, question):
+    """실제 LLM 호출/SQL 실행을 여기서 한 번만 하고 dcc.Store에 담아 둔다 —
+    "전체 보기" 토글은 이 데이터를 다시 조회하지 않고 저장된 결과를 더/덜
+    보여주기만 한다."""
     if not question or not question.strip():
-        return dbc.Alert('질문을 입력해주세요.', color='warning', className='mb-0')
+        return {'intent': 'unsupported', 'note': '질문을 입력해주세요.'}, False
     result = nl_query.answer_question(question)
-    return _render_nl_result(result)
+    return result, False
+
+
+@callback(
+    Output('nl-query-result', 'children'),
+    Output('nl-query-toggle-btn', 'children'),
+    Output('nl-query-toggle-btn', 'style'),
+    Input('nl-query-full-result', 'data'),
+    Input('nl-query-expanded', 'data'),
+    prevent_initial_call=True,
+)
+def _render_nl_query_store(result, expanded):
+    if not result:
+        return dash.no_update, dash.no_update, dash.no_update
+    expanded = bool(expanded)
+    label, style = _toggle_button_props(result, expanded)
+    return _render_nl_result(result, expanded), label, style
+
+
+@callback(
+    Output('nl-query-expanded', 'data', allow_duplicate=True),
+    Input('nl-query-toggle-btn', 'n_clicks'),
+    State('nl-query-expanded', 'data'),
+    prevent_initial_call=True,
+)
+def _toggle_nl_query_expand(_n_clicks, expanded):
+    return not expanded
 
 
 def layout(highlight_researcher=None, **_kwargs):

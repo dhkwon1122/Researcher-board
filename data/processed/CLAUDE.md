@@ -100,8 +100,57 @@
    두 개의 자유 리스트로 교체. `strength_fields`/`strength_keywords`는 유지.
    `researcher_fit.researcher_profile_text()`(임베딩 입력 텍스트 생성 — 유사도/
    매칭/자연어질문이 전부 공유)도 함께 갱신.
+10. **자연어 질문 기능에 개방형 질의(`open_data_query`) 폴백 추가**: 아래
+    "완료: 개방형 질의(open_data_query) 확장" 섹션 참고.
 
-## 진행 중인 논의: "보유 전문성" 자연어 질문을 개방형 질의로 확장 (설계 확정, 구현 전)
+## 완료: 개방형 질의(open_data_query) 확장
+
+8번 항목(폐쇄형 3-intent 라우터)을 유지한 채, 그 밖의 질문("물리학 전공한 사람
+찾아줘", "양자컴 과제 수행 중인 연구원 보여줘")을 `data/processed`의 원천 CSV +
+LLM 파생 JSON 전체를 대상으로 사내 LLM이 즉석 SQL을 생성해 답하는 4번째 intent로
+구현 완료. 설계 확정 과정(사용자 인터뷰, `text2sql.py` 선행 조사, 대안 검토)은
+아래 "설계 결정 기록"에 남겨둠 — 실제 구현은 다음 파일:
+
+- **`services/open_data_query.py`** (신규): `answer(question)` 진입점.
+  `data/processed/*.csv`를 매 질의 시점에 동적 스캔(`_discover_csv_tables()`,
+  `services.data_store.read_processed()` 재사용 — DB 생기면 자동으로 DB로 전환)
+  + LLM 파생 JSON 3종(`expertise_profiles`/`project_fit_by_project`/
+  `project_fit_by_researcher`, `_discover_json_tables()`)을 flat DataFrame으로
+  등록. DuckDB(`:memory:`, `requirements.txt`에 `duckdb>=0.10.0` 추가)에
+  `con.register()`로 붙여 SQL 실행. SQL 생성은 `pipeline/llm_client.call_llm(
+  ..., max_wait=...)` 경유(동시성 보호 적용 — `text2sql.py`엔 없던 보호를
+  여기선 적용). `services/text2sql.py`의 `sanitize_sql()`을 그대로 재사용해
+  쓰기/DDL 차단 + LIMIT 자동 부착. 결과는 Python 레이어에서 항상 상위 50건
+  (`DISPLAY_LIMIT`)으로 자름. SQL 1차 실행이 0건이면 LLM이 함께 준
+  `fallback_table`/`fallback_column`/`fallback_term`으로 BGE-M3 코사인 유사도
+  폴백(`_semantic_fallback()`, threshold 0.75, `nl_query.expand_term()`과 동일
+  철학).
+- **`services/nl_query.py`**: `_KNOWN_INTENTS`/`QUERY_SYSTEM_PROMPT`에
+  `open_data_query` 5번째(unsupported 포함) 추가, `execute_query()`가
+  `open_data_query.answer(parsed['question'])`로 위임.
+- **`pages/researcher_similarity_map.py`**: 결과 저장용 `dcc.Store`
+  (`nl-query-full-result`) + 펼침 상태 `dcc.Store`(`nl-query-expanded`) 2개와
+  콜백 3개(`_run_nl_query`/`_render_nl_query_store`/`_toggle_nl_query_expand`)로
+  "기본 10건 표시 + 전체 N건 보기(최대 50)" UI 구현. LLM 재호출 없이 이미 받아온
+  최대 50건 중 몇 건을 보여줄지만 토글.
+
+**⚠️ 구현 중 발견한 Dash 함정 (재발 방지용 기록)**: "전체 보기" 버튼을
+`_render_open_data_query_result()` 안에서 매번 새로 `dbc.Button(id='nl-query-toggle-btn', ...)`
+으로 만들어 반환했더니, 클릭이 서버 로그상 200으로 정상 처리되는데도 화면이
+안 바뀌는 버그가 있었다. 원인: Dash는 `prevent_initial_call=True`여도, 콜백의
+Input으로 걸린 컴포넌트가 **레이아웃에 처음 나타나는 시점**(동적으로 삽입될 때
+포함)에 한 번 "유령 실행"을 시킨다 — 즉 버튼이 렌더링되자마자 클릭 없이
+`_toggle_nl_query_expand`가 한 번 실행돼 상태를 뒤집어 버리고, 그 직후 실제
+클릭이 다시 뒤집어서 순 효과가 0이 되어 "아무 반응 없음"처럼 보였다(Playwright로
+네트워크 요청/응답 바디를 직접 캡처해 `nl-query-expanded.data`가 클릭 전에
+이미 한 번 바뀌어 있는 것을 확인해 특정). **해결**: 버튼을 매 렌더링마다
+새로 만들지 않고 레이아웃에 상시 존재하는 고정 컴포넌트로 두고(`_nl_query_bar()`
+에서 `style={'display': 'none'}`로 최초 삽입), 렌더 콜백이 버튼의 `children`
+(라벨)/`style`(표시 여부)만 별도 Output으로 갱신하도록 변경(`_toggle_button_props()`).
+→ **다음에 "결과에 따라 동적으로 나타나는 버튼/인풋에 콜백을 건다"류 UI를
+추가할 때는 이 패턴(컴포넌트는 고정, 속성만 콜백으로 갱신)을 기본으로 쓸 것.**
+
+### 설계 결정 기록 (구현 전 인터뷰 내용)
 
 **배경**: 기존(8번 항목)은 이미 계산된 전문성 분석 결과 안에서만 답하는 **폐쇄형
 3-intent 라우터**. "물리학 전공한 사람", "양자컴 과제 수행 중인 연구원"처럼
@@ -168,5 +217,5 @@
   - **SQL 노출**: "연구원 목록" 탭의 기존 AI 검색과 동일하게, 실행된 SQL을
     접이식으로 화면에 표시(기존 기능과 UX 통일).
 
-**다음 단계**: 위 설계로 구현 진행 예정. 구현 후 이 섹션은 "완료된 항목"으로
-옮기고 실제 파일 경로/함수명으로 갱신할 것.
+위 설계대로 구현 완료 — 실제 파일 경로/함수명 및 구현 중 발견한 이슈는 위
+"완료: 개방형 질의(open_data_query) 확장" 섹션 참고.
