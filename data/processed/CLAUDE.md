@@ -1102,3 +1102,40 @@ Playwright로 실제 화면에서 "정재원" 검색→추가, "오지아" 검�
 두 명을 누적한 뒤 최종 검색을 누르면 두 사람 모두의 결과가 한 번에
 나오는 것, 칩의 "×"로 제거가 되는 것, 과제 단위 검색(복수 선택)/이력/
 제외 드롭다운 cascading에 회귀가 없는 것을 확인.
+
+## 완료: JOB Market — 참여 가능한 과제가 없는 사람에게도 근거 표시
+
+사용자 요청: 참여 가능한 과제를 찾지 못한 사람도 그냥 "없음"으로 끝내지
+말고, "그나마 가장 가까운 과제는 이건데, 이것도 전문성이 이러이러해서
+다르다" 식으로 근거를 보여 달라는 것.
+
+**`services/job_market.py`**:
+- `_RECOMMEND_SYSTEM_PROMPT`에 `closest_non_match` 출력 필드 추가 —
+  `recommendations`가 빈 리스트면(뚜렷이 맞는 과제가 없으면) 그나마 가장
+  가까운 후보 하나와 "왜 이것도 충분히 맞지 않는지" 사유를 담게 하고,
+  `recommendations`에 1개 이상 있으면 반드시 `null`로 두게 지시. 추가
+  LLM 호출 없이 기존 1회 호출의 출력 형식만 확장(구조화 출력 강제 원칙
+  유지).
+- `_judge_recommendations()`가 `(recommendations, closest_non_match)`
+  튜플을 반환하도록 변경. `closest_non_match`도 `recommendations`와
+  동일하게 "shortlist(임베딩 상위 후보)에 실제로 있던 과제명인지" 검증해
+  할루시네이션이면 버림(신규 `_attach()` 헬퍼로 두 경로가 같은 검증 로직
+  공유).
+- `recommend_for_researcher()`의 반환 dict에 `closest_non_match` 필드
+  추가(정상 케이스는 값 또는 None, "전문성 데이터 없음"/"후보 과제 없음"/
+  "임베딩 실패"처럼 애초에 비교 자체를 못 한 케이스는 None — 비교할
+  근거가 없으므로 억지로 만들지 않음).
+
+**`pages/job_market.py`**: `recommendations`가 비어 있고 `closest_non_match`가
+있으면, 실제 추천과는 시각적으로 구분되는(회색 배경 박스) "참여 가능한
+과제를 찾지 못했습니다 + 그나마 가장 가까운 과제: OO(A/B 점수 배지) + 왜
+안 맞는지 사유(이탤릭)" 블록을 보여준다. `closest_non_match`도 없으면
+(비교 자체가 불가능했던 경우) 기존처럼 note 문구만 표시.
+
+검증: (1) 추천 0건 + closest_non_match 있음 → 정상 표시, (2) LLM이
+후보 목록에 없는 과제명을 closest_non_match로 냈을 때(할루시네이션) →
+버려지고 None, (3) 실제 추천이 1건 이상 있을 때 → closest_non_match를
+LLM이 실수로 채워도 무시하고 None으로 정규화 — 세 시나리오 모두 픽스처로
+확인. `_render_result()`가 이 새 필드를 포함한 결과를 크래시 없이
+렌더링하는지, 기존 개인별 검색(검색→추가→검색 실행) 흐름과 과제 단위
+검색에 회귀가 없는지 Playwright로 재확인.

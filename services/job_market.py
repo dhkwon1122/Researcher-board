@@ -305,10 +305,17 @@ _RECOMMEND_SYSTEM_PROMPT = """# Role
    억지로 채우지 말고 빈 리스트를 반환하세요.
 3. reason은 왜 이 과제가 맞는지 1~2문장으로 구체적으로 쓰세요. A/B 중 어떤
    근거를 주로 참고했는지 자연스럽게 드러나도록 쓰세요.
-4. 반드시 아래 JSON 형식으로만 출력하세요.
+4. recommendations가 빈 리스트라면(뚜렷이 맞는 과제가 하나도 없다면), 그래도
+   후보 중 그나마 가장 가까운 과제 하나를 골라 closest_non_match에 담으세요.
+   reason에는 "추천"이 아니라 왜 이 과제조차 충분히 맞지 않는지(이 연구원의
+   전문성과 이 과제가 요구하는 것이 구체적으로 어떻게 다른지)를 1~2문장으로
+   쓰세요. recommendations에 1개 이상 있다면 closest_non_match는 반드시
+   null로 두세요.
+5. 반드시 아래 JSON 형식으로만 출력하세요.
 
 # Output Format (JSON)
-{"recommendations": [{"project_name": "후보 목록의 과제명 그대로", "reason": "1~2문장 사유"}]}
+{"recommendations": [{"project_name": "후보 목록의 과제명 그대로", "reason": "1~2문장 사유"}],
+ "closest_non_match": {"project_name": "후보 목록의 과제명 그대로", "reason": "왜 이것도 충분히 맞지 않는지 1~2문장"} 또는 null}
 """
 
 
@@ -318,37 +325,53 @@ def _candidate_block(item: dict) -> str:
     return f"[{item['project_name']}] 소속: {item['dep_name']}\nA) 과제 분석 기반: {a}\nB) 유사 인력 기반: {b}"
 
 
-def _judge_recommendations(profile_text: str, shortlist: list) -> list:
+def _judge_recommendations(profile_text: str, shortlist: list) -> tuple:
     """임베딩 상위 후보(shortlist)를 LLM에 보여주고 0~3개만 사유와 함께 고르게
-    한다. 실패/파싱 오류 시 빈 리스트(추천 없음으로 안전하게 처리)."""
+    한다. 반환: (recommendations, closest_non_match). recommendations가
+    비어 있으면(뚜렷이 맞는 과제가 없으면) closest_non_match에 "그나마
+    가장 가까운 과제 + 왜 이것도 안 맞는지" 근거를 담아 함께 돌려준다 —
+    호출부가 "참여 가능한 과제 없음"을 근거 없이 통보하지 않게 한다.
+    실패/파싱 오류 시 (빈 리스트, None)으로 안전하게 처리."""
     if not shortlist:
-        return []
+        return [], None
     candidate_block = '\n\n'.join(_candidate_block(c) for c in shortlist)
     prompt = (
         f'[연구원 전문성 프로필]\n{profile_text}\n\n[후보 과제 목록]\n{candidate_block}\n\n'
-        '위 연구원이 실제로 참여 가능성이 높은 과제를 최대 3개까지 골라주세요.'
+        '위 연구원이 실제로 참여 가능성이 높은 과제를 최대 3개까지 골라주세요. '
+        '뚜렷이 맞는 과제가 없다면 그나마 가장 가까운 과제와 그 사유를 closest_non_match에 담아주세요.'
     )
     raw = llm_client.call_llm(prompt, _RECOMMEND_SYSTEM_PROMPT, temperature=0.0, max_tokens=1200)
     if not raw:
-        return []
+        return [], None
     try:
         parsed = json.loads(llm_client.extract_json(raw))
     except json.JSONDecodeError:
-        return []
+        return [], None
 
     by_name = {c['project_name']: c for c in shortlist}
-    results = []
-    for r in (parsed.get('recommendations') or [])[:MAX_RECOMMENDATIONS]:
+
+    def _attach(r):
         name = str(r.get('project_name') or '').strip()
         cand = by_name.get(name)
         if not cand:
-            continue  # 후보 목록에 없는 이름은 할루시네이션으로 간주하고 버림
-        results.append({
+            return None  # 후보 목록에 없는 이름은 할루시네이션으로 간주하고 버림
+        return {
             'project_name': name, 'dep_name': cand['dep_name'],
             'reason': str(r.get('reason') or '').strip(),
             'score_a': cand['score_a'], 'score_b': cand['score_b'],
-        })
-    return results
+        }
+
+    results = []
+    for r in (parsed.get('recommendations') or [])[:MAX_RECOMMENDATIONS]:
+        attached = _attach(r)
+        if attached:
+            results.append(attached)
+
+    closest_non_match = None
+    if not results and isinstance(parsed.get('closest_non_match'), dict):
+        closest_non_match = _attach(parsed['closest_non_match'])
+
+    return results, closest_non_match
 
 
 # ─── 전체 실행 ───────────────────────────────────────────────────────────────
@@ -359,20 +382,20 @@ def recommend_for_researcher(researcher_id: str, expertise_profiles: dict, candi
     호출부가 미리 만들어 넘긴다)."""
     profile = expertise_profiles.get(researcher_id)
     if not profile:
-        return {'recommendations': [], 'note': '전문성 분석 데이터가 없어 추천할 수 없습니다.'}
+        return {'recommendations': [], 'closest_non_match': None, 'note': '전문성 분석 데이터가 없어 추천할 수 없습니다.'}
     if not candidate_pool:
-        return {'recommendations': [], 'note': '비교 가능한 후보 과제가 없습니다.'}
+        return {'recommendations': [], 'closest_non_match': None, 'note': '비교 가능한 후보 과제가 없습니다.'}
 
     profile_text = fit.researcher_profile_text(profile)
     try:
         profile_embedding = fit.cached_embed([profile_text])[0]
     except LLMError as exc:
-        return {'recommendations': [], 'note': f'임베딩 계산 실패: {exc}'}
+        return {'recommendations': [], 'closest_non_match': None, 'note': f'임베딩 계산 실패: {exc}'}
 
     scored = _score_candidates(profile_embedding, candidate_pool)
     shortlist = scored[:TOP_K_CANDIDATES]
-    recommendations = _judge_recommendations(profile_text, shortlist)
-    return {'recommendations': recommendations, 'note': ''}
+    recommendations, closest_non_match = _judge_recommendations(profile_text, shortlist)
+    return {'recommendations': recommendations, 'closest_non_match': closest_non_match, 'note': ''}
 
 
 def _own_org_code(researcher_id: str, researchers_df) -> str:

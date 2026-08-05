@@ -39,11 +39,28 @@ def _recommendation_row(rec: dict):
     ], className='mb-2 pb-2 border-bottom')
 
 
+def _closest_non_match_block(rec: dict):
+    return html.Div([
+        html.Div('참여 가능한 과제를 찾지 못했습니다.', className='text-muted small mb-1'),
+        html.Div([
+            html.Span('그나마 가장 가까운 과제: ', className='small text-muted'),
+            html.Span(rec.get('project_name', ''), className='fw-semibold small me-2'),
+            html.Span(rec.get('dep_name', ''), className='text-muted small me-2'),
+            _score_badge('A', rec.get('score_a')),
+            _score_badge('B', rec.get('score_b')),
+        ]),
+        html.Div(rec.get('reason', '') or '(사유 없음)', className='text-muted small fst-italic'),
+    ], className='p-2 bg-light rounded')
+
+
 def _person_card(person: dict, result: dict):
     recs = result.get('recommendations') or []
+    closest_non_match = result.get('closest_non_match')
     note = result.get('note') or ''
     if recs:
         body = html.Div([_recommendation_row(r) for r in recs])
+    elif closest_non_match:
+        body = _closest_non_match_block(closest_non_match)
     else:
         body = html.Div(note or '참여 가능한 과제를 찾지 못했습니다.', className='text-muted small')
     return dbc.Card(
