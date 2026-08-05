@@ -235,17 +235,25 @@ def candidate_label(researcher_id: str, name_map: dict | None = None) -> str:
 # _col_position_year()를 그대로 재사용(예: "CL4-17", 승격기준일 없으면 "CL4").
 PERSON_BASE_COLUMNS = ['researcher_id', 'name', 'department', 'org_code', 'position_year', 'degree_major', 'age']
 
+# _highest_degree_str() 전용 — 엑셀 다운로드의 _col_education()(박/석/학사만,
+# 나머지 제외)과 달리 여기서는 전공만 필터에서 뺄 뿐 학력 자체는 전문대/고교
+# 까지 전부 인정한다(process_education.py의 DEG_ORDER와 동일한 5단계 우선순위
+# — education.csv 자체가 이미 "학사 이상이 있으면 전문대/고교 제외" 규칙으로
+# 정리돼 있어서, 여기 남아 있는 전문대/고교는 그게 그 사람의 최종 학력이라는 뜻).
+_DEGREE_ORDER_FULL = ['박사', '석사', '학사', '전문대', '고교']
+_DEGREE_CODE_FULL = {'박사': '박', '석사': '석', '학사': '학', '전문대': '전', '고교': '고'}
+
 
 def _highest_degree_str(education_rows: list) -> str:
     by_degree = {}
     for e in education_rows:
         deg = _s(e.get('degree'))
-        if deg in _DEGREE_CODE:
+        if deg in _DEGREE_CODE_FULL:
             by_degree.setdefault(deg, e)
-    for deg in _DEGREE_ORDER:
+    for deg in _DEGREE_ORDER_FULL:
         e = by_degree.get(deg)
         if e:
-            code = _DEGREE_CODE[deg]
+            code = _DEGREE_CODE_FULL[deg]
             school = _or_dash(e.get('school'))
             major = _or_dash(e.get('major'))
             return f'{code}){school} {major}'

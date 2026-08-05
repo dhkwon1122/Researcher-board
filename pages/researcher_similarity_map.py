@@ -400,12 +400,15 @@ def _nl_query_bar() -> html.Div:
 _NO_FILTER_COLUMNS = {'researcher_id', 'name', 'age'}
 
 # degree_major는 "박)학교 전공" 형태라 원문 그대로 필터 목록을 만들면 사실상
-# 학교/전공까지 다 다른 값이 되어 필터가 무의미해진다 — 학위(박/석/학) 구분
-# 만으로 필터하고 전공은 필터 대상에서 뺀다.
+# 학교/전공까지 다 다른 값이 되어 필터가 무의미해진다 — 전공만 필터에서 빼고
+# 학력 구분(박/석/학/전문대/고교, services.researcher_profile_export의
+# _DEGREE_ORDER_FULL과 동일한 5단계)은 전부 남긴다.
 _DEGREE_FILTER_OPTIONS = [
     {'label': '박사', 'value': '박'},
     {'label': '석사', 'value': '석'},
     {'label': '학사', 'value': '학'},
+    {'label': '전문대', 'value': '전'},
+    {'label': '고교', 'value': '고'},
 ]
 
 
