@@ -233,14 +233,20 @@ def _run(n_clicks, mode, project_names, individual_query, excluded_depts, exclud
     excluded_projects = excluded_projects or []
     project_names = project_names or []
 
-    if mode == _MODE_INDIVIDUAL:
-        if not (individual_query or '').strip():
-            return dbc.Alert('이름 또는 사번을 입력해주세요.', color='warning'), dash.no_update
-        result = jm.run_individual_search(individual_query.strip(), excluded_depts, excluded_projects)
-    else:
-        if not project_names:
-            return dbc.Alert('종료 예정 과제를 선택해주세요.', color='warning'), dash.no_update
-        result = jm.run_project_search(project_names, excluded_depts, excluded_projects)
+    try:
+        if mode == _MODE_INDIVIDUAL:
+            if not (individual_query or '').strip():
+                return dbc.Alert('이름 또는 사번을 입력해주세요.', color='warning'), dash.no_update
+            result = jm.run_individual_search(individual_query.strip(), excluded_depts, excluded_projects)
+        else:
+            if not project_names:
+                return dbc.Alert('종료 예정 과제를 선택해주세요.', color='warning'), dash.no_update
+            result = jm.run_project_search(project_names, excluded_depts, excluded_projects)
+    except Exception as exc:  # noqa: BLE001 — 어떤 원인이든 화면에 아무 반응도
+        # 없는 것보다는, 오류를 눈에 보이게 알려주는 게 낫다(외부 입력/실데이터
+        # 경계). services/job_market.py 내부의 개별 안전망(run_concurrent 등)이
+        # 못 잡는 예외(예: 명단 구성, 후보 조회 단계)까지 여기서 최종적으로 잡는다.
+        return dbc.Alert(f'검색 중 오류가 발생했습니다: {exc}', color='danger'), dash.no_update
 
     refresh = (refresh_token or 0) + 1 if not result.get('error') else dash.no_update
     return _render_result(result), refresh
