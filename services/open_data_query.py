@@ -22,9 +22,15 @@ CSV(및 LLM 파생 JSON 산출물)를 그 자리에서 SQL로 조회한다 — �
      차단, 다중 문장·주석 차단, LIMIT 자동 부착)한 뒤 DuckDB에서 실행.
   4) 결과가 0건이면 fallback_table/column/term으로 BGE-M3 임베딩 유사도 매칭을
      시도한다(services.nl_query.expand_term()과 같은 폴백 철학).
-  5) 응답은 항상 최대 50건으로 자른다(SQL 자체의 LIMIT과 무관하게 후처리로
-     강제) — 화면(pages/researcher_similarity_map.py)은 그중 기본 10건만
-     보여주고 "전체 보기"로 펼친다.
+  5) 응답은 항상 최대 DISPLAY_LIMIT(1000)건으로 자른다(SQL 자체의 LIMIT과
+     무관하게 후처리로 강제) — 화면(pages/researcher_similarity_map.py)은
+     그중 기본 30건만 보여주고 "전체 보기"로 펼친다.
+  6) 결과에 researcher_id 컬럼이 있으면(=사람에 대한 데이터) 사번/성명/부서/
+     과제/CL/학력·전공(최종 학력만)/나이 7개 기본 컬럼을 앞에 붙인다
+     (inject_person_columns — services.researcher_profile_export.person_base_table
+     재사용, 엑셀 다운로드와 표기 동일). 컬럼명은 services.data_labels로
+     한글 라벨을 붙여 함께 반환한다('columns'는 원본명 유지 — 정렬/필터용,
+     'labels'는 화면 표시용).
 
 동시성: SQL 생성 호출은 services.llm.chat()이 아니라 pipeline/llm_client.call_llm()
 을 max_wait과 함께 사용해, nl_query.py의 나머지 intent와 동일하게 동시 호출
@@ -43,7 +49,9 @@ sys.path.insert(0, os.path.abspath(_PIPELINE_DIR))
 
 import llm_client  # noqa: E402
 import researcher_fit as fit  # noqa: E402
+from services import data_labels  # noqa: E402
 from services import data_store  # noqa: E402
+from services import researcher_profile_export as rpe  # noqa: E402
 from services import text2sql  # noqa: E402
 from services.llm import LLMError  # noqa: E402
 
@@ -52,9 +60,15 @@ try:
 except ModuleNotFoundError:
     _llm_cfg = None
 
-DISPLAY_LIMIT = 50
+DISPLAY_LIMIT = 1000
 _EMBEDDING_MATCH_THRESHOLD = 0.75
 _DISTINCT_VALUES_CAP = 2000
+
+# 결과에 researcher_id가 있으면 항상 맨 앞에 rpe.PERSON_BASE_COLUMNS 7개를
+# 붙인다(services.researcher_profile_export 참고) — 원래 SQL 결과에 이
+# 개념과 겹치는 원본 컬럼이 있으면(예: department, major) 중복 표시하지
+# 않도록 제외한다.
+_PERSON_DEDUPE_RAW_COLUMNS = {'name', 'department', 'org_code', 'position', 'degree', 'major', 'birth_year'}
 
 _SQL_GEN_SYSTEM_TEMPLATE = """You are a DuckDB SQL expert helping route natural-language HR/R&D
 questions into a single read-only SQL query, run against an in-memory DuckDB database.
@@ -67,6 +81,10 @@ Rules:
 - Every column is stored as TEXT. Cast before numeric/date comparison or
   aggregation, e.g. CAST(col AS INTEGER), CAST(col AS DOUBLE), CAST(col AS DATE).
 - Join tables on researcher_id when combining data across tables.
+- If the question is about people/researchers (the result is naturally one row
+  per researcher, or filters/ranks researchers), ALWAYS include researcher_id
+  in the SELECT list even if the user didn't explicitly ask for it — the
+  application uses it to attach standard identity columns to the result.
 - strength_fields/strength_keywords/key_responsibilities/domain_knowledge_skill
   in the expertise_profiles table are semicolon("; ")-joined lists stored as a
   single text value — use LIKE '%...%' against them, not exact equality.
@@ -217,6 +235,40 @@ def _execute(con, sql: str, params: list | None = None) -> tuple:
     return columns, rows
 
 
+def inject_person_columns(columns: list, rows: list) -> tuple:
+    """결과에 researcher_id가 있으면(=사람 데이터로 판단) 앞쪽에
+    rpe.PERSON_BASE_COLUMNS 7개를 붙이고, 겹치는 원본 컬럼은 제거한다.
+    researcher_id가 없으면 그대로 반환. nl_query.py의 정형 3-intent 결과도
+    이 함수를 거쳐 개방형 질의와 동일한 표 형태로 통일된다."""
+    if 'researcher_id' not in columns:
+        return columns, rows
+    rid_idx = columns.index('researcher_id')
+
+    researcher_ids = []
+    seen = set()
+    for row in rows:
+        raw = row[rid_idx] if rid_idx < len(row) else None
+        if raw is None:
+            continue
+        rid = str(raw).strip().zfill(8)
+        if rid and rid not in seen:
+            seen.add(rid)
+            researcher_ids.append(rid)
+    base_table = rpe.person_base_table(researcher_ids)
+
+    extra_idx = [i for i, c in enumerate(columns) if i != rid_idx and c not in _PERSON_DEDUPE_RAW_COLUMNS]
+    new_columns = list(rpe.PERSON_BASE_COLUMNS) + [columns[i] for i in extra_idx]
+
+    new_rows = []
+    for row in rows:
+        raw = row[rid_idx] if rid_idx < len(row) else None
+        rid = str(raw).strip().zfill(8) if raw is not None else ''
+        base_vals = base_table.get(rid) or [rid, '-', '-', '-', '-', '-', '-']
+        extra_vals = [row[i] if i < len(row) else None for i in extra_idx]
+        new_rows.append(list(base_vals) + extra_vals)
+    return new_columns, new_rows
+
+
 def _embedding_match(term: str, candidates: set, threshold: float = _EMBEDDING_MATCH_THRESHOLD, top_n: int = 5) -> set:
     """services.nl_query.expand_term()의 임베딩 폴백과 동일한 방식 — 여기서는
     strength_fields 같은 고정 어휘집이 아니라 임의 컬럼의 고유값 집합을 대상으로
@@ -313,6 +365,7 @@ def answer(question: str) -> dict:
 
     total_fetched = len(rows)
     shown = rows[:DISPLAY_LIMIT]
+    columns, shown = inject_person_columns(columns, shown)
 
     if source == 'semantic_fallback':
         note = f'정확히 일치하는 결과가 없어 "{gen["fallback_term"]}"과(와) 의미가 비슷한 값으로 다시 찾았습니다.'
@@ -325,6 +378,7 @@ def answer(question: str) -> dict:
         'intent': 'open_data_query',
         'sql': used_sql,
         'columns': columns,
+        'labels': data_labels.label_columns(columns),
         'rows': shown,
         'total_rows': total_fetched,
         'source': source,

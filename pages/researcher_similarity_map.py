@@ -12,6 +12,7 @@ HTML 리포트를 그대로 iframe(srcDoc)으로 띄운다 — 별도 Dash 컴�
 참고) — 별도 Dash 탭이 아니라 그 리포트 안의 라디오 탭 중 하나다.
 """
 
+import json
 import os
 
 import numpy as np
@@ -19,7 +20,7 @@ import dash
 import dash_bootstrap_components as dbc
 import plotly.express as px
 import plotly.graph_objects as go
-from dash import Input, Output, Patch, State, callback, dcc, html
+from dash import ALL, Input, Output, Patch, State, callback, dcc, html
 
 from services import nl_query
 from services import researcher_profile_export
@@ -334,14 +335,39 @@ def _fit_score_badge(score: str):
     return dbc.Badge(score or '-', color=color, className='me-1')
 
 
-_OPEN_QUERY_PAGE_SIZE = 10
+_PAGE_SIZE = 30
+
+# "건재순" — 부서(department) 컬럼 전용 정렬 기준(사용자 확정 순서). 목록에
+# 없는 부서명은 이 뒤에 이름 오름차순으로 붙는다.
+_DEPT_ORDER = [
+    'advanced device platform(sait)',
+    'photonics platform(sait)',
+    'ai system platform(sait)',
+    'material ai platform(sait)',
+    'display solution platform(sait)',
+    'air science platform(sait)',
+    'future tech platform(sait)',
+]
+
+_SORT_OPTIONS = [{'label': '오름차순', 'value': 'asc'}, {'label': '내림차순', 'value': 'desc'}]
+_DEPT_SORT_OPTIONS = _SORT_OPTIONS + [{'label': '건재순', 'value': 'custom'}]
 
 
 def _nl_query_bar() -> html.Div:
     """자연어 질문 입력창 — "특정 전문성 보유자 찾기"/"과제에 적합한 사람 찾기"/
     "연구원에게 맞는 과제 찾기"(구조화 조회) + 그 밖의 원천 데이터 개방형 질문
-    (services.open_data_query, SQL 생성)을 처리한다. 자세한 아키텍처는
-    services/nl_query.py, services/open_data_query.py 모듈 docstring 참고."""
+    (services.open_data_query, SQL 생성)을 4개 intent 모두 같은 표 형태
+    (columns/labels/rows)로 받아 하나의 렌더러로 보여준다. 자세한 아키텍처는
+    services/nl_query.py, services/open_data_query.py 모듈 docstring 참고.
+
+    Dash 콜백 설계 메모(재발 방지 — data/processed/CLAUDE.md에도 기록):
+    매 렌더링마다 새로 나타나는 컴포넌트(정렬/필터 드롭다운, 행 체크박스 등)에
+    건 콜백은, Dash가 "새로 나타난 컴포넌트"를 클릭 없이 한 번 더 실행시키는
+    현상(팬텀 트리거)이 있다. 이번엔 그 컴포넌트를 고정시키는 대신, 모든
+    관련 콜백을 "현재 표시된 값들로부터 다음 상태를 그대로 계산"하는 순수
+    함수로 짜서(토글/증가가 아니라 대입) 팬텀 트리거가 와도 상태가 그대로
+    유지되게 했다 — 유일한 예외인 n_clicks 기반 콜백(엑셀 다운로드, 정렬/필터
+    초기화)은 `if not n_clicks: return dash.no_update`로 직접 방어한다."""
     return html.Div([
         dbc.InputGroup([
             dbc.Input(
@@ -354,205 +380,178 @@ def _nl_query_bar() -> html.Div:
         ], className='mb-2'),
         dcc.Loading(html.Div([
             html.Div(id='nl-query-result'),
-            # 토글 버튼은 레이아웃에 상시 존재(숨김/라벨만 콜백으로 갱신) —
-            # 매 렌더링마다 새로 만들면 Dash가 "새로 나타난 컴포넌트"로 인식해
-            # 클릭 없이도 콜백을 한 번 더 실행시켜(팬텀 토글) 실제 클릭 효과를
-            # 상쇄해 버린다.
+            # 토글 버튼은 레이아웃에 상시 존재(숨김/라벨만 콜백으로 갱신) — 아래
+            # docstring의 팬텀 트리거 메모 참고.
             dbc.Button('', id='nl-query-toggle-btn', color='link', size='sm',
                        className='p-0 mt-1', style={'display': 'none'}, n_clicks=0),
             dcc.Store(id='nl-query-full-result'),
+            dcc.Store(id='nl-query-filters', data={}),
+            dcc.Store(id='nl-query-sort', data={}),
             dcc.Store(id='nl-query-expanded', data=False),
+            dcc.Store(id='nl-query-selected', data=[]),
         ])),
-        # 엑셀 다운로드 버튼/모달도 토글 버튼과 같은 이유로 상시 고정 컴포넌트로 둔다.
-        dbc.Button([html.I(className='bi bi-file-earmark-excel me-1'), '엑셀 다운로드'],
-                   id='nl-query-excel-btn', color='success', outline=True, size='sm',
-                   className='mt-2', style={'display': 'none'}, n_clicks=0),
-        dcc.Store(id='nl-query-candidates', data=[]),
-        dbc.Modal([
-            dbc.ModalHeader(dbc.ModalTitle('엑셀로 내보낼 연구원 선택')),
-            dbc.ModalBody([
-                dbc.Button('전체 선택/해제', id='nl-query-excel-selectall-btn',
-                           color='link', size='sm', className='p-0 mb-2', n_clicks=0),
-                dbc.Checklist(id='nl-query-excel-checklist', options=[], value=[],
-                              className='small'),
-            ]),
-            dbc.ModalFooter([
-                dbc.Button('닫기', id='nl-query-excel-close-btn', color='secondary',
-                           outline=True, size='sm', n_clicks=0),
-                dbc.Button('다운로드', id='nl-query-excel-download-btn', color='primary',
-                           size='sm', n_clicks=0),
-            ]),
-        ], id='nl-query-excel-modal', is_open=False),
+        dbc.Button('', id='nl-query-excel-btn', color='success', outline=True, size='sm',
+                   className='mt-2', style={'display': 'none'}, n_clicks=0, disabled=True),
         dcc.Download(id='nl-query-excel-download'),
     ], className='mb-3')
 
 
-def _render_open_data_query_result(result: dict, expanded: bool):
-    """open_data_query intent 전용 렌더링 — 최대 50건 중 기본 10건만 보여주고
-    "전체 보기" 버튼으로 펼친다(재질의 없이 이미 받아온 dcc.Store 데이터를
-    더 보여주기만 함). 실행된 SQL은 접이식으로 함께 표시."""
-    note = result.get('note', '')
-    columns = result.get('columns') or []
-    rows = result.get('rows') or []
-    total = result.get('total_rows', len(rows))
-    sql = result.get('sql', '')
+def _column_options(columns: list, rows: list, col: str) -> list:
+    idx = columns.index(col)
+    values = sorted({('' if r[idx] is None else str(r[idx])) for r in rows if idx < len(r)})
+    return [{'label': v if v else '(빈값)', 'value': v} for v in values]
 
+
+def _passes_filters(row: list, columns: list, filters: dict) -> bool:
+    for col, allowed in (filters or {}).items():
+        if not allowed or col not in columns:
+            continue
+        idx = columns.index(col)
+        val = row[idx] if idx < len(row) else None
+        if ('' if val is None else str(val)) not in allowed:
+            return False
+    return True
+
+
+def _sort_key_value(v):
+    if v is None:
+        return (2, '')
+    s = str(v).strip()
+    if s in ('', '-'):
+        return (2, '')
+    try:
+        return (0, float(s))
+    except ValueError:
+        return (1, s)
+
+
+def _dept_sort_key(v):
+    s = '' if v is None else str(v)
+    return (0, _DEPT_ORDER.index(s)) if s in _DEPT_ORDER else (1, s)
+
+
+def _display_order(columns: list, rows: list, filters: dict, sort: dict) -> list:
+    """필터 통과 + 정렬까지 적용한 뒤, rows 안에서의 원래 인덱스 목록을
+    반환한다(체크박스 선택 상태는 이 원래 인덱스를 키로 관리 — 정렬/필터가
+    바뀌어도 선택은 유지됨)."""
+    order = [i for i, row in enumerate(rows) if _passes_filters(row, columns, filters)]
+    sort_col, sort_mode = (sort or {}).get('column'), (sort or {}).get('mode')
+    if sort_col and sort_col in columns and sort_mode:
+        idx = columns.index(sort_col)
+        if sort_mode == 'custom':
+            order.sort(key=lambda i: _dept_sort_key(rows[i][idx] if idx < len(rows[i]) else None))
+        elif sort_mode in ('asc', 'desc'):
+            order.sort(key=lambda i: _sort_key_value(rows[i][idx] if idx < len(rows[i]) else None),
+                       reverse=(sort_mode == 'desc'))
+    return order
+
+
+def _render_cell(col: str, value):
+    if col == 'fit_score' and value:
+        return _fit_score_badge(str(value))
+    return '' if value is None else str(value)
+
+
+def _render_table_body(full_result: dict, filters: dict, sort: dict, expanded: bool, selected: list):
+    """반환: (화면에 넣을 컴포넌트, 필터 적용 후 전체 건수 — 0이면 "전체 보기"
+    버튼을 숨긴다는 뜻으로도 쓰인다)."""
+    intent = full_result.get('intent')
+    note = full_result.get('note', '')
+    if intent in ('error', 'unsupported'):
+        return dbc.Alert(note, color='warning', className='mb-0'), 0
+
+    columns = full_result.get('columns') or []
+    labels = full_result.get('labels') or columns
+    rows = full_result.get('rows') or []
+    sql = full_result.get('sql', '')
     if not rows:
-        return dbc.Alert(note or '검색 결과가 없습니다.', color='light', className='mb-0 border')
+        return dbc.Alert(note or '검색 결과가 없습니다.', color='light', className='mb-0 border'), 0
 
-    children = []
+    order = _display_order(columns, rows, filters, sort)
+    total_filtered = len(order)
+    visible = order if expanded else order[:_PAGE_SIZE]
+    selected_set = set(selected or [])
+    sort_col, sort_mode = (sort or {}).get('column'), (sort or {}).get('mode')
+
+    header_cells = [html.Th(
+        dbc.Checkbox(id='nl-query-selectall-check',
+                     value=bool(visible) and all(i in selected_set for i in visible)),
+        style={'width': '30px'},
+    )]
+    for col, label in zip(columns, labels):
+        arrow = {'asc': ' ▲', 'desc': ' ▼', 'custom': ' ★'}.get(sort_mode, '') if col == sort_col else ''
+        sort_opts = _DEPT_SORT_OPTIONS if col == 'department' else _SORT_OPTIONS
+        header_cells.append(html.Th([
+            html.Div(label + arrow, className='small fw-semibold mb-1'),
+            html.Div([
+                dcc.Dropdown(
+                    id={'type': 'nl-sort-dd', 'col': col}, options=sort_opts, value=None,
+                    placeholder='정렬', clearable=False, style={'minWidth': '92px', 'fontSize': '12px'},
+                ),
+                dcc.Dropdown(
+                    id={'type': 'nl-filter-dd', 'col': col}, options=_column_options(columns, rows, col),
+                    value=(filters or {}).get(col) or [], multi=True, placeholder='필터',
+                    style={'minWidth': '120px', 'fontSize': '12px'},
+                ),
+            ], className='d-flex gap-1'),
+        ], style={'whiteSpace': 'nowrap', 'verticalAlign': 'top'}))
+
+    body_rows = [
+        html.Tr(
+            [html.Td(dbc.Checkbox(id={'type': 'nl-row-check', 'idx': i}, value=i in selected_set))]
+            + [html.Td(_render_cell(col, rows[i][j] if j < len(rows[i]) else None))
+               for j, col in enumerate(columns)]
+        )
+        for i in visible
+    ]
+
+    table = dbc.Table(
+        [html.Thead(html.Tr(header_cells)), html.Tbody(body_rows)],
+        bordered=False, hover=True, size='sm', responsive=True, className='mt-2',
+    )
+
+    count_text = f'총 {total_filtered}건'
+    if total_filtered != len(rows):
+        count_text += f' (필터 적용 전 {len(rows)}건)'
+    top_row = [html.Span(count_text, className='small text-muted fw-semibold')]
+    if sort_col:
+        top_row.append(html.A('정렬 해제', id='nl-query-sort-reset-btn', n_clicks=0,
+                               className='small ms-2', href='#'))
+    if filters:
+        top_row.append(html.A('필터 초기화', id='nl-query-filter-reset-btn', n_clicks=0,
+                               className='small ms-2', href='#'))
+
+    children = [html.Div(top_row, className='mb-1')]
     if note:
         children.append(html.Div(note, className='small text-muted mb-2'))
-
-    show_n = len(rows) if expanded else min(_OPEN_QUERY_PAGE_SIZE, len(rows))
-    children.append(dbc.Table(
-        [
-            html.Thead(html.Tr([html.Th(str(c)) for c in columns])),
-            html.Tbody([
-                html.Tr([html.Td('' if v is None else str(v)) for v in row])
-                for row in rows[:show_n]
-            ]),
-        ],
-        bordered=False, hover=True, size='sm', responsive=True, className='mt-2',
-    ))
-
-    if total <= _OPEN_QUERY_PAGE_SIZE:
-        children.append(html.Div(f'총 {total}건', className='small text-muted mt-1'))
-
+    children.append(table)
     if sql:
         children.append(html.Details([
             html.Summary('실행된 SQL', className='small text-muted mt-2'),
             html.Pre(sql, className='small bg-light p-2 mt-1', style={'whiteSpace': 'pre-wrap'}),
         ]))
-
-    return html.Div(children)
-
-
-def _toggle_button_props(result: dict, expanded: bool):
-    """상시 존재하는 nl-query-toggle-btn의 라벨/표시 스타일을 계산한다."""
-    if result.get('intent') != 'open_data_query':
-        return '', {'display': 'none'}
-    rows = result.get('rows') or []
-    total = result.get('total_rows', len(rows))
-    if not rows or total <= _OPEN_QUERY_PAGE_SIZE:
-        return '', {'display': 'none'}
-    label = '접기' if expanded else f'전체 {total}건 보기'
-    return label, {'display': 'inline-block'}
+    return html.Div(children), total_filtered
 
 
-def _render_nl_result(result: dict, expanded: bool = False):
-    intent = result.get('intent')
-    note = result.get('note', '')
-
-    if intent in ('error', 'unsupported'):
-        return dbc.Alert(note, color='warning', className='mb-0')
-
-    if intent == 'open_data_query':
-        return _render_open_data_query_result(result, expanded)
-
-    items = result.get('items') or []
-    if not items:
-        return dbc.Alert(note or '검색 결과가 없습니다.', color='light', className='mb-0 border')
-
-    children = []
-    if note:
-        children.append(html.Div(note, className='small text-muted mb-2'))
-
-    if intent == 'find_researchers_by_expertise':
-        cards = []
-        for it in items:
-            chips = (
-                [dbc.Badge(f, color='dark', className='me-1 mb-1') for f in it['strength_fields']]
-                + [dbc.Badge(k, color='secondary', className='me-1 mb-1') for k in it['strength_keywords']]
-            )
-            cards.append(dbc.Card(dbc.CardBody([
-                html.Div([
-                    html.Span(f"{it['name']} ", className='fw-bold'),
-                    html.Span(f"({it['researcher_id']})", className='text-muted small'),
-                    html.Span(f" · {it['department']}" if it['department'] else '', className='text-muted small'),
-                ]),
-                html.Div(chips, className='mt-1'),
-            ]), className='mb-2'))
-        children.append(html.Div(cards))
-
-    elif intent == 'find_researchers_for_project':
-        rows = [
-            html.Tr([
-                html.Td(it['project_name']), html.Td(it['job_title']),
-                html.Td(f"{it['name']} ({it['researcher_id']})"),
-                html.Td(_fit_score_badge(it['fit_score']) if it['fit_score'] else str(it.get('score', ''))),
-                html.Td(it['reason'], className='small'),
-            ])
-            for it in items
-        ]
-        children.append(dbc.Table(
-            [html.Thead(html.Tr([html.Th('과제'), html.Th('직무'), html.Th('연구원'),
-                                  html.Th('적합도'), html.Th('근거')])),
-             html.Tbody(rows)],
-            bordered=False, hover=True, size='sm', className='mt-2',
-        ))
-
-    elif intent == 'find_projects_for_researcher':
-        rows = [
-            html.Tr([
-                html.Td(it['project_name']), html.Td(it['job_title']), html.Td(it['dep_name']),
-                html.Td(_fit_score_badge(it['fit_score'])), html.Td(it['reason'], className='small'),
-            ])
-            for it in items
-        ]
-        children.append(dbc.Table(
-            [html.Thead(html.Tr([html.Th('과제'), html.Th('직무'), html.Th('소속'),
-                                  html.Th('적합도'), html.Th('근거')])),
-             html.Tbody(rows)],
-            bordered=False, hover=True, size='sm', className='mt-2',
-        ))
-
-    return html.Div(children)
-
-
-def _extract_candidates(result: dict) -> list:
-    """결과에서 엑셀 다운로드 후보(사번/라벨) 목록을 뽑는다. 구조화 intent는
-    items[].researcher_id를 그대로 쓰고, open_data_query는 결과 컬럼에
-    researcher_id가 있을 때만(없으면 내보낼 근거가 없음) 그 값으로 이름을
-    조회해 라벨을 만든다."""
-    intent = result.get('intent')
-    seen = set()
-
-    if intent == 'open_data_query':
-        columns = result.get('columns') or []
-        if 'researcher_id' not in columns:
-            return []
-        idx = columns.index('researcher_id')
-        rids = []
-        for row in result.get('rows') or []:
-            if idx >= len(row) or row[idx] is None:
-                continue
-            rid = str(row[idx]).strip().zfill(8)
-            if rid and rid not in seen:
-                seen.add(rid)
-                rids.append(rid)
-        if not rids:
-            return []
-        name_map = researcher_profile_export.researcher_name_map()
-        return [{'researcher_id': r, 'label': researcher_profile_export.candidate_label(r, name_map)}
-                for r in rids]
-
-    items = result.get('items') or []
+def _selected_researcher_ids(full_result: dict, selected: list) -> list:
+    columns = (full_result or {}).get('columns') or []
+    if 'researcher_id' not in columns or not selected:
+        return []
+    idx = columns.index('researcher_id')
+    rows = (full_result or {}).get('rows') or []
     out = []
-    for it in items:
-        rid = str(it.get('researcher_id') or '').strip()
-        if not rid or rid in seen:
-            continue
-        seen.add(rid)
-        rid = rid.zfill(8)
-        name = it.get('name') or ''
-        out.append({'researcher_id': rid, 'label': f'{name} ({rid})' if name else rid})
+    for i in selected:
+        if i < len(rows) and idx < len(rows[i]) and rows[i][idx]:
+            out.append(str(rows[i][idx]).strip().zfill(8))
     return out
 
 
 @callback(
     Output('nl-query-full-result', 'data'),
+    Output('nl-query-filters', 'data'),
+    Output('nl-query-sort', 'data'),
     Output('nl-query-expanded', 'data'),
+    Output('nl-query-selected', 'data'),
     Input('nl-query-submit', 'n_clicks'),
     Input('nl-query-input', 'n_submit'),
     State('nl-query-input', 'value'),
@@ -560,32 +559,37 @@ def _extract_candidates(result: dict) -> list:
 )
 def _run_nl_query(_n_clicks, _n_submit, question):
     """실제 LLM 호출/SQL 실행을 여기서 한 번만 하고 dcc.Store에 담아 둔다 —
-    "전체 보기" 토글은 이 데이터를 다시 조회하지 않고 저장된 결과를 더/덜
-    보여주기만 한다."""
+    정렬/필터/펼치기/선택은 이 데이터를 다시 조회하지 않고 화면에서만
+    처리한다. 새 질문마다 정렬/필터/펼침/선택 상태를 전부 초기화한다."""
+    empty = {'intent': 'unsupported', 'columns': [], 'labels': [], 'rows': [], 'total_rows': 0, 'note': ''}
     if not question or not question.strip():
-        return {'intent': 'unsupported', 'note': '질문을 입력해주세요.'}, False
+        return {**empty, 'note': '질문을 입력해주세요.'}, {}, {}, False, []
     result = nl_query.answer_question(question)
-    return result, False
+    return result, {}, {}, False, []
 
 
 @callback(
     Output('nl-query-result', 'children'),
     Output('nl-query-toggle-btn', 'children'),
     Output('nl-query-toggle-btn', 'style'),
-    Output('nl-query-excel-btn', 'style'),
-    Output('nl-query-candidates', 'data'),
     Input('nl-query-full-result', 'data'),
+    Input('nl-query-filters', 'data'),
+    Input('nl-query-sort', 'data'),
     Input('nl-query-expanded', 'data'),
+    State('nl-query-selected', 'data'),
     prevent_initial_call=True,
 )
-def _render_nl_query_store(result, expanded):
-    if not result:
-        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+def _render_nl_query_store(full_result, filters, sort, expanded, selected):
+    if not full_result:
+        return dash.no_update, dash.no_update, dash.no_update
     expanded = bool(expanded)
-    label, style = _toggle_button_props(result, expanded)
-    candidates = _extract_candidates(result)
-    excel_style = {'display': 'inline-block'} if candidates else {'display': 'none'}
-    return _render_nl_result(result, expanded), label, style, excel_style, candidates
+    children, total_filtered = _render_table_body(full_result, filters, sort, expanded, selected)
+    if total_filtered > _PAGE_SIZE:
+        label = '접기' if expanded else f'전체 {total_filtered}건 보기'
+        style = {'display': 'inline-block'}
+    else:
+        label, style = '', {'display': 'none'}
+    return children, label, style
 
 
 @callback(
@@ -594,58 +598,146 @@ def _render_nl_query_store(result, expanded):
     State('nl-query-expanded', 'data'),
     prevent_initial_call=True,
 )
-def _toggle_nl_query_expand(_n_clicks, expanded):
+def _toggle_nl_query_expand(n_clicks, expanded):
+    if not n_clicks:
+        return dash.no_update
     return not expanded
 
 
 @callback(
-    Output('nl-query-excel-modal', 'is_open'),
-    Output('nl-query-excel-checklist', 'options'),
-    Output('nl-query-excel-checklist', 'value'),
-    Input('nl-query-excel-btn', 'n_clicks'),
-    State('nl-query-candidates', 'data'),
+    Output('nl-query-sort', 'data', allow_duplicate=True),
+    Input({'type': 'nl-sort-dd', 'col': ALL}, 'value'),
+    State({'type': 'nl-sort-dd', 'col': ALL}, 'id'),
     prevent_initial_call=True,
 )
-def _open_excel_modal(_n_clicks, candidates):
-    candidates = candidates or []
-    options = [{'label': c['label'], 'value': c['researcher_id']} for c in candidates]
-    all_values = [c['researcher_id'] for c in candidates]
-    return True, options, all_values
+def _set_sort(values, ids):
+    """정렬 드롭다운은 값을 저장하지 않고(매 렌더링마다 value=None으로 새로
+    그려짐) 항상 "고르면 그 컬럼/방향으로 확정" 트리거로만 쓴다 — 팬텀
+    트리거가 와도 value는 초기값 None 그대로라 아래서 걸러진다."""
+    triggered = dash.callback_context.triggered
+    if not triggered:
+        return dash.no_update
+    try:
+        comp_id = json.loads(triggered[0]['prop_id'].rsplit('.', 1)[0])
+    except (ValueError, IndexError):
+        return dash.no_update
+    col = comp_id.get('col')
+    value = next((v for v, i in zip(values, ids) if i.get('col') == col), None)
+    if not value:
+        return dash.no_update
+    return {'column': col, 'mode': value}
 
 
 @callback(
-    Output('nl-query-excel-modal', 'is_open', allow_duplicate=True),
-    Input('nl-query-excel-close-btn', 'n_clicks'),
+    Output('nl-query-sort', 'data', allow_duplicate=True),
+    Input('nl-query-sort-reset-btn', 'n_clicks'),
     prevent_initial_call=True,
 )
-def _close_excel_modal(_n_clicks):
-    return False
+def _reset_sort(n_clicks):
+    if not n_clicks:
+        return dash.no_update
+    return {}
 
 
 @callback(
-    Output('nl-query-excel-checklist', 'value', allow_duplicate=True),
-    Input('nl-query-excel-selectall-btn', 'n_clicks'),
-    State('nl-query-excel-checklist', 'value'),
-    State('nl-query-excel-checklist', 'options'),
+    Output('nl-query-filters', 'data', allow_duplicate=True),
+    Input({'type': 'nl-filter-dd', 'col': ALL}, 'value'),
+    State({'type': 'nl-filter-dd', 'col': ALL}, 'id'),
+    State('nl-query-filters', 'data'),
     prevent_initial_call=True,
 )
-def _toggle_excel_selectall(_n_clicks, selected, options):
-    all_values = [o['value'] for o in (options or [])]
-    if selected and len(selected) >= len(all_values):
-        return []
-    return all_values
+def _set_filters(values, ids, current):
+    triggered = dash.callback_context.triggered
+    if not triggered:
+        return dash.no_update
+    try:
+        comp_id = json.loads(triggered[0]['prop_id'].rsplit('.', 1)[0])
+    except (ValueError, IndexError):
+        return dash.no_update
+    col = comp_id.get('col')
+    if col is None:
+        return dash.no_update
+    value = next((v for v, i in zip(values, ids) if i.get('col') == col), None)
+    filters = dict(current or {})
+    if value:
+        filters[col] = value
+    else:
+        filters.pop(col, None)
+    return filters
+
+
+@callback(
+    Output('nl-query-filters', 'data', allow_duplicate=True),
+    Input('nl-query-filter-reset-btn', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def _reset_filters(n_clicks):
+    if not n_clicks:
+        return dash.no_update
+    return {}
+
+
+@callback(
+    Output('nl-query-selected', 'data', allow_duplicate=True),
+    Input({'type': 'nl-row-check', 'idx': ALL}, 'value'),
+    State({'type': 'nl-row-check', 'idx': ALL}, 'id'),
+    State('nl-query-selected', 'data'),
+    prevent_initial_call=True,
+)
+def _sync_selected(values, ids, current):
+    """현재 화면에 보이는 행들의 체크 상태로부터 선택 목록을 다시 계산한다
+    (토글이 아니라 대입 — 팬텀 트리거가 와도 렌더링 시점 값 그대로라 안전).
+    필터/펼치기로 화면에서 잠시 사라진 행의 선택은 유지한다."""
+    visible_idx = {i['idx'] for i in ids}
+    now_checked = {i['idx'] for i, v in zip(ids, values) if v}
+    kept = [i for i in (current or []) if i not in visible_idx]
+    return kept + list(now_checked)
+
+
+@callback(
+    Output({'type': 'nl-row-check', 'idx': ALL}, 'value'),
+    Input('nl-query-selectall-check', 'value'),
+    State({'type': 'nl-row-check', 'idx': ALL}, 'id'),
+    prevent_initial_call=True,
+)
+def _toggle_selectall(checked, ids):
+    if not ids:
+        return dash.no_update
+    return [bool(checked)] * len(ids)
+
+
+@callback(
+    Output('nl-query-excel-btn', 'children'),
+    Output('nl-query-excel-btn', 'style'),
+    Output('nl-query-excel-btn', 'disabled'),
+    Input('nl-query-full-result', 'data'),
+    Input('nl-query-selected', 'data'),
+    prevent_initial_call=True,
+)
+def _update_excel_button(full_result, selected):
+    columns = (full_result or {}).get('columns') or []
+    if 'researcher_id' not in columns:
+        return dash.no_update, {'display': 'none'}, dash.no_update
+    n = len(_selected_researcher_ids(full_result, selected))
+    label = [html.I(className='bi bi-file-earmark-excel me-1'),
+              f'선택 {n}명 엑셀 다운로드' if n else '엑셀 다운로드 (행을 선택하세요)']
+    return label, {'display': 'inline-block'}, n == 0
 
 
 @callback(
     Output('nl-query-excel-download', 'data'),
-    Input('nl-query-excel-download-btn', 'n_clicks'),
-    State('nl-query-excel-checklist', 'value'),
+    Input('nl-query-excel-btn', 'n_clicks'),
+    State('nl-query-full-result', 'data'),
+    State('nl-query-selected', 'data'),
     prevent_initial_call=True,
 )
-def _download_excel(_n_clicks, selected):
-    if not selected:
+def _download_excel(n_clicks, full_result, selected):
+    if not n_clicks:
         return dash.no_update
-    data = researcher_profile_export.build_profile_workbook(selected)
+    researcher_ids = _selected_researcher_ids(full_result, selected)
+    if not researcher_ids:
+        return dash.no_update
+    data = researcher_profile_export.build_profile_workbook(researcher_ids)
     return dcc.send_bytes(data, researcher_profile_export.default_filename())
 
 

@@ -228,6 +228,59 @@ def candidate_label(researcher_id: str, name_map: dict | None = None) -> str:
     return f'{name} ({researcher_id})' if name else researcher_id
 
 
+# 자연어 질문(nl_query/open_data_query) 결과가 "사람에 대한 데이터"로 판단되면
+# (결과에 researcher_id 컬럼이 있으면) 항상 맨 앞에 붙이는 7개 기본 컬럼.
+# 값 계산 로직은 엑셀 다운로드와 동일한 걸 재사용(같은 사람은 어디서 봐도
+# 같은 표기) — 단, 학력은 엑셀처럼 전체 이력이 아니라 "최종 학력 1건만".
+PERSON_BASE_COLUMNS = ['researcher_id', 'name', 'department', 'org_code', 'position', 'degree_major', 'age']
+
+
+def _highest_degree_str(education_rows: list) -> str:
+    by_degree = {}
+    for e in education_rows:
+        deg = _s(e.get('degree'))
+        if deg in _DEGREE_CODE:
+            by_degree.setdefault(deg, e)
+    for deg in _DEGREE_ORDER:
+        e = by_degree.get(deg)
+        if e:
+            code = _DEGREE_CODE[deg]
+            school = _or_dash(e.get('school'))
+            major = _or_dash(e.get('major'))
+            return f'{code}){school} {major}'
+    return '-'
+
+
+def person_base_table(researcher_ids: list) -> dict:
+    """PERSON_BASE_COLUMNS 순서에 맞는 값 리스트를 researcher_id별로 반환.
+    researchers.csv/education.csv를 한 번만 읽어 여러 명을 한꺼번에 처리한다
+    (nl_query/open_data_query가 결과 테이블 렌더링 때마다 호출하므로 매번
+    파일을 다시 읽지 않도록)."""
+    researchers_df = data_store.read_processed('researchers')
+    education_df = data_store.read_processed('education')
+    researchers_by_id = (
+        researchers_df.set_index('researcher_id').to_dict('index') if not researchers_df.empty else {}
+    )
+    current_year = datetime.now().year
+
+    out = {}
+    for rid in researcher_ids:
+        r = researchers_by_id.get(rid)
+        edu_rows = _rows_for(education_df, rid)
+        degree_major = _highest_degree_str(edu_rows)
+        if r:
+            name = _or_dash(r.get('name'))
+            department = _or_dash(r.get('department'))
+            org_code = _or_dash(r.get('org_code'))
+            position = _or_dash(r.get('position'))
+            birth_year = _s(r.get('birth_year'))
+            age = str(current_year - int(birth_year)) if birth_year.isdigit() else '-'
+        else:
+            name = department = org_code = position = age = '-'
+        out[rid] = [rid, name, department, org_code, position, degree_major, age]
+    return out
+
+
 def build_profile_workbook(researcher_ids: list) -> bytes:
     """선택된 researcher_id 목록으로 엑셀(xlsx) 바이트를 만들어 반환한다.
     양식: 바탕체 11pt, 전체 검정 테두리, 헤더만 볼드, 줄바꿈 셀은 자동 줄바꿈."""

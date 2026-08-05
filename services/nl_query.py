@@ -56,6 +56,7 @@ sys.path.insert(0, os.path.abspath(_PIPELINE_DIR))
 import llm_client  # noqa: E402
 import researcher_fit as fit  # noqa: E402
 from services.llm import LLMError  # noqa: E402
+from services import data_labels  # noqa: E402
 from services import data_store  # noqa: E402
 from services import open_data_query  # noqa: E402
 
@@ -177,16 +178,46 @@ def expand_term(term: str, taxonomy: dict, raw_pool: set) -> tuple:
     return set(), 'none'
 
 
+def _empty_table_result(intent: str, note: str) -> dict:
+    return {'intent': intent, 'columns': [], 'labels': [], 'rows': [], 'total_rows': 0, 'note': note}
+
+
+def _build_table_result(intent: str, items: list, column_order: list, note: str = '') -> dict:
+    """구조화 3-intent의 결과(item dict 목록)를 open_data_query와 동일한
+    columns/rows 표 형태로 변환한다 — researcher_id가 있으면 사번/성명/부서/
+    과제/CL/학력·전공/나이 7개 기본 컬럼이 자동으로 앞에 붙어서(inject_person_columns),
+    화면은 4개 intent 전부 같은 표 렌더러 하나로 보여줄 수 있다."""
+    columns = list(column_order)
+    rows = []
+    for it in items:
+        row = []
+        for c in columns:
+            v = it.get(c)
+            if isinstance(v, list):
+                v = '; '.join(str(x) for x in v)
+            row.append(v)
+        rows.append(row)
+    columns, rows = open_data_query.inject_person_columns(columns, rows)
+    return {
+        'intent': intent,
+        'columns': columns,
+        'labels': data_labels.label_columns(columns),
+        'rows': rows,
+        'total_rows': len(rows),
+        'note': note,
+    }
+
+
 def find_researchers_by_expertise(terms: list, department_filter: str = '', top_k: int = DEFAULT_TOP_K) -> dict:
     terms = [str(t).strip() for t in (terms or []) if str(t).strip()]
     if not terms:
-        return {'intent': 'find_researchers_by_expertise', 'items': [],
-                'note': '질문에서 찾을 전문성 키워드를 확인하지 못했습니다.'}
+        return _empty_table_result('find_researchers_by_expertise', '질문에서 찾을 전문성 키워드를 확인하지 못했습니다.')
 
     profiles = data_store.read_expertise_profiles()
     if not profiles:
-        return {'intent': 'find_researchers_by_expertise', 'items': [],
-                'note': '연구원 보유 전문성 분석.json이 없습니다(process_researcher_expertise.py 먼저 실행).'}
+        return _empty_table_result(
+            'find_researchers_by_expertise',
+            '연구원 보유 전문성 분석.json이 없습니다(process_researcher_expertise.py 먼저 실행).')
 
     researchers_df = data_store.read_processed('researchers')
     name_map, dept_map = {}, {}
@@ -234,12 +265,14 @@ def find_researchers_by_expertise(terms: list, department_filter: str = '', top_
         }
         for hit_count, rid in scored[:top_k]
     ]
-    return {
-        'intent': 'find_researchers_by_expertise',
-        'items': items,
-        'total_matched': len(scored),
-        'note': ' '.join(notes),
-    }
+    note = ' '.join(notes)
+    if len(scored) > top_k:
+        note = f'{note} 조건에 맞는 {len(scored)}명 중 상위 {top_k}명을 표시합니다.'.strip()
+    return _build_table_result(
+        'find_researchers_by_expertise', items,
+        ['researcher_id', 'name', 'department', 'strength_fields', 'strength_keywords', 'matched_term_count'],
+        note,
+    )
 
 
 def _fit_rank_key(m: dict) -> int:
@@ -283,25 +316,22 @@ def find_researchers_for_project(project_name: str = '', project_description: st
                         'fit_score': r.get('fit_score', ''),
                         'reason': r.get('reason', ''),
                     })
-            return {
-                'intent': 'find_researchers_for_project',
-                'items': items,
-                'source': 'batch',
-                'note': '',
-            }
+            return _build_table_result(
+                'find_researchers_for_project', items,
+                ['researcher_id', 'name', 'project_name', 'job_title', 'fit_score', 'reason'],
+            )
 
     # 등록된 과제에서 못 찾았고 설명이 있으면, 임베딩만으로 1차 후보를 실시간 계산한다
     # (사내 LLM 정성 판정은 배치 process_project_researcher_fit.py만 수행하므로,
     # 이 경로의 결과는 "1차 후보"일 뿐 확정 배치 결과와 신뢰도가 다르다).
     description = (project_description or query).strip()
     if not description:
-        return {'intent': 'find_researchers_for_project', 'items': [],
-                'note': '과제명이나 과제 설명을 확인하지 못했습니다.'}
+        return _empty_table_result('find_researchers_for_project', '과제명이나 과제 설명을 확인하지 못했습니다.')
 
     profiles = data_store.read_expertise_profiles()
     if not profiles:
-        return {'intent': 'find_researchers_for_project', 'items': [],
-                'note': '연구원 보유 전문성 분석.json이 없어 매칭할 수 없습니다.'}
+        return _empty_table_result(
+            'find_researchers_for_project', '연구원 보유 전문성 분석.json이 없어 매칭할 수 없습니다.')
 
     researcher_ids = list(profiles.keys())
     researcher_texts = [fit.researcher_profile_text(profiles[rid]) for rid in researcher_ids]
@@ -324,13 +354,12 @@ def find_researchers_for_project(project_name: str = '', project_description: st
         }
         for i in ranked_idx
     ]
-    return {
-        'intent': 'find_researchers_for_project',
-        'items': items,
-        'source': 'embedding_only',
-        'note': ('등록된 과제 목록에 없어 임베딩 유사도로 1차 후보만 계산했습니다 — '
-                 '사내 LLM 정성 판정(근거·적합도 상/중/하)은 아직 거치지 않았습니다.'),
-    }
+    return _build_table_result(
+        'find_researchers_for_project', items,
+        ['researcher_id', 'name', 'project_name', 'job_title', 'score', 'fit_score', 'reason'],
+        '등록된 과제 목록에 없어 임베딩 유사도로 1차 후보만 계산했습니다 — '
+        '사내 LLM 정성 판정(근거·적합도 상/중/하)은 아직 거치지 않았습니다.',
+    )
 
 
 def _resolve_researcher(query: str, researchers_df: pd.DataFrame) -> list:
@@ -379,21 +408,22 @@ def find_projects_for_researcher(researcher_query: str, exclude_current: bool = 
     researchers_df = data_store.read_processed('researchers')
     candidates = _resolve_researcher(researcher_query, researchers_df)
     if not candidates:
-        return {'intent': 'find_projects_for_researcher', 'items': [],
-                'note': f'"{researcher_query}"에 해당하는 연구원을 찾지 못했습니다.'}
+        return _empty_table_result(
+            'find_projects_for_researcher', f'"{researcher_query}"에 해당하는 연구원을 찾지 못했습니다.')
     if len(candidates) > 1:
         name_map = researchers_df.set_index('researcher_id')['name'].to_dict()
         cand_desc = ', '.join(f'{name_map.get(rid, rid)}({rid})' for rid in candidates[:10])
-        return {'intent': 'find_projects_for_researcher', 'items': [],
-                'note': f'동명이인 등으로 {len(candidates)}명이 검색됩니다: {cand_desc}. 사번으로 다시 질문해주세요.'}
+        return _empty_table_result(
+            'find_projects_for_researcher',
+            f'동명이인 등으로 {len(candidates)}명이 검색됩니다: {cand_desc}. 사번으로 다시 질문해주세요.')
 
     rid = candidates[0]
     by_researcher = data_store.read_project_fit_by_researcher()
     entry = by_researcher.get(rid)
     if not entry:
-        return {'intent': 'find_projects_for_researcher', 'items': [],
-                'note': '이 연구원에 대한 과제 적합도 매칭 데이터가 없습니다'
-                        '(process_project_researcher_fit.py 실행 필요).'}
+        return _empty_table_result(
+            'find_projects_for_researcher',
+            '이 연구원에 대한 과제 적합도 매칭 데이터가 없습니다(process_project_researcher_fit.py 실행 필요).')
 
     matches = list(entry.get('matches') or [])
     excluded_note = ''
@@ -415,7 +445,11 @@ def find_projects_for_researcher(researcher_query: str, exclude_current: bool = 
         }
         for m in matches[:top_k]
     ]
-    return {'intent': 'find_projects_for_researcher', 'items': items, 'note': excluded_note}
+    return _build_table_result(
+        'find_projects_for_researcher', items,
+        ['researcher_id', 'name', 'project_name', 'job_title', 'dep_name', 'fit_score', 'reason'],
+        excluded_note,
+    )
 
 
 def parse_question(question: str) -> dict:
@@ -463,7 +497,7 @@ def execute_query(parsed: dict) -> dict:
     """parse_question()의 결과를 실제 데이터 조회로 실행한다."""
     intent = parsed.get('intent')
     if intent == 'error':
-        return {'intent': 'error', 'items': [], 'note': parsed.get('message', '알 수 없는 오류가 발생했습니다.')}
+        return _empty_table_result('error', parsed.get('message', '알 수 없는 오류가 발생했습니다.'))
 
     if intent == 'unsupported':
         reason = parsed.get('reason_if_unsupported') or ''
@@ -473,7 +507,7 @@ def execute_query(parsed: dict) -> dict:
         note += (' "특정 전문성 보유자 찾기", "과제에 적합한 사람 찾기", '
                  '"연구원에게 맞는 과제 찾기", 또는 학력·과제이력 등 원천 데이터에'
                  ' 대한 질문 형태로 질문해 주세요.')
-        return {'intent': 'unsupported', 'items': [], 'note': note}
+        return _empty_table_result('unsupported', note)
 
     if intent == 'open_data_query':
         return open_data_query.answer(parsed.get('question') or '')
@@ -489,7 +523,7 @@ def execute_query(parsed: dict) -> dict:
         return find_projects_for_researcher(
             parsed.get('researcher_query', ''), parsed.get('exclude_current_project', True), top_k)
 
-    return {'intent': 'unsupported', 'items': [], 'note': '알 수 없는 질문 유형입니다.'}
+    return _empty_table_result('unsupported', '알 수 없는 질문 유형입니다.')
 
 
 def answer_question(question: str) -> dict:

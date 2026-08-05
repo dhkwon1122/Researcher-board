@@ -104,6 +104,74 @@
     "완료: 개방형 질의(open_data_query) 확장" 섹션 참고.
 11. **자연어 질문 결과 → 연구원 프로필 엑셀 다운로드**: 아래 "완료: 연구원
     프로필 엑셀 다운로드" 섹션 참고.
+12. **자연어 질문 결과 화면 전면 개편(4개 intent 통합 표, 정렬/필터, 인라인
+    선택)**: 아래 "완료: 자연어 질문 결과 표 통합 개편" 섹션 참고.
+
+## 완료: 자연어 질문 결과 표 통합 개편
+
+"보유 전문성" 자연어 질문 결과 화면을 사용자 피드백 6건 반영해 다시 짰다.
+핵심은 **4개 intent(정형 3개 + open_data_query)가 전부 같은
+{columns, labels, rows} 표 형태로 결과를 내도록 통일**한 것 — 그 덕에
+정렬/필터/체크박스 선택/엑셀 다운로드를 렌더러 하나로 4개 intent 모두에
+동시에 적용할 수 있었다(사용자가 "구조 자체를 바꿔도 된다"고 허용한 부분).
+단, 정형 3-intent의 실제 조회/판단 로직(임베딩 매칭, 배치 매칭 결과 필터링
+등)은 그대로 유지 — LLM SQL 생성으로 바꾸진 않았다(이 프로젝트가 계속
+지켜온 "구조화 출력 강제, 자유 생성 최소화" 원칙을 깨지 않기 위해). 바뀐
+건 **최종 결과를 포장하는 방식**뿐이다.
+
+- **`services/data_labels.py`**(신규): `data/processed/*.csv` + LLM 파생
+  JSON 전체 컬럼 → 한글 라벨 사전(`label_for()`/`label_columns()`, 매핑에
+  없으면 원래 이름 그대로 폴백). 소스 파일마다 원본 헤더 표현이 달라도
+  (사원번호/KNOXID 등) 같은 개념은 항상 같은 한글 라벨로 통일(사용자
+  선택: 원본 헤더 재사용이 아니라 통일된 라벨).
+- **`services/researcher_profile_export.py`**: `PERSON_BASE_COLUMNS`
+  (`researcher_id/name/department/org_code/position/degree_major/age`)와
+  `person_base_table(researcher_ids)` 추가 — 엑셀 다운로드와 자연어 질문
+  결과 표가 "같은 사람은 어디서 봐도 같은 학력·나이 표기"를 공유하도록
+  로직을 여기 한 곳에 모았다(학력은 엑셀처럼 전체 이력이 아니라
+  `_highest_degree_str()`로 최종 학력 1건만).
+- **`services/open_data_query.py`**: `DISPLAY_LIMIT`/`_cap_limit` 50→1000건
+  (상한만 올리고 화면 기본 표시는 30건 — 아래 UI). `inject_person_columns()`
+  신규 — 결과에 `researcher_id`가 있으면(=사람 데이터로 판단) 사번/성명/
+  부서/과제/CL/학력·전공/나이 7개를 항상 앞에 붙이고, 겹치는 원본 컬럼
+  (department/org_code/position/degree/major/birth_year 등)은 제거해
+  중복 표시하지 않는다. SQL 생성 프롬프트에 "사람에 대한 질문이면
+  researcher_id를 SELECT에 반드시 포함하라" 규칙 추가(이 판단 로직이
+  기댈 신호를 LLM이 빠뜨리지 않도록). 응답에 `labels`(표시용 한글) 필드
+  추가(`columns`는 정렬/필터가 참조할 원본명 그대로 유지).
+- **`services/nl_query.py`**: 정형 3-intent
+  (`find_researchers_by_expertise`/`find_researchers_for_project`/
+  `find_projects_for_researcher`)의 반환값을 기존 `items: [...]`(카드/표
+  각각 다른 모양)에서 `open_data_query`와 동일한 `columns/labels/rows`
+  구조로 변경(`_build_table_result()` 공용 헬퍼, 내부적으로
+  `open_data_query.inject_person_columns()` 재사용) — 조회/판단 로직
+  자체는 한 줄도 안 바꾸고 마지막 포장만 바꿨다.
+- **`pages/researcher_similarity_map.py`**: 결과 표 렌더링을 전면 재작성.
+  - **표시 개수**: 기본 30건, 상한 1000건까지 "전체 N건 보기"로 펼침
+    (건수는 필터 적용 여부와 무관하게 항상 헤더 위에 "총 N건" 상시 표시).
+  - **정렬**: 컬럼 헤더 옆 드롭다운(오름차순/내림차순), `department`
+    컬럼만 추가로 "건재순"(advanced device platform(sait) 등 사용자 지정
+    7개 우선순위 + 나머지는 이름순, `_DEPT_ORDER`/`_dept_sort_key()`).
+    "정렬 해제" 링크로 초기화.
+  - **필터**: 모든 컬럼에 값 다중선택 드롭다운(현재 받아온 전체 데이터
+    기준 고유값 목록) — 재질의 없이 브라우저에서만 걸러낸다
+    (`_passes_filters()`). "필터 초기화" 링크로 초기화.
+  - **엑셀 다운로드**: 별도 모달을 없애고, 결과 표 각 행에 체크박스를
+    바로 두는 방식으로 변경(헤더 체크박스로 전체선택/해제). 선택된 행
+    수가 버튼 라벨에 실시간 반영되고, researcher_id가 있는 결과에서만
+    버튼이 나타난다.
+  - **Dash 팬텀 트리거 대응**: 정렬/필터/체크박스는 모두 매 렌더링마다
+    새로 그려지는 동적 컴포넌트라(컬럼 수 자체가 질문마다 달라 고정
+    컴포넌트로 둘 수 없음), 이전 엑셀 모달 버그 때처럼 컴포넌트를 고정하는
+    대신 **콜백을 전부 "현재 상태로부터 다음 상태를 그대로 계산"하는 순수
+    함수**로 짜서(토글/증가 없음) 팬텀 트리거가 와도 상태가 그대로
+    유지되게 했다. n_clicks 기반 콜백(정렬/필터 초기화, 엑셀 다운로드)은
+    추가로 `if not n_clicks: return dash.no_update`로 방어.
+  - **알려진 제약**: 부서 "건재순" 우선순위 목록은 이 저장소의 개발
+    샘플 데이터(`AI융합연구팀` 등 한글 팀명)엔 매칭되는 값이 없어 전부
+    "나머지" 취급(이름순)으로 보임 — 운영 데이터의 `department` 값이
+    실제로 `advanced device platform(sait)` 형태인지 확인 필요(사용자
+    확인 완료, 운영 데이터 기준으로는 정상 동작 예상).
 
 ## 완료: 연구원 프로필 엑셀 다운로드
 
@@ -125,13 +193,14 @@
   `promotion_date` — 운영 환경에선 `pipeline/process_researchers.py`가
   채운다)은 전부 "-"로 안전하게 처리.
 - **`pages/researcher_similarity_map.py`**: `_nl_query_bar()`에 "엑셀
-  다운로드" 버튼(`nl-query-excel-btn`, 결과에 researcher_id 후보가 있을
-  때만 표시 — open_data_query 결과 로직에 이미 있던 "컴포넌트는 고정, 속성만
-  콜백 갱신" 패턴 재사용) + 대상 선택 모달(`nl-query-excel-modal`, 체크리스트
-  + 전체선택/해제 토글) + `dcc.Download`. `_extract_candidates(result)`가
-  intent별로(구조화 intent는 `items[].researcher_id`, open_data_query는
-  결과 컬럼에 `researcher_id`가 있을 때만) 후보 목록을 뽑는다. 다운로드
-  파일명은 `연구원_프로필_YYYYMMDDHHMM.xlsx`(분 단위까지).
+  다운로드" 버튼(`nl-query-excel-btn`) + `dcc.Download`. 다운로드 파일명은
+  `연구원_프로필_YYYYMMDDHHMM.xlsx`(분 단위까지).
+  ⚠️ **UI는 이후 "자연어 질문 결과 표 통합 개편"(위 12번 항목)에서 다시
+  바뀌었다** — 처음엔 대상 선택 모달(`nl-query-excel-modal`) 방식이었지만,
+  지금은 모달 없이 결과 표에 체크박스를 바로 두는 방식으로 교체됐다.
+  아래 두 문단은 그 이전 버전(모달) 설명이니 최신 구현은 위 12번 섹션을
+  참고할 것 — 남겨두는 이유는 "컴포넌트 고정 + 속성만 갱신"이라는 팬텀
+  트리거 대응 패턴이 처음 등장한 사례라 히스토리로서 가치가 있어서다.
 
 ## 완료: 개방형 질의(open_data_query) 확장
 
