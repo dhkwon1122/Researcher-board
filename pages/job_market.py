@@ -91,13 +91,38 @@ def _render_result(result: dict):
         f"후보 과제 {result.get('candidates_considered', 0)}건을 대상으로 비교했습니다"
         f"(A: 과제 분석 기반, B: 배정 인력 전문성 기반 — 데이터가 없는 쪽은 개별 표시)."
     )
+    run_at = result.get('run_at', '')
     return html.Div([
-        dbc.Alert(header_line, color='info', className='mb-3'),
+        dbc.Alert([
+            html.Div(header_line),
+            (html.Div(f'실행 시각: {run_at}', className='small text-muted') if run_at else None),
+        ], color='info', className='mb-3'),
         html.H6('대상 인원', className='fw-bold mb-2'),
         _roster_table(roster),
         html.H6('추천 결과', className='fw-bold mb-2'),
         html.Div([_person_card(by_id.get(rid, {'researcher_id': rid}), res) for rid, res in results.items()]),
     ])
+
+
+def _history_table():
+    rows = jm.list_history()
+    if not rows:
+        return html.Div('검색 이력이 없습니다.', className='text-muted small')
+    mode_label = {'project': '과제 단위', 'individual': '개인별'}
+    return dbc.Table([
+        html.Thead(html.Tr([
+            html.Th('실행일시'), html.Th('구분'), html.Th('대상'),
+            html.Th('인원'), html.Th('후보 과제'), html.Th(''),
+        ])),
+        html.Tbody([
+            html.Tr([
+                html.Td(r['run_at']), html.Td(mode_label.get(r['mode'], r['mode'])), html.Td(r['label']),
+                html.Td(str(r['target_count'])), html.Td(str(r['candidates_considered'])),
+                html.Td(dbc.Button('보기', id={'type': 'jm-history-view', 'file': r['file']},
+                                    color='link', size='sm', n_clicks=0)),
+            ]) for r in rows
+        ]),
+    ], bordered=False, hover=True, size='sm', className='mb-0')
 
 
 def layout(**_kwargs):
@@ -151,6 +176,10 @@ def layout(**_kwargs):
                    id='jm-run-btn', color='primary', n_clicks=0, className='mb-3'),
 
         dcc.Loading(html.Div(id='jm-result')),
+        dcc.Store(id='jm-history-refresh', data=0),
+        html.Hr(),
+        html.H6('검색 이력', className='fw-bold mb-2'),
+        html.Div(id='jm-history-table', children=_history_table()),
     ], className='mb-3')
 
 
@@ -177,36 +206,68 @@ def _update_project_options(department):
     Output('jm-exclude-project', 'options'),
     Input('jm-exclude-dept', 'value'),
 )
-def _update_exclude_project_options(_excluded_dept):
-    # 제외 과제 목록은 전체 과제(부서 선택과 무관) — 부서 제외와 개별 과제
-    # 제외는 서로 독립적인 조건으로 합쳐진다(services/job_market.py 참고).
-    return [{'label': p, 'value': p} for p in jm.list_projects()]
+def _update_exclude_project_options(excluded_dept):
+    # "종료 예정 과제" 선택과 동일하게, 부서를 고르면 그 부서의 과제만 보이도록
+    # 좁힌다. 부서 자체를 제외 조건으로 쓰는 것과는 별개(services/job_market.py의
+    # _expand_excluded_projects — 부서 제외와 개별 과제 제외는 계속 독립적으로
+    # 합쳐진다), 여기서는 드롭다운에 보여줄 옵션만 좁힌다.
+    return [{'label': p, 'value': p} for p in jm.list_projects(excluded_dept)]
 
 
 @callback(
     Output('jm-result', 'children'),
+    Output('jm-history-refresh', 'data'),
     Input('jm-run-btn', 'n_clicks'),
     State('jm-mode', 'value'),
     State('jm-project-select', 'value'),
     State('jm-individual-query', 'value'),
     State('jm-exclude-dept', 'value'),
     State('jm-exclude-project', 'value'),
+    State('jm-history-refresh', 'data'),
     prevent_initial_call=True,
 )
-def _run(n_clicks, mode, project_names, individual_query, excluded_depts, excluded_projects):
+def _run(n_clicks, mode, project_names, individual_query, excluded_depts, excluded_projects, refresh_token):
     if not n_clicks:
-        return dash.no_update
+        return dash.no_update, dash.no_update
     excluded_depts = excluded_depts or []
     excluded_projects = excluded_projects or []
     project_names = project_names or []
 
     if mode == _MODE_INDIVIDUAL:
         if not (individual_query or '').strip():
-            return dbc.Alert('이름 또는 사번을 입력해주세요.', color='warning')
+            return dbc.Alert('이름 또는 사번을 입력해주세요.', color='warning'), dash.no_update
         result = jm.run_individual_search(individual_query.strip(), excluded_depts, excluded_projects)
     else:
         if not project_names:
-            return dbc.Alert('종료 예정 과제를 선택해주세요.', color='warning')
+            return dbc.Alert('종료 예정 과제를 선택해주세요.', color='warning'), dash.no_update
         result = jm.run_project_search(project_names, excluded_depts, excluded_projects)
 
+    refresh = (refresh_token or 0) + 1 if not result.get('error') else dash.no_update
+    return _render_result(result), refresh
+
+
+@callback(
+    Output('jm-history-table', 'children'),
+    Input('jm-history-refresh', 'data'),
+)
+def _refresh_history_table(_refresh_token):
+    return _history_table()
+
+
+@callback(
+    Output('jm-result', 'children', allow_duplicate=True),
+    Input({'type': 'jm-history-view', 'file': dash.ALL}, 'n_clicks'),
+    State({'type': 'jm-history-view', 'file': dash.ALL}, 'id'),
+    prevent_initial_call=True,
+)
+def _view_history(n_clicks_list, ids):
+    triggered_id = dash.ctx.triggered_id
+    if not triggered_id:
+        return dash.no_update
+    idx = next((i for i, d in enumerate(ids) if d == triggered_id), None)
+    if idx is None or not n_clicks_list[idx]:
+        return dash.no_update
+    result = jm.load_history(triggered_id['file'])
+    if not result:
+        return dbc.Alert('이력을 불러오지 못했습니다.', color='danger')
     return _render_result(result)

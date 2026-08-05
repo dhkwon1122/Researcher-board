@@ -39,6 +39,7 @@ Source:
   data/processed/연구원 보유 전문성 분석.json   (근거 B/대상자 프로필)
 """
 
+import json
 import os
 import re
 import sys
@@ -56,6 +57,69 @@ from services.llm import LLMError  # noqa: E402
 
 TOP_K_CANDIDATES = 8  # 임베딩으로 추려 LLM에 넘길 상위 후보 수(최종 0~3개는 LLM이 고름)
 MAX_RECOMMENDATIONS = 3
+
+HISTORY_DIR = os.path.join(data_store.DATA_DIR, 'job_market')
+
+
+# ─── 검색 이력 저장/조회 ─────────────────────────────────────────────────────
+
+def _safe_stem(text: str) -> str:
+    return re.sub(r'[^0-9A-Za-z가-힣_-]', '_', text or '')[:60] or 'search'
+
+
+def _history_label(report: dict) -> str:
+    if report.get('mode') == 'individual':
+        rid = report.get('researcher_id', '')
+        roster = report.get('roster') or []
+        name = roster[0]['name'] if roster else rid
+        return f'{name}({rid})'
+    return ', '.join(report.get('project_names') or [])
+
+
+def save_history(report: dict) -> str:
+    os.makedirs(HISTORY_DIR, exist_ok=True)
+    ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+    fname = f"{_safe_stem(_history_label(report))}_{ts}.json"
+    with open(os.path.join(HISTORY_DIR, fname), 'w', encoding='utf-8') as f:
+        json.dump(report, f, ensure_ascii=False, indent=2)
+    return fname
+
+
+def list_history() -> list:
+    if not os.path.isdir(HISTORY_DIR):
+        return []
+    rows = []
+    for fname in os.listdir(HISTORY_DIR):
+        if not fname.endswith('.json'):
+            continue
+        try:
+            with open(os.path.join(HISTORY_DIR, fname), encoding='utf-8') as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        rows.append({
+            'file': fname,
+            'run_at': data.get('run_at', ''),
+            'mode': data.get('mode', ''),
+            'label': _history_label(data),
+            'target_count': len(data.get('roster') or []),
+            'candidates_considered': data.get('candidates_considered', 0),
+        })
+    rows.sort(key=lambda r: r['run_at'], reverse=True)
+    return rows
+
+
+def load_history(file_name: str) -> dict | None:
+    """file_name은 list_history()가 돌려준 값만 받는다 — basename만 취급하고
+    HISTORY_DIR 밖 경로는 거부해 경로 조작을 막는다."""
+    safe_name = os.path.basename(file_name or '')
+    if not safe_name.endswith('.json'):
+        return None
+    path = os.path.join(HISTORY_DIR, safe_name)
+    if not os.path.isfile(path):
+        return None
+    with open(path, encoding='utf-8') as f:
+        return json.load(f)
 
 
 # ─── 과제/부서 목록 (드롭다운, 결정적) ───────────────────────────────────────
@@ -264,7 +328,6 @@ def _judge_recommendations(profile_text: str, shortlist: list) -> list:
     raw = llm_client.call_llm(prompt, _RECOMMEND_SYSTEM_PROMPT, temperature=0.0, max_tokens=1200)
     if not raw:
         return []
-    import json
     try:
         parsed = json.loads(llm_client.extract_json(raw))
     except json.JSONDecodeError:
@@ -356,12 +419,14 @@ def run_project_search(project_names: list, excluded_departments: list, excluded
     for rid, (result, error) in zip(researcher_ids, task_results):
         results[rid] = result if error is None and result else {'recommendations': [], 'note': f'처리 중 오류: {error}'}
 
-    return {
+    report = {
         'mode': 'project', 'project_names': project_names,
         'run_at': datetime.now().isoformat(timespec='seconds'),
         'roster': roster, 'results': results,
         'candidates_considered': len(candidate_pool),
     }
+    save_history(report)
+    return report
 
 
 def _resolve_researcher_query(query: str, researchers_df) -> list:
@@ -408,10 +473,22 @@ def run_individual_search(researcher_query: str, excluded_departments: list, exc
     except LLMError as exc:
         return {'error': f'후보 과제 임베딩 계산 실패: {exc}'}
 
-    result = recommend_for_researcher(researcher_id, expertise_profiles, candidate_pool)
-    return {
+    # run_project_search()처럼 run_concurrent()를 거쳐서(1건이라도) 호출한다 —
+    # recommend_for_researcher() 안에서 예상 못한 예외가 나도(예: 캐시에 섞인
+    # 차원이 다른 임베딩 등) run_concurrent가 잡아 에러 문자열로 돌려주므로,
+    # 콜백 자체가 죽어서 화면에 아무 결과도 안 뜨는 대신 "처리 중 오류" 카드가
+    # 뜬다. 직접 호출하면 이 안전망이 빠져 개인별 검색만 조용히 실패할 수 있었다.
+    task_results = llm_client.run_concurrent(
+        [lambda: recommend_for_researcher(researcher_id, expertise_profiles, candidate_pool)], max_workers=1)
+    result, error = task_results[0]
+    if error is not None or not result:
+        result = {'recommendations': [], 'note': f'처리 중 오류: {error}'}
+
+    report = {
         'mode': 'individual', 'researcher_id': researcher_id,
         'run_at': datetime.now().isoformat(timespec='seconds'),
         'roster': roster, 'results': {researcher_id: result},
         'candidates_considered': len(candidate_pool),
     }
+    save_history(report)
+    return report

@@ -978,3 +978,37 @@ Playwright로 실제 앱 기동 후: 네비게이션 탭 노출, 모드 전환 U
 확인. Playwright로 실제 화면에서 부서 2개 → 과제 2개를 순서대로 다중
 선택해 cascading 옵션이 정확히 좁혀지는지, 검색 결과 상단에 선택한 과제
 둘 다 표시되는지 확인.
+
+## 완료: JOB Market — 검색 이력, 부서→과제 제외 드롭다운 cascading, 개인별 검색 버그 수정
+
+1. **검색 이력**: `jd_reconciliation.py`와 동일한 패턴(`save_history`/
+   `list_history`/`load_history`, `HISTORY_DIR = data/processed/job_market/`)을
+   `services/job_market.py`에 추가. `run_project_search()`/`run_individual_search()`
+   성공 시(에러 아닐 때만) 자동 저장. 화면에는 검색 결과 아래 "검색 이력"
+   테이블(실행일시/구분/대상/인원/후보 과제/보기)을 추가, "보기" 클릭 시
+   그 이력의 결과를 다시 렌더링(jd_reconciliation의 이력 보기 버튼과 동일한
+   pattern-matching 콜백 구조).
+2. **제외 과제 드롭다운도 부서 선택 시 좁혀지도록**: `jm-exclude-dept` 선택값을
+   `jm-exclude-project`의 옵션 필터링에도 쓰도록 변경("종료 예정 과제"
+   섹션과 동일한 cascading). 단, 실제 제외 계산(`_expand_excluded_projects`)의
+   "부서 제외 + 과제 제외는 독립적으로 합쳐진다" 로직 자체는 그대로 — 여기서
+   바뀐 건 드롭다운에 "보여주는 옵션"만이다.
+3. **개인별 검색이 아무 결과도 안 보이던 버그**: `run_project_search()`는
+   사람별 추천 계산(`recommend_for_researcher`)을 `llm_client.run_concurrent()`로
+   감싸서 실행하기 때문에, 그 안에서 예상 못한 예외(예: 캐시에 차원이 다른
+   임베딩이 섞여 있는 경우 등)가 나도 안전하게 잡아 "처리 중 오류" 노트로
+   보여준다. 그런데 `run_individual_search()`는 같은 함수를 **직접** 호출하고
+   있어서 이 안전망이 없었다 — 그런 예외가 나면 Dash 콜백 자체가 죽어서
+   화면에 "아무 결과도 안 나오는" 것처럼 보였다(개인별 검색만 실패하고
+   과제 단위 검색은 정상이었던 이유). `run_individual_search()`도
+   `run_concurrent()`에 태워(1건이라도) 호출하도록 바꿔 과제 단위 검색과
+   동일한 안전망을 갖도록 통일.
+
+검증: `save_history`/`list_history`/`load_history`를 과제 단위·개인별 검색
+둘 다로 픽스처 테스트. `recommend_for_researcher`를 몽키패치로 예외를
+던지게 만들어 `run_individual_search()`가 예외를 그대로 전파하지 않고
+"처리 중 오류: ..." 노트가 담긴 정상적인 결과 dict를 반환하는지 확인.
+`jm.list_projects(department)`가 부서로 옵션을 좁히는지 확인. Playwright로
+실제 화면에서 검색 이력 테이블이 채워지고 "보기" 버튼이 과거 결과를
+다시 렌더링하는지, 제외 과제 드롭다운이 부서 선택 시 실제로 좁혀지는지,
+개인별 검색이 정상적으로 결과를 보여주는지 모두 재확인.
