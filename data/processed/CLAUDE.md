@@ -1060,3 +1060,45 @@ Playwright로 실제 앱 기동 후: 네비게이션 탭 노출, 모드 전환 U
 눌러 정상적으로 결과가 렌더링되는지 확인(수정 전엔 빈 화면, 수정 후엔
 정상 결과). 기존 버튼 클릭 경로, 과제 단위 복수 선택 검색도 회귀
 없음을 재확인.
+
+## 완료: JOB Market — 개인별 검색을 3단계(검색→선택→검색 실행) 흐름으로 재설계
+
+사용자 요청: 개인별 검색을 하나의 텍스트 입력으로 즉시 실행하는 대신,
+1) 검색창에 이름/사번을 검색하면 대상자 후보가 나와서 고를 수 있고(다시
+검색해서 복수 대상자를 계속 추가 가능), 2) 제외 부서/과제 선택, 3) "검색"
+버튼으로 선택된 한 명 또는 여러 명 전체의 결과를 한 번에 보여주는 3단계
+흐름으로 바꿔 달라는 것.
+
+**`services/job_market.py`**:
+- 신규 `search_researchers(query)` — 검색창용. 기존 `_resolve_researcher_query()`
+  (정확 일치 우선, 없으면 부분 일치)를 그대로 재사용하되, 동명이인이어도
+  에러 내지 않고 전부(최대 `MAX_SEARCH_RESULTS`=20건) 반환해 화면에서
+  고르게 한다.
+- `run_individual_search()` 시그니처를 `researcher_query: str`(단일 텍스트,
+  내부에서 동명이인이면 에러) → `researcher_ids: list`(화면에서 이미 확정한
+  1명 이상)로 변경. 사람마다 "현재 속한 과제" 제외 조건이 다를 수 있어
+  후보 풀도 사람별로 계산하되, 같은 소속(정규화된 org_code)인 사람끼리는
+  풀을 재사용해 임베딩 반복 계산을 피한다. 나머지(LLM 최종 판정)는
+  `run_project_search()`와 동일하게 `run_concurrent()`로 동시 처리.
+- `_history_label()`이 개인별 검색 결과가 이제 여러 명일 수 있음을 반영
+  (1명이면 "이름(사번)", 여러 명이면 "이름1, 이름2 외 N명").
+
+**`pages/job_market.py`**:
+- 개인별 검색 영역을 검색창+"찾기" 버튼(Enter로도 검색) → 후보 목록(각
+  후보에 "추가" 버튼) → "선택된 대상자" 칩 목록(각 칩에 "×" 제거 버튼) 구조로
+  재구성. `dcc.Store`(`jm-individual-candidates-store`: 마지막 검색 결과,
+  `jm-individual-selected-store`: 누적된 선택 목록)로 상태 관리.
+- 새 콜백 3개: `_search_candidates`(검색 버튼/Enter → 후보 렌더링),
+  `_update_selected`(패턴 매칭 — "추가"/"×" 버튼 클릭에 따라 선택 목록에
+  더하거나 뺌, 중복 추가는 무시), `_render_selected`(선택 목록 렌더링).
+- 최종 "검색" 버튼(`_run`)은 이제 `jm-individual-selected-store`에서
+  researcher_id 목록을 뽑아 `run_individual_search(researcher_ids, ...)`를
+  호출 — 1명이든 여러 명이든 동일한 경로.
+
+검증: `search_researchers`가 동명이인/부분일치를 전부 반환하는지,
+`run_individual_search`가 서로 다른 소속의 여러 사람을 한 번에 처리하고
+입력에 중복 researcher_id가 있어도 한 번만 처리하는지 픽스처로 확인.
+Playwright로 실제 화면에서 "정재원" 검색→추가, "오지아" 검색→추가로
+두 명을 누적한 뒤 최종 검색을 누르면 두 사람 모두의 결과가 한 번에
+나오는 것, 칩의 "×"로 제거가 되는 것, 과제 단위 검색(복수 선택)/이력/
+제외 드롭다운 cascading에 회귀가 없는 것을 확인.

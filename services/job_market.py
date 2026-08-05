@@ -69,10 +69,13 @@ def _safe_stem(text: str) -> str:
 
 def _history_label(report: dict) -> str:
     if report.get('mode') == 'individual':
-        rid = report.get('researcher_id', '')
         roster = report.get('roster') or []
-        name = roster[0]['name'] if roster else rid
-        return f'{name}({rid})'
+        if len(roster) == 1:
+            p = roster[0]
+            return f"{p['name']}({p['researcher_id']})"
+        names = ', '.join(p['name'] for p in roster[:3])
+        more = f' 외 {len(roster) - 3}명' if len(roster) > 3 else ''
+        return f'{names}{more}' if roster else '개인별 검색'
     return ', '.join(report.get('project_names') or [])
 
 
@@ -429,6 +432,9 @@ def run_project_search(project_names: list, excluded_departments: list, excluded
     return report
 
 
+MAX_SEARCH_RESULTS = 20  # 이름/사번 검색창의 후보 표시 개수 상한
+
+
 def _resolve_researcher_query(query: str, researchers_df) -> list:
     """이름 또는 사번으로 researcher_id 후보를 찾는다(동명이인이면 복수 반환)."""
     if researchers_df.empty:
@@ -447,48 +453,76 @@ def _resolve_researcher_query(query: str, researchers_df) -> list:
     return contains['researcher_id'].tolist()
 
 
-def run_individual_search(researcher_query: str, excluded_departments: list, excluded_org_codes: list) -> dict:
-    """개인별 검색 — 이름/사번 1건으로 후보 과제를 추천한다. 본인이 현재
-    속한 과제는 항상 자동으로 제외한다."""
+def search_researchers(query: str) -> list:
+    """이름/사번 검색창용 — 화면에서 여러 후보 중 골라 추가할 수 있도록,
+    동명이인이어도(또는 부분 일치가 여럿이어도) 전부 반환한다(최대
+    MAX_SEARCH_RESULTS건). run_individual_search()가 쓰는 정확 일치 대신
+    "골라서 추가"하는 흐름이라 여기서는 후보를 좁히지 않는다."""
     researchers_df = data_store.read_processed('researchers')
-    candidates = _resolve_researcher_query(researcher_query, researchers_df)
+    candidates = _resolve_researcher_query(query, researchers_df)
     if not candidates:
-        return {'error': f'"{researcher_query}"에 해당하는 연구원을 찾지 못했습니다.'}
-    if len(candidates) > 1:
-        return {'error': f'"{researcher_query}"에 해당하는 연구원이 {len(candidates)}명입니다. 사번으로 다시 검색해주세요.'}
+        return []
+    rows = researchers_df[researchers_df['researcher_id'].isin(candidates)]
+    return [
+        {
+            'researcher_id': row['researcher_id'],
+            'name': row.get('name', row['researcher_id']),
+            'department': row.get('department', ''),
+            'org_code': row.get('org_code', ''),
+        }
+        for _, row in rows.iterrows()
+    ][:MAX_SEARCH_RESULTS]
 
-    researcher_id = candidates[0]
-    roster = build_roster([researcher_id])
+
+def run_individual_search(researcher_ids: list, excluded_departments: list, excluded_org_codes: list) -> dict:
+    """개인별 검색 — 화면에서 미리 골라 확정한 researcher_id 목록(1명 또는
+    여러 명)에 대해 각자의 후보 과제를 추천한다. 각자 현재 속한 과제는
+    항상 자동으로 제외한다(사람마다 다를 수 있어 개별 계산).
+
+    같은 과제(정규화된 org_code) 소속 사람이 여럿이면 그들의 제외 조건이
+    동일하므로 후보 풀을 그룹당 한 번만 만들어 재사용한다(임베딩 반복
+    계산 방지)."""
+    researcher_ids = [r for r in dict.fromkeys(researcher_ids or []) if r]  # 순서 유지 중복 제거
+    if not researcher_ids:
+        return {'error': '검색할 대상자를 추가해주세요.'}
+
+    researchers_df = data_store.read_processed('researchers')
+    roster = build_roster(researcher_ids)
 
     projects_df = data_store.read_processed('project_confl_address')
     all_rows = _dedup_candidate_rows(projects_df) if not projects_df.empty else []
-    excluded_norm = _expand_excluded_projects(set(excluded_departments), set(excluded_org_codes), all_rows)
-    own_org_code = _own_org_code(researcher_id, researchers_df)
-    if own_org_code:
-        excluded_norm.add(fit.normalize_org_code(own_org_code))
-
+    base_excluded_norm = _expand_excluded_projects(set(excluded_departments), set(excluded_org_codes), all_rows)
     expertise_profiles = data_store.read_expertise_profiles()
+
+    own_norm_by_rid = {}
+    for rid in researcher_ids:
+        own_org_code = _own_org_code(rid, researchers_df)
+        own_norm_by_rid[rid] = fit.normalize_org_code(own_org_code) if own_org_code else ''
+
+    pool_by_own_org = {}
     try:
-        candidate_pool = _build_candidate_pool(excluded_norm, expertise_profiles)
+        for own_norm in set(own_norm_by_rid.values()):
+            excluded_norm = base_excluded_norm | ({own_norm} if own_norm else set())
+            pool_by_own_org[own_norm] = _build_candidate_pool(excluded_norm, expertise_profiles)
     except LLMError as exc:
         return {'error': f'후보 과제 임베딩 계산 실패: {exc}'}
 
-    # run_project_search()처럼 run_concurrent()를 거쳐서(1건이라도) 호출한다 —
-    # recommend_for_researcher() 안에서 예상 못한 예외가 나도(예: 캐시에 섞인
-    # 차원이 다른 임베딩 등) run_concurrent가 잡아 에러 문자열로 돌려주므로,
-    # 콜백 자체가 죽어서 화면에 아무 결과도 안 뜨는 대신 "처리 중 오류" 카드가
-    # 뜬다. 직접 호출하면 이 안전망이 빠져 개인별 검색만 조용히 실패할 수 있었다.
-    task_results = llm_client.run_concurrent(
-        [lambda: recommend_for_researcher(researcher_id, expertise_profiles, candidate_pool)], max_workers=1)
-    result, error = task_results[0]
-    if error is not None or not result:
-        result = {'recommendations': [], 'note': f'처리 중 오류: {error}'}
+    workers = llm_client.max_concurrency()
+    tasks = [
+        (lambda rid=rid: recommend_for_researcher(rid, expertise_profiles, pool_by_own_org[own_norm_by_rid[rid]]))
+        for rid in researcher_ids
+    ]
+    task_results = llm_client.run_concurrent(tasks, max_workers=workers) if tasks else []
+
+    results = {}
+    for rid, (result, error) in zip(researcher_ids, task_results):
+        results[rid] = result if error is None and result else {'recommendations': [], 'note': f'처리 중 오류: {error}'}
 
     report = {
-        'mode': 'individual', 'researcher_id': researcher_id,
+        'mode': 'individual', 'researcher_ids': researcher_ids,
         'run_at': datetime.now().isoformat(timespec='seconds'),
-        'roster': roster, 'results': {researcher_id: result},
-        'candidates_considered': len(candidate_pool),
+        'roster': roster, 'results': results,
+        'candidates_considered': max((len(p) for p in pool_by_own_org.values()), default=0),
     }
     save_history(report)
     return report

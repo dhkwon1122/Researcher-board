@@ -60,6 +60,23 @@ def _person_card(person: dict, result: dict):
     )
 
 
+def _candidate_row(c: dict):
+    return html.Div([
+        html.Span(f"{c['name']}({c['researcher_id']})", className='me-2'),
+        html.Span(f"{c['department']} · {c['org_code']}", className='text-muted small me-2'),
+        dbc.Button('추가', id={'type': 'jm-add-candidate', 'rid': c['researcher_id']},
+                   color='link', size='sm', n_clicks=0, className='py-0'),
+    ], className='d-flex align-items-center mb-1')
+
+
+def _selected_chip(c: dict):
+    return dbc.Badge([
+        f"{c['name']}({c['researcher_id']})",
+        html.Span('×', id={'type': 'jm-remove-selected', 'rid': c['researcher_id']}, n_clicks=0,
+                   className='ms-2', style={'cursor': 'pointer'}),
+    ], color='secondary', className='p-2 me-1 mb-1')
+
+
 def _roster_table(roster: list):
     if not roster:
         return html.Div('명단이 없습니다.', className='text-muted small')
@@ -156,13 +173,22 @@ def layout(**_kwargs):
             ], className='g-2 mb-2'),
             id='jm-project-mode-row',
         ),
-        html.Div(
+        html.Div([
             dbc.Row([
-                dbc.Col(dcc.Input(id='jm-individual-query', type='text', placeholder='이름 또는 사번',
-                                   className='form-control'), md=12),
+                dbc.Col(dcc.Input(id='jm-individual-search-input', type='text', placeholder='이름 또는 사번 검색',
+                                   className='form-control'), md=9),
+                dbc.Col(dbc.Button('찾기', id='jm-individual-search-btn', color='secondary',
+                                    n_clicks=0, className='w-100'), md=3),
             ], className='g-2 mb-2'),
-            id='jm-individual-mode-row', style={'display': 'none'},
-        ),
+            html.Div(id='jm-individual-candidates', className='mb-2'),
+            html.Div('선택된 대상자', className='fw-bold small mb-1'),
+            html.Div(id='jm-individual-selected-list',
+                      children=html.Div('선택된 대상자가 없습니다. 위에서 검색해 추가해주세요.',
+                                         className='text-muted small'),
+                      className='mb-2'),
+            dcc.Store(id='jm-individual-candidates-store', data=[]),
+            dcc.Store(id='jm-individual-selected-store', data=[]),
+        ], id='jm-individual-mode-row', style={'display': 'none'}),
 
         html.Div('참여 가능한 과제에서 제외', className='fw-bold small mb-1 mt-2'),
         dbc.Row([
@@ -215,29 +241,101 @@ def _update_exclude_project_options(excluded_dept):
 
 
 @callback(
+    Output('jm-individual-candidates', 'children'),
+    Output('jm-individual-candidates-store', 'data'),
+    Input('jm-individual-search-btn', 'n_clicks'),
+    Input('jm-individual-search-input', 'n_submit'),
+    State('jm-individual-search-input', 'value'),
+    prevent_initial_call=True,
+)
+def _search_candidates(_n_clicks, _n_submit, query):
+    """1단계 — 이름/사번으로 대상자를 검색해 후보 목록을 보여준다(아직
+    선택 목록에 추가되지는 않음, "추가" 버튼을 눌러야 확정)."""
+    query = (query or '').strip()
+    if not query:
+        return dbc.Alert('검색어를 입력해주세요.', color='warning', className='py-1 px-2 mb-0 small'), []
+    candidates = jm.search_researchers(query)
+    if not candidates:
+        return html.Div(f'"{query}"에 해당하는 연구원을 찾지 못했습니다.', className='text-muted small'), []
+    return html.Div([_candidate_row(c) for c in candidates]), candidates
+
+
+@callback(
+    Output('jm-individual-selected-store', 'data'),
+    Input({'type': 'jm-add-candidate', 'rid': dash.ALL}, 'n_clicks'),
+    Input({'type': 'jm-remove-selected', 'rid': dash.ALL}, 'n_clicks'),
+    State({'type': 'jm-add-candidate', 'rid': dash.ALL}, 'id'),
+    State({'type': 'jm-remove-selected', 'rid': dash.ALL}, 'id'),
+    State('jm-individual-candidates-store', 'data'),
+    State('jm-individual-selected-store', 'data'),
+    prevent_initial_call=True,
+)
+def _update_selected(add_clicks, remove_clicks, add_ids, remove_ids, candidates, selected):
+    """1단계에서 "추가"를 누르면 그 사람을 선택 목록에 더하고(중복은 무시),
+    선택 목록의 "×"를 누르면 뺀다 — 여러 번 검색해 여러 명을 하나씩
+    누적할 수 있다."""
+    triggered_id = dash.ctx.triggered_id
+    if not triggered_id:
+        return dash.no_update
+    selected = list(selected or [])
+
+    if triggered_id.get('type') == 'jm-add-candidate':
+        idx = next((i for i, d in enumerate(add_ids) if d == triggered_id), None)
+        if idx is None or not add_clicks[idx]:
+            return dash.no_update
+        rid = triggered_id['rid']
+        cand = next((c for c in (candidates or []) if c['researcher_id'] == rid), None)
+        if cand and not any(s['researcher_id'] == rid for s in selected):
+            selected.append(cand)
+        return selected
+
+    if triggered_id.get('type') == 'jm-remove-selected':
+        idx = next((i for i, d in enumerate(remove_ids) if d == triggered_id), None)
+        if idx is None or not remove_clicks[idx]:
+            return dash.no_update
+        rid = triggered_id['rid']
+        return [s for s in selected if s['researcher_id'] != rid]
+
+    return dash.no_update
+
+
+@callback(
+    Output('jm-individual-selected-list', 'children'),
+    Input('jm-individual-selected-store', 'data'),
+)
+def _render_selected(selected):
+    selected = selected or []
+    if not selected:
+        return html.Div('선택된 대상자가 없습니다. 위에서 검색해 추가해주세요.', className='text-muted small')
+    return html.Div([_selected_chip(c) for c in selected], className='d-flex flex-wrap')
+
+
+@callback(
     Output('jm-result', 'children'),
     Output('jm-history-refresh', 'data'),
     Input('jm-run-btn', 'n_clicks'),
-    Input('jm-individual-query', 'n_submit'),  # 텍스트 입력창에서 Enter로도 검색되도록
     State('jm-mode', 'value'),
     State('jm-project-select', 'value'),
-    State('jm-individual-query', 'value'),
+    State('jm-individual-selected-store', 'data'),
     State('jm-exclude-dept', 'value'),
     State('jm-exclude-project', 'value'),
     State('jm-history-refresh', 'data'),
     prevent_initial_call=True,
 )
-def _run(n_clicks, _n_submit, mode, project_names, individual_query, excluded_depts, excluded_projects,
-          refresh_token):
+def _run(n_clicks, mode, project_names, selected_individuals, excluded_depts, excluded_projects, refresh_token):
+    if not n_clicks:
+        return dash.no_update, dash.no_update
     excluded_depts = excluded_depts or []
     excluded_projects = excluded_projects or []
     project_names = project_names or []
+    selected_individuals = selected_individuals or []
 
     try:
         if mode == _MODE_INDIVIDUAL:
-            if not (individual_query or '').strip():
-                return dbc.Alert('이름 또는 사번을 입력해주세요.', color='warning'), dash.no_update
-            result = jm.run_individual_search(individual_query.strip(), excluded_depts, excluded_projects)
+            if not selected_individuals:
+                return dbc.Alert('대상자를 검색해서 추가해주세요.', color='warning'), dash.no_update
+            researcher_ids = [c['researcher_id'] for c in selected_individuals]
+            result = jm.run_individual_search(researcher_ids, excluded_depts, excluded_projects)
         else:
             if not project_names:
                 return dbc.Alert('종료 예정 과제를 선택해주세요.', color='warning'), dash.no_update
