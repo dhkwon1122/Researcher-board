@@ -857,3 +857,88 @@ install python-docx)를 실행한 뒤 앱을 재시작해주세요."라는 `Docu
 검증: `builtins.__import__`를 가로채 `docx` 모듈이 없는 상황을 흉내내
 `extract_document()`가 원하는 `DocumentReadError` 메시지를 던지는지 확인.
 정상 상태(모듈 있음)에서 표+서술형이 있는 .docx 추출도 회귀 테스트로 재확인.
+
+## 완료: "JOB Market" 탭 신설 — 과제 종료 시 보유 전문성 기준 재배치 추천
+
+사용자 요청: 특정 과제가 종료된다고 가정할 때, 그 과제원들이 보유 전문성
+기준으로 어떤 다른 과제에 참여 가능한지(가장 가까운 과제가 무엇인지)를
+보여주는 새 탭. 개념적으로는 이 세션 초반에 완전히 삭제한
+`process_project_researcher_fit.py`(과제↔연구원 매칭)와 비슷한 성격이지만,
+"이 과제엔 누가 맞는가"가 아니라 "이 사람들이 다른 어떤 과제로 갈 수
+있는가"를 인력 재배치 관점에서 보는 별도 기능으로 새로 설계했다.
+
+**사용자가 확정한 세부 결정**:
+1. 근거는 두 가지를 모두 보여주되 구분 표기: A) 과제 분석(컨플루언스 요약)
+   기반, B) 그 과제에 배정된 연구원들의 보유 전문성 프로필 기반. 어느 한쪽
+   데이터가 없으면 그 항목만 개별적으로 "데이터 없음"으로 표시(과제 전체를
+   후보에서 빼지 않음 — 단, 둘 다 없으면 비교 근거가 아예 없으므로 후보에서
+   제외).
+2. department 드롭다운은 project_confl_address.csv의 dep_name 기준.
+3. 표시 항목 중 년차는 "직급연차"(CL/년차), 학력/전공은 최종학력 1개만.
+4. 후보 과제 풀은 project_confl_address.csv에 등록된 전체 과제.
+5. 계산은 "검색" 버튼 클릭 시 그 자리에서 임베딩+LLM 실행(배치 파이프라인
+   아님).
+6. 본인이 현재 속한 과제는 항상 자동으로 후보에서 제외되고, 제외 필터도
+   동일하게 적용됨(과제 단위/개인별 검색 공통).
+
+### `services/job_market.py` (신규)
+- `list_departments()`/`list_projects(department=None)` — 드롭다운용, 결정적.
+- `build_roster(researcher_ids)` — 명단(사번/성명/부서/과제/CL·년차/학력·전공/
+  나이)을 만든다. 직접 계산하지 않고 `services/researcher_profile_export.py`의
+  `person_base_table()`을 그대로 재사용 — 그 모듈이 이미 정확히 이 7개
+  컬럼(`PERSON_BASE_COLUMNS`, 라벨도 "CL/년차"·"학력/전공"으로 이미 확정돼
+  있음)을 계산해 두고 있어서 새로 만들 필요가 없었다.
+- `_dedup_candidate_rows()` — project_confl_address.csv를
+  `fit.normalize_org_code()` 기준으로 묶어 대괄호 태그/띄어쓰기가 다른
+  중복 표기를 대표 행 하나로 합친다(직전에 고친 org_code/project_name
+  정규화 이슈와 동일한 문제가 후보 과제 목록 자체에도 있을 수 있어 여기서도
+  적용).
+- `_expand_excluded_projects()` — 제외 부서를 그 부서의 모든 과제로 펼치고
+  제외 과제와 합쳐 정규화된 제외 집합을 만든다.
+- `_build_candidate_pool()` — 후보 과제별로 근거 A 텍스트(있으면,
+  `jd_reconciliation.read_confluence_summary`/`confluence_context_text`
+  재사용)와 근거 B(현재 배정 인력의 전문성 프로필 텍스트 목록, 있는 사람만)를
+  모아 `fit.cached_embed()`로 한 번에 임베딩한다(캐시 재사용 — 후보/인원이
+  늘어도 반복 임베딩 호출 없음). A/B 둘 다 없는 과제는 이 단계에서 제외.
+- `_score_candidates()` — 결정적 로직(LLM 미사용). 대상자 프로필 임베딩과
+  각 후보의 A 임베딩/B 최댓값(가장 가까운 배정 인력 1명)을 코사인 유사도로
+  비교해 결합 점수(둘 중 높은 쪽) 내림차순 정렬.
+- `_judge_recommendations()` — 임베딩 상위 8개만 LLM에 보여주고 최대 3개를
+  사유와 함께 고르게 한다(구조화 출력 강제 — 순위는 이미 Python이 정해
+  둔 후보 중에서만 고르게 해 할루시네이션 방지, 목록에 없는 과제명이
+  나오면 버림). LLM 프롬프트에는 researcher_id/이름을 전혀 포함하지
+  않는다(이 프로젝트 전체 원칙 — 대상자 본인도 B 근거로 쓰는 대표 인력도
+  프로필 텍스트만 전달).
+- `recommend_for_researcher()` — 위 단계를 묶은 사람 1명 단위 함수.
+  `run_project_search()`(과제 단위, 배정 인원 전체에 대해 동시 실행 —
+  `llm_client.run_concurrent()` 재사용)와 `run_individual_search()`(개인별
+  검색, 이름/사번 검색은 `nl_query._resolve_researcher()`와 같은 방식을
+  로컬로 둠)가 candidate_pool을 한 번만 만들어 공유하며 이 함수를 호출한다.
+
+### `services/jd_reconciliation.py` (기존 파일 소폭 변경)
+`_read_confluence_summary()`/`_confluence_context_text()`를
+`read_confluence_summary()`/`confluence_context_text()`로 공개 함수화(내부
+로직 변경 없음) — job_market.py가 재사용하기 위함. 내부 호출부도 함께 갱신.
+
+### `pages/job_market.py` (신규) + `app.py`
+새 탭 "JOB Market"(`/job-market`) 추가. 화면 구성: 모드 전환(과제 단위/
+개인별 검색, RadioItems) → 종료 예정 과제 선택(부서 드롭다운 선택 시
+과제 드롭다운이 그 부서로 좁혀지는 cascading, `jm-project-dept` →
+`jm-project-select`) 또는 개인별 검색어 입력 → 제외 부서/제외 과제(각각
+독립적인 다중 선택 드롭다운, 전체 목록 대상) → 검색 버튼 → 명단 테이블 +
+사람별 추천 카드(과제명·소속·A/B 점수 배지·사유, 0~3개 또는 "데이터
+없음"/"근거 없음" 안내).
+
+**검증**: `services/job_market.py`는 project_confl_address.csv(대괄호 태그
+포함/미포함 혼재)·project_expertise_analysis.json·연구원 보유 전문성
+분석.json 픽스처 + `fit.cached_embed`/`llm_client.call_llm` 모킹으로
+후보 풀 구성(제외 집합 계산, A/B 둘 다 없는 과제 자동 제외, 대괄호 태그
+중복 제거)과 과제 단위/개인별 검색 전체 흐름을 확인. `pages/job_market.py`는
+Playwright로 실제 앱 기동 후: 네비게이션 탭 노출, 모드 전환 UI 토글,
+부서→과제 cascading 드롭다운이 실제로 좁혀지는지, 제외 드롭다운 2개가
+서로 독립적으로 전체 목록을 보여주는지, 검색 버튼 클릭 시(임베딩 서버
+없는 개발 환경이라 "후보 과제 0건"으로 정상적으로 우아하게 처리됨 — 크래시
+없음) 결과 영역이 렌더링되는지, 필수 입력 누락 시 경고 알럿이 뜨는지 확인.
+기존 페이지(jd-reconciliation)에서도 동일하게 발생하는 무관한 콘솔 에러
+(`ERR_TUNNEL_CONNECTION_FAILED`, 샌드박스 프록시 환경 이슈)를 제외하면
+콘솔 에러 없음. 테스트 중 만든 픽스처 파일은 전부 삭제하고 원상 복구.

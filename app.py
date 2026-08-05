@@ -144,6 +144,14 @@ navbar = dbc.Navbar(
                             className='text-white',
                         )
                     ),
+                    dbc.NavItem(
+                        dbc.NavLink(
+                            [html.I(className='bi bi-signpost-split me-1'), 'JOB Market'],
+                            href='/job-market',
+                            active='exact',
+                            className='text-white',
+                        )
+                    ),
                 ],
                 navbar=True,
                 className='ms-auto',

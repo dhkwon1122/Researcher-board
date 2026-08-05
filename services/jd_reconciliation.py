@@ -23,7 +23,7 @@
      과제 사람만" 매칭 대상으로 한정된다(다른 과제 사람은 애초에 후보에
      안 들어옴). 결정적 로직, LLM 미사용.
   5) 이 과제의 컨플루언스 분석(project_expertise_analysis.json, 있으면)을
-     읽어(_read_confluence_summary) 핵심기술/배경/산출물/난제/기대효과를
+     읽어(read_confluence_summary) 핵심기술/배경/산출물/난제/기대효과를
      맥락으로 삼아, 3)에서 병합한 직무 설명을 인사담당자가 이해하기 쉬운
      말로 다시 쓴다(_plain_explain_roles) — 원문(기술적일 수 있음)은
      raw_description으로 남겨 두고 대조해 볼 수 있게 한다.
@@ -106,7 +106,7 @@ def get_project_members(project_name: str) -> list:
     ]
 
 
-def _read_confluence_summary(project_name: str) -> dict | None:
+def read_confluence_summary(project_name: str) -> dict | None:
     """process_project_expertise.py가 만든 project_expertise_analysis.json에서
     이 과제의 컨플루언스 분석 항목을 찾는다. 파일이 없거나(파이프라인 미실행)
     이 과제명이 없으면 None — 호출부는 이를 "컨플루언스 맥락 없이 직무기술서
@@ -126,7 +126,7 @@ def _read_confluence_summary(project_name: str) -> dict | None:
     return None
 
 
-def _confluence_context_text(entry: dict | None) -> str:
+def confluence_context_text(entry: dict | None) -> str:
     """컨플루언스 과제 요약 항목을 LLM 맥락용 텍스트로 정리한다. "확인 불가"/
     빈 값은 제외한다(process_project_expertise.py가 추출 실패 시 채워 넣는
     placeholder이므로 맥락에 넣을 가치가 없음)."""
@@ -553,7 +553,7 @@ def build_report(project_name: str, doc_filename: str, table_roles: list, narrat
         'actual_total': actual_total,
         'summary_text': summary_text,
         'confluence_available': bool(confluence_entry),
-        'project_overview': _confluence_context_text(confluence_entry),
+        'project_overview': confluence_context_text(confluence_entry),
     }
 
 
@@ -615,8 +615,8 @@ def run_reconciliation(project_name: str, doc_filename: str, file_bytes: bytes) 
     table_roles = _extract_roles(extracted['tables_text'], '표')
     narrative_roles = _extract_roles(extracted['narrative_text'], '서술형 본문')
     roles, consistency_notes = merge_roles(table_roles, narrative_roles)
-    confluence_entry = _read_confluence_summary(project_name)
-    roles = _plain_explain_roles(roles, _confluence_context_text(confluence_entry))
+    confluence_entry = read_confluence_summary(project_name)
+    roles = _plain_explain_roles(roles, confluence_context_text(confluence_entry))
     matches = match_members_to_roles(members, roles)
     report = build_report(project_name, doc_filename, table_roles, narrative_roles,
                            roles, consistency_notes, members, matches, confluence_entry)
