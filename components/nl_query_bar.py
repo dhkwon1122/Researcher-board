@@ -289,15 +289,24 @@ def _render_table_body(full_result: dict, filters: dict, sort: dict, expanded: b
 
 
 def _selected_researcher_ids(full_result: dict, selected: list) -> list:
+    """선택된 행에서 researcher_id를 뽑는다. 한 질문의 결과에 같은 연구원이
+    여러 행(예: 과제/논문/특허별로 한 행씩)으로 나올 수 있어, 그중 여러 행을
+    선택하면 같은 사람이 중복으로 잡힐 수 있다 — 처음 나온 순서를 유지하며
+    중복을 제거해 "선택 N명" 표시와 엑셀 다운로드 둘 다 같은 사람의 프로필이
+    여러 번 나오지 않게 한다."""
     columns = (full_result or {}).get('columns') or []
     if 'researcher_id' not in columns or not selected:
         return []
     idx = columns.index('researcher_id')
     rows = (full_result or {}).get('rows') or []
+    seen = set()
     out = []
     for i in selected:
         if i < len(rows) and idx < len(rows[i]) and rows[i][idx]:
-            out.append(str(rows[i][idx]).strip().zfill(8))
+            rid = str(rows[i][idx]).strip().zfill(8)
+            if rid not in seen:
+                seen.add(rid)
+                out.append(rid)
     return out
 
 

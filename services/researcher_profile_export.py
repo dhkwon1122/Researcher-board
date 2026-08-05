@@ -156,7 +156,7 @@ def _col_position_year(_rid, rows):
 
 
 def _col_tasks(_rid, rows):
-    items = sorted(rows['tasks'], key=lambda t: _s(t.get('start_date')))
+    items = sorted(rows['tasks'], key=lambda t: _s(t.get('start_date')), reverse=True)
     lines = []
     for t in items:
         name = _s(t.get('task_name')) or '-'
