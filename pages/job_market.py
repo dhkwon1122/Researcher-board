@@ -112,6 +112,39 @@ def _roster_table(roster: list):
     ], bordered=False, hover=True, size='sm', className='mb-3')
 
 
+def _summary_stats(results: dict) -> dict:
+    total = len(results)
+    redeployable_count = sum(1 for r in results.values() if r.get('recommendations'))
+    rate = round(redeployable_count / total * 100) if total else 0
+    target_projects = {
+        rec['project_name'] for r in results.values() for rec in (r.get('recommendations') or [])
+    }
+    return {
+        'total': total, 'redeployable_count': redeployable_count, 'rate': rate,
+        'target_project_count': len(target_projects),
+    }
+
+
+def _stat_tile(value, label):
+    return dbc.Col(
+        html.Div([
+            html.Div(str(value), className='fs-4 fw-bold text-primary'),
+            html.Div(label, className='small text-muted'),
+        ], className='text-center'),
+    )
+
+
+def _summary_bar(results: dict):
+    if not results:
+        return None
+    stats = _summary_stats(results)
+    return dbc.Row([
+        _stat_tile(f"{stats['total']}명", '대상 인원'),
+        _stat_tile(f"{stats['redeployable_count']}명 ({stats['rate']}%)", '재배치 가능 예상'),
+        _stat_tile(f"{stats['target_project_count']}개", '대상 과제'),
+    ], className='mb-3 py-3 bg-light rounded g-2')
+
+
 def _render_result(result: dict):
     if result.get('error'):
         return dbc.Alert(result['error'], color='warning')
@@ -126,15 +159,22 @@ def _render_result(result: dict):
         f"(A: 과제 분석 기반, B: 배정 인력 전문성 기반 — 데이터가 없는 쪽은 개별 표시)."
     )
     run_at = result.get('run_at', '')
+    # 재배치 가능(추천 1개 이상)한 사람을 상단, 재배치가 어려운 사람을 하단으로 —
+    # sorted()는 안정 정렬이라 각 그룹 안에서는 원래 순서(명단 순서)가 유지된다.
+    ordered_items = sorted(
+        results.items(),
+        key=lambda kv: 0 if (kv[1].get('recommendations') or []) else 1,
+    )
     return html.Div([
         dbc.Alert([
             html.Div(header_line),
             (html.Div(f'실행 시각: {run_at}', className='small text-muted') if run_at else None),
         ], color='info', className='mb-3'),
+        _summary_bar(results),
         html.H6('대상 인원', className='fw-bold mb-2'),
         _roster_table(roster),
         html.H6('추천 결과', className='fw-bold mb-2'),
-        html.Div([_person_card(by_id.get(rid, {'researcher_id': rid}), res) for rid, res in results.items()]),
+        html.Div([_person_card(by_id.get(rid, {'researcher_id': rid}), res) for rid, res in ordered_items]),
     ])
 
 
