@@ -82,12 +82,18 @@ def get_project_members(project_name: str) -> list:
     org_code(현재 소속 과제)가 이 과제명과 같은 사람. process_project_expertise.py가
     문서 내 인력 이름을 researcher_id로 매핑할 때 쓰는 것과 동일한 기준이라,
     "이 과제 소속 사람만" 매칭 후보로 한정된다(다른 과제 사람은 애초에
-    이 목록에 없음)."""
+    이 목록에 없음).
+
+    project_name(project_confl_address.csv, "[탐색] 가나다라마바사"처럼 대괄호
+    태그+띄어쓰기가 있을 수 있음)과 org_code(researchers.csv, "가나다라마바사"처럼
+    태그/공백 없음)는 표기 형식이 달라 fit.normalize_org_code()로 정규화한
+    뒤 비교한다(process_project_expertise.py의 _resolve_personnel()과 동일한
+    정규화 기준 공유)."""
     researchers_df = data_store.read_processed('researchers')
     if researchers_df.empty:
         return []
-    target = str(project_name or '').strip()
-    rows = researchers_df[researchers_df['org_code'].astype(str).str.strip() == target]
+    target = fit.normalize_org_code(project_name)
+    rows = researchers_df[researchers_df['org_code'].astype(str).apply(fit.normalize_org_code) == target]
     if rows.empty:
         return []
     return [

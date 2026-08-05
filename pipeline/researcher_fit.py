@@ -21,6 +21,7 @@ cached_embed()/cosine_sim_matrix() 전체를 쓰고, services/jd_reconciliation.
 import hashlib
 import json
 import os
+import re
 import sys
 
 import numpy as np
@@ -35,6 +36,22 @@ from services.llm import LLMError, embed  # noqa: E402,F401 (embed/LLMError는 �
 TOP_K = 5
 
 _EMBED_CACHE_PATH = os.path.join(OUT_DIR, 'embedding_cache.json')
+
+
+def normalize_org_code(text: str) -> str:
+    """researchers.csv의 org_code와 project_confl_address.csv의 project_name을
+    서로 비교 가능한 형태로 정규화한다.
+
+    project_name은 "[탐색] 가나다라마바사"처럼 앞에 대괄호 분류 태그가 붙고
+    띄어쓰기도 있을 수도/없을 수도 있는 반면, org_code는 "가나다라마바사"처럼
+    태그도 공백도 없는 형태다 — 앞쪽 대괄호 태그(있으면)를 떼고 모든 공백을
+    제거해야 두 값이 정확히 같아진다.
+
+    process_project_expertise.py(_resolve_personnel)와
+    services/jd_reconciliation.py(get_project_members)가 이 함수를 공유해서
+    "이 과제 사람" 판별 기준이 항상 일치하도록 한다."""
+    s = re.sub(r'^\[[^\]]*\]\s*', '', str(text or '').strip())
+    return re.sub(r'\s+', '', s)
 
 
 def read_researchers(out_dir: str) -> pd.DataFrame:

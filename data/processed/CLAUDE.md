@@ -803,3 +803,29 @@ zip이지만 OOXML이 아닌 바이트, 지원하지 않는 확장자(.hwp), 빈
 결과/메시지가 나오는지 확인. `run_reconciliation()`을 통해서도
 `DocumentReadError`가 그대로 전파되는 것을 확인. `pages/jd_reconciliation.py`의
 `layout()` 렌더도 재확인.
+
+## 완료: org_code ↔ project_name 표기 형식 불일치 수정 (대괄호 태그/띄어쓰기)
+
+배경: `project_confl_address.csv`의 `project_name`은 `"[탐색] 가나다라마바사"`
+처럼 앞에 대괄호 분류 태그가 붙고 띄어쓰기 유무도 문서마다 다른 반면,
+`researchers.csv`의 `org_code`는 `"가나다라마바사"`처럼 태그도 공백도 없는
+형태다. `_resolve_personnel()`(`process_project_expertise.py`)과
+`get_project_members()`(`jd_reconciliation.py`)는 둘 다
+`org_code == project_name` 정확 일치로 비교하고 있어서, 이 형식 차이 때문에
+**항상 후보 0명**으로 나오고 있었다 — 인력 매칭도, 과제 직무/대상자 검증
+탭의 배정 인원 조회도 조용히 실패하는 상태였다(에러 없이 빈 결과만 나와
+알아채기 어려움).
+
+**해결**: `pipeline/researcher_fit.py`에 `normalize_org_code(text)` 공용
+함수 추가 — 앞쪽 대괄호 태그(`^\[[^\]]*\]\s*`, 있으면)를 떼고 모든 공백을
+제거한다. `org_code`/`project_name` 양쪽에 이 함수를 적용한 뒤 비교하도록
+`_resolve_personnel()`과 `get_project_members()`를 수정 — 두 함수가 항상
+같은 파일(`researcher_fit.py`)의 같은 정규화 기준을 공유해 드리프트가
+안 생기게 했다.
+
+검증: `normalize_org_code()`에 대괄호 태그+띄어쓰기 유무 여러 조합("[탐색]
+가나다라마바사", "[탐색 또는 연구] 가나 다라마바사", "[연구]가나다라마바사",
+공백 없는 원본 등)을 넣어 전부 "가나다라마바사"로 정규화되는지 확인.
+`get_project_members("[탐색] ORG01")`이 `org_code="ORG01"`인 연구원들을
+정상적으로 찾는 것, `_resolve_personnel("[탐색] ORG01", ...)`이 동명이인
+suffix 판별을 포함해 정상 매칭되는 것을 각각 fixture로 확인.

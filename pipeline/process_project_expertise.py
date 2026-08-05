@@ -69,12 +69,18 @@ def _resolve_personnel(project_name: str, personnel: list, researchers_df: pd.Da
     """문서에서 뽑은 인력(이름 + name_suffix)을, org_code == project_name인
     연구원 중 이름이 같은 사람과 대조해 researcher_id를 매핑한다. 후보가
     없거나(0명) 동명이인을 판별할 수 없으면(name_suffix 없음/일치 후보 0·2명
-    이상) researcher_id를 빈 값으로 남기고 원문 이름은 그대로 보존한다."""
+    이상) researcher_id를 빈 값으로 남기고 원문 이름은 그대로 보존한다.
+
+    project_name(project_confl_address.csv, "[탐색] 가나다라마바사"처럼 대괄호
+    태그+띄어쓰기가 있을 수 있음)과 org_code(researchers.csv, "가나다라마바사"처럼
+    태그/공백 없음)는 표기 형식이 달라 fit.normalize_org_code()로 정규화한
+    뒤 비교한다."""
     if researchers_df.empty:
         candidates_df = pd.DataFrame()
     else:
+        target = fit.normalize_org_code(project_name)
         candidates_df = researchers_df[
-            researchers_df['org_code'].astype(str).str.strip() == str(project_name or '').strip()
+            researchers_df['org_code'].astype(str).apply(fit.normalize_org_code) == target
         ]
 
     resolved = []
