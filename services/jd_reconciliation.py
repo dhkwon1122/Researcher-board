@@ -1,11 +1,15 @@
 """
-"과제 직무/대상자 검증" 탭 핵심 로직 — 업로드된 직무기술서(.docx)와 실제
-인사데이터(과제 배정 인원 + 보유 전문성 분석)를 대조한다.
+"과제 직무/대상자 검증" 탭 핵심 로직 — 업로드된 직무기술서(.docx 또는 .pdf)와
+실제 인사데이터(과제 배정 인원 + 보유 전문성 분석)를 대조한다.
 
 흐름:
-  1) .docx에서 표와 서술형 본문을 각각 뽑아낸다(extract_docx). 표에는 보통
+  1) 업로드된 파일에서 텍스트를 뽑는다(extract_document) — 확장자로 분기한다.
+     .docx는 표와 서술형 본문을 따로 뽑는다(_extract_docx). 표에는 보통
      "직무명 | 현인원 | 설명" 같은 구조화된 정보가 있고, 서술형 본문에는 더
-     풍부한 역할 설명이 있는 경우가 많아 둘 다 쓴다.
+     풍부한 역할 설명이 있는 경우가 많아 둘 다 쓴다. .pdf는 표/서술형 구분이
+     없는 일반 텍스트 추출이라(_extract_pdf) 전부 서술형 본문으로 취급한다.
+     지원하지 않는 확장자나 손상된 파일은 DocumentReadError로 화면에 바로
+     보여줘도 안전한 한국어 메시지를 던진다.
   2) 표/서술형 각각을 LLM으로 구조화 추출(_extract_roles) — 직접 판단하지
      않고 문서에 적힌 내용만 그대로 뽑아내는 역할만 시킨다(이 프로젝트
      전체가 지켜온 "구조화 출력 강제" 원칙).
@@ -52,6 +56,7 @@ _PIPELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '
 sys.path.insert(0, os.path.abspath(_PIPELINE_DIR))
 
 import llm_client  # noqa: E402
+import pdf_reader  # noqa: E402
 import researcher_fit as fit  # noqa: E402
 from paths import OUT_DIR  # noqa: E402
 from services import data_store  # noqa: E402
@@ -143,15 +148,40 @@ def _confluence_context_text(entry: dict | None) -> str:
     return '\n'.join(lines)
 
 
-# ─── .docx 추출 (표/서술형 분리) ─────────────────────────────────────────────
+# ─── 문서 추출 (.docx / .pdf) ────────────────────────────────────────────────
 
-def extract_docx(file_bytes: bytes) -> dict:
+class DocumentReadError(RuntimeError):
+    """업로드된 파일에서 텍스트를 추출하지 못했을 때 — 메시지를 화면에 그대로
+    노출해도 되는 사용자 대상 한국어 문구로 만든다(스택 트레이스 대신)."""
+
+
+_SUPPORTED_EXTENSIONS = ('.docx', '.pdf')
+
+
+def _extract_docx(file_bytes: bytes) -> dict:
     """표와 서술형 본문을 각각 텍스트로 뽑는다. 표는 셀을 ' | '로 이어 붙여
     LLM이 열 구조를 스스로 해석하게 한다(헤더 이름/열 순서가 문서마다 달라
     고정 파싱은 깨지기 쉬움)."""
-    from docx import Document
+    import zipfile
 
-    doc = Document(io.BytesIO(file_bytes))
+    from docx import Document
+    from docx.opc.exceptions import PackageNotFoundError
+
+    try:
+        doc = Document(io.BytesIO(file_bytes))
+    except (PackageNotFoundError, zipfile.BadZipFile) as exc:
+        # .docx는 내부적으로 zip 압축 포맷(OOXML)이다 — 확장자만 .docx로 바뀐
+        # 옛 .doc(바이너리)이거나 파일이 손상되면 zip으로도 못 열려
+        # BadZipFile이, zip은 맞지만 OOXML 필수 구성요소가 없으면
+        # PackageNotFoundError가 난다. 둘 다 사용자 입장에선 같은 문제.
+        raise DocumentReadError(
+            '올바른 .docx 파일이 아닌 것 같습니다(예: 오래된 .doc 형식이거나 파일이 '
+            '손상됨). Word에서 "다른 이름으로 저장" → .docx 형식으로 다시 저장한 뒤 '
+            '업로드해주세요.'
+        ) from exc
+    except Exception as exc:  # noqa: BLE001 — 업로드 파일 파싱은 외부 입력 경계라 방어적으로 처리
+        raise DocumentReadError(f'.docx 파일을 읽는 중 오류가 발생했습니다: {exc}') from exc
+
     narrative_lines = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
     table_blocks = []
     for table in doc.tables:
@@ -163,6 +193,30 @@ def extract_docx(file_bytes: bytes) -> dict:
         'narrative_text': '\n'.join(narrative_lines),
         'tables_text': '\n\n'.join(table_blocks),
     }
+
+
+def _extract_pdf(file_bytes: bytes) -> dict:
+    """.pdf는 표/서술형을 구분해서 뽑을 수 없으므로(일반 PDF에는 docx 같은
+    구조화된 표 정보가 없음) 페이지 텍스트 전체를 서술형 본문으로 취급한다."""
+    try:
+        text = pdf_reader.extract_text_from_bytes(file_bytes, label='업로드한 PDF')
+    except pdf_reader.PdfNotFoundError as exc:
+        raise DocumentReadError(str(exc)) from exc
+    return {'narrative_text': text, 'tables_text': ''}
+
+
+def extract_document(file_bytes: bytes, filename: str) -> dict:
+    """파일 확장자로 .docx/.pdf 추출기를 분기 호출한다. 지원하지 않는 확장자면
+    DocumentReadError(화면에 바로 보여줘도 되는 메시지)."""
+    ext = os.path.splitext(filename or '')[1].lower()
+    if ext == '.docx':
+        return _extract_docx(file_bytes)
+    if ext == '.pdf':
+        return _extract_pdf(file_bytes)
+    raise DocumentReadError(
+        f'지원하지 않는 파일 형식입니다({ext or "확장자 없음"}). '
+        f'{"/".join(_SUPPORTED_EXTENSIONS)} 파일을 업로드해주세요.'
+    )
 
 
 # ─── ① 문서 → 직무별 구조화 추출 (LLM, 판단 없이 추출만) ─────────────────────
@@ -544,7 +598,7 @@ def load_history(file_name: str) -> dict | None:
 
 def run_reconciliation(project_name: str, doc_filename: str, file_bytes: bytes) -> dict:
     members = get_project_members(project_name)
-    extracted = extract_docx(file_bytes)
+    extracted = extract_document(file_bytes, doc_filename)
     table_roles = _extract_roles(extracted['tables_text'], '표')
     narrative_roles = _extract_roles(extracted['narrative_text'], '서술형 본문')
     roles, consistency_notes = merge_roles(table_roles, narrative_roles)

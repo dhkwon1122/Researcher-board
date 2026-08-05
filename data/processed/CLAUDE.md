@@ -750,3 +750,56 @@ LLM 없이(이 sandbox) `process_project_expertise.py`의 결정적 로직을
 `force=False`일 때 캐시에 값이 있으면 LLM 호출 없이 캐시값 그대로 반환,
 `force=True`일 때는 캐시 무시하고 LLM을 호출해 새 값으로 캐시를 덮어쓰는
 것을 확인.
+
+## 완료: "과제 직무/대상자 검증" 업로드 — .pdf 지원 추가 + .docx 오류 메시지 개선
+
+배경: 직무기술서를 .docx로 업로드할 때 "오류가 발생했습니다"만 뜨고 원인을
+알기 어렵다는 문의. 원인은 대부분 확장자만 .docx로 바뀐 옛 .doc(바이너리)
+파일이거나 손상된 파일 — python-docx의 `Document()`는 이런 경우
+`zipfile.BadZipFile`(.docx는 내부적으로 zip/OOXML 포맷이라 zip으로도 못
+열림) 또는 `docx.opc.exceptions.PackageNotFoundError`(zip은 맞지만 OOXML
+필수 구성요소가 없음)를 던지는데, 예전엔 이걸 그대로 문자열화해 화면에
+노출해서 사용자가 원인을 알기 어려웠다. 겸사겸사 .docx 외에 .pdf 직무기술서도
+받을 수 있게 확장했다(이미 `pipeline/pdf_reader.py`가 pypdf로 PDF 텍스트를
+뽑는 로직을 갖고 있어 재사용 가능했음).
+
+**`pipeline/pdf_reader.py`**: 기존 `fetch_pdf_text(project_name)`(고정 경로
+`data/raw/conflue_MPR/{project_name}.pdf`에서 읽음)의 핵심 추출 로직을
+`extract_text_from_bytes(file_bytes, label='PDF')`로 분리 — 임의의 PDF
+바이트에서 텍스트를 뽑는 범용 함수. `fetch_pdf_text()`는 이제 파일을 읽어
+바이트로 넘기는 방식으로 이 함수를 호출(동작은 그대로, 코드만 재사용
+가능하게 분리).
+
+**`services/jd_reconciliation.py`**:
+- `extract_docx(file_bytes)` → `_extract_docx(file_bytes)`로 이름 변경(내부
+  함수화), `DocumentReadError` 신설(스택 트레이스 대신 화면에 그대로 보여줘도
+  되는 한국어 메시지를 담는 예외).
+  - `Document()` 호출을 `try/except (PackageNotFoundError, zipfile.BadZipFile)`로
+    감싸 "올바른 .docx 파일이 아닌 것 같습니다(예: 오래된 .doc 형식이거나
+    파일이 손상됨)... 다시 저장한 뒤 업로드해주세요" 메시지로 변환.
+  - 그 외 예상 못한 예외도 `except Exception`으로 잡아 최소한 원인 문자열은
+    보여주는 `DocumentReadError`로 감쌈(파일 파싱은 외부 입력 경계).
+- 신규 `_extract_pdf(file_bytes)`: `pdf_reader.extract_text_from_bytes()`로
+  텍스트를 뽑아 전부 `narrative_text`로 취급(`tables_text`는 빈 문자열 —
+  일반 PDF에는 docx 같은 구조화된 표 정보가 없음). 실패(암호화/스캔 이미지
+  PDF 등)는 `pdf_reader.PdfNotFoundError`를 `DocumentReadError`로 변환.
+- 신규 `extract_document(file_bytes, filename)`: 확장자(`.docx`/`.pdf`)로
+  분기 호출, 그 외 확장자는 `DocumentReadError`("지원하지 않는 파일
+  형식입니다..."). `run_reconciliation()`이 `extract_docx()` 대신 이 함수를
+  호출하도록 변경.
+
+**`pages/jd_reconciliation.py`**:
+- `dcc.Upload`의 `accept`를 `.docx` → `.docx,.pdf`로, 라벨/안내 문구도 두
+  형식을 함께 언급하도록 수정. 업로드된 파일명 표시 아이콘도 확장자에 따라
+  Word/PDF 아이콘으로 분기.
+- `_run()` 콜백에 `except jd.DocumentReadError` 분기를 추가해 그 메시지를
+  그대로(가공 없이) warning 색상 알럿으로 보여줌 — 기존 `except Exception`
+  (danger 색상, "검증 중 오류가 발생했습니다: ..." 접두문구)은 진짜 예기치
+  못한 오류만 잡도록 남겨둠.
+
+**검증**: 정상 .docx(표+서술형 둘 다 있는 문서), 손상된/가짜 .docx 바이트,
+zip이지만 OOXML이 아닌 바이트, 지원하지 않는 확장자(.hwp), 빈 페이지 PDF
+(텍스트 없음 경로) 각각에 대해 `extract_document()`를 직접 호출해 기대한
+결과/메시지가 나오는지 확인. `run_reconciliation()`을 통해서도
+`DocumentReadError`가 그대로 전파되는 것을 확인. `pages/jd_reconciliation.py`의
+`layout()` 렌더도 재확인.

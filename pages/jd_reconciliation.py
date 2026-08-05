@@ -127,7 +127,7 @@ def layout(**_kwargs):
             className='fw-bold mb-1 mt-1',
         ),
         html.Div(
-            '업로드한 직무기술서(.docx)의 직무별 인원수·요구사항을 컨플루언스 과제 요약과 '
+            '업로드한 직무기술서(.docx 또는 .pdf)의 직무별 인원수·요구사항을 컨플루언스 과제 요약과 '
             '함께 쉬운 말로 풀어서 보여주고, 실제 그 과제에 배정된 인원의 보유 전문성과 대조합니다.',
             className='text-muted small mb-3',
         ),
@@ -138,8 +138,8 @@ def layout(**_kwargs):
             ), md=4),
             dbc.Col(dcc.Upload(
                 id='jd-doc-upload',
-                children=html.Div(id='jd-doc-upload-label', children='직무기술서(.docx) 업로드'),
-                accept='.docx',
+                children=html.Div(id='jd-doc-upload-label', children='직무기술서(.docx, .pdf) 업로드'),
+                accept='.docx,.pdf',
                 className='text-center border rounded p-2',
                 style={'cursor': 'pointer'},
             ), md=5),
@@ -162,7 +162,8 @@ def layout(**_kwargs):
 def _show_upload_filename(filename):
     if not filename:
         return dash.no_update
-    return [html.I(className='bi bi-file-earmark-word me-1'), filename]
+    icon = 'bi-file-earmark-pdf' if filename.lower().endswith('.pdf') else 'bi-file-earmark-word'
+    return [html.I(className=f'bi {icon} me-1'), filename]
 
 
 @callback(
@@ -181,16 +182,18 @@ def _run(n_clicks, project_name, contents, filename, refresh_token):
     if not project_name:
         return dbc.Alert('과제를 선택해주세요.', color='warning'), dash.no_update
     if not contents:
-        return dbc.Alert('직무기술서(.docx) 파일을 업로드해주세요.', color='warning'), dash.no_update
+        return dbc.Alert('직무기술서(.docx 또는 .pdf) 파일을 업로드해주세요.', color='warning'), dash.no_update
 
     try:
         _header, b64data = contents.split(',', 1)
         file_bytes = base64.b64decode(b64data)
     except (ValueError, binascii.Error):
-        return dbc.Alert('파일을 읽지 못했습니다. .docx 파일인지 확인해주세요.', color='danger'), dash.no_update
+        return dbc.Alert('첨부파일을 읽지 못했습니다. 파일이 손상되지 않았는지 확인해주세요.', color='danger'), dash.no_update
 
     try:
         report = jd.run_reconciliation(project_name, filename or '업로드 파일', file_bytes)
+    except jd.DocumentReadError as exc:
+        return dbc.Alert(str(exc), color='warning'), dash.no_update
     except Exception as exc:  # noqa: BLE001 — 업로드 파일 파싱은 외부 입력 경계라 방어적으로 처리
         return dbc.Alert(f'검증 중 오류가 발생했습니다: {exc}', color='danger'), dash.no_update
 
