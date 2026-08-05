@@ -127,43 +127,41 @@
     1) python pipeline/process_project_confl.py   (run_expertise.py에 포함되어 있어 개별 실행 불필요)
        → data/processed/project_confl_address.csv (소속/과제명/컨플 주소)
 
-    2) python pipeline/process_project_expertise.py   (컨플 요약 + 과제 전문성 분석)
-       → data/processed/project_expertise_analysis.json / .html
-         (컨플루언스 페이지를 사내 LLM으로 요약 후, "R&D Project Specialist Agent"
-          역할로 과제별 필요 직무·전문성 딥다이브 분석을 생성. Bootstrap 5 +
-          marked.js/DOMPurify로 HTML도 함께 생성)
+    2) python pipeline/process_project_expertise.py   (컨플 문서 상세 분석)
+       → data/processed/project_expertise_analysis.json / .html,
+         project_personnel.csv
+         (컨플루언스 페이지를 사내 LLM으로 상세 분석 — 핵심기술/산출물/난제/
+          배경/추진일정/기대효과/키워드에 더해, 문서에 언급된 인력과 담당
+          업무를 뽑아 researchers.csv의 org_code로 대조·매핑한다. 그 매핑
+          결과가 project_personnel.csv로 저장되어 3)의 새 근거로 쓰인다)
 
     3) python pipeline/process_researcher_expertise.py   (연구원 전문성 분석)
        → data/processed/연구원 보유 전문성 분석.json / .html
-         (학력/과제이력/직무이력/핵심기술/보유기술/논문/특허/업무목표(24~26년)를
-          종합해 사내 LLM이 강점 분야·핵심 기술 역량·도메인 지식을 구조화된
-          JSON으로 분석. 진행 중 10명 처리될 때마다 "(완료인원 N명/전체 N명,
-          N명 성공, N명 실패, N명 건너뜀)" 요약을 출력. 이미 저장된 JSON을
-          LLM 재호출 없이 HTML로만 다시 만들려면 --html-only 옵션 사용)
+         (학력/과제이력/과제 내 담당 업무(2)/직무이력/핵심기술/보유기술/논문/
+          특허/업무목표(24~26년)를 종합해 사내 LLM이 강점 분야·핵심 기술
+          역량·도메인 지식을 구조화된 JSON으로 분석. 진행 중 10명 처리될
+          때마다 "(완료인원 N명/전체 N명, N명 성공, N명 실패, N명 건너뜀)"
+          요약을 출력. 이미 저장된 JSON을 LLM 재호출 없이 HTML로만 다시
+          만들려면 --html-only 옵션 사용)
        ※ 논문 저널 권위도 조회는 pipeline/journal_authority.py로 분리되어 있다
           (data/processed/journal_authority.json 캐시). 이 파일 실행 시 자동으로
           함께 호출되며, 캐시만 갱신하고 싶으면 독립적으로도 실행 가능:
           python pipeline/journal_authority.py [--refresh-journals]
           ※ 사내 LLM 호출(비용 발생) — run_pipeline.py 자동 실행에는 포함되지 않음
 
-    4) python pipeline/process_project_researcher_fit.py   (연구원 매칭)
-       → data/processed/project_fit_by_project.json,
-         project_fit_by_researcher.json, project_researcher_fit.html
-         (임베딩 1차 후보 추출 + 사내 LLM "R&D Talent Matching Agent"로 과제
-          기준/인별 기준 두 방향 적합도 판단. 매칭 로직은 pipeline/researcher_fit.py
-          공용 모듈을 사용)
-
-    5) python pipeline/process_researcher_similarity.py   (선택: 연구원 ↔ 연구원 유사도)
+    4) python pipeline/process_researcher_similarity.py   (선택: 연구원 ↔ 연구원 유사도)
        → data/processed/researcher_similarity.json, researcher_similarity.html
          (3)의 연구원 전문성 프로필을 BGE-M3로 임베딩해 코사인 유사도를 계산 —
           과제(프로젝트) 라벨과 무관하게 실제 전문성이 겹치는 연구원을 직접
           찾아낸다(예: 서로 다른 과제 소속이어도 둘 다 AI를 하면 유사도가 높게
           나옴). 사내 chat LLM은 호출하지 않고 임베딩만 사용한다. 3)의 출력만
-          있으면 되므로 4)와 무관하게 바로 실행 가능)
+          있으면 되므로 바로 실행 가능)
 
-    ※ 2)~4)는 project_summary.py의 컨플루언스 원문 캐시
-       (data/processed/project_page_cache.json)를 공유하므로, 같은 과제를
-       두 번 조회하지 않는다.
+    ※ (예전에는 4)로 과제↔연구원 매칭 단계가 더 있었지만, 그 기능 자체가
+       제거되면서 삭제됐다 — data/processed/CLAUDE.md 참고.)
+    ※ 2)는 process_project_search.py(선택, 유사 기업/학계 탐색)와 project_summary.py의
+       컨플루언스 원문 캐시(data/processed/project_page_cache.json)를 공유하므로,
+       같은 과제를 두 번 조회하지 않는다.
     ※ Confluence 접속: pipeline/llm_config.py의 CONFLUENCE_TOKEN(PAT) 필요
        (llm_config.example.py 참고). atlassian-python-api 패키지 설치 필요.
 

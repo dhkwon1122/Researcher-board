@@ -1,8 +1,9 @@
 """
 BGE-M3 임베딩 서버(services/bge_server.py) 자동 기동/재사용 유틸리티.
 
-process_project_researcher_fit.py, run_expertise.py가 실행 시 이 모듈의
-ensure_embed_server()를 호출한다. 이미 서버가 응답 중이면 그대로 재사용하고
+run_expertise.py가 실행 시 이 모듈의 ensure_embed_server()를 호출해
+process_researcher_similarity.py가 쓸 서버를 미리 띄워 둔다. 이미 서버가
+응답 중이면 그대로 재사용하고
 (모델 재로딩 비용을 피함), 응답하지 않으면 services/bge_server.py를 백그라운드
 데몬 프로세스로 새로 기동한 뒤 준비될 때까지 폴링한다. 기동된 프로세스는
 호출 스크립트가 끝나도 계속 살아 있어 다음 실행이 그대로 재사용할 수 있다.

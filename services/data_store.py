@@ -71,28 +71,6 @@ def read_similar_researchers() -> dict[str, dict]:
     return {item.get('researcher_id', ''): item for item in results}
 
 
-def read_project_fit_by_project() -> list[dict]:
-    """project_fit_by_project.json 그대로 반환(list of {dep_name, project_name,
-    job_title, rankings}). 파일이 없으면(process_project_researcher_fit.py
-    미실행) 빈 리스트."""
-    path = os.path.join(DATA_DIR, 'project_fit_by_project.json')
-    if not os.path.exists(path):
-        return []
-    with open(path, encoding='utf-8') as f:
-        return json.load(f)
-
-
-def read_project_fit_by_researcher() -> dict[str, dict]:
-    """researcher_id -> project_fit_by_researcher.json 항목(dict, 'matches'
-    리스트 포함) 매핑. 파일이 없으면 빈 dict."""
-    path = os.path.join(DATA_DIR, 'project_fit_by_researcher.json')
-    if not os.path.exists(path):
-        return {}
-    with open(path, encoding='utf-8') as f:
-        results = json.load(f)
-    return {item.get('researcher_id', ''): item for item in results}
-
-
 def read_strength_taxonomy() -> dict:
     """strength_taxonomy.json(build_strength_taxonomy.py의 2단계 확정 표준
     목록) 그대로 반환. 파일이 없으면(아직 build_strength_taxonomy.py를

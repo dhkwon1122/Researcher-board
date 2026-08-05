@@ -12,8 +12,7 @@ CSV(및 LLM 파생 JSON 산출물)를 그 자리에서 SQL로 조회한다 — �
   1) data/processed/*.csv를 매 호출 시점에 동적으로 스캔해 테이블로 등록하고
      (DB가 나중에 생기면 services.data_store.read_processed()가 자동으로 DB를
      읽으므로 이 스캔도 자동으로 DB 기준이 된다), 연구원 보유 전문성 분석.json/
-     project_fit_by_project.json/project_fit_by_researcher.json도 평탄화해
-     함께 등록한다.
+     researcher_similarity.json도 평탄화해 함께 등록한다.
   2) LLM에게 스키마(테이블/컬럼명만, 실제 행 데이터는 절대 전달하지 않음)와
      질문을 주고 {sql, fallback_table, fallback_column, fallback_term} JSON을
      받는다 — services.text2sql.generate_sql()과 같은 발상이지만, "SQL이 0건일
@@ -159,34 +158,6 @@ def _expertise_profiles_table() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _project_fit_by_project_table() -> pd.DataFrame:
-    entries = data_store.read_project_fit_by_project()
-    rows = [
-        {
-            'dep_name': e.get('dep_name', ''), 'project_name': e.get('project_name', ''),
-            'job_title': e.get('job_title', ''), 'researcher_id': r.get('researcher_id', ''),
-            'fit_score': r.get('fit_score', ''), 'reason': r.get('reason', ''),
-        }
-        for e in entries
-        for r in e.get('rankings') or []
-    ]
-    return pd.DataFrame(rows)
-
-
-def _project_fit_by_researcher_table() -> pd.DataFrame:
-    by_researcher = data_store.read_project_fit_by_researcher()
-    rows = [
-        {
-            'researcher_id': rid, 'dep_name': m.get('dep_name', ''),
-            'project_name': m.get('project_name', ''), 'job_title': m.get('job_title', ''),
-            'fit_score': m.get('fit_score', ''), 'reason': m.get('reason', ''),
-        }
-        for rid, entry in by_researcher.items()
-        for m in entry.get('matches') or []
-    ]
-    return pd.DataFrame(rows)
-
-
 def _researcher_similarity_table() -> pd.DataFrame:
     similarity_map = data_store.read_similar_researchers()
     rows = [
@@ -204,14 +175,12 @@ def _researcher_similarity_table() -> pd.DataFrame:
 
 
 def _discover_json_tables() -> dict:
-    """연구원 보유 전문성 분석.json/project_fit_by_*.json/researcher_similarity.json을
-    평탄화해 CSV 테이블과 동일한 창구(SQL)로 조회할 수 있게 등록. 한글 파일명은
-    SQL 식별자로 쓰기 번거로워 영문 별칭을 붙인다."""
+    """연구원 보유 전문성 분석.json/researcher_similarity.json을 평탄화해 CSV
+    테이블과 동일한 창구(SQL)로 조회할 수 있게 등록. 한글 파일명은 SQL
+    식별자로 쓰기 번거로워 영문 별칭을 붙인다."""
     tables = {}
     for name, builder in (
         ('expertise_profiles', _expertise_profiles_table),
-        ('project_fit_by_project', _project_fit_by_project_table),
-        ('project_fit_by_researcher', _project_fit_by_researcher_table),
         ('researcher_similarity', _researcher_similarity_table),
     ):
         df = builder()

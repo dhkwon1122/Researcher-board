@@ -9,6 +9,8 @@ Source:
   data/processed/researchers.csv
   data/processed/education.csv                      (degree, major)
   data/processed/tasks.csv + tasks_information.csv   (task_name 기준 조인)
+  data/processed/project_personnel.csv               (과제 문서에서 뽑은 담당 업무,
+                                                        process_project_expertise.py가 생성)
   data/processed/job_profile.csv                     (연구원별 직무 이력, wide)
   data/processed/job_profile_info_standard.json      (직무명 → 정의, 표준)
   data/processed/job_profile_info_sait.json          (직무명 → 세부직무/정의, 부서)
@@ -80,8 +82,10 @@ HR 담당자와 R&D 부서장이 이 연구원이 "실제로 어떤 일을 해�
    이유만으로 전문성을 낮게 판단하지 마세요. 다른 항목에 이미 충분한 근거가
    있다면 업무목표는 보조 참고 자료로만 활용하세요.
 4. key_responsibilities(주요 역할과 책임/업무내용)는 [과제 수행 이력]의 각
-   과제에서 실제로 맡았을 역할, [직무 이력]에 기록된 직무명과 수행 기간,
-   [업무목표]에 명시된 실제 수행 업무를 종합해 도출하세요. 직무명이나 과제명을
+   과제에서 실제로 맡았을 역할, [과제 내 담당 업무](과제 문서에 실제로 기록된
+   구체적 담당 업무 — 있으면 가장 신뢰도 높은 근거로 우선 활용), [직무 이력]에
+   기록된 직무명과 수행 기간, [업무목표]에 명시된 실제 수행 업무를 종합해
+   도출하세요. 직무명이나 과제명을
    그대로 나열하지 말고, "실제로 무엇을 했는지/하고 있는지"가 드러나는 구체적
    행위 중심 표현으로 작성하세요 (예: "로봇 SLAM 알고리즘 설계 및 검증",
    "센서 캘리브레이션 파이프라인 구축", "신소재 내구성 평가 실험 설계"). 여러
@@ -188,6 +192,22 @@ def _task_history_text(task_rows: pd.DataFrame, info_df: pd.DataFrame) -> str:
     return '\n'.join(lines) if lines else '(데이터 없음)'
 
 
+def _project_role_text(role_rows: pd.DataFrame) -> str:
+    """project_personnel.csv(process_project_expertise.py가 과제 문서에서 뽑아
+    researcher_id로 매핑해 둔 담당 업무)에서 이 연구원 몫만 추려 텍스트로
+    구성. 같은 과제에 여러 행이 남아 있으면(문서 개정 등) 전부 보여준다."""
+    if role_rows.empty:
+        return '(데이터 없음)'
+    lines = []
+    for _, r in role_rows.iterrows():
+        project_name = _clean(r.get('project_name'))
+        role = _clean(r.get('role_description'))
+        if not (project_name or role):
+            continue
+        lines.append(f'- [{project_name}] {role or "(담당 업무 확인 불가)"}')
+    return '\n'.join(lines) if lines else '(데이터 없음)'
+
+
 def _job_history_text(job_row: pd.Series, std_map: dict, sait_map: dict) -> str:
     if job_row is None:
         return '(데이터 없음)'
@@ -290,7 +310,7 @@ def _work_objective_text(row) -> str:
     return '\n'.join(lines) if lines else '(데이터 없음)'
 
 
-def _build_prompt(edu_text, task_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text) -> str:
+def _build_prompt(edu_text, task_text, role_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text) -> str:
     return f"""아래는 한 연구원의 이력 데이터입니다. 개인 식별 정보(이름/사번 등)는 제외되어 있습니다.
 
 [학력]
@@ -298,6 +318,9 @@ def _build_prompt(edu_text, task_text, job_text, core_text, tech_text, pub_text,
 
 [과제 수행 이력]
 {task_text}
+
+[과제 내 담당 업무 (과제 문서에 실제로 기록된 내용 — 있으면 가장 신뢰도 높은 근거)]
+{role_text}
 
 [직무 이력]
 {job_text}
@@ -375,8 +398,7 @@ def _build_html(results: list, researchers_df: pd.DataFrame) -> str:
 
     researchers.csv의 department(현소속부서명) → '플랫폼/팀', org_code(비공식
     소속부서명) → '과제/파트'로 라벨링해 좌측 사이드바·본문 모두 2단계로
-    그룹핑해 보여준다(JSON 구조 자체는 그대로 flat list — process_project_researcher_fit.py
-    등이 이 JSON을 그대로 읽으므로 하위 호환 유지)."""
+    그룹핑해 보여준다(JSON 구조 자체는 flat list 그대로 유지)."""
     name_map, dept_map, org_map = {}, {}, {}
     if not researchers_df.empty:
         indexed = researchers_df.set_index('researcher_id')
@@ -513,6 +535,7 @@ def process(refresh_journals: bool = False) -> bool:
     education = _read_csv('education')
     tasks = _read_csv('tasks')
     tasks_info = _read_csv('tasks_information')
+    project_personnel = _read_csv('project_personnel')
     job_profile = _read_csv('job_profile')
     core_tech = _read_csv('core_technology')
     tech_ownership = _read_csv('tech_ownership')
@@ -554,6 +577,10 @@ def process(refresh_journals: bool = False) -> bool:
         task_text = _task_history_text(
             tasks[tasks['researcher_id'] == rid] if not tasks.empty else pd.DataFrame(), tasks_info
         )
+        role_text = _project_role_text(
+            project_personnel[project_personnel['researcher_id'] == rid]
+            if not project_personnel.empty else pd.DataFrame()
+        )
         job_row = None
         if not job_profile.empty:
             rows = job_profile[job_profile['researcher_id'] == rid]
@@ -586,14 +613,14 @@ def process(refresh_journals: bool = False) -> bool:
 
         # 판단 근거가 될 데이터가 전혀 없으면 LLM 호출 자체를 건너뛴다.
         if all(t == '(데이터 없음)' for t in
-               (edu_text, task_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text)):
+               (edu_text, task_text, role_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text)):
             print(f'    [{rid}] 데이터 없음 — 건너뜀')
             skip_count += 1
             completed += 1
             _progress_checkpoint()
             continue
 
-        prompt = _build_prompt(edu_text, task_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text)
+        prompt = _build_prompt(edu_text, task_text, role_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text)
         prepared.append((rid, prompt))
 
     # 2단계: 실제 LLM 분석은 동시 호출 허용치만큼 동시에 실행한다.

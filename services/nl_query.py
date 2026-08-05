@@ -15,25 +15,22 @@
 지원 intent(사용자 표현은 매우 다양할 수 있으므로, 아래로 분류가 안 되는
 질문은 "unsupported"로 안내만 반환하고 추측 답변을 만들지 않는다):
   - find_researchers_by_expertise : 이미 요약된 강점 분야/키워드 태그로 연구원 찾기
-  - find_researchers_for_project  : 특정 과제(등록된 과제 또는 새 과제 설명)에
-    적합한 연구원 찾기
-  - find_projects_for_researcher  : 특정 연구원에게 적합한 사내 과제 찾기
-    (현재 수행 중인 과제는 기본적으로 제외)
   - find_similar_researchers      : 특정 연구원과 전문성이 유사한 다른 연구원
     찾기(연구원↔연구원 유사도, pipeline/process_researcher_similarity.py가
     이미 배치로 계산해 둔 결과를 그대로 조회 — LLM 근거 판정까지 끝난 값)
-  - open_data_query : 위 4가지가 다루는 "이미 계산된 결과"로는 답할 수 없는,
+  - open_data_query : 위 2가지가 다루는 "이미 계산된 결과"로는 답할 수 없는,
     원천 데이터(학력/전공, 과제 수행 이력, 논문/특허, 평가/인사 이력 등)의
     특정 항목을 근거로 찾는 개방형 질문. 예) "물리학 전공한 사람 찾아줘",
     "양자컴 과제 수행 중인 연구원 보여줘", "특허 등록 3건 이상인 연구원".
     services/open_data_query.py가 자연어 → SQL로 그 자리에서 조회한다.
 
+(예전에는 find_researchers_for_project/find_projects_for_researcher 2개
+intent가 더 있었지만, 그 기반이 되던 과제↔연구원 매칭 기능 자체가 제거되면서
+함께 삭제됐다 — data/processed/CLAUDE.md 참고.)
+
 Source:
   data/processed/연구원 보유 전문성 분석.json      (services.data_store.read_expertise_profiles)
   data/processed/researchers.csv                    (이름/부서)
-  data/processed/tasks.csv                          (연구원의 현재 수행 과제 판단)
-  data/processed/project_fit_by_project.json/project_fit_by_researcher.json
-    (process_project_researcher_fit.py가 이미 계산해 둔 배치 매칭 결과)
   data/processed/researcher_similarity.json         (process_researcher_similarity.py가
     이미 계산해 둔 연구원↔연구원 유사도 + LLM 근거 판정, services.data_store.read_similar_researchers)
   data/processed/strength_taxonomy.json             (build_strength_taxonomy.py 2단계
@@ -78,47 +75,38 @@ _FIT_RANK = {'상': 0, '중': 1, '하': 2}
 
 _KNOWN_INTENTS = {
     'find_researchers_by_expertise',
-    'find_researchers_for_project',
-    'find_projects_for_researcher',
     'find_similar_researchers',
     'open_data_query',
 }
 
 QUERY_SYSTEM_PROMPT = """# Role
-당신은 사내 연구원 전문성/과제 매칭 데이터베이스에 대한 자연어 질문을 구조화된
+당신은 사내 연구원 전문성 데이터베이스에 대한 자연어 질문을 구조화된
 검색 조건으로 바꾸는 "R&D Query Router"입니다. 직접 답을 만들지 않습니다 —
 질문을 분류하고 검색에 필요한 핵심 개체만 뽑아냅니다.
 
-# 지원하는 질문 유형(intent) — 반드시 이 6가지 중 하나로만 분류하세요
+# 지원하는 질문 유형(intent) — 반드시 이 4가지 중 하나로만 분류하세요
 1. find_researchers_by_expertise : 이미 요약된 "강점 분야/키워드" 태그로 연구원을
    찾는 질문(태그 자체를 묻는 것이지, 학력·과제이력 같은 원천 데이터 항목이 아님)
    예) "로봇 제어 전문가 찾아줘", "센서 데이터 처리 할 줄 아는 사람 있어?"
-2. find_researchers_for_project : 특정 과제(사내에 이미 등록된 과제명, 또는
-   새로 설명하는 과제)에 적합한 연구원을 찾는 질문
-   예) "차세대로봇제어 과제에 적합한 사람 찾아줘", "자율주행 센서 퓨전 하는 신규 과제에 맞는 사람은?"
-3. find_projects_for_researcher : 특정 연구원에게 어떤 과제가 적합한지 찾는 질문.
-   "현재 하고 있는 과제 말고", "지금 과제 제외하고" 같은 표현이 있으면
-   exclude_current_project=true, 명시가 없어도 기본값은 true로 두세요.
-   예) "정재원 연구원은 지금 과제 말고 어떤 과제에 적합해?"
-4. find_similar_researchers : 특정 연구원(이름 또는 사번)과 전문성/역량이
+2. find_similar_researchers : 특정 연구원(이름 또는 사번)과 전문성/역량이
    비슷한 "다른 연구원"을 찾는 질문 — researcher_query에 그 연구원의
    이름/사번을 넣으세요(전문성 키워드가 아니라 사람 자체를 기준으로 찾는
    질문이면 이 intent입니다. find_researchers_by_expertise와 헷갈리지
    마세요 — expertise_terms가 아니라 사람 이름이 기준이면 항상 이 intent).
    예) "홍길동 연구원과 전문성이 비슷한 사람 찾아줘",
    "정재원이랑 유사한 역량 가진 연구원 있어?", "홍길동과 비슷한 연구원은 누구야"
-5. open_data_query : 위 네 가지가 다루는 "이미 계산된 요약/매칭 결과"가 아니라,
+3. open_data_query : 위 두 가지가 다루는 "이미 계산된 요약 결과"가 아니라,
    원천 데이터의 구체적 항목(학력/전공, 실제 과제 수행 이력, 논문/특허 실적,
    직급/근속, 평가/인사 이력 등)을 조건으로 찾거나 집계하는 질문
    예) "물리학 전공한 사람 찾아줘", "양자컴퓨팅 과제 수행 중인 연구원 보여줘",
    "특허 등록 3건 이상인 연구원", "부서별 평균 논문 수"
-6. unsupported : 위 5가지에 해당하지 않는 모든 질문(잡담, 이 시스템이 다루지
+4. unsupported : 위 세 가지에 해당하지 않는 모든 질문(잡담, 이 시스템이 다루지
    않는 질문 등) — 억지로 끼워 맞추지 말고 이 값으로 분류하고
    reason_if_unsupported에 짧게 이유를 적으세요.
 
 # Output Format (JSON만 출력하고 그 외 텍스트는 절대 출력하지 마세요)
 {
-  "intent": "find_researchers_by_expertise" | "find_researchers_for_project" | "find_projects_for_researcher" | "find_similar_researchers" | "open_data_query" | "unsupported",
+  "intent": "find_researchers_by_expertise" | "find_similar_researchers" | "open_data_query" | "unsupported",
   "expertise_terms": ["..."],
   "project_name": "",
   "project_description": "",
@@ -197,10 +185,11 @@ def _empty_table_result(intent: str, note: str) -> dict:
 
 
 def _build_table_result(intent: str, items: list, column_order: list, note: str = '') -> dict:
-    """구조화 3-intent의 결과(item dict 목록)를 open_data_query와 동일한
-    columns/rows 표 형태로 변환한다 — researcher_id가 있으면 사번/성명/부서/
-    과제/CL/학력·전공/나이 7개 기본 컬럼이 자동으로 앞에 붙어서(inject_person_columns),
-    화면은 4개 intent 전부 같은 표 렌더러 하나로 보여줄 수 있다."""
+    """구조화 2-intent(find_researchers_by_expertise/find_similar_researchers)의
+    결과(item dict 목록)를 open_data_query와 동일한 columns/rows 표 형태로
+    변환한다 — researcher_id가 있으면 사번/성명/부서/과제/CL/학력·전공/나이
+    7개 기본 컬럼이 자동으로 앞에 붙어서(inject_person_columns), 화면은 3개
+    intent 전부 같은 표 렌더러 하나로 보여줄 수 있다."""
     columns = list(column_order)
     rows = []
     for it in items:
@@ -289,93 +278,6 @@ def find_researchers_by_expertise(terms: list, department_filter: str = '', top_
     )
 
 
-def _fit_rank_key(m: dict) -> int:
-    return _FIT_RANK.get(m.get('fit_score', ''), 3)
-
-
-def _match_project_entries(project_query: str, by_project: list) -> list:
-    nq = _norm(project_query)
-    if not nq:
-        return []
-    exact = [e for e in by_project if _norm(e.get('project_name', '')) == nq]
-    if exact:
-        return exact
-    return [e for e in by_project if nq in _norm(e.get('project_name', '')) or _norm(e.get('project_name', '')) in nq]
-
-
-def find_researchers_for_project(project_name: str = '', project_description: str = '',
-                                  top_k: int = DEFAULT_TOP_K) -> dict:
-    top_k = min(top_k or DEFAULT_TOP_K, MAX_TOP_K)
-    by_project = data_store.read_project_fit_by_project()
-    query = (project_name or '').strip()
-
-    if query and by_project:
-        matches = _match_project_entries(query, by_project)
-        if matches:
-            researchers_df = data_store.read_processed('researchers')
-            name_map = researchers_df.set_index('researcher_id')['name'].to_dict() if not researchers_df.empty else {}
-            items, seen = [], set()
-            for entry in matches:
-                rankings = sorted(entry.get('rankings') or [], key=_fit_rank_key)[:top_k]
-                for r in rankings:
-                    key = (entry.get('project_name', ''), entry.get('job_title', ''), r.get('researcher_id', ''))
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    items.append({
-                        'project_name': entry.get('project_name', ''),
-                        'job_title': entry.get('job_title', ''),
-                        'researcher_id': r.get('researcher_id', ''),
-                        'name': name_map.get(r.get('researcher_id', ''), r.get('researcher_id', '')),
-                        'fit_score': r.get('fit_score', ''),
-                        'reason': r.get('reason', ''),
-                    })
-            return _build_table_result(
-                'find_researchers_for_project', items,
-                ['researcher_id', 'name', 'project_name', 'job_title', 'fit_score', 'reason'],
-            )
-
-    # 등록된 과제에서 못 찾았고 설명이 있으면, 임베딩만으로 1차 후보를 실시간 계산한다
-    # (사내 LLM 정성 판정은 배치 process_project_researcher_fit.py만 수행하므로,
-    # 이 경로의 결과는 "1차 후보"일 뿐 확정 배치 결과와 신뢰도가 다르다).
-    description = (project_description or query).strip()
-    if not description:
-        return _empty_table_result('find_researchers_for_project', '과제명이나 과제 설명을 확인하지 못했습니다.')
-
-    profiles = data_store.read_expertise_profiles()
-    if not profiles:
-        return _empty_table_result(
-            'find_researchers_for_project', '연구원 보유 전문성 분석.json이 없어 매칭할 수 없습니다.')
-
-    researcher_ids = list(profiles.keys())
-    researcher_texts = [fit.researcher_profile_text(profiles[rid]) for rid in researcher_ids]
-    try:
-        vectors = fit.cached_embed([description] + researcher_texts)
-    except LLMError as exc:
-        return {'intent': 'find_researchers_for_project', 'items': [], 'note': f'임베딩 서버 오류: {exc}'}
-
-    desc_vec, researcher_vecs = vectors[:1], vectors[1:]
-    sims = fit.cosine_sim_matrix(desc_vec, researcher_vecs)[0]
-    ranked_idx = sorted(range(len(researcher_ids)), key=lambda i: -sims[i])[:top_k]
-
-    researchers_df = data_store.read_processed('researchers')
-    name_map = researchers_df.set_index('researcher_id')['name'].to_dict() if not researchers_df.empty else {}
-    items = [
-        {
-            'project_name': description[:40], 'job_title': '',
-            'researcher_id': researcher_ids[i], 'name': name_map.get(researcher_ids[i], researcher_ids[i]),
-            'fit_score': '', 'reason': '', 'score': round(float(sims[i]), 4),
-        }
-        for i in ranked_idx
-    ]
-    return _build_table_result(
-        'find_researchers_for_project', items,
-        ['researcher_id', 'name', 'project_name', 'job_title', 'score', 'fit_score', 'reason'],
-        '등록된 과제 목록에 없어 임베딩 유사도로 1차 후보만 계산했습니다 — '
-        '사내 LLM 정성 판정(근거·적합도 상/중/하)은 아직 거치지 않았습니다.',
-    )
-
-
 def _resolve_researcher(query: str, researchers_df: pd.DataFrame) -> list:
     """이름 또는 사번으로 researcher_id 후보를 찾는다(동명이인이면 복수 반환)."""
     if researchers_df.empty:
@@ -392,78 +294,6 @@ def _resolve_researcher(query: str, researchers_df: pd.DataFrame) -> list:
         return by_name['researcher_id'].tolist()
     contains = researchers_df[researchers_df['name'].astype(str).str.contains(re.escape(q), na=False)]
     return contains['researcher_id'].tolist()
-
-
-def _current_project_names(researcher_id: str, tasks_df: pd.DataFrame) -> set:
-    """이 연구원이 '현재' 수행 중인 과제명 집합. end_date가 비어 있으면
-    진행중(components/timeline_data.py의 기존 관례와 동일), 있으면 오늘
-    이후인 경우도 진행중으로 취급한다."""
-    if tasks_df.empty:
-        return set()
-    rows = tasks_df[tasks_df['researcher_id'] == researcher_id]
-    if rows.empty:
-        return set()
-    today = pd.Timestamp.now().normalize()
-    current = set()
-    for _, row in rows.iterrows():
-        end_raw = str(row.get('end_date', '') or '').strip()
-        if not end_raw:
-            current.add(str(row.get('task_name', '')).strip())
-            continue
-        end_ts = pd.to_datetime(end_raw, errors='coerce')
-        if pd.isna(end_ts) or end_ts >= today:
-            current.add(str(row.get('task_name', '')).strip())
-    return current
-
-
-def find_projects_for_researcher(researcher_query: str, exclude_current: bool = True,
-                                  top_k: int = DEFAULT_TOP_K) -> dict:
-    top_k = min(top_k or DEFAULT_TOP_K, MAX_TOP_K)
-    researchers_df = data_store.read_processed('researchers')
-    candidates = _resolve_researcher(researcher_query, researchers_df)
-    if not candidates:
-        return _empty_table_result(
-            'find_projects_for_researcher', f'"{researcher_query}"에 해당하는 연구원을 찾지 못했습니다.')
-    if len(candidates) > 1:
-        name_map = researchers_df.set_index('researcher_id')['name'].to_dict()
-        cand_desc = ', '.join(f'{name_map.get(rid, rid)}({rid})' for rid in candidates[:10])
-        return _empty_table_result(
-            'find_projects_for_researcher',
-            f'동명이인 등으로 {len(candidates)}명이 검색됩니다: {cand_desc}. 사번으로 다시 질문해주세요.')
-
-    rid = candidates[0]
-    by_researcher = data_store.read_project_fit_by_researcher()
-    entry = by_researcher.get(rid)
-    if not entry:
-        return _empty_table_result(
-            'find_projects_for_researcher',
-            '이 연구원에 대한 과제 적합도 매칭 데이터가 없습니다(process_project_researcher_fit.py 실행 필요).')
-
-    matches = list(entry.get('matches') or [])
-    excluded_note = ''
-    if exclude_current:
-        tasks_df = data_store.read_processed('tasks')
-        current_names = _current_project_names(rid, tasks_df)
-        before = len(matches)
-        matches = [m for m in matches if m.get('project_name', '') not in current_names]
-        if current_names and before != len(matches):
-            excluded_note = f'현재 수행 중인 과제({", ".join(sorted(current_names))})는 제외했습니다.'
-
-    matches.sort(key=_fit_rank_key)
-    name_map = researchers_df.set_index('researcher_id')['name'].to_dict()
-    items = [
-        {
-            'researcher_id': rid, 'name': name_map.get(rid, rid),
-            'project_name': m.get('project_name', ''), 'job_title': m.get('job_title', ''),
-            'dep_name': m.get('dep_name', ''), 'fit_score': m.get('fit_score', ''), 'reason': m.get('reason', ''),
-        }
-        for m in matches[:top_k]
-    ]
-    return _build_table_result(
-        'find_projects_for_researcher', items,
-        ['researcher_id', 'name', 'project_name', 'job_title', 'dep_name', 'fit_score', 'reason'],
-        excluded_note,
-    )
 
 
 def find_similar_researchers(researcher_query: str, top_k: int = DEFAULT_TOP_K) -> dict:
@@ -552,10 +382,7 @@ def parse_question(question: str) -> dict:
         'intent': intent,
         'question': question,
         'expertise_terms': parsed.get('expertise_terms') or [],
-        'project_name': parsed.get('project_name') or '',
-        'project_description': parsed.get('project_description') or '',
         'researcher_query': parsed.get('researcher_query') or '',
-        'exclude_current_project': bool(parsed.get('exclude_current_project', True)),
         'department_filter': parsed.get('department_filter') or '',
         'top_k': top_k,
     }
@@ -568,7 +395,7 @@ def execute_query(parsed: dict) -> dict:
         return _empty_table_result('error', parsed.get('message', '알 수 없는 오류가 발생했습니다.'))
 
     if intent == 'unsupported':
-        # 5개 intent 어디에도 안 걸렸다고 바로 포기하지 않고, 마지막 수단으로
+        # 3개 intent 어디에도 안 걸렸다고 바로 포기하지 않고, 마지막 수단으로
         # 개방형 SQL 질의를 한 번 더 시도한다 — data/processed/ 전체(CSV +
         # LLM 파생 JSON)를 대상으로 하므로 라우터 프롬프트가 놓친 질문도
         # 여기서 답이 나올 때가 있다. 그래도 결과가 없으면 기존 안내 문구로 폴백.
@@ -582,8 +409,7 @@ def execute_query(parsed: dict) -> dict:
         note = '죄송합니다, 이 질문에는 아직 답변할 수 없습니다.'
         if reason:
             note += f' ({reason})'
-        note += (' "특정 전문성 보유자 찾기", "과제에 적합한 사람 찾기", '
-                 '"연구원에게 맞는 과제 찾기", "연구원과 유사한 연구원 찾기", '
+        note += (' "특정 전문성 보유자 찾기", "연구원과 유사한 연구원 찾기", '
                  '또는 학력·과제이력 등 원천 데이터에 대한 질문 형태로 질문해 주세요.')
         return _empty_table_result('unsupported', note)
 
@@ -594,12 +420,6 @@ def execute_query(parsed: dict) -> dict:
     if intent == 'find_researchers_by_expertise':
         return find_researchers_by_expertise(
             parsed.get('expertise_terms') or [], parsed.get('department_filter', ''), top_k)
-    if intent == 'find_researchers_for_project':
-        return find_researchers_for_project(
-            parsed.get('project_name', ''), parsed.get('project_description', ''), top_k)
-    if intent == 'find_projects_for_researcher':
-        return find_projects_for_researcher(
-            parsed.get('researcher_query', ''), parsed.get('exclude_current_project', True), top_k)
     if intent == 'find_similar_researchers':
         return find_similar_researchers(parsed.get('researcher_query', ''), top_k)
 

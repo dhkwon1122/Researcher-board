@@ -1,15 +1,13 @@
-"""화면: 보유 전문성 (연구원/연구원↔연구원/연구원↔과제/전문성 MAP 4개 탭)
+"""화면: 보유 전문성 (연구원/연구원↔연구원/전문성 MAP 3개 탭)
 
-연구원/연구원↔연구원/연구원↔과제 3개 탭은 pipeline이 생성한 정적 콘솔 스타일
-HTML 리포트를 그대로 iframe(srcDoc)으로 띄운다 — 별도 Dash 컴포넌트로 재구현하지
+연구원/연구원↔연구원 2개 탭은 pipeline이 생성한 정적 콘솔 스타일 HTML
+리포트를 그대로 iframe(srcDoc)으로 띄운다 — 별도 Dash 컴포넌트로 재구현하지
 않고 기존 리포트 렌더링을 재사용하기 위함. 전문성 MAP 탭만 기존 UMAP 산점도
 그대로 유지하며, UMAP 계산(numba JIT)이 무겁기 때문에 탭이 실제 선택될 때만
 계산하도록 지연 렌더링한다.
 
-"과제 전문성"(구 project_expertise_analysis.html, 예전엔 별도 5번째 탭)은
-연구원↔과제 탭(project_researcher_fit.html) 안의 "과제 기준"/"인별 기준"
-탭 전환 영역에 세 번째 탭으로 통합됐다(researcher_fit.py의 build_fit_html
-참고) — 별도 Dash 탭이 아니라 그 리포트 안의 라디오 탭 중 하나다.
+(예전에는 "연구원↔과제" 탭도 있었지만, 그 기반이 되던 과제↔연구원 매칭
+기능 자체가 제거되면서 함께 삭제됐다 — data/processed/CLAUDE.md 참고.)
 """
 
 import os
@@ -30,7 +28,6 @@ dash.register_page(__name__, path='/researcher-similarity-map', name='보유 전
 _REPORT_FILES = {
     'researcher': '연구원 보유 전문성 분석.html',
     'similarity': 'researcher_similarity.html',
-    'fit': 'project_researcher_fit.html',
 }
 
 
@@ -40,8 +37,7 @@ def _missing_data_alert() -> dbc.Alert:
             '유사도 지도를 표시할 데이터가 없습니다. 아래 순서로 먼저 실행하세요.',
             html.Ul([
                 html.Li('python pipeline/process_researcher_expertise.py'),
-                html.Li('python pipeline/process_researcher_similarity.py '
-                        '(또는 process_project_researcher_fit.py — 둘 다 임베딩 캐시를 채웁니다)'),
+                html.Li('python pipeline/process_researcher_similarity.py'),
             ], className='mb-0 mt-2'),
         ],
         color='warning', className='mt-3',
@@ -341,7 +337,6 @@ def layout(highlight_researcher=None, **_kwargs):
             [
                 dbc.Tab(label='연구원', tab_id='researcher'),
                 dbc.Tab(label='연구원 ↔ 연구원', tab_id='similarity'),
-                dbc.Tab(label='연구원 ↔ 과제', tab_id='fit'),
                 dbc.Tab(label='전문성 MAP', tab_id='map'),
             ],
             id='expertise-tabs', active_tab='map', className='mb-3',

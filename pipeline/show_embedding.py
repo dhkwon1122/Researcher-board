@@ -3,11 +3,10 @@ BGE-M3 임베딩 방식 설명 모듈 (보고용)
 
 연구원 전문성 프로필이 실제로 어떻게 벡터로 변환되고, 그 벡터가 어떻게
 "유사한 연구원 찾기"에 쓰이는지를 특정 연구원 한 명을 예시로 콘솔형 HTML
-리포트에 구체적으로 보여준다. process_researcher_similarity.py/
-process_project_researcher_fit.py가 실제로 쓰는 것과 동일한 함수
-(researcher_fit.researcher_profile_text, researcher_fit.cached_embed)를
-그대로 재사용하므로, 실제 파이프라인과 완전히 같은 방식으로 변환된 결과를
-보여준다.
+리포트에 구체적으로 보여준다. process_researcher_similarity.py가 실제로
+쓰는 것과 동일한 함수(researcher_fit.researcher_profile_text,
+researcher_fit.cached_embed)를 그대로 재사용하므로, 실제 파이프라인과
+완전히 같은 방식으로 변환된 결과를 보여준다.
 
 이 리포트가 보여주는 3단계:
   1) 입력 텍스트 구성: 강점 분야/키워드/Hard Skills/Domain Knowledge를

@@ -6,9 +6,9 @@ services/llm.py의 embed()가 기대하는 계약을 그대로 구현한다:
   요청: {"model": "<모델명>", "input": ["텍스트1", "텍스트2", ...]}
   응답: {"data": [{"index": 0, "embedding": [...]}, ...]}
 
-pipeline/embed_server.py의 ensure_embed_server()가 process_project_researcher_fit.py/
-run_expertise.py 실행 시 이 스크립트를 백그라운드 프로세스로 자동 기동한다(이미
-응답 중이면 재기동하지 않음). 수동으로 직접 띄우려면:
+pipeline/embed_server.py의 ensure_embed_server()가 run_expertise.py 실행 시
+이 스크립트를 백그라운드 프로세스로 자동 기동한다(이미 응답 중이면
+재기동하지 않음). 수동으로 직접 띄우려면:
   python services/bge_server.py
 
 필요 패키지(requirements-embed.txt, 무거운 ML 의존성이라 별도 분리):

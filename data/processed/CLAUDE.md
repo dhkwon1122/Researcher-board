@@ -537,3 +537,126 @@ LLM 근거 판정까지 끝난 값, `data_store.read_similar_researchers()`로 �
   깨지지 않고 "미분류"로 안전하게 처리되는 것까지 확인). 실제 LLM
   연결 환경에서 추출 정확도(특히 표/서술형 구분 인식)는 배포 후 확인
   필요.
+
+## 완료: process_project_expertise.py 목적 변경 — 직무 딥다이브 매핑 제거,
+## 문서 상세 분석 + 인력 매칭으로 전환 (+ 과제↔연구원 매칭 기능 전체 삭제)
+
+사용자 요청: `process_project_expertise.py`에서 "R&D Project Specialist
+Agent"(직무 딥다이브 매핑) 기능을 빼고, 대신 "R&D 과제 문서 분석
+전문가"(핵심기술/산출물/난제/키워드 추출) 기능을 심화하고, 문서에 언급된
+인력과 그 담당 업무를 함께 추출해 `process_researcher_expertise.py`의 새
+근거로 넣어 달라는 것. 조사 결과 "직무 딥다이브 매핑"은
+`process_project_researcher_fit.py`(과제↔연구원 매칭)의 유일한 입력이라,
+사용자 확인 후 그 기능 전체를 함께 삭제했다.
+
+**사용자가 확정한 세부 결정**:
+1. 과제↔연구원 매칭 기능(스크립트/탭/AI 검색 intent 전부) 삭제.
+2. 인력 이름 매칭 실패 시 원문 이름만 남김(추측 배정 안 함).
+3. 이름 후보 좁히기는 `researchers.csv`의 `org_code == project_name` 기준.
+4. 기존 4개 항목은 더 길고 구체적으로, 문서 탐색 중 발견되는 새 하위
+   항목(연구 배경/추진 일정/기대효과)도 추가.
+5. 컨플루언스 검색으로 찾은 인력을 별도 CSV(`project_personnel.csv`)로
+   모아 `process_researcher_expertise.py`의 신규 근거로 추가.
+
+**동명이인 판별 규칙**(사용자 설명 그대로 구현): 문서에 "김재연(17)"처럼
+이름 옆 괄호 숫자가 있으면, 그 숫자와 후보 `researcher_id`의 앞 2자리를
+비교해 판별. 후보가 1명이면 그대로 매칭, 0명이거나 판별 불가(괄호 숫자
+없음/불일치)면 매칭하지 않고 원문 이름만 보존.
+
+### 새 목적 (`pipeline/process_project_expertise.py`)
+- `project_summary._SUMMARY_SYSTEM_PROMPT` 심화: 기존
+  `core_tech`/`deliverable`/`challenge`/`keywords_kr`/`keywords_en` 5개
+  항목을 "한두 문장 요약이 아니라 최대한 상세하게" 쓰도록 지시 강화, 신규
+  항목 `background`(연구 배경)/`milestones`(추진 일정, 리스트)/
+  `expected_impact`(기대효과) 추가. 새로 `personnel`(문서에 언급된 인력)
+  추출 지침도 추가 — `name`/`name_suffix`(괄호 숫자)/`role_description`
+  (구체적 담당 업무). `_summarize()` 호출의 `max_tokens`를 3000→6000으로
+  올림(심화 분석 + 인력 추출까지 한 번에 요구하므로).
+  `process_project_search.py`(유사 기업/학계 탐색)도 같은 캐시를
+  공유하지만 새 필드는 무시하고 기존 5개만 쓰므로 영향 없음.
+- `process_project_expertise.py`의 `process()`를 재작성: 예전엔 1단계
+  (문서 요약, 순차) → 2단계(딥다이브 분석, 동시 LLM 호출)였는데, 딥다이브
+  단계가 통째로 없어지고 실제 분석 자체가 이미 1단계(project_summary
+  호출) 안에서 끝나므로 2단계 개념이 사라짐. 대신 각 과제 처리 후
+  `_resolve_personnel()`로 인력 이름→researcher_id 매핑(위 규칙)을
+  수행하고, 매핑 결과를 `project_personnel.csv`로 저장(`_write_personnel_csv`,
+  `quoting=csv.QUOTE_NONNUMERIC`로 사번 텍스트 형식 보장 — 이 세션이
+  이전에 정한 CSV 저장 관례 그대로 따름).
+- `project_expertise_analysis.json`의 항목 구조가 바뀜: 예전엔
+  `expertise_analysis`(마크다운 원문) 필드 하나에 딥다이브 내용이 다
+  들어 있었는데, 이제는 `background`/`milestones`/`expected_impact`
+  + `personnel`(researcher_id 매핑 포함) 필드로 구조화됨.
+- **`pipeline/rd_specialist_markdown.py`**: "R&D Project Specialist
+  Agent" 페르소나 프롬프트(`RD_SPECIALIST_SYSTEM_PROMPT`)와 그 마크다운
+  파싱 헬퍼들(`analyze_expertise`/`split_top_sections`/`is_deepdive_section`/
+  `split_job_blocks`/`extract_difficulty`/`extract_job_title`/`job_body`/
+  `deepdive_jobs`/`parse_job_fields`/`job_card_html`) 전부 삭제.
+  `project_card_html()`을 새 스키마용으로 재작성 — 직무 카드 대신
+  핵심기술/산출물/난제/배경/기대효과 요약(`dl.kv`) + 추진 일정(불릿
+  목록) + 인력 목록(`.personnel-row`, researcher_id 매핑된 사람은
+  전문성 MAP 바로가기 링크가 붙는 배지, 미매칭이면 회색 "미매칭" 배지)을
+  렌더링. 이제 아무도 안 쓰는 CSS(`.job-*`, `details.more`, `.tabs`/
+  `.tab-bar`/CSS 전용 탭 :has() 동기화 규칙)도 함께 정리.
+- **`pipeline/process_researcher_expertise.py`**: 새 근거 섹션 `[과제 내
+  담당 업무]` 추가 — `_project_role_text()`가 `project_personnel.csv`에서
+  해당 researcher_id 행만 추려 텍스트로 구성, `_build_prompt()`에
+  `[과제 수행 이력]` 바로 다음 섹션으로 삽입. 시스템 프롬프트의
+  `key_responsibilities` 지침에 "과제 문서에 실제로 기록된 내용 — 있으면
+  가장 신뢰도 높은 근거로 우선 활용" 문구 추가. 이 CSV가 없거나 해당
+  연구원 행이 없어도(파이프라인 미실행/문서에 언급 안 됨) "(데이터
+  없음)"으로 정상 동작 — 필수 입력 아님.
+
+### 삭제한 것 (과제↔연구원 매칭 기능 전체)
+- `pipeline/process_project_researcher_fit.py` 파일 자체 삭제.
+- `pipeline/researcher_fit.py`: 매칭 전용 함수들(`SYSTEM_PROMPT_BY_TARGET`/
+  `SYSTEM_PROMPT_BY_RESEARCHER`/`run_matching_llm`/`_label_of`/
+  `match_by_target`/`match_by_researcher`/`job_text`/`FIT_VARIANT`/
+  `_fit_pill_html`/`build_fit_html`/`read_json`) 삭제, 공용 유틸
+  (`researcher_profile_text`/`cached_embed`/`cosine_sim_matrix`/
+  `top_k_idx`/`read_researchers`)만 남김 — `process_researcher_similarity.py`와
+  `services/jd_reconciliation.py`가 계속 이 나머지를 재사용.
+- **`services/data_store.py`**: `read_project_fit_by_project()`/
+  `read_project_fit_by_researcher()` 삭제.
+- **`services/open_data_query.py`**: `project_fit_by_project`/
+  `project_fit_by_researcher` 테이블 등록 삭제.
+- **`services/nl_query.py`**: `find_researchers_for_project`/
+  `find_projects_for_researcher` intent와 그 전용 함수
+  (`find_researchers_for_project`/`find_projects_for_researcher`/
+  `_fit_rank_key`/`_match_project_entries`/`_current_project_names`)
+  전부 삭제 — 라우터가 이제 4개 intent(전문성 태그/유사 연구원/개방형
+  질의/unsupported)만 분류. `_resolve_researcher()`는
+  `find_similar_researchers`와 공유라 유지.
+- **`pages/researcher_similarity_map.py`**: "연구원 ↔ 과제" 탭 삭제(4개
+  → 3개 탭: 연구원/연구원↔연구원/전문성 MAP). 예전엔 "과제 전문성"
+  리포트가 이 탭(`project_researcher_fit.html`) 안 3번째 서브탭으로
+  통합돼 있었는데, 그 통합도 함께 사라짐 — `project_expertise_analysis.html`은
+  다시 독립 정적 리포트로 돌아갔고(Dash 탭에는 연결 안 됨, 필요하면
+  파일을 직접 열어서 봄), 이 부분은 사용자가 별도로 요청하지 않아
+  Dash 탭으로 재연결하지 않았다.
+- **`pipeline/run_pipeline.py`/`run_expertise.py`/`run_analysis.py`**:
+  실행 순서 문서/print 안내에서 과제↔연구원 매칭 단계 제거, 단계
+  번호 재정렬. `run_analysis.py`는 실제로 `process_project_researcher_fit.process()`를
+  호출하던 3/4단계를 코드에서도 제거(3단계 체인으로 축소).
+  `run_expertise.py`의 BGE-M3 사전 기동 이유도
+  "process_project_researcher_fit.py 대비" → "process_researcher_similarity.py
+  대비"로 정정.
+- 그 외 `services/similarity_map.py`/`pipeline/result_archive.py`/
+  `pipeline/show_embedding.py`/`pipeline/embed_server.py`/
+  `services/bge_server.py`의 docstring에 남아 있던
+  `process_project_researcher_fit.py` 언급도 정리(기능 설명, 동작에는
+  영향 없음).
+
+### 검증
+LLM 없이(이 sandbox) `process_project_expertise.py`의 결정적 로직을
+모의 `project_summary.get_project_summary` 응답으로 직접 실행 검증 —
+동명이인 2명(표기 다른 접미사) + 단독 이름 1명 + 미등록 이름 1명을
+넣어 매칭 규칙(정확히 3명 매칭, 1명 미매칭)을 확인했고, 그 결과가
+`project_personnel.csv`/`project_expertise_analysis.json`/`.html`에
+올바르게 반영되는 것도 확인했다. `process_researcher_expertise.py`의
+`_project_role_text()`/`_build_prompt()`도 이 CSV를 직접 읽어 새 섹션이
+프롬프트에 올바르게 삽입되는 것을 확인. 전체 파이프라인(`generate_sample_data.py`로
+정상 규모 샘플 재생성 후 `process_researcher_expertise.py` 실행)과 Dash
+앱(보유 전문성 3탭 구조, 조직별 비교, 연구원 프로필, 과제 직무/대상자
+검증)을 Playwright로 재확인 — 전부 정상, 콘솔 에러 없음(연구원 프로필의
+`leadership_figure` `KeyError: 'evaluator_group'`는 이 세션 이전부터
+있던 무관한 기존 버그로 별도 확인됨).

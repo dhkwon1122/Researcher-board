@@ -1,11 +1,14 @@
 """
-"R&D Project Specialist Agent" 계열 LLM이 생성하는 마크다운(## 섹션, ### 직무
-블록)을 다루는 공용 유틸리티. process_project_expertise.py, process_researcher_expertise.py,
-process_project_researcher_fit.py 등 여러 스크립트가 동일한 페르소나/파싱 로직과,
-그 결과를 보여주는 "콘솔"형 HTML 리포트 공용 인프라(CONSOLE_STYLE/console_page/
-stat_row_html)를 재사용하기 위해 분리했다. 네 개 리포트(연구원 유사도/과제 전문성/
-연구원 전문성/과제-연구원 매칭)가 모두 이 공용 인프라 위에서 렌더링되므로, 색상
-토큰이나 사이드바·카드 스타일을 바꾸려면 이 파일만 고치면 된다.
+"콘솔"형 정적 HTML 리포트 공용 인프라(CONSOLE_STYLE/console_page/stat_row_html/
+group_ordered/build_org_tree/strength_section_html/map_link_html 등)와, 과제
+카드 렌더링(project_card_html, process_project_expertise.py 전용)을 모아 둔
+모듈. 세 개 리포트(연구원 유사도/과제 전문성/연구원 전문성)가 모두 이 공용
+인프라 위에서 렌더링되므로, 색상 토큰이나 사이드바·카드 스타일을 바꾸려면
+이 파일만 고치면 된다.
+
+(예전에는 "R&D Project Specialist Agent" 페르소나 프롬프트와 그 마크다운
+출력을 파싱하는 헬퍼들도 이 모듈에 있었지만, 과제↔연구원 매칭 기능 자체가
+제거되면서 함께 삭제됐다 — data/processed/CLAUDE.md 참고.)
 """
 
 import html
@@ -187,296 +190,85 @@ def strength_section_html(fields: list, keywords: list) -> str:
     return ''.join(parts)
 
 
-# R&D Project Specialist Agent — 사내 LLM 시스템 프롬프트 (원문 그대로 사용).
-# process_project_expertise.py(사내 과제) 등 여러 스크립트가 동일한 페르소나로
-# "필수 직무·전문성 딥다이브 매핑"을 생성하는 데 재사용한다.
-RD_SPECIALIST_SYSTEM_PROMPT = """# Role
-당신은 R&D 연구개발 과제 및 기술 분석 전문가인 "R&D Project Specialist Agent"입니다.
-입력된 연구 기술명, 연구 내용, 목표 데이터를 정밀 분석하여, 연구개발 성공에 필요한 **"필수 직무(Role), 상세 전문성(Competency), 대체 가능성 및 검증 기준"**을 오직 팩트(Fact) 기반으로 딥다이브(Deep-dive)하여 도출하는 역할을 수행합니다.
-
-# Goal
-HR 담당자 및 R&D 부서장이 신규 인력 채용, 내부 인력 재배치, 혹은 아웃소싱 여부를 즉각적이고 객관적으로 판단할 수 있도록 고도로 구조화된 전문성 매핑 데이터를 제공합니다.
-
-# Guidelines & Constraints (지침 및 제약사항)
-1. **철저한 팩트 기반(Strict Fact-Based):** 기술서에 언급되지 않은 기술을 자의적으로 유추하여 필수 스킬로 확정 짓지 마세요. 단, 명시된 기술을 구현하기 위해 학술적·산업적으로 '반드시 수반되는 직무 및 스킬'은 논리적 근거와 함께 제시할 수 있습니다.
-2. **역량의 입체적 분석 (Competency Deep-Dive):** 단순히 직무 이름과 스킬셋 나열을 넘어, 해당 직무가 프로젝트 내에서 맡는 구체적 'R&D Task', '요구 역량 수준(Level)', '시장에서의 채용 난이도 및 대체 가능성'을 함께 분석합니다.
-3. **평가 가이드라인 제공:** HR 담당자가 해당 기술 면접이나 서류 검토 시 후보자의 전문성을 검증할 수 있는 핵심 질문/확인 사항을 매핑 테이블에 포함합니다.
-4. **선행연구소 특성 반영(양산 직무 제외 원칙):** 분석 대상 조직은 완제품 양산(Mass Production)이 목표가 아니라, 실현 가능성(Feasibility)을 검증하는 선행연구소입니다. 신뢰성(Reliability) 엔지니어링, 품질보증/품질관리(QA/QC), 양산 스케일업을 위한 생산기술·공정 엔지니어링, 수율/설비 개선 등 "완제품 양산 단계"에만 필요한 직무는 필수 직무에서 제외하세요. 단, 개념 검증(PoC)이나 시제품 제작 수준에서 실현 가능성을 확인하기 위해 최소한으로 필요한 생산기술·공정 엔지니어링 직무는 포함할 수 있습니다(양산 최적화가 아니라 "이 기술이 실제로 동작하는지 검증"하는 목적일 때만). 원천기술 확보, 이론/알고리즘 개발, 선행 실험·연구 등 선행연구 성격의 직무를 우선적으로 선정하세요.
-5. **직무 개수 제한(최대 5개, 상한이지 목표치가 아님):** 딥다이브 매핑에 포함하는 직무는 최대 5개까지만 선정하세요. 위 4번 기준(선행연구 우선, 양산 단계 제외)을 통과하는 후보가 5개를 초과하면 연구 성공에 가장 핵심적인 직무 5개만 남기고 우선순위가 낮은 직무는 생략하세요. 반대로 후보가 5개 미만이면 억지로 5개를 채우지 말고 실제 해당하는 개수만큼만(예: 3개) 작성하세요.
-6. **연구개발 직접 수행 직무만 선정(관리·기획·행정 직무 제외):** 프로젝트 매니저(PM), 사업 기획/기획 담당, 학술 기획 연구원, 행정 지원 등 연구개발을 직접 수행하지 않고 관리·기획·조율·행정 역할을 맡는 직무는 필수 직무에서 제외하세요. 딥다이브 매핑에는 실제로 연구·설계·구현·실험 등 기술적 R&D 작업을 손으로 직접 수행하는 기술 직무만 포함합니다.
-
----
-
-# Output Format (출력 형식)
-반드시 다음 구조에 맞추어 답변을 작성해 주세요.
-
-## 1. 연구 개발 프로젝트 개요
-* **분석 대상 기술명:** [입력된 기술명]
-* **핵심 연구 요약:** [입력된 내용을 바탕으로 한 핵심 요약]
-
----
-
-## 2. R&D 필수 전문성 및 직무 딥다이브 매핑 (Deep-Dive Job Mapping)
-*본 연구개발 과제를 완수하기 위해 정의된 필수 직무와 세부 역량 요구사항입니다.*
-
-### [직무 1: 직무명 입력 (예: SLAM/로봇 인지 엔지니어)]
-* **프로젝트 내 R&D Task:** (이 직무가 본 연구에서 실제로 수행해야 하는 구체적인 개발/연구 태스크)
-* **세부 전문성 및 역량 요구사항:**
-    * **핵심 하드 스킬 (Hard Skills):** (구체적인 라이브러리, 프레임워크, 개발 언어, 툴, 장비 제어 기술 등 명시)
-    * **필요 도메인 지식 (Domain Knowledge):** (수학적 이론, 특정 산업 표준, 물리학적 배경 등)
-* **직무 레벨 및 역량 기준 (Competency Level):**
-    * **Junior (학습/지원 가능 수준):** (예: ROS2 기본 패키지 활용 및 센서 데이터 퍼블리시/서브스크라이브 구현 가능 수준)
-    * **Mid-level (단독 수행 가능 수준):** (예: 실내외 환경 특성을 고려한 센서 캘리브레이션 및 오도메트리 보정 알고리즘 커스텀 가능 수준)
-    * **Senior (설계 및 문제해결 수준):** (예: 다중 센서 융합 기반 슬램 시스템 전체 아키텍처 설계 및 오차 누적 최적화 필터 자체 설계 수준)
-* **채용/확보 난이도:** [ 상 / 중 / 하 ] (시장에서의 인력 희소성 및 채용 타겟 범위)
-* **지원자 전문성 검증 질문 (HR/기술 면접용):**
-    1. (기술적 검증 질문 1)
-    2. (기술적 검증 질문 2)
-
-*(위 선정 기준에 따라 최대 5개까지 [직무 2], [직무 3]... 구조를 반복해 작성하세요. 기준을 통과하는 직무가 5개보다 적으면 그 개수만큼만 작성하고 억지로 채우지 마세요.)*
-
----
-
-## 3. R&D 인력 수급 및 리스크 관리 매핑 (Resource & Risk Matrix)
-*과제 수행을 위한 인력 수급 우선순위와 대체 가능성을 도출합니다. 위 2번에서 선정한 직무(최대 5개)와
-동일한 목록을 대상으로 하며, 여기서 새로운 직무를 추가하지 않습니다.*
-
-| 직무명 | 권장 인원 | 필수성 (Criticality) | 대체 가능성 (Alternative) | 채용/확보 전략 추천 (Buy, Build, Borrow) |
-| :--- | :---: | :---: | :--- | :--- |
-| 예: SLAM 엔지니어 | 1명 | **Essential** | 대체 불가 (연구 핵심 기술) | **Buy (외부 핵심 인재 영입):** 내부 육성에 시간 소요가 크므로 경력직 영입 필수 |
-| [직무명] | O명 | [Essential / Supportive] | [대체 불가 / 타 분야 전환 가능 / 외주 가능] | [채용(Buy) / 육성(Build) / 아웃소싱·자문(Borrow)] 중 택1 및 근거 |
-
-* **총 예상 필요 인력:** 최소 O명 ~ 최대 O명
-
----
-
-## 4. [종합 평가] 성공적인 과제 수행을 위한 HR 제언
-* **핵심 역량 병목(Bottleneck) 요인:** (프로젝트 진행 시 가장 인력 수급이 어렵거나 이탈 리스크가 큰 지점 지목)
-* **HR 액션 아이템:** (채용 시점, 내부 인력 업스킬링 제안, 혹은 산학 협력 필요성 등 실질적 제언)
-"""
+def _field_row_html(label: str, value: str) -> str:
+    v = (value or '').strip()
+    if not v or v == '확인 불가':
+        return ''
+    return f'<dt>{html.escape(label)}</dt><dd>{html.escape(v)}</dd>'
 
 
-def analyze_expertise(name: str, description: str) -> str:
-    """R&D Project Specialist Agent 역할의 LLM 분석을 호출. 실패 시 빈 문자열.
-    name: 연구 기술명(사내 과제명 등)
-    description: 연구 내용(기술 설명 또는 과제 요약)"""
-    prompt = f"""다음 기술에 대해 분석해 주세요.
-
-연구 기술명: {name}
-연구 내용: {description}"""
-    # 추론형 모델의 사고 과정 토큰 소모를 감안해 여유 있게 잡는다(finish_reason=length 방지).
-    return call_llm(prompt, RD_SPECIALIST_SYSTEM_PROMPT, temperature=0.2, max_tokens=6000)
+def _milestones_html(milestones: list) -> str:
+    items = [m for m in (milestones or []) if str(m or '').strip()]
+    if not items:
+        return ''
+    lis = ''.join(f'<li>{html.escape(str(m))}</li>' for m in items)
+    return f'<div class="kv-block"><div class="kv-title">주요 추진 일정</div><ul class="kv-list">{lis}</ul></div>'
 
 
-# ── 마크다운 섹션/직무 블록 파싱 ────────────────────────────────────────────
-
-
-def split_top_sections(text: str) -> list:
-    """'## ' 최상위 헤더 기준으로 전체 마크다운을 섹션 단위로 분리한다(헤더 행도
-    각 청크에 포함). 첫 '## ' 이전에 다른 텍스트가 있으면 별도 청크로 남는다."""
-    if not text:
-        return []
-    parts = re.split(r'(?m)^(?=##\s+)', text)
-    return [p.strip() for p in parts if p.strip()]
-
-
-def is_deepdive_section(section_text: str) -> bool:
-    first_line = section_text.split('\n', 1)[0]
-    return bool(re.match(r'^##\s*2[.\)]', first_line)) or '딥다이브' in first_line or 'Deep-Dive' in first_line
-
-
-def split_job_blocks(section_text: str) -> tuple:
-    """섹션 본문(맨 위 '## ...' 헤더는 제외하고 넘겨야 함)을 '### ' 헤더 기준으로
-    인트로 문단과 직무별 블록으로 분리."""
-    intro_lines = []
-    jobs = []
-    current = None
-    for line in section_text.split('\n'):
-        if re.match(r'^###\s+', line.rstrip()):
-            current = [line]
-            jobs.append(current)
-        elif current is not None:
-            current.append(line)
+def _personnel_html(personnel: list) -> str:
+    """process_project_expertise.py가 컨플루언스 문서에서 뽑아 researchers.csv와
+    대조한 인력 목록을 카드로 렌더링. researcher_id가 매핑된 사람은 전문성
+    MAP으로 바로 이동할 수 있는 링크를 붙이고, 매핑되지 않은 사람은 문서에
+    적힌 원문 이름만 "미매칭"으로 표시한다(추측해서 잘못 배정하지 않기 위해)."""
+    people = personnel or []
+    if not people:
+        return ''
+    rows = []
+    for p in people:
+        name = html.escape(p.get('name', ''))
+        suffix = p.get('name_suffix', '')
+        name_disp = f'{name}({html.escape(suffix)})' if suffix else name
+        rid = p.get('researcher_id', '')
+        if rid:
+            badge = (
+                f'<a class="badge matched" href="/researcher-similarity-map?highlight_researcher={rid}" '
+                f'target="_top" title="전문성 MAP에서 위치 보기">{html.escape(rid)}</a>'
+            )
         else:
-            intro_lines.append(line)
-    return '\n'.join(intro_lines), ['\n'.join(j) for j in jobs]
-
-
-def extract_difficulty(job_block_text: str):
-    m = re.search(r'채용.{0,6}난이도[^:：]*[:：]\*{0,2}\s*\[?\s*(상|중|하)', job_block_text)
-    return m.group(1) if m else None
-
-
-def extract_job_title(job_block_text: str) -> str:
-    first_line = job_block_text.split('\n', 1)[0]
-    m = re.match(r'^#{2,4}\s*\[?(.+?)\]?\s*$', first_line.strip())
-    return m.group(1).strip() if m else first_line.strip('# ').strip()
-
-
-def job_body(job_block_text: str) -> str:
-    """### 헤더 첫 줄을 뗀 나머지 본문."""
-    lines = job_block_text.split('\n', 1)
-    return lines[1] if len(lines) > 1 else ''
-
-
-def deepdive_jobs(analysis_text: str) -> list:
-    """expertise_analysis 전체 텍스트에서 딥다이브 매핑 섹션의 직무 블록만 뽑아
-    [{'title', 'difficulty', 'body_raw'}, ...] 형태로 반환. 없으면 빈 리스트."""
-    sections = split_top_sections(analysis_text)
-    deepdive_idx = next((idx for idx, s in enumerate(sections) if is_deepdive_section(s)), None)
-    if deepdive_idx is None:
-        return []
-    deepdive_section = sections[deepdive_idx]
-    deepdive_body = deepdive_section.split('\n', 1)[1] if '\n' in deepdive_section else ''
-    _, job_blocks_raw = split_job_blocks(deepdive_body)
-    return [
-        {'title': extract_job_title(jb), 'difficulty': extract_difficulty(jb), 'body_raw': job_body(jb)}
-        for jb in job_blocks_raw
-    ]
-
-
-def _strip_label(text: str) -> str:
-    return re.sub(r'\*\*', '', text).strip().strip('*').strip()
-
-
-def parse_job_fields(body: str) -> dict:
-    """직무 딥다이브 블록 본문에서 R&D Task/Hard Skills/Domain Knowledge/Junior/
-    Mid/Senior/검증 질문을 파싱한다. LLM 응답마다 마크다운 표현 스타일이 달라도
-    카드가 항상 같은 구조로 보이도록, 고정 라벨(영문 앵커: R&D Task, Hard Skills,
-    Domain Knowledge, Junior, Mid-level, Senior)을 기준으로 값만 뽑아낸다.
-    못 찾은 필드는 빈 값/빈 리스트로 둔다(지어내지 않음)."""
-    fields = {
-        'rd_task': '', 'hard_skills': '', 'domain_knowledge': '',
-        'junior': '', 'mid': '', 'senior': '', 'questions': [],
-    }
-    in_questions = False
-    for raw_line in body.split('\n'):
-        line = raw_line.strip()
-        if not line:
-            continue
-
-        if in_questions:
-            m = re.match(r'^(?:\d+[.\)]|[*\-])\s+(.+)', line)
-            if m and not re.search(r'\*\*[^*]+\*\*\s*[:：]', m.group(1)):
-                fields['questions'].append(_strip_label(m.group(1)))
-                continue
-            in_questions = False  # 목록이 끝났으니 아래에서 다른 필드로 재검사
-
-        m = re.search(r'R&D\s*Task\)?[^:：]*[:：]\*{0,2}\s*(.+)', line, re.IGNORECASE)
-        if m:
-            fields['rd_task'] = _strip_label(m.group(1))
-            continue
-        m = re.search(r'Hard\s*Skills\)[^:：]*[:：]\*{0,2}\s*(.+)', line, re.IGNORECASE)
-        if m:
-            fields['hard_skills'] = _strip_label(m.group(1))
-            continue
-        m = re.search(r'Domain\s*Knowledge\)[^:：]*[:：]\*{0,2}\s*(.+)', line, re.IGNORECASE)
-        if m:
-            fields['domain_knowledge'] = _strip_label(m.group(1))
-            continue
-        m = re.search(r'Junior[^:：]*[:：]\*{0,2}\s*(.+)', line, re.IGNORECASE)
-        if m:
-            fields['junior'] = _strip_label(m.group(1))
-            continue
-        m = re.search(r'Mid[\s\-]?level[^:：]*[:：]\*{0,2}\s*(.+)', line, re.IGNORECASE)
-        if m:
-            fields['mid'] = _strip_label(m.group(1))
-            continue
-        m = re.search(r'Senior[^:：]*[:：]\*{0,2}\s*(.+)', line, re.IGNORECASE)
-        if m:
-            fields['senior'] = _strip_label(m.group(1))
-            continue
-        if re.search(r'검증\s*질문|면접', line):
-            in_questions = True
-            continue
-
-    return fields
-
-
-# ── 과제/직무 카드 HTML (process_project_expertise.py, researcher_fit.py의
-#    "과제 전문성" 탭이 공유) ─────────────────────────────────────────────────
-
-DIFF_VARIANT = {'상': 'danger', '중': 'warn', '하': 'good'}
-
-
-def job_card_html(job: dict) -> str:
-    """deepdive_jobs()가 뽑은 직무 블록 하나를 job-card로 렌더링. R&D Task/Hard
-    Skills/Domain Knowledge/역량 기준은 parse_job_fields()로 파싱한 값만 표시하고
-    (못 찾은 필드는 생략), 검증 질문은 <details>로 접어서 보여준다(JS 불필요)."""
-    fields = parse_job_fields(job['body_raw'])
-    diff = job.get('difficulty')
-    diff_pill = (
-        f'<span class="pill {DIFF_VARIANT.get(diff, "low")}">채용난이도 {html.escape(diff)}</span>'
-        if diff else ''
+            badge = '<span class="badge unmatched">미매칭</span>'
+        role = html.escape(p.get('role_description', '') or '(담당 업무 확인 불가)')
+        rows.append(
+            f'<div class="personnel-row"><div class="personnel-name">{name_disp} {badge}</div>'
+            f'<div class="personnel-role">{role}</div></div>'
+        )
+    return (
+        '<div class="kv-block"><div class="kv-title">문서 내 언급된 인력</div>'
+        f'<div class="personnel-list">{"".join(rows)}</div></div>'
     )
 
-    kv_items = []
-    if fields['rd_task']:
-        kv_items.append(f"<dt>R&amp;D Task</dt><dd>{html.escape(fields['rd_task'])}</dd>")
-    if fields['hard_skills']:
-        kv_items.append(f"<dt>Hard Skills</dt><dd>{html.escape(fields['hard_skills'])}</dd>")
-    if fields['domain_knowledge']:
-        kv_items.append(f"<dt>Domain Knowledge</dt><dd>{html.escape(fields['domain_knowledge'])}</dd>")
-    levels = [
-        f'{label} — {html.escape(fields[key])}'
-        for key, label in (('junior', 'Junior'), ('mid', 'Mid'), ('senior', 'Senior'))
-        if fields[key]
-    ]
-    if levels:
-        kv_items.append(f"<dt>역량 기준</dt><dd>{'<br>'.join(levels)}</dd>")
-    kv_html = f'<dl class="kv">{"".join(kv_items)}</dl>' if kv_items else '<p class="empty">세부 항목 데이터 없음</p>'
 
-    questions_html = ''
-    if fields['questions']:
-        q_items = ''.join(f'<li>{html.escape(q)}</li>' for q in fields['questions'])
-        questions_html = f'<details class="more"><summary>전문성 검증 질문</summary><ol>{q_items}</ol></details>'
-
-    return f'''<div class="job-card">
-  <div class="job-top"><h4>{html.escape(job['title'])}</h4>{diff_pill}</div>
-  {kv_html}
-  {questions_html}
-</div>'''
-
-
-def project_card_html(item: dict, jobs: list, anchor: str) -> str:
+def project_card_html(item: dict, anchor: str) -> str:
+    """process_project_expertise.py가 컨플루언스 문서를 상세 분석한 결과(핵심
+    기술/산출물/난제/배경/추진일정/기대효과/키워드/인력) 하나를 카드로
+    렌더링. 예전에는 이 카드가 "R&D Project Specialist Agent"의 직무 딥다이브
+    매핑을 함께 보여줬지만, 그 기능은 제거되고 문서 분석 자체가 더 상세해지는
+    쪽으로 목적이 바뀌었다(data/processed/CLAUDE.md 참고)."""
     keywords = (item.get('keywords_kr') or []) + (item.get('keywords_en') or [])
-    overview = (
-        f"<b>핵심 기술</b> {html.escape(item.get('core_tech') or '확인 불가')} · "
-        f"<b>산출물</b> {html.escape(item.get('deliverable') or '확인 불가')} · "
-        f"<b>기술적 난제</b> {html.escape(item.get('challenge') or '확인 불가')}"
-    )
     chip_row = ''.join(f'<span class="chip">{html.escape(k)}</span>' for k in keywords)
 
-    if jobs:
-        jobs_html = f'<div class="job-grid">{"".join(job_card_html(j) for j in jobs)}</div>'
-    else:
-        jobs_html = '<p class="empty">전문성 분석 데이터 없음 (python pipeline/process_project_expertise.py 실행 필요)</p>'
+    kv_rows = ''.join([
+        _field_row_html('핵심 기술', item.get('core_tech', '')),
+        _field_row_html('최종 산출물', item.get('deliverable', '')),
+        _field_row_html('기술적 난제', item.get('challenge', '')),
+        _field_row_html('연구 배경', item.get('background', '')),
+        _field_row_html('기대효과', item.get('expected_impact', '')),
+    ])
+    overview_html = f'<dl class="kv">{kv_rows}</dl>' if kv_rows else '<p class="empty">분석 데이터 없음</p>'
 
-    # 딥다이브 매핑 외 나머지 섹션(프로젝트 개요/인력 수급 매트릭스/HR 제언)은
-    # 자유 형식 마크다운이라, 외부 마크다운 파서 없이 원문 그대로 접어서 보여준다.
-    analysis_text = item.get('expertise_analysis', '')
-    other_sections = [s for s in split_top_sections(analysis_text) if not is_deepdive_section(s)]
-    other_html = ''
-    if other_sections:
-        raw = html.escape('\n\n'.join(other_sections))
-        other_html = (
-            '<details class="more"><summary>프로젝트 개요·인력 수급 매트릭스·HR 제언 (원문)</summary>'
-            f'<pre class="raw-md">{raw}</pre></details>'
-        )
+    extra_html = _milestones_html(item.get('milestones')) + _personnel_html(item.get('personnel'))
 
     return f'''<div class="card" id="{anchor}">
   <div class="card-top"><h3>{html.escape(item['project_name'])}</h3></div>
-  <p class="card-sub">{overview}</p>
+  {overview_html}
   <div class="chip-row">{chip_row}</div>
-  {jobs_html}
-  {other_html}
+  {extra_html}
 </div>'''
 
 
 # ── 콘솔형 리포트 공용 CSS/셸 ────────────────────────────────────────────────
 # 외부 CDN(Bootstrap/marked.js) 없이 완전히 독립적인 정적 페이지. 연구원 유사도/
-# 과제 전문성/연구원 전문성/과제-연구원 매칭 4개 리포트가 모두 동일한 색상
-# 토큰과 사이드바+요약통계+카드 문법을 공유해 한 가족처럼 보이도록 한다.
+# 과제 전문성/연구원 전문성 3개 리포트가 모두 동일한 색상 토큰과 사이드바+
+# 요약통계+카드 문법을 공유해 한 가족처럼 보이도록 한다.
 CONSOLE_STYLE = """
   :root {
     --bg: #f3f4f7; --sidebar: #ffffff; --panel: #ffffff; --line: #e2e4ea;
@@ -585,6 +377,15 @@ CONSOLE_STYLE = """
   .badge { font-size: 0.66rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
   .badge.senior { background: var(--accent-weak); color: var(--accent); }
   .badge.junior { background: var(--low-weak); color: var(--ink-soft); }
+  /* project_card_html의 인력 매칭 배지(researcher_id 매핑 성공/실패) */
+  a.badge.matched { background: var(--good-weak); color: var(--good); text-decoration: none; }
+  a.badge.matched:hover { background: var(--good); color: #fff; }
+  .badge.unmatched { background: var(--low-weak); color: var(--ink-soft); }
+  .personnel-list { display: flex; flex-direction: column; gap: 8px; }
+  .personnel-row { border-top: 1px solid var(--line); padding-top: 8px; }
+  .personnel-row:first-child { border-top: none; padding-top: 0; }
+  .personnel-name { font-size: 0.78rem; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .personnel-role { font-size: 0.76rem; color: var(--ink-soft); margin-top: 2px; }
   .chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
   .chip { font-size: 0.7rem; padding: 3px 9px; border-radius: 6px; background: var(--accent-weak); color: var(--accent); font-weight: 600; }
   .chip.kw { background: var(--bg); color: var(--ink-soft); border: 1px solid var(--line); }
@@ -629,42 +430,6 @@ CONSOLE_STYLE = """
   ul.kv-list { margin: 0; padding-left: 18px; font-size: 0.78rem; color: var(--ink); }
   ul.kv-list li { margin-top: 4px; }
   ul.kv-list li:first-child { margin-top: 0; }
-  .job-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px,1fr)); gap: 12px; margin-top: 4px; }
-  .job-card { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
-  .job-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 8px; }
-  .job-top h4 { margin: 0; font-size: 0.9rem; font-weight: 700; }
-  details.more { font-size: 0.78rem; margin-top: 6px; }
-  details.more summary { cursor: pointer; color: var(--accent); font-weight: 600; }
-  details.more ol, details.more ul { margin: 6px 0 0; padding-left: 18px; color: var(--ink-soft); }
-  details.more pre.raw-md {
-    margin: 8px 0 0; padding: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
-    font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.72rem; color: var(--ink-soft);
-    white-space: pre-wrap; word-break: break-word;
-  }
-  /* CSS 전용 탭 (JS 없이 radio + :checked 형제 선택자) */
-  .tabs input { display: none; }
-  .tab-bar { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid var(--line); }
-  .tab-bar label {
-    padding: 9px 16px; font-size: 0.84rem; font-weight: 600; color: var(--ink-soft);
-    cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
-  }
-  .panel-a, .panel-b, .panel-c { display: none; }
-  #tab-a:checked ~ .panel-a { display: block; }
-  #tab-b:checked ~ .panel-b { display: block; }
-  #tab-c:checked ~ .panel-c { display: block; }
-  #tab-a:checked ~ .tab-bar label[for="tab-a"],
-  #tab-b:checked ~ .tab-bar label[for="tab-b"],
-  #tab-c:checked ~ .tab-bar label[for="tab-c"] {
-    color: var(--accent); border-bottom-color: var(--accent);
-  }
-  /* 사이드바 조직도가 여러 개(과제 기준/인별 기준/과제 전문성) 쌓인 리포트에서,
-     본문 탭(tab-a/b/c) 선택에 맞는 조직도만 보이게 한다. 라디오(#tab-*)는 본문
-     .tabs 안에 있고 사이드바는 그 밖(형제 아님)이라 ~ 형제 선택자로는 닿지
-     않으므로 :has()로 문서 전체에서 검사한다.*/
-  .tab-a-only, .tab-b-only, .tab-c-only { display: none; }
-  body:has(#tab-a:checked) .tab-a-only { display: block; }
-  body:has(#tab-b:checked) .tab-b-only { display: block; }
-  body:has(#tab-c:checked) .tab-c-only { display: block; }
   /* CSS 전용 표시 개수 토글(연구원 ↔ 연구원 리포트, JS 없이 radio + 형제 선택자로
      행을 숨김/표시 — 데이터는 이미 서버에서 최대 개수까지 저장돼 있음) */
   input.cnt-radio { display: none; }

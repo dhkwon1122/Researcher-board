@@ -12,7 +12,7 @@ researchers/education/tasks/publications/patents 등)은 이 파일에도
 실행 마지막에 BGE-M3 임베딩 서버(services/bge_server.py)가 응답하는지 확인하고,
 응답하지 않으면 백그라운드로 자동 기동해 둔다(pipeline/embed_server.py) — 이
 스크립트 자체는 임베딩을 쓰지 않지만, 바로 이어서 실행할
-process_project_researcher_fit.py를 위해 모델 로딩 시간을 미리 없애 둔다.
+process_researcher_similarity.py를 위해 모델 로딩 시간을 미리 없애 둔다.
 
 이 스크립트 + run_analysis.py를 한 번에 순차 실행하려면 pipeline/run_integration.py를
 쓰면 된다(전체 실행에 수십 분~수 시간이 걸릴 수 있으므로, 실행 전 반드시
@@ -43,22 +43,25 @@ analysis_dep.csv(전문성 분석 부서.xlsx 전처리, 선택)는 process_rese
 이 스크립트가 실행하지 않는 것 (사내 Confluence + 사내 LLM 필요, 비용 발생 —
 위 전처리가 끝난 뒤 아래 순서로 직접 실행, 또는 pipeline/run_analysis.py로
 한 번에 순차 실행):
-  1) python pipeline/process_project_expertise.py      (과제 전문성 분석)
+  1) python pipeline/process_project_expertise.py      (과제 문서 상세 분석 +
+     인력·담당 업무 매칭)
      python pipeline/process_project_search.py         (선택: 유사 기업/학계 탐색)
-  2) python pipeline/process_researcher_expertise.py   (연구원 전문성 분석)
+  2) python pipeline/process_researcher_expertise.py   (연구원 전문성 분석,
+     1)이 만든 과제 내 담당 업무를 새 근거로 사용)
      ※ 논문 저널 권위도 조회(pipeline/journal_authority.py)가 이 단계 실행 시
        자동으로 함께 호출된다. 독립적으로 캐시만 갱신하려면:
        python pipeline/journal_authority.py [--refresh-journals]
-  3) python pipeline/process_project_researcher_fit.py (과제·연구원 매칭)
-  4) python pipeline/process_researcher_similarity.py  (선택: 연구원 ↔ 연구원 유사도)
-  ※ 위 1~3단계(journal_authority 포함)는 모두 개별 항목(과제/연구원/저널 등)
+  3) python pipeline/process_researcher_similarity.py  (선택: 연구원 ↔ 연구원 유사도)
+  ※ (예전에는 3)으로 과제↔연구원 매칭 단계가 더 있었지만, 그 기능 자체가
+    제거되면서 삭제됐다 — data/processed/CLAUDE.md 참고.)
+  ※ 위 1~2단계(journal_authority 포함)는 모두 개별 항목(과제/연구원/저널 등)
     단위 LLM 호출을 동시 호출 허용치(llm_config.LLM2_MAX_CONCURRENT, 기본 8)
     만큼 스레드풀로 병렬 실행한다.
-  ※ 1~4단계는 각자 data/processed/의 '현재본' json/html(파이프라인 체인·비교용,
+  ※ 1~3단계는 각자 data/processed/의 '현재본' json/html(파이프라인 체인·비교용,
     매번 덮어씀)은 그대로 유지하면서, 실행할 때마다 data/processed/result/ 아래
-    산출물별 폴더(01. 과제분석/02. 연구원분석/03. 과제별_연구원별_매칭/
-    04. 연구원_연구원_유사도_매칭)에 실행 시각이 붙은 사본을 추가로 쌓는다
-    (result_archive.py, 이력 누적·덮어쓰기 없음).
+    산출물별 폴더(01. 과제분석/02. 연구원분석/04. 연구원_연구원_유사도_매칭 —
+    옛 과제↔연구원 매칭 전용이던 03번 폴더는 더 이상 쓰이지 않음)에 실행
+    시각이 붙은 사본을 추가로 쌓는다(result_archive.py, 이력 누적·덮어쓰기 없음).
 
 출력 위치: data/processed/
 """
@@ -187,17 +190,16 @@ def run():
         print('  1) python pipeline/process_project_expertise.py')
         print('  2) python pipeline/process_researcher_expertise.py')
         print('       (논문 저널 권위도 조회 pipeline/journal_authority.py가 자동으로 함께 호출됨)')
-        print('  3) python pipeline/process_project_researcher_fit.py')
-        print('  4) python pipeline/process_researcher_similarity.py   (선택)')
-        print('  ※ 1~3단계는 동시 호출 허용치만큼 병렬로 LLM을 호출합니다')
+        print('  3) python pipeline/process_researcher_similarity.py   (선택)')
+        print('  ※ 1~2단계는 동시 호출 허용치만큼 병렬로 LLM을 호출합니다')
         print('     (llm_config.LLM2_MAX_CONCURRENT, 기본 8건).')
 
     # ── BGE-M3 임베딩 서버 사전 기동 ────────────────────────────────────
     # 이 스크립트 자체는 임베딩/LLM을 호출하지 않지만, 바로 다음 실행할
-    # process_project_researcher_fit.py(임베딩 1차 후보 추출)를 위해 미리
-    # 띄워 둔다 — 이미 응답 중이면 재기동하지 않고, 응답하지 않으면 백그라운드로
-    # 새로 기동해 모델 로딩을 지금 끝내 둔다.
-    print('\nBGE-M3 임베딩 서버 사전 기동 확인 중 (다음 단계 process_project_researcher_fit.py 대비)...')
+    # process_researcher_similarity.py(임베딩 계산)를 위해 미리 띄워 둔다 —
+    # 이미 응답 중이면 재기동하지 않고, 응답하지 않으면 백그라운드로 새로
+    # 기동해 모델 로딩을 지금 끝내 둔다.
+    print('\nBGE-M3 임베딩 서버 사전 기동 확인 중 (다음 단계 process_researcher_similarity.py 대비)...')
     from embed_server import ensure_embed_server
     ensure_embed_server()
 

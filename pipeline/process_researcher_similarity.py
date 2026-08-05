@@ -13,9 +13,7 @@ Knowledge)을 BGE-M3로 임베딩하고 코사인 유사도를 계산한다.
 과제명이 전혀 달라도 실제로 비슷한 일을 하는 연구원을 찾아낼 수 있다.
 
 매칭 로직(코사인 유사도, top-K 추출)은 pipeline/researcher_fit.py 공용 모듈을
-그대로 재사용한다(process_project_researcher_fit.py가 과제↔연구원 매칭에
-쓰는 것과 동일한 함수들이며, 임베딩 자체는 두 스크립트가 다시 계산한다 —
-비교 대상 텍스트 집합이 다르기 때문).
+그대로 재사용한다.
 
 근속 그룹별 top-K: 대상 연구원의 근속(Junior/Senior, 아래 3단계 참고)을 알 수
 있으면, 후보를 Junior/Senior로 나눠 그룹별로 각각 후보 pool을 찾는다 —
@@ -188,8 +186,8 @@ def compute_similarity(profiles: list, top_k: int = DEFAULT_TOP_K, tenure_map: d
     researcher_ids = [p['researcher_id'] for p in profiles]
     texts = [fit.researcher_profile_text(p) for p in profiles]
 
-    # 텍스트 해시 기준 캐시(fit.cached_embed) — process_project_researcher_fit.py가
-    # 같은 연구원 프로필 텍스트를 이미 임베딩해 뒀다면 재계산하지 않는다.
+    # 텍스트 해시 기준 캐시(fit.cached_embed) — 같은 연구원 프로필 텍스트를
+    # 이미 임베딩해 뒀다면 재계산하지 않는다.
     embeddings = fit.cached_embed(texts)
     sims = fit.cosine_sim_matrix(embeddings, embeddings)
 

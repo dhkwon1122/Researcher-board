@@ -2,21 +2,24 @@
 전문성 분석 LLM 체인 순차 실행 스크립트
 
 run_expertise.py(전처리, LLM 호출 없음)가 끝난 뒤 사람이 하나씩 실행하던 아래
-4단계를 이 스크립트 하나로 순서대로 실행한다. 각 단계는 사내 LLM(과 일부 단계는
+3단계를 이 스크립트 하나로 순서대로 실행한다. 각 단계는 사내 LLM(과 일부 단계는
 BGE-M3 임베딩)을 호출하므로 비용이 발생한다.
 
-  1) process_project_expertise.py   과제 전문성 분석
-  2) process_researcher_expertise.py 연구원 전문성 분석 (저널 권위도 조회 자동 포함)
-  3) process_project_researcher_fit.py 과제·연구원 매칭 (BGE-M3 임베딩 서버 자동 기동)
-  4) process_researcher_similarity.py  연구원 ↔ 연구원 유사도
+  1) process_project_expertise.py   과제 문서 상세 분석 + 인력·담당 업무 매칭
+  2) process_researcher_expertise.py 연구원 전문성 분석 (1)의 담당 업무를 새
+     근거로 사용, 저널 권위도 조회 자동 포함)
+  3) process_researcher_similarity.py  연구원 ↔ 연구원 유사도 (BGE-M3 임베딩 서버 자동 기동)
 
 process_project_search.py(유사 기업/학계 탐색)는 이 체인에 포함되지 않는다 —
 필요하면 별도로 직접 실행: python pipeline/process_project_search.py
 
-한 단계가 실패해도(반환값 False) 이후 단계는 계속 진행한다 — 3단계는
-1·2단계의 산출물을, 4단계는 2단계의 산출물을 입력으로 읽으므로, 앞 단계가
-실패하면 해당 입력을 못 찾아 그 단계도 자연히 실패([process_*] ... 없음 —
-종료 메시지)한다. 마지막에 단계별 성공/실패를 요약해서 보여준다.
+(예전에는 과제↔연구원 매칭 단계가 더 있었지만, 그 기능 자체가 제거되면서
+삭제됐다 — data/processed/CLAUDE.md 참고.)
+
+한 단계가 실패해도(반환값 False) 이후 단계는 계속 진행한다 — 2단계는 1단계의
+산출물을(과제 내 담당 업무), 3단계는 2단계의 산출물을 입력으로 읽으므로, 앞
+단계가 실패해도 나머지 근거만으로 계속 진행된다(완전히 필수 입력은 아님).
+마지막에 단계별 성공/실패를 요약해서 보여준다.
 
 사용법:
   python pipeline/run_analysis.py [--refresh-journals] [--refresh-judgments] [--top-k 5]
@@ -45,19 +48,15 @@ def _parse_top_k_arg(argv: list) -> int | None:
 def run(refresh_journals: bool = False, refresh_judgments: bool = False, top_k: int | None = None):
     steps = []  # [(단계명, True/False), ...]
 
-    print('[run_analysis] 1/4 과제 전문성 분석')
+    print('[run_analysis] 1/3 과제 문서 상세 분석')
     from process_project_expertise import process as process_project_expertise
-    steps.append(('과제 전문성 분석', process_project_expertise()))
+    steps.append(('과제 문서 상세 분석', process_project_expertise()))
 
-    print('[run_analysis] 2/4 연구원 전문성 분석')
+    print('[run_analysis] 2/3 연구원 전문성 분석')
     from process_researcher_expertise import process as process_researcher_expertise
     steps.append(('연구원 전문성 분석', process_researcher_expertise(refresh_journals=refresh_journals)))
 
-    print('[run_analysis] 3/4 과제·연구원 매칭')
-    from process_project_researcher_fit import process as process_project_researcher_fit
-    steps.append(('과제·연구원 매칭', process_project_researcher_fit()))
-
-    print('[run_analysis] 4/4 연구원 ↔ 연구원 유사도')
+    print('[run_analysis] 3/3 연구원 ↔ 연구원 유사도')
     from process_researcher_similarity import process as process_researcher_similarity
     similarity_kwargs = {'refresh_judgments': refresh_judgments}
     if top_k is not None:

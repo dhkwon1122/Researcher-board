@@ -2,14 +2,13 @@
 연구원 전문성 임베딩(BGE-M3) 기반 2D 유사도 지도 계산.
 
 pipeline/process_researcher_expertise.py(연구원 보유 전문성 분석.json)와
-pipeline/process_researcher_similarity.py·process_project_researcher_fit.py가
-채워둔 embedding_cache.json(텍스트 해시 → 1024차원 BGE-M3 벡터)을 읽어, UMAP으로
-2D 좌표로 투영한다.
+pipeline/process_researcher_similarity.py가 채워둔 embedding_cache.json
+(텍스트 해시 → 1024차원 BGE-M3 벡터)을 읽어, UMAP으로 2D 좌표로 투영한다.
 
 이 서비스는 새로 임베딩을 계산하지 않는다(대시보드 페이지 로드 시 BGE-M3 서버를
 호출하지 않음 — 캐시에 없는 연구원은 그냥 지도에서 제외된다). 지도에 모든
-연구원이 나오게 하려면 먼저 pipeline/process_researcher_similarity.py(또는
-process_project_researcher_fit.py)를 실행해 embedding_cache.json을 채워야 한다.
+연구원이 나오게 하려면 먼저 pipeline/process_researcher_similarity.py를
+실행해 embedding_cache.json을 채워야 한다.
 """
 
 import json
