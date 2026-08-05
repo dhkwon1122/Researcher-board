@@ -396,7 +396,27 @@ def _nl_query_bar() -> html.Div:
     ], className='mb-3')
 
 
+# 식별자 성격이라 필터가 의미 없는 컬럼(정렬은 그대로 허용).
+_NO_FILTER_COLUMNS = {'researcher_id', 'name', 'age'}
+
+# degree_major는 "박)학교 전공" 형태라 원문 그대로 필터 목록을 만들면 사실상
+# 학교/전공까지 다 다른 값이 되어 필터가 무의미해진다 — 학위(박/석/학) 구분
+# 만으로 필터하고 전공은 필터 대상에서 뺀다.
+_DEGREE_FILTER_OPTIONS = [
+    {'label': '박사', 'value': '박'},
+    {'label': '석사', 'value': '석'},
+    {'label': '학사', 'value': '학'},
+]
+
+
+def _degree_prefix(value) -> str:
+    s = '' if value is None else str(value)
+    return s.split(')', 1)[0] if ')' in s else ''
+
+
 def _column_options(columns: list, rows: list, col: str) -> list:
+    if col == 'degree_major':
+        return _DEGREE_FILTER_OPTIONS
     idx = columns.index(col)
     values = sorted({('' if r[idx] is None else str(r[idx])) for r in rows if idx < len(r)})
     return [{'label': v if v else '(빈값)', 'value': v} for v in values]
@@ -408,6 +428,10 @@ def _passes_filters(row: list, columns: list, filters: dict) -> bool:
             continue
         idx = columns.index(col)
         val = row[idx] if idx < len(row) else None
+        if col == 'degree_major':
+            if _degree_prefix(val) not in allowed:
+                return False
+            continue
         if ('' if val is None else str(val)) not in allowed:
             return False
     return True
@@ -481,19 +505,21 @@ def _render_table_body(full_result: dict, filters: dict, sort: dict, expanded: b
     for col, label in zip(columns, labels):
         arrow = {'asc': ' ▲', 'desc': ' ▼', 'custom': ' ★'}.get(sort_mode, '') if col == sort_col else ''
         sort_opts = _DEPT_SORT_OPTIONS if col == 'department' else _SORT_OPTIONS
+        controls = [
+            dcc.Dropdown(
+                id={'type': 'nl-sort-dd', 'col': col}, options=sort_opts, value=None,
+                placeholder='정렬', clearable=False, style={'minWidth': '92px', 'fontSize': '12px'},
+            ),
+        ]
+        if col not in _NO_FILTER_COLUMNS:
+            controls.append(dcc.Dropdown(
+                id={'type': 'nl-filter-dd', 'col': col}, options=_column_options(columns, rows, col),
+                value=(filters or {}).get(col) or [], multi=True, placeholder='필터',
+                style={'minWidth': '120px', 'fontSize': '12px'},
+            ))
         header_cells.append(html.Th([
             html.Div(label + arrow, className='small fw-semibold mb-1'),
-            html.Div([
-                dcc.Dropdown(
-                    id={'type': 'nl-sort-dd', 'col': col}, options=sort_opts, value=None,
-                    placeholder='정렬', clearable=False, style={'minWidth': '92px', 'fontSize': '12px'},
-                ),
-                dcc.Dropdown(
-                    id={'type': 'nl-filter-dd', 'col': col}, options=_column_options(columns, rows, col),
-                    value=(filters or {}).get(col) or [], multi=True, placeholder='필터',
-                    style={'minWidth': '120px', 'fontSize': '12px'},
-                ),
-            ], className='d-flex gap-1'),
+            html.Div(controls, className='d-flex gap-1'),
         ], style={'whiteSpace': 'nowrap', 'verticalAlign': 'top'}))
 
     body_rows = [

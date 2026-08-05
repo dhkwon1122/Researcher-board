@@ -194,7 +194,7 @@ _COLUMNS = [
     ('입사일', _col_hire_date),
     ('학력', _col_education),
     ("평가\n('24~'26)", _col_evaluation),
-    ('직급/년차', _col_position_year),
+    ('CL/년차', _col_position_year),
     ('과제수행이력', _col_tasks),
     ('양성이력', _col_nurturing),
     ('핵심이력', _col_incentive),
@@ -231,8 +231,9 @@ def candidate_label(researcher_id: str, name_map: dict | None = None) -> str:
 # 자연어 질문(nl_query/open_data_query) 결과가 "사람에 대한 데이터"로 판단되면
 # (결과에 researcher_id 컬럼이 있으면) 항상 맨 앞에 붙이는 7개 기본 컬럼.
 # 값 계산 로직은 엑셀 다운로드와 동일한 걸 재사용(같은 사람은 어디서 봐도
-# 같은 표기) — 단, 학력은 엑셀처럼 전체 이력이 아니라 "최종 학력 1건만".
-PERSON_BASE_COLUMNS = ['researcher_id', 'name', 'department', 'org_code', 'position', 'degree_major', 'age']
+# 같은 표기) — 학력은 엑셀처럼 전체 이력이 아니라 "최종 학력 1건만", CL/년차는
+# _col_position_year()를 그대로 재사용(예: "CL4-17", 승격기준일 없으면 "CL4").
+PERSON_BASE_COLUMNS = ['researcher_id', 'name', 'department', 'org_code', 'position_year', 'degree_major', 'age']
 
 
 def _highest_degree_str(education_rows: list) -> str:
@@ -272,12 +273,12 @@ def person_base_table(researcher_ids: list) -> dict:
             name = _or_dash(r.get('name'))
             department = _or_dash(r.get('department'))
             org_code = _or_dash(r.get('org_code'))
-            position = _or_dash(r.get('position'))
+            position_year = _col_position_year(rid, {'researcher': r})
             birth_year = _s(r.get('birth_year'))
             age = str(current_year - int(birth_year)) if birth_year.isdigit() else '-'
         else:
-            name = department = org_code = position = age = '-'
-        out[rid] = [rid, name, department, org_code, position, degree_major, age]
+            name = department = org_code = position_year = age = '-'
+        out[rid] = [rid, name, department, org_code, position_year, degree_major, age]
     return out
 
 

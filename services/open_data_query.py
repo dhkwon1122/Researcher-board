@@ -85,6 +85,13 @@ Rules:
   per researcher, or filters/ranks researchers), ALWAYS include researcher_id
   in the SELECT list even if the user didn't explicitly ask for it — the
   application uses it to attach standard identity columns to the result.
+- ALWAYS include, in the SELECT list, the column(s) that justify why a row
+  matches the question (whatever you used in a WHERE/LIKE/JOIN condition to
+  decide relevance) — not just in the WHERE clause. This is the evidence the
+  user actually asked for, e.g. for "미생물 관련 연구이력이 있는 사람" you
+  filter tasks.task_name LIKE '%미생물%', so also SELECT tasks.task_name.
+  Include at most 3 such evidence columns (pick the most directly relevant
+  ones if more conditions are involved).
 - strength_fields/strength_keywords/key_responsibilities/domain_knowledge_skill
   in the expertise_profiles table are semicolon("; ")-joined lists stored as a
   single text value — use LIKE '%...%' against them, not exact equality.

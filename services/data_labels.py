@@ -179,6 +179,7 @@ COLUMN_LABELS = {
     # 자연어 질문 화면 전용 파생 컬럼
     'age': '나이',
     'degree_major': '학력/전공',
+    'position_year': 'CL/년차',
     'matched_term_count': '일치 키워드 수',
     'score': '유사도점수',
 }
