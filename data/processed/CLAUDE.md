@@ -1170,3 +1170,54 @@ closest_non_match만 있는 1명) 픽스처로 `_summary_stats`가 "총 4명 중
 실제 화면에서 요약 바가 렌더링되는지(개발 샌드박스는 임베딩/LLM 서버가
 없어 0명/0%/0개로 나오지만 렌더링 자체와 계산 로직은 정상), 기존 흐름에
 회귀가 없는지 재확인.
+
+## 완료: 과제 직무/대상자 검증 — 현인원/채용 목표 인원수 혼동 수정 + 업로드 드래그앤드롭
+
+사용자 요청 요약: 직무기술서에서 "'27년 채용 대상자 수"를 현재
+인원수(현인원)로 잘못 읽어오는 버그. 원하는 동작은 (1) "현재
+배정되어 있는 인원수"만 headcount로 읽고, (2) 채용 계획/목표 인원수는
+버리지 말고 참고용으로 같이 보여달라는 것. 확인 결과 표(현인원 컬럼)와
+서술형("현재 N명") 둘 다 현재 인원을 나타내며, 표를 우선하되 서술형과
+비교(불일치 시 안내)하는 기존 `merge_roles()` 설계를 그대로 살리면
+됨 — docx/이를 변환한 pdf 모두 동일하게 재현되어 원인이 포맷별 코드가
+아니라 공용 추출 프롬프트에 있음을 확인.
+
+**`services/jd_reconciliation.py`**:
+- `_ROLE_EXTRACTION_SYSTEM_PROMPT`을 재작성 — "인원수 구분" 섹션을
+  추가해 `headcount`("현재" 시점 실배정 인원 — 표의 "현인원"/"현원"/
+  "현재 인원" 컬럼, 서술형의 "현재 N명")와 `hiring_target`(미래 채용
+  계획/목표, 예: "'27년 채용 대상자 수" — "이건 headcount가
+  아닙니다"라고 명시)을 뚜렷이 분리해서 추출하도록 지시. Output
+  JSON에 `hiring_target` 필드 추가.
+- `_extract_roles()` — 파싱 결과에 `hiring_target`(문자열, 숫자가
+  아니어도 원문 표현 그대로 허용) 필드 추가.
+- `merge_roles()` — `hiring_target`을 표/서술형 병합의 세 갈래
+  전부(표+서술형 모두 있음/표만/서술형만)에서 함께 이어 감. 표+서술형
+  모두 있을 때는 `t['hiring_target'] or n['hiring_target']`로 표를
+  우선하되 표에 없으면 서술형 값을 채택. headcount 불일치 안내 로직은
+  기존 그대로 유지(변경 없음).
+- `build_report()` — 각 `role_rows` 항목에 `hiring_target` 필드 추가.
+
+**`pages/jd_reconciliation.py`** `_role_card()`: `hiring_target`이
+있을 때만 "채용 목표(참고용, 비교 대상 아님): ..." 문구를 회색
+이탤릭체로, 문서 인원/실제 매칭 비교 줄과 분리된 별도 줄로 표시(비교
+대상인 `document_count`/`matched_count`/`diff`와 시각적으로 섞이지
+않도록).
+
+**업로드 드래그앤드롭**: `dcc.Upload`는 원래부터 드래그앤드롭을
+기본 지원하므로 기능 추가가 아니라 발견성(어포던스) 개선만 진행.
+`jd-doc-upload`에 점선 테두리(`border: 2px dashed`), 업로드 아이콘,
+"여기로 파일을 끌어다 놓거나 클릭해서 업로드" 안내 문구를 추가하고,
+`style_active`/`style_reject`로 드래그 중/거부 시 테두리·배경색이
+바뀌도록 설정. `assets/custom.css`에 `.jd-upload-dropzone:hover`
+스타일 추가.
+
+검증: `merge_roles()`/`build_report()`를 표 headcount=3 + 서술형
+"현재 0명" + 표 hiring_target 픽스처로 직접 호출해 표 headcount가
+채택되고 hiring_target이 role_rows까지 그대로 전달되는지 확인.
+`_extract_roles()`를 `call_llm`을 모킹해 JSON 응답에서
+`hiring_target`이 올바르게 파싱되는지 확인. `_role_card()`를 직접
+렌더링해 `hiring_target`이 있을 때는 참고용 문구가, 없을 때는 문구
+자체가 렌더링되지 않는지 확인. Playwright로 업로드 영역에 점선
+테두리·아이콘·안내 문구가 실제 화면에 렌더링되는지, 콘솔 에러가
+없는지 확인.

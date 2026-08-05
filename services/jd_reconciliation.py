@@ -235,20 +235,33 @@ def extract_document(file_bytes: bytes, filename: str) -> dict:
 # ─── ① 문서 → 직무별 구조화 추출 (LLM, 판단 없이 추출만) ─────────────────────
 
 _ROLE_EXTRACTION_SYSTEM_PROMPT = """# Role
-당신은 R&D 과제의 직무기술서(job description) 문서에서 직무(역할)별 필요/
-현재 인원수와 역할 설명을 뽑아내는 "문서 구조화 도우미"입니다. 직접
-판단하거나 추정하지 않고, 문서에 실제로 적혀 있는 내용만 그대로
-추출합니다.
+당신은 R&D 과제의 직무기술서(job description) 문서에서 직무(역할)별 현재
+인원수와 역할 설명을 뽑아내는 "문서 구조화 도우미"입니다. 직접 판단하거나
+추정하지 않고, 문서에 실제로 적혀 있는 내용만 그대로 추출합니다.
+
+# 인원수 구분 (매우 중요 — 절대 혼동하지 마세요)
+문서에는 인원수 관련 숫자가 여러 개 나올 수 있습니다. 반드시 아래 두 가지를
+구분해서 뽑으세요.
+- headcount: "현재" 시점에 실제로 배정되어 있는 인원수. 표에서는 "현인원"/
+  "현원"/"현재 인원" 같은 이름의 컬럼, 서술형에서는 "현재 N명" 같은 표현이
+  이것입니다.
+- hiring_target: 앞으로의 채용 계획/목표(참고용) 인원수. "'27년 채용
+  대상자 수", "충원 계획", "채용 목표", "부족 인원", "추가 채용" 등 미래
+  시점이나 계획을 나타내는 표현입니다. **이건 headcount가 아닙니다** —
+  아무리 표에서 눈에 띄거나 강조되어 있어도 headcount 자리에 넣지 마세요.
 
 # Guidelines & Constraints
 1. 문서에 없는 직무를 만들어내거나, 적혀 있지 않은 인원수를 추정하지 마세요.
-2. 인원수가 명시되지 않은 직무는 headcount를 0으로 두세요.
-3. description에는 그 직무의 역할/요구 전문성 설명을 문서 원문에 가깝게
+2. headcount가 명시되지 않은 직무는 headcount를 0으로 두세요. hiring_target이
+   명시되지 않았으면 빈 문자열로 두세요.
+3. hiring_target은 숫자가 아니어도 됩니다 — 문서 원문 표현을 그대로 담아도
+   됩니다(예: "2명 추가 채용 예정").
+4. description에는 그 직무의 역할/요구 전문성 설명을 문서 원문에 가깝게
    요약해 담으세요(다음 단계에서 이 설명으로 실제 인력과 매칭에 씁니다).
-4. 반드시 아래 JSON 형식으로만 출력하고, 그 외 텍스트는 출력하지 마세요.
+5. 반드시 아래 JSON 형식으로만 출력하고, 그 외 텍스트는 출력하지 마세요.
 
 # Output Format (JSON)
-{"roles": [{"role_name": "직무명", "headcount": 0, "description": "역할/요구 전문성 설명"}]}
+{"roles": [{"role_name": "직무명", "headcount": 0, "hiring_target": "", "description": "역할/요구 전문성 설명"}]}
 """
 
 
@@ -279,6 +292,7 @@ def _extract_roles(text: str, source_label: str) -> list:
             headcount = 0
         roles.append({
             'role_name': name, 'headcount': headcount,
+            'hiring_target': str(r.get('hiring_target') or '').strip(),
             'description': str(r.get('description') or '').strip(),
         })
     return roles
@@ -326,6 +340,7 @@ def merge_roles(table_roles: list, narrative_roles: list) -> tuple:
     for t, n in pairs:
         if t and n:
             role_name, headcount = t['role_name'], t['headcount']
+            hiring_target = t['hiring_target'] or n['hiring_target']
             desc = '\n'.join(filter(None, [t['description'], n['description']]))
             if n['headcount'] and n['headcount'] != t['headcount']:
                 notes.append(
@@ -333,11 +348,14 @@ def merge_roles(table_roles: list, narrative_roles: list) -> tuple:
                     f"{n['headcount']}명으로 다르게 적혀 있습니다(표 기준으로 비교합니다)."
                 )
         elif t:
-            role_name, headcount, desc = t['role_name'], t['headcount'], t['description']
+            role_name, headcount, hiring_target, desc = t['role_name'], t['headcount'], t['hiring_target'], t['description']
         else:
-            role_name, headcount, desc = n['role_name'], n['headcount'], n['description']
+            role_name, headcount, hiring_target, desc = n['role_name'], n['headcount'], n['hiring_target'], n['description']
             notes.append(f"'{role_name}'은 표에는 없고 본문 서술에만 언급되어 있습니다.")
-        merged.append({'role_name': role_name, 'headcount': headcount, 'description': desc})
+        merged.append({
+            'role_name': role_name, 'headcount': headcount,
+            'hiring_target': hiring_target, 'description': desc,
+        })
     return merged, notes
 
 
@@ -518,6 +536,7 @@ def build_report(project_name: str, doc_filename: str, table_roles: list, narrat
             'description': r['description'],
             'raw_description': r.get('raw_description', r['description']),
             'document_count': r['headcount'],
+            'hiring_target': r.get('hiring_target', ''),
             'matched_count': len(matched),
             'diff': len(matched) - r['headcount'],
             'matched': matched,

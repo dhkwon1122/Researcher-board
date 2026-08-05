@@ -46,6 +46,7 @@ def _role_card(role: dict):
         border = 'border-warning'
     description = role.get('description', '')
     raw_description = role.get('raw_description', '')
+    hiring_target = role.get('hiring_target', '')
     return dbc.Card(
         dbc.CardBody([
             html.Div([
@@ -56,6 +57,10 @@ def _role_card(role: dict):
                     className='text-muted',
                 ),
             ], className='mb-2'),
+            (html.Div([
+                html.I(className='bi bi-info-circle me-1'),
+                f'채용 목표(참고용, 비교 대상 아님): {hiring_target}',
+            ], className='text-muted small fst-italic mb-2') if hiring_target else None),
             (html.Div(description, className='small mb-1') if description else None),
             (html.Div(f'원문: {raw_description}', className='text-muted small fst-italic mb-2')
              if raw_description and raw_description != description else None),
@@ -138,10 +143,15 @@ def layout(**_kwargs):
             ), md=4),
             dbc.Col(dcc.Upload(
                 id='jd-doc-upload',
-                children=html.Div(id='jd-doc-upload-label', children='직무기술서(.docx, .pdf) 업로드'),
+                children=html.Div(id='jd-doc-upload-label', children=[
+                    html.I(className='bi bi-cloud-arrow-up me-1'),
+                    '여기로 파일을 끌어다 놓거나 클릭해서 업로드 (.docx, .pdf)',
+                ]),
                 accept='.docx,.pdf',
-                className='text-center border rounded p-2',
-                style={'cursor': 'pointer'},
+                className='text-center rounded p-2 jd-upload-dropzone',
+                style={'cursor': 'pointer', 'border': '2px dashed #adb5bd'},
+                style_active={'borderColor': '#0d6efd', 'backgroundColor': '#e7f1ff'},
+                style_reject={'borderColor': '#dc3545', 'backgroundColor': '#f8d7da'},
             ), md=5),
             dbc.Col(dbc.Button([html.I(className='bi bi-search me-1'), '검증 시작'],
                                 id='jd-run-btn', color='primary', n_clicks=0, className='w-100'), md=3),

@@ -362,3 +362,12 @@ h1, h2, h3, h4, h5, h6 {
     font-size: 14px !important;
   }
 }
+
+/* 드래그 앤 드롭 업로드 영역 */
+.jd-upload-dropzone {
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.jd-upload-dropzone:hover {
+  background-color: #f8f9fa;
+  border-color: #6c757d !important;
+}
