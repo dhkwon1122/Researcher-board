@@ -84,12 +84,15 @@ def _render_result(result: dict):
     roster = result.get('roster') or []
     results = result.get('results') or {}
     by_id = {p['researcher_id']: p for p in roster}
+    project_names = result.get('project_names') or []
+    header_line = (
+        f"선택한 과제({', '.join(project_names)})를 기준으로, " if project_names else ''
+    ) + (
+        f"후보 과제 {result.get('candidates_considered', 0)}건을 대상으로 비교했습니다"
+        f"(A: 과제 분석 기반, B: 배정 인력 전문성 기반 — 데이터가 없는 쪽은 개별 표시)."
+    )
     return html.Div([
-        dbc.Alert(
-            f"후보 과제 {result.get('candidates_considered', 0)}건을 대상으로 비교했습니다"
-            f"(A: 과제 분석 기반, B: 배정 인력 전문성 기반 — 데이터가 없는 쪽은 개별 표시).",
-            color='info', className='mb-3',
-        ),
+        dbc.Alert(header_line, color='info', className='mb-3'),
         html.H6('대상 인원', className='fw-bold mb-2'),
         _roster_table(roster),
         html.H6('추천 결과', className='fw-bold mb-2'),
@@ -122,9 +125,9 @@ def layout(**_kwargs):
         html.Div(
             dbc.Row([
                 dbc.Col(dcc.Dropdown(id='jm-project-dept', options=department_options,
-                                      placeholder='부서(플랫폼/팀) 선택', clearable=True), md=4),
+                                      placeholder='부서(플랫폼/팀) 선택(복수 선택 가능)', multi=True), md=4),
                 dbc.Col(dcc.Dropdown(id='jm-project-select', options=[],
-                                      placeholder='종료 예정 과제 선택', clearable=True), md=8),
+                                      placeholder='종료 예정 과제 선택(복수 선택 가능)', multi=True), md=8),
             ], className='g-2 mb-2'),
             id='jm-project-mode-row',
         ),
@@ -190,19 +193,20 @@ def _update_exclude_project_options(_excluded_dept):
     State('jm-exclude-project', 'value'),
     prevent_initial_call=True,
 )
-def _run(n_clicks, mode, project_name, individual_query, excluded_depts, excluded_projects):
+def _run(n_clicks, mode, project_names, individual_query, excluded_depts, excluded_projects):
     if not n_clicks:
         return dash.no_update
     excluded_depts = excluded_depts or []
     excluded_projects = excluded_projects or []
+    project_names = project_names or []
 
     if mode == _MODE_INDIVIDUAL:
         if not (individual_query or '').strip():
             return dbc.Alert('이름 또는 사번을 입력해주세요.', color='warning')
         result = jm.run_individual_search(individual_query.strip(), excluded_depts, excluded_projects)
     else:
-        if not project_name:
+        if not project_names:
             return dbc.Alert('종료 예정 과제를 선택해주세요.', color='warning')
-        result = jm.run_project_search(project_name, excluded_depts, excluded_projects)
+        result = jm.run_project_search(project_names, excluded_depts, excluded_projects)
 
     return _render_result(result)

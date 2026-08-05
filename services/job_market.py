@@ -68,14 +68,16 @@ def list_departments() -> list:
     return sorted({str(v).strip() for v in projects_df['dep_name'] if str(v).strip()})
 
 
-def list_projects(department: str | None = None) -> list:
+def list_projects(department=None) -> list:
     """드롭다운용 과제 목록 — project_confl_address.csv의 project_name.
-    department가 있으면 그 dep_name인 과제만."""
+    department가 있으면 그 dep_name(문자열 1개 또는 복수 선택 시 리스트)인
+    과제만."""
     projects_df = data_store.read_processed('project_confl_address')
     if projects_df.empty or 'project_name' not in projects_df.columns:
         return []
     if department:
-        projects_df = projects_df[projects_df['dep_name'].astype(str).str.strip() == str(department).strip()]
+        depts = {department.strip()} if isinstance(department, str) else {str(d).strip() for d in department}
+        projects_df = projects_df[projects_df['dep_name'].astype(str).str.strip().isin(depts)]
     return sorted({str(v).strip() for v in projects_df['project_name'] if str(v).strip()})
 
 
@@ -314,18 +316,30 @@ def _own_org_code(researcher_id: str, researchers_df) -> str:
     return str(rows.iloc[0].get('org_code') or '').strip()
 
 
-def run_project_search(project_name: str, excluded_departments: list, excluded_org_codes: list) -> dict:
-    """'종료 예정 과제' 단위 검색 — 그 과제의 배정 인원 전체에 대해 추천을 반복."""
-    members = jd.get_project_members(project_name)
-    if not members:
-        return {'error': f'"{project_name}" 과제에 배정된 인원이 없습니다.'}
-    researcher_ids = [m['researcher_id'] for m in members]
+def run_project_search(project_names: list, excluded_departments: list, excluded_org_codes: list) -> dict:
+    """'종료 예정 과제' 단위 검색 — 복수 선택 가능. 선택한 과제 전체의 배정
+    인원(중복 인원은 한 번만)에 대해 추천을 반복하고, 선택한 과제들은 전부
+    (본인이 속한 과제뿐 아니라 함께 종료되는 다른 선택 과제들도) 후보에서
+    제외한다 — 같이 끝나는 과제로 서로 재추천되지 않도록."""
+    project_names = [p for p in (project_names or []) if p]
+    if not project_names:
+        return {'error': '종료 예정 과제를 선택해주세요.'}
+
+    researcher_ids = []
+    seen_rid = set()
+    for project_name in project_names:
+        for m in jd.get_project_members(project_name):
+            if m['researcher_id'] not in seen_rid:
+                seen_rid.add(m['researcher_id'])
+                researcher_ids.append(m['researcher_id'])
+    if not researcher_ids:
+        return {'error': f'선택한 과제({", ".join(project_names)})에 배정된 인원이 없습니다.'}
     roster = build_roster(researcher_ids)
 
     projects_df = data_store.read_processed('project_confl_address')
     all_rows = _dedup_candidate_rows(projects_df) if not projects_df.empty else []
     excluded_norm = _expand_excluded_projects(set(excluded_departments), set(excluded_org_codes), all_rows)
-    excluded_norm.add(fit.normalize_org_code(project_name))  # 종료 예정 과제 자신은 항상 제외
+    excluded_norm |= {fit.normalize_org_code(p) for p in project_names}  # 종료 예정 과제 전체는 항상 제외
 
     expertise_profiles = data_store.read_expertise_profiles()
     try:
@@ -343,7 +357,7 @@ def run_project_search(project_name: str, excluded_departments: list, excluded_o
         results[rid] = result if error is None and result else {'recommendations': [], 'note': f'처리 중 오류: {error}'}
 
     return {
-        'mode': 'project', 'project_name': project_name,
+        'mode': 'project', 'project_names': project_names,
         'run_at': datetime.now().isoformat(timespec='seconds'),
         'roster': roster, 'results': results,
         'candidates_considered': len(candidate_pool),

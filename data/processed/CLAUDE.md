@@ -955,3 +955,26 @@ Playwright로 실제 앱 기동 후: 네비게이션 탭 노출, 모드 전환 U
 2. `services/researcher_profile_export.py`의 `_col_tasks()`(엑셀 "과제수행이력"
    컬럼) — `start_date` 오름차순 정렬을 `reverse=True`로 바꿔 최근 이력이
    상단에 오도록 수정.
+
+## 완료: JOB Market — 종료 예정 과제 복수 선택 지원
+
+"종료 예정 과제" 선택을 단일 선택에서 복수 선택으로 확장(제외 과제
+섹션과 동일하게 부서/과제 드롭다운 모두 `multi=True`).
+
+- `services/job_market.py`: `list_projects(department)`가 department를
+  문자열 1개 또는 리스트 모두 받도록 일반화. `run_project_search()`가
+  `project_name: str` 대신 `project_names: list`를 받아 선택한 과제 전체의
+  배정 인원을 합친다(중복 인원은 한 번만). 제외 집합에는 선택한 과제
+  전체를 넣는다 — 함께 종료되는 과제끼리 서로 재추천되지 않도록(과제 A와
+  B가 같이 끝나면, A 소속이었던 사람에게 B를 추천하지 않음). 결과 dict의
+  키도 `project_name` → `project_names`(리스트)로 변경.
+- `pages/job_market.py`: 두 드롭다운에 `multi=True` 추가, `_run()` 콜백이
+  리스트를 받아 그대로 전달, 결과 상단 알럿에 "선택한 과제(A, B)를
+  기준으로..." 문구 추가.
+
+검증: `list_projects()`에 부서 리스트를 넘겨 여러 부서의 과제가 모두
+나오는지, `run_project_search(['ORG01','ORG02'], ...)`가 두 과제의 인원을
+합친 명단(중복 없음)을 만들고 두 과제 모두 후보에서 제외하는지 픽스처로
+확인. Playwright로 실제 화면에서 부서 2개 → 과제 2개를 순서대로 다중
+선택해 cascading 옵션이 정확히 좁혀지는지, 검색 결과 상단에 선택한 과제
+둘 다 표시되는지 확인.
