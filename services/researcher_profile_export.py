@@ -113,8 +113,8 @@ def _col_hire_date(_rid, rows):
     if not hire_date:
         return '-'
     hd = date.fromisoformat(hire_date[:10])
-    tenure = round((date.today() - hd).days / 365, 2)
-    return f"{hd.strftime('%Y%m%d')}\n{tenure}"
+    tenure = round((date.today() - hd).days / 365, 1)
+    return f"{hd.strftime('%Y%m%d')}\n({tenure}년)"
 
 
 def _col_education(_rid, rows):
@@ -148,11 +148,11 @@ def _col_position_year(_rid, rows):
     position = _or_dash(r.get('position'))
     promo = _s(r.get('promotion_date'))
     if not promo:
-        return f'{position}\n-'
+        return position
     promo_dt = date.fromisoformat(promo[:10])
     ref = _next_promotion_ref_date(date.today())
-    years = _floor1((ref - promo_dt).days / 365)
-    return f'{position}\n{years}'
+    years = int(_floor1((ref - promo_dt).days / 365))
+    return f'{position}-{years}'
 
 
 def _col_tasks(_rid, rows):
