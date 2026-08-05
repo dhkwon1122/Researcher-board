@@ -19,6 +19,11 @@ confl_address가 비어 있는 과제는 data/raw/conflue_MPR/{과제명}.pdf �
     키는 confl_address가 있으면 그 값, 없으면 'pdf:{project_name}'.
   - 요약 캐시(project_summary_cache.json): 실제 LLM 요약 결과. 키는 원문
     캐시와 동일한 규칙(confl_address 또는 'pdf:{project_name}').
+
+_SUMMARY_SYSTEM_PROMPT가 바뀌면(추출 항목 추가/수정) 이미 쌓인 요약 캐시는
+예전 프롬프트 결과 그대로라 새 항목이 비어 있을 수 있다 — get_project_summary()에
+force=True를 넘기면 요약 캐시를 무시하고 다시 요약한다(원문 캐시는 그대로
+재사용). process_project_expertise.py는 이를 `--refresh` 인자로 노출한다.
 """
 
 import json
@@ -147,14 +152,20 @@ def _summarize(page_text: str):
         return None
 
 
-def get_project_summary(project_name: str, confl_address: str, page_cache: dict, summary_cache: dict):
+def get_project_summary(project_name: str, confl_address: str, page_cache: dict, summary_cache: dict,
+                         force: bool = False):
     """요약 캐시를 확인하고, 없으면 원문(page_cache — confl_address가 있으면
     Confluence, 없으면 data/raw/conflue_MPR/{project_name}.pdf 폴백)을 가져와
     LLM으로 요약해 summary_cache에 채워 넣는다. 호출부가 두 캐시의 로드/저장을
     관리한다(배치 처리 시 루프 밖에서 한 번만). 실패 시 None(캐시에 남기지
-    않아 다음 실행 때 재시도)."""
+    않아 다음 실행 때 재시도).
+
+    force=True면 summary_cache에 값이 있어도 무시하고 다시 요약한다(프롬프트가
+    바뀌어 예전 캐시에 새 필드가 없을 때 등). 원문 캐시(page_cache)는 그대로
+    재사용한다 — 문서 원문 자체는 안 바뀌었으므로 Confluence/PDF를 다시 조회할
+    필요는 없다."""
     cache_key = _page_cache_key(project_name, confl_address)
-    if cache_key in summary_cache:
+    if not force and cache_key in summary_cache:
         return summary_cache[cache_key]
 
     page_text = _get_page_text(project_name, confl_address, page_cache)

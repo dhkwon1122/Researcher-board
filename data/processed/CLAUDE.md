@@ -722,3 +722,31 @@ LLM 없이(이 sandbox) `process_project_expertise.py`의 결정적 로직을
 `description`/`raw_description` 정상 반영. `pages/jd_reconciliation.py`의
 `_render_report()`/`layout()`도 더미 리포트로 렌더 확인. 테스트 중 만든
 픽스처 파일은 스크립트 종료 시 자동 삭제(원래 없던 파일만 정리).
+
+## 완료: process_project_expertise.py에 `--refresh` 캐시 무효화 플래그 추가
+
+배경: `process_project_expertise.py`의 목적을 바꾸며 `project_summary.py`의
+`_SUMMARY_SYSTEM_PROMPT`에 `personnel`/`background`/`milestones`/
+`expected_impact` 항목을 추가했는데, 프롬프트가 바뀌기 전에 이미 쌓여 있던
+`project_summary_cache.json`은 예전 프롬프트 결과 그대로라 이 새 항목들이
+비어 있다. `get_project_summary()`는 캐시 키가 있으면 LLM을 다시 부르지
+않고 캐시값을 그대로 반환하므로, 이 상태에서 `process_project_expertise.py`를
+재실행해도 인력(personnel) 등 새 항목이 계속 빈 값으로 나온다 — 코드
+버그가 아니라 캐시 무효화 수단이 없어서 생기는 문제였다.
+
+`journal_authority.py`의 `--refresh-journals`와 동일한 패턴으로 해결:
+- `project_summary.get_project_summary()`에 `force: bool = False` 파라미터
+  추가 — `force=True`면 `summary_cache`에 값이 있어도 무시하고 다시
+  요약한다. 원문 캐시(`project_page_cache.json`)는 그대로 재사용한다
+  (Confluence/PDF 재조회는 불필요 — 문서 원문 자체는 안 바뀌었으므로).
+- `process_project_expertise.py`의 `process()`에 `force` 파라미터를 추가해
+  그대로 전달하고, `--refresh` CLI 인자로 노출(`process(force='--refresh' in sys.argv)`).
+- `process_project_search.py`도 같은 `get_project_summary()`를 호출하지만
+  `force` 파라미터를 안 넘기므로(기본값 False) 동작에 영향 없음.
+
+사용법: `python pipeline/process_project_expertise.py --refresh`
+
+검증: `get_project_summary()`를 직접 호출하는 단위 테스트로
+`force=False`일 때 캐시에 값이 있으면 LLM 호출 없이 캐시값 그대로 반환,
+`force=True`일 때는 캐시 무시하고 LLM을 호출해 새 값으로 캐시를 덮어쓰는
+것을 확인.

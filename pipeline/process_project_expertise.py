@@ -33,6 +33,13 @@ Output:
 
 사용법:
   python pipeline/process_project_expertise.py
+
+_SUMMARY_SYSTEM_PROMPT(project_summary.py)가 바뀌어 이미 쌓인 요약 캐시
+(project_summary_cache.json)에 새 항목이 비어 있을 때, 캐시를 무시하고
+전체 과제를 다시 요약하려면:
+  python pipeline/process_project_expertise.py --refresh
+(원문 캐시 project_page_cache.json은 그대로 재사용한다 — Confluence/PDF를
+다시 조회하지 않는다.)
 """
 
 import csv
@@ -145,7 +152,10 @@ def _build_html(items: list, total_projects: int) -> str:
     return mmd.console_page('과제 전문성 분석', sidebar, stats + ''.join(sections))
 
 
-def process() -> bool:
+def process(force: bool = False) -> bool:
+    """force=True(--refresh)면 project_summary_cache.json에 이미 값이 있는
+    과제도 무시하고 전체를 다시 요약한다(원문 캐시는 재사용) — 요약 프롬프트가
+    바뀌어 예전 캐시에 새 필드가 비어 있을 때 쓴다."""
     projects = _read_projects()
     if projects.empty:
         print('[process_project_expertise] project_confl_address.csv 없음 — 종료 '
@@ -156,7 +166,8 @@ def process() -> bool:
 
     page_cache = project_summary.load_page_cache()
     summary_cache = project_summary.load_cache()
-    print(f'[process_project_expertise] 과제 {len(projects)}건 문서 분석 중...')
+    label = '전체 재분석(--refresh)' if force else '분석'
+    print(f'[process_project_expertise] 과제 {len(projects)}건 문서 {label} 중...')
 
     results = []
     personnel_rows = []
@@ -167,7 +178,8 @@ def process() -> bool:
         project_name = proj['project_name']
         confl_address = proj['confl_address']
 
-        summary = project_summary.get_project_summary(project_name, confl_address, page_cache, summary_cache)
+        summary = project_summary.get_project_summary(project_name, confl_address, page_cache, summary_cache,
+                                                        force=force)
         completed += 1
         if summary is None:
             print(f'  [{project_name}] 건너뜀')
@@ -222,4 +234,4 @@ def process() -> bool:
 
 
 if __name__ == '__main__':
-    process()
+    process(force='--refresh' in sys.argv)
