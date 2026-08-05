@@ -829,3 +829,31 @@ zip이지만 OOXML이 아닌 바이트, 지원하지 않는 확장자(.hwp), 빈
 `get_project_members("[탐색] ORG01")`이 `org_code="ORG01"`인 연구원들을
 정상적으로 찾는 것, `_resolve_personnel("[탐색] ORG01", ...)`이 동명이인
 suffix 판별을 포함해 정상 매칭되는 것을 각각 fixture로 확인.
+
+## 완료: python-docx 미설치 시 ModuleNotFoundError가 그대로 노출되던 문제 수정
+
+배경: "과제 직무/대상자 검증"에서 과제 선택 후 .docx를 업로드하면
+"검증 중 오류가 발생했습니다: No module named 'docx'"가 나온다는 문의(PDF는
+정상 동작). 원인은 두 가지가 겹쳤다:
+1. (환경) `requirements.txt`에는 `python-docx>=1.1.0`이 있지만, 실제로 앱을
+   구동하는 서버/컨테이너에 이 의존성이 설치돼 있지 않았음(또는
+   requirements.txt에 추가된 뒤 재설치가 안 됨) — `pip install -r
+   requirements.txt` 재실행 + 앱 재시작이 필요.
+2. (코드) `_extract_docx()`의 `from docx import Document`가 `try` 블록
+   *밖*에 있어서, 패키지가 없을 때 나는 `ModuleNotFoundError`가 어떤
+   `except`에도 안 잡히고 그대로 `pages/jd_reconciliation.py`의 최종
+   `except Exception` 폴백까지 새어나가 원문 그대로("No module named
+   'docx'") 노출되고 있었다. `pdf_reader.py`가 `pypdf` 없을 때 이미 하고
+   있는 것과 같은 방식으로 고쳤다.
+
+**수정**: `_extract_docx()`의 `from docx import Document`/
+`from docx.opc.exceptions import PackageNotFoundError`를 `try/except
+ModuleNotFoundError`로 감싸, "python-docx 패키지가 설치되어 있지 않아 .docx
+파일을 읽을 수 없습니다. 서버에서 pip install -r requirements.txt(또는 pip
+install python-docx)를 실행한 뒤 앱을 재시작해주세요."라는 `DocumentReadError`로
+변환. 화면에는 이 메시지가 warning 알럿으로 그대로 표시된다(이전 세션에서
+`DocumentReadError`를 warning 색상으로 렌더링하도록 이미 처리해둠).
+
+검증: `builtins.__import__`를 가로채 `docx` 모듈이 없는 상황을 흉내내
+`extract_document()`가 원하는 `DocumentReadError` 메시지를 던지는지 확인.
+정상 상태(모듈 있음)에서 표+서술형이 있는 .docx 추출도 회귀 테스트로 재확인.

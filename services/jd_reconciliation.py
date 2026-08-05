@@ -170,8 +170,15 @@ def _extract_docx(file_bytes: bytes) -> dict:
     고정 파싱은 깨지기 쉬움)."""
     import zipfile
 
-    from docx import Document
-    from docx.opc.exceptions import PackageNotFoundError
+    try:
+        from docx import Document
+        from docx.opc.exceptions import PackageNotFoundError
+    except ModuleNotFoundError as exc:
+        raise DocumentReadError(
+            'python-docx 패키지가 설치되어 있지 않아 .docx 파일을 읽을 수 없습니다. '
+            '서버에서 pip install -r requirements.txt(또는 pip install python-docx)를 '
+            '실행한 뒤 앱을 재시작해주세요.'
+        ) from exc
 
     try:
         doc = Document(io.BytesIO(file_bytes))
