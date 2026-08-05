@@ -477,3 +477,63 @@ LLM 근거 판정까지 끝난 값, `data_store.read_similar_researchers()`로 �
 - Playwright로 패널 열기→입력→저장→닫기→재열기까지 end-to-end 확인,
   저장된 텍스트가 `query_settings.apply()`를 통해 프롬프트 끝에 정상
   결합되는 것도 별도 확인.
+
+## 완료: "과제 직무/대상자 검증" 탭 신설 — 직무기술서 ↔ 인사데이터 대조
+
+사용자 요청: 특정 과제의 채용 근거 문서(.docx, 직무기술서 형태 — 예:
+"AI 과제는 Knowledge/Validation/Reasoning/공통 4개 직무, 각 5/3/2/1명")를
+업로드하면, 그 과제에 실제 배정된 인사데이터 인원 중 각 직무에 전문성이
+있다고 판단되는 사람을 근거와 함께 매핑해 문서 수치와 데이터 기반 판정을
+대조해 달라는 것. 사용자(HR 담당자, 직무 비전문가)가 이해할 수 있도록
+근거는 쉬운 말로. 여러 라운드에 걸쳐 설계를 확정한 뒤 구현:
+- 과제는 화면 드롭다운에서 직접 선택(문서에서 자동 추출한 이름을
+  신뢰하지 않음).
+- 검증 실행마다 결과를 이력으로 저장, 화면에서 다시 조회 가능.
+- 새 탭 "과제 직무/대상자 검증"(경로 `/jd-reconciliation`).
+- 문서에 표와 서술형이 둘 다 있을 수 있어 각각 추출하고, 표의 "현인원"을
+  authoritative로 삼되 서술형과 다르면 "문서 내부 불일치"로 노출.
+- 사람별로 "가장 가까운 직무 1개"만 매핑(다중 매핑 안 함).
+
+- **`services/jd_reconciliation.py`**(신규, 모듈 docstring에 전체 흐름
+  정리): 
+  - `list_project_names()`/`get_project_members()` — `tasks.csv` 기준
+    과제 목록/현재 배정 인원 조회(결정적, LLM 미사용). `tasks.csv`는
+    `pipeline/process_tasks.py` 산출물이며 이 개발 sandbox에는 현재
+    파일이 없어(원천 데이터 미제공) 목록이 비어 있을 수 있음 — 정상
+    동작이며, 화면은 빈 목록을 그대로 보여준다(별도 에러 처리 불필요한
+    수준의 정상 상태로 취급).
+  - `extract_docx()` — `python-docx`로 표/서술형을 분리해서 텍스트로
+    추출(표는 셀을 `' | '`로 이어 붙여 LLM이 열 구조를 스스로 해석하게
+    함 — 문서마다 헤더/열 순서가 달라 고정 파싱은 깨지기 쉬움).
+  - `_extract_roles()` — 표/서술형 각각을 LLM으로 구조화 추출(판단 없이
+    추출만, 이 프로젝트의 "구조화 출력 강제" 원칙 유지).
+  - `merge_roles()` — role_name 정규화 매칭으로 표/서술형을 병합, 표의
+    headcount를 최종 비교 기준으로 삼고 서술형과 다르면
+    `consistency_notes`에 기록.
+  - `match_members_to_roles()` — 실제 배정자 각각에 대해 LLM 1회 호출로
+    "가장 가까운 직무 1개"만 판정(`_MATCH_SYSTEM_PROMPT`가 "HR 담당자가
+    이해할 수 있는 쉬운 말로 설명"을 명시적으로 지시 — 전문 용어 금지).
+    전문성 분석 데이터가 없는 사람은 LLM 호출 없이 바로 "미분류" 처리.
+  - `build_report()` — 직무별 문서 인원 vs 실제 매칭 인원 대조표,
+    미분류 인원, 총원 비교, 쉬운 말 요약 문장 조립.
+  - `save_history()`/`list_history()`/`load_history()` —
+    `data/processed/jd_reconciliation/{과제명}_{실행시각}.json`에 실행마다
+    저장. `load_history()`는 `os.path.basename()`으로 경로 조작을 막음.
+- **`pages/jd_reconciliation.py`**(신규): 과제 드롭다운 + `dcc.Upload`
+  (.docx) + "검증 시작" 버튼 → 결과 카드(직무별 대조, 미분류, 불일치
+  경고) + 이력 테이블(행마다 "보기" 버튼으로 재조회,
+  `{'type':'jd-history-view','file':...}` 패턴매칭 id 사용, 이 세션의
+  팬텀 트리거 방지 규약대로 `n_clicks` 가드 적용).
+- **`app.py`**: 네비게이션에 "과제 직무/대상자 검증" 링크 추가.
+- **`requirements.txt`**: `python-docx` 추가.
+- **테스트**: 실제 LLM 없이(이 sandbox에 `llm_config.py` 없음)
+  `services/jd_reconciliation.py`의 결정적 로직(`extract_docx`,
+  `merge_roles`의 불일치 감지, `get_project_members`의 종료 배정 제외,
+  `build_report`, 이력 저장/재조회)은 모의 데이터로 직접 검증했고,
+  `match_members_to_roles`는 `llm_client.call_llm`을 모킹해 라벨→직무명
+  역매핑까지 검증. 페이지 자체는 Playwright로 과제 선택 → .docx 업로드 →
+  검증 시작 → 결과 렌더링 → 이력 재조회까지 end-to-end 확인(LLM 미설정
+  환경이라 역할 추출 자체는 빈 값으로 나왔지만, 그 상태에서도 화면이
+  깨지지 않고 "미분류"로 안전하게 처리되는 것까지 확인). 실제 LLM
+  연결 환경에서 추출 정확도(특히 표/서술형 구분 인식)는 배포 후 확인
+  필요.

@@ -136,6 +136,14 @@ navbar = dbc.Navbar(
                             className='text-white',
                         )
                     ),
+                    dbc.NavItem(
+                        dbc.NavLink(
+                            [html.I(className='bi bi-file-earmark-check me-1'), '과제 직무/대상자 검증'],
+                            href='/jd-reconciliation',
+                            active='exact',
+                            className='text-white',
+                        )
+                    ),
                 ],
                 navbar=True,
                 className='ms-auto',

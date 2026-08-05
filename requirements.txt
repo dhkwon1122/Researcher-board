@@ -13,3 +13,4 @@ atlassian-python-api>=3.41.0
 pypdf>=4.0.0
 umap-learn>=0.5.5
 duckdb>=0.10.0
+python-docx>=1.1.0
