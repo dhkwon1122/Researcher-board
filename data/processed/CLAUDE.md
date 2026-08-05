@@ -660,3 +660,65 @@ LLM 없이(이 sandbox) `process_project_expertise.py`의 결정적 로직을
 검증)을 Playwright로 재확인 — 전부 정상, 콘솔 에러 없음(연구원 프로필의
 `leadership_figure` `KeyError: 'evaluator_group'`는 이 세션 이전부터
 있던 무관한 기존 버그로 별도 확인됨).
+
+## 완료: "과제 직무/대상자 검증" — 과제명 기준을 project_confl_address.csv로
+## 통일 + 컨플루언스 요약 기반 쉬운 말 직무 설명 추가
+
+사용자 요청: 드롭다운/인원 조회 기준을 `tasks.csv`가 아니라
+`project_confl_address.csv`(컨플루언스 과제명 체계, `process_project_expertise.py`가
+분석하는 것과 동일)로 바꾸고, 선택한 과제의 컨플루언스 과제 요약 +
+업로드한 직무기술서 내용을 함께 활용해 직무 설명을 기술 비전문가인
+인사담당자도 이해하기 쉬운 말로 풀어 달라는 것. 현재 인원수 파악(서술형+표
+검증)과, 실 배정 인원 중 문서상 직무에 해당하는 사람을 LLM 전문성 분석
+기반으로 매핑해 문서 수치와 대조하는 기능(매칭 인원수는 문서 인원수와
+독립적으로 나올 수 있음)은 이미 기존 구현이 요구사항을 충족하는 것으로
+확인해 별도 코드 변경 없이 유지했다.
+
+**`services/jd_reconciliation.py` 변경**:
+- `list_project_names()`: `tasks.csv`(HR 개인별과제투입기간데이터 기반) 대신
+  `project_confl_address.csv`의 `project_name`을 드롭다운 목록으로 사용.
+- `get_project_members()`: 예전엔 `tasks.csv`를 `pd.Timestamp.now()` 기준
+  시작/종료일로 필터링해 "현재 이 과제에 투입 중인 사람"을 골랐는데,
+  `researchers.csv`의 `org_code == project_name`(현재 소속 과제) 기준으로
+  단순화 — `process_project_expertise.py`의 `_resolve_personnel()`이 문서 내
+  인력 이름을 researcher_id로 매핑할 때 쓰는 것과 동일한 기준이라 두
+  기능의 "이 과제 사람" 정의가 일관됨. 이제 `pandas`를 직접 쓰지 않아
+  `import pandas as pd` 제거.
+- 신규 `_read_confluence_summary(project_name)`: `process_project_expertise.py`가
+  만든 `project_expertise_analysis.json`에서 이 과제명과 일치하는 항목을
+  찾는다(파일 없음/미일치면 `None` — 컨플루언스 분석 없이도 직무기술서만으로
+  동작).
+- 신규 `_confluence_context_text(entry)`: 핵심기술/배경/최종산출물/기술적
+  난제/기대효과/마일스톤을 텍스트로 정리(값이 "확인 불가"거나 빈 경우
+  제외).
+- 신규 `_PLAIN_EXPLAIN_SYSTEM_PROMPT` + `_plain_explain_roles(roles,
+  confluence_context)`: `merge_roles()`가 만든 직무별 설명(기술 용어 포함
+  가능)을, 컨플루언스 맥락을 참고 정보로 삼아 쉬운 말로 다시 쓰는 LLM
+  호출 1회(직무 전체를 한 번에 처리). 원문은 `raw_description`으로 보존해
+  화면에서 대조 가능하게 하고, LLM 실패/응답에 없는 직무는 원문 그대로
+  폴백.
+- `build_report()`: `confluence_entry` 파라미터 추가, 반환 dict에
+  `confluence_available`/`project_overview` 필드 추가, 각 `role_rows` 항목에
+  `description`(쉬운 말)/`raw_description`(원문) 추가. 컨플루언스 분석이
+  없는 과제는 `summary_text`에 안내 문구를 덧붙임.
+- `run_reconciliation()`: `merge_roles()` 이후 `_read_confluence_summary()` →
+  `_plain_explain_roles()`를 거쳐 쉬운 말로 바뀐 `roles`를
+  `match_members_to_roles()`/`build_report()`에 전달하도록 흐름 변경.
+
+**`pages/jd_reconciliation.py` 변경**:
+- `_role_card()`: 쉬운 말 `description`을 본문에 표시하고, 원문과 다르면
+  `raw_description`을 작은 회색 글씨로 "원문: ..."로 함께 노출(검증용).
+- `_render_report()`: `confluence_available`이면 요약 알럿 아래에 "과제
+  개요(컨플루언스 분석 기반)" 카드를 추가로 표시.
+- 상단 안내 문구를 새 흐름(컨플루언스 요약 + 쉬운 말 설명)을 반영해 수정.
+
+**검증**: `project_confl_address.csv`/`project_expertise_analysis.json`
+픽스처(기존 `researchers.csv`의 `org_code=ORG01`, 10명)로
+`list_project_names`/`get_project_members`/`_read_confluence_summary`/
+`_confluence_context_text` 확인. `_plain_explain_roles`는 LLM 응답을
+모킹해 정상 매핑과, LLM 실패 시 원문 폴백(둘 다 정상) 확인.
+`match_members_to_roles`/`build_report`도 모킹으로 전체 흐름 확인 —
+`confluence_available=True`, `project_overview` 채워짐, `role_rows`에
+`description`/`raw_description` 정상 반영. `pages/jd_reconciliation.py`의
+`_render_report()`/`layout()`도 더미 리포트로 렌더 확인. 테스트 중 만든
+픽스처 파일은 스크립트 종료 시 자동 삭제(원래 없던 파일만 정리).

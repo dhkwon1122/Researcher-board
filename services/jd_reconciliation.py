@@ -12,20 +12,32 @@
   3) 표와 서술형 추출 결과를 role_name 기준으로 병합(merge_roles) — 인원수는
      표를 authoritative로 삼고(사용자 확정), 표/서술형 인원수가 다르면
      "문서 내부 불일치"로 기록해 리포트에 노출한다.
-  4) 선택한 과제(project_name)에 실제 배정된 인원을 tasks.csv에서 조회
-     (get_project_members) — 결정적 로직, LLM 미사용.
-  5) 각 실제 배정자마다 "가장 가까운 직무 1개"만 LLM이 판정한다
+  4) 선택한 과제(project_name — project_confl_address.csv 기준, 컨플루언스
+     과제명과 동일한 체계)에 실제 배정된 인원을 researchers.csv의
+     org_code로 조회한다(get_project_members) — process_project_expertise.py가
+     문서 내 인력을 researcher_id로 매핑할 때 쓰는 것과 같은 기준이라, "이
+     과제 사람만" 매칭 대상으로 한정된다(다른 과제 사람은 애초에 후보에
+     안 들어옴). 결정적 로직, LLM 미사용.
+  5) 이 과제의 컨플루언스 분석(project_expertise_analysis.json, 있으면)을
+     읽어(_read_confluence_summary) 핵심기술/배경/산출물/난제/기대효과를
+     맥락으로 삼아, 3)에서 병합한 직무 설명을 인사담당자가 이해하기 쉬운
+     말로 다시 쓴다(_plain_explain_roles) — 원문(기술적일 수 있음)은
+     raw_description으로 남겨 두고 대조해 볼 수 있게 한다.
+  6) 각 실제 배정자마다 "가장 가까운 직무 1개"만 LLM이 판정한다
      (match_members_to_roles) — 여러 직무에 걸쳐 있어도 반드시 하나만
-     고르고, 뚜렷한 근거가 없으면 "미분류"로 남긴다. 근거 문장은 HR
-     담당자가 바로 이해할 수 있는 쉬운 말로 쓰도록 프롬프트에 명시했다
-     (사용자가 직무 전문가가 아닌 HR 담당자라는 점을 고려).
-  6) 문서 수치 vs 데이터 기반 판정 수치를 대조한 리포트를 만들고
+     고르고, 뚜렷한 근거가 없으면 "미분류"로 남긴다. 근거 문장도 쉬운
+     말로 쓰도록 프롬프트에 명시했다. 이 매칭 인원수는 문서의 현인원과
+     무관하게 독립적으로 계산된다 — 문서가 3명이라고 적었어도 실제
+     매칭은 그보다 많거나 적거나 0명일 수 있고, 그 차이 자체가 리포트의
+     핵심 정보다.
+  7) 문서 수치 vs 데이터 기반 판정 수치를 대조한 리포트를 만들고
      (build_report) data/processed/jd_reconciliation/에 실행 이력으로 남긴다
      (save_history/list_history/load_history).
 
 Source:
-  data/processed/tasks.csv                    (과제 배정 인원 — 실행 pipeline/process_tasks.py)
-  data/processed/researchers.csv               (이름/부서)
+  data/processed/project_confl_address.csv     (과제 목록 — 드롭다운, dep_name/project_name)
+  data/processed/researchers.csv               (과제 배정 인원 — org_code 기준, 이름/부서)
+  data/processed/project_expertise_analysis.json (컨플루언스 과제 요약 — process_project_expertise.py)
   data/processed/연구원 보유 전문성 분석.json   (사람별 전문성 프로필 텍스트)
 """
 
@@ -36,13 +48,12 @@ import re
 import sys
 from datetime import datetime
 
-import pandas as pd
-
 _PIPELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'pipeline')
 sys.path.insert(0, os.path.abspath(_PIPELINE_DIR))
 
 import llm_client  # noqa: E402
 import researcher_fit as fit  # noqa: E402
+from paths import OUT_DIR  # noqa: E402
 from services import data_store  # noqa: E402
 
 HISTORY_DIR = os.path.join(data_store.DATA_DIR, 'jd_reconciliation')
@@ -51,49 +62,85 @@ HISTORY_DIR = os.path.join(data_store.DATA_DIR, 'jd_reconciliation')
 # ─── 과제/인원 조회 (결정적, LLM 미사용) ─────────────────────────────────────
 
 def list_project_names() -> list:
-    """드롭다운에 보여줄 과제(task_name) 목록. tasks.csv가 없으면 빈 리스트."""
-    tasks_df = data_store.read_processed('tasks')
-    if tasks_df.empty or 'task_name' not in tasks_df.columns:
+    """드롭다운에 보여줄 과제 목록 — project_confl_address.csv(컨플루언스
+    과제 목록, process_project_expertise.py가 분석하는 것과 동일한 과제명
+    체계)의 project_name. 파일이 없으면(process_project_confl.py 미실행)
+    빈 리스트."""
+    projects_df = data_store.read_processed('project_confl_address')
+    if projects_df.empty or 'project_name' not in projects_df.columns:
         return []
-    return sorted({str(v).strip() for v in tasks_df['task_name'] if str(v).strip()})
+    return sorted({str(v).strip() for v in projects_df['project_name'] if str(v).strip()})
 
 
 def get_project_members(project_name: str) -> list:
-    """선택한 과제에 현재 배정된 인원 목록. end_date가 비어 있거나 오늘 이후면
-    현재 배정 중으로 취급한다(services.nl_query._current_project_names와
-    동일한 규칙)."""
-    tasks_df = data_store.read_processed('tasks')
-    if tasks_df.empty:
+    """선택한 과제에 현재 배정된 인원 목록 — researchers.csv의
+    org_code(현재 소속 과제)가 이 과제명과 같은 사람. process_project_expertise.py가
+    문서 내 인력 이름을 researcher_id로 매핑할 때 쓰는 것과 동일한 기준이라,
+    "이 과제 소속 사람만" 매칭 후보로 한정된다(다른 과제 사람은 애초에
+    이 목록에 없음)."""
+    researchers_df = data_store.read_processed('researchers')
+    if researchers_df.empty:
         return []
-    rows = tasks_df[tasks_df['task_name'].astype(str).str.strip() == str(project_name or '').strip()]
+    target = str(project_name or '').strip()
+    rows = researchers_df[researchers_df['org_code'].astype(str).str.strip() == target]
     if rows.empty:
         return []
-
-    today = pd.Timestamp.now().normalize()
-    current_ids, seen = [], set()
-    for _, row in rows.iterrows():
-        end_raw = str(row.get('end_date', '') or '').strip()
-        is_current = True
-        if end_raw:
-            end_ts = pd.to_datetime(end_raw, errors='coerce')
-            is_current = pd.isna(end_ts) or end_ts >= today
-        if not is_current:
-            continue
-        rid = str(row.get('researcher_id', '')).strip().zfill(8)
-        if rid and rid not in seen:
-            seen.add(rid)
-            current_ids.append(rid)
-
-    researchers_df = data_store.read_processed('researchers')
-    name_map, dept_map = {}, {}
-    if not researchers_df.empty:
-        indexed = researchers_df.set_index('researcher_id')
-        name_map = indexed['name'].to_dict()
-        dept_map = indexed['department'].to_dict()
     return [
-        {'researcher_id': rid, 'name': name_map.get(rid, rid), 'department': dept_map.get(rid, '')}
-        for rid in current_ids
+        {
+            'researcher_id': row['researcher_id'],
+            'name': row.get('name', row['researcher_id']),
+            'department': row.get('department', ''),
+        }
+        for _, row in rows.iterrows()
     ]
+
+
+def _read_confluence_summary(project_name: str) -> dict | None:
+    """process_project_expertise.py가 만든 project_expertise_analysis.json에서
+    이 과제의 컨플루언스 분석 항목을 찾는다. 파일이 없거나(파이프라인 미실행)
+    이 과제명이 없으면 None — 호출부는 이를 "컨플루언스 맥락 없이 직무기술서
+    내용만으로 설명"으로 처리한다."""
+    path = os.path.join(OUT_DIR, 'project_expertise_analysis.json')
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding='utf-8') as f:
+            items = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    target = str(project_name or '').strip()
+    for it in items:
+        if str(it.get('project_name') or '').strip() == target:
+            return it
+    return None
+
+
+def _confluence_context_text(entry: dict | None) -> str:
+    """컨플루언스 과제 요약 항목을 LLM 맥락용 텍스트로 정리한다. "확인 불가"/
+    빈 값은 제외한다(process_project_expertise.py가 추출 실패 시 채워 넣는
+    placeholder이므로 맥락에 넣을 가치가 없음)."""
+    if not entry:
+        return ''
+
+    def _ok(v):
+        v = str(v or '').strip()
+        return v if v and v != '확인 불가' else ''
+
+    lines = []
+    if _ok(entry.get('core_tech')):
+        lines.append(f"핵심 기술: {_ok(entry.get('core_tech'))}")
+    if _ok(entry.get('background')):
+        lines.append(f"배경: {_ok(entry.get('background'))}")
+    if _ok(entry.get('deliverable')):
+        lines.append(f"최종 산출물: {_ok(entry.get('deliverable'))}")
+    if _ok(entry.get('challenge')):
+        lines.append(f"기술적 난제: {_ok(entry.get('challenge'))}")
+    if _ok(entry.get('expected_impact')):
+        lines.append(f"기대 효과: {_ok(entry.get('expected_impact'))}")
+    milestones = [str(m).strip() for m in (entry.get('milestones') or []) if str(m).strip()]
+    if milestones:
+        lines.append('주요 마일스톤: ' + '; '.join(milestones))
+    return '\n'.join(lines)
 
 
 # ─── .docx 추출 (표/서술형 분리) ─────────────────────────────────────────────
@@ -227,6 +274,73 @@ def merge_roles(table_roles: list, narrative_roles: list) -> tuple:
     return merged, notes
 
 
+# ─── ④ 컨플루언스 맥락 기반 쉬운 말 직무 설명 재작성 ─────────────────────────
+
+_PLAIN_EXPLAIN_SYSTEM_PROMPT = """# Role
+당신은 R&D 과제의 기술적인 직무 설명을, 기술 전문가가 아닌 HR 담당자도
+바로 이해할 수 있도록 쉬운 일상 언어로 다시 설명해주는 "쉬운 설명
+도우미"입니다.
+
+# Goal
+직무기술서에서 뽑은 직무별 설명(전문 용어가 섞여 있을 수 있음)을, 함께
+주어지는 과제 배경 정보를 참고해 더 이해하기 쉬운 설명으로 다시
+씁니다.
+
+# Guidelines & Constraints
+1. 원문에 없는 내용을 새로 지어내지 마세요 — 같은 의미를 쉬운 말로
+   바꿔 쓰는 것이지, 추정하거나 과장하지 않습니다.
+2. AI·기술 전문 용어(모델/알고리즘 이름, 프레임워크명 등)가 나오면
+   "그게 무엇을 하는 것인지"를 함께 풀어서 설명하세요.
+3. 과제 배경 정보는 문맥 이해를 돕는 참고용입니다 — 직무 설명 자체는
+   원문 직무기술서 내용을 벗어나지 않아야 합니다.
+4. 각 직무마다 2~4문장 정도로 정리하세요.
+5. 반드시 아래 JSON 형식으로만 출력하고, 입력받은 모든 직무를 빠짐없이
+   포함하세요.
+
+# Output Format (JSON)
+{"roles": [{"role_name": "직무명(입력과 동일하게)", "plain_description": "쉬운 말 설명"}]}
+"""
+
+
+def _plain_explain_roles(roles: list, confluence_context: str) -> list:
+    """merge_roles()가 만든 직무 목록의 description을 쉬운 말로 다시 쓴다.
+    원문은 raw_description으로 그대로 보존해, 화면에서 대조해 볼 수 있게
+    한다. LLM 실패/미매칭 시 해당 직무는 원문 그대로 둔다(안전한 폴백)."""
+    if not roles:
+        return []
+
+    role_block = '\n\n'.join(
+        f'[{r["role_name"]}]\n{r["description"] or "(설명 없음)"}' for r in roles
+    )
+    context_block = confluence_context or '(이 과제의 컨플루언스 분석 데이터 없음)'
+    prompt = (
+        f'[과제 배경 정보(참고용)]\n{context_block}\n\n'
+        f'[직무기술서에서 뽑은 직무별 설명(원문)]\n{role_block}\n\n'
+        '위 직무들을 각각 쉬운 말로 다시 설명해주세요.'
+    )
+    raw = llm_client.call_llm(prompt, _PLAIN_EXPLAIN_SYSTEM_PROMPT, temperature=0.0, max_tokens=2000)
+    plain_by_role = {}
+    if raw:
+        try:
+            parsed = json.loads(llm_client.extract_json(raw))
+            plain_by_role = {
+                _norm_role(r.get('role_name')): str(r.get('plain_description') or '').strip()
+                for r in (parsed.get('roles') or [])
+            }
+        except json.JSONDecodeError:
+            plain_by_role = {}
+
+    result = []
+    for r in roles:
+        plain = plain_by_role.get(_norm_role(r['role_name']))
+        result.append({
+            **r,
+            'raw_description': r['description'],
+            'description': plain or r['description'],
+        })
+    return result
+
+
 # ─── ⑤ 사람 × 직무 매핑 (가까운 직무 1개만, 쉬운 말 근거) ─────────────────────
 
 _MATCH_SYSTEM_PROMPT = """# Role
@@ -322,7 +436,8 @@ def match_members_to_roles(members: list, roles: list) -> list:
 # ─── ⑥ 리포트 조립 + 이력 저장/조회 ─────────────────────────────────────────
 
 def build_report(project_name: str, doc_filename: str, table_roles: list, narrative_roles: list,
-                  roles: list, consistency_notes: list, members: list, matches: list) -> dict:
+                  roles: list, consistency_notes: list, members: list, matches: list,
+                  confluence_entry: dict | None = None) -> dict:
     member_by_id = {m['researcher_id']: m for m in members}
 
     role_rows = []
@@ -333,6 +448,8 @@ def build_report(project_name: str, doc_filename: str, table_roles: list, narrat
         ]
         role_rows.append({
             'role_name': r['role_name'],
+            'description': r['description'],
+            'raw_description': r.get('raw_description', r['description']),
             'document_count': r['headcount'],
             'matched_count': len(matched),
             'diff': len(matched) - r['headcount'],
@@ -353,6 +470,8 @@ def build_report(project_name: str, doc_filename: str, table_roles: list, narrat
         summary_text += f' 그중 {len(unmatched)}명은 문서에 적힌 어떤 직무와도 뚜렷이 맞지 않는 것으로 판단됩니다.'
     if consistency_notes:
         summary_text += ' 문서 내부에 표와 본문 내용이 다른 부분이 있어 함께 확인이 필요합니다.'
+    if not confluence_entry:
+        summary_text += ' 이 과제의 컨플루언스 분석 데이터가 없어 직무기술서 내용만으로 설명했습니다.'
 
     return {
         'project_name': project_name,
@@ -366,6 +485,8 @@ def build_report(project_name: str, doc_filename: str, table_roles: list, narrat
         'document_total': document_total,
         'actual_total': actual_total,
         'summary_text': summary_text,
+        'confluence_available': bool(confluence_entry),
+        'project_overview': _confluence_context_text(confluence_entry),
     }
 
 
@@ -427,8 +548,10 @@ def run_reconciliation(project_name: str, doc_filename: str, file_bytes: bytes) 
     table_roles = _extract_roles(extracted['tables_text'], '표')
     narrative_roles = _extract_roles(extracted['narrative_text'], '서술형 본문')
     roles, consistency_notes = merge_roles(table_roles, narrative_roles)
+    confluence_entry = _read_confluence_summary(project_name)
+    roles = _plain_explain_roles(roles, _confluence_context_text(confluence_entry))
     matches = match_members_to_roles(members, roles)
     report = build_report(project_name, doc_filename, table_roles, narrative_roles,
-                           roles, consistency_notes, members, matches)
+                           roles, consistency_notes, members, matches, confluence_entry)
     save_history(report)
     return report

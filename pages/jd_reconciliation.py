@@ -44,6 +44,8 @@ def _role_card(role: dict):
         border = 'border-danger'
     else:
         border = 'border-warning'
+    description = role.get('description', '')
+    raw_description = role.get('raw_description', '')
     return dbc.Card(
         dbc.CardBody([
             html.Div([
@@ -54,6 +56,9 @@ def _role_card(role: dict):
                     className='text-muted',
                 ),
             ], className='mb-2'),
+            (html.Div(description, className='small mb-1') if description else None),
+            (html.Div(f'원문: {raw_description}', className='text-muted small fst-italic mb-2')
+             if raw_description and raw_description != description else None),
             html.Div([_person_row(p) for p in role.get('matched', [])]) if role.get('matched')
             else html.Div('매칭된 인원이 없습니다.', className='text-muted small'),
         ]),
@@ -64,12 +69,20 @@ def _role_card(role: dict):
 def _render_report(report: dict):
     consistency_notes = report.get('consistency_notes') or []
     unmatched = report.get('unmatched') or []
+    project_overview = report.get('project_overview') or ''
     return html.Div([
         dbc.Alert([
             html.Div(report.get('summary_text', ''), className='fw-semibold mb-1'),
             html.Div(f"실행 시각: {report.get('run_at', '')} · 문서: {report.get('doc_filename', '')} · "
                      f"과제: {report.get('project_name', '')}", className='small text-muted'),
         ], color='info', className='mb-3'),
+        (dbc.Card(
+            dbc.CardBody([
+                html.Div('과제 개요 (컨플루언스 분석 기반)', className='fw-bold mb-2'),
+                html.Div([html.Div(line) for line in project_overview.split('\n')], className='small'),
+            ]),
+            className='mb-3 border-primary',
+        ) if report.get('confluence_available') and project_overview else None),
         (dbc.Alert(
             [html.Div('문서 내부 표/본문 불일치', className='fw-semibold'),
              html.Ul([html.Li(n) for n in consistency_notes])],
@@ -114,8 +127,8 @@ def layout(**_kwargs):
             className='fw-bold mb-1 mt-1',
         ),
         html.Div(
-            '업로드한 직무기술서(.docx)의 직무별 인원수·요구사항과, 실제 그 과제에 '
-            '배정된 인원의 보유 전문성을 대조합니다.',
+            '업로드한 직무기술서(.docx)의 직무별 인원수·요구사항을 컨플루언스 과제 요약과 '
+            '함께 쉬운 말로 풀어서 보여주고, 실제 그 과제에 배정된 인원의 보유 전문성과 대조합니다.',
             className='text-muted small mb-3',
         ),
         dbc.Row([
