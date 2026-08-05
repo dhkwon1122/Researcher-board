@@ -418,3 +418,28 @@ LLM 근거 판정까지 끝난 값, `data_store.read_similar_researchers()`로 �
   직접 넣어 호출 — 두 경로 모두 정상 동작 확인(7개 기본 컬럼 + level/
   score/evidence 정상 조립). 실제 사용자 환경에서 질문 분류 자체가
   잘 되는지는 배포 후 확인 필요.
+
+## 완료: 개방형 질의(open_data_query) 커버리지 확장 — "가능한 모든 질문에 답"
+
+사용자 요청: 자연어 질문이 LLM/임베딩 파생 산출물이든 원천 CSV든 가리지
+않고 최대한 많은 질문에 답할 수 있게 해달라는 것. 점검해 보니 구멍 2개.
+
+- **`services/open_data_query.py`**: `_discover_json_tables()`에
+  `researcher_similarity` 테이블 추가(`_researcher_similarity_table()`,
+  `researcher_similarity.json`을 researcher_id/similar_researcher_id/
+  score/level/evidence 행으로 평탄화) — 방금 추가한
+  `find_similar_researchers` intent가 못 잡아내는 변형 질문(예: "유사도
+  0.8 이상인 연구원 쌍이 몇 개야?" 같은 집계성 질문)도 개방형 SQL
+  경로로는 답할 수 있게 됨.
+- **`services/nl_query.py`**: 라우터가 6개 intent 어디에도 못 넣고
+  `unsupported`로 분류하면, 예전에는 그 즉시 안내 문구만 반환하고
+  끝냈다. 이제는 포기하기 전에 `open_data_query.answer()`를 한 번 더
+  시도(마지막 수단 폴백) — 결과가 있으면 그걸 보여주고, 그래도 없으면
+  기존 안내 문구로 폴백. `parse_question()`의 `unsupported` 조기 반환에
+  `question` 필드를 추가로 실어 보내야 이 폴백 호출이 가능해서 함께
+  수정.
+- **의도적으로 안 한 것**: 4개 구조화 intent(전문성/과제매칭/유사도)가
+  매칭은 됐지만 결과가 0건인 경우까지 개방형 SQL로 재시도하지는 않음
+  — 그 경우는 이미 구체적인 사유("~데이터가 없습니다" 등)를 보여주고
+  있어, 이걸 다른 답으로 덮어쓰면 오히려 혼란을 줄 수 있다고 판단.
+  폴백은 순수 "unsupported"(질문 자체를 못 알아들은 경우)에만 적용.

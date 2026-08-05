@@ -538,7 +538,8 @@ def parse_question(question: str) -> dict:
 
     intent = parsed.get('intent')
     if intent not in _KNOWN_INTENTS:
-        return {'intent': 'unsupported', 'reason_if_unsupported': parsed.get('reason_if_unsupported', '')}
+        return {'intent': 'unsupported', 'question': question,
+                'reason_if_unsupported': parsed.get('reason_if_unsupported', '')}
 
     try:
         top_k = int(parsed.get('top_k') or DEFAULT_TOP_K)
@@ -565,13 +566,23 @@ def execute_query(parsed: dict) -> dict:
         return _empty_table_result('error', parsed.get('message', '알 수 없는 오류가 발생했습니다.'))
 
     if intent == 'unsupported':
+        # 5개 intent 어디에도 안 걸렸다고 바로 포기하지 않고, 마지막 수단으로
+        # 개방형 SQL 질의를 한 번 더 시도한다 — data/processed/ 전체(CSV +
+        # LLM 파생 JSON)를 대상으로 하므로 라우터 프롬프트가 놓친 질문도
+        # 여기서 답이 나올 때가 있다. 그래도 결과가 없으면 기존 안내 문구로 폴백.
+        question = parsed.get('question') or ''
+        if question:
+            fallback = open_data_query.answer(question)
+            if fallback.get('rows'):
+                return fallback
+
         reason = parsed.get('reason_if_unsupported') or ''
         note = '죄송합니다, 이 질문에는 아직 답변할 수 없습니다.'
         if reason:
             note += f' ({reason})'
         note += (' "특정 전문성 보유자 찾기", "과제에 적합한 사람 찾기", '
-                 '"연구원에게 맞는 과제 찾기", 또는 학력·과제이력 등 원천 데이터에'
-                 ' 대한 질문 형태로 질문해 주세요.')
+                 '"연구원에게 맞는 과제 찾기", "연구원과 유사한 연구원 찾기", '
+                 '또는 학력·과제이력 등 원천 데이터에 대한 질문 형태로 질문해 주세요.')
         return _empty_table_result('unsupported', note)
 
     if intent == 'open_data_query':

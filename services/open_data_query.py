@@ -186,15 +186,32 @@ def _project_fit_by_researcher_table() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _researcher_similarity_table() -> pd.DataFrame:
+    similarity_map = data_store.read_similar_researchers()
+    rows = [
+        {
+            'researcher_id': rid,
+            'similar_researcher_id': s.get('researcher_id', ''),
+            'score': s.get('score', ''),
+            'level': s.get('level', ''),
+            'evidence': '; '.join(s.get('evidence') or []) if isinstance(s.get('evidence'), list) else s.get('evidence', ''),
+        }
+        for rid, entry in similarity_map.items()
+        for s in entry.get('similar') or []
+    ]
+    return pd.DataFrame(rows)
+
+
 def _discover_json_tables() -> dict:
-    """연구원 보유 전문성 분석.json/project_fit_by_*.json을 평탄화해 CSV 테이블과
-    동일한 창구(SQL)로 조회할 수 있게 등록. 한글 파일명은 SQL 식별자로 쓰기
-    번거로워 영문 별칭을 붙인다."""
+    """연구원 보유 전문성 분석.json/project_fit_by_*.json/researcher_similarity.json을
+    평탄화해 CSV 테이블과 동일한 창구(SQL)로 조회할 수 있게 등록. 한글 파일명은
+    SQL 식별자로 쓰기 번거로워 영문 별칭을 붙인다."""
     tables = {}
     for name, builder in (
         ('expertise_profiles', _expertise_profiles_table),
         ('project_fit_by_project', _project_fit_by_project_table),
         ('project_fit_by_researcher', _project_fit_by_researcher_table),
+        ('researcher_similarity', _researcher_similarity_table),
     ):
         df = builder()
         if not df.empty:
