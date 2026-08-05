@@ -218,6 +218,7 @@ def _update_exclude_project_options(excluded_dept):
     Output('jm-result', 'children'),
     Output('jm-history-refresh', 'data'),
     Input('jm-run-btn', 'n_clicks'),
+    Input('jm-individual-query', 'n_submit'),  # 텍스트 입력창에서 Enter로도 검색되도록
     State('jm-mode', 'value'),
     State('jm-project-select', 'value'),
     State('jm-individual-query', 'value'),
@@ -226,9 +227,8 @@ def _update_exclude_project_options(excluded_dept):
     State('jm-history-refresh', 'data'),
     prevent_initial_call=True,
 )
-def _run(n_clicks, mode, project_names, individual_query, excluded_depts, excluded_projects, refresh_token):
-    if not n_clicks:
-        return dash.no_update, dash.no_update
+def _run(n_clicks, _n_submit, mode, project_names, individual_query, excluded_depts, excluded_projects,
+          refresh_token):
     excluded_depts = excluded_depts or []
     excluded_projects = excluded_projects or []
     project_names = project_names or []

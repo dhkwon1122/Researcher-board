@@ -1036,3 +1036,27 @@ Playwright로 실제 앱 기동 후: 네비게이션 탭 노출, 모드 전환 U
 `_run()`이 예외를 삼키지 않고 `dbc.Alert(danger)`를 반환하는지 확인.
 정상 동작(과제 단위/개인별 검색, 이력, cascading 드롭다운)은 Playwright로
 재확인해 회귀 없음을 확인.
+
+## 완료: JOB Market — 개인별 검색에서 Enter 키가 아무 반응이 없던 진짜 원인
+
+이전 두 번의 시도(run_concurrent 안전망, 콜백 전체 try/except)로도
+"개인별 검색에서 이름/사번을 넣어도 응답이 없다"가 재현된다는 보고가
+계속돼, Playwright로 실제 사용자가 할 법한 다른 조작 패턴을 하나씩
+테스트해 봤다 — 검색창에 이름을 입력하고 **Enter 키**를 누르는 경우
+(버튼을 따로 클릭하지 않고)를 재현하자 실제로 화면에 아무 변화가 없는
+것을 확인했다: `_run()` 콜백이 `Input('jm-run-btn', 'n_clicks')`만
+듣고 있어서, Enter는 `dcc.Input`의 `n_submit` 값만 올릴 뿐 어떤
+콜백도 트리거하지 않았다. 이전의 안전망들은 전부 콜백이 "실행된 이후"
+발생하는 예외를 잡는 것들이라, 콜백 자체가 트리거되지 않는 이 케이스는
+전혀 손대지 못하고 있었다.
+
+`pages/job_market.py`의 `_run()` 콜백에
+`Input('jm-individual-query', 'n_submit')`을 추가해 Enter로도 검색이
+실행되도록 했다(`n_clicks`가 0이어도 `n_submit`으로 트리거될 수 있어야
+하므로 `if not n_clicks: return ...` 가드도 제거 — `prevent_initial_call=True`가
+이미 최초 로드 시 오발동을 막아 준다).
+
+검증: Playwright로 검색창에 이름을 입력한 뒤 버튼 클릭 없이 Enter만
+눌러 정상적으로 결과가 렌더링되는지 확인(수정 전엔 빈 화면, 수정 후엔
+정상 결과). 기존 버튼 클릭 경로, 과제 단위 복수 선택 검색도 회귀
+없음을 재확인.
