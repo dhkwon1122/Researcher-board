@@ -383,3 +383,38 @@ Input으로 걸린 컴포넌트가 **레이아웃에 처음 나타나는 시점*
     `dbc.Alert`를 해당 부서 자리에 표시(`pages/org_comparison.py`
     `_dept_section()`) — 향후 같은 유형의 원천 데이터 표기 문제가
     생겨도 화면에서 바로 원인이 보이도록 함.
+
+## 완료: AI 검색에 5번째 intent `find_similar_researchers` 추가
+
+사용자가 "홍길동 연구원의 전문성과 유사한 전문성을 가진 연구원 찾아줘"라고
+질문하면 "홍길동"을 `find_researchers_by_expertise`의 전문성 키워드로
+잘못 분류해(사람 이름을 강점 태그로 오인) `expand_term()`이 매칭 실패하고
+"해당하는 표기를 찾지 못했습니다"만 반환하던 문제. 실제로 이 질문이
+가리키는 기능은 이미 배치로 계산돼 있는 "연구원↔연구원 유사도"
+(`pipeline/process_researcher_similarity.py` → `researcher_similarity.json`,
+LLM 근거 판정까지 끝난 값, `data_store.read_similar_researchers()`로 이미
+읽고 있었음 — 보유 전문성 탭의 "연구원 ↔ 연구원" 서브탭에서 씀)인데,
+자연어 질문 라우터에는 이 intent가 아예 없었다.
+
+- **`services/nl_query.py`**: `QUERY_SYSTEM_PROMPT`에 5번째 intent
+  `find_similar_researchers` 추가(researcher_query에 이름/사번, 기존
+  `find_projects_for_researcher`와 같은 필드 재사용) — "전문성 키워드로
+  찾기"가 아니라 "특정 사람과 비슷한 사람 찾기"임을 예시와 함께 명시해
+  `find_researchers_by_expertise`와 혼동하지 않도록 라우팅 규칙을
+  분리했다. `find_similar_researchers()` 함수 신규 — `_resolve_researcher()`
+  로 이름→사번 해석(동명이인 처리 동일 패턴) 후
+  `data_store.read_similar_researchers()`의 배치 결과를 그대로 표로
+  변환(researcher_id/name/department/level/score/evidence, 새로 계산하지
+  않음). `execute_query()`에 라우팅 분기 추가.
+- **`services/data_labels.py`**: `level`(유사도 등급)/`evidence`(유사
+  근거) 라벨 추가. `score`는 기존에 이미 '유사도점수'로 매핑돼 있던 것을
+  그대로 재사용(다만 이 매핑이 `evaluations.csv`의 일반 `score`(점수)
+  라벨을 덮어쓰고 있는 기존 dict 중복 키 이슈를 발견 — 이번 작업 범위
+  밖이라 손대지 않았고, 자연어 질문 화면에는 영향 없음).
+- **한계**: 이 sandbox에는 `llm_config.py`(LLM 자격증명)가 없어 실제
+  질문→intent 분류가 되는지는 라이브로 확인하지 못했다. 대신 (1)
+  `find_similar_researchers()`를 모의 `researcher_similarity.json`으로
+  직접 호출, (2) `execute_query()`에 라우터가 반환할 법한 parsed dict를
+  직접 넣어 호출 — 두 경로 모두 정상 동작 확인(7개 기본 컬럼 + level/
+  score/evidence 정상 조립). 실제 사용자 환경에서 질문 분류 자체가
+  잘 되는지는 배포 후 확인 필요.

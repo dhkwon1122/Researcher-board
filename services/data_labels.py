@@ -182,6 +182,8 @@ COLUMN_LABELS = {
     'position_year': 'CL/년차',
     'matched_term_count': '일치 키워드 수',
     'score': '유사도점수',
+    'level': '유사도 등급',
+    'evidence': '유사 근거',
 }
 
 

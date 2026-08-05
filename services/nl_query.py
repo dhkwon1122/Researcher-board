@@ -19,7 +19,10 @@
     적합한 연구원 찾기
   - find_projects_for_researcher  : 특정 연구원에게 적합한 사내 과제 찾기
     (현재 수행 중인 과제는 기본적으로 제외)
-  - open_data_query : 위 3가지가 다루는 "이미 계산된 결과"로는 답할 수 없는,
+  - find_similar_researchers      : 특정 연구원과 전문성이 유사한 다른 연구원
+    찾기(연구원↔연구원 유사도, pipeline/process_researcher_similarity.py가
+    이미 배치로 계산해 둔 결과를 그대로 조회 — LLM 근거 판정까지 끝난 값)
+  - open_data_query : 위 4가지가 다루는 "이미 계산된 결과"로는 답할 수 없는,
     원천 데이터(학력/전공, 과제 수행 이력, 논문/특허, 평가/인사 이력 등)의
     특정 항목을 근거로 찾는 개방형 질문. 예) "물리학 전공한 사람 찾아줘",
     "양자컴 과제 수행 중인 연구원 보여줘", "특허 등록 3건 이상인 연구원".
@@ -31,6 +34,8 @@ Source:
   data/processed/tasks.csv                          (연구원의 현재 수행 과제 판단)
   data/processed/project_fit_by_project.json/project_fit_by_researcher.json
     (process_project_researcher_fit.py가 이미 계산해 둔 배치 매칭 결과)
+  data/processed/researcher_similarity.json         (process_researcher_similarity.py가
+    이미 계산해 둔 연구원↔연구원 유사도 + LLM 근거 판정, services.data_store.read_similar_researchers)
   data/processed/strength_taxonomy.json             (build_strength_taxonomy.py 2단계
     확정 표준 목록 — 있으면 동의어 확장에 사용, 없으면 원문 그대로만 매칭)
   data/processed/embedding_cache.json               (BGE-M3 임베딩 캐시, researcher_fit.cached_embed 재사용)
@@ -74,6 +79,7 @@ _KNOWN_INTENTS = {
     'find_researchers_by_expertise',
     'find_researchers_for_project',
     'find_projects_for_researcher',
+    'find_similar_researchers',
     'open_data_query',
 }
 
@@ -82,7 +88,7 @@ QUERY_SYSTEM_PROMPT = """# Role
 검색 조건으로 바꾸는 "R&D Query Router"입니다. 직접 답을 만들지 않습니다 —
 질문을 분류하고 검색에 필요한 핵심 개체만 뽑아냅니다.
 
-# 지원하는 질문 유형(intent) — 반드시 이 5가지 중 하나로만 분류하세요
+# 지원하는 질문 유형(intent) — 반드시 이 6가지 중 하나로만 분류하세요
 1. find_researchers_by_expertise : 이미 요약된 "강점 분야/키워드" 태그로 연구원을
    찾는 질문(태그 자체를 묻는 것이지, 학력·과제이력 같은 원천 데이터 항목이 아님)
    예) "로봇 제어 전문가 찾아줘", "센서 데이터 처리 할 줄 아는 사람 있어?"
@@ -93,18 +99,25 @@ QUERY_SYSTEM_PROMPT = """# Role
    "현재 하고 있는 과제 말고", "지금 과제 제외하고" 같은 표현이 있으면
    exclude_current_project=true, 명시가 없어도 기본값은 true로 두세요.
    예) "정재원 연구원은 지금 과제 말고 어떤 과제에 적합해?"
-4. open_data_query : 위 세 가지가 다루는 "이미 계산된 요약/매칭 결과"가 아니라,
+4. find_similar_researchers : 특정 연구원(이름 또는 사번)과 전문성/역량이
+   비슷한 "다른 연구원"을 찾는 질문 — researcher_query에 그 연구원의
+   이름/사번을 넣으세요(전문성 키워드가 아니라 사람 자체를 기준으로 찾는
+   질문이면 이 intent입니다. find_researchers_by_expertise와 헷갈리지
+   마세요 — expertise_terms가 아니라 사람 이름이 기준이면 항상 이 intent).
+   예) "홍길동 연구원과 전문성이 비슷한 사람 찾아줘",
+   "정재원이랑 유사한 역량 가진 연구원 있어?", "홍길동과 비슷한 연구원은 누구야"
+5. open_data_query : 위 네 가지가 다루는 "이미 계산된 요약/매칭 결과"가 아니라,
    원천 데이터의 구체적 항목(학력/전공, 실제 과제 수행 이력, 논문/특허 실적,
    직급/근속, 평가/인사 이력 등)을 조건으로 찾거나 집계하는 질문
    예) "물리학 전공한 사람 찾아줘", "양자컴퓨팅 과제 수행 중인 연구원 보여줘",
    "특허 등록 3건 이상인 연구원", "부서별 평균 논문 수"
-5. unsupported : 위 4가지에 해당하지 않는 모든 질문(잡담, 이 시스템이 다루지
+6. unsupported : 위 5가지에 해당하지 않는 모든 질문(잡담, 이 시스템이 다루지
    않는 질문 등) — 억지로 끼워 맞추지 말고 이 값으로 분류하고
    reason_if_unsupported에 짧게 이유를 적으세요.
 
 # Output Format (JSON만 출력하고 그 외 텍스트는 절대 출력하지 마세요)
 {
-  "intent": "find_researchers_by_expertise" | "find_researchers_for_project" | "find_projects_for_researcher" | "open_data_query" | "unsupported",
+  "intent": "find_researchers_by_expertise" | "find_researchers_for_project" | "find_projects_for_researcher" | "find_similar_researchers" | "open_data_query" | "unsupported",
   "expertise_terms": ["..."],
   "project_name": "",
   "project_description": "",
@@ -452,6 +465,58 @@ def find_projects_for_researcher(researcher_query: str, exclude_current: bool = 
     )
 
 
+def find_similar_researchers(researcher_query: str, top_k: int = DEFAULT_TOP_K) -> dict:
+    """특정 연구원과 전문성이 유사한 다른 연구원을 찾는다. LLM 판정까지 이미
+    끝난 pipeline/process_researcher_similarity.py의 배치 결과
+    (researcher_similarity.json)를 그대로 조회할 뿐, 여기서 새로 유사도를
+    계산하지 않는다."""
+    top_k = min(top_k or DEFAULT_TOP_K, MAX_TOP_K)
+    researchers_df = data_store.read_processed('researchers')
+    candidates = _resolve_researcher(researcher_query, researchers_df)
+    if not candidates:
+        return _empty_table_result(
+            'find_similar_researchers', f'"{researcher_query}"에 해당하는 연구원을 찾지 못했습니다.')
+    if len(candidates) > 1:
+        name_map = researchers_df.set_index('researcher_id')['name'].to_dict()
+        cand_desc = ', '.join(f'{name_map.get(rid, rid)}({rid})' for rid in candidates[:10])
+        return _empty_table_result(
+            'find_similar_researchers',
+            f'동명이인 등으로 {len(candidates)}명이 검색됩니다: {cand_desc}. 사번으로 다시 질문해주세요.')
+
+    rid = candidates[0]
+    similarity_map = data_store.read_similar_researchers()
+    entry = similarity_map.get(rid)
+    if not entry:
+        return _empty_table_result(
+            'find_similar_researchers',
+            '이 연구원에 대한 연구원↔연구원 유사도 데이터가 없습니다'
+            '(pipeline/process_researcher_similarity.py 실행 필요).')
+
+    name_map = researchers_df.set_index('researcher_id')['name'].to_dict()
+    dept_map = researchers_df.set_index('researcher_id')['department'].to_dict()
+    similar = list(entry.get('similar') or [])[:top_k]
+    items = [
+        {
+            'researcher_id': s.get('researcher_id', ''),
+            'name': name_map.get(s.get('researcher_id', ''), s.get('researcher_id', '')),
+            'department': dept_map.get(s.get('researcher_id', ''), ''),
+            'level': s.get('level', ''),
+            'score': s.get('score', ''),
+            'evidence': s.get('evidence', ''),
+        }
+        for s in similar
+    ]
+    note = ''
+    base_name = name_map.get(rid, rid)
+    if not items:
+        note = f'{base_name}({rid})과 유사도 근거가 확인된 연구원이 없습니다.'
+    return _build_table_result(
+        'find_similar_researchers', items,
+        ['researcher_id', 'name', 'department', 'level', 'score', 'evidence'],
+        note,
+    )
+
+
 def parse_question(question: str) -> dict:
     """자연어 질문을 구조화된 쿼리 dict로 변환(사내 LLM 1회 호출). 실패
     유형별로 다른 intent('error'|'unsupported')를 돌려줘 호출부가 구분해서
@@ -522,6 +587,8 @@ def execute_query(parsed: dict) -> dict:
     if intent == 'find_projects_for_researcher':
         return find_projects_for_researcher(
             parsed.get('researcher_query', ''), parsed.get('exclude_current_project', True), top_k)
+    if intent == 'find_similar_researchers':
+        return find_similar_researchers(parsed.get('researcher_query', ''), top_k)
 
     return _empty_table_result('unsupported', '알 수 없는 질문 유형입니다.')
 
