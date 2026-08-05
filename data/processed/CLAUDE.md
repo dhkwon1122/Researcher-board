@@ -443,3 +443,37 @@ LLM 근거 판정까지 끝난 값, `data_store.read_similar_researchers()`로 �
   — 그 경우는 이미 구체적인 사유("~데이터가 없습니다" 등)를 보여주고
   있어, 이걸 다른 답으로 덮어쓰면 오히려 혼란을 줄 수 있다고 판단.
   폴백은 순수 "unsupported"(질문 자체를 못 알아들은 경우)에만 적용.
+
+## 완료: 화면에서 편집 가능한 AI 검색 커스텀 규칙
+
+사용자 요청: "상위평가=가/나 등급" 같은 용어 정의나 "답변에 근거를 더
+자세히 포함해줘" 같은 출력 형식 지시를, 코드 배포 없이 화면에서 직접
+추가/수정하고 싶다. 확인 결과 사용자가 선택한 설계: (1) 용어 정의와
+출력 형식 지시를 굳이 나누지 않고 규칙 텍스트 하나로 통합, (2) 편집
+패널은 별도 관리자 페이지가 아니라 AI 검색 바 바로 옆에 토글로 열리는
+작은 패널.
+
+- **`services/query_settings.py`**(신규): 규칙 텍스트를
+  `data/processed/nl_query_custom_rules.txt`에 저장/조회
+  (`read_rules()`/`write_rules()`, 최대 4000자). `apply(system_prompt)`가
+  기존 시스템 프롬프트 뒤에 "# 사용자 정의 추가 규칙" 섹션으로 그대로
+  덧붙여 반환 — 코드에 있는 원본 프롬프트 상수(`nl_query.QUERY_SYSTEM_PROMPT`,
+  `open_data_query._SQL_GEN_SYSTEM_TEMPLATE`)는 건드리지 않는다. 저장
+  파일은 `data/processed/*`라 다른 CSV/JSON 산출물과 마찬가지로
+  형상관리 대상이 아니다(파이프라인 산출물은 아니지만, 배포 환경마다
+  다른 사용자 입력이라는 점에서 성격이 같음).
+- **`services/nl_query.py`** / **`services/open_data_query.py`**: 각각
+  LLM 호출 직전에 `query_settings.apply()`를 거치도록 한 줄씩 수정
+  (라우팅 프롬프트, SQL 생성 프롬프트 양쪽 다 적용).
+- **`components/nl_query_bar.py`**: AI 검색 제목 오른쪽에 "규칙 설정"
+  버튼(`nl-query-rules-toggle-btn`) 추가, 클릭 시 `dbc.Collapse` 패널이
+  열리며 `dcc.Textarea` + 저장 버튼 노출. 패널을 열 때마다(저장 후
+  재오픈 포함) `query_settings.read_rules()`로 디스크에서 다시
+  읽어와 텍스트영역에 채운다 — `render()`가 앱 시작 시 딱 한 번만
+  호출되므로, 초기 레이아웃에 값을 미리 심어두면 다른 세션이 그 사이
+  저장한 최신 내용을 못 보는 문제가 생겨 매번 재조회하는 방식으로 짬.
+  저장 버튼은 이 세션 전용 콜백 규약(`if not n_clicks: return
+  dash.no_update`)을 그대로 따름.
+- Playwright로 패널 열기→입력→저장→닫기→재열기까지 end-to-end 확인,
+  저장된 텍스트가 `query_settings.apply()`를 통해 프롬프트 끝에 정상
+  결합되는 것도 별도 확인.

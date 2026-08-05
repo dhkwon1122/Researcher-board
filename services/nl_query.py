@@ -64,6 +64,7 @@ from services.llm import LLMError  # noqa: E402
 from services import data_labels  # noqa: E402
 from services import data_store  # noqa: E402
 from services import open_data_query  # noqa: E402
+from services import query_settings  # noqa: E402
 
 try:
     import llm_config as _llm_cfg
@@ -526,7 +527,8 @@ def parse_question(question: str) -> dict:
         return {'intent': 'unsupported', 'reason_if_unsupported': '빈 질문입니다.'}
 
     max_wait = getattr(_llm_cfg, 'LLM2_QUERY_MAX_WAIT_SECONDS', 15) if _llm_cfg else 15
-    raw = llm_client.call_llm(question, QUERY_SYSTEM_PROMPT, temperature=0.0, max_tokens=400, max_wait=max_wait)
+    system_prompt = query_settings.apply(QUERY_SYSTEM_PROMPT)
+    raw = llm_client.call_llm(question, system_prompt, temperature=0.0, max_tokens=400, max_wait=max_wait)
     if not raw:
         return {'intent': 'error',
                 'message': '지금 요청이 많아 응답을 만들지 못했습니다. 잠시 후 다시 시도해주세요.'}

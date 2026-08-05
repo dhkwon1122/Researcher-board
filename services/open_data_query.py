@@ -51,6 +51,7 @@ import llm_client  # noqa: E402
 import researcher_fit as fit  # noqa: E402
 from services import data_labels  # noqa: E402
 from services import data_store  # noqa: E402
+from services import query_settings  # noqa: E402
 from services import researcher_profile_export as rpe  # noqa: E402
 from services import text2sql  # noqa: E402
 from services.llm import LLMError  # noqa: E402
@@ -224,7 +225,7 @@ def _schema_prompt(tables: dict) -> str:
 
 
 def _generate_sql(question: str, schema: str, max_wait) -> dict | None:
-    system = _SQL_GEN_SYSTEM_TEMPLATE.format(schema=schema)
+    system = query_settings.apply(_SQL_GEN_SYSTEM_TEMPLATE.format(schema=schema))
     raw = llm_client.call_llm(question, system, temperature=0.0, max_tokens=700, max_wait=max_wait)
     if not raw:
         return None

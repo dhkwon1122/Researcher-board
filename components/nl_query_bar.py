@@ -27,6 +27,7 @@ import dash_bootstrap_components as dbc
 from dash import ALL, Input, Output, State, callback, dcc, html
 
 from services import nl_query
+from services import query_settings
 from services import researcher_profile_export
 
 
@@ -57,10 +58,42 @@ def render() -> html.Div:
     """전역 자연어 질문 바 레이아웃 — app.py가 네비게이션 바로 아래에 한 번만
     삽입해 모든 탭에서 항상 보이게 한다."""
     return html.Div([
-        html.H5(
-            [html.I(className='bi bi-robot me-2 text-primary'), 'AI 검색',
-             html.Small(' 자연어로 물어보면 원천 데이터를 조회합니다', className='text-muted fw-normal')],
-            className='fw-bold mb-2 mt-1',
+        html.Div([
+            html.H5(
+                [html.I(className='bi bi-robot me-2 text-primary'), 'AI 검색',
+                 html.Small(' 자연어로 물어보면 원천 데이터를 조회합니다', className='text-muted fw-normal')],
+                className='fw-bold mb-0 mt-1',
+            ),
+            dbc.Button(
+                [html.I(className='bi bi-gear me-1'), '규칙 설정'],
+                id='nl-query-rules-toggle-btn', color='link', size='sm',
+                className='text-decoration-none', n_clicks=0,
+            ),
+        ], className='d-flex justify-content-between align-items-center mb-1'),
+        dbc.Collapse(
+            dbc.Card(
+                dbc.CardBody([
+                    html.Div(
+                        '용어 정의나 답변 형식을 직접 지시할 수 있습니다. 예: '
+                        '"상위평가는 가 또는 나 등급을 의미한다", '
+                        '"인원수를 물으면 항상 표 아래에 합계를 같이 보여줘"',
+                        className='text-muted small mb-2',
+                    ),
+                    dcc.Textarea(
+                        id='nl-query-rules-textarea',
+                        value='', placeholder='추가 규칙을 한 줄에 하나씩 입력하세요.',
+                        style={'width': '100%', 'height': '100px'},
+                        className='mb-2',
+                    ),
+                    html.Div([
+                        dbc.Button('저장', id='nl-query-rules-save-btn', color='primary',
+                                   size='sm', n_clicks=0),
+                        html.Span(id='nl-query-rules-save-msg', className='ms-2'),
+                    ]),
+                ]),
+                className='mb-2',
+            ),
+            id='nl-query-rules-collapse', is_open=False,
         ),
         dbc.InputGroup([
             dbc.Input(
@@ -288,6 +321,39 @@ def _run_nl_query(_n_clicks, _n_submit, question):
         return {**empty, 'note': '질문을 입력해주세요.'}, {}, {}, False, []
     result = nl_query.answer_question(question)
     return result, {}, {}, False, []
+
+
+@callback(
+    Output('nl-query-rules-collapse', 'is_open'),
+    Output('nl-query-rules-textarea', 'value'),
+    Input('nl-query-rules-toggle-btn', 'n_clicks'),
+    State('nl-query-rules-collapse', 'is_open'),
+    prevent_initial_call=True,
+)
+def _toggle_rules_panel(n_clicks, is_open):
+    """열 때마다 디스크에서 최신 규칙을 다시 읽는다 — render()가 앱 시작
+    시점에 한 번만 호출되므로(다른 세션이 그 사이 저장한 내용을 못 보는
+    문제 방지), 텍스트를 layout에 미리 심어 두지 않고 여기서 매번 갱신."""
+    if not n_clicks:
+        return dash.no_update, dash.no_update
+    next_open = not is_open
+    if next_open:
+        return True, query_settings.read_rules()
+    return False, dash.no_update
+
+
+@callback(
+    Output('nl-query-rules-save-msg', 'children'),
+    Input('nl-query-rules-save-btn', 'n_clicks'),
+    State('nl-query-rules-textarea', 'value'),
+    prevent_initial_call=True,
+)
+def _save_rules(n_clicks, text):
+    if not n_clicks:
+        return dash.no_update
+    query_settings.write_rules(text or '')
+    return html.Span([html.I(className='bi bi-check-circle-fill me-1'), '저장되었습니다.'],
+                      className='text-success small')
 
 
 @callback(
