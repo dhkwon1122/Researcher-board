@@ -348,3 +348,38 @@ Input으로 걸린 컴포넌트가 **레이아웃에 처음 나타나는 시점*
 
 위 설계대로 구현 완료 — 실제 파일 경로/함수명 및 구현 중 발견한 이슈는 위
 "완료: 개방형 질의(open_data_query) 확장" 섹션 참고.
+
+## 완료: AI 검색 전역화 + 조직별 비교 표시 안 되던 문제 수정
+
+사용자 요청 3건: (1) "연구원 목록" 탭 전용 AI 검색(text2sql 기반, DB
+전용) 삭제, (2) "보유 전문성" 탭에 있던 자연어 질문 바를 전 탭 공용으로
+이동, (3) "조직별 비교" 탭 내용이 안 보이는 원인 확인.
+
+- **`components/nl_query_bar.py`**(신규): `pages/researcher_similarity_map.py`
+  안에 있던 자연어 질문 바 UI+콜백 11개를 그대로 옮겨 온 모듈. 페이지가
+  아니라 `app.py`가 `Dash()` 인스턴스 생성 직후 한 번 import해서
+  module-level `@callback`을 등록하고, `render()`를 `app.layout`에서
+  `dash.page_container` 위(네비게이션 바로 아래)에 직접 삽입 — 탭을
+  이동해도 다시 생성되지 않고 항상 같은 자리에 유지된다. 기존 "연구원
+  목록"의 페이지 전용 AI 검색(`services/text2sql.py`, PostgreSQL 전용,
+  DB 없으면 동작 안 함)은 완전히 삭제하고 이 전역 바 하나로 통합.
+- **`pages/researcher_list.py`** / **`pages/researcher_similarity_map.py`**:
+  각각 구 AI 검색 카드/콜백, 이동된 nl-query 바 블록 제거. 남은 미사용
+  import(`db_enabled`, `text2sql`, `json`, `ALL`, `nl_query`,
+  `researcher_profile_export`) 정리.
+- **조직별 비교 표시 안 되던 원인**: `_dept_section()`이 succession
+  데이터의 `rank_type`을 `'Ready Now'`/`'Ready Later'` 문자열과
+  **완전 일치**로만 매칭했다. 원본(raw) 데이터에 대소문자/공백이 조금만
+  달라도(엑셀 수기 입력 특성상 흔함) 4개 슬롯이 전부 매칭 실패 →
+  해당 부서 카드가 0개 → `_dept_section`이 `None`을 반환해 그 부서
+  섹션 자체가 화면에서 조용히 사라짐(에러 없이 헤더+인쇄버튼만 남는
+  빈 화면). 샘플 데이터 생성기는 문자열을 정확히 하드코딩해서 만들기
+  때문에 개발 샌드박스에서는 재현되지 않았다.
+  - **수정**: `rank_type` 매칭을 `strip()` + 소문자 비교로 완화해
+    표기 차이에 영향받지 않도록 함.
+  - **추가 안전장치**: 그래도 카드가 0개인 부서는 조용히 사라지는 대신,
+    "rank_type 값이 일치하지 않습니다(원본 값: …)" 또는 "researcher_id가
+    researchers 데이터에 없습니다(…)" 같은 구체적 사유를 담은
+    `dbc.Alert`를 해당 부서 자리에 표시(`pages/org_comparison.py`
+    `_dept_section()`) — 향후 같은 유형의 원천 데이터 표기 문제가
+    생겨도 화면에서 바로 원인이 보이도록 함.

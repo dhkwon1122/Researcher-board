@@ -12,8 +12,6 @@ from dash import Input, Output, State, callback, dash_table, dcc, html, no_updat
 
 from components.timeline_data import dedupe_patents
 from services.data_store import read_processed
-from services.db import db_enabled
-from services.text2sql import run_query
 
 dash.register_page(
     __name__,
@@ -202,38 +200,6 @@ def layout():
     return html.Div([
         dcc.Location(id='list-url', refresh=True),
 
-        # ── AI 검색 (자연어 → SQL) ─────────────────────────────────────────
-        dbc.Card(
-            dbc.CardBody([
-                html.H5(
-                    [html.I(className='bi bi-robot me-2 text-primary'),
-                     'AI 검색 ', html.Small('자연어로 물어보면 DB를 조회합니다',
-                                            className='text-muted fw-normal')],
-                    className='fw-bold mb-2 mt-1',
-                ),
-                dbc.InputGroup([
-                    dbc.Input(
-                        id='t2s-input',
-                        placeholder='예) AI 부서에서 논문이 가장 많은 연구원 5명',
-                        type='text',
-                        n_submit=0,
-                    ),
-                    dbc.Button([html.I(className='bi bi-search me-1'), '검색'],
-                               id='t2s-btn', color='primary', n_clicks=0),
-                ]),
-                html.Div(
-                    '예시: “특허 등록이 3건 이상인 연구원”, “부서별 평균 논문 수”, '
-                    '“2024년 평가등급이 가”인 연구원 이름”',
-                    className='text-muted small mt-2',
-                ),
-                dcc.Loading(
-                    html.Div(id='t2s-result', className='mt-3'),
-                    type='dot', color='#1e3a5f',
-                ),
-            ]),
-            className='mb-3 shadow-sm',
-        ),
-
         dbc.Row([
             dbc.Col(
                 html.H5([html.I(className='bi bi-table me-2 text-primary'), '연구원 목록'],
@@ -402,72 +368,3 @@ def navigate_to_profile(active_cell, virtual_data):
         return f'/researcher-profile?id={rid}'
     except Exception:
         return no_update
-
-
-# ── 콜백 4: AI 검색 (자연어 → SQL → 결과) ───────────────────────────────────
-def _sql_block(sql: str):
-    """생성된 SQL 을 접기 가능한 코드 블록으로."""
-    return dbc.Card(
-        dbc.CardBody([
-            html.Div([html.I(className='bi bi-code-slash me-1'),
-                      html.Small('실행된 SQL', className='text-muted')],
-                     className='mb-1'),
-            html.Pre(sql, className='mb-0',
-                     style={'whiteSpace': 'pre-wrap', 'fontSize': '0.78rem',
-                            'background': '#f6f8fa', 'padding': '8px 10px',
-                            'borderRadius': '6px', 'margin': 0}),
-        ], className='py-2'),
-        className='mb-2 border-0', style={'background': 'transparent'},
-    )
-
-
-@callback(
-    Output('t2s-result', 'children'),
-    Input('t2s-btn',   'n_clicks'),
-    Input('t2s-input', 'n_submit'),
-    State('t2s-input', 'value'),
-    prevent_initial_call=True,
-)
-def ai_search(n_clicks, n_submit, question):
-    if not question or not question.strip():
-        return dbc.Alert('질문을 입력하세요.', color='secondary', className='mb-0')
-
-    if not db_enabled():
-        return dbc.Alert(
-            [html.I(className='bi bi-info-circle me-2'),
-             'AI 검색은 PostgreSQL 연결이 필요합니다. DATABASE_URL 을 설정하세요.'],
-            color='warning', className='mb-0',
-        )
-
-    res = run_query(question)
-
-    if res['error']:
-        children = [dbc.Alert(
-            [html.I(className='bi bi-exclamation-triangle me-2'), res['error']],
-            color='danger', className='mb-2')]
-        if res.get('sql'):
-            children.append(_sql_block(res['sql']))
-        return children
-
-    cols = res['columns']
-    rows = res['rows']
-    table = dash_table.DataTable(
-        columns=[{'name': c, 'id': c} for c in cols],
-        data=[dict(zip(cols, r)) for r in rows],
-        page_action='native',
-        page_size=20,
-        sort_action='native',
-        style_as_list_view=True,
-        style_table={'overflowX': 'auto'},
-        style_header={'backgroundColor': '#1e3a5f', 'color': 'white',
-                      'fontWeight': '600', 'fontSize': '0.8rem', 'textAlign': 'center'},
-        style_cell={'fontSize': '0.82rem', 'padding': '5px 10px',
-                    'textAlign': 'left', 'maxWidth': '260px',
-                    'overflow': 'hidden', 'textOverflow': 'ellipsis'},
-        style_data_conditional=[{'if': {'row_index': 'odd'},
-                                 'backgroundColor': '#f9fbfd'}],
-    )
-    count = html.Div(f'{len(rows)}건', className='text-muted small mb-2')
-    if not rows:
-        count = dbc.Alert('조건에 맞는 결과가 없습니다.', color='secondary', className='mb-2')
-    return [_sql_block(res['sql']), count, table]

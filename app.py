@@ -15,6 +15,12 @@ app = dash.Dash(
     title='연구원 대시보드',
 )
 
+# pages/*.py 콜백은 use_pages=True 스캔 과정에서 자동 등록되지만, 이 모듈은
+# 페이지가 아니라 전 탭 공용 컴포넌트라 Dash 인스턴스 생성 이후 직접
+# import해서 module-level @callback들을 등록해야 한다(생성 전에 import하면
+# 아직 앱이 없어 콜백이 등록되지 않는다).
+from components import nl_query_bar  # noqa: E402
+
 app.index_string = '''<!DOCTYPE html>
 <html>
     <head>
@@ -147,7 +153,14 @@ app.layout = html.Div(
     [
         navbar,
         dbc.Container(
-            dash.page_container,
+            [
+                # 전 탭 공용 자연어 질문 바 — 어느 탭에 있든 항상 보이도록
+                # 네비게이션 바로 아래, 페이지 콘텐츠 위에 고정 배치한다
+                # (구 "연구원 목록" 탭 전용 AI 검색을 대체).
+                nl_query_bar.render(),
+                html.Hr(className='mt-1 mb-3'),
+                dash.page_container,
+            ],
             fluid=True,
             className='px-4 py-3',
         ),

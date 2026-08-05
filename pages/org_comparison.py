@@ -263,6 +263,8 @@ def _dept_section(dept_name, suc_dept, res, eva, edu, awd, nur, inc):
 
     s = suc_dept.copy()
     s['rank_order'] = pd.to_numeric(s['rank_order'], errors='coerce').fillna(99).astype(int)
+    # rank_type 원본 표기 편차(대소문자/공백)에 흔들리지 않도록 정규화 키로 매칭
+    s['_rank_type_norm'] = s['rank_type'].astype(str).str.strip().str.lower()
 
     # 4개 슬롯 고정 순서
     SLOTS = [
@@ -273,14 +275,16 @@ def _dept_section(dept_name, suc_dept, res, eva, edu, awd, nur, inc):
     ]
 
     cards = []
+    unmatched_ids = []
     for rank_type, rank_order in SLOTS:
-        matched = s[(s['rank_type'] == rank_type) & (s['rank_order'] == rank_order)]
+        matched = s[(s['_rank_type_norm'] == rank_type.lower()) & (s['rank_order'] == rank_order)]
         if matched.empty:
             continue
         srow = matched.iloc[0]
         rid = str(srow['researcher_id'])
         r_rows = res[res['researcher_id'] == rid]
         if r_rows.empty:
+            unmatched_ids.append(rid)
             continue
         card = _candidate_card(
             r_rows.iloc[0], rank_type, rank_order,
@@ -289,7 +293,30 @@ def _dept_section(dept_name, suc_dept, res, eva, edu, awd, nur, inc):
         cards.append(dbc.Col(card, lg=3, md=6, className='mb-2'))
 
     if not cards:
-        return None
+        # succession 행은 있지만 카드가 하나도 만들어지지 않은 경우 — rank_type 표기가
+        # 'Ready Now'/'Ready Later'와 다르거나 researcher_id가 researchers.csv에 없는
+        # 것이 원인일 수 있어, 조용히 사라지는 대신 원인을 화면에 남긴다.
+        raw_rank_types = sorted(s['rank_type'].astype(str).unique())
+        reasons = []
+        if not any(rt.strip().lower() in ('ready now', 'ready later') for rt in raw_rank_types):
+            reasons.append(f"rank_type 값이 'Ready Now'/'Ready Later'와 일치하지 않습니다 "
+                            f"(원본 값: {', '.join(raw_rank_types)})")
+        if unmatched_ids:
+            reasons.append(f"researcher_id가 researchers 데이터에 없습니다 "
+                            f"({', '.join(unmatched_ids)})")
+        if not reasons:
+            reasons.append('일치하는 후보를 찾지 못했습니다.')
+        return html.Div([
+            html.Div([
+                html.I(className='bi bi-building me-2 text-primary'),
+                html.Span(dept_name, className='fw-bold fs-6'),
+            ], className='mb-2 pb-1 border-bottom border-primary border-2'),
+            dbc.Alert(
+                [html.Strong(f'{dept_name}: 카드를 표시하지 못했습니다. ')] +
+                [html.Span(r) for r in reasons],
+                color='warning', className='mb-2 py-2 small',
+            ),
+        ], className='mb-4 org-section')
 
     return html.Div([
         html.Div([
