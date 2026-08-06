@@ -1562,3 +1562,61 @@ Windows에서 아예 동작하지 않고(fork 기반) 이 규모엔 멀티 워�
 링크(연구원 프로필/보유 전문성/연구원 명단/JOB Market)만 남았는지
 (3) `/jd-reconciliation`을 URL로 직접 열어도 "준비 중" 안내만 뜨고
 실제 폼은 안 보이는지 확인.
+
+## 완료: 좌측 상단 "의견 제출하기" 버튼 + 누적 CSV 저장
+
+사용자 요청: 관리자/유저 구분 대신, 좌측 상단 "연구원 대시보드" 옆에
+밝은 색 버튼으로 "기능 관련 수정/추가/보완/기타 의견 제출하기"를
+추가해 베타테스터 의견을 받고 싶다는 것. 확인 문답으로 확정된 사항:
+저장 위치는 `data/processed/` 하위(다른 기능들의 이력 저장 위치와
+동일한 관례), 제출마다 새 파일이 아니라 **파일 하나에 누적**, 작성자는
+**선택 입력**, 파일명은 사용자가 재확인한 표기 그대로 `request_fucntion`
+(오타로 보이지만 사용자가 명시적으로 확정).
+
+**형식은 CSV로 추천·채택**: 제출일시/구분/작성자/내용처럼 여러 항목을
+구조적으로 담아야 하고, 이 프로젝트 전반에서 이미 엑셀을 검토 도구로
+쓰고 있어 나중에 엑셀로 열어 정렬·필터링하며 보기 편하다. txt는 여러
+줄짜리 의견이 여러 건 쌓이면 항목 구분이 애매해질 수 있어 제외.
+
+**`services/feedback.py`**(신규): `FEEDBACK_DIR = data/processed/feedback`,
+`FEEDBACK_PATH = .../request_fucntion.csv`. `submit_feedback(category,
+message, author='')` — 카테고리가 4개(수정/추가/보완/기타) 밖이면
+"기타"로 폴백, 내용이 비어 있으면 `ValueError`(호출부가 그대로 화면에
+안내). `csv.DictWriter`로 파일이 없으면 헤더부터 쓰고, 있으면 한 줄
+추가(append) — 매번 전체를 다시 쓰는 `services/comments.py` 방식과
+달리 로그성 데이터라 append가 더 알맞다고 판단. `app.py`가
+`threaded=True`라 여러 사용자가 동시에 제출할 수 있어, 프로세스 내
+`threading.Lock()`으로 파일 쓰기가 서로 섞이지 않게 함(멀티프로세스
+운영은 아직 아니라서 파일 락까지는 필요 없다고 판단).
+
+**`components/feedback_modal.py`**(신규, `nl_query_bar.py`와 동일한
+패턴 — app.py가 `dash.Dash()` 생성 후 명시적으로 import해야 모듈
+콜백이 등록됨): `render()`가 버튼 + `dbc.Modal`(구분 라디오/내용
+Textarea/작성자 선택 Input)을 반환. 콜백 하나가 열기/취소/제출 3개
+버튼을 `dash.ctx.triggered_id`로 분기 — 열 때 필드 초기화, 취소 시
+닫기, 제출 시 내용 비어있으면 경고, 성공하면 모달은 열어둔 채 필드만
+비우고 초록색 성공 메시지 표시(제출 확인을 사용자가 보게 하려고 자동
+닫기 대신 이렇게 함).
+
+**버튼 색상 관련 이슈 발견·수정**: 처음엔 `dbc.Button`을 색 지정 없이
+(기본값 `color='primary'`) 만들고 인라인 `style`로 배경색을 주황으로
+덮어썼는데, 실제로는 계속 이 앱의 기본 파란색으로 보였다 — 원인은
+`assets/custom.css`의 `.btn-primary { background-color: ... !important;
+}` 규칙이 인라인 style보다 우선 적용되기 때문. `!important`가 없는
+Bootstrap 기본 `color='warning'`(밝은 노랑/주황 계열)로 바꿔 이 충돌을
+피하고, 텍스트 색·굵기만 인라인 style로 남겼다.
+
+**`app.py`**: `feedback_modal` import 추가(nl_query_bar와 같은 줄),
+네비게이션 바 상단 Row에서 `연구원 대시보드` 브랜드 타이틀 바로 옆
+Col로 버튼 배치(버튼 자체에 `className='ms-3'`로 간격).
+
+검증: `submit_feedback()`을 직접 호출해 CSV 헤더/여러 줄 메시지(개행
+포함) 왕복, 빈 내용 시 `ValueError`, 잘못된 카테고리 폴백 확인.
+Playwright로 실제 서버에서 버튼 클릭 → 모달 오픈 → 빈 제출 시 경고 →
+정상 제출 시 성공 메시지 → 취소로 닫힘까지 전체 흐름 확인, 실제로
+`request_fucntion.csv`에 제출한 내용이 그대로 기록됐는지 확인. 버튼
+배경색 자체가 브라우저에서 노란색으로 보이는지는 이 샌드박스의
+Bootstrap CDN 차단(기존에 여러 번 확인된 프록시 아티팩트) 때문에
+직접 확인은 못 했지만, DOM에 `btn-warning` 클래스가 정확히 붙고
+`custom.css`에 이를 덮어쓰는 규칙이 없음을 확인해 실제 배포
+환경에서는 정상적으로 밝은 노랑으로 보일 것으로 판단.

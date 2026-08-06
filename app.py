@@ -15,11 +15,11 @@ app = dash.Dash(
     title='연구원 대시보드',
 )
 
-# pages/*.py 콜백은 use_pages=True 스캔 과정에서 자동 등록되지만, 이 모듈은
+# pages/*.py 콜백은 use_pages=True 스캔 과정에서 자동 등록되지만, 이 모듈들은
 # 페이지가 아니라 전 탭 공용 컴포넌트라 Dash 인스턴스 생성 이후 직접
 # import해서 module-level @callback들을 등록해야 한다(생성 전에 import하면
 # 아직 앱이 없어 콜백이 등록되지 않는다).
-from components import nl_query_bar  # noqa: E402
+from components import feedback_modal, nl_query_bar  # noqa: E402
 
 app.index_string = '''<!DOCTYPE html>
 <html>
@@ -98,6 +98,7 @@ navbar = dbc.Navbar(
                         dbc.NavbarBrand('연구원 대시보드', className='fw-bold fs-5 mb-0'),
                         width='auto',
                     ),
+                    dbc.Col(feedback_modal.render(), width='auto'),
                 ],
                 align='center',
                 className='g-0',
