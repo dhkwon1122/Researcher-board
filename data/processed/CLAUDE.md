@@ -1221,3 +1221,33 @@ closest_non_match만 있는 1명) 픽스처로 `_summary_stats`가 "총 4명 중
 자체가 렌더링되지 않는지 확인. Playwright로 업로드 영역에 점선
 테두리·아이콘·안내 문구가 실제 화면에 렌더링되는지, 콘솔 에러가
 없는지 확인.
+
+## 완료: JOB Market — 결과 카드에 연구원 본인의 보유 전문성 추가 표시
+
+사용자 요청: 검색 결과가 매칭된 과제에 대한 설명만 보여줘서 신뢰성이
+떨어지니, 그 연구원이 실제로 어떤 전문성을 갖고 있는지도 추천 사유와
+함께 보여달라는 것.
+
+**`services/job_market.py`** `recommend_for_researcher()`: 이미
+내부에서 `expertise_profiles.get(researcher_id)`로 읽고 있던 프로필
+원본을 반환값에 `'profile'` 키로 추가(조기 반환하는 4개 분기 — 데이터
+없음/후보 없음/임베딩 실패/정상 — 전부에 포함, 데이터가 없을 때만
+`None`). 추가 LLM 호출이나 임베딩 계산 없이 이미 로드해 둔 값을 그대로
+얹기만 하므로 성능에 영향 없음.
+
+**`pages/job_market.py`**: `components.detail_tabs.llm_summary_block`
+(researcher_profile.py의 "전문성 요약(LLM)"과 동일한 컴포넌트 —
+강점 분야/키워드는 배지로, 주요 역할·책임/전문지식 및 역량은 불릿
+목록으로 렌더링)을 그대로 재사용해, 신규 `_profile_block(profile)`을
+만들고 `_person_card()`에서 사람 이름/부서 줄과 추천 결과 사이에
+"보유 전문성" 섹션으로 삽입. 프로필이 없으면 `llm_summary_block(None)`이
+알아서 "분석 데이터 없음"을 보여주므로 별도 분기 불필요. history에
+저장된 report에도 `profile`이 함께 저장되므로, 과거 이력을 "보기"로
+다시 열 때도 `_render_result()`가 그대로 재사용돼 동일하게 표시된다
+(저장 당시 `profile`이 없던 옛 이력은 `.get('profile')`이 `None`을
+반환해 "분석 데이터 없음"으로 안전하게 처리).
+
+검증: `_person_card()`를 프로필 있음/없음 두 픽스처로 직접 렌더링해
+각각 "보유 전문성" 섹션에 강점 분야/키워드가 포함되는지, 프로필이
+없을 때 "분석 데이터 없음"으로 대체되는지 확인. Playwright로 JOB
+Market 페이지가 콘솔 에러 없이 로드되는지 확인.

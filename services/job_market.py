@@ -379,23 +379,33 @@ def _judge_recommendations(profile_text: str, shortlist: list) -> tuple:
 def recommend_for_researcher(researcher_id: str, expertise_profiles: dict, candidate_pool: dict) -> dict:
     """한 사람에 대한 추천 결과. candidate_pool은 여러 사람에 걸쳐 재사용
     가능(과제 단위 검색이 배정 인원 전체를 순회할 때 매번 새로 만들지 않도록
-    호출부가 미리 만들어 넘긴다)."""
+    호출부가 미리 만들어 넘긴다).
+
+    반환에 'profile'(연구원 보유 전문성 분석.json의 해당 인물 원본 항목)을
+    함께 담는다 — 매칭 과제 사유만으로는 신뢰성이 떨어진다는 사용자 피드백에
+    따라, 화면에서 이 사람의 보유 전문성(강점 분야/키워드/역할 등)을 추천
+    사유와 나란히 보여주기 위함(components.detail_tabs.llm_summary_block이
+    researcher_profile.py와 동일한 형태로 렌더링)."""
     profile = expertise_profiles.get(researcher_id)
     if not profile:
-        return {'recommendations': [], 'closest_non_match': None, 'note': '전문성 분석 데이터가 없어 추천할 수 없습니다.'}
+        return {'recommendations': [], 'closest_non_match': None,
+                'note': '전문성 분석 데이터가 없어 추천할 수 없습니다.', 'profile': None}
     if not candidate_pool:
-        return {'recommendations': [], 'closest_non_match': None, 'note': '비교 가능한 후보 과제가 없습니다.'}
+        return {'recommendations': [], 'closest_non_match': None,
+                'note': '비교 가능한 후보 과제가 없습니다.', 'profile': profile}
 
     profile_text = fit.researcher_profile_text(profile)
     try:
         profile_embedding = fit.cached_embed([profile_text])[0]
     except LLMError as exc:
-        return {'recommendations': [], 'closest_non_match': None, 'note': f'임베딩 계산 실패: {exc}'}
+        return {'recommendations': [], 'closest_non_match': None,
+                'note': f'임베딩 계산 실패: {exc}', 'profile': profile}
 
     scored = _score_candidates(profile_embedding, candidate_pool)
     shortlist = scored[:TOP_K_CANDIDATES]
     recommendations, closest_non_match = _judge_recommendations(profile_text, shortlist)
-    return {'recommendations': recommendations, 'closest_non_match': closest_non_match, 'note': ''}
+    return {'recommendations': recommendations, 'closest_non_match': closest_non_match,
+            'note': '', 'profile': profile}
 
 
 def _own_org_code(researcher_id: str, researchers_df) -> str:

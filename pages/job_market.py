@@ -8,6 +8,7 @@ import dash
 import dash_bootstrap_components as dbc
 from dash import Input, Output, State, callback, dcc, html
 
+from components.detail_tabs import llm_summary_block
 from services import job_market as jm
 
 dash.register_page(
@@ -53,6 +54,17 @@ def _closest_non_match_block(rec: dict):
     ], className='p-2 bg-light rounded')
 
 
+def _profile_block(profile: dict | None):
+    """추천 사유만으로는 신뢰성이 떨어진다는 피드백에 따라, 이 사람의 보유
+    전문성(강점 분야/키워드/역할·책임 등)을 추천 근거와 나란히 보여준다 —
+    researcher_profile.py의 '전문성 요약(LLM)'과 동일한 컴포넌트를 재사용해
+    같은 데이터를 같은 형태로 일관되게 표시한다."""
+    return html.Div([
+        html.Div('보유 전문성', className='small text-muted fw-semibold mb-1'),
+        html.Div(llm_summary_block(profile), className='mb-2'),
+    ], className='p-2 mb-2 bg-light rounded')
+
+
 def _person_card(person: dict, result: dict):
     recs = result.get('recommendations') or []
     closest_non_match = result.get('closest_non_match')
@@ -71,6 +83,7 @@ def _person_card(person: dict, result: dict):
                 html.Span(f"{person.get('department', '')} · {person.get('org_code', '')}",
                           className='text-muted small'),
             ], className='mb-2'),
+            _profile_block(result.get('profile')),
             body,
         ]),
         className='mb-3',
