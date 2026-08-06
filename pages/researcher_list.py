@@ -37,8 +37,16 @@ def _build_summary_df() -> pd.DataFrame:
         awd  = read_processed('awards')
         edu  = read_processed('education')
         inc  = read_processed('incentive_selection')
+        team = read_processed('team_refer')
     except Exception:
         return pd.DataFrame()
+
+    # 직책 = team_refer.csv의 assignment_name(researcher_id 기준, 조직장급만
+    # 등록돼 있어 나머지는 매핑이 없음 — 그 경우 "-").
+    title_by_id = (
+        dict(zip(team['researcher_id'], team['assignment_name']))
+        if not team.empty and {'researcher_id', 'assignment_name'} <= set(team.columns) else {}
+    )
 
     # 숫자 변환
     for col in ['pub_year', 'impact_factor', 'citation_count', 'contribution']:
@@ -109,6 +117,7 @@ def _build_summary_df() -> pd.DataFrame:
             '부서':           str(r.get('department', '')),
             '과제':           str(r.get('org_code', '')),
             '직급':           str(r.get('position', '')),
+            '직책':           str(title_by_id.get(rid, '') or '').strip() or '-',
             '성별':           str(r.get('gender', '')),
             '학력(최종)':     highest,
             '전공':           major,

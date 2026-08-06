@@ -70,6 +70,7 @@ def _load_tables() -> dict:
         'tasks': data_store.read_processed('tasks'),
         'nurturing': data_store.read_processed('nurturing'),
         'incentive_selection': data_store.read_processed('incentive_selection'),
+        'team_refer': data_store.read_processed('team_refer'),
     }
 
 
@@ -155,6 +156,13 @@ def _col_position_year(_rid, rows):
     return f'{position}-{years}'
 
 
+def _col_position_title(_rid, rows):
+    """직책 = team_refer.csv의 assignment_name(조직장급만 등록돼 있어 대부분
+    매핑이 없음 — 그 경우 "-")."""
+    team_rows = rows['team_refer']
+    return _or_dash(team_rows[0].get('assignment_name')) if team_rows else '-'
+
+
 def _col_tasks(_rid, rows):
     items = sorted(rows['tasks'], key=lambda t: _s(t.get('start_date')), reverse=True)
     lines = []
@@ -195,6 +203,7 @@ _COLUMNS = [
     ('학력', _col_education),
     ("평가\n('24~'26)", _col_evaluation),
     ('CL/년차', _col_position_year),
+    ('직책', _col_position_title),
     ('과제수행이력', _col_tasks),
     ('양성이력', _col_nurturing),
     ('핵심이력', _col_incentive),
@@ -210,6 +219,7 @@ def _researcher_row_context(researcher_id: str, tables: dict) -> dict:
         'tasks': _rows_for(tables['tasks'], researcher_id),
         'nurturing': _rows_for(tables['nurturing'], researcher_id),
         'incentive_selection': _rows_for(tables['incentive_selection'], researcher_id),
+        'team_refer': _rows_for(tables['team_refer'], researcher_id),
     }
 
 

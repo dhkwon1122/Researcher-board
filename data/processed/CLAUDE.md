@@ -1378,3 +1378,35 @@ TOEIC 없음 (3) 부서 선택 시 과제 옵션이 좁혀짐 (4) 드롭다운�
 로드되지 않는 환경 한정 아티팩트로 확인(기존 JOB Market 페이지도
 동일하게 재현됨 — `col-md-*` 클래스 자체는 정상 적용되어 있어 실제
 배포 환경에서는 문제 없음).
+
+## 완료: 연구원 명단/엑셀 다운로드에 "직책"(team_refer.csv assignment_name) 추가
+
+사용자 요청 2건: (1) 연구원 명단 컬럼에 직책 추가(직급~성별 사이,
+team_refer.csv의 assignment_name 매핑, 없으면 "-") (2) 프로필 엑셀
+다운로드에도 CL/년차~과제수행이력 사이에 직책 추가. 확인 결과 2번은
+`pages/researcher_list.py`가 아니라 공용 모듈
+`services/researcher_profile_export.py`(`build_profile_workbook()`)의
+`_COLUMNS`를 가리키는 것이었고, 이 모듈은 연구원 명단 탭의 엑셀
+다운로드뿐 아니라 "보유 전문성" 탭 AI 검색 결과 엑셀 다운로드
+(`components/nl_query_bar.py`)에도 공유되는 함수라 두 화면 모두에
+반영되는 게 맞는지 확인 — 사용자가 "둘 다 적용되는게 맞다"고 확정.
+
+`team_refer.csv`는 조직장급 9명(소장/본부장/PL/파트장)만 `researcher_id`
+당 1행씩 등록돼 있고(중복 없음 확인) 나머지는 매핑이 없어 "-"로
+표기된다.
+
+**`pages/researcher_list.py`** `_build_summary_df()`: `team_refer`를
+추가로 읽어 `researcher_id -> assignment_name` dict(`title_by_id`)를
+만들고, rows 딕셔너리에 `직책` 키를 `직급`과 `성별` 사이에 추가
+(`title_by_id.get(rid) or '-'`).
+
+**`services/researcher_profile_export.py`**: `_load_tables()`/
+`_researcher_row_context()`에 `team_refer` 추가, 신규
+`_col_position_title(_rid, rows)`(`team_refer` 행이 있으면
+`assignment_name`, 없으면 "-")를 `_COLUMNS`의 `'CL/년차'`와
+`'과제수행이력'` 사이에 삽입.
+
+검증: `_build_summary_df()`를 직접 호출해 직책 컬럼 값(PL/파트장/소장/
+"-")과 컬럼 순서(직급→직책→성별) 확인. `build_profile_workbook()`으로
+실제 xlsx를 만들어 openpyxl로 다시 열어 헤더 순서(CL/년차→직책→
+과제수행이력)와 셀 값을 검증.
