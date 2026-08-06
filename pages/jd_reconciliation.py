@@ -19,6 +19,12 @@ dash.register_page(
     title='과제 직무/대상자 검증',
 )
 
+# 관리자/유저 구분(로그인·권한 체계)이 아직 없어 임시로 전체 사용자에게
+# 숨겨둔 상태 — 나중에 권한 체계가 생기면 이 플래그를 False로 바꾸고
+# app.py의 '과제 직무/대상자 검증' NavLink를 되살리면 된다
+# (data/processed/CLAUDE.md 참고).
+_FEATURE_HIDDEN = True
+
 
 def _confidence_badge(confidence: str):
     color = {'상': 'success', '중': 'warning', '하': 'secondary'}.get(confidence, 'light')
@@ -125,6 +131,8 @@ def _history_table():
 
 
 def layout(**_kwargs):
+    if _FEATURE_HIDDEN:
+        return dbc.Alert('이 기능은 현재 준비 중입니다.', color='secondary', className='mt-3')
     project_options = [{'label': p, 'value': p} for p in jd.list_project_names()]
     return html.Div([
         html.H5(

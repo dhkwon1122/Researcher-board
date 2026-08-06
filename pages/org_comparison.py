@@ -15,6 +15,16 @@ from components.profile_sections import load_photo_src
 
 dash.register_page(__name__, path='/', name='조직별 비교', title='조직별 우수 연구원 비교')
 
+# 관리자/유저 구분(로그인·권한 체계)이 아직 없어 임시로 전체 사용자에게
+# 숨겨둔 상태 — 나중에 권한 체계가 생기면 이 플래그를 False로 바꾸고
+# app.py의 '조직별 비교' NavLink를 되살리면 된다(data/processed/CLAUDE.md
+# 참고). 이 페이지가 루트('/') 경로를 쓰고 있어(Dash가 루트를 프레임워크
+# 자체 인덱스 라우트로 예약해 두기 때문에 register_page(redirect_from=['/'])
+# 로는 다른 페이지에 못 넘긴다 — 시도해보니 Flask 라우트 충돌로 서버가
+# 아예 안 뜸), 숨긴 동안은 이 페이지 자체가 클라이언트 사이드로
+# '/researcher-profile'로 리다이렉트한다.
+_FEATURE_HIDDEN = True
+
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
 
 CURRENT_YEAR = datetime.now().year
@@ -330,6 +340,8 @@ def _dept_section(dept_name, suc_dept, res, eva, edu, awd, nur, inc):
 # ─── 레이아웃 ────────────────────────────────────────────────────────────────────
 
 def layout():
+    if _FEATURE_HIDDEN:
+        return dcc.Location(href='/researcher-profile', id='org-comparison-hidden-redirect')
     try:
         res = _r('researchers')
         eva = _r('evaluations')

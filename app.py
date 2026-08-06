@@ -128,22 +128,11 @@ navbar = dbc.Navbar(
                             className='text-white',
                         )
                     ),
-                    dbc.NavItem(
-                        dbc.NavLink(
-                            [html.I(className='bi bi-people-fill me-1'), '조직별 비교'],
-                            href='/',
-                            active='exact',
-                            className='text-white',
-                        )
-                    ),
-                    dbc.NavItem(
-                        dbc.NavLink(
-                            [html.I(className='bi bi-file-earmark-check me-1'), '과제 직무/대상자 검증'],
-                            href='/jd-reconciliation',
-                            active='exact',
-                            className='text-white',
-                        )
-                    ),
+                    # '조직별 비교'/'과제 직무/대상자 검증' NavLink는 관리자/유저
+                    # 구분(로그인·권한 체계)이 아직 없어 임시로 제거됨 —
+                    # pages/org_comparison.py, pages/jd_reconciliation.py의
+                    # _FEATURE_HIDDEN 참고(data/processed/CLAUDE.md에 재오픈
+                    # 방법 기록).
                     dbc.NavItem(
                         dbc.NavLink(
                             [html.I(className='bi bi-signpost-split me-1'), 'JOB Market'],
