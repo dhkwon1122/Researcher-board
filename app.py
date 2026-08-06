@@ -189,4 +189,8 @@ server = app.server
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', '8501'))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    # threaded=True: 기본 Werkzeug 개발 서버는 싱글 스레드라 요청 하나(UMAP 계산,
+    # LLM 호출 등 오래 걸리는 작업)가 서버 전체를 붙잡아 다른 사용자의 요청이
+    # 밀리거나 타임아웃으로 "연결 끊김"처럼 보이는 문제가 있었다 — 개인 데스크탑에서
+    # 소수 인원 베타테스트하는 용도로는 이 정도로 충분(별도 의존성/OS 제약 없음).
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
