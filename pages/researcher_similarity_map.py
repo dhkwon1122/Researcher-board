@@ -2,9 +2,10 @@
 
 연구원/연구원↔연구원 2개 탭은 pipeline이 생성한 정적 콘솔 스타일 HTML
 리포트를 그대로 iframe(srcDoc)으로 띄운다 — 별도 Dash 컴포넌트로 재구현하지
-않고 기존 리포트 렌더링을 재사용하기 위함. 전문성 MAP 탭만 기존 UMAP 산점도
-그대로 유지하며, UMAP 계산(numba JIT)이 무겁기 때문에 탭이 실제 선택될 때만
-계산하도록 지연 렌더링한다.
+않고 기존 리포트 렌더링을 재사용하기 위함. 전문성 MAP 탭은 UMAP 산점도와
+관계 그래프(옵시디언 방식 노드-링크, dash_cytoscape) 두 서브뷰를 버튼으로
+전환할 수 있다 — 둘 다 무거운 계산(UMAP은 numba JIT, 관계 그래프도 데이터
+로딩)이 있어 실제 선택된 서브뷰만 계산하도록 지연 렌더링한다.
 
 (예전에는 "연구원↔과제" 탭도 있었지만, 그 기반이 되던 과제↔연구원 매칭
 기능 자체가 제거되면서 함께 삭제됐다 — data/processed/CLAUDE.md 참고.)
@@ -15,12 +16,15 @@ import os
 import numpy as np
 import dash
 import dash_bootstrap_components as dbc
+import dash_cytoscape as cyto
 import plotly.express as px
 import plotly.graph_objects as go
 from dash import Input, Output, Patch, State, callback, dcc, html
 
 from services.data_store import DATA_DIR
-from services.similarity_map import load_similarity_map
+from services.similarity_map import (
+    build_similarity_graph_elements, load_similarity_map, similarity_graph_department_classes,
+)
 
 dash.register_page(__name__, path='/researcher-similarity-map', name='보유 전문성',
                     title='연구원 보유 전문성')
@@ -197,6 +201,16 @@ def _star_highlight_trace(x: float, y: float) -> go.Scatter:
     )
 
 
+def _uirevision_for(rid: str | None) -> str:
+    """이 그래프의 uirevision 값 — 검색 대상(rid)이 바뀔 때만 값이 달라지게
+    해서, 검색으로 특정 지점에 확대·포커스하는 "의도된" 확대는 실제로
+    반영되면서도, 그 상태에서 사용자가 직접 확대/축소하는 동안에는(같은
+    rid가 유지되는 한) Plotly가 그 확대 상태를 그대로 유지하게 한다
+    (uirevision이 안 바뀌면 Plotly가 사용자의 현재 확대/이동을 새 figure
+    prop보다 우선해서 유지 — 공식 권장 방식)."""
+    return f'highlight:{rid or "none"}'
+
+
 def _apply_highlight(fig, rid: str | None, points: list):
     """검색으로 선택되었거나(URL의 highlight_researcher로 진입한 경우 포함)
     연구원을 지도 위 별 마커로 표시하고 그 지점으로 확대·포커스한다. rid가
@@ -223,7 +237,44 @@ def _apply_highlight(fig, rid: str | None, points: list):
     return True
 
 
+_SUBVIEW_UMAP = 'umap'
+_SUBVIEW_GRAPH = 'graph'
+
+
+def _subview_toggle():
+    """UMAP 산점도 ↔ 관계 그래프(옵시디언 방식 노드-링크) 전환 버튼. 다시
+    "전문성 MAP" 탭으로 돌아오면(_render_expertise_tab이 매번 새로 만듦)
+    항상 UMAP 기본값으로 초기화된다 — 다른 탭 전환 시 상태가 리셋되는 이
+    화면의 기존 관례와 동일."""
+    return dbc.RadioItems(
+        id='similarity-map-subview-toggle',
+        options=[
+            {'label': 'UMAP 지도', 'value': _SUBVIEW_UMAP},
+            {'label': '관계 그래프', 'value': _SUBVIEW_GRAPH},
+        ],
+        value=_SUBVIEW_UMAP, inline=True, className='mb-2',
+        inputClassName='btn-check', labelClassName='btn btn-outline-primary btn-sm me-1',
+        labelCheckedClassName='active',
+    )
+
+
 def _map_tab_content(highlighted_rid: str | None = None):
+    """전문성 MAP 탭 전체 — 헤더 + 서브뷰 전환 버튼 + 서브뷰 콘텐츠(기본
+    UMAP). highlighted_rid(URL 쿼리로 진입한 강조 대상)는 최초 진입 시의
+    UMAP 서브뷰에만 적용된다."""
+    return html.Div([
+        html.H4('연구원 전문성 유사도 지도', className='mb-1'),
+        html.P(
+            'BGE-M3 임베딩(1024차원)을 UMAP으로 2D에 투영한 지도, 또는 연구원↔연구원 '
+            '유사도 판정을 노드-링크 관계 그래프로 볼 수 있습니다.',
+            className='text-muted small mb-2',
+        ),
+        _subview_toggle(),
+        html.Div(id='similarity-map-subview-content', children=_umap_subview_content(highlighted_rid)),
+    ])
+
+
+def _umap_subview_content(highlighted_rid: str | None = None):
     df, missing = load_similarity_map()
     if df.empty or 'x' not in df.columns:
         return _missing_data_alert()
@@ -257,6 +308,7 @@ def _map_tab_content(highlighted_rid: str | None = None):
         height=680,
         legend_title_text='플랫폼/팀',
         dragmode='pan',
+        uirevision=_uirevision_for(highlighted_rid),
         xaxis_title=None, yaxis_title=None,
         xaxis=dict(showticklabels=False, zeroline=False, showgrid=False),
         yaxis=dict(showticklabels=False, zeroline=False, showgrid=False),
@@ -285,10 +337,9 @@ def _map_tab_content(highlighted_rid: str | None = None):
     blink_enabled = _apply_highlight(fig, highlighted_rid, points)
 
     return html.Div([
-        html.H4('연구원 전문성 유사도 지도', className='mb-1'),
         html.P(
-            'BGE-M3 임베딩(1024차원)을 UMAP으로 2D에 투영한 지도입니다 — 가까이 모인 점일수록 '
-            '실제 보유 전문성이 유사합니다(과제명과 무관). 점을 클릭하면 "연구원" 탭의 해당 카드로 이동합니다.',
+            '가까이 모인 점일수록 실제 보유 전문성이 유사합니다(과제명과 무관). '
+            '점을 클릭하면 "연구원" 탭의 해당 카드로 이동합니다.',
             className='text-muted small mb-3',
         ),
         missing_note,
@@ -321,6 +372,89 @@ def _map_tab_content(highlighted_rid: str | None = None):
         dcc.Store(id='similarity-map-points', data=points),
         dcc.Interval(id='similarity-map-blink-interval', interval=550, n_intervals=0, disabled=not blink_enabled),
     ])
+
+
+_CYTO_BASE_STYLESHEET = [
+    {'selector': 'node', 'style': {
+        'label': 'data(label)', 'font-size': '9px', 'width': 22, 'height': 22,
+        'color': '#333', 'text-valign': 'bottom', 'text-margin-y': 4,
+        'border-width': 1, 'border-color': '#ffffff', 'background-color': '#8ecae6',
+    }},
+    {'selector': 'node:selected', 'style': {'border-width': 3, 'border-color': '#ff3b30'}},
+    {'selector': 'edge', 'style': {
+        'width': 'mapData(score, 0, 1, 1, 6)', 'opacity': 0.55, 'curve-style': 'bezier',
+        'line-color': '#adb5bd',
+    }},
+    # 판정 레벨(상/중/하)별 엣지 색·진하기 — 근거가 뚜렷할수록 진하게.
+    {'selector': '.level-상', 'style': {'line-color': '#1d4ed8', 'opacity': 0.75}},
+    {'selector': '.level-중', 'style': {'line-color': '#60a5fa', 'opacity': 0.55}},
+    {'selector': '.level-하', 'style': {'line-color': '#cbd5e1', 'opacity': 0.35}},
+]
+
+
+def _graph_subview_content():
+    """옵시디언 방식 노드-링크 관계 그래프 서브뷰. UMAP과 달리 점(노드)
+    위치는 임베딩 거리가 아니라 cytoscape의 힘-기반(cose) 레이아웃이
+    엣지(연구원↔연구원 유사도) 연결 관계만으로 그때그때 계산한다."""
+    elements = build_similarity_graph_elements()
+    if not elements:
+        return dbc.Alert(
+            [
+                '관계 그래프를 표시할 데이터가 없습니다. 아래 순서로 먼저 실행하세요.',
+                html.Ul([
+                    html.Li('python pipeline/process_researcher_expertise.py'),
+                    html.Li('python pipeline/process_researcher_similarity.py'),
+                ], className='mb-0 mt-2'),
+            ],
+            color='warning', className='mt-3',
+        )
+    stylesheet = _CYTO_BASE_STYLESHEET + similarity_graph_department_classes()
+    return html.Div([
+        html.P(
+            '노드를 클릭하면 "연구원" 탭의 해당 카드로 이동합니다. 선(엣지)은 연구원↔연구원 '
+            '유사도 판정 근거가 있는 쌍만 연결하며, 굵고 진할수록 유사도가 높습니다.',
+            className='text-muted small mb-3',
+        ),
+        dbc.Card(
+            dbc.CardBody(
+                cyto.Cytoscape(
+                    id='similarity-graph-cyto',
+                    elements=elements,
+                    layout={'name': 'cose', 'animate': True, 'padding': 30,
+                            'nodeRepulsion': 8000, 'idealEdgeLength': 80, 'gravity': 40},
+                    style={'width': '100%', 'height': '680px'},
+                    stylesheet=stylesheet,
+                    minZoom=0.2, maxZoom=3,
+                ),
+            ),
+        ),
+    ])
+
+
+@callback(
+    Output('similarity-map-subview-content', 'children'),
+    Input('similarity-map-subview-toggle', 'value'),
+    prevent_initial_call=True,
+)
+def _switch_map_subview(subview):
+    if subview == _SUBVIEW_GRAPH:
+        return _graph_subview_content()
+    return _umap_subview_content()
+
+
+@callback(
+    Output('expertise-tabs', 'active_tab', allow_duplicate=True),
+    Output('expertise-scroll-target', 'data', allow_duplicate=True),
+    Input('similarity-graph-cyto', 'tapNodeData'),
+    prevent_initial_call=True,
+)
+def _go_to_researcher_card_from_graph(node_data):
+    """관계 그래프에서 노드를 클릭해도 UMAP 지도의 점 클릭과 동일하게
+    '연구원' 탭으로 이동해 해당 카드로 스크롤한다(_go_to_researcher_card와
+    동일한 동작 — 입력 컴포넌트만 다름)."""
+    if not node_data or not node_data.get('id'):
+        return dash.no_update, dash.no_update
+    return 'researcher', f"r-{node_data['id']}"
 
 
 def layout(highlight_researcher=None, **_kwargs):
@@ -404,7 +538,15 @@ def _toggle_small_tier_by_zoom(relayout_data, current_fig, points):
     비교해, _ZOOM_REVEAL_RATIO 이상 확대된 상태에서만 소규모(meta.tier='small')
     경계를 노출한다(visible + 호버텍스트 활성화). 그 외 relayout 이벤트(범위 변화가
     없는 경우)는 무시한다. 사용자가 지도를 드래그·확대/축소하면(이 콜백이 반응할
-    수 있는 이벤트라면 전부) 점멸 중이던 하이라이트도 함께 멈춘다."""
+    수 있는 이벤트라면 전부) 점멸 중이던 하이라이트도 함께 멈춘다.
+
+    확대 상태 자체는 여기서 손대지 않는다 — 그래프 layout의 uirevision이
+    (검색 대상이 안 바뀌는 한) 고정돼 있어, Plotly가 사용자의 현재 확대/이동을
+    새로 받은 figure보다 우선해서 그대로 유지해 준다(_uirevision_for() 참고).
+    예전엔 relayoutData에서 읽은 범위를 매번 수동으로 다시 적용했는데, 빠르게
+    연속으로 확대할 때 서버 왕복 지연으로 뒤늦게 도착한 relayoutData가 이미
+    더 확대된 화면을 예전 범위로 덮어써 순간적으로 "리셋되는 것처럼" 보이는
+    레이스컨디션이 있었다 — uirevision으로 대체해 이 문제 자체를 없앴다."""
     if not relayout_data or not points:
         return dash.no_update, dash.no_update
 
@@ -438,16 +580,6 @@ def _toggle_small_tier_by_zoom(relayout_data, current_fig, points):
     if not changed:
         return dash.no_update, True
 
-    # State('figure')는 사용자의 실시간 확대/축소를 반영하지 않으므로(relayoutData만
-    # 갱신됨), 여기서 현재 확대 상태를 명시적으로 다시 반영하지 않으면 새 figure를
-    # 반환하는 순간 화면이 전체보기로 리셋돼 버린다.
-    if is_autorange:
-        fig.update_layout(xaxis=dict(autorange=True), yaxis=dict(autorange=True))
-    else:
-        fig.update_layout(
-            xaxis=dict(range=[relayout_data['xaxis.range[0]'], relayout_data['xaxis.range[1]']]),
-            yaxis=dict(range=[relayout_data.get('yaxis.range[0]'), relayout_data.get('yaxis.range[1]')]),
-        )
     return fig, True
 
 
@@ -467,9 +599,15 @@ def _highlight_search_result(selected_rid, current_fig, points):
     를 이 화면에서는 '다른 검색 결과를 고르거나 지우기 전까지'로 구현했다:
     지도 클릭은 이제 연구원 탭으로 이동하는 동작이라 지도 위에서 강조 대상을
     바꾸는 유일한 방법은 검색뿐이다). 선택 해제 시 하이라이트/점멸을 끄고
-    전체 보기로 되돌린다."""
+    전체 보기로 되돌린다.
+
+    uirevision을 selected_rid 기준으로 명시적으로 바꿔서(_uirevision_for()),
+    직전까지 사용자가 수동으로 확대해 둔 상태가 있어도 이 "의도된" 포커스
+    이동이 실제로 반영되게 한다(uirevision이 그대로면 Plotly가 이전 확대
+    상태를 그대로 유지해 버려 검색 포커스가 무시될 수 있다)."""
     fig = go.Figure(current_fig)
     blink_on = _apply_highlight(fig, selected_rid, points)
+    fig.update_layout(uirevision=_uirevision_for(selected_rid))
     return fig, not blink_on, 0
 
 

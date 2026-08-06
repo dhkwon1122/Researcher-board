@@ -103,6 +103,8 @@ def render() -> html.Div:
             ),
             dbc.Button([html.I(className='bi bi-search me-1'), '질문하기'],
                        id='nl-query-submit', color='primary', n_clicks=0),
+            dbc.Button([html.I(className='bi bi-x-circle me-1'), '초기화'],
+                       id='nl-query-reset-btn', color='secondary', outline=True, n_clicks=0),
         ], className='mb-2'),
         dcc.Loading(html.Div([
             html.Div(id='nl-query-result'),
@@ -203,6 +205,14 @@ def _render_cell(col: str, value):
     if col == 'fit_score' and value:
         return _fit_score_badge(str(value))
     return '' if value is None else str(value)
+
+
+def _answer_block(answer: str):
+    return dbc.Alert([
+        html.Div([html.I(className='bi bi-robot me-2'), html.Span('AI 답변', className='fw-semibold')],
+                 className='mb-1'),
+        html.Div(answer, className='small', style={'whiteSpace': 'pre-wrap'}),
+    ], color='primary', className='mb-2')
 
 
 def _render_table_body(full_result: dict, filters: dict, sort: dict, expanded: bool, selected: list):
@@ -378,15 +388,39 @@ def _save_rules(n_clicks, text):
 )
 def _render_nl_query_store(full_result, filters, sort, expanded, selected):
     if not full_result:
-        return dash.no_update, dash.no_update, dash.no_update
+        # 초기화 버튼이 full_result를 None으로 비웠을 때 화면도 실제로
+        # 비워야 하므로(no_update면 이전 결과가 그대로 남음) 빈 children을
+        # 명시적으로 반환한다.
+        return None, '', {'display': 'none'}
     expanded = bool(expanded)
     children, total_filtered = _render_table_body(full_result, filters, sort, expanded, selected)
+    answer = full_result.get('answer')
+    if answer:
+        children = html.Div([_answer_block(answer), children])
     if total_filtered > _PAGE_SIZE:
         label = '접기' if expanded else f'전체 {total_filtered}건 보기'
         style = {'display': 'inline-block'}
     else:
         label, style = '', {'display': 'none'}
     return children, label, style
+
+
+@callback(
+    Output('nl-query-input', 'value'),
+    Output('nl-query-full-result', 'data', allow_duplicate=True),
+    Output('nl-query-filters', 'data', allow_duplicate=True),
+    Output('nl-query-sort', 'data', allow_duplicate=True),
+    Output('nl-query-expanded', 'data', allow_duplicate=True),
+    Output('nl-query-selected', 'data', allow_duplicate=True),
+    Input('nl-query-reset-btn', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def _reset_query(n_clicks):
+    """검색창/답변/명단을 전부 초기 상태로 되돌린다(사용자 확정: 검색어
+    텍스트까지 포함해 완전 초기화)."""
+    if not n_clicks:
+        return (dash.no_update,) * 6
+    return '', None, {}, {}, False, []
 
 
 @callback(

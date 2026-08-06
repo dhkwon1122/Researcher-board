@@ -426,6 +426,60 @@ def execute_query(parsed: dict) -> dict:
     return _empty_table_result('unsupported', '알 수 없는 질문 유형입니다.')
 
 
+_ANSWER_SYSTEM_PROMPT = """# Role
+당신은 사내 연구원 검색 결과를 사용자에게 설명해주는 "결과 설명 도우미"입니다.
+
+# Goal
+사용자의 질문과, 이미 검색으로 찾아낸 결과 표(라벨과 값)를 보고 "왜 이런
+결과가 나왔는지"를 짧은 한국어 설명으로 답합니다.
+
+# Guidelines & Constraints
+1. 반드시 주어진 표 데이터에 실제로 있는 내용만 근거로 쓰세요 — 표에 없는
+   사실을 새로 만들어내거나 추측하지 마세요(당신은 새로 판단하는 역할이
+   아니라, 이미 나온 결과를 설명하는 역할입니다).
+2. 인물을 한 명씩 전부 나열하지 말고, 전체적으로 어떤 공통 기준으로
+   찾아졌는지 2~4문장으로 요약하세요.
+3. 표에 이미 판정 근거(예: evidence, matched_term_count 같은 컬럼)가
+   있으면 그 내용을 활용해 설명하세요.
+4. 결과가 일부 조건과 정확히 안 맞을 수 있다면(예: 의미가 비슷한 표기로
+   대체 검색된 경우) 그 점도 정직하게 언급하세요.
+5. 순수 텍스트로만 답하세요(JSON도, 마크다운 기호도 쓰지 마세요).
+"""
+
+_ANSWER_MAX_ROWS = 20
+
+
+def _answer_prompt(question: str, result: dict) -> str:
+    labels = result.get('labels') or result.get('columns') or []
+    rows = (result.get('rows') or [])[:_ANSWER_MAX_ROWS]
+    lines = [', '.join(str(v) if v is not None else '' for v in row) for row in rows]
+    table_text = f"{' | '.join(labels)}\n" + '\n'.join(lines)
+    extra = ''
+    total_rows = result.get('total_rows') or len(result.get('rows') or [])
+    if total_rows > len(rows):
+        extra = f'\n(표에는 총 {total_rows}건 중 {len(rows)}건만 보여줬습니다.)'
+    return f'[질문]\n{question}\n\n[검색 결과 표]\n{table_text}{extra}\n\n위 결과에 대해 설명해주세요.'
+
+
+def _generate_answer_summary(question: str, result: dict) -> str:
+    """검색 결과 표를 근거로, "왜 이렇게 찾았는지" 설명을 LLM에게 한 번 더
+    요청한다(구조화 변환 1회 호출과는 별개). 이미 조회로 확정된 표 데이터
+    설명에 그치도록 프롬프트에서 강하게 제약해 새 판단/환각을 막는다.
+    실패/시간초과 시 빈 문자열로 안전하게 처리 — 답변 텍스트가 없어도 표
+    자체는 그대로 보여준다."""
+    if not result.get('rows'):
+        return ''
+    max_wait = getattr(_llm_cfg, 'LLM2_QUERY_MAX_WAIT_SECONDS', 15) if _llm_cfg else 15
+    prompt = _answer_prompt(question, result)
+    raw = llm_client.call_llm(prompt, _ANSWER_SYSTEM_PROMPT, temperature=0.2, max_tokens=500, max_wait=max_wait)
+    return raw.strip() if raw else ''
+
+
 def answer_question(question: str) -> dict:
-    """질문 → (질의 변환 → 조회) 전체 파이프라인의 단일 진입점."""
-    return execute_query(parse_question(question))
+    """질문 → (질의 변환 → 조회 → 결과 설명) 전체 파이프라인의 단일
+    진입점. 결과 설명(answer)은 error/unsupported이거나 결과가 없으면
+    비워둔다."""
+    result = execute_query(parse_question(question))
+    if result.get('intent') not in ('error', 'unsupported'):
+        result['answer'] = _generate_answer_summary(question, result)
+    return result

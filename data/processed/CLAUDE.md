@@ -1410,3 +1410,89 @@ team_refer.csv의 assignment_name 매핑, 없으면 "-") (2) 프로필 엑셀
 "-")과 컬럼 순서(직급→직책→성별) 확인. `build_profile_workbook()`으로
 실제 xlsx를 만들어 openpyxl로 다시 열어 헤더 순서(CL/년차→직책→
 과제수행이력)와 셀 값을 검증.
+
+## 완료: AI 검색 답변/초기화 + 전문성 MAP 줌 버그 수정 + 옵시디언식 관계 그래프
+
+사용자 요청 3건, 확인 문답으로 범위 확정:
+1. AI 검색 결과에 "왜 이렇게 찾았는지" LLM 설명을 추가(표에 실제로 있는
+   내용만 근거로, 새 판단/환각 금지 — 사용자 확정 "예").
+2. 검색창/답변/명단을 한 번에 비우는 "초기화" 버튼 추가(검색어 텍스트도
+   포함해 완전 초기화 — 사용자 확정).
+3. 전문성 MAP에서 확대할 때 화면이 리셋되는 버그 수정 + UMAP 산점도를
+   "옵시디언 방식"(힘-기반 노드-링크 그래프)으로도 볼 수 있게, 버튼/탭
+   전환으로 두 방식을 다 유지(사용자 확정: `researcher_similarity.json`
+   기준 엣지, 라이브러리 추가 OK, 완전 교체 아니라 토글).
+
+**1) AI 검색 답변 — `services/nl_query.py`**: 기존 3개 intent
+(find_researchers_by_expertise/find_similar_researchers/open_data_query)
+는 그대로 두고, 공용 진입점 `answer_question()`에서 조회가 끝난 뒤
+한 번 더 LLM을 호출해(`_generate_answer_summary()`) 결과를 설명하는
+텍스트를 `result['answer']`에 담는다. 새 `_ANSWER_SYSTEM_PROMPT`가
+"표에 실제로 있는 내용만 근거로 쓰고 새 사실을 만들어내지 말라"고 강하게
+제약 — 이 모듈의 기존 원칙("LLM은 판단하지 않고 조회만")을 깨지 않으면서
+"이미 나온 결과를 설명"하는 역할만 추가한 것. rows가 비었거나 intent가
+error/unsupported면 answer를 생성하지 않는다(설명할 게 없으므로). 표
+데이터는 최대 20행만 프롬프트에 담고(`_ANSWER_MAX_ROWS`), 나머지는
+"총 N건 중 20건만 보여줬다"는 문구로 대체.
+
+**2) 초기화 버튼 — `components/nl_query_bar.py`**: 입력창 옆에
+"초기화" 버튼 추가. `_reset_query()` 콜백이 검색어(`nl-query-input`)와
+5개 Store(`full-result`/`filters`/`sort`/`expanded`/`selected`)를 전부
+빈 값으로 되돌린다. `_render_nl_query_store()`의 `if not full_result`
+분기를 `dash.no_update` 대신 `None`(빈 children)을 반환하도록 고쳐서 —
+안 그러면 초기화해도 화면에 이전 결과가 그대로 남는다. 결과 표 위에
+`_answer_block()`으로 `full_result.get('answer')`를 눈에 띄게(파란
+Alert) 표시.
+
+**3-a) 줌 리셋 버그 — `pages/researcher_similarity_map.py`**: 원인은
+Plotly 그래프에 `uirevision`이 없었던 것. 기존엔 `_toggle_small_tier_by_zoom`
+콜백이 relayoutData에서 읽은 확대 범위를 매번 수동으로 다시 그려
+리셋을 막고 있었는데, 빠르게 연속으로 확대하면 서버 왕복 지연으로
+뒤늦게 도착한 relayoutData가 이미 더 확대된 화면을 예전 범위로 덮어써
+순간적으로 "리셋되는 것처럼" 보이는 레이스컨디션이 있었다. 신규
+`_uirevision_for(rid)`(검색 대상 rid가 바뀔 때만 값이 달라짐)를 초기
+figure 생성 시 `uirevision`으로 설정 — Plotly가 uirevision이 같은 한
+사용자의 현재 확대/이동을 새 figure prop보다 우선해서 유지해 준다(공식
+권장 방식). `_toggle_small_tier_by_zoom`에서 수동 range 재적용 로직을
+전부 제거(트레이스 visible/hoverinfo 토글만 남김). 반대로
+`_highlight_search_result`(검색으로 특정 지점에 의도적으로
+확대·포커스하는 콜백)는 `uirevision`을 `selected_rid` 기준으로
+명시적으로 바꿔서, 그 "의도된" 확대가 이전 수동 확대 상태에 가려지지
+않고 실제로 반영되게 했다.
+
+**3-b) 옵시디언식 관계 그래프**: `requirements.txt`에
+`dash-cytoscape>=1.0.2` 추가.
+- **`services/similarity_map.py`** 신규 `build_similarity_graph_elements()`:
+  `researcher_similarity.json`(이미 배치로 판정된 연구원↔연구원 유사도)을
+  dash_cytoscape elements(노드=연구원, 엣지=유사도 쌍)로 변환. 각
+  연구원의 top-K 목록은 방향성이 있어(A 목록에 B가 있어도 B 목록엔
+  A가 없을 수 있음) A-B/B-A를 정렬된 튜플로 묶어 한 번만 엣지로 만들고
+  (process_researcher_similarity.py의 `_pair_key()`와 동일한 발상),
+  양쪽 score가 다르면 더 높은 쪽을 채택. 노드에는 부서별 팔레트
+  인덱스를 클래스(`dept-N`)로 붙이고, `similarity_graph_department_classes()`가
+  그 클래스에 맞는 cytoscape 스타일시트를 만든다.
+- **`pages/researcher_similarity_map.py`**: 전문성 MAP 탭 상단에
+  "UMAP 지도"/"관계 그래프" 버튼 토글(`_subview_toggle()`) 추가. 기존
+  탭 콘텐츠를 `_umap_subview_content()`로 그대로 옮기고, 신규
+  `_graph_subview_content()`가 `cyto.Cytoscape`(레이아웃 `cose` — 별도
+  확장 없이 기본 제공되는 힘-기반 레이아웃, 옵시디언 그래프 뷰와 같은
+  "떠다니는" 느낌)를 렌더링. 엣지 두께/색은 cytoscape 스타일시트의
+  `mapData(score, ...)`와 판정 레벨(상/중/하)별 클래스로 표현. 노드
+  클릭 시 UMAP 점 클릭과 동일하게 '연구원' 탭으로 이동하도록
+  `_go_to_researcher_card_from_graph()` 콜백 추가(기존
+  `_go_to_researcher_card`와 입력 컴포넌트만 다름). 서브뷰는 "전문성
+  MAP" 탭을 벗어났다 돌아오면 항상 UMAP 기본값으로 리셋(이 화면의
+  기존 관례와 동일).
+
+검증: `_generate_answer_summary()`/`answer_question()`을 `call_llm`
+모킹으로 직접 호출해 답변 생성/스킵 조건 확인. 초기화 버튼은 Playwright로
+실제 화면에서 입력창·결과 영역이 모두 비는지 확인. 줌 버그/관계 그래프는
+연구원 12명 분량의 임시 픽스처(`연구원 보유 전문성 분석.json`/
+`embedding_cache.json`/`researcher_similarity.json` — 테스트 후
+원본으로 복원, 이 파일들은 전부 `.gitignore` 대상이라 커밋에는 영향
+없음)로 실제 서버를 띄워 Playwright로: uirevision 값 확인, 마우스 휠로
+확대 후 xaxis range가 리셋되지 않고 유지되는지 확인, 토글로 관계
+그래프 전환 시 노드 12개가 정상 렌더링되는지, 다시 UMAP으로 돌아오는지,
+그래프 노드를 tap하면 '연구원' 탭으로 이동하는지(cytoscape 인스턴스에
+직접 tap 이벤트를 발생시켜 확인 — cose 레이아웃이 매번 다른 좌표를
+계산해 마우스 좌표 클릭은 재현성이 없었음) 확인. 콘솔 에러 없음.

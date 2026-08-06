@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 from pipeline.researcher_fit import _text_hash, researcher_profile_text
-from services.data_store import DATA_DIR, read_processed
+from services.data_store import DATA_DIR, read_processed, read_similar_researchers
 
 
 def _cluster_label(rows: list) -> str:
@@ -172,3 +172,92 @@ def load_similarity_map(n_neighbors: int = 15, random_state: int = 42, min_clust
     df = compute_clusters(df, min_cluster_size=min_cluster_size)
     df = compute_medium_clusters(df)
     return df, missing
+
+
+# ─── 관계 그래프(옵시디언 방식 노드-링크) ─────────────────────────────────────
+# UMAP 좌표와는 무관하게, 이미 배치로 판정해 둔 연구원↔연구원 유사도
+# (researcher_similarity.json, pipeline/process_researcher_similarity.py)를
+# 그대로 엣지로 써서 dash_cytoscape용 elements를 만든다. 점(노드) 위치는
+# 임베딩 거리가 아니라 cytoscape의 힘-기반(force-directed) 레이아웃이
+# 엣지 연결 관계만으로 그때그때 계산한다.
+
+_GRAPH_PALETTE = [
+    '#8ecae6', '#f4a6c6', '#f7dd72', '#95d5b2', '#c9a8f5',
+    '#f8b88b', '#7fdbda', '#b8c4e0', '#ffb4a2', '#cdb4db',
+]
+
+_LEVEL_ORDER = {'상': 3, '중': 2, '하': 1}
+
+
+def _dept_class(dept: str, dept_index: dict) -> str:
+    idx = dept_index.setdefault(dept, len(dept_index) % len(_GRAPH_PALETTE))
+    return f'dept-{idx}'
+
+
+def build_similarity_graph_elements() -> list:
+    """researcher_similarity.json을 dash_cytoscape elements(노드+엣지)로
+    변환한다. 노드=연구원(researchers.csv 이름/부서), 엣지=유사도가 있는
+    쌍 — 각 연구원의 top-K 목록은 방향성이 있어(A의 목록에 B가 있어도 B의
+    목록엔 A가 없을 수 있음) A-B/B-A를 같은 쌍으로 취급해 한 번만
+    엣지로 만든다(process_researcher_similarity.py의 _pair_key()와 동일한
+    정렬 기준). 같은 쌍이 양쪽에서 서로 다른 score로 나오면(비대칭 판정)
+    더 높은 쪽을 채택한다. researcher_similarity.json이 없으면 빈 리스트."""
+    similarity_map = read_similar_researchers()
+    if not similarity_map:
+        return []
+
+    researchers_df = read_processed('researchers')
+    name_map, dept_map = {}, {}
+    if not researchers_df.empty:
+        indexed = researchers_df.set_index('researcher_id')
+        name_map = indexed['name'].to_dict()
+        dept_map = indexed['department'].to_dict()
+
+    edges_by_key: dict = {}
+    node_ids: set = set()
+    for rid, entry in similarity_map.items():
+        node_ids.add(rid)
+        for s in entry.get('similar') or []:
+            other = s.get('researcher_id', '')
+            if not other or other == rid:
+                continue
+            node_ids.add(other)
+            key = tuple(sorted([rid, other]))
+            score = s.get('score')
+            existing = edges_by_key.get(key)
+            if existing is None or (score is not None and (existing.get('score') is None or score > existing['score'])):
+                edges_by_key[key] = {'level': s.get('level', ''), 'score': score, 'evidence': s.get('evidence', '')}
+
+    dept_index: dict = {}
+    elements = []
+    for rid in sorted(node_ids):
+        dept = dept_map.get(rid, '') or '미분류'
+        elements.append({
+            'data': {
+                'id': rid,
+                'label': name_map.get(rid, rid),
+                'department': dept,
+            },
+            'classes': _dept_class(dept, dept_index),
+        })
+    for (a, b), edge in edges_by_key.items():
+        evidence = edge['evidence']
+        evidence_text = '; '.join(evidence) if isinstance(evidence, list) else str(evidence or '')
+        level = edge['level'] if edge['level'] in _LEVEL_ORDER else '하'
+        elements.append({
+            'data': {
+                'source': a, 'target': b,
+                'level': edge['level'], 'score': edge['score'], 'evidence': evidence_text,
+            },
+            'classes': f'level-{level}',
+        })
+    return elements
+
+
+def similarity_graph_department_classes() -> list:
+    """build_similarity_graph_elements()가 붙인 dept-N 클래스에 맞는
+    cytoscape 스타일시트 셀렉터를 순서대로 반환(팔레트 순환)."""
+    return [
+        {'selector': f'.dept-{i}', 'style': {'background-color': color}}
+        for i, color in enumerate(_GRAPH_PALETTE)
+    ]
