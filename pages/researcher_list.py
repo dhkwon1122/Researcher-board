@@ -1,5 +1,5 @@
 """
-화면 3: 연구원 목록 (정량 지표 테이블)
+화면 3: 연구원 명단 (정량 지표 테이블)
 """
 
 from datetime import datetime
@@ -11,22 +11,20 @@ import pandas as pd
 from dash import Input, Output, State, callback, dash_table, dcc, html, no_update
 
 from components.timeline_data import dedupe_patents
+from services import researcher_profile_export
 from services.data_store import read_processed
 
 dash.register_page(
     __name__,
     path='/researcher-list',
-    name='연구원 목록',
-    title='연구원 목록',
+    name='연구원 명단',
+    title='연구원 명단',
 )
 
 _CURRENT_YEAR = datetime.now().year
 
 # ── 학위 우선순위 ─────────────────────────────────────────────────────────────
 _DEGREE_RANK = {'박사': 5, '석사': 4, '학사': 3, '전문대': 2, '고교': 1}
-
-# ── 리더십 차원 (실제 데이터 기준) ────────────────────────────────────────────
-_LEA_DIMS = ['미래통찰', '성과창출', '몰입촉진', '인재육성', '자기관리']
 
 
 def _build_summary_df() -> pd.DataFrame:
@@ -36,8 +34,6 @@ def _build_summary_df() -> pd.DataFrame:
         eva  = read_processed('evaluations')
         pub  = read_processed('publications')
         pat  = read_processed('patents')
-        lea  = read_processed('leadership')
-        cert = read_processed('certifications')
         awd  = read_processed('awards')
         edu  = read_processed('education')
         inc  = read_processed('incentive_selection')
@@ -51,11 +47,6 @@ def _build_summary_df() -> pd.DataFrame:
     # pub_year가 없으면 pub_date 앞 4자리에서 파생
     if 'pub_year' not in pub.columns and 'pub_date' in pub.columns:
         pub['pub_year'] = pd.to_numeric(pub['pub_date'].str[:4], errors='coerce')
-    for col in _LEA_DIMS + ['overall_score']:
-        if col in lea.columns:
-            lea[col] = pd.to_numeric(lea[col], errors='coerce')
-    if 'score' in cert.columns:
-        cert['score'] = pd.to_numeric(cert['score'], errors='coerce')
     if 'year' in eva.columns:
         eva['year'] = pd.to_numeric(eva['year'], errors='coerce')
     if 'year' in inc.columns:
@@ -98,50 +89,29 @@ def _build_summary_df() -> pd.DataFrame:
         pat_app = int((pats_dedup['status'] == '출원').sum()) if not pats_dedup.empty else 0
         pat_reg = int((pats_dedup['status'] == '등록').sum()) if not pats_dedup.empty else 0
 
-        # ── 리더십 ─────────────────────────────────────────────────────────
-        ldf = lea[(lea['researcher_id'] == rid)]
-        # 타인평균 우선, 없으면 전체 평균
-        grp_col = 'evaluator_group' if 'evaluator_group' in ldf.columns else None
-        if grp_col:
-            ldf = ldf[ldf[grp_col] == '타인평균']
-        if not ldf.empty:
-            if 'year' in ldf.columns:
-                ldf = ldf.sort_values('year')
-            latest_lea = ldf.iloc[-1]
-            if 'overall_score' in latest_lea and pd.notna(latest_lea['overall_score']):
-                lea_score = round(float(latest_lea['overall_score']), 1)
-            else:
-                dims_vals = [latest_lea[d] for d in _LEA_DIMS if d in latest_lea and pd.notna(latest_lea[d])]
-                lea_score = round(sum(dims_vals) / len(dims_vals), 1) if dims_vals else '-'
-        else:
-            lea_score = '-'
-
-        # ── TOEIC ──────────────────────────────────────────────────────────
-        toeic = cert[(cert['researcher_id'] == rid) & (cert['cert_name'] == 'TOEIC')]
-        if not toeic.empty and 'score' in toeic.columns:
-            valid = toeic[toeic['score'].notna()]
-            toeic_score = int(valid.sort_values('date_obtained').iloc[-1]['score']) if not valid.empty else '-'
-        else:
-            toeic_score = '-'
-
         # ── 수상 ───────────────────────────────────────────────────────────
         awd_cnt = len(awd[awd['researcher_id'] == rid])
 
-        # ── 최종학위 ───────────────────────────────────────────────────────
+        # ── 학력(최종)/전공 ───────────────────────────────────────────────────
         edu_r = edu[edu['researcher_id'] == rid]
         if not edu_r.empty and 'degree' in edu_r.columns:
-            highest = edu_r.assign(_rank=edu_r['degree'].map(_DEGREE_RANK).fillna(0)) \
-                           .sort_values('_rank').iloc[-1]['degree']
+            top_edu = edu_r.assign(_rank=edu_r['degree'].map(_DEGREE_RANK).fillna(0)) \
+                           .sort_values('_rank').iloc[-1]
+            highest = top_edu['degree']
+            major = str(top_edu.get('major', '') or '').strip() or '-'
         else:
             highest = '-'
+            major = '-'
 
         rows.append({
             'researcher_id': rid,
             '이름':           str(r.get('name', '')),
             '부서':           str(r.get('department', '')),
+            '과제':           str(r.get('org_code', '')),
             '직급':           str(r.get('position', '')),
             '성별':           str(r.get('gender', '')),
-            '최종학위':       highest,
+            '학력(최종)':     highest,
+            '전공':           major,
             "'24평가":        g24,
             "'25평가":        g25,
             "'26평가":        g26,
@@ -151,8 +121,6 @@ def _build_summary_df() -> pd.DataFrame:
             '평균IF':         avg_if,
             '특허(출원)':     pat_app,
             '특허(등록)':     pat_reg,
-            '리더십':         lea_score,
-            'TOEIC':          toeic_score,
             '수상':           awd_cnt,
         })
 
@@ -164,6 +132,23 @@ def _filter_options(df: pd.DataFrame, col: str) -> list:
         return []
     vals = sorted(df[col].dropna().unique())
     return [{'label': v, 'value': v} for v in vals if str(v).strip()]
+
+
+def _project_options(department=None) -> list:
+    """과제(=researchers.csv의 org_code) 드롭다운 옵션. 부서를 지정하면 그
+    부서 소속 연구원들의 org_code만 남긴다 — 이 페이지 자체 데이터만으로
+    캐스케이딩을 구성한다(project_confl_address.csv의 dep_name 표기와 이
+    페이지의 '부서'(researchers.csv department) 표기가 항상 일치한다는
+    보장이 없어, 다른 화면의 과제 카탈로그와는 별도로 자기완결적으로 둔다)."""
+    researchers = read_processed('researchers')
+    if researchers.empty or 'org_code' not in researchers.columns:
+        return []
+    df = researchers
+    if department:
+        depts = {department} if isinstance(department, str) else {str(d) for d in department}
+        df = df[df['department'].astype(str).isin(depts)]
+    vals = sorted({str(v).strip() for v in df['org_code'] if str(v).strip()})
+    return [{'label': v, 'value': v} for v in vals]
 
 
 # ── 조건부 스타일 (평가등급 색상) ─────────────────────────────────────────────
@@ -185,24 +170,26 @@ _GRADE_STYLES = [
 def layout():
     df = _build_summary_df()
 
-    dept_opts   = _filter_options(df, '부서')
-    pos_opts    = _filter_options(df, '직급')
-    degree_opts = _filter_options(df, '최종학위')
-    inc_opts    = _filter_options(df, '인센티브')
+    dept_opts    = _filter_options(df, '부서')
+    project_opts = _project_options()
+    pos_opts     = _filter_options(df, '직급')
+    degree_opts  = _filter_options(df, '학력(최종)')
+    inc_opts     = _filter_options(df, '인센티브')
 
     columns = [
         {'name': col, 'id': col,
          'type': 'numeric' if col in ('논문(전체)', '논문(3년)', '특허(출원)', '특허(등록)', '수상') else 'text'}
         for col in df.columns if col != 'researcher_id'
     ]
-    # 평균IF, 리더십, TOEIC도 숫자형으로 설정 (혼합값 있으므로 text 유지)
+    # 평균IF도 혼합값(숫자/'-')이 있어 text로 유지
 
     return html.Div([
         dcc.Location(id='list-url', refresh=True),
+        dcc.Download(id='researcher-list-excel-download'),
 
         dbc.Row([
             dbc.Col(
-                html.H5([html.I(className='bi bi-table me-2 text-primary'), '연구원 목록'],
+                html.H5([html.I(className='bi bi-table me-2 text-primary'), '연구원 명단'],
                         className='fw-bold mb-0 mt-1'),
                 className='d-flex align-items-center',
             ),
@@ -214,6 +201,9 @@ def layout():
         ], className='mb-3'),
 
         # ── 상단 드롭다운 필터 ─────────────────────────────────────────────
+        # 드롭다운 선택 자체는 바로 반영되지 않고, 검색 아이콘을 눌러야 테이블에
+        # 적용된다(사용자 확정) — 드롭다운은 filter-*, 검색/엑셀 버튼은 아래
+        # 콜백에서 각각 Input/State로 분리해서 처리한다.
         dbc.Card(
             dbc.CardBody(
                 dbc.Row([
@@ -221,14 +211,19 @@ def layout():
                         dbc.Label('부서', className='small fw-semibold text-muted mb-1'),
                         dcc.Dropdown(id='filter-dept', options=dept_opts, multi=True,
                                      placeholder='전체', clearable=True),
-                    ], md=3),
+                    ], md=2),
+                    dbc.Col([
+                        dbc.Label('과제', className='small fw-semibold text-muted mb-1'),
+                        dcc.Dropdown(id='filter-project', options=project_opts, multi=True,
+                                     placeholder='전체', clearable=True),
+                    ], md=2),
                     dbc.Col([
                         dbc.Label('직급', className='small fw-semibold text-muted mb-1'),
                         dcc.Dropdown(id='filter-pos', options=pos_opts, multi=True,
                                      placeholder='전체', clearable=True),
                     ], md=2),
                     dbc.Col([
-                        dbc.Label('최종학위', className='small fw-semibold text-muted mb-1'),
+                        dbc.Label('학력(최종)', className='small fw-semibold text-muted mb-1'),
                         dcc.Dropdown(id='filter-degree', options=degree_opts, multi=True,
                                      placeholder='전체', clearable=True),
                     ], md=2),
@@ -236,6 +231,15 @@ def layout():
                         dbc.Label('인센티브', className='small fw-semibold text-muted mb-1'),
                         dcc.Dropdown(id='filter-incentive', options=inc_opts, multi=True,
                                      placeholder='전체', clearable=True),
+                    ], md=2),
+                    dbc.Col([
+                        dbc.Label(' ', className='small d-block mb-1'),  # 라벨 줄 높이 맞춤
+                        dbc.ButtonGroup([
+                            dbc.Button(html.I(className='bi bi-search'), id='list-search-btn',
+                                       color='primary', title='검색(필터 적용)'),
+                            dbc.Button(html.I(className='bi bi-file-earmark-excel'), id='list-excel-btn',
+                                       color='success', title='엑셀 다운로드(현재 화면에 보이는 대상)'),
+                        ], className='w-100'),
                     ], md=2),
                 ], className='g-3'),
             ),
@@ -248,7 +252,7 @@ def layout():
                 dash_table.DataTable(
                     id='researcher-table',
                     columns=columns,
-                    data=df.drop(columns=['researcher_id']).to_dict('records') if not df.empty else [],
+                    data=df.to_dict('records') if not df.empty else [],
                     # 필터 / 정렬
                     filter_action='native',
                     sort_action='native',
@@ -284,6 +288,7 @@ def layout():
                         {'if': {'column_id': '이름'}, 'textAlign': 'left', 'minWidth': '80px',
                          'fontWeight': '600', 'cursor': 'pointer', 'color': '#1e3a5f'},
                         {'if': {'column_id': '부서'}, 'textAlign': 'left', 'minWidth': '100px'},
+                        {'if': {'column_id': '과제'}, 'textAlign': 'left', 'minWidth': '100px'},
                     ],
                     style_data_conditional=_GRADE_STYLES + [
                         {'if': {'row_index': 'odd'}, 'backgroundColor': '#f9fbfd'},
@@ -306,32 +311,53 @@ def layout():
     ])
 
 
-# ── 콜백 1: 상단 드롭다운 필터 → 테이블 데이터 갱신 ─────────────────────────
+# ── 콜백 1: 부서 선택 → 과제 드롭다운 옵션 캐스케이딩 ─────────────────────────
+@callback(
+    Output('filter-project', 'options'),
+    Input('filter-dept', 'value'),
+)
+def update_project_options(dept):
+    return _project_options(dept)
+
+
+# ── 콜백 2: 검색 버튼(필터 적용) / 필터 초기화 버튼 → 테이블 데이터 갱신 ──────
+# 드롭다운 값은 State로만 읽는다 — 선택하는 즉시가 아니라 검색 아이콘을 눌러야
+# 테이블에 반영된다(사용자 확정). 필터 초기화 버튼은 이 콜백에도 함께 연결해,
+# 눌렀을 때 드롭다운 값과 무관하게 항상 전체 목록으로 되돌아가게 한다.
 @callback(
     Output('researcher-table', 'data'),
-    Input('filter-dept',      'value'),
-    Input('filter-pos',       'value'),
-    Input('filter-degree',    'value'),
-    Input('filter-incentive', 'value'),
+    Input('list-search-btn',   'n_clicks'),
+    Input('clear-filters-btn', 'n_clicks'),
+    State('filter-dept',      'value'),
+    State('filter-project',   'value'),
+    State('filter-pos',       'value'),
+    State('filter-degree',    'value'),
+    State('filter-incentive', 'value'),
+    prevent_initial_call=True,
 )
-def update_table(dept, pos, degree, incentive):
+def update_table(_search_clicks, _clear_clicks, dept, project, pos, degree, incentive):
     df = _build_summary_df()
     if df.empty:
         return []
+    if dash.ctx.triggered_id == 'clear-filters-btn':
+        return df.to_dict('records')
     if dept:
         df = df[df['부서'].isin(dept)]
+    if project:
+        df = df[df['과제'].isin(project)]
     if pos:
         df = df[df['직급'].isin(pos)]
     if degree:
-        df = df[df['최종학위'].isin(degree)]
+        df = df[df['학력(최종)'].isin(degree)]
     if incentive:
         df = df[df['인센티브'].isin(incentive)]
-    return df.drop(columns=['researcher_id']).to_dict('records')
+    return df.to_dict('records')
 
 
-# ── 콜백 2: 필터 초기화 버튼 ─────────────────────────────────────────────────
+# ── 콜백 3: 필터 초기화 버튼 → 드롭다운 값 비우기 ────────────────────────────
 @callback(
     Output('filter-dept',      'value'),
+    Output('filter-project',   'value'),
     Output('filter-pos',       'value'),
     Output('filter-degree',    'value'),
     Output('filter-incentive', 'value'),
@@ -339,14 +365,32 @@ def update_table(dept, pos, degree, incentive):
     prevent_initial_call=True,
 )
 def clear_filters(_):
-    return None, None, None, None
+    return None, None, None, None, None
 
 
-# ── 콜백 3: 행 클릭 → 프로필 화면 이동 ──────────────────────────────────────
+# ── 콜백 4: 엑셀 다운로드 — 지금 화면에 실제로 보이는(검색 필터 + 표 자체
+# 열별 필터/정렬까지 반영된) 대상자들의 프로필을 다운로드 ───────────────────
+@callback(
+    Output('researcher-list-excel-download', 'data'),
+    Input('list-excel-btn', 'n_clicks'),
+    State('researcher-table', 'derived_virtual_data'),
+    prevent_initial_call=True,
+)
+def download_excel(n_clicks, virtual_data):
+    if not n_clicks or not virtual_data:
+        return no_update
+    researcher_ids = [row['researcher_id'] for row in virtual_data if row.get('researcher_id')]
+    if not researcher_ids:
+        return no_update
+    data = researcher_profile_export.build_profile_workbook(researcher_ids)
+    return dcc.send_bytes(data, researcher_profile_export.default_filename())
+
+
+# ── 콜백 5: 행 클릭 → 프로필 화면 이동 ──────────────────────────────────────
 @callback(
     Output('list-url', 'href'),
     Input('researcher-table', 'active_cell'),
-    Input('researcher-table', 'derived_virtual_data'),
+    State('researcher-table', 'derived_virtual_data'),
     prevent_initial_call=True,
 )
 def navigate_to_profile(active_cell, virtual_data):
@@ -355,16 +399,7 @@ def navigate_to_profile(active_cell, virtual_data):
     row_idx = active_cell.get('row')
     if row_idx is None or row_idx >= len(virtual_data):
         return no_update
-    # researcher_id는 테이블 data에 없으므로 이름으로 역조회
-    name = virtual_data[row_idx].get('이름', '')
-    if not name:
+    rid = virtual_data[row_idx].get('researcher_id')
+    if not rid:
         return no_update
-    try:
-        df_all = _build_summary_df()
-        match = df_all[df_all['이름'] == name]
-        if match.empty:
-            return no_update
-        rid = match.iloc[0]['researcher_id']
-        return f'/researcher-profile?id={rid}'
-    except Exception:
-        return no_update
+    return f'/researcher-profile?id={rid}'

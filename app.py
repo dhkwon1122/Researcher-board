@@ -122,7 +122,7 @@ navbar = dbc.Navbar(
                     ),
                     dbc.NavItem(
                         dbc.NavLink(
-                            [html.I(className='bi bi-table me-1'), '연구원 목록'],
+                            [html.I(className='bi bi-table me-1'), '연구원 명단'],
                             href='/researcher-list',
                             active='exact',
                             className='text-white',

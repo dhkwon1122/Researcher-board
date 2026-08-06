@@ -1316,3 +1316,65 @@ import해 그대로 재노출 — `process_researcher_similarity.py`가 기존
 카운터 함수에 접근되는지 확인. 4개 파일 모두 `ast.parse` 컴파일
 확인(사내 LLM 서버가 없는 이 샌드박스에서는 실제 파이프라인 재실행으로
 로그 출력까지는 확인 불가).
+
+## 완료: "연구원 목록" → "연구원 명단" 리네이밍 + 컬럼/필터/검색·엑셀 다운로드 재구성
+
+사용자 요청 4건: (1) 탭 이름 변경 + 컬럼에 과제(org_code) 추가(부서~직급
+사이)/리더십·TOEIC 제거/최종학위→학력(최종)/전공 추가(학력~평가 사이)
+(2) 필터에 과제 추가 + 부서→과제 캐스케이딩 (3) 필터 우측에 검색
+아이콘 — 눌러야 필터 적용 (4) 검색 아이콘 옆 엑셀 아이콘 — 필터 대상
+프로필 다운로드. 사전 확인 4문항에 대한 사용자 답변: 과제 필터는 이
+페이지 자체 데이터(researchers.csv)로만 구성, 엑셀은
+`researcher_profile_export.build_profile_workbook()` 재사용, 다운로드
+범위는 "지금 화면에 실제로 보이는 행", 필터 초기화 시 테이블도 전체
+목록으로 복귀.
+
+**`pages/researcher_list.py`**:
+- `dash.register_page`의 name/title과 페이지 H5 제목을 "연구원
+  명단"으로 변경(`app.py`의 nav 링크 라벨도 동일하게 변경).
+- `_build_summary_df()`: 리더십(`lea`)/TOEIC(`cert`) 관련 읽기·계산
+  블록과 `_LEA_DIMS`를 전부 제거(컬럼이 없어지면 죽은 코드가 되므로).
+  `과제` 컬럼을 `researchers.csv`의 `org_code`에서 추가. 기존
+  "최종학위" 계산 블록에서 최고 학위 행을 그대로 재사용해 `학력(최종)`
+  (학위명만)과 `전공`(그 행의 `major`)을 분리해서 담음. 최종 컬럼
+  순서: 이름/부서/과제/직급/성별/학력(최종)/전공/'24~'26평가/인센티브/
+  논문(전체)/논문(3년)/평균IF/특허(출원)/특허(등록)/수상.
+- 신규 `_project_options(department=None)`: `researchers.csv`만
+  읽어(무거운 `_build_summary_df()` 전체 재계산 없이) 부서 선택 시 그
+  부서 소속 연구원들의 org_code만 남기는 캐스케이딩 옵션을 만든다 —
+  JOB Market이 쓰는 `project_confl_address.csv` 카탈로그와는 별개(이
+  페이지의 '부서' 표기가 그쪽 dep_name과 일치한다는 보장이 없어 자기
+  완결적으로 둠, 사용자 확정 (a)).
+- 필터 카드에 `과제` 드롭다운 추가, 그 옆에 검색(`bi-search`)/엑셀
+  (`bi-file-earmark-excel`) 아이콘 버튼을 `dbc.ButtonGroup`으로 배치.
+  `dcc.Download(id='researcher-list-excel-download')` 추가.
+- DataTable의 `data`를 더 이상 `researcher_id`를 드롭하지 않고 그대로
+  둔다(`columns` 목록에는 여전히 안 넣어 화면엔 안 보임) — 이러면
+  `derived_virtual_data`(네이티브 필터/정렬 반영된 실제 표시 행)에도
+  `researcher_id`가 숨은 필드로 남아, 엑셀 다운로드와 행 클릭 이동
+  콜백이 이름으로 역조회할 필요 없이 바로 꺼내 쓸 수 있다(동명이인
+  버그도 부수적으로 해결).
+- 콜백 재구성: `update_project_options`(부서→과제 캐스케이딩),
+  `update_table`은 드롭다운을 전부 `State`로 바꾸고 `list-search-btn`/
+  `clear-filters-btn`의 `n_clicks`만 `Input`으로 받아 `dash.ctx.triggered_id`로
+  분기(초기화 버튼이면 필터값과 무관하게 항상 전체 목록 반환),
+  `clear_filters`는 드롭다운 5개 값만 비움(필터 5개로 늘어 Output도
+  5개로 확장), 신규 `download_excel`(엑셀 버튼 클릭 시
+  `derived_virtual_data`에서 `researcher_id`를 모아
+  `build_profile_workbook()` 호출 후 `dcc.send_bytes`),
+  `navigate_to_profile`은 `derived_virtual_data`를 `Input`에서
+  `State`로 바꾸고(행 클릭 시에만 반응하도록) 이름 재조회 대신 숨은
+  `researcher_id` 필드를 직접 사용하도록 단순화.
+
+검증: `_build_summary_df()`/`_project_options()`를 직접 호출해 컬럼
+구성과 부서→과제 캐스케이딩 결과 확인. Playwright로 실제 화면에서
+(1) nav 라벨/제목 변경 (2) 헤더에 과제/학력(최종)/전공 존재, 리더십/
+TOEIC 없음 (3) 부서 선택 시 과제 옵션이 좁혀짐 (4) 드롭다운만 바꿔서는
+표가 안 바뀌다가 검색 버튼을 눌러야 바뀜 (5) 필터 초기화 시 표가 전체
+목록으로 복귀 (6) 엑셀 다운로드 버튼 클릭 시 실제 파일 다운로드 발생
+(7) 행 클릭 시 `/researcher-profile?id=...`로 정상 이동 — 을 모두
+확인. 필터 드롭다운들이 화면에서 세로로 쌓여 보이는 현상은 이
+샌드박스의 프록시가 Bootstrap CDN을 차단(403)해 그리드 CSS 자체가
+로드되지 않는 환경 한정 아티팩트로 확인(기존 JOB Market 페이지도
+동일하게 재현됨 — `col-md-*` 클래스 자체는 정상 적용되어 있어 실제
+배포 환경에서는 문제 없음).
