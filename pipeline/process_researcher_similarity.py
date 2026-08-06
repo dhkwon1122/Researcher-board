@@ -262,8 +262,8 @@ def _judge_pair(text_a: str, text_b: str) -> dict | None:
     # 작으면(예: 400) 사고 과정만으로 예산을 다 써 content가 비고
     # finish_reason=length 경고가 자주 뜬다 — 자체 서버 운영 중이라 비용 부담이
     # 없으므로 넉넉하게 잡는다(실제 API 요청 시 LLM2_MAX_TOKENS_MULTIPLIER가 한 번
-    # 더 곱해짐, 기본 3배).
-    raw = fit.call_llm(prompt, _PAIR_JUDGE_SYSTEM_PROMPT, temperature=0.0, max_tokens=1500)
+    # 더 곱해짐, 기본 3배). 1500(effective 4500)에서도 자주 잘려 2500으로 상향.
+    raw = fit.call_llm(prompt, _PAIR_JUDGE_SYSTEM_PROMPT, temperature=0.0, max_tokens=2500)
     if not raw:
         return None
     try:

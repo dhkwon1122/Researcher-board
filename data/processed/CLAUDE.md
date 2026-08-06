@@ -1251,3 +1251,27 @@ closest_non_match만 있는 1명) 픽스처로 `_summary_stats`가 "총 4명 중
 각각 "보유 전문성" 섹션에 강점 분야/키워드가 포함되는지, 프로필이
 없을 때 "분석 데이터 없음"으로 대체되는지 확인. Playwright로 JOB
 Market 페이지가 콘솔 에러 없이 로드되는지 확인.
+
+## 완료: process_researcher_expertise.py / process_researcher_similarity.py max_tokens 상향
+
+사용자 보고: JOB Market에서 쓸 데이터를 준비하려고 이 두 파이프라인을
+돌리면 `[LLM 경고] content가 비어 있어 reasoning_content로 대체 사용
+(finish_reason=length)`가 종종 뜬다는 것. 원인은 사내 LLM(thinkingcap)이
+추론형 모델이라 최종 답변 전 사고 과정에도 토큰을 쓰는데, 요청
+`max_tokens`(자동으로 `LLM2_MAX_TOKENS_MULTIPLIER`, 기본 3배가 곱해짐)를
+사고 과정만으로 다 써버리면 `content`가 비어 응답이 잘리기 때문 —
+`reasoning_content`로 대체는 되지만 그 안의 텍스트는 JSON 형식이 아닐
+수 있어 이후 파싱이 실패하고, 그러면 캐시에 값이 안 남아 다음 실행 때
+다시 시도돼야 한다.
+
+자체 서버 운영 중이라 비용 부담이 없으므로 두 호출의 `max_tokens`를
+상향:
+- `process_researcher_expertise.py` `_analyze_researcher()`: 4000 ->
+  6000(배수 적용 시 12000 -> 18000). 사람마다 과제/논문/특허 이력
+  길이 편차가 커서 사고 과정도 그만큼 길어질 수 있음.
+- `process_researcher_similarity.py` `_judge_pair()`: 1500 ->
+  2500(배수 적용 시 4500 -> 7500).
+
+검증: `ast.parse`로 두 파일 컴파일 확인. 실제 완화 효과는 사내 LLM
+서버에 접근 가능한 환경에서 파이프라인을 재실행해 경고 빈도로
+확인해야 함(이 개발 샌드박스에는 `llm_config.py`가 없어 재현 불가).

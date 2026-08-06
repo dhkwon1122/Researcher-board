@@ -344,7 +344,10 @@ def _build_prompt(edu_text, task_text, role_text, job_text, core_text, tech_text
 
 def _analyze_researcher(prompt: str) -> dict | None:
     # 추론형 모델의 사고 과정 토큰 소모를 감안해 여유 있게 잡는다(finish_reason=length 방지).
-    raw = call_llm(prompt, _SYSTEM_PROMPT, temperature=0.2, max_tokens=4000)
+    # 입력(과제/논문/특허 이력 등)이 사람마다 길이 편차가 커서 사고 과정도 그만큼
+    # 길어질 수 있어, 기본 배수(LLM2_MAX_TOKENS_MULTIPLIER)만으로 부족한 경우가
+    # 있었다 — 4000 -> 6000으로 상향.
+    raw = call_llm(prompt, _SYSTEM_PROMPT, temperature=0.2, max_tokens=6000)
     if not raw:
         return None
     try:
