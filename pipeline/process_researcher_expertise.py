@@ -56,7 +56,10 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import OUT_DIR  # noqa: E402
 from excel_reader import clean_str as _clean  # noqa: E402
-from llm_client import call_llm, extract_json, max_concurrency, run_concurrent  # noqa: E402
+from llm_client import (  # noqa: E402
+    call_llm, extract_json, get_truncation_count, max_concurrency,
+    reset_truncation_count, run_concurrent,
+)
 import journal_authority  # noqa: E402
 import rd_specialist_markdown as mmd  # noqa: E402
 import result_archive  # noqa: E402
@@ -525,6 +528,7 @@ def _filter_eligible_researchers(researchers: pd.DataFrame) -> pd.DataFrame:
 
 
 def process(refresh_journals: bool = False) -> bool:
+    reset_truncation_count()
     researchers = _read_csv('researchers')
     if researchers.empty:
         print('[process_researcher_expertise] researchers.csv 없음 — 종료')
@@ -670,6 +674,10 @@ def process(refresh_journals: bool = False) -> bool:
         f.write(json_text)
 
     print(f'[OK]   연구원 보유 전문성 분석.json 저장 ({len(results)}명)')
+    truncation_count = get_truncation_count()
+    if truncation_count:
+        print(f'[알림] LLM 응답 content가 비어(주로 finish_reason=length) 대체 처리된 '
+              f'횟수: {truncation_count}회 — 잦으면 max_tokens를 더 늘려야 할 수 있습니다.')
     result_archive.archive_copy('02. 연구원분석', '연구원 보유 전문성 분석', 'json', json_text)
 
     _write_html(results, researchers)

@@ -39,6 +39,32 @@ except ModuleNotFoundError:
 _semaphore_lock = threading.Lock()
 _semaphore: threading.Semaphore | None = None
 
+_stats_lock = threading.Lock()
+_truncation_count = 0  # content가 비어 finish_reason=length로 대체/실패 처리된 누적 횟수
+
+
+def get_truncation_count() -> int:
+    """이번 프로세스에서 (마지막 reset_truncation_count() 이후) content가 비어
+    reasoning_content로 대체하거나 그마저 없어 빈 문자열을 반환한 횟수 — 대부분
+    finish_reason=length(사고 과정이 max_tokens 예산을 다 쓴 경우)다. 배치
+    스크립트가 실행 끝에 "이 경고가 몇 번 발생했는지"를 요약해 보여줄 때 쓴다."""
+    return _truncation_count
+
+
+def reset_truncation_count():
+    """배치 실행 시작 시 호출해 이번 실행분만 집계되게 한다(여러 프로세스가
+    이 모듈을 계속 import해서 쓰는 장기 실행 환경이 아니라, 스크립트 1회
+    실행이 곧 1번의 집계 단위이므로 process() 시작 시 리셋하는 것으로 충분)."""
+    global _truncation_count
+    with _stats_lock:
+        _truncation_count = 0
+
+
+def _record_truncation():
+    global _truncation_count
+    with _stats_lock:
+        _truncation_count += 1
+
 
 def max_concurrency() -> int:
     """설정된 동시 호출 허용치. run_concurrent()로 여러 건을 한꺼번에 넘길 때
@@ -186,6 +212,7 @@ def call_llm(prompt: str, system_prompt: str, *, temperature: float = 0.2, max_t
         # 시도하고, 그래도 없으면 원인을 알 수 있도록 로그를 남긴다.
         reasoning = message.get('reasoning_content') or message.get('reasoning')
         finish_reason = choice.get('finish_reason')
+        _record_truncation()
         if reasoning:
             print(f'  [LLM 경고] content가 비어 있어 reasoning_content로 대체 사용 '
                   f'(finish_reason={finish_reason})')

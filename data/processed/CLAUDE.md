@@ -1275,3 +1275,44 @@ Market 페이지가 콘솔 에러 없이 로드되는지 확인.
 검증: `ast.parse`로 두 파일 컴파일 확인. 실제 완화 효과는 사내 LLM
 서버에 접근 가능한 환경에서 파이프라인을 재실행해 경고 빈도로
 확인해야 함(이 개발 샌드박스에는 `llm_config.py`가 없어 재현 불가).
+
+## 완료: LLM content-비어있음(finish_reason=length) 경고 발생 횟수 집계
+
+사용자 요청: 위 max_tokens 상향으로 완전히 없앨 수는 없으니, 모듈을
+실행했을 때 그 경고가 몇 번 발생했는지 결과에 표시해달라는 것.
+
+**`pipeline/llm_client.py`**: 스레드 안전한 모듈 전역 카운터
+`_truncation_count` 추가(`_stats_lock`으로 보호 — call_llm()이
+`run_concurrent()`로 여러 스레드에서 동시에 호출되므로). `content`가
+비어 `reasoning_content`로 대체하거나(그마저 없어 빈 문자열을
+반환하거나) 하는 두 경고 분기 모두에서 `_record_truncation()`으로
+증가. `get_truncation_count()`/`reset_truncation_count()`를 공개
+함수로 노출 — reset은 배치 스크립트가 자기 실행분만 집계하도록
+`process()` 시작 시 호출한다(이 모듈을 계속 import해 쓰는 장기 실행
+서버가 아니라 스크립트 1회 실행 = 1번의 집계 단위이므로 이걸로 충분).
+
+**`pipeline/researcher_fit.py`**: `llm_client`에서 두 함수를 추가로
+import해 그대로 재노출 — `process_researcher_similarity.py`가 기존
+`fit.call_llm`/`fit.run_concurrent`처럼 `fit.` 경유로 쓸 수 있게
+(직접 `llm_client`를 import하지 않는 기존 관례 유지).
+
+**`process_researcher_expertise.py`**: `process()` 시작에서
+`reset_truncation_count()`, `연구원 보유 전문성 분석.json` 저장 로그
+직후 `get_truncation_count()`가 0보다 크면 "[알림] LLM 응답 content가
+비어(주로 finish_reason=length) 대체 처리된 횟수: N회" 출력(0이면
+출력 안 함 — 정상 실행 로그에 잡음 추가하지 않음). 이 함수 안에서
+`journal_authority.update_authority()`도 호출되므로(같은
+`llm_client` 전역 카운터를 공유), 저널 조회 중 발생한 경고도 함께
+집계된다.
+
+**`process_researcher_similarity.py`**: `process()` 시작에서
+`fit.reset_truncation_count()`, `researcher_similarity.html` 저장
+로그 직후 동일한 형식으로 출력.
+
+검증: `requests.post`를 모킹해 content가 비고 finish_reason=length인
+응답을 반환하도록 하고 `call_llm()`을 호출 — 카운터가 1 증가하는지,
+성공 응답(content 있음)에서는 증가하지 않는지, `reset_truncation_count()`
+호출 후 0으로 돌아가는지 확인. `researcher_fit.py`를 통해서도 같은
+카운터 함수에 접근되는지 확인. 4개 파일 모두 `ast.parse` 컴파일
+확인(사내 LLM 서버가 없는 이 샌드박스에서는 실제 파이프라인 재실행으로
+로그 출력까지는 확인 불가).

@@ -584,6 +584,7 @@ def _build_html(results: list, researchers_df: pd.DataFrame, profile_by_id: dict
 
 
 def process(top_k: int = DEFAULT_TOP_K, refresh_judgments: bool = False) -> bool:
+    fit.reset_truncation_count()
     profiles = _read_expertise()
     if not profiles:
         print('[process_researcher_similarity] 연구원 보유 전문성 분석.json 없음 — 종료 '
@@ -622,6 +623,11 @@ def process(top_k: int = DEFAULT_TOP_K, refresh_judgments: bool = False) -> bool
         f.write(html_out)
     print('[OK]   researcher_similarity.html 저장')
     result_archive.archive_copy('04. 연구원_연구원_유사도_매칭', '연구원_연구원_유사도_분석', 'html', html_out)
+
+    truncation_count = fit.get_truncation_count()
+    if truncation_count:
+        print(f'[알림] LLM 응답 content가 비어(주로 finish_reason=length) 대체 처리된 '
+              f'횟수: {truncation_count}회 — 잦으면 max_tokens를 더 늘려야 할 수 있습니다.')
 
     return True
 
