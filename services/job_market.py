@@ -39,11 +39,15 @@ Source:
   data/processed/연구원 보유 전문성 분석.json   (근거 B/대상자 프로필)
 """
 
+import io
 import json
 import os
 import re
 import sys
 from datetime import datetime
+
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, Side
 
 _PIPELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'pipeline')
 sys.path.insert(0, os.path.abspath(_PIPELINE_DIR))
@@ -559,3 +563,76 @@ def run_individual_search(researcher_ids: list, excluded_departments: list, excl
     }
     save_history(report)
     return report
+
+
+# ─── 검색 결과 엑셀 다운로드 ─────────────────────────────────────────────────
+
+def _pct(score) -> str:
+    return f'{round(score * 100)}%' if score is not None else '데이터없음'
+
+
+def build_result_workbook(result: dict) -> bytes:
+    """JOB Market 검색 결과(run_project_search/run_individual_search/
+    load_history()가 반환하는 report 형태)를 엑셀로 내보낸다. "재배치가
+    가능한 연구원의 사번을 첫 번째 컬럼, 결과를 두 번째 컬럼에" 반영해
+    달라는 요청대로, 추천이 1건 이상인(재배치 가능한) 연구원만 포함하고
+    추천 과제명/부서/A·B 점수/사유를 한 셀에 번호 매겨 줄바꿈 나열한다."""
+    roster = result.get('roster') or []
+    results = result.get('results') or {}
+    ordered_rids = [p['researcher_id'] for p in roster if p.get('researcher_id') in results]
+    ordered_rids += [rid for rid in results if rid not in ordered_rids]
+
+    rows = []
+    for rid in ordered_rids:
+        recs = (results.get(rid) or {}).get('recommendations') or []
+        if not recs:
+            continue
+        blocks = []
+        for i, r in enumerate(recs, start=1):
+            line = (f"{i}. {r.get('project_name', '')} ({r.get('dep_name', '')}) "
+                    f"- A: {_pct(r.get('score_a'))}, B: {_pct(r.get('score_b'))}")
+            reason = (r.get('reason') or '').strip()
+            if reason:
+                line += f'\n   사유: {reason}'
+            blocks.append(line)
+        rows.append((rid, '\n\n'.join(blocks)))
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'JOB Market 결과'
+
+    font_name, font_size = '바탕체', 11
+    header_font = Font(name=font_name, size=font_size, bold=True)
+    body_font = Font(name=font_name, size=font_size, bold=False)
+    thin = Side(style='thin', color='000000')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    wrap_center = Alignment(wrap_text=True, vertical='center', horizontal='center')
+    wrap_left = Alignment(wrap_text=True, vertical='top', horizontal='left')
+
+    for col_idx, header in enumerate(['사번', '결과'], start=1):
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.font = header_font
+        cell.border = border
+        cell.alignment = wrap_center
+
+    for row_idx, (rid, text) in enumerate(rows, start=2):
+        id_cell = ws.cell(row=row_idx, column=1, value=rid)
+        id_cell.font = body_font
+        id_cell.border = border
+        id_cell.alignment = wrap_center
+
+        result_cell = ws.cell(row=row_idx, column=2, value=text)
+        result_cell.font = body_font
+        result_cell.border = border
+        result_cell.alignment = wrap_left
+
+    ws.column_dimensions['A'].width = 14
+    ws.column_dimensions['B'].width = 90
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def result_default_filename() -> str:
+    return f"JOB_Market_결과_{datetime.now().strftime('%Y%m%d%H%M')}.xlsx"

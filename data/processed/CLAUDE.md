@@ -1779,3 +1779,44 @@ id를 `*-excel-expertise-check`에서 `*-excel-options-check`로 변경(아직
 `True`로 `build_profile_workbook()`을 실행해 헤더 마지막 4개가 정확히
 `보유전문성(강점 분야/강점 키워드/주요 역할·책임/전문지식 및 역량)`
 순서로 오는지 openpyxl로 확인.
+
+## 완료: JOB Market 검색 결과 엑셀 다운로드(사번 1열, 결과 2열)
+
+"JOB market에서 검색한 결과를 엑셀로 다운로드 받을 수 있게 해줘.
+재배치가 가능한 연구원의 사번을 첫번째 컬럼, 결과를 두번째 컬럼에
+반영" 요청. "재배치가 가능한"이라는 표현대로 추천이 1건 이상인
+사람만 포함하고(추천 0건인 사람은 행 자체를 뺌), 딱 2개 컬럼(사번/결과)
+구성으로 만들었다 — 화면에 있는 사진/전문성 요약 카드 등은 엑셀에
+옮기지 않고, 화면의 추천 한 줄(`_recommendation_row` — 과제명/부서/A·B
+점수/사유)만 텍스트로 압축해 담았다.
+
+**`services/job_market.py`**: `build_result_workbook(result)` 신규 —
+`run_project_search()`/`run_individual_search()`/`load_history()`가
+반환하는 report(`roster`, `results` 등)를 그대로 받는다. `roster` 순서를
+따라 `results[rid]['recommendations']`가 있는 사람만 골라, 추천마다
+`"N. 과제명 (부서명) - A: xx%, B: xx%"` + (있으면) `"   사유: ..."` 두 줄을
+만들고 여러 추천은 빈 줄로 이어붙여 한 셀에 담는다(A/B 점수가 없는
+쪽은 "데이터없음"). `researcher_profile_export.py`와 같은 스타일(바탕체
+11pt, 전체 테두리, 헤더 볼드, 줄바꿈 셀)로 새 워크북을 직접 만든다(대상
+데이터 구조가 완전히 달라 그 모듈 함수는 재사용하지 않음). openpyxl/io
+임포트 추가. `result_default_filename()`도 추가(`JOB_Market_결과_YYYYMMDDHHMM.xlsx`).
+
+**`pages/job_market.py`**: 검색 결과 영역(`dcc.Loading(html.Div(id='jm-result'))`)
+바로 아래에 엑셀 다운로드 버튼(`jm-excel-btn`, 기본 숨김) + `dcc.Download`
+추가, 결과 원본을 담아두는 `dcc.Store(id='jm-result-store')` 신규 —
+검색(`_run`)과 이력 보기(`_view_history`) 콜백 둘 다 `_render_result()`로
+화면을 그릴 때 같은 원본 `result`를 이 스토어에도 함께 저장한다(에러
+결과는 `None`으로 비움). `_update_excel_button()` 콜백이 스토어 변화를
+지켜보다 재배치 가능한 사람이 1명이라도 있을 때만 버튼을 보이게/눌리게
+하고, `_download_excel()`이 그 스토어 값을 그대로
+`build_result_workbook()`에 넘긴다.
+
+검증: `build_result_workbook()`을 목 결과(3명 중 2명만 추천 있음, 그중
+한 명은 추천 2건에 점수 없는 필드/빈 사유 섞음)로 직접 호출해 —
+추천 없는 사람이 행에서 빠지는지, 사번이 roster 순서 그대로 1열에
+오는지, 2열 줄바꿈/번호/사유 서식과 "데이터없음" 폴백이 맞는지 openpyxl로
+확인. `pages.job_market.layout()`을 직접 호출해 `jm-excel-btn`/
+`jm-excel-download`/`jm-result-store`가 레이아웃에 포함되는지 확인.
+Playwright 브라우저 테스트는 이번 세션 컨테이너에 `data/processed/`가
+비어 있어(LLM 호출까지 필요한 실제 검색 자체가 불가능) 생략 — 위 함수
+단위 검증으로 로직을 대신 확인했다.

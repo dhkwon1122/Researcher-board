@@ -272,6 +272,11 @@ def layout(**_kwargs):
                    id='jm-run-btn', color='primary', n_clicks=0, className='mb-3'),
 
         dcc.Loading(html.Div(id='jm-result')),
+        dbc.Button([html.I(className='bi bi-file-earmark-excel me-1'), '재배치 가능 인원 엑셀 다운로드'],
+                   id='jm-excel-btn', color='success', outline=True, size='sm',
+                   className='mb-3', style={'display': 'none'}, n_clicks=0, disabled=True),
+        dcc.Download(id='jm-excel-download'),
+        dcc.Store(id='jm-result-store', data=None),
         dcc.Store(id='jm-history-refresh', data=0),
         html.Hr(),
         html.H6('검색 이력', className='fw-bold mb-2'),
@@ -383,6 +388,7 @@ def _render_selected(selected):
 @callback(
     Output('jm-result', 'children'),
     Output('jm-history-refresh', 'data'),
+    Output('jm-result-store', 'data'),
     Input('jm-run-btn', 'n_clicks'),
     State('jm-mode', 'value'),
     State('jm-project-select', 'value'),
@@ -394,7 +400,7 @@ def _render_selected(selected):
 )
 def _run(n_clicks, mode, project_names, selected_individuals, excluded_depts, excluded_projects, refresh_token):
     if not n_clicks:
-        return dash.no_update, dash.no_update
+        return dash.no_update, dash.no_update, dash.no_update
     excluded_depts = excluded_depts or []
     excluded_projects = excluded_projects or []
     project_names = project_names or []
@@ -403,21 +409,21 @@ def _run(n_clicks, mode, project_names, selected_individuals, excluded_depts, ex
     try:
         if mode == _MODE_INDIVIDUAL:
             if not selected_individuals:
-                return dbc.Alert('대상자를 검색해서 추가해주세요.', color='warning'), dash.no_update
+                return dbc.Alert('대상자를 검색해서 추가해주세요.', color='warning'), dash.no_update, None
             researcher_ids = [c['researcher_id'] for c in selected_individuals]
             result = jm.run_individual_search(researcher_ids, excluded_depts, excluded_projects)
         else:
             if not project_names:
-                return dbc.Alert('종료 예정 과제를 선택해주세요.', color='warning'), dash.no_update
+                return dbc.Alert('종료 예정 과제를 선택해주세요.', color='warning'), dash.no_update, None
             result = jm.run_project_search(project_names, excluded_depts, excluded_projects)
     except Exception as exc:  # noqa: BLE001 — 어떤 원인이든 화면에 아무 반응도
         # 없는 것보다는, 오류를 눈에 보이게 알려주는 게 낫다(외부 입력/실데이터
         # 경계). services/job_market.py 내부의 개별 안전망(run_concurrent 등)이
         # 못 잡는 예외(예: 명단 구성, 후보 조회 단계)까지 여기서 최종적으로 잡는다.
-        return dbc.Alert(f'검색 중 오류가 발생했습니다: {exc}', color='danger'), dash.no_update
+        return dbc.Alert(f'검색 중 오류가 발생했습니다: {exc}', color='danger'), dash.no_update, None
 
     refresh = (refresh_token or 0) + 1 if not result.get('error') else dash.no_update
-    return _render_result(result), refresh
+    return _render_result(result), refresh, (None if result.get('error') else result)
 
 
 @callback(
@@ -430,6 +436,7 @@ def _refresh_history_table(_refresh_token):
 
 @callback(
     Output('jm-result', 'children', allow_duplicate=True),
+    Output('jm-result-store', 'data', allow_duplicate=True),
     Input({'type': 'jm-history-view', 'file': dash.ALL}, 'n_clicks'),
     State({'type': 'jm-history-view', 'file': dash.ALL}, 'id'),
     prevent_initial_call=True,
@@ -437,11 +444,41 @@ def _refresh_history_table(_refresh_token):
 def _view_history(n_clicks_list, ids):
     triggered_id = dash.ctx.triggered_id
     if not triggered_id:
-        return dash.no_update
+        return dash.no_update, dash.no_update
     idx = next((i for i, d in enumerate(ids) if d == triggered_id), None)
     if idx is None or not n_clicks_list[idx]:
-        return dash.no_update
+        return dash.no_update, dash.no_update
     result = jm.load_history(triggered_id['file'])
     if not result:
-        return dbc.Alert('이력을 불러오지 못했습니다.', color='danger')
-    return _render_result(result)
+        return dbc.Alert('이력을 불러오지 못했습니다.', color='danger'), None
+    return _render_result(result), result
+
+
+def _has_redeployable(result: dict | None) -> bool:
+    if not result or result.get('error'):
+        return False
+    return any((r.get('recommendations') or []) for r in (result.get('results') or {}).values())
+
+
+@callback(
+    Output('jm-excel-btn', 'style'),
+    Output('jm-excel-btn', 'disabled'),
+    Input('jm-result-store', 'data'),
+)
+def _update_excel_button(result):
+    if not _has_redeployable(result):
+        return {'display': 'none'}, True
+    return {'display': 'inline-block'}, False
+
+
+@callback(
+    Output('jm-excel-download', 'data'),
+    Input('jm-excel-btn', 'n_clicks'),
+    State('jm-result-store', 'data'),
+    prevent_initial_call=True,
+)
+def _download_excel(n_clicks, result):
+    if not n_clicks or not _has_redeployable(result):
+        return dash.no_update
+    data = jm.build_result_workbook(result)
+    return dcc.send_bytes(data, jm.result_default_filename())
