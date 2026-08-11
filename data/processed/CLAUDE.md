@@ -1620,3 +1620,72 @@ Bootstrap CDN 차단(기존에 여러 번 확인된 프록시 아티팩트) 때�
 직접 확인은 못 했지만, DOM에 `btn-warning` 클래스가 정확히 붙고
 `custom.css`에 이를 덮어쓰는 규칙이 없음을 확인해 실제 배포
 환경에서는 정상적으로 밝은 노랑으로 보일 것으로 판단.
+
+## 완료: 엑셀 다운로드에 "보유 전문성"(LLM) 선택 컬럼 추가 + 보유 전문성 탭 기본값 변경
+
+사용자 요청 두 가지: (1) AI 검색/연구원 명단 엑셀 다운로드에 LLM이
+산출한 "연구원 보유 전문성 분석.json" 내용까지 받을 수 있게 하되,
+선택(옵트인) 가능하도록. (2) "보유 전문성" 페이지 진입 시 첫 화면을
+현재의 "전문성 MAP"에서 "연구원" 탭으로 변경. 확인 문답으로 확정된
+사항: 전문성 4개 필드(강점 분야/강점 키워드/주요 역할·책임/전문지식 및
+역량) 전부 포함, 체크박스는 **기본 해제(미포함) 상태**, 리포트 카드의
+"📍 유사맵" 아이콘이 여는 `?highlight_researcher=...` 딥링크는 기존처럼
+"전문성 MAP" 탭으로 강제 랜딩하는 것을 그대로 유지(새 기본값은 일반
+진입에만 적용).
+
+**`services/researcher_profile_export.py`**: `build_profile_workbook()`은
+`nl_query_bar.py`(AI 검색)와 `researcher_list.py`(연구원 명단) 두 곳에서만
+쓰이는 공용 함수라, 여기 하나만 고치면 두 화면 모두에 반영된다.
+- `_load_tables()`에 `'expertise_profiles': data_store.read_expertise_profiles()`
+  추가(다른 테이블과 달리 DataFrame이 아니라 `researcher_id -> dict`).
+- `_researcher_row_context()`에 `'expertise_profile': tables['expertise_profiles'].get(researcher_id)`
+  추가.
+- `_col_expertise(_rid, rows)` 신규 — `components/detail_tabs.py`의
+  `llm_summary_block()`과 동일한 4개 필드/순서를 `[레이블]` + `- 항목`
+  형태로 한 셀에 줄바꿈 나열, 프로필이 없으면 `'-'`.
+- `build_profile_workbook(researcher_ids, include_expertise=False)` —
+  `include_expertise=True`일 때만 `_COLUMNS`의 로컬 사본에
+  `('보유 전문성', _col_expertise)`와 너비(40)를 덧붙인다(모듈 상수
+  `_COLUMNS` 자체는 건드리지 않음).
+- 겸사겸사 발견한 기존 버그 수정: `widths` 리스트가 11개뿐이라
+  `_COLUMNS`(이번 세션에 `직책`이 추가되며 12개가 됨)와 개수가 안 맞아
+  마지막 컬럼(핵심이력)에 명시적 너비가 적용되지 않고 있었음 — `직책`
+  칸에 너비 10을 추가해 `_COLUMN_WIDTHS`(12개)로 상수화.
+
+**`components/nl_query_bar.py`**: 엑셀 버튼 옆에 `dbc.Checklist`(스위치형,
+id `nl-query-excel-expertise-check`, 기본값 `[]`=미포함) 추가, 버튼과
+같은 `_update_excel_button` 콜백에서 결과가 사람 데이터일 때만 같이
+보이도록(`style` 출력 하나 추가) 동기화. `_download_excel` 콜백에
+`State('nl-query-excel-expertise-check', 'value')`를 추가해
+`include_expertise='include' in (value or [])`로 변환해 전달.
+
+**`pages/researcher_list.py`**: 엑셀 버튼이 있는 `dbc.ButtonGroup` 아래
+같은 컬럼(md=2)에 동일한 스위치형 체크박스(id
+`list-excel-expertise-check`, 기본 미포함) 추가. `download_excel` 콜백에
+`State`로 추가해 동일하게 `include_expertise`로 변환 후
+`build_profile_workbook()`에 전달.
+
+**`pages/researcher_similarity_map.py`**: `layout()`의 기본 진입 탭을
+`highlight_researcher` 유무로 분기 — 없으면 `'researcher'`(신규 기본값),
+있으면 기존처럼 `'map'`. `expertise-tab-content`의 초기 `children`도
+탭 클릭 콜백(`_render_expertise_tab`)이 생성하는 것과 동일한 내용이
+되도록 함께 분기(`researcher`면 `_iframe_tab('researcher')`, `map`이면
+기존 `_map_tab_content(...)`) — 그렇지 않으면 활성 탭 표시와 실제 렌더된
+내용이 어긋난다.
+
+검증: (1) `_col_expertise()`를 목(mock) 프로필로 직접 호출해 4개 필드
+레이블·순서·불릿 형식 확인, 프로필 없을 때 `'-'` 확인. (2)
+`_load_tables()`를 목 데이터로 몬키패치해 `build_profile_workbook()`을
+`include_expertise=True/False` 양쪽으로 실행 — 헤더 개수(12/13)·순서,
+"보유 전문성" 셀 내용, 컬럼 너비(마지막 40) openpyxl로 열어서 확인.
+(3) `nl_query_bar.render()`를 직접 호출해 새 체크박스 컴포넌트가
+레이아웃 트리에 포함되는지 확인. (4)
+`pages/researcher_similarity_map.layout()`을 `highlight_researcher` 유무
+양쪽으로 직접 호출해 `active_tab`이 각각 `'researcher'`/`'map'`으로
+갈리고, 초기 콘텐츠가 탭 전환 콜백과 같은 종류(iframe/지도)로 렌더되는지
+확인(이 세션 컨테이너에는 `data/processed/`에 실제 파이프라인 산출물이
+없어 iframe 쪽은 "리포트가 없습니다" 안내로 정상 폴백되는 것까지 확인 —
+실제 데이터가 있는 환경에서는 그 자리에 리포트가 렌더된다). Playwright
+브라우저 구동 테스트는 이번 세션 컨테이너에 `data/processed/`가
+비어 있어(파이프라인 미실행) 실질적인 화면 검증이 어려워 생략 —
+위 함수 단위 검증으로 로직을 대신 확인했다.

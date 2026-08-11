@@ -71,6 +71,7 @@ def _load_tables() -> dict:
         'nurturing': data_store.read_processed('nurturing'),
         'incentive_selection': data_store.read_processed('incentive_selection'),
         'team_refer': data_store.read_processed('team_refer'),
+        'expertise_profiles': data_store.read_expertise_profiles(),
     }
 
 
@@ -193,6 +194,28 @@ def _col_incentive(_rid, rows):
     return '\n'.join(lines) if lines else '-'
 
 
+def _col_expertise(_rid, rows):
+    """보유 전문성(LLM) — components/detail_tabs.py의 llm_summary_block()과 동일한
+    4개 필드/순서(강점 분야 → 강점 키워드 → 주요 역할·책임 → 전문지식 및 역량)를
+    한 셀에 레이블과 함께 줄바꿈으로 나열한다. 다운로드 시 선택 사항(옵트인)."""
+    profile = rows.get('expertise_profile')
+    if not profile:
+        return '-'
+    sections = [
+        ('강점 분야', profile.get('strength_fields') or []),
+        ('강점 키워드', profile.get('strength_keywords') or []),
+        ('주요 역할·책임', profile.get('key_responsibilities') or []),
+        ('전문지식 및 역량', profile.get('domain_knowledge_skill') or []),
+    ]
+    lines = []
+    for label, items in sections:
+        if not items:
+            continue
+        lines.append(f'[{label}]')
+        lines.extend(f'- {item}' for item in items)
+    return '\n'.join(lines) if lines else '-'
+
+
 # (헤더, 값 계산 함수) — 순서 = 엑셀 컬럼 순서
 _COLUMNS = [
     ('사번', _col_id),
@@ -220,6 +243,7 @@ def _researcher_row_context(researcher_id: str, tables: dict) -> dict:
         'nurturing': _rows_for(tables['nurturing'], researcher_id),
         'incentive_selection': _rows_for(tables['incentive_selection'], researcher_id),
         'team_refer': _rows_for(tables['team_refer'], researcher_id),
+        'expertise_profile': tables['expertise_profiles'].get(researcher_id),
     }
 
 
@@ -300,10 +324,24 @@ def person_base_table(researcher_ids: list) -> dict:
     return out
 
 
-def build_profile_workbook(researcher_ids: list) -> bytes:
+_COLUMN_WIDTHS = [12, 14, 16, 18, 12, 26, 12, 12, 10, 34, 30, 22]
+_EXPERTISE_COLUMN_WIDTH = 40
+
+
+def build_profile_workbook(researcher_ids: list, include_expertise: bool = False) -> bytes:
     """선택된 researcher_id 목록으로 엑셀(xlsx) 바이트를 만들어 반환한다.
-    양식: 바탕체 11pt, 전체 검정 테두리, 헤더만 볼드, 줄바꿈 셀은 자동 줄바꿈."""
+    양식: 바탕체 11pt, 전체 검정 테두리, 헤더만 볼드, 줄바꿈 셀은 자동 줄바꿈.
+    include_expertise=True면 LLM이 산출한 '보유 전문성'(연구원 보유 전문성
+    분석.json) 열을 맨 끝에 추가한다 — 다운로드 화면의 체크박스로 선택하는
+    옵트인 항목이라 기본값은 False이고, 켜져도 _COLUMNS 자체는 건드리지 않고
+    이 함수 안에서만 로컬 사본에 덧붙인다."""
     tables = _load_tables()
+
+    columns = list(_COLUMNS)
+    widths = list(_COLUMN_WIDTHS)
+    if include_expertise:
+        columns.append(('보유 전문성', _col_expertise))
+        widths.append(_EXPERTISE_COLUMN_WIDTH)
 
     wb = Workbook()
     ws = wb.active
@@ -314,7 +352,7 @@ def build_profile_workbook(researcher_ids: list) -> bytes:
     wrap_center = Alignment(wrap_text=True, vertical='center', horizontal='center')
     wrap_left = Alignment(wrap_text=True, vertical='center', horizontal='left')
 
-    for col_idx, (header, _fn) in enumerate(_COLUMNS, start=1):
+    for col_idx, (header, _fn) in enumerate(columns, start=1):
         cell = ws.cell(row=1, column=col_idx, value=header)
         cell.font = header_font
         cell.border = _BORDER
@@ -322,14 +360,13 @@ def build_profile_workbook(researcher_ids: list) -> bytes:
 
     for row_idx, rid in enumerate(researcher_ids, start=2):
         ctx = _researcher_row_context(rid, tables)
-        for col_idx, (_header, fn) in enumerate(_COLUMNS, start=1):
+        for col_idx, (_header, fn) in enumerate(columns, start=1):
             value = fn(rid, ctx)
             cell = ws.cell(row=row_idx, column=col_idx, value=value)
             cell.font = body_font
             cell.border = _BORDER
             cell.alignment = wrap_left
 
-    widths = [12, 14, 16, 18, 12, 26, 12, 12, 34, 30, 22]
     for col_idx, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(col_idx)].width = width
 

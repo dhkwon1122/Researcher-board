@@ -118,8 +118,16 @@ def render() -> html.Div:
             dcc.Store(id='nl-query-expanded', data=False),
             dcc.Store(id='nl-query-selected', data=[]),
         ])),
-        dbc.Button('', id='nl-query-excel-btn', color='success', outline=True, size='sm',
-                   className='mt-2', style={'display': 'none'}, n_clicks=0, disabled=True),
+        html.Div([
+            dbc.Button('', id='nl-query-excel-btn', color='success', outline=True, size='sm',
+                       className='mt-2 me-2', style={'display': 'none'}, n_clicks=0, disabled=True),
+            dbc.Checklist(
+                id='nl-query-excel-expertise-check',
+                options=[{'label': '보유 전문성 포함', 'value': 'include'}],
+                value=[], switch=True, inline=True,
+                className='mt-2 small', style={'display': 'none'},
+            ),
+        ], className='d-flex align-items-center'),
         dcc.Download(id='nl-query-excel-download'),
     ], className='mb-3')
 
@@ -541,6 +549,7 @@ def _toggle_selectall(checked, ids):
     Output('nl-query-excel-btn', 'children'),
     Output('nl-query-excel-btn', 'style'),
     Output('nl-query-excel-btn', 'disabled'),
+    Output('nl-query-excel-expertise-check', 'style'),
     Input('nl-query-full-result', 'data'),
     Input('nl-query-selected', 'data'),
     prevent_initial_call=True,
@@ -548,11 +557,11 @@ def _toggle_selectall(checked, ids):
 def _update_excel_button(full_result, selected):
     columns = (full_result or {}).get('columns') or []
     if 'researcher_id' not in columns:
-        return dash.no_update, {'display': 'none'}, dash.no_update
+        return dash.no_update, {'display': 'none'}, dash.no_update, {'display': 'none'}
     n = len(_selected_researcher_ids(full_result, selected))
     label = [html.I(className='bi bi-file-earmark-excel me-1'),
               f'선택 {n}명 엑셀 다운로드' if n else '엑셀 다운로드 (행을 선택하세요)']
-    return label, {'display': 'inline-block'}, n == 0
+    return label, {'display': 'inline-block'}, n == 0, {'display': 'inline-block'}
 
 
 @callback(
@@ -560,13 +569,15 @@ def _update_excel_button(full_result, selected):
     Input('nl-query-excel-btn', 'n_clicks'),
     State('nl-query-full-result', 'data'),
     State('nl-query-selected', 'data'),
+    State('nl-query-excel-expertise-check', 'value'),
     prevent_initial_call=True,
 )
-def _download_excel(n_clicks, full_result, selected):
+def _download_excel(n_clicks, full_result, selected, include_expertise):
     if not n_clicks:
         return dash.no_update
     researcher_ids = _selected_researcher_ids(full_result, selected)
     if not researcher_ids:
         return dash.no_update
-    data = researcher_profile_export.build_profile_workbook(researcher_ids)
+    data = researcher_profile_export.build_profile_workbook(
+        researcher_ids, include_expertise='include' in (include_expertise or []))
     return dcc.send_bytes(data, researcher_profile_export.default_filename())

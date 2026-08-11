@@ -458,10 +458,16 @@ def _go_to_researcher_card_from_graph(node_data):
 
 
 def layout(highlight_researcher=None, **_kwargs):
-    """highlight_researcher: URL 쿼리 파라미터(예: /researcher-similarity-map
-    ?highlight_researcher=00000001) — 리포트 카드의 '📍 유사맵' 아이콘이
-    target="_top"으로 이 URL을 열면, 전문성 유사맵 탭이 그 연구원을 별 마커로
-    강조·확대한 상태로 바로 보이도록 pending-highlight Store에 태워 둔다."""
+    """기본 진입 탭은 '연구원'. 다만 highlight_researcher가 있으면(URL 쿼리
+    파라미터, 예: /researcher-similarity-map?highlight_researcher=00000001 —
+    리포트 카드의 '📍 유사맵' 아이콘이 target="_top"으로 이 URL을 열 때 전달됨)
+    그 연구원을 별 마커로 강조·확대해 보여줘야 하므로 예외적으로 '전문성 MAP'
+    탭에 바로 랜딩한다."""
+    default_tab = 'map' if highlight_researcher else 'researcher'
+    initial_content = (
+        _map_tab_content(highlighted_rid=highlight_researcher)
+        if default_tab == 'map' else _iframe_tab('researcher')
+    )
     return html.Div([
         html.H5(
             [html.I(className='bi bi-share-fill me-2 text-primary'), '보유 전문성'],
@@ -473,11 +479,11 @@ def layout(highlight_researcher=None, **_kwargs):
                 dbc.Tab(label='연구원 ↔ 연구원', tab_id='similarity'),
                 dbc.Tab(label='전문성 MAP', tab_id='map'),
             ],
-            id='expertise-tabs', active_tab='map', className='mb-3',
+            id='expertise-tabs', active_tab=default_tab, className='mb-3',
         ),
         dcc.Loading(html.Div(
             id='expertise-tab-content',
-            children=_map_tab_content(highlighted_rid=highlight_researcher),
+            children=initial_content,
         )),
         dcc.Store(id='expertise-pending-highlight', data=highlight_researcher),
         dcc.Store(id='expertise-scroll-target'),

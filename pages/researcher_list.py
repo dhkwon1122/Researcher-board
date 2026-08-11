@@ -249,6 +249,12 @@ def layout():
                             dbc.Button(html.I(className='bi bi-file-earmark-excel'), id='list-excel-btn',
                                        color='success', title='엑셀 다운로드(현재 화면에 보이는 대상)'),
                         ], className='w-100'),
+                        dbc.Checklist(
+                            id='list-excel-expertise-check',
+                            options=[{'label': '보유 전문성 포함', 'value': 'include'}],
+                            value=[], switch=True,
+                            className='small mt-1',
+                        ),
                     ], md=2),
                 ], className='g-3'),
             ),
@@ -383,15 +389,17 @@ def clear_filters(_):
     Output('researcher-list-excel-download', 'data'),
     Input('list-excel-btn', 'n_clicks'),
     State('researcher-table', 'derived_virtual_data'),
+    State('list-excel-expertise-check', 'value'),
     prevent_initial_call=True,
 )
-def download_excel(n_clicks, virtual_data):
+def download_excel(n_clicks, virtual_data, include_expertise):
     if not n_clicks or not virtual_data:
         return no_update
     researcher_ids = [row['researcher_id'] for row in virtual_data if row.get('researcher_id')]
     if not researcher_ids:
         return no_update
-    data = researcher_profile_export.build_profile_workbook(researcher_ids)
+    data = researcher_profile_export.build_profile_workbook(
+        researcher_ids, include_expertise='include' in (include_expertise or []))
     return dcc.send_bytes(data, researcher_profile_export.default_filename())
 
 
