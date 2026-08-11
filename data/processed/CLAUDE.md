@@ -1693,3 +1693,28 @@ id `nl-query-excel-expertise-check`, 기본값 `[]`=미포함) 추가, 버튼과
 브라우저 구동 테스트는 이번 세션 컨테이너에 `data/processed/`가
 비어 있어(파이프라인 미실행) 실질적인 화면 검증이 어려워 생략 —
 위 함수 단위 검증으로 로직을 대신 확인했다.
+
+### 후속: "보유기술"(tech_ownership.csv) 컬럼 추가
+
+연구원 프로필 화면(`components/detail_tabs.py`의 `owned_expertise_block()`
+우측 "보유기술" 표 — `_tech_ownership_table()`, `tech_ownership.csv`의
+`tech_1~5`/`lv_1~5`/`portion_1~5`)을 엑셀에도 넣어 달라는 요청. 이번
+것은 LLM 산출물이 아니라 `핵심이력`/`학력` 등과 같은 성격의 원천 데이터라,
+앞서 만든 "보유 전문성 포함" 체크박스(LLM 4필드 전용)와 묶지 않고
+`_COLUMNS`에 **항상 포함**되는 일반 컬럼으로 추가했다(직책/과제수행이력
+옆에 있는 핵심이력 바로 뒤, 헤더 "보유기술").
+
+- `_load_tables()`/`_researcher_row_context()`에 `tech_ownership`
+  (`data_store.read_processed('tech_ownership')`) 추가.
+- `_col_tech_ownership(_rid, rows)` 신규 — 화면의 `_tech_ownership_table()`과
+  동일하게 5개 슬롯(`tech_i`/`lv_i`/`portion_i`)을 돌며 이름이 있는
+  슬롯만 `"전문분야 (Lv N, 보유율 M%)"` 형태로 줄바꿈 나열, 슬롯이
+  하나도 없으면 `'-'`.
+- `_COLUMNS`에 `('보유기술', _col_tech_ownership)`을 `핵심이력` 다음에
+  추가(기본 컬럼이 12개→13개가 되며 `_COLUMN_WIDTHS`에도 너비 30 추가).
+
+검증: `_load_tables()`를 목 데이터(2개 슬롯만 채운 tech_ownership 행)로
+몬키패치해 `build_profile_workbook()`을 `include_expertise=True/False`
+양쪽으로 실행 — 헤더 개수(13/17)·순서, "보유기술" 셀에 두 슬롯이
+줄바꿈으로 정확히 나열되고 빈 슬롯은 건너뛰는지, 컬럼 너비까지 openpyxl로
+확인.

@@ -71,6 +71,7 @@ def _load_tables() -> dict:
         'nurturing': data_store.read_processed('nurturing'),
         'incentive_selection': data_store.read_processed('incentive_selection'),
         'team_refer': data_store.read_processed('team_refer'),
+        'tech_ownership': data_store.read_processed('tech_ownership'),
         'expertise_profiles': data_store.read_expertise_profiles(),
     }
 
@@ -194,6 +195,27 @@ def _col_incentive(_rid, rows):
     return '\n'.join(lines) if lines else '-'
 
 
+def _col_tech_ownership(_rid, rows):
+    """보유기술 — components/detail_tabs.py의 _tech_ownership_table()과 동일하게
+    tech_ownership.csv의 tech_1~5/lv_1~5/portion_1~5를 "전문분야(Lv N, 보유율 M%)"
+    형태로 한 셀에 줄바꿈 나열한다(화면의 '보유기술' 표와 동일 항목, 데이터 없는
+    슬롯은 건너뜀)."""
+    tech_rows = rows['tech_ownership']
+    if not tech_rows:
+        return '-'
+    tech_row = tech_rows[0]
+    lines = []
+    for i in range(1, 6):
+        name = _s(tech_row.get(f'tech_{i}'))
+        if not name:
+            continue
+        lv = _s(tech_row.get(f'lv_{i}')) or '-'
+        portion = _s(tech_row.get(f'portion_{i}'))
+        portion_disp = f'{portion}%' if portion else '-'
+        lines.append(f'{name} (Lv {lv}, 보유율 {portion_disp})')
+    return '\n'.join(lines) if lines else '-'
+
+
 def _expertise_field(field: str):
     """보유 전문성(LLM)의 한 필드를 한 셀에 줄바꿈으로 나열하는 컬럼 함수를 만든다.
     components/detail_tabs.py의 llm_summary_block()과 동일한 4개 필드
@@ -229,6 +251,7 @@ _COLUMNS = [
     ('과제수행이력', _col_tasks),
     ('양성이력', _col_nurturing),
     ('핵심이력', _col_incentive),
+    ('보유기술', _col_tech_ownership),
 ]
 
 
@@ -242,6 +265,7 @@ def _researcher_row_context(researcher_id: str, tables: dict) -> dict:
         'nurturing': _rows_for(tables['nurturing'], researcher_id),
         'incentive_selection': _rows_for(tables['incentive_selection'], researcher_id),
         'team_refer': _rows_for(tables['team_refer'], researcher_id),
+        'tech_ownership': _rows_for(tables['tech_ownership'], researcher_id),
         'expertise_profile': tables['expertise_profiles'].get(researcher_id),
     }
 
@@ -323,7 +347,7 @@ def person_base_table(researcher_ids: list) -> dict:
     return out
 
 
-_COLUMN_WIDTHS = [12, 14, 16, 18, 12, 26, 12, 12, 10, 34, 30, 22]
+_COLUMN_WIDTHS = [12, 14, 16, 18, 12, 26, 12, 12, 10, 34, 30, 22, 30]
 _EXPERTISE_COLUMN_WIDTH = 26
 
 
