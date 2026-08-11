@@ -1747,8 +1747,8 @@ id `nl-query-excel-expertise-check`, 기본값 `[]`=미포함) 추가, 버튼과
   `_EXPERTISE_COLUMNS`와 같은 패턴으로 정의.
 - `build_profile_workbook(researcher_ids, include_expertise=False,
   include_patents=False, include_publications=False)` — 세 플래그가
-  각각 독립적으로 해당 옵트인 컬럼 그룹을 이 순서(전문성 → 특허 → 논문)로
-  덧붙인다.
+  각각 독립적으로 해당 옵트인 컬럼 그룹을 이 순서(특허 → 논문 → 전문성)로
+  덧붙인다 — 전문성 그룹을 맨 뒤에 고정한 이유는 아래 후속 참고.
 
 **`components/nl_query_bar.py`/`pages/researcher_list.py`**: 기존
 "보유 전문성 포함" 단일 체크박스를 3개 옵션짜리 `dbc.Checklist`(값
@@ -1767,3 +1767,15 @@ id를 `*-excel-expertise-check`에서 `*-excel-options-check`로 변경(아직
 모두 기본값(False)일 때 기존 13개 기본 컬럼만 나오는지도 함께 확인.
 `nl_query_bar.render()`를 직접 호출해 새 체크리스트(3옵션)가 레이아웃에
 포함되는지 확인.
+
+### 후속: 보유 전문성 컬럼을 항상 맨 마지막으로 고정
+
+"보유 전문성은 객관적인 내용이 아니므로(부서장/본인 컨펌 X) 엑셀의
+가장 마지막 컬럼에 반영되도록 해줘" 요청 — 특허/논문(원천 실적 데이터)과
+달리 보유 전문성은 LLM이 추정한 값이라 신뢰도 성격이 달라, 어떤 옵트인
+조합을 선택해도 항상 맨 끝에 오도록 `build_profile_workbook()`의
+추가 순서를 특허 → 논문 → 전문성으로 바꿨다(이전엔 전문성 → 특허 → 논문
+순이라 셋 다 선택하면 전문성이 중간에 끼었음). 검증: 세 플래그를 모두
+`True`로 `build_profile_workbook()`을 실행해 헤더 마지막 4개가 정확히
+`보유전문성(강점 분야/강점 키워드/주요 역할·책임/전문지식 및 역량)`
+순서로 오는지 openpyxl로 확인.

@@ -436,15 +436,18 @@ def build_profile_workbook(
 
     columns = list(_COLUMNS)
     widths = list(_COLUMN_WIDTHS)
-    if include_expertise:
-        columns.extend(_EXPERTISE_COLUMNS)
-        widths.extend([_EXPERTISE_COLUMN_WIDTH] * len(_EXPERTISE_COLUMNS))
     if include_patents:
         columns.extend(_PATENT_COLUMNS)
         widths.extend([_PATENT_COLUMN_WIDTH] * len(_PATENT_COLUMNS))
     if include_publications:
         columns.extend(_PUBLICATION_COLUMNS)
         widths.extend([_PUBLICATION_COLUMN_WIDTH] * len(_PUBLICATION_COLUMNS))
+    # 보유 전문성(LLM 산출, 부서장/본인 컨펌을 거치지 않은 비객관적 정보)은
+    # 다른 옵트인 컬럼과 무엇을 같이 선택하든 항상 맨 마지막 컬럼이 되도록
+    # 다른 그룹 뒤에 붙인다.
+    if include_expertise:
+        columns.extend(_EXPERTISE_COLUMNS)
+        widths.extend([_EXPERTISE_COLUMN_WIDTH] * len(_EXPERTISE_COLUMNS))
 
     wb = Workbook()
     ws = wb.active
