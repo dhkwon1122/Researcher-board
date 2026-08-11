@@ -250,8 +250,12 @@ def layout():
                                        color='success', title='엑셀 다운로드(현재 화면에 보이는 대상)'),
                         ], className='w-100'),
                         dbc.Checklist(
-                            id='list-excel-expertise-check',
-                            options=[{'label': '보유 전문성 포함', 'value': 'include'}],
+                            id='list-excel-options-check',
+                            options=[
+                                {'label': '보유 전문성 포함', 'value': 'expertise'},
+                                {'label': '특허 포함', 'value': 'patents'},
+                                {'label': '논문 포함', 'value': 'publications'},
+                            ],
                             value=[], switch=True,
                             className='small mt-1',
                         ),
@@ -389,17 +393,22 @@ def clear_filters(_):
     Output('researcher-list-excel-download', 'data'),
     Input('list-excel-btn', 'n_clicks'),
     State('researcher-table', 'derived_virtual_data'),
-    State('list-excel-expertise-check', 'value'),
+    State('list-excel-options-check', 'value'),
     prevent_initial_call=True,
 )
-def download_excel(n_clicks, virtual_data, include_expertise):
+def download_excel(n_clicks, virtual_data, excel_options):
     if not n_clicks or not virtual_data:
         return no_update
     researcher_ids = [row['researcher_id'] for row in virtual_data if row.get('researcher_id')]
     if not researcher_ids:
         return no_update
+    excel_options = excel_options or []
     data = researcher_profile_export.build_profile_workbook(
-        researcher_ids, include_expertise='include' in (include_expertise or []))
+        researcher_ids,
+        include_expertise='expertise' in excel_options,
+        include_patents='patents' in excel_options,
+        include_publications='publications' in excel_options,
+    )
     return dcc.send_bytes(data, researcher_profile_export.default_filename())
 
 

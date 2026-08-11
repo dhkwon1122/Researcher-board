@@ -122,8 +122,12 @@ def render() -> html.Div:
             dbc.Button('', id='nl-query-excel-btn', color='success', outline=True, size='sm',
                        className='mt-2 me-2', style={'display': 'none'}, n_clicks=0, disabled=True),
             dbc.Checklist(
-                id='nl-query-excel-expertise-check',
-                options=[{'label': '보유 전문성 포함', 'value': 'include'}],
+                id='nl-query-excel-options-check',
+                options=[
+                    {'label': '보유 전문성 포함', 'value': 'expertise'},
+                    {'label': '특허 포함', 'value': 'patents'},
+                    {'label': '논문 포함', 'value': 'publications'},
+                ],
                 value=[], switch=True, inline=True,
                 className='mt-2 small', style={'display': 'none'},
             ),
@@ -549,7 +553,7 @@ def _toggle_selectall(checked, ids):
     Output('nl-query-excel-btn', 'children'),
     Output('nl-query-excel-btn', 'style'),
     Output('nl-query-excel-btn', 'disabled'),
-    Output('nl-query-excel-expertise-check', 'style'),
+    Output('nl-query-excel-options-check', 'style'),
     Input('nl-query-full-result', 'data'),
     Input('nl-query-selected', 'data'),
     prevent_initial_call=True,
@@ -569,15 +573,20 @@ def _update_excel_button(full_result, selected):
     Input('nl-query-excel-btn', 'n_clicks'),
     State('nl-query-full-result', 'data'),
     State('nl-query-selected', 'data'),
-    State('nl-query-excel-expertise-check', 'value'),
+    State('nl-query-excel-options-check', 'value'),
     prevent_initial_call=True,
 )
-def _download_excel(n_clicks, full_result, selected, include_expertise):
+def _download_excel(n_clicks, full_result, selected, excel_options):
     if not n_clicks:
         return dash.no_update
     researcher_ids = _selected_researcher_ids(full_result, selected)
     if not researcher_ids:
         return dash.no_update
+    excel_options = excel_options or []
     data = researcher_profile_export.build_profile_workbook(
-        researcher_ids, include_expertise='include' in (include_expertise or []))
+        researcher_ids,
+        include_expertise='expertise' in excel_options,
+        include_patents='patents' in excel_options,
+        include_publications='publications' in excel_options,
+    )
     return dcc.send_bytes(data, researcher_profile_export.default_filename())

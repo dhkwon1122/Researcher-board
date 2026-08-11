@@ -13,10 +13,12 @@ import io
 import math
 from datetime import date, datetime
 
+import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, Side
 from openpyxl.utils import get_column_letter
 
+from components.timeline_data import dedupe_patents, is_registered
 from services import data_store
 
 _FONT_NAME = '바탕체'
@@ -72,6 +74,8 @@ def _load_tables() -> dict:
         'incentive_selection': data_store.read_processed('incentive_selection'),
         'team_refer': data_store.read_processed('team_refer'),
         'tech_ownership': data_store.read_processed('tech_ownership'),
+        'patents': data_store.read_processed('patents'),
+        'publications': data_store.read_processed('publications'),
         'expertise_profiles': data_store.read_expertise_profiles(),
     }
 
@@ -80,6 +84,14 @@ def _rows_for(df, researcher_id: str):
     if df is None or df.empty or 'researcher_id' not in df.columns:
         return []
     return df[df['researcher_id'] == researcher_id].to_dict('records')
+
+
+def _df_for(df, researcher_id: str):
+    """_rows_for()의 DataFrame 버전 — dedupe_patents()처럼 DataFrame을 그대로
+    받아야 하는 헬퍼(특허 국가별 중복 합치기)에 넘길 때 사용."""
+    if df is None or df.empty or 'researcher_id' not in df.columns:
+        return df.iloc[0:0] if df is not None else pd.DataFrame()
+    return df[df['researcher_id'] == researcher_id]
 
 
 def _col_id(rid, _rows):
@@ -237,6 +249,58 @@ _EXPERTISE_COLUMNS = [
 ]
 
 
+def _col_patents(_rid, rows):
+    """특허 실적 — components/detail_tabs.py의 patents_tab()과 동일하게
+    dedupe_patents()로 국가별 중복 출원 행을 하나로 합친 뒤, 출원일 내림차순으로
+    "출원일 : 발명명칭 (상태, 대표발명자, 지분율%, 등급)"를 한 셀에 줄바꿈 나열."""
+    pat = rows.get('patents_df')
+    if pat is None or pat.empty:
+        return '-'
+    pat_dedup = dedupe_patents(pat)
+    sort_col = 'application_date' if 'application_date' in pat_dedup.columns else pat_dedup.columns[0]
+    lines = []
+    for _, p in pat_dedup.sort_values(sort_col, ascending=False).iterrows():
+        date = _s(p.get('application_date'))[:7] or '-'
+        title = _s(p.get('title')) or _s(p.get('title_ko')) or '-'
+        status = _s(p.get('status')) or '-'
+        lead = '대표' if _s(p.get('is_lead_inventor')).lower() in ('y', '1', 'true') else ''
+        share = _s(p.get('share_ratio'))
+        share_disp = f'{share}%' if share else ''
+        grade = _s(p.get('patent_grade'))
+        grade_a = _s(p.get('patent_grade_a_sub'))
+        grade_disp = grade + (f'({grade_a})' if grade_a else '') if grade else ''
+        extras = ', '.join(v for v in (status, lead, share_disp, grade_disp) if v)
+        lines.append(f'{date} : {title}' + (f' ({extras})' if extras else ''))
+    return '\n'.join(lines) if lines else '-'
+
+
+def _col_publications(_rid, rows):
+    """논문 실적 — components/detail_tabs.py의 publications_tab()과 동일하게
+    pub_date(없으면 pub_year) 내림차순으로 "발표일 : 제목 (게재처, 순위/총수,
+    기여도%, 교신)"를 한 셀에 줄바꿈 나열."""
+    items = rows.get('publications') or []
+    if not items:
+        return '-'
+    items = sorted(items, key=lambda p: _s(p.get('pub_date')) or _s(p.get('pub_year')), reverse=True)
+    lines = []
+    for p in items:
+        date = (_s(p.get('pub_date')) or _s(p.get('pub_year')))[:7] or '-'
+        title = _s(p.get('title')) or '-'
+        journal = _s(p.get('journal'))
+        rank, total = _s(p.get('author_rank')), _s(p.get('total_authors'))
+        rank_total = f'{rank}/{total}' if rank and total else ''
+        contrib = _s(p.get('contribution'))
+        contrib_disp = f'기여도 {contrib}%' if contrib else ''
+        corr = '교신' if _s(p.get('is_corresponding')).lower() in ('true', '1', 'y', 'yes') else ''
+        extras = ', '.join(v for v in (journal, rank_total, contrib_disp, corr) if v)
+        lines.append(f'{date} : {title}' + (f' ({extras})' if extras else ''))
+    return '\n'.join(lines) if lines else '-'
+
+
+_PATENT_COLUMNS = [('특허 실적', _col_patents)]
+_PUBLICATION_COLUMNS = [('논문 실적', _col_publications)]
+
+
 # (헤더, 값 계산 함수) — 순서 = 엑셀 컬럼 순서
 _COLUMNS = [
     ('사번', _col_id),
@@ -266,6 +330,8 @@ def _researcher_row_context(researcher_id: str, tables: dict) -> dict:
         'incentive_selection': _rows_for(tables['incentive_selection'], researcher_id),
         'team_refer': _rows_for(tables['team_refer'], researcher_id),
         'tech_ownership': _rows_for(tables['tech_ownership'], researcher_id),
+        'patents_df': _df_for(tables['patents'], researcher_id),
+        'publications': _rows_for(tables['publications'], researcher_id),
         'expertise_profile': tables['expertise_profiles'].get(researcher_id),
     }
 
@@ -349,16 +415,23 @@ def person_base_table(researcher_ids: list) -> dict:
 
 _COLUMN_WIDTHS = [12, 14, 16, 18, 12, 26, 12, 12, 10, 34, 30, 22, 30]
 _EXPERTISE_COLUMN_WIDTH = 26
+_PATENT_COLUMN_WIDTH = 40
+_PUBLICATION_COLUMN_WIDTH = 40
 
 
-def build_profile_workbook(researcher_ids: list, include_expertise: bool = False) -> bytes:
+def build_profile_workbook(
+    researcher_ids: list,
+    include_expertise: bool = False,
+    include_patents: bool = False,
+    include_publications: bool = False,
+) -> bytes:
     """선택된 researcher_id 목록으로 엑셀(xlsx) 바이트를 만들어 반환한다.
     양식: 바탕체 11pt, 전체 검정 테두리, 헤더만 볼드, 줄바꿈 셀은 자동 줄바꿈.
-    include_expertise=True면 LLM이 산출한 '보유 전문성'(연구원 보유 전문성
-    분석.json)을 필드별로 나눈 4개 컬럼(_EXPERTISE_COLUMNS)을 맨 끝에
-    추가한다 — 다운로드 화면의 체크박스로 선택하는 옵트인 항목이라 기본값은
-    False이고, 켜져도 _COLUMNS 자체는 건드리지 않고 이 함수 안에서만 로컬
-    사본에 덧붙인다."""
+    include_expertise/include_patents/include_publications가 True인 항목만
+    해당 옵트인 컬럼 그룹(_EXPERTISE_COLUMNS/_PATENT_COLUMNS/
+    _PUBLICATION_COLUMNS)을 이 순서대로 맨 끝에 추가한다 — 전부 기본값은
+    False(다운로드 화면 체크박스 기본 해제)이고, 켜져도 _COLUMNS 자체는
+    건드리지 않고 이 함수 안에서만 로컬 사본에 덧붙인다."""
     tables = _load_tables()
 
     columns = list(_COLUMNS)
@@ -366,6 +439,12 @@ def build_profile_workbook(researcher_ids: list, include_expertise: bool = False
     if include_expertise:
         columns.extend(_EXPERTISE_COLUMNS)
         widths.extend([_EXPERTISE_COLUMN_WIDTH] * len(_EXPERTISE_COLUMNS))
+    if include_patents:
+        columns.extend(_PATENT_COLUMNS)
+        widths.extend([_PATENT_COLUMN_WIDTH] * len(_PATENT_COLUMNS))
+    if include_publications:
+        columns.extend(_PUBLICATION_COLUMNS)
+        widths.extend([_PUBLICATION_COLUMN_WIDTH] * len(_PUBLICATION_COLUMNS))
 
     wb = Workbook()
     ws = wb.active

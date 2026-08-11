@@ -1718,3 +1718,52 @@ id `nl-query-excel-expertise-check`, 기본값 `[]`=미포함) 추가, 버튼과
 양쪽으로 실행 — 헤더 개수(13/17)·순서, "보유기술" 셀에 두 슬롯이
 줄바꿈으로 정확히 나열되고 빈 슬롯은 건너뛰는지, 컬럼 너비까지 openpyxl로
 확인.
+
+### 후속: "특허 실적"/"논문 실적" 선택 컬럼 추가
+
+"특허/논문도 엑셀에 선택적으로 다운받을 수 있게 해줘" 요청. 특허/논문은
+연구원마다 여러 건이 쌓이는 실적 데이터라 항상 켜두면 셀이 매우 길어질
+수 있어, 보유 전문성과 같은 옵트인(기본 해제) 방식을 그대로 따르되
+"특허 포함"/"논문 포함"을 별도 체크박스로 분리했다(하나로 묶으면
+특허만 필요하거나 논문만 필요한 경우를 못 고르게 되므로).
+
+**`services/researcher_profile_export.py`**:
+- `components.timeline_data`에서 `dedupe_patents`/`is_registered`를
+  가져와 재사용 — 화면(`patents_tab()`)과 동일하게 국가별로 중복
+  출원된 같은 특허(`application_id` 동일)를 한 행으로 합친다(등록국이
+  하나라도 있으면 상태를 "등록"으로, 국가는 콤마로 병합).
+- `_df_for(df, researcher_id)` 신규(`_rows_for()`의 DataFrame 버전) —
+  `dedupe_patents()`가 DataFrame을 받아야 해서 특허만 리스트가 아니라
+  필터링된 DataFrame 그대로 컨텍스트에 넣는다.
+- `_load_tables()`/`_researcher_row_context()`에 `patents`(DataFrame,
+  `patents_df` 키로 저장)·`publications`(리스트) 추가.
+- `_col_patents(_rid, rows)` 신규 — dedupe 후 출원일 내림차순으로
+  `"출원일 : 발명명칭 (상태, 대표발명자, 지분율%, 등급(전략출원 등))"`을
+  한 셀에 줄바꿈 나열.
+- `_col_publications(_rid, rows)` 신규 — `pub_date`(없으면 `pub_year`)
+  내림차순으로 `"발표일 : 제목 (게재처, 순위/총수, 기여도%, 교신)"`을
+  한 셀에 줄바꿈 나열.
+- `_PATENT_COLUMNS`/`_PUBLICATION_COLUMNS`(각각 컬럼 1개)를
+  `_EXPERTISE_COLUMNS`와 같은 패턴으로 정의.
+- `build_profile_workbook(researcher_ids, include_expertise=False,
+  include_patents=False, include_publications=False)` — 세 플래그가
+  각각 독립적으로 해당 옵트인 컬럼 그룹을 이 순서(전문성 → 특허 → 논문)로
+  덧붙인다.
+
+**`components/nl_query_bar.py`/`pages/researcher_list.py`**: 기존
+"보유 전문성 포함" 단일 체크박스를 3개 옵션짜리 `dbc.Checklist`(값
+`expertise`/`patents`/`publications`, 전부 기본 해제)로 확장 —
+id를 `*-excel-expertise-check`에서 `*-excel-options-check`로 변경(아직
+릴리즈되지 않은 최근 기능이라 하위호환 부담 없음). 각 다운로드 콜백은
+선택된 값 리스트에서 `'expertise'/'patents'/'publications'`가 있는지
+판별해 `build_profile_workbook()`의 세 플래그로 그대로 전달.
+
+검증: `_load_tables()`를 목 데이터(같은 `application_id`로 국가만
+다른 특허 2건 + 다른 특허 1건, 논문 1건)로 몬키패치해
+`build_profile_workbook(include_patents=True, include_publications=True)`
+실행 — 헤더에 "특허 실적"/"논문 실적" 추가, 특허 셀에서 두 국가 출원이
+한 줄로 합쳐지고(등록국 우선으로 상태 "등록") 서로 다른 특허는 별도
+줄로 유지되는지, 논문 셀 형식(게재처/순위/기여도/교신) 확인. 세 플래그
+모두 기본값(False)일 때 기존 13개 기본 컬럼만 나오는지도 함께 확인.
+`nl_query_bar.render()`를 직접 호출해 새 체크리스트(3옵션)가 레이아웃에
+포함되는지 확인.
