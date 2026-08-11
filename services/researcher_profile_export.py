@@ -194,26 +194,25 @@ def _col_incentive(_rid, rows):
     return '\n'.join(lines) if lines else '-'
 
 
-def _col_expertise(_rid, rows):
-    """보유 전문성(LLM) — components/detail_tabs.py의 llm_summary_block()과 동일한
-    4개 필드/순서(강점 분야 → 강점 키워드 → 주요 역할·책임 → 전문지식 및 역량)를
-    한 셀에 레이블과 함께 줄바꿈으로 나열한다. 다운로드 시 선택 사항(옵트인)."""
-    profile = rows.get('expertise_profile')
-    if not profile:
-        return '-'
-    sections = [
-        ('강점 분야', profile.get('strength_fields') or []),
-        ('강점 키워드', profile.get('strength_keywords') or []),
-        ('주요 역할·책임', profile.get('key_responsibilities') or []),
-        ('전문지식 및 역량', profile.get('domain_knowledge_skill') or []),
-    ]
-    lines = []
-    for label, items in sections:
-        if not items:
-            continue
-        lines.append(f'[{label}]')
-        lines.extend(f'- {item}' for item in items)
-    return '\n'.join(lines) if lines else '-'
+def _expertise_field(field: str):
+    """보유 전문성(LLM)의 한 필드를 한 셀에 줄바꿈으로 나열하는 컬럼 함수를 만든다.
+    components/detail_tabs.py의 llm_summary_block()과 동일한 4개 필드
+    (strength_fields/strength_keywords/key_responsibilities/domain_knowledge_skill)를
+    강점 분야/강점 키워드/주요 역할·책임/전문지식 및 역량 4개 컬럼으로 나눠 받고
+    싶다는 요청에 따라 컬럼별 함수로 분리했다. 다운로드 시 선택 사항(옵트인)."""
+    def _col(_rid, rows):
+        profile = rows.get('expertise_profile')
+        items = (profile.get(field) if profile else None) or []
+        return '\n'.join(items) if items else '-'
+    return _col
+
+
+_EXPERTISE_COLUMNS = [
+    ('보유전문성(강점 분야)', _expertise_field('strength_fields')),
+    ('보유전문성(강점 키워드)', _expertise_field('strength_keywords')),
+    ('보유전문성(주요 역할·책임)', _expertise_field('key_responsibilities')),
+    ('보유전문성(전문지식 및 역량)', _expertise_field('domain_knowledge_skill')),
+]
 
 
 # (헤더, 값 계산 함수) — 순서 = 엑셀 컬럼 순서
@@ -325,23 +324,24 @@ def person_base_table(researcher_ids: list) -> dict:
 
 
 _COLUMN_WIDTHS = [12, 14, 16, 18, 12, 26, 12, 12, 10, 34, 30, 22]
-_EXPERTISE_COLUMN_WIDTH = 40
+_EXPERTISE_COLUMN_WIDTH = 26
 
 
 def build_profile_workbook(researcher_ids: list, include_expertise: bool = False) -> bytes:
     """선택된 researcher_id 목록으로 엑셀(xlsx) 바이트를 만들어 반환한다.
     양식: 바탕체 11pt, 전체 검정 테두리, 헤더만 볼드, 줄바꿈 셀은 자동 줄바꿈.
     include_expertise=True면 LLM이 산출한 '보유 전문성'(연구원 보유 전문성
-    분석.json) 열을 맨 끝에 추가한다 — 다운로드 화면의 체크박스로 선택하는
-    옵트인 항목이라 기본값은 False이고, 켜져도 _COLUMNS 자체는 건드리지 않고
-    이 함수 안에서만 로컬 사본에 덧붙인다."""
+    분석.json)을 필드별로 나눈 4개 컬럼(_EXPERTISE_COLUMNS)을 맨 끝에
+    추가한다 — 다운로드 화면의 체크박스로 선택하는 옵트인 항목이라 기본값은
+    False이고, 켜져도 _COLUMNS 자체는 건드리지 않고 이 함수 안에서만 로컬
+    사본에 덧붙인다."""
     tables = _load_tables()
 
     columns = list(_COLUMNS)
     widths = list(_COLUMN_WIDTHS)
     if include_expertise:
-        columns.append(('보유 전문성', _col_expertise))
-        widths.append(_EXPERTISE_COLUMN_WIDTH)
+        columns.extend(_EXPERTISE_COLUMNS)
+        widths.extend([_EXPERTISE_COLUMN_WIDTH] * len(_EXPERTISE_COLUMNS))
 
     wb = Workbook()
     ws = wb.active

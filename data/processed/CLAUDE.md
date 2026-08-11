@@ -1640,12 +1640,16 @@ Bootstrap CDN 차단(기존에 여러 번 확인된 프록시 아티팩트) 때�
   추가(다른 테이블과 달리 DataFrame이 아니라 `researcher_id -> dict`).
 - `_researcher_row_context()`에 `'expertise_profile': tables['expertise_profiles'].get(researcher_id)`
   추가.
-- `_col_expertise(_rid, rows)` 신규 — `components/detail_tabs.py`의
-  `llm_summary_block()`과 동일한 4개 필드/순서를 `[레이블]` + `- 항목`
-  형태로 한 셀에 줄바꿈 나열, 프로필이 없으면 `'-'`.
+- `_expertise_field(field)` 신규 — 필드 하나(strength_fields 등)를 한
+  셀에 줄바꿈으로 나열하는 컬럼 함수를 만드는 팩토리. 처음엔 4개 필드를
+  `_col_expertise()` 하나로 합쳐 한 셀에 넣었으나, "4개 항목을 컬럼으로
+  나눠 달라(보유전문성(강점 분야), 보유전문성(강점 키워드) 형식)"는
+  후속 요청으로 `_EXPERTISE_COLUMNS`(4개 (헤더, 함수) 튜플 리스트 —
+  `components/detail_tabs.py`의 `llm_summary_block()`과 동일한 필드/순서)로
+  분리.
 - `build_profile_workbook(researcher_ids, include_expertise=False)` —
   `include_expertise=True`일 때만 `_COLUMNS`의 로컬 사본에
-  `('보유 전문성', _col_expertise)`와 너비(40)를 덧붙인다(모듈 상수
+  `_EXPERTISE_COLUMNS` 4개(각 너비 26)를 통째로 덧붙인다(모듈 상수
   `_COLUMNS` 자체는 건드리지 않음).
 - 겸사겸사 발견한 기존 버그 수정: `widths` 리스트가 11개뿐이라
   `_COLUMNS`(이번 세션에 `직책`이 추가되며 12개가 됨)와 개수가 안 맞아
