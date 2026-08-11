@@ -365,6 +365,18 @@ CONSOLE_STYLE = """
   .dept-heading:first-of-type { margin-top: 0; }
   .org-heading { font-size: 0.72rem; color: var(--ink-soft); margin: 16px 0 8px; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; margin-bottom: 14px; }
+  /* detail-view: 조직도에서 고른 연구원 한 명만 보여준다(전체 목록 나열 대신) —
+     기본은 CSS로 전부 숨기고, _CONSOLE_SCRIPT가 클릭한 카드에만 .detail-active를
+     붙인다. 카드가 .sim-sections처럼 중첩 래퍼 안에 있어도 맞도록 자손 선택자 사용. */
+  body.detail-view .content .card,
+  body.detail-view .content .dept-heading,
+  body.detail-view .content .org-heading { display: none; }
+  body.detail-view .content .card.detail-active { display: block; }
+  .detail-placeholder { display: none; }
+  body.detail-view .detail-placeholder {
+    display: block; color: var(--ink-soft); font-size: 0.88rem;
+    border: 1px dashed var(--line); border-radius: 10px; padding: 24px; text-align: center;
+  }
   .card-top { display: flex; align-items: center; gap: 10px; margin-bottom: 3px; }
   .card-top h3 { margin: 0; font-size: 1rem; font-weight: 700; }
   .map-link {
@@ -497,6 +509,18 @@ _CONSOLE_SCRIPT = """
     var el = id && document.getElementById(id);
     if (!el) return;
     e.preventDefault();
+    // detail-view(연구원/연구원↔연구원 리포트): 조직도에서 고른 카드 하나만
+    // 보이도록 .detail-active를 옮겨 붙인다. 나머지 카드/구분 헤딩은 CSS가 숨김.
+    if (document.body.classList.contains('detail-view')) {
+      document.querySelectorAll('.content .card.detail-active').forEach(function(c){
+        c.classList.remove('detail-active');
+      });
+      if (el.classList.contains('card')) {
+        el.classList.add('detail-active');
+        var placeholder = document.querySelector('.detail-placeholder');
+        if (placeholder) placeholder.style.display = 'none';
+      }
+    }
     el.scrollIntoView({block: 'start'});
     el.style.outline = '2px solid #4453d6';
     el.style.outlineOffset = '2px';
@@ -540,11 +564,22 @@ _CONSOLE_SCRIPT = """
 """
 
 
-def console_page(title: str, sidebar_html: str, body_html: str) -> str:
+def console_page(title: str, sidebar_html: str, body_html: str, detail_view: bool = False) -> str:
     """콘솔형 리포트 공용 페이지 셸. 외부 CDN 없이 완전히 독립적인 정적 HTML
     문서를 만든다(연구원 유사도/과제 전문성/연구원 전문성/매칭 4개 리포트가
     공유). 사이드바/본문 사이 드래그 리사이즈 바와 프래그먼트 링크 스크롤
-    보정을 위해 _CONSOLE_SCRIPT를 함께 싣는다(그 외 인터랙션은 CSS 전용)."""
+    보정을 위해 _CONSOLE_SCRIPT를 함께 싣는다(그 외 인터랙션은 CSS 전용).
+
+    detail_view=True면(연구원/연구원↔연구원 리포트) 카드를 전부 나열하지
+    않고, 조직도에서 연구원을 클릭해야 그 사람 카드 하나만 보이는 모드로
+    전환한다 — <body>에 detail-view 클래스를 붙이면 CONSOLE_STYLE의 관련
+    규칙이 카드를 기본 숨김 처리하고, _CONSOLE_SCRIPT의 클릭 핸들러가
+    선택된 카드에만 .detail-active를 옮겨 붙인다."""
+    body_class = ' class="detail-view"' if detail_view else ''
+    placeholder = (
+        '<div class="detail-placeholder">◀ 왼쪽 조직도에서 연구원을 선택하면 정보가 표시됩니다.</div>'
+        if detail_view else ''
+    )
     return f'''<!doctype html>
 <html lang="ko">
 <head>
@@ -553,10 +588,10 @@ def console_page(title: str, sidebar_html: str, body_html: str) -> str:
 <title>{title}</title>
 <style>{CONSOLE_STYLE}</style>
 </head>
-<body>
+<body{body_class}>
 <nav class="sidebar">{sidebar_html}</nav>
 <div class="split-divider" id="split-divider"></div>
-<main><div class="content">{body_html}</div></main>
+<main><div class="content">{placeholder}{body_html}</div></main>
 <button id="back-to-top" class="back-to-top" title="맨 위로" aria-label="맨 위로">↑</button>
 <script>{_CONSOLE_SCRIPT}</script>
 </body>

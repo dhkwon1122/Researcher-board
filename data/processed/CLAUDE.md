@@ -1820,3 +1820,61 @@ id를 `*-excel-expertise-check`에서 `*-excel-options-check`로 변경(아직
 Playwright 브라우저 테스트는 이번 세션 컨테이너에 `data/processed/`가
 비어 있어(LLM 호출까지 필요한 실제 검색 자체가 불가능) 생략 — 위 함수
 단위 검증으로 로직을 대신 확인했다.
+
+## 완료: 보유 전문성 "연구원"/"연구원↔연구원" 탭을 조직도 클릭식 상세보기로 전환
+
+"보유 전문성 탭의 연구원과 연구원↔연구원 탭에서 모든 연구원 정보가 카드
+형태로 쭉 나열되어있는데, 조직도 상에서 클릭하면 그때 해당 연구원의
+정보가 보이도록 수정해줘" 요청. 이 두 탭은 `pages/researcher_similarity_map.py`가
+정적 HTML 리포트(`연구원 보유 전문성 분석.html`/`researcher_similarity.html`,
+각각 `pipeline/process_researcher_expertise.py`/`process_researcher_similarity.py`가
+생성)를 iframe(srcDoc)으로 그대로 띄우는 구조이고, 좌측 사이드바 조직도는
+이미 있었지만(`team_refer.csv` 기반, `rd_specialist_markdown.build_org_tree()`)
+클릭 시 "그 사람 카드로 스크롤"만 할 뿐 본문엔 항상 전체 연구원 카드가
+나열돼 있었다 — 그래서 스크롤 없이 원하는 사람을 찾기 번거로웠다.
+
+**`pipeline/rd_specialist_markdown.py`**(3개 콘솔형 리포트의 공용 인프라 —
+과제 전문성/strength 표준화/임베딩 설명 리포트도 같은 `console_page()`를
+쓰므로, 영향 범위를 연구원/연구원↔연구원 두 리포트로만 좁히기 위해
+옵트인 플래그로 구현):
+- `console_page(title, sidebar_html, body_html, detail_view=False)` —
+  `detail_view=True`면 `<body class="detail-view">`를 붙이고, 본문 맨 앞에
+  안내 문구(`.detail-placeholder`, "◀ 왼쪽 조직도에서 연구원을 선택하면
+  정보가 표시됩니다.")를 넣는다. 기본값 False라 다른 3개 리포트는 기존
+  동작 그대로.
+- `CONSOLE_STYLE`에 규칙 추가: `body.detail-view .content` 안의
+  `.card`/`.dept-heading`/`.org-heading`을 기본 `display:none`(카드가
+  `.sim-sections` 같은 중첩 래퍼 안에 있어도 맞도록 자손 선택자 사용),
+  `.card.detail-active`만 `display:block`. `.detail-placeholder`는
+  `detail-view`가 아닐 때는 항상 숨김.
+- `_CONSOLE_SCRIPT`의 기존 `a[href^="#"]` 클릭 핸들러(원래 스크롤만 하던
+  곳)에 `document.body.classList.contains('detail-view')`일 때의 분기를
+  추가 — 클릭한 카드에만 `.detail-active`를 옮겨 붙이고(기존 활성 카드는
+  제거) 안내 문구를 숨긴다. 조직도 검색(`org-search-input`)이나
+  드래그 리사이즈 등 나머지 인터랙션은 그대로.
+
+**`pipeline/process_researcher_expertise.py`/`process_researcher_similarity.py`**:
+각각의 `console_page(...)` 호출에 `detail_view=True`만 추가.
+
+**`pages/researcher_similarity_map.py`의 `_iframe_tab()`**: UMAP 점 클릭이나
+관계 그래프 노드 클릭으로 "연구원" 탭으로 넘어올 때(`scroll_to` 인자)
+주입하는 스크립트가 기존엔 `el.scrollIntoView()`만 호출했는데, detail-view
+아래에서는 그 카드가 `.detail-active`가 아니라서 숨겨진 채로 스크롤만
+되어 화면엔 아무것도 안 보이는 회귀가 생길 뻔했다 — 사이드바 클릭
+핸들러와 동일한 로직(다른 카드의 `.detail-active` 제거 → 대상 카드에
+추가 → 안내 문구 숨김)을 이 주입 스크립트에도 그대로 추가해 미리 잡았다.
+
+검증: `rd_specialist_markdown` 함수들로 카드 2개짜리 목(mock) 리포트를
+직접 만들어(`console_page(..., detail_view=True)`) 로컬 HTML로 저장한 뒤
+Playwright(Chromium)로 열어 — 초기 상태에서 카드 2개·부서 헤딩 모두
+숨겨지고 안내 문구만 보이는지, 조직도에서 첫 번째 사람을 클릭하면 그
+사람 카드만 보이고 안내 문구가 사라지는지, 이어서 두 번째 사람을
+클릭하면 첫 번째 카드는 다시 숨고 두 번째 카드로 바뀌는지 확인. 별도로
+`researcher_similarity_map._iframe_tab('researcher', scroll_to='r-002')`가
+만드는 주입 스크립트를 같은 목 리포트에 적용해 Playwright로 열어보고,
+로드 즉시(클릭 없이) 목표 카드가 `.detail-active`로 바로 보이는지도
+확인. 이번 세션 컨테이너엔 실제 파이프라인 산출물이 없어 진짜
+`연구원 보유 전문성 분석.html`/`researcher_similarity.html`로는 확인하지
+못했지만, 두 리포트 모두 같은 `rd_specialist_markdown` 함수와 카드 DOM
+구조(`class="card" id="r-{사번}"`)를 공유하므로 위 검증이 그대로
+적용된다.

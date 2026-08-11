@@ -172,10 +172,22 @@ def _iframe_tab(report_key: str, scroll_to: str | None = None):
         content = f.read()
     if scroll_to:
         import json as _json
+        # detail-view 리포트(연구원/연구원↔연구원 — rd_specialist_markdown.py의
+        # console_page(detail_view=True))는 조직도 클릭 전까지 카드를 전부
+        # 숨겨 두므로, UMAP 점 클릭 등으로 특정 카드에 바로 스크롤해야 할 때는
+        # 사이드바 클릭 핸들러(_CONSOLE_SCRIPT)와 동일하게 .detail-active를
+        # 먼저 옮겨 붙여야 그 카드가 실제로 보인다(안 그러면 숨겨진 요소로
+        # scrollIntoView만 호출되고 화면엔 아무것도 안 보임).
         script = (
             f'<script>document.addEventListener("DOMContentLoaded",function(){{'
             f'var el=document.getElementById({_json.dumps(scroll_to)});'
-            f'if(el){{el.scrollIntoView({{block:"start"}});'
+            f'if(el){{'
+            f'if(document.body.classList.contains("detail-view")){{'
+            f'document.querySelectorAll(".content .card.detail-active").forEach(function(c){{c.classList.remove("detail-active");}});'
+            f'if(el.classList.contains("card")){{el.classList.add("detail-active");'
+            f'var ph=document.querySelector(".detail-placeholder");if(ph)ph.style.display="none";}}'
+            f'}}'
+            f'el.scrollIntoView({{block:"start"}});'
             f'el.style.outline="2px solid #4453d6";el.style.outlineOffset="2px";}}'
             f'}});</script>'
         )

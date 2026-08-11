@@ -580,7 +580,7 @@ def _build_html(results: list, researchers_df: pd.DataFrame, profile_by_id: dict
         '</div>'
     )
     body = count_toggle + stats + f'<div class="sim-sections">{"".join(sections)}</div>'
-    return mmd.console_page('연구원 ↔ 연구원 유사도', sidebar, body)
+    return mmd.console_page('연구원 ↔ 연구원 유사도', sidebar, body, detail_view=True)
 
 
 def process(top_k: int = DEFAULT_TOP_K, refresh_judgments: bool = False) -> bool:

@@ -466,7 +466,7 @@ def _build_html(results: list, researchers_df: pd.DataFrame) -> str:
         f'{mmd.org_search_input_html()}'
         f'{"".join(nav_groups)}'
     )
-    return mmd.console_page('연구원 보유 전문성 분석', sidebar, stats + ''.join(sections))
+    return mmd.console_page('연구원 보유 전문성 분석', sidebar, stats + ''.join(sections), detail_view=True)
 
 
 def _write_html(results: list, researchers_df: pd.DataFrame):
