@@ -48,6 +48,7 @@ from datetime import datetime
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, Side
+from openpyxl.utils import get_column_letter
 
 _PIPELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'pipeline')
 sys.path.insert(0, os.path.abspath(_PIPELINE_DIR))
@@ -606,12 +607,32 @@ def _pct(score) -> str:
     return f'{round(score * 100)}%' if score is not None else '데이터없음'
 
 
+def _format_picks(picks: list) -> str:
+    """추천/강제배치 후보 리스트를 "N. 과제명 (부서) - A: xx%, B: xx%\\n   사유: ..."
+    형태로 번호 매겨 줄바꿈 나열한다(결과/반드시 배치해야 한다면 두 컬럼이
+    같은 모양의 데이터를 받아 재사용)."""
+    if not picks:
+        return '-'
+    blocks = []
+    for i, r in enumerate(picks, start=1):
+        line = (f"{i}. {r.get('project_name', '')} ({r.get('dep_name', '')}) "
+                f"- A: {_pct(r.get('score_a'))}, B: {_pct(r.get('score_b'))}")
+        reason = (r.get('reason') or '').strip()
+        if reason:
+            line += f'\n   사유: {reason}'
+        blocks.append(line)
+    return '\n\n'.join(blocks)
+
+
 def build_result_workbook(result: dict) -> bytes:
     """JOB Market 검색 결과(run_project_search/run_individual_search/
-    load_history()가 반환하는 report 형태)를 엑셀로 내보낸다. "재배치가
-    가능한 연구원의 사번을 첫 번째 컬럼, 결과를 두 번째 컬럼에" 반영해
-    달라는 요청대로, 추천이 1건 이상인(재배치 가능한) 연구원만 포함하고
-    추천 과제명/부서/A·B 점수/사유를 한 셀에 번호 매겨 줄바꿈 나열한다."""
+    load_history()가 반환하는 report 형태)를 엑셀로 내보낸다. 사번을 첫
+    번째 컬럼, 추천 결과(recommendations)를 두 번째, "반드시 배치해야
+    한다면" 강제 후보(must_place)를 세 번째 컬럼에 담는다. 재배치 가능
+    (recommendations 있음) 여부와 무관하게, must_place가 하나라도 있는
+    사람은 전부 포함한다(사용자 확정 — must_place는 원래 재배치가
+    어려운 사람을 위해 만든 값이라, 그 사람들이 엑셀에서 빠지면 의미가
+    없음). recommendations가 없는 사람은 '결과' 셀만 '-'로 비워둔다."""
     roster = result.get('roster') or []
     results = result.get('results') or {}
     ordered_rids = [p['researcher_id'] for p in roster if p.get('researcher_id') in results]
@@ -619,18 +640,12 @@ def build_result_workbook(result: dict) -> bytes:
 
     rows = []
     for rid in ordered_rids:
-        recs = (results.get(rid) or {}).get('recommendations') or []
-        if not recs:
+        person_result = results.get(rid) or {}
+        recs = person_result.get('recommendations') or []
+        must_place = person_result.get('must_place') or []
+        if not recs and not must_place:
             continue
-        blocks = []
-        for i, r in enumerate(recs, start=1):
-            line = (f"{i}. {r.get('project_name', '')} ({r.get('dep_name', '')}) "
-                    f"- A: {_pct(r.get('score_a'))}, B: {_pct(r.get('score_b'))}")
-            reason = (r.get('reason') or '').strip()
-            if reason:
-                line += f'\n   사유: {reason}'
-            blocks.append(line)
-        rows.append((rid, '\n\n'.join(blocks)))
+        rows.append((rid, _format_picks(recs), _format_picks(must_place)))
 
     wb = Workbook()
     ws = wb.active
@@ -644,25 +659,27 @@ def build_result_workbook(result: dict) -> bytes:
     wrap_center = Alignment(wrap_text=True, vertical='center', horizontal='center')
     wrap_left = Alignment(wrap_text=True, vertical='top', horizontal='left')
 
-    for col_idx, header in enumerate(['사번', '결과'], start=1):
+    headers = ['사번', '결과', '반드시 배치해야 한다면']
+    for col_idx, header in enumerate(headers, start=1):
         cell = ws.cell(row=1, column=col_idx, value=header)
         cell.font = header_font
         cell.border = border
         cell.alignment = wrap_center
 
-    for row_idx, (rid, text) in enumerate(rows, start=2):
+    for row_idx, (rid, result_text, must_place_text) in enumerate(rows, start=2):
         id_cell = ws.cell(row=row_idx, column=1, value=rid)
         id_cell.font = body_font
         id_cell.border = border
         id_cell.alignment = wrap_center
 
-        result_cell = ws.cell(row=row_idx, column=2, value=text)
-        result_cell.font = body_font
-        result_cell.border = border
-        result_cell.alignment = wrap_left
+        for col_idx, text in ((2, result_text), (3, must_place_text)):
+            cell = ws.cell(row=row_idx, column=col_idx, value=text)
+            cell.font = body_font
+            cell.border = border
+            cell.alignment = wrap_left
 
-    ws.column_dimensions['A'].width = 14
-    ws.column_dimensions['B'].width = 90
+    for col_idx, width in ((1, 14), (2, 90), (3, 90)):
+        ws.column_dimensions[get_column_letter(col_idx)].width = width
 
     buf = io.BytesIO()
     wb.save(buf)
