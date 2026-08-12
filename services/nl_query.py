@@ -49,6 +49,7 @@ import json
 import os
 import re
 import sys
+from datetime import datetime
 
 import pandas as pd
 
@@ -62,6 +63,8 @@ from services import data_labels  # noqa: E402
 from services import data_store  # noqa: E402
 from services import open_data_query  # noqa: E402
 from services import query_settings  # noqa: E402
+from services.evaluations import evaluation_years, salary_grade_column  # noqa: E402
+from services.researcher_profile_export import highest_degree_row  # noqa: E402
 
 try:
     import llm_config as _llm_cfg
@@ -76,6 +79,7 @@ _FIT_RANK = {'상': 0, '중': 1, '하': 2}
 _KNOWN_INTENTS = {
     'find_researchers_by_expertise',
     'find_similar_researchers',
+    'find_researchers_by_criteria',
     'open_data_query',
 }
 
@@ -84,7 +88,7 @@ QUERY_SYSTEM_PROMPT = """# Role
 검색 조건으로 바꾸는 "R&D Query Router"입니다. 직접 답을 만들지 않습니다 —
 질문을 분류하고 검색에 필요한 핵심 개체만 뽑아냅니다.
 
-# 지원하는 질문 유형(intent) — 반드시 이 4가지 중 하나로만 분류하세요
+# 지원하는 질문 유형(intent) — 반드시 이 5가지 중 하나로만 분류하세요
 1. find_researchers_by_expertise : 이미 요약된 "강점 분야/키워드" 태그로 연구원을
    찾는 질문(태그 자체를 묻는 것이지, 학력·과제이력 같은 원천 데이터 항목이 아님)
    예) "로봇 제어 전문가 찾아줘", "센서 데이터 처리 할 줄 아는 사람 있어?"
@@ -95,30 +99,50 @@ QUERY_SYSTEM_PROMPT = """# Role
    마세요 — expertise_terms가 아니라 사람 이름이 기준이면 항상 이 intent).
    예) "홍길동 연구원과 전문성이 비슷한 사람 찾아줘",
    "정재원이랑 유사한 역량 가진 연구원 있어?", "홍길동과 비슷한 연구원은 누구야"
-3. open_data_query : 위 두 가지가 다루는 "이미 계산된 요약 결과"가 아니라,
-   원천 데이터의 구체적 항목(학력/전공, 실제 과제 수행 이력, 논문/특허 실적,
-   직급/근속, 평가/인사 이력 등)을 조건으로 찾거나 집계하는 질문
+3. find_researchers_by_criteria : 연령대/최종학력/최근 N개년 평가등급 조합 중
+   하나 이상을 조건으로 연구원을 찾는 질문 — 특히 평가등급 조건은 반드시 이
+   intent로 분류하세요(open_data_query로 보내면 등급 순서·조합 비교를 틀리기
+   쉽습니다). 등급 체계는 가(최우수) > 나 > 다 > 라 > 마(최하)이고, "OOO 이상/
+   이하"는 여러 개년 등급을 "순서 상관없이" 종합적으로 비교하는 뜻입니다
+   (예: "나나가 이상" = 3개년 등급 중 최소 1개는 가, 나머지도 전부 나 이상이면
+   해당 — 가나나/나가나/나나가/가가나/가나가/나가가/가가가 전부 포함, 다/라/마가
+   하나라도 섞이면 제외). grade_threshold에는 등급 글자를 하나씩 리스트로
+   넣으세요(예: "나나가" → ["나","나","가"], 글자 수 = 비교할 개년 수).
+   grade_comparison은 "이상"(기본값)/"이하"/"초과"/"미만"/"동일" 중 하나.
+   예) "연령 30대, 최종학력 박사, 최근 3년 평가 나나가 이상 찾아줘",
+   "최근 2년 평가 나나 이상인 석사 이상 연구원", "40대이면서 최근 3년 다다다 이하인 사람"
+4. open_data_query : 위 세 가지가 다루는 "이미 계산된 요약 결과"나 "연령/학력/
+   평가등급 조합"이 아니라, 원천 데이터의 다른 구체적 항목(전공명 자체, 실제
+   과제 수행 이력, 논문/특허 실적, 부서별 집계 등)을 조건으로 찾거나 집계하는 질문
    예) "물리학 전공한 사람 찾아줘", "양자컴퓨팅 과제 수행 중인 연구원 보여줘",
    "특허 등록 3건 이상인 연구원", "부서별 평균 논문 수"
-4. unsupported : 위 세 가지에 해당하지 않는 모든 질문(잡담, 이 시스템이 다루지
+5. unsupported : 위 네 가지에 해당하지 않는 모든 질문(잡담, 이 시스템이 다루지
    않는 질문 등) — 억지로 끼워 맞추지 말고 이 값으로 분류하고
    reason_if_unsupported에 짧게 이유를 적으세요.
 
 # Output Format (JSON만 출력하고 그 외 텍스트는 절대 출력하지 마세요)
 {
-  "intent": "find_researchers_by_expertise" | "find_similar_researchers" | "open_data_query" | "unsupported",
+  "intent": "find_researchers_by_expertise" | "find_similar_researchers" | "find_researchers_by_criteria" | "open_data_query" | "unsupported",
   "expertise_terms": ["..."],
   "project_name": "",
   "project_description": "",
   "researcher_query": "",
   "exclude_current_project": true,
   "department_filter": "",
+  "age_min": null,
+  "age_max": null,
+  "degree": "",
+  "grade_threshold": [],
+  "grade_comparison": "이상",
   "top_k": 5,
   "reason_if_unsupported": ""
 }
-※ 해당 intent와 무관한 필드는 빈 문자열/빈 리스트로 두세요.
+※ 해당 intent와 무관한 필드는 빈 문자열/빈 리스트/null로 두세요.
 ※ department_filter/top_k는 질문에 명시적으로 언급된 경우에만 채우고, 그 외에는
   기본값(department_filter="", top_k=5)을 유지하세요.
+※ age_min/age_max: "30대"→age_min=30,age_max=39. "40대 이상"→age_min=40,age_max=null.
+  "35세 이상"→age_min=35,age_max=null.
+※ degree는 "박사"/"석사"/"학사"/"전문대"/"고교" 중 하나(최종학력 기준)만 넣으세요.
 """
 
 
@@ -363,6 +387,144 @@ def find_similar_researchers(researcher_query: str, top_k: int = DEFAULT_TOP_K,
     )
 
 
+_GRADE_RANK = {'가': 1, '나': 2, '다': 3, '라': 4, '마': 5}
+
+
+def _grade_dominates(a_ranks_sorted: list, b_ranks_sorted: list) -> bool:
+    """정렬된(오름차순, 좋은 등급 먼저) 순위 리스트 a가 b와 같거나 전반적으로
+    더 우수한지 — 같은 길이의 두 리스트를 자리별로 비교해 a의 모든 자리가
+    b보다 같거나 더 좋아야(순위 숫자가 같거나 작아야) True. "OOO 이상"의
+    핵심 로직 — 등급을 원래 순서 그대로 짝짓지 않고, 각자 좋은 순서로 정렬한
+    뒤 비교하므로 "어느 해에 어떤 등급을 받았는지" 순서는 결과에 영향을
+    주지 않는다(사용자 확정: "가나나/나가나/나나가는 전부 동일 취급")."""
+    return all(a <= b for a, b in zip(a_ranks_sorted, b_ranks_sorted))
+
+
+def _grade_threshold_pass(candidate_grades: list, threshold_grades: list, comparison: str) -> bool | None:
+    """candidate_grades(한 사람의 N개년 등급)가 threshold_grades 기준으로
+    comparison 조건을 만족하는지. 등급 글자가 가/나/다/라/마가 아니면(빈 값 등)
+    판단 불가로 None을 반환 — 호출부는 이 경우 "데이터 없음"으로 제외 처리한다."""
+    try:
+        cand_ranks = sorted(_GRADE_RANK[g] for g in candidate_grades)
+        thr_ranks = sorted(_GRADE_RANK[g] for g in threshold_grades)
+    except KeyError:
+        return None
+    if comparison == '이하':
+        return _grade_dominates(thr_ranks, cand_ranks)
+    if comparison == '초과':
+        return _grade_dominates(cand_ranks, thr_ranks) and cand_ranks != thr_ranks
+    if comparison == '미만':
+        return _grade_dominates(thr_ranks, cand_ranks) and cand_ranks != thr_ranks
+    if comparison in ('동일', '정확히'):
+        return cand_ranks == thr_ranks
+    return _grade_dominates(cand_ranks, thr_ranks)  # 기본값: 이상
+
+
+def find_researchers_by_criteria(age_min: int | None = None, age_max: int | None = None,
+                                  degree: str = '', grade_threshold: list | None = None,
+                                  grade_comparison: str = '이상', department_filter: str = '',
+                                  top_k: int = DEFAULT_TOP_K, current_only: bool = True) -> dict:
+    """연령대/최종학력/최근 N개년 평가등급 조합을 AND 조건으로 걸러 찾는다.
+    평가등급 조건("나나가 이상"처럼 순서 무관 다개년 조합 비교)은 LLM에게 SQL로
+    생성시키면(open_data_query) 등급 순서(가>나>다>라>마)와 조합 비교 규칙을
+    매번 다시 추론해야 해 틀리기 쉬워서, 여기서는 파이썬으로 결정적으로
+    계산한다 — find_researchers_by_expertise/find_similar_researchers와 같은
+    설계 원칙(판단은 이미 계산됐거나 규칙이 고정된 로직으로, LLM은 질문
+    파싱만)."""
+    researchers_df = data_store.read_processed('researchers')
+    if researchers_df.empty:
+        return _empty_table_result('find_researchers_by_criteria', '연구원 데이터가 없습니다.')
+    researchers_df = data_store.filter_current(researchers_df, current_only)
+
+    candidates = researchers_df.copy()
+
+    if department_filter:
+        dept_l = department_filter.strip().lower()
+        candidates = candidates[candidates['department'].astype(str).str.lower().str.contains(dept_l, na=False)]
+
+    current_year = datetime.now().year
+    if age_min is not None or age_max is not None:
+        def _age(birth_year):
+            s = str(birth_year).strip()
+            return current_year - int(s) if s.isdigit() else None
+        ages = candidates['birth_year'].apply(_age)
+        if age_min is not None:
+            candidates = candidates[ages.apply(lambda a: a is not None and a >= age_min)]
+            ages = ages[candidates.index]
+        if age_max is not None:
+            candidates = candidates[ages.apply(lambda a: a is not None and a <= age_max)]
+
+    if degree:
+        education_df = data_store.read_processed('education')
+        edu_by_rid: dict = {}
+        if not education_df.empty:
+            for rid, grp in education_df.groupby('researcher_id'):
+                edu_by_rid[rid] = grp.to_dict('records')
+
+        def _matches_degree(rid):
+            row = highest_degree_row(edu_by_rid.get(rid, []))
+            return bool(row) and str(row.get('degree', '')).strip() == degree
+
+        candidates = candidates[candidates['researcher_id'].apply(_matches_degree)]
+
+    grade_note = ''
+    if grade_threshold:
+        n = len(grade_threshold)
+        years = evaluation_years()[0][:n]
+        if len(years) < n:
+            return _empty_table_result(
+                'find_researchers_by_criteria',
+                f'최근 {n}개년 평가등급을 비교하기엔 확인 가능한 회계연도가 부족합니다.')
+        cols = [salary_grade_column(y) for y in years]
+        evaluations_df = data_store.read_processed('evaluations')
+        missing_cols = [c for c in cols if evaluations_df.empty or c not in evaluations_df.columns]
+        if missing_cols:
+            return _empty_table_result(
+                'find_researchers_by_criteria',
+                f'평가등급 컬럼을 찾을 수 없습니다: {missing_cols} (evaluations.csv 확인 필요).')
+
+        eval_by_rid = evaluations_df.set_index('researcher_id')[cols].to_dict('index')
+        grade_evidence: dict = {}
+        keep_ids = []
+        excluded_missing = 0
+        for rid in candidates['researcher_id']:
+            row = eval_by_rid.get(rid)
+            grades = [str(row.get(c, '')).strip() for c in cols] if row else []
+            passed = _grade_threshold_pass(grades, grade_threshold, grade_comparison)
+            if passed is None:
+                excluded_missing += 1
+                continue
+            if passed:
+                keep_ids.append(rid)
+                grade_evidence[rid] = ' / '.join(f"'{str(y)[-2:]}:{g}" for y, g in zip(years, grades))
+        candidates = candidates[candidates['researcher_id'].isin(keep_ids)]
+        if excluded_missing:
+            grade_note = f'최근 {n}개년 평가등급이 모두 확인되지 않는 {excluded_missing}명은 판단할 수 없어 제외했습니다.'
+
+    top_k = min(top_k or DEFAULT_TOP_K, MAX_TOP_K)
+    total = len(candidates)
+    candidates = candidates.head(top_k)
+
+    items = []
+    for _, r in candidates.iterrows():
+        rid = r['researcher_id']
+        item = {'researcher_id': rid}
+        if grade_threshold:
+            item['grade_evidence'] = grade_evidence.get(rid, '')
+        items.append(item)
+
+    notes = []
+    if total > top_k:
+        notes.append(f'조건에 맞는 {total}명 중 상위 {top_k}명을 표시합니다.')
+    if grade_note:
+        notes.append(grade_note)
+    if not items:
+        notes.append('조건에 맞는 연구원을 찾지 못했습니다.')
+
+    column_order = ['researcher_id'] + (['grade_evidence'] if grade_threshold else [])
+    return _build_table_result('find_researchers_by_criteria', items, column_order, ' '.join(notes))
+
+
 def parse_question(question: str) -> dict:
     """자연어 질문을 구조화된 쿼리 dict로 변환(사내 LLM 1회 호출). 실패
     유형별로 다른 intent('error'|'unsupported')를 돌려줘 호출부가 구분해서
@@ -393,12 +555,28 @@ def parse_question(question: str) -> dict:
     except (TypeError, ValueError):
         top_k = DEFAULT_TOP_K
 
+    def _to_int_or_none(v):
+        try:
+            return int(v) if v is not None and str(v).strip() != '' else None
+        except (TypeError, ValueError):
+            return None
+
+    grade_threshold = parsed.get('grade_threshold') or []
+    if isinstance(grade_threshold, str):
+        # LLM이 리스트 대신 "나나가" 같은 문자열을 줬을 때도 안전하게 받는다.
+        grade_threshold = list(grade_threshold.strip())
+
     return {
         'intent': intent,
         'question': question,
         'expertise_terms': parsed.get('expertise_terms') or [],
         'researcher_query': parsed.get('researcher_query') or '',
         'department_filter': parsed.get('department_filter') or '',
+        'age_min': _to_int_or_none(parsed.get('age_min')),
+        'age_max': _to_int_or_none(parsed.get('age_max')),
+        'degree': str(parsed.get('degree') or '').strip(),
+        'grade_threshold': [str(g).strip() for g in grade_threshold if str(g).strip()],
+        'grade_comparison': str(parsed.get('grade_comparison') or '이상').strip(),
         'top_k': top_k,
     }
 
@@ -440,6 +618,13 @@ def execute_query(parsed: dict, current_only: bool = True) -> dict:
             current_only=current_only)
     if intent == 'find_similar_researchers':
         return find_similar_researchers(parsed.get('researcher_query', ''), top_k, current_only=current_only)
+    if intent == 'find_researchers_by_criteria':
+        return find_researchers_by_criteria(
+            age_min=parsed.get('age_min'), age_max=parsed.get('age_max'),
+            degree=parsed.get('degree', ''), grade_threshold=parsed.get('grade_threshold') or [],
+            grade_comparison=parsed.get('grade_comparison', '이상'),
+            department_filter=parsed.get('department_filter', ''), top_k=top_k,
+            current_only=current_only)
 
     return _empty_table_result('unsupported', '알 수 없는 질문 유형입니다.')
 

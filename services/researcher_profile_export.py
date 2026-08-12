@@ -437,7 +437,11 @@ _DEGREE_ORDER_FULL = ['박사', '석사', '학사', '전문대', '고교']
 _DEGREE_CODE_FULL = {'박사': '박', '석사': '석', '학사': '학', '전문대': '전', '고교': '고'}
 
 
-def _highest_degree_str(education_rows: list) -> str:
+def highest_degree_row(education_rows: list) -> dict | None:
+    """education.csv 행 목록(한 사람 것) 중 최종학력(박사>석사>학사>전문대>고교
+    우선순위, process_education.py의 DEG_ORDER와 동일) 1건을 반환. 없으면 None.
+    services.nl_query의 학력 조건 검색(find_researchers_by_criteria)과
+    _highest_degree_str() 둘 다 이 함수를 공유한다."""
     by_degree = {}
     for e in education_rows:
         deg = _s(e.get('degree'))
@@ -446,11 +450,18 @@ def _highest_degree_str(education_rows: list) -> str:
     for deg in _DEGREE_ORDER_FULL:
         e = by_degree.get(deg)
         if e:
-            code = _DEGREE_CODE_FULL[deg]
-            school = _or_dash(e.get('school'))
-            major = _or_dash(e.get('major'))
-            return f'{code}){school} {major}'
-    return '-'
+            return e
+    return None
+
+
+def _highest_degree_str(education_rows: list) -> str:
+    e = highest_degree_row(education_rows)
+    if not e:
+        return '-'
+    code = _DEGREE_CODE_FULL[_s(e.get('degree'))]
+    school = _or_dash(e.get('school'))
+    major = _or_dash(e.get('major'))
+    return f'{code}){school} {major}'
 
 
 def person_base_table(researcher_ids: list) -> dict:

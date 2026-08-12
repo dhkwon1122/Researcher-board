@@ -193,6 +193,7 @@ COLUMN_LABELS = {
     'score': '유사도점수',
     'level': '유사도 등급',
     'evidence': '유사 근거',
+    'grade_evidence': '평가등급 근거',
 }
 
 
