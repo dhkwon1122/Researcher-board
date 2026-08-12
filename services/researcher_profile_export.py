@@ -71,6 +71,20 @@ def _floor1(x: float) -> float:
     return math.floor(x * 10) / 10
 
 
+def position_years(promotion_date: str) -> int | None:
+    """"CL/년차"의 "년차" 부분만 계산해 정수로 반환 — promotion_date가 없으면
+    계산 불가라 None(호출부가 "직급 표시만" 등으로 폴백). _col_position_year()
+    뿐 아니라 pipeline/process_researcher_similarity.py의 CL 기반 시니어/주니어
+    분류에서도 재사용한다(같은 "몇 년차인지" 계산을 두 곳에서 따로 하면
+    어긋날 위험이 있어 여기 하나로 모음)."""
+    promo = _s(promotion_date)
+    if not promo:
+        return None
+    promo_dt = date.fromisoformat(promo[:10])
+    ref = _next_promotion_ref_date(date.today())
+    return int(_floor1((ref - promo_dt).days / 365))
+
+
 def _load_tables() -> dict:
     return {
         'researchers': data_store.read_processed('researchers'),
@@ -184,12 +198,9 @@ def _col_position_year(_rid, rows):
     if not r:
         return '-'
     position = _or_dash(r.get('position'))
-    promo = _s(r.get('promotion_date'))
-    if not promo:
+    years = position_years(r.get('promotion_date'))
+    if years is None:
         return position
-    promo_dt = date.fromisoformat(promo[:10])
-    ref = _next_promotion_ref_date(date.today())
-    years = int(_floor1((ref - promo_dt).days / 365))
     return f'{position}-{years}'
 
 

@@ -2334,3 +2334,65 @@ first_half, second_half)` 신규 — `format_evaluation_cell()`과 같은
 나오는지 확인. 연봉등급이 없는 해가 섞인 경우(`-/나/가\n(-/MT, ES, -)`)
 로도 확인해, "연봉등급 없을 때는 대시 유지" 기존 규칙이 그대로
 살아있는지 함께 검증.
+
+## 완료: position 영문 라벨 한글화 + 보유 전문성 시니어/주니어 분류를 CL/년차 기준으로 변경 + 임원 제외
+
+두 가지 요청. (1) `researchers.csv`의 `position`(원본 CL 컬럼) 값 중 영문
+임원 표기를 한글로 통일. (2) "연구원 ↔ 연구원" 유사도 리포트의 시니어/
+주니어 구분을 기존 "근속 5년" 기준에서 "CL/년차" 기준으로 바꾸고, 임원은
+유사 연구원 매칭 대상에서 완전히 제외.
+
+**1) `pipeline/process_researchers.py`**: `POSITION_LABEL_MAP` 신규 —
+`{'Corporate VP': '상무', 'Corporate President': '사장', 'Senior Advisor':
+'고문', 'Corporate EVP': '부사장'}`(그 외 값, 예: CL1~CL6은 원본 그대로).
+`position` 필드를 만들 때 이 맵으로 치환(매핑에 없으면 원본 그대로 폴백).
+
+**2) 시니어/주니어 분류 기준 변경**:
+- **`services/researcher_profile_export.py`**: 기존 `_col_position_year()`
+  (엑셀 "CL/년차" 컬럼, 예: "CL3-5")의 "년차" 계산 부분을 `position_years
+  (promotion_date)`라는 공개 함수로 분리했다 — 승격기준일 기준 회계연도
+  계산(`_next_promotion_ref_date`, 2027-03-01 시작 매년 3월 기준일)은
+  이미 있던 로직 그대로, 재사용 가능하게 이름만 붙여 뺀 것(동작 변경
+  없음, `_col_position_year()`는 이 함수를 호출하도록 리팩터링).
+- **`pipeline/process_researcher_similarity.py`**: `_tenure_level()`을
+  `hire_date` 기반(근속 5년 미만/이상)에서 `position`(CL)/`promotion_date`
+  기반으로 전면 교체 — "CL3-5 이상이면 시니어, CL3-4 이하면 주니어"라는
+  확정 문구를 CL 레벨 전체로 일반화해, **CL3 미만은 항상 Junior, CL3
+  초과는 항상 Senior, 정확히 CL3일 때만** `position_years()`로 계산한
+  년차가 5 이상이면 Senior·미만이면 Junior로 갈리게 했다(이 CL3 이외
+  레벨에 대한 일반화는 사용자가 명시하지 않아 합리적으로 추정한 부분 —
+  다르게 원하시면 `_CL_SENIOR_THRESHOLD_LEVEL`/`_cl_level()` 판단부만
+  고치면 됨). `_cl_level(position)` 신규 — `"CL3"` → `3`처럼 CL 접두사 +
+  숫자 형태만 파싱하고, 임원 직책처럼 그 형태가 아니면 `None`(미분류).
+  `build_tenure_map()`도 `hire_date` 컬럼 대신 `position`/`promotion_date`
+  컬럼을 읽도록 교체. `datetime`/`date` 임포트가 더 이상 안 쓰여서 제거.
+- 임원 제외: `_EXCLUDED_POSITIONS = {'상무','사장','고문','부사장','Master'}`
+  신규. `process()`에서 `연구원 보유 전문성 분석.json`을 읽은 직후
+  `researchers.csv`의 `position`으로 이 집합에 속하는 사람을 `profiles`
+  에서 아예 걸러낸다 — 이후 임베딩/LLM 판정/결과 저장 전 과정에서 그
+  사람은 존재하지 않는 것처럼 처리되어, **자기 카드도 안 생기고 다른
+  누구의 유사 연구원 후보로도 뽑히지 않는다**("연구원 보유 전문성 분석"
+  자체(process_researcher_expertise.py)는 건드리지 않아 그 사람의
+  개인 프로필 페이지는 그대로 남음 — 요청이 "유사 연구원을 찾을 때"로
+  한정했으므로).
+- 관련 docstring(모듈 헤더의 "3단계" 설명, `compute_similarity()`/
+  `attach_tenure_levels()` 주석, HTML 사이드바 태그라인 "근속 시니어
+  우선" → "CL 시니어 우선")도 새 기준에 맞게 업데이트.
+
+검증: `process_researchers.process()`를 목 원본 데이터(CL 컬럼에
+"Corporate VP"/"CL3" 섞음)로 실행해 `researchers.csv`에 "상무"/"CL3"로
+정확히 저장되는지 확인. `_cl_level()`을 여러 입력(CL1~CL6/임원 직책/빈
+값/이상한 형식)으로 확인. `_tenure_level()`을 6가지 경계 케이스(CL2,
+CL4, CL3+5년이상, CL3+5년미만, CL3+승격일없음, 비CL직책)로 직접 호출해
+전부 기대값과 일치하는지 확인. `build_tenure_map()`을 목 DataFrame으로
+확인. `process()` 전체를 LLM/임베딩 관련 함수는 스텁으로 바꾼 채
+실행해서 — 임원 1명이 로그에 찍히며 `profiles`에서 실제로 제외되고
+(`compute_similarity`에 넘어가는 목록에 안 보임), `tenure_map`은
+그 사람도 포함해 계산되지만(단순 조회용이라 무해) 최종 결과에는
+영향이 없는지 확인. 관련 3개 파일 전부 `ast.parse` 구문 확인,
+`process_researcher_similarity` 모듈을 실제로 import해(services 쪽
+연쇄 임포트 포함) 깨지지 않는지 확인. 이번 세션 컨테이너엔 실제
+원본 데이터/파이프라인 산출물이 없어, 실제 재실행·브라우저 확인은
+못 했다 — 화면에 반영하려면 `python pipeline/process_researchers.py`와
+`python pipeline/process_researcher_similarity.py`(또는 전체 파이프라인)
+를 다시 실행해야 한다.

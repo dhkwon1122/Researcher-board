@@ -46,6 +46,15 @@ COL_PROMO_DATE = '승격산정기준일자'
 COL_KNOX       = 'Knox ID'
 # 직급연차 기준일 (2027-03-01)
 POSITION_YEAR_REF = date(2027, 3, 1)
+
+# CL 컬럼(COL_POSITION) 원본 값 중 영문 임원/특별 직책 표기를 한글로 통일
+# (그 외 값, 예: CL1~CL6은 원본 그대로 사용 — 사용자 확정 매핑).
+POSITION_LABEL_MAP = {
+    'Corporate VP': '상무',
+    'Corporate President': '사장',
+    'Senior Advisor': '고문',
+    'Corporate EVP': '부사장',
+}
 # ─────────────────────────────────────────────────────────────────────────────
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -117,12 +126,13 @@ def process() -> bool:
         # 승격산정기준일
         promo_dt = _parse_date(row.get(COL_PROMO_DATE))
 
+        position_raw = str(row.get(COL_POSITION, '')).strip()
         rows.append({
             'researcher_id':   rid,
             'name':            str(row.get(COL_NAME, '')).strip(),
             'department':      str(row.get(COL_DEPT, '')).strip(),
             'org_code':        str(row.get(COL_ORG, '')).strip(),
-            'position':        str(row.get(COL_POSITION, '')).strip(),
+            'position':        POSITION_LABEL_MAP.get(position_raw, position_raw),
             'job_function':    str(row.get(COL_JOB, '')).strip(),
             'job_type':        str(row.get(COL_JOB_TYPE, '')).strip(),
             'nationality':     str(row.get(COL_NATION, '')).strip(),

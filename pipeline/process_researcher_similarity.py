@@ -15,14 +15,16 @@ Knowledge)을 BGE-M3로 임베딩하고 코사인 유사도를 계산한다.
 매칭 로직(코사인 유사도, top-K 추출)은 pipeline/researcher_fit.py 공용 모듈을
 그대로 재사용한다.
 
-근속 그룹별 top-K: 대상 연구원의 근속(Junior/Senior, 아래 3단계 참고)을 알 수
-있으면, 후보를 Junior/Senior로 나눠 그룹별로 각각 후보 pool을 찾는다 —
-"이 사람과 전문성이 가장 비슷한 Senior"와 "가장 비슷한 Junior"를 시니어
-우선 순서로 함께 보여주기 위함이다(결과 리스트는 Senior 그룹을 먼저,
-Junior 그룹을 나중에 이어붙인다). 후보 중 hire_date가 없어 근속을 모르는
-사람은 어느 그룹에도 들어가지 못하므로 이 그룹별 검색에서는 제외된다.
-대상 연구원 본인의 근속을 모르면(hire_date 없음) 그룹 구분 없이 기존처럼
-전체 후보 중에서 찾는다(하위 호환 폴백).
+근속 그룹별 top-K: 대상 연구원의 CL/년차 기반 시니어·주니어 구분(Junior/Senior,
+아래 3단계 참고)을 알 수 있으면, 후보를 Junior/Senior로 나눠 그룹별로 각각
+후보 pool을 찾는다 — "이 사람과 전문성이 가장 비슷한 Senior"와 "가장 비슷한
+Junior"를 시니어 우선 순서로 함께 보여주기 위함이다(결과 리스트는 Senior
+그룹을 먼저, Junior 그룹을 나중에 이어붙인다). 후보 중 CL 표기가 없거나(임원
+등) 승격기준일이 없어 분류를 모르는 사람은 어느 그룹에도 들어가지 못하므로
+이 그룹별 검색에서는 제외된다. 대상 연구원 본인의 분류를 모르면 그룹 구분
+없이 기존처럼 전체 후보 중에서 찾는다(하위 호환 폴백). 임원(상무/사장/고문/
+부사장/Master — _EXCLUDED_POSITIONS)은 애초에 후보 자체에서 완전히
+빠진다(process()가 profiles를 걸러냄).
 
 그룹별 후보 pool 크기(_CANDIDATE_POOL_K)는 화면에 실제로 표시할 그룹당 최대
 개수(MAX_DISPLAY_K, 10)보다 넉넉히 크게 잡는다 — 아래 2단계에서 근거(evidence)가
@@ -57,11 +59,13 @@ Junior 그룹을 나중에 이어붙인다). 후보 중 hire_date가 없어 근�
     서로 어긋나는 일이 생기지 않는다.
   ※ 캐시 무시하고 전체 쌍을 다시 판정하려면 --refresh-judgments 사용.
 
-3단계(근속 라벨): researchers.csv의 hire_date로 그때그때(저장하지 않고 실행
-시점 기준) 근속=round((오늘-hire_date).days/365, 2)을 계산해, 5년 미만이면
-Junior, 5년 이상이면 Senior 라벨을 결과에 붙인다. 매칭 로직(누가 누구와
+3단계(근속 라벨): researchers.csv의 position(CL)/promotion_date로 그때그때
+(저장하지 않고 실행 시점 기준) CL/년차를 계산해, CL3 미만은 Junior, CL3
+초과는 Senior, CL3는 년차 5 이상이면 Senior·미만이면 Junior 라벨을 결과에
+붙인다(사용자 확정 — 예전 "근속 5년" 기준을 대체). 매칭 로직(누가 누구와
 유사한지) 자체는 바꾸지 않고, 대상자 본인과 각 유사 연구원에 라벨만
-추가한다 — hire_date가 없으면 라벨 없이(''), HTML에서는 배지를 생략한다.
+추가한다 — CL 표기가 아니거나 승격기준일이 없으면 라벨 없이(''), HTML에서는
+배지를 생략한다.
 
 Source:
   data/processed/연구원 보유 전문성 분석.json (process_researcher_expertise.py)
@@ -84,7 +88,6 @@ import html
 import json
 import os
 import sys
-from datetime import date, datetime
 
 import numpy as np
 import pandas as pd
@@ -96,6 +99,7 @@ import rd_specialist_markdown as mmd  # noqa: E402
 import researcher_fit as fit  # noqa: E402
 import result_archive  # noqa: E402
 from services.llm import LLMError  # noqa: E402
+from services.researcher_profile_export import position_years  # noqa: E402
 
 DEFAULT_TOP_K = fit.TOP_K
 
@@ -375,36 +379,65 @@ def _drop_empty_evidence(results: list, tenure_map: dict, max_per_group: int = M
     return results
 
 
-_TENURE_JUNIOR_THRESHOLD = 5.0
+# CL/년차 기준 시니어/주니어 분류(사용자 확정 — 기존 "근속 5년" 기준을 대체).
+# "CL3-5 이상이면 Senior, CL3-4 이하면 Junior"라는 확정 문구를 CL 레벨 전체로
+# 일반화하면: CL3보다 낮은 레벨(CL1/CL2)은 항상 Junior, CL3보다 높은 레벨은
+# 항상 Senior, 딱 CL3일 때만 년차(5년)로 갈린다.
+_CL_SENIOR_THRESHOLD_LEVEL = 3
+_CL_SENIOR_THRESHOLD_YEARS = 5
+
+# researchers.csv의 position이 이 값 중 하나면(임원/특별 직책, process_researchers.py의
+# POSITION_LABEL_MAP이 영문 원본을 이 한글 라벨로 이미 통일해 둠 — Master는
+# 원본 그대로) 유사 연구원 매칭 대상에서 완전히 제외한다(사용자 확정) — 이
+# 사람들은 이 리포트에 아예 등장하지 않고(자기 카드 없음), 다른 누구의
+# 유사 연구원 후보로도 뽑히지 않는다.
+_EXCLUDED_POSITIONS = {'상무', '사장', '고문', '부사장', 'Master'}
 
 
-def _tenure_level(hire_date_str) -> str:
-    """근속=round((오늘-hire_date).days/365, 2)를 그때그때 계산해(저장하지 않음)
-    5년 미만이면 'Junior', 5년 이상이면 'Senior'를 반환한다. hire_date가 없거나
-    형식이 안 맞으면 빈 문자열(미분류 — 호출부가 배지 없이 처리)."""
-    s = str(hire_date_str or '').strip()
-    if not s:
+def _cl_level(position: str) -> int | None:
+    """position이 'CL' + 숫자(예: 'CL3') 형태면 그 숫자를, 아니면(임원 직책 등
+    CL 표기가 아니면) None을 반환한다."""
+    position = (position or '').strip()
+    if position.startswith('CL') and position[2:].isdigit():
+        return int(position[2:])
+    return None
+
+
+def _tenure_level(position: str, promotion_date: str) -> str:
+    """CL/년차 기준 시니어/주니어 분류. CL3 미만은 'Junior', CL3 초과는
+    'Senior', CL3는 년차(승격기준일 기준, services.researcher_profile_export.
+    position_years())가 5 이상이면 'Senior', 미만이면 'Junior'. position이
+    'CL' 표기가 아니거나(임원 등 — 이미 _EXCLUDED_POSITIONS로 걸러지지만
+    방어적으로 처리) 년차를 계산할 수 없으면 빈 문자열(미분류)."""
+    cl = _cl_level(position)
+    if cl is None:
         return ''
-    try:
-        hire_dt = datetime.strptime(s[:10], '%Y-%m-%d').date()
-    except ValueError:
+    if cl < _CL_SENIOR_THRESHOLD_LEVEL:
+        return 'Junior'
+    if cl > _CL_SENIOR_THRESHOLD_LEVEL:
+        return 'Senior'
+    years = position_years(promotion_date)
+    if years is None:
         return ''
-    tenure = round((date.today() - hire_dt).days / 365, 2)
-    return 'Junior' if tenure < _TENURE_JUNIOR_THRESHOLD else 'Senior'
+    return 'Senior' if years >= _CL_SENIOR_THRESHOLD_YEARS else 'Junior'
 
 
 def build_tenure_map(researchers_df: pd.DataFrame) -> dict:
-    """researcher_id -> 'Junior'/'Senior'/''(모름) 매핑을 한 번만 계산해,
+    """researcher_id -> 'Junior'/'Senior'/''(미분류) 매핑을 한 번만 계산해,
     compute_similarity()의 그룹별 검색과 attach_tenure_levels()의 라벨 표시가
     같은 맵을 재사용하도록 한다."""
-    if researchers_df.empty or 'hire_date' not in researchers_df.columns:
+    if researchers_df.empty or 'position' not in researchers_df.columns:
         return {}
-    hire_map = researchers_df.set_index('researcher_id')['hire_date'].to_dict()
-    return {rid: _tenure_level(hd) for rid, hd in hire_map.items()}
+    promo_col = 'promotion_date' if 'promotion_date' in researchers_df.columns else None
+    result = {}
+    for _, row in researchers_df.iterrows():
+        promo = row[promo_col] if promo_col else ''
+        result[row['researcher_id']] = _tenure_level(row.get('position', ''), promo)
+    return result
 
 
 def attach_tenure_levels(results: list, tenure_map: dict) -> list:
-    """build_tenure_map()이 계산한 근속 Junior(5년 미만)/Senior(5년 이상) 라벨을
+    """build_tenure_map()이 계산한 CL/년차 기반 Junior/Senior 라벨을
     결과에 붙인다 — compute_similarity()/attach_pair_judgments()의 매칭 로직
     (누가 누구와 유사한지)은 그대로 두고, 대상자 본인과 각 유사 연구원 항목에
     tenure_level 필드만 추가한다."""
@@ -556,7 +589,7 @@ def _build_html(results: list, researchers_df: pd.DataFrame, profile_by_id: dict
     sidebar = (
         '<h1>유사도 콘솔</h1>'
         '<p class="tagline">과제 단위가 아닌 실제 보유 전문성 임베딩 기반 유사도 · '
-        '근속 시니어 우선 · 근거 있는 매칭만 표시</p>'
+        'CL 시니어 우선 · 근거 있는 매칭만 표시</p>'
         f'{mmd.org_search_input_html()}'
         f'{"".join(nav_groups)}'
     )
@@ -592,11 +625,25 @@ def process(top_k: int = DEFAULT_TOP_K, refresh_judgments: bool = False) -> bool
         print('[process_researcher_similarity] 연구원 보유 전문성 분석.json 없음 — 종료 '
               '(process_researcher_expertise.py 먼저 실행)')
         return False
+
+    researchers_df = fit.read_researchers(OUT_DIR)
+    position_map = (
+        researchers_df.set_index('researcher_id')['position'].to_dict()
+        if not researchers_df.empty and 'position' in researchers_df.columns else {}
+    )
+    # 임원(상무/사장/고문/부사장/Master)은 유사 연구원 매칭에서 완전히 제외
+    # (사용자 확정) — 자기 카드도 안 생기고, 다른 사람 후보로도 안 뽑힌다.
+    before = len(profiles)
+    profiles = [p for p in profiles if position_map.get(p.get('researcher_id', ''), '') not in _EXCLUDED_POSITIONS]
+    excluded_count = before - len(profiles)
+    if excluded_count:
+        print(f'[process_researcher_similarity] 임원 {excluded_count}명 제외 '
+              f'({sorted(_EXCLUDED_POSITIONS)})')
+
     if len(profiles) < 2:
         print('[process_researcher_similarity] 비교할 연구원이 2명 미만 — 종료')
         return False
 
-    researchers_df = fit.read_researchers(OUT_DIR)
     tenure_map = build_tenure_map(researchers_df)
 
     print(f'[process_researcher_similarity] 연구원 {len(profiles)}명 임베딩 계산 중...')
