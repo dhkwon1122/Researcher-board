@@ -2123,3 +2123,23 @@ evaluations.csv가 wide로 정확히 저장되는지, 유효하지 않은 값만
 실제 T&P 원본 파일이 없어 진짜 파이프라인 재실행·브라우저 확인은
 못 했다 — 화면에 반영하려면 `python pipeline/process_tp_evaluation.py`
 (또는 전체 파이프라인)를 다시 실행해 evaluations.csv를 재생성해야 한다.
+
+## 완료: JOB Market 추천 결과의 A/B 유사도 의미를 안내 아이콘으로 표기
+
+"job market 결과에서 A 유사도 B 유사도가 뭘 의미하는거였지? 아이콘에
+어떤 의미인지 표기해줘" — 기존엔 결과 상단 Alert 문구에만 짧게("A: 과제
+분석 기반, B: 배정 인력 전문성 기반") 적혀 있어 눈에 잘 안 띄었다.
+`services/job_market.py` 모듈 docstring에 있던 A/B 정의(A=과제 자체의
+분석 문서 임베딩과 비교, B=그 과제에 배정된 사람 중 가장 가까운 1명과
+비교)를 그대로 옮겨, "추천 결과" 제목 옆에 hover 안내 아이콘(ⓘ)을
+추가했다 — `components/detail_tabs.py`의 등급/Lv 안내 아이콘과 동일한
+hover 패턴(다만 이미지 대신 텍스트 툴팁).
+
+**`pages/job_market.py`**: `_score_info_icon()` 신규 — `bi-info-circle`
+아이콘 + `dbc.Tooltip`(A/B 각각 한 줄 설명 + "데이터 없음일 때" 안내).
+`_render_result()`의 "추천 결과" `html.H6` 옆에 붙였다(추천 목록 전체에
+한 번만 — 등급/Lv 안내 아이콘처럼 반복되는 배지마다가 아니라 섹션당
+하나로 충분).
+
+검증: `_render_result()`를 목 결과로 직접 호출해 아이콘 id/Tooltip
+target이 일치하는지, 툴팁 내용에 A/B 설명 문구가 정확히 들어가는지 확인.

@@ -28,6 +28,29 @@ def _score_badge(label: str, score):
     return dbc.Badge(f'{label}: {round(score * 100)}%', color='info', className='me-1')
 
 
+_SCORE_A_DESC = '그 과제 자체의 분석 문서(컨플루언스 요약) 임베딩과, 이 사람의 보유 전문성 프로필 임베딩을 비교한 유사도.'
+_SCORE_B_DESC = '그 과제에 현재 배정된 사람들의 보유 전문성 중, 이 사람과 가장 가까운 1명(대표값)과 비교한 유사도.'
+
+
+def _score_info_icon():
+    """추천 목록 각 줄의 "A: 83%" / "B: 70%" 배지가 각각 어떤 기준의 유사도인지
+    설명하는 안내 아이콘 — 사용자가 "아이콘에 의미를 표기해달라"고 요청해
+    추가(연구원 프로필의 등급/Lv 안내 아이콘과 동일한 hover 패턴)."""
+    return html.Span([
+        html.I(className='bi bi-info-circle ms-1', id='jm-score-info-icon',
+               style={'fontSize': '0.8rem', 'color': '#6c757d', 'cursor': 'help', 'verticalAlign': 'middle'}),
+        dbc.Tooltip(
+            html.Div([
+                html.Div([html.Strong('A (과제 분석 기반): '), _SCORE_A_DESC]),
+                html.Div([html.Strong('B (배정 인력 전문성 기반): '), _SCORE_B_DESC], className='mt-1'),
+                html.Div('둘 중 한쪽 데이터가 없으면 그 쪽만 "데이터 없음"으로 표시됩니다.',
+                         className='mt-1 fst-italic text-muted'),
+            ]),
+            target='jm-score-info-icon', placement='right',
+        ),
+    ])
+
+
 def _recommendation_row(rec: dict):
     return html.Div([
         html.Div([
@@ -186,7 +209,7 @@ def _render_result(result: dict):
         _summary_bar(results),
         html.H6('대상 인원', className='fw-bold mb-2'),
         _roster_table(roster),
-        html.H6('추천 결과', className='fw-bold mb-2'),
+        html.H6(['추천 결과', _score_info_icon()], className='fw-bold mb-2'),
         html.Div([_person_card(by_id.get(rid, {'researcher_id': rid}), res) for rid, res in ordered_items]),
     ])
 
