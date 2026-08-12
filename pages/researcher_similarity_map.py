@@ -284,7 +284,7 @@ def _render_cumulative_result(rid: str | None):
     return dbc.Card(
         dbc.CardBody([
             html.Div(header, className='mb-2'),
-            llm_summary_block(profile, similar, name_map),
+            html.Div(llm_summary_block(profile, similar, name_map)),
             dbc.Button(
                 [html.I(className='bi bi-person-badge-fill me-1'), '개별 프로필 열기'],
                 href=f'/researcher-profile?id={rid}', target='_top',
