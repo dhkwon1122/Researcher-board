@@ -1878,3 +1878,86 @@ Playwright(Chromium)로 열어 — 초기 상태에서 카드 2개·부서 헤�
 못했지만, 두 리포트 모두 같은 `rd_specialist_markdown` 함수와 카드 DOM
 구조(`class="card" id="r-{사번}"`)를 공유하므로 위 검증이 그대로
 적용된다.
+
+## 완료: 연구원/연구원↔연구원 탭 — 프로필 이동 아이콘 + 엑셀 다운로드 + 표시 개수/검색 개선
+
+한 메시지로 들어온 5개 요청. 1·3·4·5는 범위가 명확해 바로 구현했고,
+2(부서 단위 엑셀 다운로드)는 UI 위치/부서 트리 기준/유사 연구원 명단
+범위 3가지가 설계에 직접 영향을 줘 `AskUserQuestion`으로 확인 후 구현—
+셋 다 추천안(①탭 바깥 별도 패널 ②조직도(team_refer.csv) 트리 ③저장된
+전체 목록)으로 확정됐다.
+
+**1) 카드에 "연구원 프로필로 이동" 아이콘 추가** (`pipeline/rd_specialist_markdown.py`):
+- `profile_link_html(researcher_id)` 신규 — `map_link_html()`과 동일한
+  `.map-link` 스타일, `/researcher-profile?id={rid}` + `target="_top"`으로
+  이동(researcher_profile.py의 `layout(id=...)`이 그대로 받아 그 사람을
+  선택해 보여주는 기존 동작 재사용).
+- `.card-top` 안에서 두 아이콘(프로필/전문성 MAP)이 항상 한 덩어리로
+  오른쪽에 붙도록 `<div class="card-icons">{profile_link_html}{map_link_html}</div>`로
+  묶었다 — 기존엔 `.map-link` 자체에 `margin-left:auto`가 있어 아이콘이
+  하나뿐일 때만 맞는 방식이었으므로, `margin-left:auto`를 `.card-icons`
+  래퍼로 옮기고 개별 `.map-link`에서는 뺐다.
+- `pipeline/process_researcher_expertise.py`(`_researcher_card_html`)와
+  `pipeline/process_researcher_similarity.py`(카드 헤더) 둘 다 이 래퍼로
+  교체.
+
+**3) 유사 연구원 리스트 행에도 프로필 이동 아이콘** (`process_researcher_similarity.py`):
+`profile_icon_link_html(researcher_id)` 신규(아이콘만, 텍스트 없는 소형
+버전 — 표 행처럼 좁은 공간용) — `_match_row_html()`의 이름 옆에 붙였다.
+
+**4) 유사 연구원 표시 개수 기본값 3명**: `count_toggle`의 라디오 버튼
+`checked` 속성을 `count-5`에서 `count-3`으로 옮겼다(CSS `:checked ~`
+형제 선택자 기반이라 이 한 줄만 바꾸면 됨 — JS 불필요).
+
+**5) 연구원 개별 프로필 이름 검색에 부서명 추가**(`pages/researcher_profile.py`
+`_load_selector_data()`의 `_opt()`): 라벨을
+`"이름 [부서]  (사번) — 직급"` 형태로 바꿔 동명이인을 부서로 구분할 수
+있게 했다.
+
+**2) 보유 전문성 + 유사 연구원 명단 엑셀 다운로드(개인별/부서 단위)**:
+- `services/similarity_map.py`에 조직도 유틸 추가 —
+  `pipeline.rd_specialist_markdown.build_org_tree`/`read_team_refer`를
+  그대로 가져와(`pipeline`이 실제 파이썬 패키지라 `services/job_market.py`의
+  sys.path 트릭 없이 바로 import 가능) `org_tree_options()`(들여쓰기로
+  평탄화한 부서 드롭다운 옵션, value=dep_id), `researchers_under_departments
+  (dep_ids, include_children)`(선택 부서(들)의 org_code + include_children면
+  하위 부서 org_code까지 모아 researchers.csv와 매칭), `individual_search_options()`
+  ("이름 [부서] (사번)" 형식, researcher_profile.py와 동일 표기)를 만들었다.
+- `services/researcher_profile_export.py`에 `expertise_field_lines(profile,
+  field)` 공개 함수 추가 — 기존 `_expertise_field()`(`_researcher_row_context()`
+  전제)의 내부 로직을 분리해, profile dict만 있는 호출부(이번 신규 기능)도
+  같은 서식(강점 분야/키워드/역할·책임/역량 4필드)을 재사용할 수 있게 했다.
+- `services/similarity_map.py`에 `build_expertise_similarity_workbook
+  (researcher_ids)` 신규 — 컬럼: 사번/성명/부서/보유전문성 4개(위 함수 재사용)/
+  유사 연구원 명단(researcher_similarity.json의 `similar` 리스트 **전체**를
+  "이름(부서) - 유사도% [판정]" 줄로, 화면의 3/5/10 표시개수 제한과 무관).
+  `researcher_ids` 중복은 순서를 유지하며 제거. `researcher_profile_export.py`
+  스타일(바탕체 11pt, 테두리, 헤더 볼드, 줄바꿈 셀)을 그대로 따름.
+- `pages/researcher_similarity_map.py`: 탭(`dcc.Loading(...expertise-tab-content)`)
+  아래 `_download_panel()`을 상시 배치하고, `expertise-tabs.active_tab`을
+  구독하는 콜백으로 "전문성 MAP" 탭에서는 숨긴다(요청이 "연구원,
+  연구원↔연구원 탭에서"로 한정했으므로). 패널 안: `dbc.RadioItems`로
+  "개인별 검색"/"부서 선택(조직도)" 모드 전환(다른 모드의 입력 행은 숨김),
+  개인별은 `dcc.Dropdown(multi=True)` + `individual_search_options()`,
+  부서는 `dcc.Dropdown(multi=True)` + `org_tree_options()` + "하위부서
+  포함" 스위치(기본 켬). 다운로드 콜백은 선택 검증(미선택/매칭 없음 시
+  빨간 안내 문구) 후 `build_expertise_similarity_workbook()` 호출.
+
+검증: `services/similarity_map.py`의 새 함수들을 `read_team_refer`/
+`read_processed`/`read_expertise_profiles`/`read_similar_researchers`를
+목(mock) 데이터로 몬키패치해 직접 호출 — 3단 조직도(루트+하위 2개)에서
+`include_children=False`면 루트 소속 1명만, `True`면 하위 부서 포함
+3명 전부 나오는지, 개별 하위부서만 선택하면 그 부서 소속만 나오는지,
+개인별 검색 옵션 라벨에 부서가 포함되는지 확인. `build_expertise_similarity_workbook()`은
+중복 ID 제거, 프로필 없는 사람은 4개 필드 전부 "-", 유사 연구원 점수가
+없을 때 "데이터없음" 폴백, 유사 연구원이 명단에 없는(이름 매핑 안 되는)
+경우 사번 그대로 표시되는지까지 openpyxl로 열어 확인. 프로필/전문성MAP
+아이콘은 `rd_specialist_markdown` 함수로 만든 목 카드 HTML을 Playwright로
+열어 두 아이콘의 텍스트·href가 정확한지, `.card-icons`로 오른쪽에 나란히
+붙는지(스크린샷) 확인. `pages/researcher_similarity_map.layout()`을 직접
+호출해 다운로드 패널의 모든 컴포넌트 id가 레이아웃에 포함되는지 확인.
+이번 세션 컨테이너엔 실제 파이프라인 산출물(HTML 리포트)이 없어 진짜
+브라우저로 전체 흐름(조직도 선택 → 다운로드 클릭 → 파일 저장)을 끝까지
+확인하지는 못했다 — 화면에 반영하려면 `process_researcher_expertise.py`/
+`process_researcher_similarity.py`를 다시 실행해 두 HTML을 재생성해야
+한다(직전 완료 항목과 동일한 제약).

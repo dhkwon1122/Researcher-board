@@ -59,8 +59,10 @@ def _load_selector_data():
             return [], [], {}
 
         def _opt(row):
+            dept = str(row.get('department', '') or '').strip()
+            dept_suffix = f' [{dept}]' if dept else ''
             return {
-                'label': f'{row["name"]}  ({row["researcher_id"]}) — {row["position"]}',
+                'label': f'{row["name"]}{dept_suffix}  ({row["researcher_id"]}) — {row["position"]}',
                 'value': row['researcher_id'],
             }
 

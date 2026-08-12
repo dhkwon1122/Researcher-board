@@ -11,15 +11,22 @@ pipeline/process_researcher_similarity.py가 채워둔 embedding_cache.json
 실행해 embedding_cache.json을 채워야 한다.
 """
 
+import io
 import json
 import os
 from collections import Counter
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, Side
+from openpyxl.utils import get_column_letter
 
+from pipeline.rd_specialist_markdown import build_org_tree, read_team_refer
 from pipeline.researcher_fit import _text_hash, researcher_profile_text
-from services.data_store import DATA_DIR, read_processed, read_similar_researchers
+from services import researcher_profile_export as export
+from services.data_store import DATA_DIR, read_expertise_profiles, read_processed, read_similar_researchers
 
 
 def _cluster_label(rows: list) -> str:
@@ -261,3 +268,184 @@ def similarity_graph_department_classes() -> list:
         {'selector': f'.dept-{i}', 'style': {'background-color': color}}
         for i, color in enumerate(_GRAPH_PALETTE)
     ]
+
+
+# ─── 조직도 기반 엑셀 다운로드(보유 전문성 + 유사 연구원 명단) ────────────────
+# "연구원"/"연구원↔연구원" 탭 아래 별도 패널(pages/researcher_similarity_map.py)
+# 에서 쓴다 — 개인별 검색 또는 조직도(team_refer.csv) 부서 단위(하위부서 포함
+# 옵션)로 대상을 고르면, 그 사람들의 보유 전문성(LLM 4개 필드)과 저장된 유사
+# 연구원 명단 전체(researcher_similarity.json)를 한 줄씩 엑셀로 내보낸다.
+
+def _org_tree() -> list:
+    return build_org_tree(read_team_refer(DATA_DIR))
+
+
+def org_tree_options() -> list:
+    """부서 선택 드롭다운 옵션 — 조직도를 들여쓰기로 평탄화해 계층이 눈에
+    보이도록 한다. value는 dep_id — dep_id가 없는 노드는 하위 연구원을
+    org_code로 특정할 수 없으므로 선택지에서 뺀다(자식은 계속 순회)."""
+    options = []
+
+    def _walk(nodes, depth):
+        for node in nodes:
+            dep_id = (node.get('dep_id') or '').strip()
+            if dep_id:
+                indent = '　' * depth
+                head = node.get('end_name') or node.get('project_name') or ''
+                who = ' '.join(v for v in (node.get('assignment_name'), node.get('name')) if v)
+                label = f'{indent}{head}' + (f' ({who})' if who else '')
+                options.append({'label': label, 'value': dep_id})
+            _walk(node.get('children') or [], depth + 1)
+
+    _walk(_org_tree(), 0)
+    return options
+
+
+def _index_org_tree_by_dep_id(nodes: list, out: dict) -> dict:
+    for node in nodes:
+        dep_id = (node.get('dep_id') or '').strip()
+        if dep_id:
+            out[dep_id] = node
+        _index_org_tree_by_dep_id(node.get('children') or [], out)
+    return out
+
+
+def _collect_org_codes(node: dict, include_children: bool) -> set:
+    codes = {(node.get('project_name') or '').strip()} - {''}
+    if include_children:
+        for child in node.get('children') or []:
+            codes |= _collect_org_codes(child, True)
+    return codes
+
+
+def researchers_under_departments(dep_ids: list, include_children: bool) -> list:
+    """선택된 부서(dep_id, 복수)의 org_code(들)에 속한 연구원 researcher_id
+    목록 — include_children이면 선택된 각 부서의 하위 부서까지(조직도 트리
+    기준) 전부 포함해 합친다. 매칭되는 연구원이 없으면 빈 리스트."""
+    if not dep_ids:
+        return []
+    by_id = _index_org_tree_by_dep_id(_org_tree(), {})
+    org_codes = set()
+    for dep_id in dep_ids:
+        node = by_id.get(dep_id)
+        if node:
+            org_codes |= _collect_org_codes(node, include_children)
+    if not org_codes:
+        return []
+    researchers_df = read_processed('researchers')
+    if researchers_df.empty or 'org_code' not in researchers_df.columns:
+        return []
+    matched = researchers_df[researchers_df['org_code'].isin(org_codes)]
+    return matched['researcher_id'].tolist()
+
+
+def individual_search_options() -> list:
+    """개인별 검색 드롭다운 옵션 — "이름 [부서] (사번)" 형식(동명이인 구분,
+    pages/researcher_profile.py 검색 드롭다운과 동일한 표기 규칙)."""
+    researchers_df = read_processed('researchers')
+    if researchers_df.empty:
+        return []
+    options = []
+    for _, row in researchers_df.sort_values(['department', 'name']).iterrows():
+        dept = str(row.get('department', '') or '').strip()
+        dept_suffix = f' [{dept}]' if dept else ''
+        options.append({
+            'label': f"{row.get('name', '')}{dept_suffix} ({row['researcher_id']})",
+            'value': row['researcher_id'],
+        })
+    return options
+
+
+# ── 엑셀: 사번/성명/부서/보유전문성(4개)/유사 연구원 명단 ──────────────────────
+
+_RESULT_FONT_NAME = '바탕체'
+_RESULT_FONT_SIZE = 11
+_RESULT_THIN = Side(style='thin', color='000000')
+_RESULT_BORDER = Border(left=_RESULT_THIN, right=_RESULT_THIN, top=_RESULT_THIN, bottom=_RESULT_THIN)
+
+_SIMILARITY_COLUMNS_HEADER = [
+    '사번', '성명', '부서',
+    '보유전문성(강점 분야)', '보유전문성(강점 키워드)',
+    '보유전문성(주요 역할·책임)', '보유전문성(전문지식 및 역량)',
+    '유사 연구원 명단',
+]
+
+
+def _similar_list_lines(rid: str, similarity_map: dict, name_map: dict, dept_map: dict) -> str:
+    """researcher_similarity.json에 저장된 유사 연구원 전체(화면의 3/5/10
+    표시 개수 제한과 무관하게)를 "이름(부서) - 유사도% [판정]" 줄로 나열."""
+    similar = (similarity_map.get(rid) or {}).get('similar') or []
+    if not similar:
+        return '-'
+    lines = []
+    for s in similar:
+        srid = s.get('researcher_id', '')
+        name = name_map.get(srid, srid)
+        dept = dept_map.get(srid, '') or '-'
+        level = s.get('level', '')
+        score = s.get('score')
+        score_disp = f'{round(score * 100)}%' if score is not None else '데이터없음'
+        level_disp = f' [{level}]' if level else ''
+        lines.append(f'{name}({dept}) - {score_disp}{level_disp}')
+    return '\n'.join(lines)
+
+
+def build_expertise_similarity_workbook(researcher_ids: list) -> bytes:
+    """선택된 연구원들의 보유 전문성(LLM 4개 필드)과 저장된 유사 연구원 명단
+    전체를 엑셀로 내보낸다. 개인별 검색 또는 조직도 부서 단위(하위부서 포함
+    옵션)로 고른 researcher_ids를 그대로 받는다(중복은 순서 유지하며 제거)."""
+    researcher_ids = list(dict.fromkeys(researcher_ids))
+
+    researchers_df = read_processed('researchers')
+    name_map, dept_map = {}, {}
+    if not researchers_df.empty:
+        indexed = researchers_df.set_index('researcher_id')
+        name_map = indexed['name'].to_dict()
+        dept_map = indexed['department'].to_dict()
+
+    profiles = read_expertise_profiles()
+    similarity_map = read_similar_researchers()
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = '보유 전문성·유사 연구원'
+
+    header_font = Font(name=_RESULT_FONT_NAME, size=_RESULT_FONT_SIZE, bold=True)
+    body_font = Font(name=_RESULT_FONT_NAME, size=_RESULT_FONT_SIZE, bold=False)
+    wrap_center = Alignment(wrap_text=True, vertical='center', horizontal='center')
+    wrap_left = Alignment(wrap_text=True, vertical='top', horizontal='left')
+
+    for col_idx, header in enumerate(_SIMILARITY_COLUMNS_HEADER, start=1):
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.font = header_font
+        cell.border = _RESULT_BORDER
+        cell.alignment = wrap_center
+
+    for row_idx, rid in enumerate(researcher_ids, start=2):
+        profile = profiles.get(rid)
+        values = [
+            rid,
+            name_map.get(rid, '') or '-',
+            dept_map.get(rid, '') or '-',
+            export.expertise_field_lines(profile, 'strength_fields'),
+            export.expertise_field_lines(profile, 'strength_keywords'),
+            export.expertise_field_lines(profile, 'key_responsibilities'),
+            export.expertise_field_lines(profile, 'domain_knowledge_skill'),
+            _similar_list_lines(rid, similarity_map, name_map, dept_map),
+        ]
+        for col_idx, value in enumerate(values, start=1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell.font = body_font
+            cell.border = _RESULT_BORDER
+            cell.alignment = wrap_center if col_idx <= 3 else wrap_left
+
+    for col_idx, width in enumerate([12, 14, 18, 24, 24, 26, 26, 40], start=1):
+        ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def similarity_workbook_filename() -> str:
+    return f"보유전문성_유사연구원_{datetime.now().strftime('%Y%m%d%H%M')}.xlsx"

@@ -460,7 +460,7 @@ def _match_row_html(s: dict, name_map: dict, dept_map: dict, org_map: dict) -> s
     )
     return f'''<tr>
   <td>
-    <div class="m-name">{name} {tenure_badge}</div>
+    <div class="m-name">{name} {tenure_badge}{mmd.profile_icon_link_html(rid)}</div>
     <div class="m-dept">{dept} · {org}</div>
   </td>
   <td>{level_pill}</td>
@@ -546,7 +546,9 @@ def _build_html(results: list, researchers_df: pd.DataFrame, profile_by_id: dict
                 else:
                     table = '<p class="empty">비교할 다른 연구원 데이터 없음</p>'
                 sections.append(f'''<div class="card" id="{anchor_of[rid]}">
-  <div class="card-top"><h3>{name}</h3>{tenure_badge}{mmd.map_link_html(rid)}</div>
+  <div class="card-top"><h3>{name}</h3>{tenure_badge}
+    <div class="card-icons">{mmd.profile_link_html(rid)}{mmd.map_link_html(rid)}</div>
+  </div>
   {_chip_row_html(profile_by_id.get(rid, {}))}
   {table}
 </div>''')
@@ -569,8 +571,8 @@ def _build_html(results: list, researchers_df: pd.DataFrame, profile_by_id: dict
     # 적용된다(3명 선택 시 시니어 3 + 주니어 3, 있는 만큼만). 데이터는 이미
     # MAX_DISPLAY_K(10)까지 그룹별로 저장돼 있으므로 재계산 없이 CSS만으로 전환된다.
     count_toggle = (
-        '<input type="radio" name="cnt" id="count-3" class="cnt-radio">'
-        '<input type="radio" name="cnt" id="count-5" class="cnt-radio" checked>'
+        '<input type="radio" name="cnt" id="count-3" class="cnt-radio" checked>'
+        '<input type="radio" name="cnt" id="count-5" class="cnt-radio">'
         '<input type="radio" name="cnt" id="count-10" class="cnt-radio">'
         '<div class="count-bar">'
         '<span>표시 개수</span>'

@@ -393,7 +393,9 @@ def _researcher_card_html(item: dict, name_map: dict, anchor: str) -> str:
     body_html = f'<div class="kv-grid">{kv_blocks}</div>' if kv_blocks else '<p class="empty">세부 항목 데이터 없음</p>'
 
     return f'''<div class="card" id="{anchor}">
-  <div class="card-top"><h3>{html.escape(rid)} {html.escape(name)}</h3>{mmd.map_link_html(rid)}</div>
+  <div class="card-top"><h3>{html.escape(rid)} {html.escape(name)}</h3>
+    <div class="card-icons">{mmd.profile_link_html(rid)}{mmd.map_link_html(rid)}</div>
+  </div>
   {chip_row}
   {body_html}
 </div>'''

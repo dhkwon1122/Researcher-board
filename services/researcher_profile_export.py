@@ -228,6 +228,15 @@ def _col_tech_ownership(_rid, rows):
     return '\n'.join(lines) if lines else '-'
 
 
+def expertise_field_lines(profile: dict | None, field: str) -> str:
+    """보유 전문성(LLM) 프로필 dict에서 필드 하나(strength_fields 등)를 줄바꿈
+    나열 문자열로 뽑는다. services/similarity_map.py의 조직도 기반 다운로드처럼
+    _researcher_row_context() 없이 profile dict만 있는 호출부에서도 같은 서식을
+    쓸 수 있도록 _expertise_field()의 내부 로직을 공개 함수로 분리했다."""
+    items = (profile.get(field) if profile else None) or []
+    return '\n'.join(items) if items else '-'
+
+
 def _expertise_field(field: str):
     """보유 전문성(LLM)의 한 필드를 한 셀에 줄바꿈으로 나열하는 컬럼 함수를 만든다.
     components/detail_tabs.py의 llm_summary_block()과 동일한 4개 필드
@@ -235,9 +244,7 @@ def _expertise_field(field: str):
     강점 분야/강점 키워드/주요 역할·책임/전문지식 및 역량 4개 컬럼으로 나눠 받고
     싶다는 요청에 따라 컬럼별 함수로 분리했다. 다운로드 시 선택 사항(옵트인)."""
     def _col(_rid, rows):
-        profile = rows.get('expertise_profile')
-        items = (profile.get(field) if profile else None) or []
-        return '\n'.join(items) if items else '-'
+        return expertise_field_lines(rows.get('expertise_profile'), field)
     return _col
 
 

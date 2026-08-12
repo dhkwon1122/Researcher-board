@@ -173,6 +173,25 @@ def map_link_html(researcher_id: str) -> str:
     )
 
 
+def profile_link_html(researcher_id: str) -> str:
+    """연구원 카드 우측 상단에 map_link_html()과 나란히 붙는 '연구원 프로필로
+    이동' 아이콘. researcher_profile.py의 layout(id=...)이 쿼리 파라미터
+    ?id=researcher_id를 그대로 받아 그 사람으로 선택해 보여준다. map_link_html과
+    동일하게 iframe 밖(최상위 대시보드)으로 이동해야 하므로 target="_top"."""
+    href = f'/researcher-profile?id={researcher_id}'
+    return (
+        f'<a class="map-link" href="{href}" target="_top" title="연구원 프로필로 이동">'
+        f'👤 프로필</a>'
+    )
+
+
+def profile_icon_link_html(researcher_id: str) -> str:
+    """유사 연구원 표처럼 좁은 공간(테이블 행)에 붙이는 아이콘 전용(텍스트
+    없는) 프로필 이동 링크 — profile_link_html의 소형 버전."""
+    href = f'/researcher-profile?id={researcher_id}'
+    return f'<a class="row-icon-link" href="{href}" target="_top" title="연구원 프로필로 이동">👤</a>'
+
+
 def strength_section_html(fields: list, keywords: list) -> str:
     """강점 분야(chip)와 키워드(chip kw)를 "Strength Field"/"Strength Keywords"
     라벨로 구분해 보여준다 — 둘 다 칩만 이어 붙이면 어떤 게 분야이고 어떤 게
@@ -379,12 +398,18 @@ CONSOLE_STYLE = """
   }
   .card-top { display: flex; align-items: center; gap: 10px; margin-bottom: 3px; }
   .card-top h3 { margin: 0; font-size: 1rem; font-weight: 700; }
+  /* card-top 우측에 모이는 이동 아이콘 묶음(프로필/전문성 MAP) — 개별
+     .map-link가 아니라 이 래퍼에 margin-left:auto를 둬서, 아이콘이 몇 개든
+     항상 한 덩어리로 오른쪽에 붙게 한다. */
+  .card-icons { margin-left: auto; flex-shrink: 0; display: flex; align-items: center; gap: 6px; }
   .map-link {
-    margin-left: auto; flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px;
+    flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px;
     font-size: 0.72rem; font-weight: 600; color: var(--ink-soft); text-decoration: none;
     border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px 3px 8px;
   }
   .map-link:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-weak); }
+  .row-icon-link { text-decoration: none; opacity: 0.6; margin-left: 6px; font-size: 0.82rem; }
+  .row-icon-link:hover { opacity: 1; }
   .card-sub { font-size: 0.78rem; color: var(--ink-soft); margin-bottom: 12px; }
   .badge { font-size: 0.66rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
   .badge.senior { background: var(--accent-weak); color: var(--accent); }

@@ -23,7 +23,10 @@ from dash import Input, Output, Patch, State, callback, dcc, html
 
 from services.data_store import DATA_DIR
 from services.similarity_map import (
-    build_similarity_graph_elements, load_similarity_map, similarity_graph_department_classes,
+    build_expertise_similarity_workbook, build_similarity_graph_elements,
+    individual_search_options, load_similarity_map, org_tree_options,
+    researchers_under_departments, similarity_graph_department_classes,
+    similarity_workbook_filename,
 )
 
 dash.register_page(__name__, path='/researcher-similarity-map', name='보유 전문성',
@@ -469,6 +472,54 @@ def _go_to_researcher_card_from_graph(node_data):
     return 'researcher', f"r-{node_data['id']}"
 
 
+def _download_panel():
+    """"연구원"/"연구원 ↔ 연구원" 탭 아래(전문성 MAP 탭에서는 숨김)에 붙는
+    보유 전문성·유사 연구원 명단 엑셀 다운로드 패널. 개인별 검색 또는
+    조직도 부서 단위(하위부서 포함 옵션)로 대상을 고른다 — 특허/논문
+    다운로드(연구원 명단 탭)처럼 이 화면 안에서도 완결되는 별도 패널로 둔다."""
+    return html.Div([
+        html.Hr(),
+        html.Div([
+            html.I(className='bi bi-file-earmark-excel me-2 text-success'),
+            html.Span('보유 전문성 · 유사 연구원 명단 엑셀 다운로드', className='fw-semibold small'),
+        ], className='mb-2'),
+        dbc.RadioItems(
+            id='expertise-download-mode', inline=True, value='individual',
+            options=[
+                {'label': '개인별 검색', 'value': 'individual'},
+                {'label': '부서 선택(조직도)', 'value': 'department'},
+            ],
+            className='mb-2 small',
+        ),
+        html.Div(
+            dcc.Dropdown(
+                id='expertise-download-individual', options=individual_search_options(),
+                multi=True, placeholder='이름 또는 사번으로 검색(복수 선택 가능)',
+            ),
+            id='expertise-download-individual-row',
+        ),
+        html.Div(
+            dbc.Row([
+                dbc.Col(dcc.Dropdown(
+                    id='expertise-download-dept', options=org_tree_options(),
+                    multi=True, placeholder='조직도에서 부서 선택(복수 선택 가능)',
+                ), md=8),
+                dbc.Col(dbc.Checklist(
+                    id='expertise-download-include-children',
+                    options=[{'label': '하위부서 포함', 'value': 'include'}],
+                    value=['include'], switch=True, className='mt-2',
+                ), md=4),
+            ], className='g-2'),
+            id='expertise-download-dept-row', style={'display': 'none'},
+        ),
+        dbc.Button([html.I(className='bi bi-file-earmark-excel me-1'), '엑셀 다운로드'],
+                   id='expertise-download-btn', color='success', outline=True, size='sm',
+                   className='mt-2', n_clicks=0),
+        html.Div(id='expertise-download-msg', className='small text-danger mt-1'),
+        dcc.Download(id='expertise-download-download'),
+    ], id='expertise-download-panel')
+
+
 def layout(highlight_researcher=None, **_kwargs):
     """기본 진입 탭은 '연구원'. 다만 highlight_researcher가 있으면(URL 쿼리
     파라미터, 예: /researcher-similarity-map?highlight_researcher=00000001 —
@@ -497,6 +548,7 @@ def layout(highlight_researcher=None, **_kwargs):
             id='expertise-tab-content',
             children=initial_content,
         )),
+        _download_panel(),
         dcc.Store(id='expertise-pending-highlight', data=highlight_researcher),
         dcc.Store(id='expertise-scroll-target'),
     ])
@@ -522,6 +574,56 @@ def _render_expertise_tab(active_tab, pending_highlight, scroll_target):
         # 같은 위치로 재스크롤되지 않게 한다.
         return content, (None if scroll_target else dash.no_update)
     return dash.no_update, dash.no_update
+
+
+@callback(
+    Output('expertise-download-panel', 'style'),
+    Input('expertise-tabs', 'active_tab'),
+)
+def _toggle_download_panel(active_tab):
+    """다운로드 패널은 "연구원"/"연구원 ↔ 연구원" 탭에서만 의미가 있어(요청
+    범위) 전문성 MAP 탭에서는 숨긴다."""
+    return {'display': 'block'} if active_tab in _REPORT_FILES else {'display': 'none'}
+
+
+@callback(
+    Output('expertise-download-individual-row', 'style'),
+    Output('expertise-download-dept-row', 'style'),
+    Input('expertise-download-mode', 'value'),
+)
+def _toggle_download_mode(mode):
+    if mode == 'department':
+        return {'display': 'none'}, {'display': 'block'}
+    return {'display': 'block'}, {'display': 'none'}
+
+
+@callback(
+    Output('expertise-download-download', 'data'),
+    Output('expertise-download-msg', 'children'),
+    Input('expertise-download-btn', 'n_clicks'),
+    State('expertise-download-mode', 'value'),
+    State('expertise-download-individual', 'value'),
+    State('expertise-download-dept', 'value'),
+    State('expertise-download-include-children', 'value'),
+    prevent_initial_call=True,
+)
+def _download_expertise_similarity(n_clicks, mode, individual_ids, dept_ids, include_children):
+    if not n_clicks:
+        return dash.no_update, dash.no_update
+    if mode == 'department':
+        dept_ids = dept_ids or []
+        if not dept_ids:
+            return dash.no_update, '부서를 선택해주세요.'
+        researcher_ids = researchers_under_departments(dept_ids, include_children='include' in (include_children or []))
+        if not researcher_ids:
+            return dash.no_update, '선택한 부서에 소속된 연구원이 없습니다.'
+    else:
+        researcher_ids = individual_ids or []
+        if not researcher_ids:
+            return dash.no_update, '대상자를 검색해서 선택해주세요.'
+
+    data = build_expertise_similarity_workbook(researcher_ids)
+    return dcc.send_bytes(data, similarity_workbook_filename()), ''
 
 
 @callback(
