@@ -215,7 +215,10 @@ def _col_tasks(_rid, rows):
     items = sorted(rows['tasks'], key=lambda t: _s(t.get('start_date')), reverse=True)
     lines = []
     for t in items:
-        name = _s(t.get('task_name')) or '-'
+        # the_task_name(참여 당시 실제 과제명, pipeline/process_tasks.py가
+        # tasks_information.csv 개명 이력으로 보정)이 있으면 그걸, 없으면
+        # (구버전 CSV/매핑 실패 폴백) 원본 task_name.
+        name = _s(t.get('the_task_name')) or _s(t.get('task_name')) or '-'
         start = _yy(t.get('start_date')) or '-'
         end = _yy(t.get('end_date')) or '현재'
         lines.append(f'{name}({start} ~ {end})')

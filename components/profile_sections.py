@@ -196,7 +196,7 @@ def education_block(edu_df: pd.DataFrame, rid: str):
     return html.Div(items) if items else html.Div('학력 정보 없음', className='text-muted small')
 
 
-def _clean_grade(val) -> str:
+def _clean_str(val) -> str:
     s = str(val).strip() if val is not None else ''
     return '' if s.lower() in ('', 'nan', 'none', 'nat') else s
 
@@ -227,9 +227,9 @@ def evaluation_incentive_block(eva_df, inc_df, rid: str, years: list[int]):
         """(색상 기준 연봉등급, 화면 표시 문자열) 튜플. eva가 없으면 둘 다 '-'."""
         if eva is None:
             return '-', '-'
-        salary = _clean_grade(eva.get(salary_grade_column(year)))
-        first_half = _clean_grade(eva.get(first_half_column(year - 1)))
-        second_half = _clean_grade(eva.get(second_half_column(year - 1)))
+        salary = _clean_str(eva.get(salary_grade_column(year)))
+        first_half = _clean_str(eva.get(first_half_column(year - 1)))
+        second_half = _clean_str(eva.get(second_half_column(year - 1)))
         display = format_evaluation_cell(salary, first_half, second_half)
         return salary, display
 
@@ -395,8 +395,12 @@ def tasks_block(task_df, rid: str):
     for _, row in rows.iterrows():
         period = _fmt_period(row.get('start_date'), row.get('end_date'))
         rate   = _fmt_rate(row.get('input_rate'))
+        # the_task_name(참여 당시 실제 과제명, pipeline/process_tasks.py 보정)이
+        # 있으면 그걸, 없으면(구버전 CSV/매핑 실패 폴백) 원본 task_name.
+        the_name = _clean_str(row.get('the_task_name', ''))
+        name = the_name or str(row.get('task_name', '') or '').strip() or '-'
         table_rows.append(html.Tr([
-            html.Td(str(row.get('task_name', '-')), className='small', style={'wordBreak': 'break-word'}),
+            html.Td(name, className='small', style={'wordBreak': 'break-word'}),
             html.Td(period, className='small text-muted', style={'wordBreak': 'break-word'}),
             html.Td(rate, className='small text-center', style={'wordBreak': 'break-word'}),
         ]))

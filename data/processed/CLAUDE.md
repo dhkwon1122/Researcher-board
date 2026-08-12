@@ -2396,3 +2396,80 @@ CL4, CL3+5년이상, CL3+5년미만, CL3+승격일없음, 비CL직책)로 직접
 못 했다 — 화면에 반영하려면 `python pipeline/process_researchers.py`와
 `python pipeline/process_researcher_similarity.py`(또는 전체 파이프라인)
 를 다시 실행해야 한다.
+
+## 완료: 과제 이력의 과제명을 참여 당시 실제 이름으로 보정(the_task_name)
+
+"tasks.csv의 과제 이력이 과거 참여 당시 이름이 아니라 현재(최신) 과제명으로
+표시되는 문제" — 예: 지금은 2DM인 과제가 예전엔 GRAPH였는데, 과거 참여
+기간도 전부 "2DM"으로 나옴(tasks.csv 원본 자체가 과제코드 기준 "현재
+이름"을 내려주는 원천 시스템 특성). 문답으로 확정된 해결책은 tasks.csv
+행을 개명 시점 기준으로 **여러 구간으로 쪼개는** 것 — 처음 제안(컬럼 하나
+추가, 1행=1값)보다 큰 변경으로, 사용자가 직접 예시를 만들어 확정:
+GROTH(2019-02-01 기록)/GRAPH(2020-06-01 기록)/2DM(2023-01-01 기록) 이력이
+있고 참여기간이 2019-06-01~2023-02-01이면 → GROTH(2019-06-01~2020-05-31),
+GRAPH(2020-06-01~2022-12-31), 2DM(2023-01-01~2023-02-01) 3구간으로 분리.
+매핑 실패/이력 없음/참여 시작 이전 이력 없음은 전부 원본 task_name 그대로
+폴백(정보 유실 방지, 확정). 반영 범위는 과제 이력이 보이는 모든 곳
+(타임라인 막대·과제 표·엑셀 다운로드) 전부.
+
+**핵심 아이디어**: `tasks_information.csv`(process_task_information.py)는
+이미 "task_code가 같아도 task_name이 다르면(개명) 별도 행으로 보존"하고
+`task_name` 기준 중복 제거가 되어 있어(1개 task_name = 1개 task_code
+보장), 이 파일이 곧 "이 과제코드가 시간에 따라 어떻게 불렸는지"의
+이력 데이터베이스 역할을 한다. 파이프라인 순서도 이미
+`process_task_information.py`(5번)가 `process_tasks.py`(9-6번)보다
+먼저 실행되므로, 순서를 바꿀 필요 없이 `process_tasks.py`가 그 결과물을
+그대로 읽어 쓰면 된다.
+
+**`pipeline/process_tasks.py`**: 기존 `_merge_consecutive_periods()`(연속
+참여기간 병합, 안 건드림) 직후에 새 단계 `_apply_name_history()`를 추가.
+- `_read_tasks_information()` — `tasks_information.csv`를 읽되 없으면
+  빈 DataFrame(그래프 폴백 트리거).
+- `_name_to_code_map(tasks_info_df)` — `task_name → task_code`
+  (`components/timeline_data.py`의 기존 `task_code_map()`과 같은 로직,
+  pipeline 스크립트는 관례상 `components/`를 안 끌어써서 여기 별도로
+  작게 구현).
+- `_code_to_history_map(tasks_info_df)` — `task_code → [(write_date,
+  task_name), ...]`(write_date 오름차순 정렬, write_date/task_name 둘 다
+  있는 행만).
+- `_split_by_name_history(task_name, start, end, name_to_code,
+  code_history)` — 핵심 로직. 참여 종료일 이후에 생긴 개명은 무관하므로
+  제외하고, "참여 시작 시점에 이미 있던 가장 최근 이름"부터 시작해서
+  그 이후 각 write_date를 구간 경계로 삼아 쪼갠다(경계 사이는 "다음
+  경계 write_date - 1일"까지). 시작 시점보다 이전 이력이 아예 없으면
+  그 구간(시작일 ~ 첫 기록 직전)은 원본 task_name으로 채운다(사용자 확정
+  폴백 규칙을 부분 구간에도 적용 — 명시적으로 물어보진 않았지만 "모르면
+  원본 그대로"의 자연스러운 연장으로 판단, 다르게 원하시면 이 함수의
+  `start_name` 계산부만 고치면 됨).
+- `_apply_name_history(df)` — tasks.csv의 각 행을 위 함수로 쪼개
+  `task_code`/`the_task_name` 컬럼이 추가된(그리고 개명 이력이 있으면
+  행 수가 늘어난) 새 DataFrame을 만든다. `researcher_id`/`task_name`
+  (원본)/`input_rate`는 쪼개진 모든 구간에 그대로 복제.
+- `process()`에 이 단계를 연결하고, 행 수가 늘어나면 로그로 알림.
+
+**반영 3곳**(전부 `the_task_name`이 있으면 그걸, 없으면(구버전 CSV/매핑
+실패) 원본 `task_name`으로 폴백):
+- `components/timeline_data.py`의 `task_points()`(타임라인 스파인 막대).
+- `components/profile_sections.py`의 `tasks_block()`(과제 이력 표) — 이
+  참에 재사용을 위해 `_clean_grade()`(평가 셀 NaN 정리용으로 이전에
+  만든 헬퍼)를 `_clean_str()`로 이름만 일반화(동작 변경 없음, 4곳 모두
+  치환).
+- `services/researcher_profile_export.py`의 `_col_tasks()`(엑셀 과제수행이력).
+
+검증: `_split_by_name_history()`를 사용자 예시 그대로 호출해 3구간
+경계(2020-05-31/2020-06-01, 2022-12-31/2023-01-01 등 하루 단위 경계)가
+정확히 일치하는지 확인. 추가로 5가지 경계 케이스(참여 시작이 전체 이력보다
+이름/진행중(end 없음)/개명 없음(단일 구간)/task_name 매핑 실패/start_date
+자체 없음)를 직접 호출해 전부 기대한 폴백대로 동작하는지 확인.
+`_apply_name_history()`를 2명(한 명은 개명 있음 → 3행, 한 명은 개명
+없음 → 1행) 목 DataFrame으로 확인. `process()` 전체를 raw 소스 +
+`tasks_information.csv` 둘 다 목 데이터로 몬키패치해 실행 → 저장된
+tasks.csv가 정확히 3행으로 쪼개지는지 확인. `tasks_information.csv`가
+아예 없는 상태로도 `process()`를 실행해 에러 없이 `the_task_name=
+task_name` 그대로(행 수 안 늘어남) 폴백하는지 확인. 쪼개진 3행짜리
+결과를 `task_points()`/`tasks_block()`/`_col_tasks()` 세 곳 모두에
+직접 통과시켜 GROTH/GRAPH/2DM이 각자의 기간으로 정확히 나오는지, 옛날
+형식(the_task_name 컬럼 자체가 없는) 데이터도 원본 task_name으로
+문제없이 표시되는지 확인. 이번 세션 컨테이너엔 실제 원본 데이터가 없어
+`python pipeline/process_tasks.py`(tasks_information.csv가 먼저 있어야
+함) 실제 재실행·브라우저 확인은 못 했다.

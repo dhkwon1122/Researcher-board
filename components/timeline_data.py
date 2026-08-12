@@ -66,8 +66,13 @@ def task_points(task_df):
             end = today
         if (end - start).days <= 30:
             continue
+        # the_task_name(pipeline/process_tasks.py가 tasks_information.csv 개명
+        # 이력으로 보정한, 참여 당시 실제 과제명)이 있으면 그걸 쓰고, 없으면
+        # (구버전 CSV/매핑 실패 폴백) 원본 task_name.
+        the_name = clean(row.get('the_task_name', ''))
+        name = the_name or str(row.get('task_name', '')).strip()
         points.append({
-            'task_name': str(row.get('task_name', '')).strip(),
+            'task_name': name,
             'start': start,
             'end': end,
             'start_label': start.strftime('%Y-%m-%d'),
