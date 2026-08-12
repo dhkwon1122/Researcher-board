@@ -640,6 +640,23 @@ def process(top_k: int = DEFAULT_TOP_K, refresh_judgments: bool = False) -> bool
         print(f'[process_researcher_similarity] 임원 {excluded_count}명 제외 '
               f'({sorted(_EXCLUDED_POSITIONS)})')
 
+    # 현재 미소속(전배·퇴사 — researchers.csv의 is_current='N', pipeline/process_researchers.py
+    # 참고)인 사람도 후보에서 완전히 제외한다. 임원 제외와 동일한 이유: 화면(AI 검색/
+    # 보유 전문성 "누적기준" 패널)에서는 조회 대상 자신은 미소속이어도 찾을 수 있게
+    # 앱단에서 따로 열어주지만(services/nl_query.py, pages/researcher_similarity_map.py),
+    # "추천되는 유사 연구원 후보"는 실제로 협업 가능한 사람이어야 하므로 이 배치 계산
+    # 단계에서부터 아예 빼는 게 맞다 — 안 그러면 조직도 기반 정적 리포트(최신기준
+    # 화면에 그대로 뜨는 연구원 ↔ 연구원 탭)에는 걸러지지 않은 채로 남는다.
+    # is_current 컬럼이 없으면(구버전 데이터/원본에 인원실적년월이 없는 경우) 판단
+    # 근거가 없으므로 아무도 제외하지 않는다(services.data_store.filter_current와 동일 원칙).
+    if not researchers_df.empty and 'is_current' in researchers_df.columns:
+        current_map = researchers_df.set_index('researcher_id')['is_current'].to_dict()
+        before = len(profiles)
+        profiles = [p for p in profiles if current_map.get(p.get('researcher_id', ''), 'Y') != 'N']
+        not_current_count = before - len(profiles)
+        if not_current_count:
+            print(f'[process_researcher_similarity] 현재 미소속(전배·퇴사) {not_current_count}명 제외')
+
     if len(profiles) < 2:
         print('[process_researcher_similarity] 비교할 연구원이 2명 미만 — 종료')
         return False
