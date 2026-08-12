@@ -11,6 +11,15 @@ data/processed/*.csv + LLM 파생 JSON 전체에 걸친 컬럼명 -> 한글 표�
 점진적으로 채워도 된다.
 """
 
+import re
+
+_EVAL_COLUMN_RE = re.compile(r'^(\d{4})_(salary_grade|first_half_grade|second_half_grade)$')
+_EVAL_COLUMN_SUFFIX_LABEL = {
+    'salary_grade': '연봉등급',
+    'first_half_grade': '상반기업적',
+    'second_half_grade': '하반기업적',
+}
+
 COLUMN_LABELS = {
     # 공통 식별자
     'researcher_id': '사번',
@@ -37,9 +46,9 @@ COLUMN_LABELS = {
     'school': '학교',
     'graduation_year': '졸업연도',
 
-    # 평가 (evaluations.csv)
-    'grade': '등급',
-    'score': '점수',
+    # 평가 (evaluations.csv) — 실제 컬럼은 {연도}_salary_grade/
+    # {연도}_first_half_grade/{연도}_second_half_grade처럼 연도가 붙는 동적
+    # 컬럼이라 고정 매핑이 안 됨 — label_for()의 정규식 분기 참고.
 
     # 인센티브/핵심인재 선정 (incentive_selection.csv)
     'selected': '선정여부',
@@ -199,6 +208,10 @@ def label_for(column: str) -> str:
             return f'{COLUMN_LABELS[base.rstrip("_")]}{suffix}'
     if column.startswith('work_objective') and column[len('work_objective'):].isdigit():
         return f'업무목표 20{column[len("work_objective"):]}'
+    eval_match = _EVAL_COLUMN_RE.match(column)
+    if eval_match:
+        year, suffix = eval_match.groups()
+        return f'{year} {_EVAL_COLUMN_SUFFIX_LABEL[suffix]}'
     return column
 
 

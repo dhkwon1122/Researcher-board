@@ -9,6 +9,7 @@ import plotly.graph_objects as go
 from dash import html
 
 from services.data_store import ASSETS_DIR, RAW_DIR
+from services.evaluations import first_half_column, format_evaluation_cell, salary_grade_column, second_half_column
 
 DEGREE_ORDER = ['박사', '석사', '학사', '전문대', '고교']
 GRADE_COLOR = {
@@ -195,9 +196,20 @@ def education_block(edu_df: pd.DataFrame, rid: str):
     return html.Div(items) if items else html.Div('학력 정보 없음', className='text-muted small')
 
 
+def _clean_grade(val) -> str:
+    s = str(val).strip() if val is not None else ''
+    return '' if s.lower() in ('', 'nan', 'none', 'nat') else s
+
+
 def evaluation_incentive_block(eva_df, inc_df, rid: str, years: list[int]):
+    """years: 연봉등급 연도 리스트(오름차순, 예: [2024,2025,2026]) — 각 연도
+    열은 그 해 연봉등급과, 대응하는 전년도(연도-1) 상/하반기업적을 합쳐
+    services.evaluations.format_evaluation_cell()로 한 셀에 표시한다(예:
+    "다(EM/EM)"). evaluations.csv가 researcher_id당 1행(wide)이라 eva는
+    최대 1행."""
     inc = inc_df[inc_df['researcher_id'] == rid] if not inc_df.empty else pd.DataFrame()
-    eva = eva_df[eva_df['researcher_id'] == rid] if not eva_df.empty else pd.DataFrame()
+    eva_rows = eva_df[eva_df['researcher_id'] == rid] if not eva_df.empty else pd.DataFrame()
+    eva = eva_rows.iloc[0] if not eva_rows.empty else None
 
     def _inc_label(year):
         if inc.empty:
@@ -211,16 +223,20 @@ def evaluation_incentive_block(eva_df, inc_df, rid: str, years: list[int]):
             return '최우수' if '최우수' in category else ('우수' if '우수' in category else category[:4])
         return '-'
 
-    def _grade(year):
-        if eva.empty:
-            return '-'
-        row = eva[eva['year'].astype(str) == str(year)]
-        return str(row.iloc[0].get('grade', '-')) if not row.empty else '-'
+    def _eval_cell(year):
+        """(색상 기준 연봉등급, 화면 표시 문자열) 튜플. eva가 없으면 둘 다 '-'."""
+        if eva is None:
+            return '-', '-'
+        salary = _clean_grade(eva.get(salary_grade_column(year)))
+        first_half = _clean_grade(eva.get(first_half_column(year - 1)))
+        second_half = _clean_grade(eva.get(second_half_column(year - 1)))
+        display = format_evaluation_cell(salary, first_half, second_half)
+        return salary, display
 
-    def _grade_td(grade):
-        color = GRADE_COLOR.get(grade, '#aaa')
+    def _grade_td(salary_grade, display):
+        color = GRADE_COLOR.get(salary_grade, '#aaa')
         return html.Td(
-            html.Span(grade, style={'color': color, 'fontWeight': '700', 'fontSize': '0.9rem'}),
+            html.Span(display, style={'color': color, 'fontWeight': '700', 'fontSize': '0.8rem'}),
             className='text-center', style={'verticalAlign': 'middle'},
         )
 
@@ -245,7 +261,7 @@ def evaluation_incentive_block(eva_df, inc_df, rid: str, years: list[int]):
             html.Tr(
                 [html.Td('평가등급', className='small text-muted text-center',
                          style={'whiteSpace': 'nowrap', 'fontSize': '0.75rem', 'verticalAlign': 'middle'})] +
-                [_grade_td(_grade(year)) for year in years]
+                [_grade_td(*_eval_cell(year)) for year in years]
             ),
         ]),
     ], bordered=True, size='sm', className='mb-0 eval-incentive-table', style={'fontSize': '0.8rem'})

@@ -2003,3 +2003,123 @@ job_function), 직무이력(job_profile.csv)을 선택적으로 다운받을 수
 표기되는지 openpyxl로 확인. 플래그 전부 기본값(False)일 때 기존 13개
 기본 컬럼만 나오는 것도 함께 확인. `nl_query_bar.render()`로 새
 체크리스트 5개 옵션이 레이아웃에 포함되는지 확인.
+
+## 완료: evaluations.csv를 long → wide로 재구성 + 상/하반기업적 추가 + 3월 기준 회계연도
+
+"evaluations.csv 생성 로직 설명해줘(확인 후 수정예정)"로 시작해, 여러 차례
+문답으로 확정된 대규모 스키마 변경. 기존엔 `researcher_id, year, grade,
+score`(long, 연봉등급만) 였는데, 다음으로 바뀌었다:
+
+**확정된 요구사항**:
+1. **researcher_id당 1행(wide)**, 연봉등급 3개년 + 상/하반기업적(EM/ES/MT)
+   3개년 컬럼(`{연도}_salary_grade`, `{연도}_first_half_grade`,
+   `{연도}_second_half_grade`) — 점수(score) 컬럼은 없음(연봉등급도
+   상/하반기업적도 점수 환산 안 함 — 다운스트림에서 원래 안 쓰이던 값이라
+   완전히 제거).
+2. **연도 기준을 "매년 3월 시작 회계연도"로 통일**: 오늘이 3월 이후면
+   FY=올해, 1~2월이면 FY=작년. 연봉등급 3개년=[FY,FY-1,FY-2], 상/하반기업적
+   3개년=[FY-1,FY-2,FY-3](그 해 연봉등급이 전년도 업적 평가를 반영하므로
+   항상 연봉등급 연도-1). 기존에 논의했던 "원본에 해당 연도 컬럼이
+   있는지로 분기"하는 방식은 전부 이 날짜 기반 계산으로 대체됐다(더 이상
+   원본 파일 컬럼 존재 여부를 보지 않음 — 특정 연도 컬럼이 원본에 없으면
+   그 컬럼만 비워둘 뿐, 3개년 범위 자체는 안 바뀜).
+3. **연구원 개별 프로필 표(`evaluation_incentive_block`)**: 연도 열마다
+   그 해 연봉등급과 (그 해-1) 상/하반기업적을 합쳐 한 셀로 표시.
+4. **엑셀 다운로드("평가" 컬럼)**: 2줄 — 1줄: 연봉등급 3개년 슬래시("다/다/다"),
+   2줄: 상/하반기업적 3개년 쌍을 괄호로 묶어 콤마 나열("(MT/MT, MT/MT, MT/MT)").
+5. **합성 표기 규칙**(문답으로 8가지 조합 전부 확정):
+   - 연봉등급 있음 → `"{연봉등급}({있는 반기만 슬래시로 이어붙임})"`,
+     반기 둘 다 없으면 괄호 없이 연봉등급만("다").
+   - 연봉등급 없음 → 반기 두 자리를 항상 `"{첫자리 or '-'}/{둘째자리 or '-'}"`로
+     (예: `-/MT`, `MT/-`, `-/-`) — 있는 것만 골라 보여주는 위 규칙과 달리
+     이쪽은 자리를 항상 유지한다(사용자가 초안의 "MT" 단독 표기를
+     "-/MT"로 직접 수정하며 확정).
+   - 이 규칙을 프로필 표/엑셀 다운로드 양쪽에 동일하게 적용.
+6. 색상은 기존 `GRADE_COLOR`(가~마 5색) 그대로 — 합성 문자열이 돼도
+   앞의 연봉등급 부분 기준으로 계속 색칠.
+7. `pages/researcher_list.py`의 하드코딩된 `"'24평가"/"'25평가"/"'26평가"`
+   3개 컬럼도 동적 연도로 전환.
+
+**`services/evaluations.py`**(신규) — 위 로직의 단일 출처. 파이프라인과
+3곳의 화면/엑셀 소비처가 전부 이 모듈 하나만 보고 계산하게 해서, 한쪽만
+고치고 다른 쪽을 깜빡하는 사고를 막는다.
+- `current_fiscal_year(today=None)` — 3월 기준 회계연도 계산.
+- `evaluation_years(today=None)` — `(연봉등급 3개년, 업적 3개년)`, 둘 다
+  내림차순.
+- `salary_grade_column(year)`/`first_half_column(year)`/`second_half_column(year)`
+  — 컬럼명 생성기(오타 방지, 한 곳에서만 포맷 정의).
+- `format_half_pair(first, second)` — "{first or '-'}/{second or '-'}".
+- `format_evaluation_cell(salary, first, second)` — 위 6가지 조합 규칙을
+  구현한 합성 함수. `SALARY_GRADES`(가나다라마)/`HALF_GRADES`(EM/ES/MT)
+  튜플도 여기서 export.
+
+**`pipeline/process_tp_evaluation.py`**: 기존 `GRADE_COLS`(연도 3개
+하드코딩)/`GRADE_TO_SCORE`(점수 매핑) 상수를 걷어내고, `evaluation_years()`로
+얻은 6개 연도(연봉등급 3 + 업적 3)에 대해 원본 컬럼(`"{연도} 연봉등급"`,
+`"{연도} 상반기업적"`, `"{연도} 하반기업적"`)을 하나씩 읽어 유효값(가~마 /
+EM·ES·MT)만 남기고 `researcher_id`당 1행짜리 `result` DataFrame에
+컬럼으로 직접 붙인다(예전처럼 연도별로 melt해서 세로로 쌓지 않음). 원본에
+특정 연도 컬럼이 없으면 그 컬럼만 빈 문자열로 두고 WARN, 유효하지 않은
+값(오타 등)도 그 셀만 비우고 WARN — 나머지는 그대로 저장. 이름/성별/
+생년월일 추출(1번 섹션)은 이번 변경과 무관해 그대로 둠.
+
+**`services/researcher_profile_export.py`**: `_col_evaluation()`을
+wide 컬럼(`evaluations.salary_grade_column()` 등)을 읽어
+`format_half_pair()`로 조립하는 2줄(`\n` 하나) 문자열로 재작성. 헤더
+`"평가('24~'26)"`도 하드코딩을 걷어내고 모듈 임포트 시점에
+`_EVAL_SALARY_YEARS`(evaluation_years() 결과)로 동적 생성(`_EVAL_HEADER`)
+— 회계연도가 바뀌는 건 1년에 한 번뿐이라 매 요청마다 재계산할 필요 없이
+프로세스 기동 시 한 번이면 충분(이 앱의 다른 "현재 시점 기준" 값들과
+동일한 전제). 평가 컬럼 너비도 12→22로 넓힘(2줄째 반기 표기가 더 길어져서).
+
+**`components/profile_sections.py`**: `evaluation_incentive_block()`의
+`_grade()`(단순 조회)를 `_eval_cell()`(연봉등급 + 전년도 반기 조회 →
+`format_evaluation_cell()`로 합성, `(색상용 연봉등급, 표시 문자열)` 튜플
+반환)로 교체. `_grade_td()`는 색상은 첫 번째 값(연봉등급)으로, 텍스트는
+두 번째 값(합성 문자열)으로 렌더링하도록 시그니처 변경. 문자열이 길어져
+폰트 크기를 0.9rem→0.8rem으로 살짝 줄임. NaN-as-string("nan"/"None")
+정리용 `_clean_grade()` 헬퍼 추가(evaluations.csv를 `read_processed()`로
+읽으면 빈 셀이 파이썬 float NaN이 되고, 이걸 다시 문자열화하면 "nan"이
+되는 이 프로젝트 공통 패턴 — 다른 CSV들의 `_s()` 계열 헬퍼와 동일 목적).
+
+**`pages/researcher_profile.py`**: `years = [CURRENT_YEAR-2, CURRENT_YEAR-1,
+CURRENT_YEAR]`(달력연도)를 `sorted(evaluation_years()[0])`(회계연도, 3월
+기준)로 교체 — 안 그러면 1~2월엔 화면이 찾는 연도와 evaluations.csv에
+실제로 있는 컬럼이 어긋난다. 나이 계산 등에 쓰는 `CURRENT_YEAR` 자체는
+달력연도 그대로 유지(이번 요청과 무관).
+
+**`pages/researcher_list.py`**: 모듈 상단에 `_EVAL_SALARY_YEARS`(오름차순)/
+`_EVAL_GRADE_COLUMNS`(`"'24평가"` 형태, 동적)를 계산해두고, `_grade()`
+조회 로직과 `_GRADE_STYLES`(조건부 배경색) 둘 다 이 동적 목록을 쓰도록
+교체. 이 표는 "직급/직무" 같은 정량 지표 나열이 목적이라, 프로필/엑셀과
+달리 상/하반기업적을 합성하지 않고 연봉등급만 표시(사용자 확인: 하드코딩
+연도만 동적으로 바꾸면 됨, 서식 자체는 그대로).
+
+**`services/data_labels.py`**: 없어진 `grade`/`score`(evaluations.csv)
+고정 라벨 항목을 지우고, `label_for()`에 `{연도}_salary_grade` 등 동적
+평가 컬럼명을 정규식으로 인식해 `"2026 연봉등급"`처럼 라벨링하는 분기
+추가(AI 검색 결과 테이블 헤더용).
+
+**알려진 미반영 항목**: `pages/org_comparison.py`(조직별 비교, 이미
+`_FEATURE_HIDDEN=True`로 항상 리다이렉트되는 죽은 코드)도 옛 long 포맷
+(`eva['year']`)을 그대로 쓰고 있어 이번 변경으로 논리상 깨졌다. 지금은
+도달 불가능한 코드라 당장 영향은 없지만, 나중에 이 기능을 다시 켠다면
+`pages/researcher_list.py`와 같은 방식으로 같이 고쳐야 한다.
+
+검증: `services/evaluations.py`의 회계연도 계산을 2026-01/2026-03/
+2026-08/2027-01/2027-03 등 여러 날짜로 직접 호출해 3월 경계가 정확히
+지켜지는지, `format_evaluation_cell()`을 8가지 조합 전부 표로 돌려
+확정된 표기와 정확히 일치하는지 확인. `pipeline/process_tp_evaluation.py`를
+목(mock) T&P DataFrame(정상값/빈값/잘못된 값 섞음)으로 직접 실행해
+evaluations.csv가 wide로 정확히 저장되는지, 유효하지 않은 값만 선택적으로
+빈 칸 처리되는지 raw CSV 파일까지 열어 확인. `_col_evaluation()`/
+`evaluation_incentive_block()` 둘 다 목 데이터로 직접 호출해 8가지 조합
+전부(둘 다 있음/연봉등급만/반기만/전부 없음 등) 기대한 문자열·색상이
+나오는지 확인. `pages/researcher_list.py`의 `_build_summary_df()`를
+목 데이터로 실행해 동적 연도 컬럼명·조건부 스타일 규칙(15개 = 5등급×3년)이
+올바르게 생성되는지 확인. 관련 5개 파일 전부 `ast.parse`로 구문 확인,
+`pages.researcher_list`/`pages.researcher_profile`를 Dash 앱 컨텍스트에서
+직접 import해 모듈 로드 자체가 깨지지 않는지 확인. 이번 세션 컨테이너엔
+실제 T&P 원본 파일이 없어 진짜 파이프라인 재실행·브라우저 확인은
+못 했다 — 화면에 반영하려면 `python pipeline/process_tp_evaluation.py`
+(또는 전체 파이프라인)를 다시 실행해 evaluations.csv를 재생성해야 한다.

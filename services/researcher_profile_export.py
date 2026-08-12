@@ -19,12 +19,19 @@ from openpyxl.styles import Alignment, Border, Font, Side
 from openpyxl.utils import get_column_letter
 
 from components.timeline_data import dedupe_patents, job_points
-from services import data_store
+from services import data_store, evaluations
 
 _FONT_NAME = '바탕체'
 _FONT_SIZE = 11
 _THIN = Side(style='thin', color='000000')
 _BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
+
+# 평가('24~'26) 컬럼 — 회계연도(매년 3월 시작, services.evaluations 참고) 기준
+# 최근 3개년. 헤더 문자열은 모듈 임포트 시점에 한 번 계산(연 1회만 바뀌므로
+# 요청마다 다시 계산할 필요 없음 — 다른 회계연도 경계를 넘기려면 프로세스
+# 재시작만 있으면 됨, 이 앱의 다른 "현재 시점 기준" 값들과 동일한 전제).
+_EVAL_SALARY_YEARS, _EVAL_HALF_YEARS = evaluations.evaluation_years()
+_EVAL_HEADER = f"평가\n('{str(_EVAL_SALARY_YEARS[-1])[-2:]}~'{str(_EVAL_SALARY_YEARS[0])[-2:]})"
 
 _DEGREE_ORDER = ['박사', '석사', '학사']
 _DEGREE_CODE = {'박사': '박', '석사': '석', '학사': '학'}
@@ -152,9 +159,20 @@ def _col_education(_rid, rows):
 
 
 def _col_evaluation(_rid, rows):
-    grade_by_year = {_s(e.get('year')): _s(e.get('grade')) for e in rows['evaluations']}
-    parts = [grade_by_year.get(str(y)) or '-' for y in (2024, 2025, 2026)]
-    return '/'.join(parts)
+    """평가 — 연봉등급 3개년을 첫 줄에 "다/다/다", 그에 대응하는(각 연봉등급
+    연도 - 1) 상/하반기업적 3개년을 둘째 줄에 "(MT/MT, MT/MT, MT/MT)"로 표시.
+    반기 값이 없는 자리는 evaluations.format_half_pair()가 '-'로 채운다."""
+    eva_rows = rows['evaluations']
+    eva = eva_rows[0] if eva_rows else {}
+    salary_line = '/'.join(_s(eva.get(evaluations.salary_grade_column(y))) or '-' for y in _EVAL_SALARY_YEARS)
+    half_line = '(' + ', '.join(
+        evaluations.format_half_pair(
+            _s(eva.get(evaluations.first_half_column(y))),
+            _s(eva.get(evaluations.second_half_column(y))),
+        )
+        for y in _EVAL_HALF_YEARS
+    ) + ')'
+    return f'{salary_line}\n{half_line}'
 
 
 def _col_position_year(_rid, rows):
@@ -342,7 +360,7 @@ _COLUMNS = [
     ('부서\n(과제)', _col_dept_task),
     ('입사일', _col_hire_date),
     ('학력', _col_education),
-    ("평가\n('24~'26)", _col_evaluation),
+    (_EVAL_HEADER, _col_evaluation),
     ('CL/년차', _col_position_year),
     ('직책', _col_position_title),
     ('과제수행이력', _col_tasks),
@@ -447,7 +465,7 @@ def person_base_table(researcher_ids: list) -> dict:
     return out
 
 
-_COLUMN_WIDTHS = [12, 14, 16, 18, 12, 26, 12, 12, 10, 34, 30, 22, 30]
+_COLUMN_WIDTHS = [12, 14, 16, 18, 12, 26, 22, 12, 10, 34, 30, 22, 30]
 _EXPERTISE_COLUMN_WIDTH = 26
 _PATENT_COLUMN_WIDTH = 40
 _PUBLICATION_COLUMN_WIDTH = 40

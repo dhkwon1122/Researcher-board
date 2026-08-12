@@ -13,6 +13,7 @@ from dash import Input, Output, State, callback, dash_table, dcc, html, no_updat
 from components.timeline_data import dedupe_patents
 from services import researcher_profile_export
 from services.data_store import read_processed
+from services.evaluations import evaluation_years, salary_grade_column
 
 dash.register_page(
     __name__,
@@ -22,6 +23,11 @@ dash.register_page(
 )
 
 _CURRENT_YEAR = datetime.now().year
+
+# 평가등급 컬럼("'24평가" 등)의 연도 — evaluations.csv와 동일한 회계연도
+# 기준(매년 3월 시작, services.evaluations)으로 오름차순(과거→최신) 계산.
+_EVAL_SALARY_YEARS = sorted(evaluation_years()[0])
+_EVAL_GRADE_COLUMNS = [f"'{str(y)[-2:]}평가" for y in _EVAL_SALARY_YEARS]
 
 # ── 학위 우선순위 ─────────────────────────────────────────────────────────────
 _DEGREE_RANK = {'박사': 5, '석사': 4, '학사': 3, '전문대': 2, '고교': 1}
@@ -55,8 +61,6 @@ def _build_summary_df() -> pd.DataFrame:
     # pub_year가 없으면 pub_date 앞 4자리에서 파생
     if 'pub_year' not in pub.columns and 'pub_date' in pub.columns:
         pub['pub_year'] = pd.to_numeric(pub['pub_date'].str[:4], errors='coerce')
-    if 'year' in eva.columns:
-        eva['year'] = pd.to_numeric(eva['year'], errors='coerce')
     if 'year' in inc.columns:
         inc['year'] = pd.to_numeric(inc['year'], errors='coerce')
 
@@ -64,12 +68,15 @@ def _build_summary_df() -> pd.DataFrame:
     for _, r in res.iterrows():
         rid = r['researcher_id']
 
-        # ── 평가 등급 ──────────────────────────────────────────────────────
-        ev = eva[eva['researcher_id'] == rid]
+        # ── 평가 등급(연봉등급만 — 상/하반기업적은 이 표에 넣지 않음) ────────
+        ev_rows = eva[eva['researcher_id'] == rid]
+        ev = ev_rows.iloc[0] if not ev_rows.empty else None
         def _grade(yr):
-            s = ev[ev['year'] == yr]
-            return s.iloc[0]['grade'] if not s.empty else '-'
-        g24, g25, g26 = _grade(2024), _grade(2025), _grade(2026)
+            if ev is None:
+                return '-'
+            val = str(ev.get(salary_grade_column(yr), '') or '').strip()
+            return val if val and val.lower() != 'nan' else '-'
+        grades = {col: _grade(yr) for col, yr in zip(_EVAL_GRADE_COLUMNS, _EVAL_SALARY_YEARS)}
 
         # ── 인센티브 ───────────────────────────────────────────────────────
         sel = inc[inc['researcher_id'] == rid]
@@ -121,9 +128,7 @@ def _build_summary_df() -> pd.DataFrame:
             '성별':           str(r.get('gender', '')),
             '학력(최종)':     highest,
             '전공':           major,
-            "'24평가":        g24,
-            "'25평가":        g25,
-            "'26평가":        g26,
+            **grades,
             '인센티브':       inc_cat,
             '논문(전체)':     pub_total,
             '논문(3년)':      pub_3yr,
@@ -171,7 +176,7 @@ _GRADE_COLOR = {
 _GRADE_STYLES = [
     {'if': {'filter_query': f'{{{col}}} = {grade}', 'column_id': col},
      'backgroundColor': bg, 'color': fg}
-    for col in ["'24평가", "'25평가", "'26평가"]
+    for col in _EVAL_GRADE_COLUMNS
     for grade, (bg, fg) in _GRADE_COLOR.items()
 ]
 

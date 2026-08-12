@@ -28,6 +28,7 @@ from services.data_store import (
     read_profile_tables,
     read_similar_researchers,
 )
+from services.evaluations import evaluation_years
 
 dash.register_page(
     __name__,
@@ -339,7 +340,11 @@ def update_profile(rid):
         if rows.empty:
             return _empty_profile_output()
         researcher = rows.iloc[0]
-        years = [CURRENT_YEAR - 2, CURRENT_YEAR - 1, CURRENT_YEAR]
+        # 평가등급 표의 연도 열 — evaluations.csv가 생성될 때와 동일한 회계연도
+        # 기준(매년 3월 시작, services.evaluations)이어야 CSV의 실제 컬럼과
+        # 항상 맞아떨어진다(달력연도 CURRENT_YEAR를 그대로 쓰면 1~2월에 어긋남).
+        salary_years, _half_years = evaluation_years()
+        years = sorted(salary_years)
         leadership_options, leadership_default = leadership_year_options(tables['leadership'], rid)
         profile = read_expertise_profiles().get(rid)
         similar = read_similar_researchers().get(rid, {}).get('similar', [])
