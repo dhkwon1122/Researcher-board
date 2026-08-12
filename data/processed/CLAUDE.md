@@ -1961,3 +1961,45 @@ Playwright(Chromium)로 열어 — 초기 상태에서 카드 2개·부서 헤�
 확인하지는 못했다 — 화면에 반영하려면 `process_researcher_expertise.py`/
 `process_researcher_similarity.py`를 다시 실행해 두 HTML을 재생성해야
 한다(직전 완료 항목과 동일한 제약).
+
+## 완료: 엑셀 다운로드에 "직무"/"직무이력" 선택 컬럼 추가
+
+"AI검색, 연구원 명단 엑셀 다운로드 시 직무(researchers.csv의
+job_function), 직무이력(job_profile.csv)을 선택적으로 다운받을 수
+있도록 해줘" 요청. 특허/논문과 같은 성격(LLM 산출물이 아닌 원천 데이터)
+이지만, 사용자가 명시적으로 "선택적으로"라고 했고 서로 다른 두 출처
+(researchers.csv 단일 값 vs job_profile.csv 이력)라 특허/논문처럼
+독립적인 체크박스 2개("직무 포함"/"직무이력 포함")로 추가했다.
+
+**`services/researcher_profile_export.py`**: `build_profile_workbook()`
+공용 함수라 여기 한 곳만 고치면 AI 검색/연구원 명단 다운로드 둘 다 반영.
+- `components.timeline_data.job_points()`(이미 있던 job_profile.csv wide
+  포맷 파서 — researcher_profile.py 타임라인이 쓰는 것과 동일 로직) 재사용.
+- `_load_tables()`/`_researcher_row_context()`에 `job_profile`
+  (DataFrame, `job_profile_df` 키 — `_df_for()`로 필터링, dedupe_patents
+  처럼 DataFrame 그대로 필요) 추가.
+- `_col_job_function(_rid, rows)` 신규 — `researcher.job_function` 값
+  그대로(단일 값이라 다른 컬럼처럼 목록 서식 불필요).
+- `_col_job_profile(_rid, rows)` 신규 — `job_points()`로 슬롯을 푼 뒤
+  시작일 내림차순 정렬, `"직무명('YY ~ 'YY/현재)"`를 과제수행이력과 동일한
+  표기 규칙으로 줄바꿈 나열.
+- `_JOB_FUNCTION_COLUMNS`/`_JOB_PROFILE_COLUMNS`(각 컬럼 1개)를 기존
+  `_PATENT_COLUMNS`/`_PUBLICATION_COLUMNS`와 같은 패턴으로 추가.
+- `build_profile_workbook()`에 `include_job_function=False`/
+  `include_job_profile=False` 파라미터 추가, 특허 → 논문 → 직무 → 직무이력
+  → (항상 마지막) 보유 전문성 순으로 옵트인 컬럼을 붙인다.
+
+**`components/nl_query_bar.py`/`pages/researcher_list.py`**: 기존
+3옵션(보유 전문성/특허/논문) 체크리스트에 "직무 포함"/"직무이력 포함"
+2개를 추가(총 5옵션, 전부 기본 해제). 두 다운로드 콜백 모두
+`'job_function'/'job_profile' in excel_options`를 새 파라미터로 그대로
+전달.
+
+검증: `_load_tables()`를 목 데이터(job_function='SW개발', job_profile.csv
+2개 슬롯 — 하나는 종료일 있음, 하나는 진행중)로 몬키패치해
+`build_profile_workbook(include_job_function=True, include_job_profile=True)`
+실행 — 헤더에 "직무"/"직무이력" 추가, "직무" 셀 값, "직무이력" 셀이
+최신(진행중) 항목부터 내림차순으로 두 줄 나열되고 진행중 항목은 "현재"로
+표기되는지 openpyxl로 확인. 플래그 전부 기본값(False)일 때 기존 13개
+기본 컬럼만 나오는 것도 함께 확인. `nl_query_bar.render()`로 새
+체크리스트 5개 옵션이 레이아웃에 포함되는지 확인.

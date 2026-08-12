@@ -255,6 +255,8 @@ def layout():
                                 {'label': '보유 전문성 포함', 'value': 'expertise'},
                                 {'label': '특허 포함', 'value': 'patents'},
                                 {'label': '논문 포함', 'value': 'publications'},
+                                {'label': '직무 포함', 'value': 'job_function'},
+                                {'label': '직무이력 포함', 'value': 'job_profile'},
                             ],
                             value=[], switch=True,
                             className='small mt-1',
@@ -408,6 +410,8 @@ def download_excel(n_clicks, virtual_data, excel_options):
         include_expertise='expertise' in excel_options,
         include_patents='patents' in excel_options,
         include_publications='publications' in excel_options,
+        include_job_function='job_function' in excel_options,
+        include_job_profile='job_profile' in excel_options,
     )
     return dcc.send_bytes(data, researcher_profile_export.default_filename())
 
