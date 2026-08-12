@@ -21,7 +21,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 from dash import Input, Output, Patch, State, callback, dcc, html
 
-from services.data_store import DATA_DIR
+from components.detail_tabs import llm_summary_block
+from services.data_store import (
+    DATA_DIR, filter_current, read_expertise_profiles, read_processed, read_similar_researchers,
+)
 from services.similarity_map import (
     build_expertise_similarity_workbook, build_similarity_graph_elements,
     individual_search_options, load_similarity_map, org_tree_options,
@@ -199,6 +202,105 @@ def _iframe_tab(report_key: str, scroll_to: str | None = None):
         srcDoc=content,
         style={'width': '100%', 'height': '85vh', 'border': 'none'},
     )
+
+
+def _cumulative_person_options() -> list:
+    """누적기준 검색 옵션 — 전배·퇴사 등으로 최신 인력현황에 없는 사람도
+    포함(researchers.csv는 업서트로 적재돼 삭제되지 않으므로 filter_current로
+    걸러내지만 않으면 됨). individual_search_options()과 표기 규칙은 같지만
+    미소속자는 라벨에 표시를 붙인다."""
+    researchers_df = read_processed('researchers')
+    if researchers_df.empty:
+        return []
+    options = []
+    for _, row in researchers_df.sort_values(['department', 'name']).iterrows():
+        dept = str(row.get('department', '') or '').strip()
+        dept_suffix = f' [{dept}]' if dept else ''
+        not_current = str(row.get('is_current', 'Y')) == 'N'
+        suffix = ' — 현재 미소속' if not_current else ''
+        options.append({
+            'label': f"{row.get('name', '')}{dept_suffix} ({row['researcher_id']}){suffix}",
+            'value': row['researcher_id'],
+        })
+    return options
+
+
+def _cumulative_search_panel(report_key: str):
+    """누적기준: 정적 리포트(조직도 클릭 기반, 특정 파이프라인 실행 시점의
+    "현재" 조직 구조를 전제로 함)를 그대로 재사용할 수 없어, 조직도 탐색
+    대신 이름/사번 검색으로 고른 사람 한 명의 결과만 컴포넌트로 직접
+    렌더링한다. "연구원"/"연구원 ↔ 연구원" 두 탭 모두 강점 분야·키워드·
+    유사 연구원 배지를 함께 보여주는 llm_summary_block() 하나로 충분해
+    같은 렌더러를 공유한다(둘의 차이는 안내 문구뿐)."""
+    hint = (
+        '연구원 개인의 보유 전문성 요약을 봅니다.' if report_key == 'researcher'
+        else '연구원 개인의 보유 전문성과 함께, 그 사람과 유사한 연구원 목록도 함께 보여줍니다.'
+    )
+    return html.Div([
+        dbc.Alert(
+            '누적기준: 조직도 대신 이름/사번으로 검색합니다(전배·퇴사 등으로 '
+            '최신 인력현황에 없는 사람도 포함) — 조직 구조가 바뀌면 조직도 위치가 '
+            '더 이상 유효하지 않을 수 있어, 이 모드에서는 조직도 탐색을 지원하지 않습니다.',
+            color='secondary', className='small mb-3',
+        ),
+        html.P(hint, className='text-muted small mb-2'),
+        dcc.Dropdown(
+            id={'type': 'expertise-cumulative-search', 'tab': report_key},
+            options=_cumulative_person_options(),
+            placeholder='이름 또는 사번으로 검색',
+            clearable=True, searchable=True, style={'maxWidth': '420px'},
+            className='mb-3',
+        ),
+        html.Div(id={'type': 'expertise-cumulative-result', 'tab': report_key}),
+    ])
+
+
+def _render_cumulative_result(rid: str | None):
+    if not rid:
+        return html.Div('연구원을 검색해 선택하세요.', className='text-muted small p-2')
+    researchers = read_processed('researchers')
+    match = researchers[researchers['researcher_id'] == rid]
+    if match.empty:
+        return html.Div('연구원 정보를 찾을 수 없습니다.', className='text-muted small p-2')
+    researcher = match.iloc[0]
+    name_map = researchers.set_index('researcher_id')['name'].to_dict()
+    profile = read_expertise_profiles().get(rid)
+    similar = read_similar_researchers().get(rid, {}).get('similar', [])
+    # 조회 대상(rid)은 누적기준으로 미소속자도 허용하지만, 추천되는 유사
+    # 연구원 후보는 실제로 협업 가능한 사람이어야 하므로 항상 현재 소속자로
+    # 제한한다(설계 확정 — JOB Market과 같은 이유, 후보군만은 현재기준 고정).
+    current_researchers = filter_current(researchers, True)
+    current_ids = set(current_researchers['researcher_id'])
+    similar = [s for s in similar if s.get('researcher_id') in current_ids]
+
+    header = [html.Span(f"{researcher.get('name', '')} ({rid})", className='fw-semibold me-2')]
+    if str(researcher.get('is_current', 'Y')) == 'N':
+        header.append(dbc.Badge('현재 미소속', color='secondary'))
+    header.append(html.Span(
+        f" {researcher.get('department', '')} · {researcher.get('position', '')}",
+        className='text-muted small',
+    ))
+
+    return dbc.Card(
+        dbc.CardBody([
+            html.Div(header, className='mb-2'),
+            llm_summary_block(profile, similar, name_map),
+            dbc.Button(
+                [html.I(className='bi bi-person-badge-fill me-1'), '개별 프로필 열기'],
+                href=f'/researcher-profile?id={rid}', target='_top',
+                color='primary', outline=True, size='sm', className='mt-3',
+            ),
+        ]),
+        className='shadow-sm',
+    )
+
+
+@callback(
+    Output({'type': 'expertise-cumulative-result', 'tab': dash.MATCH}, 'children'),
+    Input({'type': 'expertise-cumulative-search', 'tab': dash.MATCH}, 'value'),
+)
+def _update_cumulative_result(rid):
+    return _render_cumulative_result(rid)
 
 
 _SEARCH_HIGHLIGHT_NAME = '__search_highlight__'
@@ -492,6 +594,11 @@ def _download_panel():
             className='mb-2 small',
         ),
         html.Div(
+            '누적기준에서는 조직도가 최신 상태를 보장하지 않아 "부서 선택(조직도)"를 사용할 수 없습니다.',
+            id='expertise-download-mode-hint', className='text-muted mb-2',
+            style={'fontSize': '0.72rem', 'display': 'none'},
+        ),
+        html.Div(
             dcc.Dropdown(
                 id='expertise-download-individual', options=individual_search_options(),
                 multi=True, placeholder='이름 또는 사번으로 검색(복수 선택 가능)',
@@ -544,6 +651,18 @@ def layout(highlight_researcher=None, **_kwargs):
             ],
             id='expertise-tabs', active_tab=default_tab, className='mb-3',
         ),
+        html.Div(
+            dbc.RadioItems(
+                id='expertise-search-mode',
+                options=[
+                    {'label': '최신기준 (조직도 탐색)', 'value': 'current'},
+                    {'label': '누적기준 (이름/사번 검색만)', 'value': 'all'},
+                ],
+                value='current', inline=True, className='small mb-2',
+            ),
+            id='expertise-search-mode-row',
+            style={'display': 'none'} if default_tab == 'map' else {'display': 'block'},
+        ),
         dcc.Loading(html.Div(
             id='expertise-tab-content',
             children=initial_content,
@@ -558,17 +677,21 @@ def layout(highlight_researcher=None, **_kwargs):
     Output('expertise-tab-content', 'children', allow_duplicate=True),
     Output('expertise-scroll-target', 'data', allow_duplicate=True),
     Input('expertise-tabs', 'active_tab'),
+    Input('expertise-search-mode', 'value'),
     State('expertise-pending-highlight', 'data'),
     State('expertise-scroll-target', 'data'),
     prevent_initial_call=True,
 )
-def _render_expertise_tab(active_tab, pending_highlight, scroll_target):
-    """탭 전환마다 해당 탭 콘텐츠를 지연 렌더링한다. 최초 진입 시(active_tab의
-    기본값 'map') 콘텐츠는 layout()이 이미 채워 두므로, 이 콜백은 prevent_initial_call
-    로 첫 로드 시에는 실행되지 않고 이후 탭 클릭에만 반응한다."""
+def _render_expertise_tab(active_tab, mode, pending_highlight, scroll_target):
+    """탭 전환·검색기준 전환마다 해당 탭 콘텐츠를 지연 렌더링한다. 최초 진입
+    시(active_tab의 기본값 'map', mode의 기본값 'current') 콘텐츠는 layout()이
+    이미 채워 두므로, 이 콜백은 prevent_initial_call로 첫 로드 시에는 실행되지
+    않고 이후 탭/모드 클릭에만 반응한다."""
     if active_tab == 'map':
         return _map_tab_content(highlighted_rid=pending_highlight), dash.no_update
     if active_tab in _REPORT_FILES:
+        if mode == 'all':
+            return _cumulative_search_panel(active_tab), dash.no_update
         content = _iframe_tab(active_tab, scroll_to=scroll_target if active_tab == 'researcher' else None)
         # 한 번 스크롤에 쓰고 나면 비워서, 이후 수동으로 탭을 다시 눌러도 매번
         # 같은 위치로 재스크롤되지 않게 한다.
@@ -578,12 +701,14 @@ def _render_expertise_tab(active_tab, pending_highlight, scroll_target):
 
 @callback(
     Output('expertise-download-panel', 'style'),
+    Output('expertise-search-mode-row', 'style'),
     Input('expertise-tabs', 'active_tab'),
 )
 def _toggle_download_panel(active_tab):
-    """다운로드 패널은 "연구원"/"연구원 ↔ 연구원" 탭에서만 의미가 있어(요청
-    범위) 전문성 MAP 탭에서는 숨긴다."""
-    return {'display': 'block'} if active_tab in _REPORT_FILES else {'display': 'none'}
+    """다운로드 패널·검색기준 토글은 "연구원"/"연구원 ↔ 연구원" 탭에서만
+    의미가 있어(요청 범위) 전문성 MAP 탭에서는 숨긴다."""
+    style = {'display': 'block'} if active_tab in _REPORT_FILES else {'display': 'none'}
+    return style, style
 
 
 @callback(
@@ -595,6 +720,28 @@ def _toggle_download_mode(mode):
     if mode == 'department':
         return {'display': 'none'}, {'display': 'block'}
     return {'display': 'block'}, {'display': 'none'}
+
+
+# 누적기준에서는 "부서 선택(조직도)" 다운로드 방식을 막는다 — 조직도 자체가
+# 최신 시점 구조를 전제로 해서 미소속자를 포함한 부서 단위 선택이 의미가
+# 없어질 수 있다(보유 전문성 조직도 탭과 동일한 이유).
+@callback(
+    Output('expertise-download-mode', 'options'),
+    Output('expertise-download-mode', 'value', allow_duplicate=True),
+    Output('expertise-download-mode-hint', 'style'),
+    Input('expertise-search-mode', 'value'),
+    State('expertise-download-mode', 'value'),
+    prevent_initial_call=True,
+)
+def _restrict_download_mode(search_mode, current_download_mode):
+    is_cumulative = (search_mode == 'all')
+    options = [
+        {'label': '개인별 검색', 'value': 'individual'},
+        {'label': '부서 선택(조직도)', 'value': 'department', 'disabled': is_cumulative},
+    ]
+    new_value = 'individual' if is_cumulative else dash.no_update
+    hint_style = {'fontSize': '0.72rem', 'display': 'block' if is_cumulative else 'none'}
+    return options, new_value, hint_style
 
 
 @callback(

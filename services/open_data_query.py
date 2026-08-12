@@ -97,6 +97,7 @@ Rules:
   single text value — use LIKE '%...%' against them, not exact equality.
 - If the question implies ranking/ordering (e.g. "가장 많은", "우수한"), include
   an ORDER BY. Otherwise omit ORDER BY.
+{current_only_rule}
 - Also propose ONE fallback for semantic retry, in case the SQL finds nothing:
   pick the single most likely (table, column, search term) where a loose,
   meaning-based match (not an exact keyword) might succeed instead of the SQL's
@@ -193,8 +194,26 @@ def _schema_prompt(tables: dict) -> str:
     return '\n'.join(f'{name}({", ".join(str(c) for c in df.columns)})' for name, df in tables.items())
 
 
-def _generate_sql(question: str, schema: str, max_wait) -> dict | None:
-    system = query_settings.apply(_SQL_GEN_SYSTEM_TEMPLATE.format(schema=schema))
+_CURRENT_ONLY_RULE = (
+    "- The researchers table has an is_current column ('Y' if this person is "
+    "in the latest headcount snapshot, 'N' if they've since transferred out or "
+    "left and are no longer active — the row is kept for history, not deleted). "
+    "Unless the question explicitly asks about people who left/transferred/are "
+    "no longer active, or asks for historical/all-time/cumulative data, ALWAYS "
+    "add a condition restricting to is_current = 'Y' (directly if the query "
+    "selects from researchers, or via a join/subquery filter on researcher_id "
+    "otherwise)."
+)
+_CUMULATIVE_RULE = (
+    "- Do NOT filter by the researchers table's is_current column — the user "
+    "explicitly asked for cumulative/all-time results, which should include "
+    "people who have since transferred out or left."
+)
+
+
+def _generate_sql(question: str, schema: str, max_wait, current_only: bool = True) -> dict | None:
+    rule = _CURRENT_ONLY_RULE if current_only else _CUMULATIVE_RULE
+    system = query_settings.apply(_SQL_GEN_SYSTEM_TEMPLATE.format(schema=schema, current_only_rule=rule))
     raw = llm_client.call_llm(question, system, temperature=0.0, max_tokens=700, max_wait=max_wait)
     if not raw:
         return None
@@ -309,8 +328,10 @@ def _semantic_fallback(con, table: str, column: str, term: str) -> tuple | None:
     return select_sql, columns, rows
 
 
-def answer(question: str) -> dict:
-    """질문 → {intent, sql, columns, rows(최대 50건), total_rows, source, note}."""
+def answer(question: str, current_only: bool = True) -> dict:
+    """질문 → {intent, sql, columns, rows(최대 50건), total_rows, source, note}.
+    current_only=False(누적기준)면 SQL 생성 지시문에서 is_current 필터를
+    빼서 전배·퇴사 등으로 최신 인력현황에 없는 사람도 조회 대상에 포함한다."""
     question = (question or '').strip()
     if not question:
         return {'intent': 'open_data_query', 'columns': [], 'rows': [], 'note': '질문을 입력해주세요.'}
@@ -323,7 +344,7 @@ def answer(question: str) -> dict:
 
     schema = _schema_prompt(tables)
     max_wait = getattr(_llm_cfg, 'LLM2_QUERY_MAX_WAIT_SECONDS', 15) if _llm_cfg else 15
-    gen = _generate_sql(question, schema, max_wait)
+    gen = _generate_sql(question, schema, max_wait, current_only=current_only)
     if gen is None:
         return {'intent': 'open_data_query', 'columns': [], 'rows': [],
                 'note': '지금 요청이 많거나 질문을 조회문으로 바꾸지 못했습니다. '

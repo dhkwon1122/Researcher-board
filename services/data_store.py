@@ -83,6 +83,22 @@ def read_strength_taxonomy() -> dict:
         return json.load(f)
 
 
+def filter_current(df: pd.DataFrame, current_only: bool = True) -> pd.DataFrame:
+    """researchers.csv(또는 이를 기반으로 만든 DataFrame)에서 "현재 소속자만"
+    볼지 "누적(한 번이라도 등록된 적 있는 전체 인원)"으로 볼지를 결정한다.
+
+    researchers.csv는 업서트로 적재되어(pipeline/process_researchers.py)
+    전배·퇴사 등으로 최신 원본 파일에서 빠진 사람도 삭제되지 않고 남아있다
+    — is_current 컬럼이 그 사람이 가장 최근 인원실적월 기준으로도 소속돼
+    있었는지(Y) 아닌지(N)를 나타낸다. current_only=True면 is_current=='Y'
+    행만, False면 전체(과거에 한 번이라도 있었던 사람 포함)를 반환한다.
+    is_current 컬럼이 없으면(구버전 데이터/원본에 인원실적년월 컬럼이 없는
+    경우) 판단 근거가 없으므로 필터 없이 그대로 반환한다."""
+    if not current_only or 'is_current' not in df.columns or df.empty:
+        return df
+    return df[df['is_current'] != 'N'].reset_index(drop=True)
+
+
 def read_profile_tables() -> dict[str, pd.DataFrame]:
     names = [
         'researchers',

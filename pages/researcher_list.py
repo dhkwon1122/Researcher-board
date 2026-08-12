@@ -12,7 +12,7 @@ from dash import Input, Output, State, callback, dash_table, dcc, html, no_updat
 
 from components.timeline_data import dedupe_patents
 from services import researcher_profile_export
-from services.data_store import read_processed
+from services.data_store import filter_current, read_processed
 from services.evaluations import evaluation_years, salary_grade_column
 
 dash.register_page(
@@ -33,8 +33,11 @@ _EVAL_GRADE_COLUMNS = [f"'{str(y)[-2:]}평가" for y in _EVAL_SALARY_YEARS]
 _DEGREE_RANK = {'박사': 5, '석사': 4, '학사': 3, '전문대': 2, '고교': 1}
 
 
-def _build_summary_df() -> pd.DataFrame:
-    """CSV들을 집계하여 연구원 1인 1행의 요약 DataFrame 반환."""
+def _build_summary_df(current_only: bool = True) -> pd.DataFrame:
+    """CSV들을 집계하여 연구원 1인 1행의 요약 DataFrame 반환.
+    current_only=False(누적기준)면 전배·퇴사 등으로 최신 인력현황에 없는
+    사람도 포함하고, 그 경우에만 '현재소속' 열을 추가로 붙인다(최신기준에서는
+    전원이 '현재'라 의미가 없어 열 자체를 안 만든다)."""
     try:
         res  = read_processed('researchers')
         eva  = read_processed('evaluations')
@@ -46,6 +49,8 @@ def _build_summary_df() -> pd.DataFrame:
         team = read_processed('team_refer')
     except Exception:
         return pd.DataFrame()
+
+    res = filter_current(res, current_only)
 
     # 직책 = team_refer.csv의 assignment_name(researcher_id 기준, 조직장급만
     # 등록돼 있어 나머지는 매핑이 없음 — 그 경우 "-").
@@ -118,7 +123,7 @@ def _build_summary_df() -> pd.DataFrame:
             highest = '-'
             major = '-'
 
-        rows.append({
+        row = {
             'researcher_id': rid,
             '이름':           str(r.get('name', '')),
             '부서':           str(r.get('department', '')),
@@ -136,7 +141,10 @@ def _build_summary_df() -> pd.DataFrame:
             '특허(출원)':     pat_app,
             '특허(등록)':     pat_reg,
             '수상':           awd_cnt,
-        })
+        }
+        if not current_only:
+            row['현재소속'] = '미소속' if str(r.get('is_current', 'Y')) == 'N' else '현재'
+        rows.append(row)
 
     return pd.DataFrame(rows)
 
@@ -181,8 +189,17 @@ _GRADE_STYLES = [
 ]
 
 
+def _build_columns(df: pd.DataFrame) -> list:
+    return [
+        {'name': col, 'id': col,
+         'type': 'numeric' if col in ('논문(전체)', '논문(3년)', '특허(출원)', '특허(등록)', '수상') else 'text'}
+        for col in df.columns if col != 'researcher_id'
+    ]
+    # 평균IF도 혼합값(숫자/'-')이 있어 text로 유지
+
+
 def layout():
-    df = _build_summary_df()
+    df = _build_summary_df(current_only=True)
 
     dept_opts    = _filter_options(df, '부서')
     project_opts = _project_options()
@@ -190,12 +207,7 @@ def layout():
     degree_opts  = _filter_options(df, '학력(최종)')
     inc_opts     = _filter_options(df, '인센티브')
 
-    columns = [
-        {'name': col, 'id': col,
-         'type': 'numeric' if col in ('논문(전체)', '논문(3년)', '특허(출원)', '특허(등록)', '수상') else 'text'}
-        for col in df.columns if col != 'researcher_id'
-    ]
-    # 평균IF도 혼합값(숫자/'-')이 있어 text로 유지
+    columns = _build_columns(df)
 
     return html.Div([
         dcc.Location(id='list-url', refresh=True),
@@ -221,6 +233,23 @@ def layout():
         dbc.Card(
             dbc.CardBody(
                 dbc.Row([
+                    dbc.Col([
+                        dbc.Label('검색 기준', className='small fw-semibold text-muted mb-1'),
+                        dbc.RadioItems(
+                            id='list-search-mode',
+                            options=[
+                                {'label': '최신기준', 'value': 'current'},
+                                {'label': '누적기준', 'value': 'all'},
+                            ],
+                            value='current',
+                            inline=True,
+                            className='small',
+                        ),
+                        html.Div(
+                            '누적기준: 이름/사번 검색 중심 (부서·과제·직급 필터 비활성화)',
+                            className='text-muted', style={'fontSize': '0.72rem'},
+                        ),
+                    ], md=2),
                     dbc.Col([
                         dbc.Label('부서', className='small fw-semibold text-muted mb-1'),
                         dcc.Dropdown(id='filter-dept', options=dept_opts, multi=True,
@@ -346,14 +375,38 @@ def update_project_options(dept):
     return _project_options(dept)
 
 
+# ── 콜백 1-1: 검색 기준(현재/누적) → 부서·과제·직급 필터 비활성화 ──────────────
+# 누적기준에서는 조직 배치(부서/과제/직급)가 최신 시점 기준이 아닐 수 있어
+# 혼란을 줄 수 있으므로 비활성화하고 값도 비운다 — 이름/사번(테이블 자체
+# 필터 행)으로만 찾도록 유도한다. 학력/인센티브는 시점에 덜 민감해 그대로 둔다.
+@callback(
+    Output('filter-dept', 'disabled'),
+    Output('filter-project', 'disabled'),
+    Output('filter-pos', 'disabled'),
+    Output('filter-dept', 'value', allow_duplicate=True),
+    Output('filter-project', 'value', allow_duplicate=True),
+    Output('filter-pos', 'value', allow_duplicate=True),
+    Input('list-search-mode', 'value'),
+    prevent_initial_call=True,
+)
+def toggle_org_filters(mode):
+    is_cumulative = (mode == 'all')
+    if is_cumulative:
+        return True, True, True, None, None, None
+    return False, False, False, no_update, no_update, no_update
+
+
 # ── 콜백 2: 검색 버튼(필터 적용) / 필터 초기화 버튼 → 테이블 데이터 갱신 ──────
 # 드롭다운 값은 State로만 읽는다 — 선택하는 즉시가 아니라 검색 아이콘을 눌러야
 # 테이블에 반영된다(사용자 확정). 필터 초기화 버튼은 이 콜백에도 함께 연결해,
 # 눌렀을 때 드롭다운 값과 무관하게 항상 전체 목록으로 되돌아가게 한다.
 @callback(
     Output('researcher-table', 'data'),
+    Output('researcher-table', 'columns'),
+    Output('researcher-table', 'tooltip_header'),
     Input('list-search-btn',   'n_clicks'),
     Input('clear-filters-btn', 'n_clicks'),
+    Input('list-search-mode',  'value'),
     State('filter-dept',      'value'),
     State('filter-project',   'value'),
     State('filter-pos',       'value'),
@@ -361,23 +414,31 @@ def update_project_options(dept):
     State('filter-incentive', 'value'),
     prevent_initial_call=True,
 )
-def update_table(_search_clicks, _clear_clicks, dept, project, pos, degree, incentive):
-    df = _build_summary_df()
+def update_table(_search_clicks, _clear_clicks, mode, dept, project, pos, degree, incentive):
+    current_only = (mode != 'all')
+    df = _build_summary_df(current_only=current_only)
+    columns = _build_columns(df)
+    tooltip_header = {c['id']: c['id'] for c in columns}
     if df.empty:
-        return []
-    if dash.ctx.triggered_id == 'clear-filters-btn':
-        return df.to_dict('records')
-    if dept:
+        return [], columns, tooltip_header
+
+    triggered = dash.ctx.triggered_id
+    # 모드 전환 자체가 트리거면(부서/과제/직급 필터가 비활성화·초기화되는
+    # 시점과 겹칠 수 있어) 조직 필터는 적용하지 않고 전체(해당 모드) 목록을 보여준다.
+    if triggered in ('clear-filters-btn', 'list-search-mode'):
+        return df.to_dict('records'), columns, tooltip_header
+
+    if dept and current_only:
         df = df[df['부서'].isin(dept)]
-    if project:
+    if project and current_only:
         df = df[df['과제'].isin(project)]
-    if pos:
+    if pos and current_only:
         df = df[df['직급'].isin(pos)]
     if degree:
         df = df[df['학력(최종)'].isin(degree)]
     if incentive:
         df = df[df['인센티브'].isin(incentive)]
-    return df.to_dict('records')
+    return df.to_dict('records'), columns, tooltip_header
 
 
 # ── 콜백 3: 필터 초기화 버튼 → 드롭다운 값 비우기 ────────────────────────────

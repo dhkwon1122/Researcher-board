@@ -23,6 +23,7 @@ from components.profile_sections import (
 from components.timeline_view import timeline_view
 from services.comments import upsert_comment
 from services.data_store import (
+    filter_current,
     read_expertise_profiles,
     read_processed,
     read_profile_tables,
@@ -53,21 +54,29 @@ TABS_CONTENT_HEIGHT = 260
 LLM_SUMMARY_HEIGHT = 150
 
 
-def _load_selector_data():
-    try:
-        res_df = read_processed('researchers').sort_values(['department', 'name'])
-        if res_df.empty:
-            return [], [], {}
+def _opt(row):
+    dept = str(row.get('department', '') or '').strip()
+    org = str(row.get('org_code', '') or '').strip()
+    tag = ' · '.join(v for v in (dept, org) if v)
+    tag_suffix = f' [{tag}]' if tag else ''
+    not_current = str(row.get('is_current', 'Y')) == 'N'
+    suffix = ' — 현재 미소속' if not_current else ''
+    return {
+        'label': f'{row["name"]}{tag_suffix}  ({row["researcher_id"]}) — {row["position"]}{suffix}',
+        'value': row['researcher_id'],
+    }
 
-        def _opt(row):
-            dept = str(row.get('department', '') or '').strip()
-            org = str(row.get('org_code', '') or '').strip()
-            tag = ' · '.join(v for v in (dept, org) if v)
-            tag_suffix = f' [{tag}]' if tag else ''
-            return {
-                'label': f'{row["name"]}{tag_suffix}  ({row["researcher_id"]}) — {row["position"]}',
-                'value': row['researcher_id'],
-            }
+
+def _load_selector_data(current_only: bool = True):
+    """current_only=True(최신기준)면 현재 소속자만, False(누적기준)면 전배·퇴사
+    등으로 최신 인력현황에 없는 사람까지 전부 포함해 검색 옵션을 만든다.
+    dept_opts(조직 드롭다운)는 항상 전체(all-time) 부서 목록으로 만들어 모드가
+    바뀌어도 그 자체는 다시 계산할 필요가 없게 한다."""
+    try:
+        full_df = read_processed('researchers').sort_values(['department', 'name'])
+        if full_df.empty:
+            return [], [], {}
+        res_df = filter_current(full_df, current_only)
 
         all_opts = [_opt(row) for _, row in res_df.iterrows()]
         by_dept = {
@@ -75,7 +84,7 @@ def _load_selector_data():
             for dept, grp in res_df.groupby('department', sort=True)
         }
         dept_opts = [{'label': '전체', 'value': ''}] + [
-            {'label': d, 'value': d} for d in sorted(by_dept)
+            {'label': d, 'value': d} for d in sorted(full_df['department'].dropna().unique()) if d
         ]
         return dept_opts, all_opts, by_dept
     except Exception:
@@ -83,28 +92,37 @@ def _load_selector_data():
 
 
 def layout(id=None, **_kwargs):
-    dept_opts, all_opts, by_dept = _load_selector_data()
+    default_mode = 'current'
+    dept_opts, all_opts, by_dept = _load_selector_data(current_only=True)
     default_rid = all_opts[0]['value'] if all_opts else None
     default_dept = ''
     res_opts = all_opts
 
-    if id is not None and any(o['value'] == id for o in all_opts):
-        default_rid = id
-        try:
-            res_df = read_processed('researchers')
-            match = res_df[res_df['researcher_id'] == id]
-            if not match.empty:
-                default_dept = str(match.iloc[0].get('department', ''))
-                res_opts = by_dept.get(default_dept, all_opts)
-        except Exception:
-            pass
+    if id is not None:
+        # 딥링크로 들어온 id가 최신기준 목록에 없으면(예: 연구원 명단 누적기준
+        # 화면에서 미소속자를 클릭해 넘어온 경우) 누적기준으로 다시 찾아본다 —
+        # 안 그러면 그 사람 대신 엉뚱한 첫 번째 사람이 열린다.
+        if not any(o['value'] == id for o in all_opts):
+            dept_opts, all_opts, by_dept = _load_selector_data(current_only=False)
+            if any(o['value'] == id for o in all_opts):
+                default_mode = 'all'
+        if any(o['value'] == id for o in all_opts):
+            default_rid = id
+            try:
+                res_df = read_processed('researchers')
+                match = res_df[res_df['researcher_id'] == id]
+                if not match.empty:
+                    default_dept = str(match.iloc[0].get('department', ''))
+                    res_opts = by_dept.get(default_dept, all_opts)
+            except Exception:
+                pass
 
     return html.Div([
         html.H5(
             [html.I(className='bi bi-person-badge-fill me-2 text-primary'), '연구원 개별 프로필'],
             className='fw-bold mb-3 mt-1',
         ),
-        _selector_card(dept_opts, res_opts, default_dept, default_rid),
+        _selector_card(dept_opts, res_opts, default_dept, default_rid, default_mode),
         dbc.Row([
             _left_stack_col(),
             _right_column(),
@@ -112,10 +130,23 @@ def layout(id=None, **_kwargs):
     ])
 
 
-def _selector_card(dept_opts, res_opts, default_dept, default_rid):
+def _selector_card(dept_opts, res_opts, default_dept, default_rid, default_mode='current'):
     return dbc.Card(
         dbc.CardBody([
             dbc.Row([
+                dbc.Col([
+                    dbc.Label('검색 기준', className='fw-semibold small text-muted mb-1'),
+                    dbc.RadioItems(
+                        id='profile-search-mode',
+                        options=[
+                            {'label': '최신기준', 'value': 'current'},
+                            {'label': '누적기준', 'value': 'all'},
+                        ],
+                        value=default_mode,
+                        inline=True,
+                        className='small',
+                    ),
+                ], width='auto'),
                 dbc.Col([
                     dbc.Label('조직', className='fw-semibold small text-muted mb-1'),
                     dcc.Dropdown(
@@ -139,6 +170,7 @@ def _selector_card(dept_opts, res_opts, default_dept, default_rid):
                     ),
                 ]),
             ], align='end', className='g-3'),
+            html.Div(id='profile-current-status', className='small mt-2'),
             html.Div([
                 html.Span('최근 검색', className='small fw-semibold text-muted me-2'),
                 html.Div(id='researcher-history-chips', className='d-inline-flex flex-wrap'),
@@ -300,7 +332,23 @@ def _empty_profile_output():
     prompt = html.Div('연구원을 선택하세요.', className='text-muted p-3')
     return (
         avatar('?'), html.Div(), html.Div(), html.Div(), html.Div(),
-        [], None, html.Div(), prompt, prompt, prompt,
+        [], None, html.Div(), prompt, prompt, prompt, html.Div(),
+    )
+
+
+def _current_status_badge(researcher):
+    """researchers.csv의 is_current/valid_year/valid_month로 "현재 미소속" 배지를
+    만든다. is_current 컬럼이 없거나 'N'이 아니면(현재 소속이거나 판단 불가) 빈
+    Div — 화면에 아무것도 안 보인다."""
+    is_current = str(researcher.get('is_current', 'Y'))
+    if is_current != 'N':
+        return html.Div()
+    yr = str(researcher.get('valid_year', '') or '').strip()
+    mo = str(researcher.get('valid_month', '') or '').strip()
+    period = f' (마지막 확인: {yr}-{mo})' if yr and mo else ''
+    return dbc.Alert(
+        f'현재 미소속(최신 인력현황에 없음){period} — 누적기준 검색으로 조회된 이력입니다.',
+        color='secondary', className='py-1 px-2 mb-0 d-inline-block',
     )
 
 
@@ -308,11 +356,12 @@ def _empty_profile_output():
     Output('researcher-select', 'options'),
     Output('researcher-select', 'value'),
     Input('dept-select', 'value'),
+    Input('profile-search-mode', 'value'),
     State('researcher-select', 'value'),
     prevent_initial_call=True,
 )
-def filter_by_dept(dept, current_rid):
-    _, all_opts, by_dept = _load_selector_data()
+def filter_by_dept(dept, mode, current_rid):
+    _, all_opts, by_dept = _load_selector_data(current_only=(mode != 'all'))
     opts = by_dept.get(dept, all_opts) if dept else all_opts
     valid_ids = {o['value'] for o in opts}
     new_value = current_rid if current_rid in valid_ids else (opts[0]['value'] if opts else None)
@@ -404,6 +453,7 @@ def _select_from_history(n_clicks_list, ids):
     Output('llm-summary-block', 'children'),
     Output('tab-timeline', 'children'),
     Output('tab-expertise', 'children'),
+    Output('profile-current-status', 'children'),
     Input('researcher-select', 'value'),
 )
 def update_profile(rid):
@@ -445,6 +495,7 @@ def update_profile(rid):
             timeline_view(tables['tasks'], tables['hr_orders'], tables['publications'],
                           tables['patents'], tables['job_profile'], tables['tasks_information'], rid),
             owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid),
+            _current_status_badge(researcher),
         )
     except Exception as exc:
         import traceback
@@ -456,7 +507,7 @@ def update_profile(rid):
         )
         return (
             avatar('?'), err_div, html.Div(), html.Div(), html.Div(),
-            [], None, html.Div(), err_div, err_div, err_div,
+            [], None, html.Div(), err_div, err_div, err_div, html.Div(),
         )
 
 

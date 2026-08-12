@@ -211,7 +211,8 @@ def _build_table_result(intent: str, items: list, column_order: list, note: str 
     }
 
 
-def find_researchers_by_expertise(terms: list, department_filter: str = '', top_k: int = DEFAULT_TOP_K) -> dict:
+def find_researchers_by_expertise(terms: list, department_filter: str = '', top_k: int = DEFAULT_TOP_K,
+                                   current_only: bool = True) -> dict:
     terms = [str(t).strip() for t in (terms or []) if str(t).strip()]
     if not terms:
         return _empty_table_result('find_researchers_by_expertise', '질문에서 찾을 전문성 키워드를 확인하지 못했습니다.')
@@ -228,6 +229,10 @@ def find_researchers_by_expertise(terms: list, department_filter: str = '', top_
         indexed = researchers_df.set_index('researcher_id')
         name_map = indexed['name'].to_dict()
         dept_map = indexed['department'].to_dict()
+    # AI 검색 기본은 현재 소속자만(최신기준) — 누적기준을 고르면 전배·퇴사
+    # 등으로 최신 인력현황에 없는 사람도 후보에 포함한다.
+    allowed_ids = set(data_store.filter_current(researchers_df, current_only)['researcher_id']) \
+        if not researchers_df.empty else None
 
     taxonomy = data_store.read_strength_taxonomy()
     raw_pool: set = set()
@@ -248,6 +253,8 @@ def find_researchers_by_expertise(terms: list, department_filter: str = '', top_
     dept_filter = (department_filter or '').strip().lower()
     scored = []
     for rid, profile in profiles.items():
+        if allowed_ids is not None and rid not in allowed_ids:
+            continue
         if dept_filter and dept_filter not in str(dept_map.get(rid, '')).lower():
             continue
         rvals = set(profile.get('strength_fields') or []) | set(profile.get('strength_keywords') or [])
@@ -296,14 +303,21 @@ def _resolve_researcher(query: str, researchers_df: pd.DataFrame) -> list:
     return contains['researcher_id'].tolist()
 
 
-def find_similar_researchers(researcher_query: str, top_k: int = DEFAULT_TOP_K) -> dict:
+def find_similar_researchers(researcher_query: str, top_k: int = DEFAULT_TOP_K,
+                              current_only: bool = True) -> dict:
     """특정 연구원과 전문성이 유사한 다른 연구원을 찾는다. LLM 판정까지 이미
     끝난 pipeline/process_researcher_similarity.py의 배치 결과
     (researcher_similarity.json)를 그대로 조회할 뿐, 여기서 새로 유사도를
-    계산하지 않는다."""
+    계산하지 않는다.
+
+    current_only=False(누적기준)면 조회 대상(researcher_query가 가리키는
+    사람)은 전배·퇴사자도 찾을 수 있다 — 다만 추천되는 유사 연구원 후보는
+    실제로 협업 가능한 사람이어야 하므로 이 값과 무관하게 항상 현재
+    소속자로만 제한한다(JOB Market과 같은 원칙)."""
     top_k = min(top_k or DEFAULT_TOP_K, MAX_TOP_K)
     researchers_df = data_store.read_processed('researchers')
-    candidates = _resolve_researcher(researcher_query, researchers_df)
+    resolve_pool = data_store.filter_current(researchers_df, current_only)
+    candidates = _resolve_researcher(researcher_query, resolve_pool)
     if not candidates:
         return _empty_table_result(
             'find_similar_researchers', f'"{researcher_query}"에 해당하는 연구원을 찾지 못했습니다.')
@@ -325,7 +339,8 @@ def find_similar_researchers(researcher_query: str, top_k: int = DEFAULT_TOP_K) 
 
     name_map = researchers_df.set_index('researcher_id')['name'].to_dict()
     dept_map = researchers_df.set_index('researcher_id')['department'].to_dict()
-    similar = list(entry.get('similar') or [])[:top_k]
+    current_ids = set(data_store.filter_current(researchers_df, True)['researcher_id'])
+    similar = [s for s in (entry.get('similar') or []) if s.get('researcher_id') in current_ids][:top_k]
     items = [
         {
             'researcher_id': s.get('researcher_id', ''),
@@ -388,8 +403,10 @@ def parse_question(question: str) -> dict:
     }
 
 
-def execute_query(parsed: dict) -> dict:
-    """parse_question()의 결과를 실제 데이터 조회로 실행한다."""
+def execute_query(parsed: dict, current_only: bool = True) -> dict:
+    """parse_question()의 결과를 실제 데이터 조회로 실행한다.
+    current_only=False(누적기준)면 전배·퇴사 등으로 최신 인력현황에 없는
+    사람도 조회 대상에 포함한다(AI 검색 전역 토글, components/nl_query_bar.py)."""
     intent = parsed.get('intent')
     if intent == 'error':
         return _empty_table_result('error', parsed.get('message', '알 수 없는 오류가 발생했습니다.'))
@@ -401,7 +418,7 @@ def execute_query(parsed: dict) -> dict:
         # 여기서 답이 나올 때가 있다. 그래도 결과가 없으면 기존 안내 문구로 폴백.
         question = parsed.get('question') or ''
         if question:
-            fallback = open_data_query.answer(question)
+            fallback = open_data_query.answer(question, current_only=current_only)
             if fallback.get('rows'):
                 return fallback
 
@@ -414,14 +431,15 @@ def execute_query(parsed: dict) -> dict:
         return _empty_table_result('unsupported', note)
 
     if intent == 'open_data_query':
-        return open_data_query.answer(parsed.get('question') or '')
+        return open_data_query.answer(parsed.get('question') or '', current_only=current_only)
 
     top_k = parsed.get('top_k') or DEFAULT_TOP_K
     if intent == 'find_researchers_by_expertise':
         return find_researchers_by_expertise(
-            parsed.get('expertise_terms') or [], parsed.get('department_filter', ''), top_k)
+            parsed.get('expertise_terms') or [], parsed.get('department_filter', ''), top_k,
+            current_only=current_only)
     if intent == 'find_similar_researchers':
-        return find_similar_researchers(parsed.get('researcher_query', ''), top_k)
+        return find_similar_researchers(parsed.get('researcher_query', ''), top_k, current_only=current_only)
 
     return _empty_table_result('unsupported', '알 수 없는 질문 유형입니다.')
 
@@ -475,11 +493,12 @@ def _generate_answer_summary(question: str, result: dict) -> str:
     return raw.strip() if raw else ''
 
 
-def answer_question(question: str) -> dict:
+def answer_question(question: str, current_only: bool = True) -> dict:
     """질문 → (질의 변환 → 조회 → 결과 설명) 전체 파이프라인의 단일
     진입점. 결과 설명(answer)은 error/unsupported이거나 결과가 없으면
-    비워둔다."""
-    result = execute_query(parse_question(question))
+    비워둔다. current_only=False(누적기준)면 전배·퇴사 등으로 최신
+    인력현황에 없는 사람도 조회 대상에 포함한다."""
+    result = execute_query(parse_question(question), current_only=current_only)
     if result.get('intent') not in ('error', 'unsupported'):
         result['answer'] = _generate_answer_summary(question, result)
     return result

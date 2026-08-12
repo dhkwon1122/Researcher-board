@@ -105,7 +105,18 @@ def render() -> html.Div:
                        id='nl-query-submit', color='primary', n_clicks=0),
             dbc.Button([html.I(className='bi bi-x-circle me-1'), '초기화'],
                        id='nl-query-reset-btn', color='secondary', outline=True, n_clicks=0),
-        ], className='mb-2'),
+        ], className='mb-1'),
+        html.Div([
+            html.Span('검색 기준', className='small text-muted me-2'),
+            dbc.RadioItems(
+                id='nl-query-search-mode',
+                options=[
+                    {'label': '최신기준(현재 소속자만)', 'value': 'current'},
+                    {'label': '누적기준(전배·퇴사자 포함)', 'value': 'all'},
+                ],
+                value='current', inline=True, className='small',
+            ),
+        ], className='mb-2 d-flex align-items-center'),
         dcc.Loading(html.Div([
             html.Div(id='nl-query-result'),
             # 토글 버튼은 레이아웃에 상시 존재(숨김/라벨만 콜백으로 갱신) — 모듈
@@ -343,16 +354,17 @@ def _selected_researcher_ids(full_result: dict, selected: list) -> list:
     Input('nl-query-submit', 'n_clicks'),
     Input('nl-query-input', 'n_submit'),
     State('nl-query-input', 'value'),
+    State('nl-query-search-mode', 'value'),
     prevent_initial_call=True,
 )
-def _run_nl_query(_n_clicks, _n_submit, question):
+def _run_nl_query(_n_clicks, _n_submit, question, search_mode):
     """실제 LLM 호출/SQL 실행을 여기서 한 번만 하고 dcc.Store에 담아 둔다 —
     정렬/필터/펼치기/선택은 이 데이터를 다시 조회하지 않고 화면에서만
     처리한다. 새 질문마다 정렬/필터/펼침/선택 상태를 전부 초기화한다."""
     empty = {'intent': 'unsupported', 'columns': [], 'labels': [], 'rows': [], 'total_rows': 0, 'note': ''}
     if not question or not question.strip():
         return {**empty, 'note': '질문을 입력해주세요.'}, {}, {}, False, []
-    result = nl_query.answer_question(question)
+    result = nl_query.answer_question(question, current_only=(search_mode != 'all'))
     return result, {}, {}, False, []
 
 
