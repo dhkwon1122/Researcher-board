@@ -2226,3 +2226,52 @@ excluded_org_codes, all_rows)`(부서→과제 펼치기 로직)를 완전히 �
 사라졌는지 확인. `pages.job_market.layout()`을 직접 호출해
 `jm-exclude-dept`/`jm-exclude-project` 두 컴포넌트가 여전히 레이아웃에
 있는지(드롭다운 자체는 유지) 확인.
+
+## 완료: JOB Market 추천에 "반드시 배치해야 한다면" 강제 후보 1~3개 추가
+
+"재배치 결과를 지금과 같이 유지하되, 재배치가 불가능한 과제를 제외하고
+반드시 나머지 과제 중 배치해야 한다고 가정했을 때 1~3개를 반드시 고른
+값도 함께 보여달라" 요청. 문답으로 확정: (1) 기존 LLM 호출 하나를
+그대로 재사용하되 출력 형식만 확장(별도 LLM 호출 추가 안 함), (2) 최소
+1개는 반드시 나와야 함(후보가 있는 한), (3) 재배치 가능 여부
+통계/엑셀 다운로드 기준은 그대로 `recommendations`만 보고, 이번 추가는
+**화면에만 보이는 참고 정보**, (4) 기존 추천/근접 후보 블록 아래에
+경고색으로 구분해서 표시.
+
+**`services/job_market.py`**:
+- `_RECOMMEND_SYSTEM_PROMPT`에 5번 규칙 추가 — `recommendations`/
+  `closest_non_match` 판단과 완전히 별개로, "무조건 후보 중 하나로
+  재배치해야 한다"고 가정했을 때 그나마 최선인 과제를 `must_place`에
+  반드시 1~3개(빈 리스트 금지) 담게 지시. 같은 프롬프트/같은 LLM 호출
+  안에서 세 번째 필드로만 추가돼 호출 횟수는 그대로.
+- `_fallback_must_place(shortlist)` 신규 — LLM이 규칙을 안 지켰거나(빈
+  `must_place`) 호출/파싱 자체가 실패해도, 후보(shortlist)가 하나라도
+  있으면 임베딩 유사도 1순위를 그대로 `must_place`에 채워 넣는 안전망.
+  "1개는 꼭 반드시" 요구를 LLM 순응 여부와 무관하게 코드 레벨에서 보장.
+- `_judge_recommendations()` 반환값이 2-tuple → 3-tuple(`recommendations,
+  closest_non_match, must_place`)로 확장, 모든 실패 경로(raw 없음/JSON
+  파싱 실패/must_place 누락)에서 `_fallback_must_place()`를 적용.
+  `shortlist`가 애초에 비어 있으면(후보 자체가 없음) `must_place`도
+  `[]`(강제할 대상 자체가 없으므로 예외).
+- `recommend_for_researcher()`가 `must_place`를 반환 dict에 추가(그 외
+  실패 경로 — 프로필/후보 풀 없음, 임베딩 실패 — 는 전부 `[]`).
+
+**`pages/job_market.py`**: `_must_place_block(must_place)` 신규 —
+`bi-exclamation-triangle-fill` 아이콘 + "반드시 배치해야 한다면" 제목의
+경고색(`bg-warning bg-opacity-10 border-warning`) 박스로 1~3개를
+나열(과제명/부서/A·B 배지/사유, 기존 추천 행과 같은 정보 밀도).
+`must_place`가 비어 있으면 `None`을 반환해 아예 렌더링되지 않는다(후보
+자체가 없는 극단적 케이스). `_person_card()`의 기존 추천/근접 후보
+블록(`body`) 아래에 이 블록을 추가 — 기존 표시 로직은 전혀 안 건드림
+(요청대로 "지금과 같이 유지"). `_summary_stats()`/`build_result_workbook()`
+등 재배치 가능 통계·엑셀 다운로드 기준은 이번 변경에서 손대지 않음
+(여전히 `recommendations` 기준).
+
+검증: `_judge_recommendations()`를 4가지 시나리오(LLM이 정상적으로 둘 다
+줌 / recommendations는 비었지만 must_place도 깜빡함 / LLM 호출 자체가
+실패(raw=None) / 애초에 shortlist가 비어 있음)로 직접 호출해 각각
+기대한 대로 동작하는지 확인 — 특히 2·3번 케이스에서 폴백이 정확히
+임베딩 1순위로 채워지는지, 4번은 강제할 대상이 없어 `[]`로 남는지 확인.
+`_person_card()`를 목 결과로 렌더링해 경고 박스가 올바른 항목 수·문구로
+나오는지, `must_place`가 빈 리스트일 때는 그 블록 자체가 안 나오는지
+(`None` 반환) 확인.

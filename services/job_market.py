@@ -311,11 +311,20 @@ _RECOMMEND_SYSTEM_PROMPT = """# Role
    전문성과 이 과제가 요구하는 것이 구체적으로 어떻게 다른지)를 1~2문장으로
    쓰세요. recommendations에 1개 이상 있다면 closest_non_match는 반드시
    null로 두세요.
-5. 반드시 아래 JSON 형식으로만 출력하세요.
+5. 위 판단(recommendations/closest_non_match)과는 완전히 별개로, "이 연구원은
+   무조건 후보 중 하나로 재배치되어야 한다"고 가정했을 때 그나마 가장 나은
+   과제를 반드시 1~3개 골라 must_place에 담으세요. recommendations나
+   closest_non_match가 비어 있어도, 후보 목록에 과제가 하나라도 있다면
+   must_place를 절대 빈 리스트로 두지 마세요(최소 1개는 반드시 채워야
+   합니다) — recommendations와 같은 과제가 겹쳐도 상관없습니다. reason에는
+   왜 이게 그나마 최선의 선택인지(부족한 점이 있다면 그것도 포함해서)
+   1~2문장으로 쓰세요.
+6. 반드시 아래 JSON 형식으로만 출력하세요.
 
 # Output Format (JSON)
 {"recommendations": [{"project_name": "후보 목록의 과제명 그대로", "reason": "1~2문장 사유"}],
- "closest_non_match": {"project_name": "후보 목록의 과제명 그대로", "reason": "왜 이것도 충분히 맞지 않는지 1~2문장"} 또는 null}
+ "closest_non_match": {"project_name": "후보 목록의 과제명 그대로", "reason": "왜 이것도 충분히 맞지 않는지 1~2문장"} 또는 null,
+ "must_place": [{"project_name": "후보 목록의 과제명 그대로", "reason": "왜 그나마 최선인지 1~2문장"}]}
 """
 
 
@@ -325,28 +334,48 @@ def _candidate_block(item: dict) -> str:
     return f"[{item['project_name']}] 소속: {item['dep_name']}\nA) 과제 분석 기반: {a}\nB) 유사 인력 기반: {b}"
 
 
+def _fallback_must_place(shortlist: list) -> list:
+    """LLM이 must_place 규칙을 못 지켰거나(빈 리스트) 호출/파싱 자체가
+    실패했을 때 쓰는 안전망 — 임베딩 유사도 1순위 후보를 그대로 "반드시
+    배치해야 한다면" 항목으로 채운다. 사용자 확정: 후보가 하나라도 있으면
+    이 값은 절대 비어 있으면 안 된다."""
+    if not shortlist:
+        return []
+    top = shortlist[0]
+    return [{
+        'project_name': top['project_name'], 'dep_name': top['dep_name'],
+        'reason': '(LLM 응답에 강제 배치 후보가 없어 임베딩 유사도 1순위로 대체)',
+        'score_a': top['score_a'], 'score_b': top['score_b'],
+    }]
+
+
 def _judge_recommendations(profile_text: str, shortlist: list) -> tuple:
     """임베딩 상위 후보(shortlist)를 LLM에 보여주고 0~3개만 사유와 함께 고르게
-    한다. 반환: (recommendations, closest_non_match). recommendations가
-    비어 있으면(뚜렷이 맞는 과제가 없으면) closest_non_match에 "그나마
-    가장 가까운 과제 + 왜 이것도 안 맞는지" 근거를 담아 함께 돌려준다 —
-    호출부가 "참여 가능한 과제 없음"을 근거 없이 통보하지 않게 한다.
-    실패/파싱 오류 시 (빈 리스트, None)으로 안전하게 처리."""
+    한다. 반환: (recommendations, closest_non_match, must_place).
+    recommendations가 비어 있으면(뚜렷이 맞는 과제가 없으면) closest_non_match에
+    "그나마 가장 가까운 과제 + 왜 이것도 안 맞는지" 근거를 담아 함께 돌려준다
+    — 호출부가 "참여 가능한 과제 없음"을 근거 없이 통보하지 않게 한다.
+    must_place는 recommendations/closest_non_match와 별개로, "무조건 배치해야
+    한다면" 가정 하의 강제 추천 1~3개 — 후보(shortlist)가 하나라도 있으면
+    _fallback_must_place()로 항상 최소 1개를 보장한다. 실패/파싱 오류 시
+    (빈 리스트, None, 폴백 must_place)로 안전하게 처리."""
     if not shortlist:
-        return [], None
+        return [], None, []
     candidate_block = '\n\n'.join(_candidate_block(c) for c in shortlist)
     prompt = (
         f'[연구원 전문성 프로필]\n{profile_text}\n\n[후보 과제 목록]\n{candidate_block}\n\n'
         '위 연구원이 실제로 참여 가능성이 높은 과제를 최대 3개까지 골라주세요. '
-        '뚜렷이 맞는 과제가 없다면 그나마 가장 가까운 과제와 그 사유를 closest_non_match에 담아주세요.'
+        '뚜렷이 맞는 과제가 없다면 그나마 가장 가까운 과제와 그 사유를 closest_non_match에 담아주세요. '
+        '그리고 이것과는 별개로, 무조건 후보 중 하나로 재배치해야 한다면 그나마 최선인 과제 1~3개를 '
+        'must_place에 반드시 담아주세요(빈 리스트 금지).'
     )
     raw = llm_client.call_llm(prompt, _RECOMMEND_SYSTEM_PROMPT, temperature=0.0, max_tokens=1200)
     if not raw:
-        return [], None
+        return [], None, _fallback_must_place(shortlist)
     try:
         parsed = json.loads(llm_client.extract_json(raw))
     except json.JSONDecodeError:
-        return [], None
+        return [], None, _fallback_must_place(shortlist)
 
     by_name = {c['project_name']: c for c in shortlist}
 
@@ -371,7 +400,15 @@ def _judge_recommendations(profile_text: str, shortlist: list) -> tuple:
     if not results and isinstance(parsed.get('closest_non_match'), dict):
         closest_non_match = _attach(parsed['closest_non_match'])
 
-    return results, closest_non_match
+    must_place = []
+    for r in (parsed.get('must_place') or [])[:MAX_RECOMMENDATIONS]:
+        attached = _attach(r)
+        if attached:
+            must_place.append(attached)
+    if not must_place:
+        must_place = _fallback_must_place(shortlist)
+
+    return results, closest_non_match, must_place
 
 
 # ─── 전체 실행 ───────────────────────────────────────────────────────────────
@@ -388,24 +425,24 @@ def recommend_for_researcher(researcher_id: str, expertise_profiles: dict, candi
     researcher_profile.py와 동일한 형태로 렌더링)."""
     profile = expertise_profiles.get(researcher_id)
     if not profile:
-        return {'recommendations': [], 'closest_non_match': None,
+        return {'recommendations': [], 'closest_non_match': None, 'must_place': [],
                 'note': '전문성 분석 데이터가 없어 추천할 수 없습니다.', 'profile': None}
     if not candidate_pool:
-        return {'recommendations': [], 'closest_non_match': None,
+        return {'recommendations': [], 'closest_non_match': None, 'must_place': [],
                 'note': '비교 가능한 후보 과제가 없습니다.', 'profile': profile}
 
     profile_text = fit.researcher_profile_text(profile)
     try:
         profile_embedding = fit.cached_embed([profile_text])[0]
     except LLMError as exc:
-        return {'recommendations': [], 'closest_non_match': None,
+        return {'recommendations': [], 'closest_non_match': None, 'must_place': [],
                 'note': f'임베딩 계산 실패: {exc}', 'profile': profile}
 
     scored = _score_candidates(profile_embedding, candidate_pool)
     shortlist = scored[:TOP_K_CANDIDATES]
-    recommendations, closest_non_match = _judge_recommendations(profile_text, shortlist)
+    recommendations, closest_non_match, must_place = _judge_recommendations(profile_text, shortlist)
     return {'recommendations': recommendations, 'closest_non_match': closest_non_match,
-            'note': '', 'profile': profile}
+            'must_place': must_place, 'note': '', 'profile': profile}
 
 
 def _own_org_code(researcher_id: str, researchers_df) -> str:

@@ -77,6 +77,33 @@ def _closest_non_match_block(rec: dict):
     ], className='p-2 bg-light rounded')
 
 
+def _must_place_block(must_place: list):
+    """"참고 정보" 전용 — 재배치 가능 여부 통계/엑셀 다운로드 기준은 여전히
+    recommendations만 보고, 이 블록은 화면에만 추가로 보여준다(사용자 확정).
+    무조건 후보 중 하나로 재배치해야 한다면 그나마 최선인 과제 1~3개
+    (services.job_market.recommend_for_researcher()의 'must_place', 후보가
+    하나라도 있으면 항상 최소 1개)를 경고색 박스로 기존 추천/근접 후보와
+    시각적으로 구분해 보여준다."""
+    if not must_place:
+        return None
+    rows = []
+    for r in must_place:
+        rows.append(html.Div([
+            html.Span(r.get('project_name', ''), className='fw-semibold me-2'),
+            html.Span(r.get('dep_name', ''), className='text-muted small me-2'),
+            _score_badge('A', r.get('score_a')),
+            _score_badge('B', r.get('score_b')),
+        ], className='mb-1'))
+        rows.append(html.Div(r.get('reason', '') or '(사유 없음)', className='text-muted small fst-italic mb-2'))
+    return html.Div([
+        html.Div([
+            html.I(className='bi bi-exclamation-triangle-fill me-1 text-warning'),
+            html.Span('반드시 배치해야 한다면', className='fw-semibold small'),
+        ], className='mb-1'),
+        html.Div(rows),
+    ], className='p-2 mt-2 bg-warning bg-opacity-10 border border-warning rounded')
+
+
 def _profile_block(profile: dict | None):
     """추천 사유만으로는 신뢰성이 떨어진다는 피드백에 따라, 이 사람의 보유
     전문성(강점 분야/키워드/역할·책임 등)을 추천 근거와 나란히 보여준다 —
@@ -91,6 +118,7 @@ def _profile_block(profile: dict | None):
 def _person_card(person: dict, result: dict):
     recs = result.get('recommendations') or []
     closest_non_match = result.get('closest_non_match')
+    must_place = result.get('must_place') or []
     note = result.get('note') or ''
     if recs:
         body = html.Div([_recommendation_row(r) for r in recs])
@@ -108,6 +136,7 @@ def _person_card(person: dict, result: dict):
             ], className='mb-2'),
             _profile_block(result.get('profile')),
             body,
+            _must_place_block(must_place),
         ]),
         className='mb-3',
     )
