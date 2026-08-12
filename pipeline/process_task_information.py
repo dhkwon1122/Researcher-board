@@ -38,7 +38,6 @@
   COL_WRITE_DATE   : 작성일 컬럼명
 """
 
-import csv
 import os
 import sys
 
@@ -62,6 +61,7 @@ COL_WRITE_DATE   = '작성일'
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import excel_safe_text, is_blank, parse_yyyymmdd, read_xlsx
+from merge_utils import TABLE_KEYS, write_merged
 
 _CONTENT_COLS = [
     'task_collabo', 'task_goal', 'task_value', 'task_howtoget',
@@ -90,8 +90,8 @@ def _dedupe_by_name(df: pd.DataFrame) -> pd.DataFrame:
     return pd.concat([with_name, without_name], ignore_index=True)
 
 
-def process() -> bool:
-    raw_path = os.path.join(RAW_DIR, TASK_INFO_FILE)
+def process(raw_dir: str = RAW_DIR) -> bool:
+    raw_path = os.path.join(raw_dir, TASK_INFO_FILE)
     if not os.path.exists(raw_path):
         print(f'[SKIP] {TASK_INFO_FILE} 파일 없음 — tasks_information_raw 폴백 시도')
         return False
@@ -136,11 +136,10 @@ def process() -> bool:
     for col in _CONTENT_COLS:
         result[col] = result[col].apply(excel_safe_text)
 
-    os.makedirs(OUT_DIR, exist_ok=True)
     out_path = os.path.join(OUT_DIR, 'tasks_information.csv')
-    result.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+    merged = write_merged(out_path, result, TABLE_KEYS['tasks_information'])
 
-    print(f'[OK]   tasks_information.csv 저장 ({after}행, 중복 제거로 {before - after}행 제외)')
+    print(f'[OK]   tasks_information.csv 저장 (총 {len(merged)}행, 이번 파일 {after}행 반영, 파일 내 중복 제거로 {before - after}행 제외)')
     return True
 
 

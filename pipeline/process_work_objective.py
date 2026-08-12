@@ -30,6 +30,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import clean_str, read_xlsx, norm_id
+from merge_utils import TABLE_KEYS, write_merged
 
 # 원본 컬럼 이름 (파일에 없으면 아래 값을 실제 헤더명으로 수정)
 COL_ID = '사번'
@@ -54,13 +55,13 @@ def _combine_row(name, detail) -> str:
     return ''
 
 
-def _read_year_file(year: int, filename: str) -> pd.DataFrame:
+def _read_year_file(year: int, filename: str, raw_dir: str) -> pd.DataFrame:
     """한 연도 파일을 읽어 (researcher_id, work_objective{year}) DataFrame으로 반환.
     파일이 없거나 비어 있으면 빈 DataFrame(같은 컬럼 구조)을 반환한다."""
     col = f'work_objective{year}'
     empty = pd.DataFrame(columns=['researcher_id', col])
 
-    path = os.path.join(RAW_DIR, filename)
+    path = os.path.join(raw_dir, filename)
     if not os.path.exists(path):
         print(f'[SKIP] {path} 파일 없음')
         return empty
@@ -99,8 +100,8 @@ def _read_year_file(year: int, filename: str) -> pd.DataFrame:
     return grouped
 
 
-def process() -> bool:
-    year_dfs = [_read_year_file(year, filename) for year, filename in YEAR_FILES.items()]
+def process(raw_dir: str = RAW_DIR) -> bool:
+    year_dfs = [_read_year_file(year, filename, raw_dir) for year, filename in YEAR_FILES.items()]
     if all(d.empty for d in year_dfs):
         print('[SKIP] 업무목표 파일을 하나도 찾지 못했습니다.')
         return False
@@ -120,10 +121,9 @@ def process() -> bool:
     out_cols = ['researcher_id'] + [f'work_objective{year}' for year in YEAR_FILES]
     merged = merged[out_cols].sort_values('researcher_id').reset_index(drop=True)
 
-    os.makedirs(OUT_DIR, exist_ok=True)
     out_path = os.path.join(OUT_DIR, 'work_objective.csv')
-    merged.to_csv(out_path, index=False, encoding='utf-8-sig')
-    print(f'[OK]   work_objective.csv 저장 ({len(merged)}명)')
+    final = write_merged(out_path, merged, TABLE_KEYS['work_objective'])
+    print(f'[OK]   work_objective.csv 저장 (총 {len(final)}명, 이번 파일 {len(merged)}명 반영)')
     return True
 
 

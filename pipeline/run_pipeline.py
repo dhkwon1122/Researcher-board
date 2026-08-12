@@ -177,6 +177,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import read_xlsx, norm_researcher_id_col
+from merge_utils import TABLE_KEYS, write_merged
 
 # 평가·특허·양성이력·시상·학력·리더십·인센티브·연구원기본정보·논문은 전용 처리기에서 추출하므로 목록에서 제외
 TABLES = [
@@ -202,14 +203,21 @@ def _read_raw(name: str) -> pd.DataFrame | None:
 
 def _run_with_fallback(process_fn, table: str, hint: str, missing: list) -> bool:
     """전용 처리기(process_fn)를 실행하고, 실패하면 {table}_raw 폴백을 시도한다.
-    폴백까지 실패하면 missing에 '{table} ({hint})' 안내를 추가한다."""
+    폴백까지 실패하면 missing에 '{table} ({hint})' 안내를 추가한다.
+    폴백 저장도 (등록돼 있으면) TABLE_KEYS 기준 업서트를 거친다 — 전용
+    처리기와 마찬가지로 이번 파일에 없는 기존 행을 지우지 않는다."""
     if process_fn():
         return True
     df = _read_raw(table)
     if df is not None:
         out_path = os.path.join(OUT_DIR, f'{table}.csv')
-        df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
-        print(f'  [OK]   {table}.csv ({table}_raw 폴백, {len(df)}행)')
+        keys = TABLE_KEYS.get(table)
+        if keys and all(k in df.columns for k in keys):
+            merged = write_merged(out_path, df, keys)
+            print(f'  [OK]   {table}.csv ({table}_raw 폴백, 업서트, 총 {len(merged)}행, 이번 파일 {len(df)}행 반영)')
+        else:
+            df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+            print(f'  [OK]   {table}.csv ({table}_raw 폴백, 전체 교체, {len(df)}행)')
         return True
     missing.append(f'{table} ({hint})')
     return False
@@ -292,6 +300,8 @@ def run():
         missing.append('tasks (개인별과제투입기간데이터_260114.xlsb)')
 
     # ── 10. 나머지 테이블 (technology_transfer, transfers, certifications, succession) ──
+    # 전용 처리기가 없어 _raw 파일만 지원한다. TABLE_KEYS에 등록된 키가 실제
+    # 컬럼에 있으면 업서트(이번 파일에 없는 기존 행 보존), 없으면 예전처럼 전체 교체.
     for table in TABLES:
         df = _read_raw(table)
         if df is None:
@@ -299,8 +309,13 @@ def run():
             print(f'  [SKIP] {table}_raw 파일 없음')
             continue
         out_path = os.path.join(OUT_DIR, f'{table}.csv')
-        df.to_csv(out_path, index=False, encoding='utf-8-sig')
-        print(f'  [OK]   {table}.csv ({len(df)}행)')
+        keys = TABLE_KEYS.get(table)
+        if keys and all(k in df.columns for k in keys):
+            merged = write_merged(out_path, df, keys)
+            print(f'  [OK]   {table}.csv (업서트, 총 {len(merged)}행, 이번 파일 {len(df)}행 반영)')
+        else:
+            df.to_csv(out_path, index=False, encoding='utf-8-sig')
+            print(f'  [OK]   {table}.csv (전체 교체, {len(df)}행 — 키 컬럼 {keys} 없어 업서트 불가)')
 
     # ── 11. 코멘트: 별도 처리 (LLM 요약 옵션 포함) ───────────────────────
     from process_comments import process as process_comments

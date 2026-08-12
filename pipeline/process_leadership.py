@@ -30,7 +30,6 @@ leadership_comments.csv 컬럼:
 컬럼명이 다를 경우 파일 상단의 COL_* 상수를 수정하세요.
 """
 
-import csv
 import os
 import sys
 from datetime import datetime
@@ -62,10 +61,11 @@ OTHERS_GROUPS = {'동료', '상사', '부서원'}
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import clean_str, is_blank, read_xlsx, norm_id
+from merge_utils import GROUP_REPLACE_KEYS, TABLE_KEYS, write_merged
 
 
-def process() -> bool:
-    raw_path = os.path.join(RAW_DIR, LEADERSHIP_FILE)
+def process(raw_dir: str = RAW_DIR) -> bool:
+    raw_path = os.path.join(raw_dir, LEADERSHIP_FILE)
     if not os.path.exists(raw_path):
         print(f'[SKIP] {LEADERSHIP_FILE} 파일 없음 — leadership_raw 폴백 시도')
         return False
@@ -138,9 +138,11 @@ def process() -> bool:
     if cmt_rows:
         cmt_df = pd.DataFrame(cmt_rows)
         cmt_path = os.path.join(OUT_DIR, 'leadership_comments.csv')
-        os.makedirs(OUT_DIR, exist_ok=True)
-        cmt_df.to_csv(cmt_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
-        print(f'[OK]   leadership_comments.csv 저장 ({len(cmt_df)}행) — process_comments가 comments.csv에 병합')
+        cmt_merged = write_merged(
+            cmt_path, cmt_df, GROUP_REPLACE_KEYS['leadership_comments'], group_replace=True,
+        )
+        print(f'[OK]   leadership_comments.csv 저장 (총 {len(cmt_merged)}행, 이번 파일 {len(cmt_df)}행으로 해당 (연구원,연도,그룹) 통째 교체) '
+              f'— process_comments가 comments.csv에 병합')
 
     # ── 역량 점수 계산 ───────────────────────────────────────────────────────
     # 같은 (연구원, 연도, 그룹) 내 여러 평가자 → 문항별 평균 먼저 산출
@@ -175,13 +177,12 @@ def process() -> bool:
               .sort_values(['researcher_id', 'year', 'evaluator_group'])
               .reset_index(drop=True))
 
-    os.makedirs(OUT_DIR, exist_ok=True)
     out_path = os.path.join(OUT_DIR, 'leadership.csv')
-    result.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+    merged = write_merged(out_path, result, TABLE_KEYS['leadership'])
 
-    n = result['researcher_id'].nunique()
-    groups = sorted(result['evaluator_group'].unique())
-    print(f'[OK]   leadership.csv 저장 ({len(result)}행, {n}명, 그룹: {groups})')
+    n = merged['researcher_id'].nunique()
+    groups = sorted(merged['evaluator_group'].unique())
+    print(f'[OK]   leadership.csv 저장 (총 {len(merged)}행, {n}명, 그룹: {groups}, 이번 파일 {len(result)}행 반영)')
     return True
 
 

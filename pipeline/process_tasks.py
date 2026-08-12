@@ -30,8 +30,9 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
+from merge_utils import TABLE_KEYS, write_merged  # noqa: E402
 
-SOURCE = os.path.join(RAW_DIR, '개인별과제투입기간데이터_260114.xlsb')
+SOURCE_FILE = '개인별과제투입기간데이터_260114.xlsb'
 OUTPUT = os.path.join(OUT_DIR, 'tasks.csv')
 TASKS_INFO_PATH = os.path.join(OUT_DIR, 'tasks_information.csv')
 
@@ -223,15 +224,16 @@ def _apply_name_history(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=columns)
 
 
-def process() -> bool:
+def process(raw_dir: str = RAW_DIR) -> bool:
     from excel_reader import norm_id, parse_yyyymmdd, read_xlsx
 
-    if not os.path.exists(SOURCE):
-        print(f'[process_tasks] 파일 없음: {SOURCE}')
+    source = os.path.join(raw_dir, SOURCE_FILE)
+    if not os.path.exists(source):
+        print(f'[process_tasks] 파일 없음: {source}')
         return False
 
-    print(f'[process_tasks] 읽는 중: {SOURCE}')
-    df = read_xlsx(SOURCE)
+    print(f'[process_tasks] 읽는 중: {source}')
+    df = read_xlsx(source)
 
     missing = [c for c in [COL_ID, COL_TASK, COL_START, COL_END, COL_RATE]
                if c not in df.columns]
@@ -264,9 +266,8 @@ def process() -> bool:
 
     result = result.sort_values(['researcher_id', 'start_date']).reset_index(drop=True)
 
-    os.makedirs(OUT_DIR, exist_ok=True)
-    result.to_csv(OUTPUT, index=False, encoding='utf-8-sig')
-    print(f'[process_tasks] 저장 완료: {OUTPUT}  ({len(result)}행)')
+    merged = write_merged(OUTPUT, result, TABLE_KEYS['tasks'])
+    print(f'[process_tasks] 저장 완료: {OUTPUT}  (총 {len(merged)}행, 이번 파일 {len(result)}행 반영)')
     return True
 
 

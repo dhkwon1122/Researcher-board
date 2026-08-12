@@ -13,7 +13,6 @@
   python pipeline/process_comments.py --llm     # LLM 통합 요약 포함
 """
 
-import csv
 import json
 import os
 import sys
@@ -24,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR as DATA_RAW, OUT_DIR as DATA_OUT  # noqa: E402
 from excel_reader import is_blank, read_xlsx, norm_researcher_id_col
 from llm_client import call_llm, extract_json
+from merge_utils import TABLE_KEYS, write_merged
 
 COLS = ['researcher_id', 'year', 'commenter_type',
         'comment_raw', 'comment_summary', 'strengths', 'improvements']
@@ -136,18 +136,19 @@ def summarize_researcher(rid: str, rows: pd.DataFrame) -> dict | None:
         return None
 
 
-def process(use_llm: bool = False):
+def process(use_llm: bool = False, raw_dir: str = DATA_RAW):
     """
     comments_raw.xlsx + leadership_comments.csv → comments.csv
 
     Args:
         use_llm: True 이면 LLM API를 호출하여 연구원별 종합요약 생성.
                  False 이면 종합요약 없이 원본 코멘트만 저장.
+        raw_dir: comments_raw.xlsx를 찾을 폴더(기본 data/raw, data/updates로 갱신 가능).
     """
     results = []
 
     # ── 부서장 코멘트 (comments_raw.xlsx) ────────────────────────────────────
-    raw_path = os.path.join(DATA_RAW, 'comments_raw.xlsx')
+    raw_path = os.path.join(raw_dir, 'comments_raw.xlsx')
     if os.path.exists(raw_path):
         df = norm_researcher_id_col(read_xlsx(raw_path))
         required = {'researcher_id', 'year', 'comment_raw'}
@@ -219,10 +220,9 @@ def process(use_llm: bool = False):
               .sort_values(['researcher_id', 'commenter_type', 'year'])
               .reset_index(drop=True))
 
-    os.makedirs(DATA_OUT, exist_ok=True)
     out_path = os.path.join(DATA_OUT, 'comments.csv')
-    out_df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
-    print(f'comments.csv 저장 완료 ({len(out_df)}행)')
+    merged = write_merged(out_path, out_df, TABLE_KEYS['comments'])
+    print(f'comments.csv 저장 완료 (총 {len(merged)}행, 이번 실행 {len(out_df)}행 반영)')
 
 
 if __name__ == '__main__':

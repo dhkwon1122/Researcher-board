@@ -36,8 +36,9 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
+from merge_utils import TABLE_KEYS, write_merged  # noqa: E402
 
-SOURCE = os.path.join(RAW_DIR, '개인별논문현황_2016_2026.xlsx')
+SOURCE_FILE = '개인별논문현황_2016_2026.xlsx'
 OUTPUT = os.path.join(OUT_DIR, 'publications.csv')
 
 # 원본 컬럼 이름
@@ -110,15 +111,16 @@ def _parse_is_corresponding(val) -> bool:
     return s in ('y', 'yes', '예', 'o', '○', '1', 'true', '교신')
 
 
-def process() -> bool:
+def process(raw_dir: str = RAW_DIR) -> bool:
     from excel_reader import norm_id, parse_yyyymmdd, read_xlsx
 
-    if not os.path.exists(SOURCE):
-        print(f'[process_publications] 파일 없음: {SOURCE}')
+    source = os.path.join(raw_dir, SOURCE_FILE)
+    if not os.path.exists(source):
+        print(f'[process_publications] 파일 없음: {source}')
         return False
 
-    print(f'[process_publications] 읽는 중: {SOURCE}  (헤더: 1번째 행)')
-    df = read_xlsx(SOURCE, header_row=0)
+    print(f'[process_publications] 읽는 중: {source}  (헤더: 1번째 행)')
+    df = read_xlsx(source, header_row=0)
 
     missing = [c for c in REQUIRED_COLS if c not in df.columns]
     if missing:
@@ -168,9 +170,8 @@ def process() -> bool:
     result = result[result['researcher_id'] != ''].reset_index(drop=True)
     result = result.sort_values(['researcher_id', 'pub_date'], ascending=[True, False]).reset_index(drop=True)
 
-    os.makedirs(OUT_DIR, exist_ok=True)
-    result.to_csv(OUTPUT, index=False, encoding='utf-8-sig')
-    print(f'[process_publications] 저장 완료: {OUTPUT}  ({len(result)}행)')
+    merged = write_merged(OUTPUT, result, TABLE_KEYS['publications'])
+    print(f'[process_publications] 저장 완료: {OUTPUT}  (총 {len(merged)}행, 이번 파일 {len(result)}행 반영)')
     return True
 
 

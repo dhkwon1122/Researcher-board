@@ -16,7 +16,6 @@ T&P 기본 인사 정보 파일에서 연봉등급/상·하반기업적(평가)�
 매기지 않고 유효값 체크에만 쓴다).
 """
 
-import csv
 import os
 import sys
 
@@ -37,6 +36,7 @@ BIRTH_COL  = '생년월일'   # YYYYMMDD, YYYY-MM-DD, datetime 모두 지원
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import BASE_DIR, RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import is_blank, read_xlsx, norm_id  # noqa: E402
+from merge_utils import TABLE_KEYS, write_merged  # noqa: E402
 
 sys.path.insert(0, BASE_DIR)
 from services.evaluations import (  # noqa: E402
@@ -66,7 +66,7 @@ def _parse_birth_year(val) -> int | None:
         return None
 
 
-def process():
+def process(raw_dir: str = RAW_DIR):
     """
     T&P 파일을 읽어 evaluations.csv를 저장하고,
     이름·성별·생년월일 정보를 담은 DataFrame을 반환합니다.
@@ -76,7 +76,7 @@ def process():
         researcher_updates 컬럼: researcher_id, name, gender, birth_year
         (추출되지 않은 컬럼은 포함되지 않을 수 있음)
     """
-    raw_path = os.path.join(RAW_DIR, TP_FILE)
+    raw_path = os.path.join(raw_dir, TP_FILE)
     if not os.path.exists(raw_path):
         print(f'[SKIP] {raw_path} 파일 없음')
         return False, None
@@ -157,14 +157,13 @@ def process():
         print('[SKIP] 추출된 평가 데이터가 없습니다.')
         return False, res_update
 
-    os.makedirs(OUT_DIR, exist_ok=True)
     out_path = os.path.join(OUT_DIR, 'evaluations.csv')
-    result.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+    merged = write_merged(out_path, result, TABLE_KEYS['evaluations'])
 
-    print(f'[OK]   evaluations.csv 저장 ({len(result)}행, 컬럼: {", ".join(filled_cols)})')
+    print(f'[OK]   evaluations.csv 저장 (총 {len(merged)}행, 이번 파일 {len(result)}행 반영, 컬럼: {", ".join(filled_cols)})')
     for col in filled_cols:
         dist = result.loc[result[col] != '', col].value_counts().sort_index().to_dict()
-        print(f'         {col} 분포: {dist}')
+        print(f'         {col} 분포(이번 파일 기준): {dist}')
 
     return True, res_update
 

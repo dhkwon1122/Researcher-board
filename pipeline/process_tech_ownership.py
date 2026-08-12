@@ -18,7 +18,6 @@ E_support: 원본 값이 'E'면 'E', 그 외(빈 값 포함)에는 모두 'R'로
 컬럼명이 다를 경우 파일 상단의 COL_* 상수를 수정하세요.
 """
 
-import csv
 import os
 import sys
 
@@ -39,6 +38,7 @@ def _slot_cols(i):
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import is_blank, read_xlsx, norm_id
+from merge_utils import TABLE_KEYS, write_merged
 
 
 def _normalize_e_support(val) -> str:
@@ -70,8 +70,8 @@ def _scale_portion(val) -> str:
         return s
 
 
-def process() -> bool:
-    raw_path = os.path.join(RAW_DIR, TECH_OWNERSHIP_FILE)
+def process(raw_dir: str = RAW_DIR) -> bool:
+    raw_path = os.path.join(raw_dir, TECH_OWNERSHIP_FILE)
     if not os.path.exists(raw_path):
         print(f'[SKIP] {TECH_OWNERSHIP_FILE} 파일 없음 — tech_ownership_raw 폴백 시도')
         return False
@@ -113,12 +113,11 @@ def process() -> bool:
     result = result.replace({'nan': '', 'None': ''})
     result = result.sort_values(['researcher_id']).reset_index(drop=True)
 
-    os.makedirs(OUT_DIR, exist_ok=True)
     out_path = os.path.join(OUT_DIR, 'tech_ownership.csv')
-    result.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+    merged = write_merged(out_path, result, TABLE_KEYS['tech_ownership'])
 
-    n = result['researcher_id'].nunique()
-    print(f'[OK]   tech_ownership.csv 저장 ({len(result)}행, {n}명)')
+    n = merged['researcher_id'].nunique()
+    print(f'[OK]   tech_ownership.csv 저장 (총 {len(merged)}행, {n}명, 이번 파일 {len(result)}행 반영)')
     return True
 
 

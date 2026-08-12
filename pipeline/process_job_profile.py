@@ -24,7 +24,6 @@
 컬럼명이 다를 경우 파일 상단의 COL_* 상수를 수정하세요.
 """
 
-import csv
 import os
 import sys
 
@@ -43,6 +42,7 @@ COL_END   = '종료일'
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import clean_str as _clean, read_xlsx, norm_id
+from merge_utils import TABLE_KEYS, write_merged
 
 
 def _parse_date(val):
@@ -72,8 +72,8 @@ def _merge_consecutive(records):
     return merged
 
 
-def process() -> bool:
-    raw_path = os.path.join(RAW_DIR, JOB_PROFILE_FILE)
+def process(raw_dir: str = RAW_DIR) -> bool:
+    raw_path = os.path.join(raw_dir, JOB_PROFILE_FILE)
     if not os.path.exists(raw_path):
         print(f'[SKIP] {JOB_PROFILE_FILE} 파일 없음 — job_profile_raw 폴백 시도')
         return False
@@ -138,11 +138,10 @@ def process() -> bool:
 
     result = pd.DataFrame(rows, columns=out_cols)
 
-    os.makedirs(OUT_DIR, exist_ok=True)
     out_path = os.path.join(OUT_DIR, 'job_profile.csv')
-    result.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+    merged = write_merged(out_path, result, TABLE_KEYS['job_profile'])
 
-    print(f'[OK]   job_profile.csv 저장 ({len(result)}행, 최대 {max_n}개 직무 슬롯)')
+    print(f'[OK]   job_profile.csv 저장 (총 {len(merged)}행, 이번 파일 {len(result)}행 반영, 이번 파일 최대 {max_n}개 직무 슬롯)')
     return True
 
 

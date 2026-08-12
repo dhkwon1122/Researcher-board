@@ -13,7 +13,6 @@
 컬럼명이 다를 경우 파일 상단의 COL_* 상수를 수정하세요.
 """
 
-import csv
 import os
 import sys
 
@@ -22,6 +21,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import clean_str as _clean, read_xlsx
+from merge_utils import TABLE_KEYS, write_merged
 
 SOURCE_FILE = '과제별컨플.xlsx'
 
@@ -32,8 +32,8 @@ COL_CONFL = '컨플 주소'
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def process() -> bool:
-    raw_path = os.path.join(RAW_DIR, SOURCE_FILE)
+def process(raw_dir: str = RAW_DIR) -> bool:
+    raw_path = os.path.join(raw_dir, SOURCE_FILE)
     if not os.path.exists(raw_path):
         print(f'[SKIP] {SOURCE_FILE} 파일 없음')
         return False
@@ -57,11 +57,10 @@ def process() -> bool:
     })
     result = result[result['project_name'] != ''].reset_index(drop=True)
 
-    os.makedirs(OUT_DIR, exist_ok=True)
     out_path = os.path.join(OUT_DIR, 'project_confl_address.csv')
-    result.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+    merged = write_merged(out_path, result, TABLE_KEYS['project_confl_address'])
 
-    print(f'[OK]   project_confl_address.csv 저장 ({len(result)}행)')
+    print(f'[OK]   project_confl_address.csv 저장 (총 {len(merged)}행, 이번 파일 {len(result)}행 반영)')
     return True
 
 

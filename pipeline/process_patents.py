@@ -28,7 +28,6 @@
   COL_GRADE_A : 현재등급 - A급구분 컬럼명
 """
 
-import csv
 import os
 import sys
 
@@ -67,12 +66,13 @@ OPTIONAL_COLS = [
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import is_blank, parse_yyyymmdd, read_xlsx, norm_id
+from merge_utils import TABLE_KEYS, write_merged
 
 _DATE_DST_COLS = {'application_date', 'registration_date'}
 
 
-def process() -> bool:
-    raw_path = os.path.join(RAW_DIR, PATENT_FILE)
+def process(raw_dir: str = RAW_DIR) -> bool:
+    raw_path = os.path.join(raw_dir, PATENT_FILE)
     if not os.path.exists(raw_path):
         print(f'[SKIP] {PATENT_FILE} 파일 없음 — patents_raw 폴백 시도')
         return False
@@ -136,13 +136,12 @@ def process() -> bool:
 
     result = result.sort_values(['researcher_id', 'application_id']).reset_index(drop=True)
 
-    os.makedirs(OUT_DIR, exist_ok=True)
     out_path = os.path.join(OUT_DIR, 'patents.csv')
-    result.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+    merged = write_merged(out_path, result, TABLE_KEYS['patents'])
 
-    n_patents   = result['application_id'].nunique()
-    n_inventors = result['researcher_id'].nunique()
-    print(f'[OK]   patents.csv 저장 ({len(result)}행 / 특허 {n_patents}건 / 발명자 {n_inventors}명)')
+    n_patents   = merged['application_id'].nunique()
+    n_inventors = merged['researcher_id'].nunique()
+    print(f'[OK]   patents.csv 저장 (총 {len(merged)}행 / 특허 {n_patents}건 / 발명자 {n_inventors}명, 이번 파일 {len(result)}행 반영)')
     return True
 
 

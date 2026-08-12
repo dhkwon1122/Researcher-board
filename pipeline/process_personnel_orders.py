@@ -24,7 +24,6 @@
   COL_ASSIGNMENT : 직책명 컬럼명
 """
 
-import csv
 import os
 import re
 import sys
@@ -45,6 +44,7 @@ COL_ASSIGNMENT = '직책명'
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import parse_yyyymmdd, read_xlsx, norm_id
+from merge_utils import TABLE_KEYS, write_merged
 
 _PAREN_RE = re.compile(r'[\(（][^)）]*[\)）]')
 
@@ -55,8 +55,8 @@ def _strip_paren(val) -> str:
     return _PAREN_RE.sub('', s).strip()
 
 
-def process() -> bool:
-    raw_path = os.path.join(RAW_DIR, ORDERS_FILE)
+def process(raw_dir: str = RAW_DIR) -> bool:
+    raw_path = os.path.join(raw_dir, ORDERS_FILE)
     if not os.path.exists(raw_path):
         print(f'[SKIP] {ORDERS_FILE} 파일 없음 — hr_orders_raw 폴백 시도')
         return False
@@ -91,12 +91,11 @@ def process() -> bool:
 
     result = result.sort_values(['researcher_id', 'order_date']).reset_index(drop=True)
 
-    os.makedirs(OUT_DIR, exist_ok=True)
     out_path = os.path.join(OUT_DIR, 'hr_orders.csv')
-    result.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+    merged = write_merged(out_path, result, TABLE_KEYS['hr_orders'])
 
-    n = result['researcher_id'].nunique()
-    print(f'[OK]   hr_orders.csv 저장 ({len(result)}행, {n}명)')
+    n = merged['researcher_id'].nunique()
+    print(f'[OK]   hr_orders.csv 저장 (총 {len(merged)}행, {n}명, 이번 파일 {len(result)}행 반영)')
     return True
 
 

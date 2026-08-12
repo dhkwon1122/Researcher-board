@@ -2473,3 +2473,156 @@ task_name` 그대로(행 수 안 늘어남) 폴백하는지 확인. 쪼개진 3�
 문제없이 표시되는지 확인. 이번 세션 컨테이너엔 실제 원본 데이터가 없어
 `python pipeline/process_tasks.py`(tasks_information.csv가 먼저 있어야
 함) 실제 재실행·브라우저 확인은 못 했다.
+
+## 완료(1단계: 데이터 레이어): 전량 덮어쓰기 → 업서트(upsert) 전환 + data/updates 폴더 신설 + researchers.csv 시점(valid_year/valid_month)·is_current·researchers_history.csv
+
+지금까지 파이프라인은 매 실행마다 `data/processed/*.csv`를 통째로 새로
+써서, 예를 들어 이번 달 `인력현황.xlsx`에 없는 사람(다른 사업부로 전배 등)은
+다음 실행부터 그냥 사라졌다. 실 데이터 운영(주기적 파일 교체/적재)을
+시작하는 시점이라, "같은 사람은 최신 값으로 교체하되, 이번 파일에 없는
+사람은 삭제하지 않고 보존"하는 업서트 방식으로 데이터 레이어 전체를
+바꿨다. 두 가지 요청을 하나의 설계로 묶어 처리했다:
+
+1. **데이터 적재를 업서트로 전환** — `data/raw/`는 그대로 두고, 별도
+   `data/updates/` 폴더에 최신 파일(raw와 동일 파일명)을 넣으면 그 파일이
+   가진 사람/이벤트만 기존 `data/processed/*.csv`에 업서트되고, 나머지는
+   보존된다. 이력형(1인 N행) 테이블은 자연키(natural key) 추천을 요청받아
+   테이블별로 정했다(아래 "자연키 등록부" 참고).
+2. **`researchers.csv`에 시점(연/월) 도입** — `인력현황.xlsx`의
+   `인원실적년도`/`인원실적월`을 `valid_year`(YYYY)/`valid_month`(MM)로
+   저장하고, `(researcher_id, valid_year, valid_month)`가 같으면 교체,
+   다르면 누적하는 히스토리를 별도로 쌓는다. 전배로 최신 파일에서 빠진
+   사람은 "최신월과 다른 시점에 머물러 있음"으로 자동 판별한다
+   (`is_current`).
+
+설계 갈림길: `researchers.csv` 자체를 다건화(1인 N행, 이력 전체)할지,
+아니면 "현재상태"와 "이력"을 분리할지 상의했고, **분리하는 쪽으로
+확정**했다 — `researchers.csv`를 읽는 화면(연구원 명단/보유 전문성
+조직도/JOB Market/유사 매칭/AI 검색/엑셀 다운로드/전문성 분석 파이프라인
+전부)이 여전히 "1인 1행"을 가정하고 있어, 다건화하면 그 전부를 고쳐야
+하기 때문. 대신:
+
+- **`researchers.csv`(기존 유지, 1인 1행 "현재상태")** — `researcher_id`
+  키로 업서트: 새 파일에 있으면 행 전체 교체, 없으면 이전 행 그대로 보존.
+  병합 뒤 파일 전체에서 `(valid_year, valid_month)`의 최댓값(=가장 최근
+  인원실적월)을 구해 각 행에 `is_current`(Y/N)를 다시 계산해 채운다 — 그
+  행이 최신월과 같으면 `Y`(현재 소속), 다르면(더 과거에 머물러 있으면)
+  `N`(현재 미소속 — 전배·퇴사를 구분하진 못하지만 "지금 우리 조직 소속이
+  아님"은 알 수 있다). valid_year/valid_month가 비어있는 행(구버전 데이터,
+  또는 원본에 해당 컬럼이 없는 경우)은 판단 근거가 없어 항상 `Y`.
+- **`researchers_history.csv`(신규)** — `(researcher_id, valid_year,
+  valid_month)` 키로 계속 누적(같은 키는 교체, 다른 키는 새 행, 절대
+  삭제 없음). "누적기준"(한 번이라도 등록된 적 있는 전체 인원, 월별
+  스냅샷) 검색 전용이며, 이 파일이 생겨도 기존 화면은 전혀 영향받지
+  않는다.
+
+**`pipeline/merge_utils.py`(신규)** — 공용 업서트 유틸리티.
+- `upsert_merge(existing, new, keys)`: keys가 일치하는 행은 new 값으로
+  완전 교체, existing에만 있는 키는 보존, new에만 있는 키는 추가. new
+  안에서 키가 중복되면 마지막 행 채택. new가 0행이면 existing을
+  보존하되(진짜 없는 게 없으면), existing마저 없으면(최초 실행) new의
+  컬럼 구조라도 살려 반환 — 안 그러면 헤더 없는 빈 CSV가 만들어지는
+  버그가 있었다(초기 구현에서 발견해 수정, 아래 검증 참고).
+- `group_replace_merge(existing, new, group_keys)`: group_keys가 일치하는
+  기존 행들을 통째로 지우고 new로 교체 — 행 안에 개별 식별자가 없는
+  테이블(평가자 1인 1행인 `leadership_comments.csv`) 전용.
+- `write_merged(out_path, new, keys, group_replace=False)`: 기존 CSV
+  읽기 → 병합 → 저장까지 한 번에 처리하는 편의 함수. 각 `process_*.py`의
+  `result.to_csv(...)` 한 줄을 이걸로 바꾸면 된다.
+- `TABLE_KEYS`/`GROUP_REPLACE_KEYS`: 테이블별 자연키 등록부(한 곳에서
+  관리, 아래 표).
+
+**자연키 등록부(`TABLE_KEYS`)**:
+
+| 테이블 | 자연키 | 비고 |
+|---|---|---|
+| researchers | researcher_id | 1인 1행 "현재상태" |
+| researchers_history | researcher_id, valid_year, valid_month | 신규, 월별 스냅샷 누적 |
+| evaluations / tech_ownership / job_profile / work_objective | researcher_id | 1인 1행(wide) |
+| hr_orders | researcher_id, order_date, order_name | |
+| tasks | researcher_id, task_name, start_date | the_task_name 분리 후에도 구간별 start_date가 달라 키 유지됨 |
+| patents | application_id, researcher_id | 특허 1건에 발명자 여러 명 = 여러 행 |
+| publications | researcher_id, title, pub_date | |
+| awards | researcher_id, award_date, award_name | |
+| nurturing | researcher_id, start_date, category | |
+| core_technology | researcher_id, tech_field, tech_name | 1인당 여러 핵심기술 가능(1인1행 아님, 코드로 확인) |
+| education | researcher_id, degree | 학사/석사/박사 각 1건 |
+| incentive_selection | researcher_id, year | |
+| leadership | researcher_id, year, evaluator_group | |
+| comments | researcher_id, year, commenter_type | |
+| tasks_information | task_name | 기존 `_dedupe_by_name()`과 동일 기준 |
+| project_confl_address | dep_name, project_name | |
+| technology_transfer / transfers / certifications / succession | (raw 컬럼 기준 추정 키) | 전용 처리기 없이 `_raw` 폴백만 지원 — 아래 참고 |
+| leadership_comments | researcher_id, year, evaluator_group (그룹 단위 교체) | 평가자 개별 식별자가 없어 GROUP_REPLACE_KEYS 사용 |
+
+**수정한 처리기(17개, 전부 동일 패턴)**: `process()`에 `raw_dir: str =
+RAW_DIR` 매개변수를 추가(기본은 기존과 동일한 `data/raw`, `data/updates`를
+넘기면 그 폴더만 읽음)하고, 마지막 `result.to_csv(out_path, ...)`를
+`merge_utils.write_merged(out_path, result, TABLE_KEYS['테이블명'])`로
+교체했다 — `process_researchers`, `process_tp_evaluation`(evaluations),
+`process_patents`, `process_personnel_orders`(hr_orders),
+`process_nurturing`, `process_task_information`(tasks_information),
+`process_awards`, `process_education`, `process_leadership`(leadership +
+leadership_comments, 후자는 group_replace), `process_incentive`
+(incentive_selection), `process_tech_ownership`, `process_job_profile`,
+`process_work_objective`, `process_publications`, `process_tasks`,
+`process_comments`(comments), `process_project_confl`
+(project_confl_address). `SOURCE`/`OUTPUT`처럼 모듈 로드 시점에 `RAW_DIR`을
+써서 경로를 고정해버리던 3개 파일(`process_publications`/`process_tasks`
+는 `SOURCE_FILE` 상수 + 함수 안에서 `os.path.join(raw_dir, ...)`으로,
+`process_work_objective`는 `_read_year_file()`에 `raw_dir` 인자를 추가로
+전달하도록)도 함께 고쳤다. 더 이상 안 쓰는 `import csv`(각자 자기 CSV를
+직접 쓰던 줄이 `write_merged` 호출로 바뀌며 필요 없어짐)도 제거.
+
+**`pipeline/run_pipeline.py`**: `_run_with_fallback()`(전용 처리기 실패 시
+`{table}_raw` 폴백)와 맨 끝 `TABLES` 루프(전용 처리기 자체가 없는
+technology_transfer/transfers/certifications/succession, raw 컬럼을
+그대로 쓰는 4개)도 `TABLE_KEYS`에 키가 등록돼 있고 실제 컬럼에 그 키가
+있으면 업서트, 없으면(raw 스키마가 예상과 다르면) 기존처럼 전체 교체로
+안전하게 폴백하도록 고쳤다. 이 4개는 전용 컬럼 매핑이 없어 raw 파일
+컬럼명이 곧 출력 컬럼명이라는 전제로 키를 추정해뒀다(실제 raw 파일이
+준비되면 확인 필요).
+
+**`pipeline/process_researchers.py`**: 위 공통 패턴에 더해 valid_year/
+valid_month 추출(`COL_VALID_YEAR='인원실적년도'`, `COL_VALID_MONTH=
+'인원실적월'`, 각각 4자리/2자리 문자열로 정규화), `_compute_is_current()`
+(병합된 전체 파일에서 최신 (valid_year, valid_month)를 구해 `is_current`
+재계산), `researchers_history.csv` 누적 저장(같은 `process()` 호출
+안에서 researchers.csv 저장 직후 이어서 실행)을 추가했다.
+
+**`pipeline/paths.py`**: `UPDATES_DIR = data/updates` 신규.
+
+**`pipeline/run_update.py`(신규)**: `data/updates/`에 있는 파일명을 보고
+해당하는 처리기만 `raw_dir=UPDATES_DIR`로 실행하는 진입점. `data/raw/`는
+전혀 읽지도 쓰지도 않는다. 폴더가 비어있거나 예상 파일명과 다르면 안내만
+출력하고 끝난다(부분 업데이트 지원 — 이번엔 인력현황만 왔으면 그 파일
+하나만 넣고 돌리면 됨).
+
+**검증**: `merge_utils.upsert_merge`/`group_replace_merge`를 목
+DataFrame으로 직접 호출해 교체/보존/추가/그룹교체 동작 확인. 실제 xlsx
+2개(2026-06 스냅샷 3명, 2026-07 스냅샷에서 1명 전배로 빠지고 1명 CL
+변경·1명 신규입사)를 만들어 `process_researchers.process()`를
+`data/raw` 대신 임시 폴더로 연달아 실행 — 전배자가 `researchers.csv`에
+`is_current='N'`으로 마지막 상태 그대로 남고(삭제 안 됨), 나머지는
+`Y`로 정확히 갈리는지, `researchers_history.csv`가 두 시점 스냅샷을
+누락 없이 누적하는지(이영희의 CL4→CL5 두 행 모두 보존), 같은 파일을
+다시 실행해도 히스토리가 중복 누적되지 않는지(멱등성) 확인. 수정한 17개
+처리기 전부 `py_compile` 통과 + 존재하지 않는 폴더로 `process(raw_dir=...)`
+직접 호출해 예외 없이 `[SKIP]`으로 정상 종료하는지 일괄 확인.
+`run_pipeline.py`/`run_update.py`를 실제로 실행해(원본 파일 없는 이
+컨테이너 환경 기준) 에러 없이 끝까지 도는지 확인하던 중, `new`가 0행이지만
+컬럼은 있는 경우(예: comments_raw.xlsx도 없고 leadership_comments.csv도
+없어 `process_comments`의 `out_df`가 0행인 상황) `upsert_merge`가
+`existing`(파일이 아예 없으면 컬럼도 없는 빈 DataFrame)을 그대로
+반환해버려 헤더 없는 빈 CSV가 만들어지는 버그를 실제로 재현·확인하고
+수정(`len(new) == 0`일 때 `existing`이 비어있으면 `new`를 반환하도록)
+— 수정 후 재실행해 `comments.csv`가 정상 헤더로 저장되는지 재확인.
+이번 세션 컨테이너에는 실제 원본 xlsx가 없어(`data/raw/`가 통째로
+없음), 위 검증은 모두 임시로 만든 목/합성 데이터 기준이다.
+
+**아직 안 한 것(2단계, 다음 작업)**: 연구원 프로필/명단/보유 전문성
+조직도/AI 유사 연구원 매칭/AI 검색 5개 화면에 "현재기준 ↔ 누적기준"
+토글을 화면별로 독립 배치(사용자 확정)하는 UI 작업 — JOB Market은
+후보군 계산을 항상 현재기준으로 고정하고 토글 자체를 넣지 않기로
+확정했다. 보유 전문성 조직도는 누적기준일 때 조직도 트리 탐색 대신
+이름/사번 검색만 허용하기로 확정. 이 화면 작업은 아직 시작 전이다.
