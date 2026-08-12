@@ -2143,3 +2143,43 @@ hover 패턴(다만 이미지 대신 텍스트 툴팁).
 
 검증: `_render_result()`를 목 결과로 직접 호출해 아이콘 id/Tooltip
 target이 일치하는지, 툴팁 내용에 A/B 설명 문구가 정확히 들어가는지 확인.
+
+## 완료: 연구원 개별 프로필 검색에 과제명 추가 + 최근 검색 이력
+
+"1. 연구원 개별 프로필에서 연구원 검색 시 기존 부서명에서 과제명도
+추가해줘. 2. 연구원 검색 시 내가 검색했었던 연구원 이력이 남아있어서
+다시 찾아볼 수 있게해줘" 요청.
+
+**1) 검색 라벨에 과제명(org_code) 추가**(`pages/researcher_profile.py`
+`_load_selector_data()`의 `_opt()`): 기존 `"이름 [부서]  (사번) — 직급"`을
+`"이름 [부서 · 과제]  (사번) — 직급"`으로 — 부서/과제 둘 다 비어있지
+않은 것만 `·`로 이어 대괄호 안에 넣는다(둘 다 없으면 대괄호 자체 생략).
+
+**2) 최근 검색 이력**: 로그인 체계가 없어(이 프로젝트 공통 제약) 서버에
+"누구의" 이력인지 구분할 방법이 없다 — 대신 `dcc.Store(id='researcher-
+search-history', storage_type='local')`로 **브라우저 localStorage**에
+남겨, 같은 브라우저로 새로고침/재방문해도 이어서 보이게 했다("나" =
+이 브라우저 하나로 구분).
+- `_record_search_history()` — `researcher-select` 값이 바뀔 때마다(직접
+  검색이든 이력 칩 클릭이든) 그 사람을 이력 맨 앞으로 올린다. 이미 있던
+  항목은 지우고 다시 넣어 중복 없이 최신순 유지, 최대 8개(`_HISTORY_LIMIT`)
+  만 보관.
+- `_render_history_chips()` — 선택 카드 하단에 "최근 검색" 칩(`dbc.Badge`,
+  패턴매칭 id `{'type':'researcher-history-chip','rid':...}`)으로 렌더링,
+  비어 있으면 안내 문구.
+- `_select_from_history()` — 칩을 누르면 그 사람의 부서로 `dept-select`도
+  같이 옮긴 뒤 `researcher-select` 값을 설정한다 — 부서를 안 맞추면
+  현재 부서 필터에 그 사람이 없어 선택이 무시될 수 있어서(`layout()`의
+  `id=` 딥링크가 처음부터 default_dept/default_rid를 함께 계산해 두는 것과
+  동일한 이유). `Output('researcher-select', 'value', allow_duplicate=True)`
+  — 이미 `filter_by_dept` 콜백이 같은 Output을 갖고 있어 중복 허용 필요.
+
+검증: `_load_selector_data()`로 라벨에 "부서 · 과제"가 올바르게 붙는지
+확인. `_record_search_history()`를 연속 호출해(A선택→B선택→A재선택)
+최신순·중복제거가 맞는지, `_render_history_chips()`가 그 목록으로 올바른
+배지(텍스트/패턴매칭 id)를 만드는지 확인. `layout()`을 직접 호출해
+`researcher-search-history`/`researcher-history-chips` 컴포넌트가
+레이아웃에 포함되는지 확인. `_select_from_history()`는 `dash.ctx.
+triggered_id`를 쓰는 함수라 테스트 스크립트에서 직접 호출하면 컨텍스트
+오류가 나는 게 정상(이 앱의 다른 패턴매칭 id 콜백들과 동일한 제약) —
+로직 자체는 소스 리뷰로 확인.

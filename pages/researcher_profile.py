@@ -61,9 +61,11 @@ def _load_selector_data():
 
         def _opt(row):
             dept = str(row.get('department', '') or '').strip()
-            dept_suffix = f' [{dept}]' if dept else ''
+            org = str(row.get('org_code', '') or '').strip()
+            tag = ' · '.join(v for v in (dept, org) if v)
+            tag_suffix = f' [{tag}]' if tag else ''
             return {
-                'label': f'{row["name"]}{dept_suffix}  ({row["researcher_id"]}) — {row["position"]}',
+                'label': f'{row["name"]}{tag_suffix}  ({row["researcher_id"]}) — {row["position"]}',
                 'value': row['researcher_id'],
             }
 
@@ -112,7 +114,7 @@ def layout(id=None, **_kwargs):
 
 def _selector_card(dept_opts, res_opts, default_dept, default_rid):
     return dbc.Card(
-        dbc.CardBody(
+        dbc.CardBody([
             dbc.Row([
                 dbc.Col([
                     dbc.Label('조직', className='fw-semibold small text-muted mb-1'),
@@ -137,7 +139,14 @@ def _selector_card(dept_opts, res_opts, default_dept, default_rid):
                     ),
                 ]),
             ], align='end', className='g-3'),
-        ),
+            html.Div([
+                html.Span('최근 검색', className='small fw-semibold text-muted me-2'),
+                html.Div(id='researcher-history-chips', className='d-inline-flex flex-wrap'),
+            ], className='mt-2 d-flex align-items-center flex-wrap'),
+            # storage_type='local' — 브라우저 localStorage에 저장돼 새로고침/재방문
+            # 후에도 남는다(로그인 체계가 없어 "나"는 이 브라우저 하나로 구분).
+            dcc.Store(id='researcher-search-history', storage_type='local', data=[]),
+        ]),
         className='mb-3 shadow-sm',
     )
 
@@ -308,6 +317,79 @@ def filter_by_dept(dept, current_rid):
     valid_ids = {o['value'] for o in opts}
     new_value = current_rid if current_rid in valid_ids else (opts[0]['value'] if opts else None)
     return opts, new_value
+
+
+_HISTORY_LIMIT = 8  # "최근 검색" 칩 최대 개수(오래된 항목부터 밀려남)
+
+
+@callback(
+    Output('researcher-search-history', 'data'),
+    Input('researcher-select', 'value'),
+    State('researcher-search-history', 'data'),
+    prevent_initial_call=True,
+)
+def _record_search_history(rid, history):
+    """researcher-select 값이 바뀔 때마다(직접 검색이든, 최근 검색 칩 클릭이든)
+    그 사람을 이력 맨 앞으로 올린다(이미 있던 항목은 지우고 다시 넣어 중복
+    없이 최신순 유지). storage_type='local'이라 브라우저에 남아 새로고침/재방문
+    후에도 이어서 볼 수 있다(로그인 체계가 없어 "나" = 이 브라우저)."""
+    if not rid:
+        return no_update
+    history = [h for h in (history or []) if h.get('rid') != rid]
+    res_df = read_processed('researchers')
+    match = res_df[res_df['researcher_id'] == rid]
+    if not match.empty:
+        row = match.iloc[0]
+        dept = str(row.get('department', '') or '').strip()
+        name = str(row.get('name', '') or '') or rid
+        label = f'{name} [{dept}]' if dept else name
+    else:
+        label = rid
+    history.insert(0, {'rid': rid, 'label': label})
+    return history[:_HISTORY_LIMIT]
+
+
+@callback(
+    Output('researcher-history-chips', 'children'),
+    Input('researcher-search-history', 'data'),
+)
+def _render_history_chips(history):
+    history = history or []
+    if not history:
+        return html.Span('아직 검색 이력이 없습니다.', className='text-muted small')
+    return [
+        dbc.Badge(
+            h['label'], id={'type': 'researcher-history-chip', 'rid': h['rid']},
+            color='light', text_color='dark', className='me-1 mb-1 border',
+            style={'cursor': 'pointer', 'fontWeight': 'normal'},
+        )
+        for h in history if h.get('rid')
+    ]
+
+
+@callback(
+    Output('dept-select', 'value'),
+    Output('researcher-select', 'value', allow_duplicate=True),
+    Input({'type': 'researcher-history-chip', 'rid': dash.ALL}, 'n_clicks'),
+    State({'type': 'researcher-history-chip', 'rid': dash.ALL}, 'id'),
+    prevent_initial_call=True,
+)
+def _select_from_history(n_clicks_list, ids):
+    """"최근 검색" 칩을 누르면 그 사람의 부서로 조직 드롭다운을 같이 옮겨줘야
+    (layout()의 id= 딥링크와 동일한 이유로) researcher-select 옵션 목록에 그
+    사람이 실제로 들어있는 상태가 된다 — 부서만 안 맞추면 필터링된 옵션에서
+    빠져 있어 선택이 무시될 수 있다."""
+    triggered_id = dash.ctx.triggered_id
+    if not triggered_id:
+        return no_update, no_update
+    idx = next((i for i, d in enumerate(ids) if d == triggered_id), None)
+    if idx is None or not n_clicks_list[idx]:
+        return no_update, no_update
+    rid = triggered_id['rid']
+    res_df = read_processed('researchers')
+    match = res_df[res_df['researcher_id'] == rid]
+    dept = str(match.iloc[0].get('department', '') or '') if not match.empty else None
+    return (dept or None), rid
 
 
 @callback(
