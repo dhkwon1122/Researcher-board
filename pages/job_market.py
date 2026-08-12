@@ -284,11 +284,16 @@ def layout(**_kwargs):
         ], id='jm-individual-mode-row', style={'display': 'none'}),
 
         html.Div('참여 가능한 과제에서 제외', className='fw-bold small mb-1 mt-2'),
+        html.Div(
+            '실제로 제외되는 건 아래 "제외할 과제"에서 고른 과제뿐입니다 — 부서는 '
+            '과제를 부서별로 좁혀 찾기 위한 보조 필터로, 그 자체는 검색 결과에 영향을 주지 않습니다.',
+            className='small text-muted mb-1',
+        ),
         dbc.Row([
             dbc.Col(dcc.Dropdown(id='jm-exclude-dept', options=department_options,
-                                  placeholder='제외할 부서(복수 선택)', multi=True), md=6),
+                                  placeholder='부서로 좁혀 찾기(선택, 결과엔 영향 없음)', multi=True), md=6),
             dbc.Col(dcc.Dropdown(id='jm-exclude-project', options=[],
-                                  placeholder='제외할 과제(복수 선택)', multi=True), md=6),
+                                  placeholder='제외할 과제(복수 선택) — 실제로 제외되는 대상', multi=True), md=6),
         ], className='g-2 mb-3'),
 
         dbc.Button([html.I(className='bi bi-search me-1'), '검색'],
@@ -331,10 +336,10 @@ def _update_project_options(department):
     Input('jm-exclude-dept', 'value'),
 )
 def _update_exclude_project_options(excluded_dept):
-    # "종료 예정 과제" 선택과 동일하게, 부서를 고르면 그 부서의 과제만 보이도록
-    # 좁힌다. 부서 자체를 제외 조건으로 쓰는 것과는 별개(services/job_market.py의
-    # _expand_excluded_projects — 부서 제외와 개별 과제 제외는 계속 독립적으로
-    # 합쳐진다), 여기서는 드롭다운에 보여줄 옵션만 좁힌다.
+    # "종료 예정 과제" 선택과 동일하게, 부서를 고르면 "제외할 과제" 드롭다운에
+    # 그 부서의 과제만 보이도록 좁혀서 고르기 편하게 할 뿐이다 — 부서 값 자체는
+    # jm.run_project_search()/run_individual_search()에 전달되지 않으므로 검색
+    # 결과에는 어떤 영향도 주지 않는다(사용자 확정: 부서는 순수 캐스케이딩 필터).
     return [{'label': p, 'value': p} for p in jm.list_projects(excluded_dept)]
 
 
@@ -416,15 +421,13 @@ def _render_selected(selected):
     State('jm-mode', 'value'),
     State('jm-project-select', 'value'),
     State('jm-individual-selected-store', 'data'),
-    State('jm-exclude-dept', 'value'),
     State('jm-exclude-project', 'value'),
     State('jm-history-refresh', 'data'),
     prevent_initial_call=True,
 )
-def _run(n_clicks, mode, project_names, selected_individuals, excluded_depts, excluded_projects, refresh_token):
+def _run(n_clicks, mode, project_names, selected_individuals, excluded_projects, refresh_token):
     if not n_clicks:
         return dash.no_update, dash.no_update, dash.no_update
-    excluded_depts = excluded_depts or []
     excluded_projects = excluded_projects or []
     project_names = project_names or []
     selected_individuals = selected_individuals or []
@@ -434,11 +437,11 @@ def _run(n_clicks, mode, project_names, selected_individuals, excluded_depts, ex
             if not selected_individuals:
                 return dbc.Alert('대상자를 검색해서 추가해주세요.', color='warning'), dash.no_update, None
             researcher_ids = [c['researcher_id'] for c in selected_individuals]
-            result = jm.run_individual_search(researcher_ids, excluded_depts, excluded_projects)
+            result = jm.run_individual_search(researcher_ids, excluded_projects)
         else:
             if not project_names:
                 return dbc.Alert('종료 예정 과제를 선택해주세요.', color='warning'), dash.no_update, None
-            result = jm.run_project_search(project_names, excluded_depts, excluded_projects)
+            result = jm.run_project_search(project_names, excluded_projects)
     except Exception as exc:  # noqa: BLE001 — 어떤 원인이든 화면에 아무 반응도
         # 없는 것보다는, 오류를 눈에 보이게 알려주는 게 낫다(외부 입력/실데이터
         # 경계). services/job_market.py 내부의 개별 안전망(run_concurrent 등)이

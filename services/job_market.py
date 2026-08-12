@@ -182,16 +182,12 @@ def _dedup_candidate_rows(projects_df) -> list:
     return list(seen.values())
 
 
-def _expand_excluded_projects(excluded_departments: set, excluded_org_codes: set,
-                               all_rows: list) -> set:
-    """제외 부서(dep_name)를 그 부서의 모든 과제로 펼치고, 제외 과제(project_name)와
-    합쳐 정규화된 제외 집합을 만든다."""
-    excluded_norm = {fit.normalize_org_code(p) for p in excluded_org_codes}
-    if excluded_departments:
-        for row in all_rows:
-            if row['dep_name'] in excluded_departments:
-                excluded_norm.add(row['norm'])
-    return excluded_norm
+def _normalize_excluded_projects(excluded_org_codes: set) -> set:
+    """제외 과제(project_name)를 정규화된 제외 집합으로 만든다. 화면의 '제외할
+    부서' 드롭다운은 이 '제외할 과제' 목록을 좁혀 보여주는 캐스케이딩 필터일
+    뿐(사용자 확정: 부서 자체는 결과에 아무 영향이 없어야 함) — 실제 후보 풀
+    제외는 여기서 만드는 과제 단위 집합만으로 결정된다."""
+    return {fit.normalize_org_code(p) for p in excluded_org_codes}
 
 
 def _build_candidate_pool(excluded_norm: set, expertise_profiles: dict) -> dict:
@@ -419,11 +415,14 @@ def _own_org_code(researcher_id: str, researchers_df) -> str:
     return str(rows.iloc[0].get('org_code') or '').strip()
 
 
-def run_project_search(project_names: list, excluded_departments: list, excluded_org_codes: list) -> dict:
+def run_project_search(project_names: list, excluded_org_codes: list) -> dict:
     """'종료 예정 과제' 단위 검색 — 복수 선택 가능. 선택한 과제 전체의 배정
     인원(중복 인원은 한 번만)에 대해 추천을 반복하고, 선택한 과제들은 전부
     (본인이 속한 과제뿐 아니라 함께 종료되는 다른 선택 과제들도) 후보에서
-    제외한다 — 같이 끝나는 과제로 서로 재추천되지 않도록."""
+    제외한다 — 같이 끝나는 과제로 서로 재추천되지 않도록. 제외는 과제
+    단위(excluded_org_codes)로만 결정되고, 화면의 부서 드롭다운은 이 과제
+    목록을 좁혀 보여주는 캐스케이딩 필터일 뿐 결과에는 영향을 주지 않는다
+    (사용자 확정)."""
     project_names = [p for p in (project_names or []) if p]
     if not project_names:
         return {'error': '종료 예정 과제를 선택해주세요.'}
@@ -439,9 +438,7 @@ def run_project_search(project_names: list, excluded_departments: list, excluded
         return {'error': f'선택한 과제({", ".join(project_names)})에 배정된 인원이 없습니다.'}
     roster = build_roster(researcher_ids)
 
-    projects_df = data_store.read_processed('project_confl_address')
-    all_rows = _dedup_candidate_rows(projects_df) if not projects_df.empty else []
-    excluded_norm = _expand_excluded_projects(set(excluded_departments), set(excluded_org_codes), all_rows)
+    excluded_norm = _normalize_excluded_projects(set(excluded_org_codes))
     excluded_norm |= {fit.normalize_org_code(p) for p in project_names}  # 종료 예정 과제 전체는 항상 제외
 
     expertise_profiles = data_store.read_expertise_profiles()
@@ -511,10 +508,13 @@ def search_researchers(query: str) -> list:
     ][:MAX_SEARCH_RESULTS]
 
 
-def run_individual_search(researcher_ids: list, excluded_departments: list, excluded_org_codes: list) -> dict:
+def run_individual_search(researcher_ids: list, excluded_org_codes: list) -> dict:
     """개인별 검색 — 화면에서 미리 골라 확정한 researcher_id 목록(1명 또는
     여러 명)에 대해 각자의 후보 과제를 추천한다. 각자 현재 속한 과제는
-    항상 자동으로 제외한다(사람마다 다를 수 있어 개별 계산).
+    항상 자동으로 제외한다(사람마다 다를 수 있어 개별 계산). 제외는 과제
+    단위(excluded_org_codes)로만 결정되고, 화면의 부서 드롭다운은 과제
+    목록을 좁혀 보여주는 캐스케이딩 필터일 뿐 결과에는 영향을 주지 않는다
+    (사용자 확정).
 
     같은 과제(정규화된 org_code) 소속 사람이 여럿이면 그들의 제외 조건이
     동일하므로 후보 풀을 그룹당 한 번만 만들어 재사용한다(임베딩 반복
@@ -526,9 +526,7 @@ def run_individual_search(researcher_ids: list, excluded_departments: list, excl
     researchers_df = data_store.read_processed('researchers')
     roster = build_roster(researcher_ids)
 
-    projects_df = data_store.read_processed('project_confl_address')
-    all_rows = _dedup_candidate_rows(projects_df) if not projects_df.empty else []
-    base_excluded_norm = _expand_excluded_projects(set(excluded_departments), set(excluded_org_codes), all_rows)
+    base_excluded_norm = _normalize_excluded_projects(set(excluded_org_codes))
     expertise_profiles = data_store.read_expertise_profiles()
 
     own_norm_by_rid = {}

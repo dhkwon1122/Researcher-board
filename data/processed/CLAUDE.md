@@ -2183,3 +2183,46 @@ search-history', storage_type='local')`로 **브라우저 localStorage**에
 triggered_id`를 쓰는 함수라 테스트 스크립트에서 직접 호출하면 컨텍스트
 오류가 나는 게 정상(이 앱의 다른 패턴매칭 id 콜백들과 동일한 제약) —
 로직 자체는 소스 리뷰로 확인.
+
+## 완료: JOB Market "제외" 부서 선택이 결과에 영향을 주지 않도록 수정
+
+이전 턴에서 "부서를 선택하면 그 부서의 모든 과제가 제외되는 게 맞냐"고
+확인을 요청하셨고(전체 42개 과제 중 5개 과제짜리 부서를 제외하면 37개로
+줄어드는 걸 관찰) — 코드를 다시 확인해 그게 `_expand_excluded_projects()`
+가 부서를 그 부서 소속 과제 전체로 펼쳐 제외 집합에 합치기 때문이라고
+설명했다. 이번 요청은 그 동작을 **원치 않는 것으로 확정** — "부서는
+단순히 과제를 선택하기 위한 캐스캐이딩 역할만 하고, 실제 제외/검토는
+과제 단위에서만 선택하게, 부서는 결과에 아무 영향이 없도록" 수정.
+
+**`services/job_market.py`**: `_expand_excluded_projects(excluded_departments,
+excluded_org_codes, all_rows)`(부서→과제 펼치기 로직)를 완전히 제거하고,
+`_normalize_excluded_projects(excluded_org_codes)`(과제명 정규화만 하는
+한 줄짜리 함수)로 교체. `run_project_search()`/`run_individual_search()`
+시그니처에서 `excluded_departments` 파라미터 자체를 삭제(부서 값이
+함수에 전달될 통로 자체를 없애 "결과에 영향 없음"을 구조적으로 보장) —
+이제 두 함수 다 `excluded_org_codes`(제외할 과제 목록)만 받는다. 이
+파라미터를 위해서만 읽던 `project_confl_address.csv`/`_dedup_candidate_rows()`
+호출도 두 함수에서 같이 제거(불필요해짐).
+
+**`pages/job_market.py`**: `_run()` 콜백에서 `State('jm-exclude-dept',
+'value')`를 제거하고 `jm.run_project_search()`/`run_individual_search()`
+호출에서 `excluded_depts` 인자를 뺐다. `jm-exclude-dept` 드롭다운
+자체는 그대로 남겨뒀다 — `_update_exclude_project_options()`가 이미
+그 값으로 "제외할 과제" 드롭다운의 옵션만 좁혀 보여주는 순수 캐스케이딩
+용도로만 쓰고 있어서(결과 계산에는 관여하지 않음), 과제를 부서별로
+빠르게 찾는 용도로는 계속 유용하다. 다만 오해의 소지가 있어 placeholder
+문구를 "제외할 부서(복수 선택)" → "부서로 좁혀 찾기(선택, 결과엔 영향
+없음)"로 바꾸고, 섹션 제목 아래에 "실제로 제외되는 건 아래 '제외할
+과제'에서 고른 과제뿐입니다" 안내 문구를 추가했다. 스테일해진 주석
+("_expand_excluded_projects — 부서 제외와 개별 과제 제외는 계속
+독립적으로 합쳐진다")도 새 동작에 맞게 수정.
+
+검증: `_normalize_excluded_projects()`가 과제명만 정규화하는지 확인.
+사용자가 관찰한 시나리오(전체 42개 프로젝트, 그중 5개가 특정 부서 소속)를
+목 DataFrame으로 재현해 — 부서를 제외 집합에 전혀 넣지 않고도(새 함수
+시그니처 자체가 부서를 받지 않으므로 구조적으로 불가능) 42개가 그대로
+후보로 남는지 확인. `run_project_search`/`run_individual_search`의
+`inspect.signature()`로 `excluded_departments` 파라미터가 완전히
+사라졌는지 확인. `pages.job_market.layout()`을 직접 호출해
+`jm-exclude-dept`/`jm-exclude-project` 두 컴포넌트가 여전히 레이아웃에
+있는지(드롭다운 자체는 유지) 확인.
