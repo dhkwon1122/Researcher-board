@@ -161,12 +161,16 @@ def _col_education(_rid, rows):
 def _col_evaluation(_rid, rows):
     """평가 — 연봉등급 3개년을 첫 줄에 "다/다/다", 그에 대응하는(각 연봉등급
     연도 - 1) 상/하반기업적 3개년을 둘째 줄에 "(MT/MT, MT/MT, MT/MT)"로 표시.
-    반기 값이 없는 자리는 evaluations.format_half_pair()가 '-'로 채운다."""
+    둘째 줄의 각 항목은 evaluations.format_half_display()로 만드는데, 그 해
+    연봉등급이 있으면 있는 반기만 보여주고(예: 상반기 없음/하반기만 있음 →
+    "EM"만, "-/EM"처럼 빈 자리를 표시하지 않음 — 사용자 확정), 연봉등급
+    자체가 없으면 기존대로 반기 두 자리를 항상 표시한다(빈 자리는 '-')."""
     eva_rows = rows['evaluations']
     eva = eva_rows[0] if eva_rows else {}
     salary_line = '/'.join(_s(eva.get(evaluations.salary_grade_column(y))) or '-' for y in _EVAL_SALARY_YEARS)
     half_line = '(' + ', '.join(
-        evaluations.format_half_pair(
+        evaluations.format_half_display(
+            _s(eva.get(evaluations.salary_grade_column(y + 1))),
             _s(eva.get(evaluations.first_half_column(y))),
             _s(eva.get(evaluations.second_half_column(y))),
         )

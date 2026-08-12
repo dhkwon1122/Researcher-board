@@ -56,6 +56,25 @@ def format_half_pair(first_half: str, second_half: str) -> str:
     return f"{first_half or '-'}/{second_half or '-'}"
 
 
+def format_half_display(salary_grade: str, first_half: str, second_half: str) -> str:
+    """엑셀 다운로드의 "평가" 컬럼 둘째 줄(연도별 반기 표기)에 쓰는 조각 —
+    format_evaluation_cell()과 같은 판단이지만, 연봉등급 부분은 첫째 줄에
+    이미 따로 있으므로 괄호 안에 들어갈 반기 부분만 돌려준다.
+      - 연봉등급이 있으면: 있는 반기만 이어붙임(둘 다 없으면 '-') — 예:
+        연봉등급 O/상반기 X/하반기 O → "EM"(하반기만, '-' 없이).
+      - 연봉등급이 없으면: format_half_pair()로 반기 두 자리를 항상 표시
+        (없는 자리는 '-', 예: "-/MT") — 이 경우는 그대로 유지(사용자 확정,
+        연봉등급이 있을 때만 '표시하지 말아달라'는 요청)."""
+    salary_grade = (salary_grade or '').strip()
+    first_half = (first_half or '').strip()
+    second_half = (second_half or '').strip()
+
+    if salary_grade:
+        halves = '/'.join(h for h in (first_half, second_half) if h)
+        return halves if halves else '-'
+    return format_half_pair(first_half, second_half)
+
+
 def format_evaluation_cell(salary_grade: str, first_half: str, second_half: str) -> str:
     """한 해(연봉등급 연도 기준)의 평가를 한 셀 표기로 합성한다.
       - 연봉등급이 있으면: "{연봉등급}({있는 반기만 이어붙임})" — 반기가 둘 다
