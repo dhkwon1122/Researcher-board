@@ -112,7 +112,7 @@ def _build_summary_df(current_only: bool = True) -> pd.DataFrame:
         # ── 수상 ───────────────────────────────────────────────────────────
         awd_cnt = len(awd[awd['researcher_id'] == rid])
 
-        # ── 학력(최종)/전공 ───────────────────────────────────────────────────
+        # ── 학력/전공 ───────────────────────────────────────────────────
         edu_r = edu[edu['researcher_id'] == rid]
         if not edu_r.empty and 'degree' in edu_r.columns:
             top_edu = edu_r.assign(_rank=edu_r['degree'].map(_DEGREE_RANK).fillna(0)) \
@@ -131,7 +131,8 @@ def _build_summary_df(current_only: bool = True) -> pd.DataFrame:
             '직급':           str(r.get('position', '')),
             '직책':           str(title_by_id.get(rid, '') or '').strip() or '-',
             '성별':           str(r.get('gender', '')),
-            '학력(최종)':     highest,
+            '재직상태':       str(r.get('employment_status', '') or '').strip() or '-',
+            '학력':           highest,
             '전공':           major,
             **grades,
             '인센티브':       inc_cat,
@@ -201,11 +202,14 @@ def _build_columns(df: pd.DataFrame) -> list:
 def layout():
     df = _build_summary_df(current_only=True)
 
-    dept_opts    = _filter_options(df, '부서')
-    project_opts = _project_options()
-    pos_opts     = _filter_options(df, '직급')
-    degree_opts  = _filter_options(df, '학력(최종)')
-    inc_opts     = _filter_options(df, '인센티브')
+    dept_opts     = _filter_options(df, '부서')
+    project_opts  = _project_options()
+    pos_opts      = _filter_options(df, '직급')
+    title_opts    = _filter_options(df, '직책')
+    gender_opts   = _filter_options(df, '성별')
+    degree_opts   = _filter_options(df, '학력')
+    major_opts    = _filter_options(df, '전공')
+    employ_opts   = _filter_options(df, '재직상태')
 
     columns = _build_columns(df)
 
@@ -227,9 +231,12 @@ def layout():
         ], className='mb-3'),
 
         # ── 상단 드롭다운 필터 ─────────────────────────────────────────────
-        # 드롭다운 선택 자체는 바로 반영되지 않고, 검색 아이콘을 눌러야 테이블에
-        # 적용된다(사용자 확정) — 드롭다운은 filter-*, 검색/엑셀 버튼은 아래
-        # 콜백에서 각각 Input/State로 분리해서 처리한다.
+        # 드롭다운 선택 자체는 바로 반영되지 않고, 검색 아이콘(또는 상세 필터
+        # 모달의 '적용')을 눌러야 테이블에 적용된다(사용자 확정) — 드롭다운은
+        # filter-*, 검색/엑셀 버튼은 아래 콜백에서 각각 Input/State로 분리해서
+        # 처리한다. 자주 쓰는 부서/과제만 메인 화면에 남기고, 직급/직책/성별/
+        # 학력/전공/재직상태는 화면이 복잡해지지 않도록 '필터' 모달로 옮겼다
+        # (사용자 요청).
         dbc.Card(
             dbc.CardBody(
                 dbc.Row([
@@ -246,38 +253,26 @@ def layout():
                             className='small',
                         ),
                         html.Div(
-                            '누적기준: 이름/사번 검색 중심 (부서·과제·직급 필터 비활성화)',
+                            '누적기준: 이름/사번 검색 중심 (부서·과제·직급·직책 필터 비활성화)',
                             className='text-muted', style={'fontSize': '0.72rem'},
                         ),
-                    ], md=2),
+                    ], md=3),
                     dbc.Col([
                         dbc.Label('부서', className='small fw-semibold text-muted mb-1'),
                         dcc.Dropdown(id='filter-dept', options=dept_opts, multi=True,
                                      placeholder='전체', clearable=True),
-                    ], md=2),
+                    ], md=3),
                     dbc.Col([
                         dbc.Label('과제', className='small fw-semibold text-muted mb-1'),
                         dcc.Dropdown(id='filter-project', options=project_opts, multi=True,
                                      placeholder='전체', clearable=True),
-                    ], md=2),
+                    ], md=3),
                     dbc.Col([
-                        dbc.Label('직급', className='small fw-semibold text-muted mb-1'),
-                        dcc.Dropdown(id='filter-pos', options=pos_opts, multi=True,
-                                     placeholder='전체', clearable=True),
-                    ], md=2),
-                    dbc.Col([
-                        dbc.Label('학력(최종)', className='small fw-semibold text-muted mb-1'),
-                        dcc.Dropdown(id='filter-degree', options=degree_opts, multi=True,
-                                     placeholder='전체', clearable=True),
-                    ], md=2),
-                    dbc.Col([
-                        dbc.Label('인센티브', className='small fw-semibold text-muted mb-1'),
-                        dcc.Dropdown(id='filter-incentive', options=inc_opts, multi=True,
-                                     placeholder='전체', clearable=True),
-                    ], md=2),
-                    dbc.Col([
-                        dbc.Label(' ', className='small d-block mb-1'),  # 라벨 줄 높이 맞춤
+                        dbc.Label(' ', className='small d-block mb-1'),  # 라벨 줄 높이 맞춤
                         dbc.ButtonGroup([
+                            dbc.Button([html.I(className='bi bi-funnel me-1'), '필터'],
+                                       id='open-filter-btn', color='secondary', outline=True,
+                                       title='상세 필터(직급/직책/성별/학력/전공/재직상태)'),
                             dbc.Button(html.I(className='bi bi-search'), id='list-search-btn',
                                        color='primary', title='검색(필터 적용)'),
                             dbc.Button(html.I(className='bi bi-file-earmark-excel'), id='list-excel-btn',
@@ -296,10 +291,59 @@ def layout():
                             value=[], switch=True,
                             className='small mt-1',
                         ),
-                    ], md=2),
+                    ], md=3),
                 ], className='g-3'),
             ),
             className='mb-3 shadow-sm',
+        ),
+
+        # ── 상세 필터 모달 ────────────────────────────────────────────────
+        # 메인 화면에서 뺀 직급/직책/성별/학력/전공/재직상태를 별도 창(모달)
+        # 으로 열어 선택한다(사용자 요청). '과제'는 메인 화면에 이미 있어
+        # 중복 배치하지 않았다.
+        dbc.Modal(
+            [
+                dbc.ModalHeader(dbc.ModalTitle('상세 필터')),
+                dbc.ModalBody(
+                    dbc.Row([
+                        dbc.Col([
+                            dbc.Label('직급', className='small fw-semibold text-muted mb-1'),
+                            dcc.Dropdown(id='filter-pos', options=pos_opts, multi=True,
+                                         placeholder='전체', clearable=True),
+                        ], md=6, className='mb-3'),
+                        dbc.Col([
+                            dbc.Label('직책', className='small fw-semibold text-muted mb-1'),
+                            dcc.Dropdown(id='filter-title', options=title_opts, multi=True,
+                                         placeholder='전체', clearable=True),
+                        ], md=6, className='mb-3'),
+                        dbc.Col([
+                            dbc.Label('성별', className='small fw-semibold text-muted mb-1'),
+                            dcc.Dropdown(id='filter-gender', options=gender_opts, multi=True,
+                                         placeholder='전체', clearable=True),
+                        ], md=6, className='mb-3'),
+                        dbc.Col([
+                            dbc.Label('학력', className='small fw-semibold text-muted mb-1'),
+                            dcc.Dropdown(id='filter-degree', options=degree_opts, multi=True,
+                                         placeholder='전체', clearable=True),
+                        ], md=6, className='mb-3'),
+                        dbc.Col([
+                            dbc.Label('전공', className='small fw-semibold text-muted mb-1'),
+                            dcc.Dropdown(id='filter-major', options=major_opts, multi=True,
+                                         placeholder='전체', clearable=True),
+                        ], md=6, className='mb-3'),
+                        dbc.Col([
+                            dbc.Label('재직상태', className='small fw-semibold text-muted mb-1'),
+                            dcc.Dropdown(id='filter-employment', options=employ_opts, multi=True,
+                                         placeholder='전체', clearable=True),
+                        ], md=6, className='mb-3'),
+                    ], className='g-2'),
+                ),
+                dbc.ModalFooter([
+                    dbc.Button('초기화', id='filter-modal-clear-btn', color='secondary', outline=True, size='sm'),
+                    dbc.Button('적용', id='filter-modal-apply-btn', color='primary', size='sm'),
+                ]),
+            ],
+            id='filter-modal', is_open=False,
         ),
 
         # ── DataTable ─────────────────────────────────────────────────────
@@ -376,25 +420,28 @@ def update_project_options(dept):
     return _project_options(dept)
 
 
-# ── 콜백 1-1: 검색 기준(현재/누적) → 부서·과제·직급 필터 비활성화 ──────────────
-# 누적기준에서는 조직 배치(부서/과제/직급)가 최신 시점 기준이 아닐 수 있어
+# ── 콜백 1-1: 검색 기준(현재/누적) → 부서·과제·직급·직책 필터 비활성화 ─────────
+# 누적기준에서는 조직 배치(부서/과제/직급/직책)가 최신 시점 기준이 아닐 수 있어
 # 혼란을 줄 수 있으므로 비활성화하고 값도 비운다 — 이름/사번(테이블 자체
-# 필터 행)으로만 찾도록 유도한다. 학력/인센티브는 시점에 덜 민감해 그대로 둔다.
+# 필터 행)으로만 찾도록 유도한다. 성별/학력/전공/재직상태는 시점에 덜
+# 민감해 그대로 둔다.
 @callback(
     Output('filter-dept', 'disabled'),
     Output('filter-project', 'disabled'),
     Output('filter-pos', 'disabled'),
+    Output('filter-title', 'disabled'),
     Output('filter-dept', 'value', allow_duplicate=True),
     Output('filter-project', 'value', allow_duplicate=True),
     Output('filter-pos', 'value', allow_duplicate=True),
+    Output('filter-title', 'value', allow_duplicate=True),
     Input('list-search-mode', 'value'),
     prevent_initial_call=True,
 )
 def toggle_org_filters(mode):
     is_cumulative = (mode == 'all')
     if is_cumulative:
-        return True, True, True, None, None, None
-    return False, False, False, no_update, no_update, no_update
+        return True, True, True, True, None, None, None, None
+    return False, False, False, False, no_update, no_update, no_update, no_update
 
 
 # ── 콜백 2: 검색 버튼(필터 적용) / 필터 초기화 버튼 → 테이블 데이터 갱신 ──────
@@ -406,16 +453,21 @@ def toggle_org_filters(mode):
     Output('researcher-table', 'columns'),
     Output('researcher-table', 'tooltip_header'),
     Input('list-search-btn',   'n_clicks'),
+    Input('filter-modal-apply-btn', 'n_clicks'),
     Input('clear-filters-btn', 'n_clicks'),
     Input('list-search-mode',  'value'),
-    State('filter-dept',      'value'),
-    State('filter-project',   'value'),
-    State('filter-pos',       'value'),
-    State('filter-degree',    'value'),
-    State('filter-incentive', 'value'),
+    State('filter-dept',       'value'),
+    State('filter-project',    'value'),
+    State('filter-pos',        'value'),
+    State('filter-title',      'value'),
+    State('filter-gender',     'value'),
+    State('filter-degree',     'value'),
+    State('filter-major',      'value'),
+    State('filter-employment', 'value'),
     prevent_initial_call=True,
 )
-def update_table(_search_clicks, _clear_clicks, mode, dept, project, pos, degree, incentive):
+def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, dept, project, pos, title,
+                  gender, degree, major, employment):
     current_only = (mode != 'all')
     df = _build_summary_df(current_only=current_only)
     columns = _build_columns(df)
@@ -424,7 +476,7 @@ def update_table(_search_clicks, _clear_clicks, mode, dept, project, pos, degree
         return [], columns, tooltip_header
 
     triggered = dash.ctx.triggered_id
-    # 모드 전환 자체가 트리거면(부서/과제/직급 필터가 비활성화·초기화되는
+    # 모드 전환 자체가 트리거면(부서/과제/직급/직책 필터가 비활성화·초기화되는
     # 시점과 겹칠 수 있어) 조직 필터는 적용하지 않고 전체(해당 모드) 목록을 보여준다.
     if triggered in ('clear-filters-btn', 'list-search-mode'):
         return df.to_dict('records'), columns, tooltip_header
@@ -435,25 +487,47 @@ def update_table(_search_clicks, _clear_clicks, mode, dept, project, pos, degree
         df = df[df['과제'].isin(project)]
     if pos and current_only:
         df = df[df['직급'].isin(pos)]
+    if title and current_only:
+        df = df[df['직책'].isin(title)]
+    if gender:
+        df = df[df['성별'].isin(gender)]
     if degree:
-        df = df[df['학력(최종)'].isin(degree)]
-    if incentive:
-        df = df[df['인센티브'].isin(incentive)]
+        df = df[df['학력'].isin(degree)]
+    if major:
+        df = df[df['전공'].isin(major)]
+    if employment:
+        df = df[df['재직상태'].isin(employment)]
     return df.to_dict('records'), columns, tooltip_header
 
 
-# ── 콜백 3: 필터 초기화 버튼 → 드롭다운 값 비우기 ────────────────────────────
+# ── 콜백 3: 필터 초기화 버튼 → 드롭다운 값 비우기(메인 화면 + 필터 모달) ─────
 @callback(
-    Output('filter-dept',      'value'),
-    Output('filter-project',   'value'),
-    Output('filter-pos',       'value'),
-    Output('filter-degree',    'value'),
-    Output('filter-incentive', 'value'),
+    Output('filter-dept',       'value'),
+    Output('filter-project',    'value'),
+    Output('filter-pos',        'value'),
+    Output('filter-title',      'value'),
+    Output('filter-gender',     'value'),
+    Output('filter-degree',     'value'),
+    Output('filter-major',      'value'),
+    Output('filter-employment', 'value'),
     Input('clear-filters-btn', 'n_clicks'),
+    Input('filter-modal-clear-btn', 'n_clicks'),
     prevent_initial_call=True,
 )
-def clear_filters(_):
-    return None, None, None, None, None
+def clear_filters(_clear_clicks, _modal_clear_clicks):
+    return None, None, None, None, None, None, None, None
+
+
+# ── 콜백 3-1: '필터' 버튼 → 상세 필터 모달 열기/닫기 ──────────────────────────
+# 열기는 '필터' 버튼만, 닫기는 모달의 '적용'/'닫기'(X) 버튼 모두에 반응한다.
+@callback(
+    Output('filter-modal', 'is_open'),
+    Input('open-filter-btn', 'n_clicks'),
+    Input('filter-modal-apply-btn', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def toggle_filter_modal(_open_clicks, _apply_clicks):
+    return dash.ctx.triggered_id == 'open-filter-btn'
 
 
 # ── 콜백 4: 엑셀 다운로드 — 지금 화면에 실제로 보이는(검색 필터 + 표 자체

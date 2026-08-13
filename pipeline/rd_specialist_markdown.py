@@ -162,10 +162,16 @@ def org_tree_html(tree: list, node_content_fn=None) -> str:
 
 
 def map_link_html(researcher_id: str) -> str:
-    """연구원 카드 우측 상단에 붙는 '전문성 MAP으로 이동' 아이콘. iframe
+    """연구원 카드 우측 상단에 붙던 '전문성 MAP으로 이동' 아이콘. iframe
     안에서 그대로 클릭하면 부모(top) 문서를 이동시켜야 하므로 target="_top"
     필수 — 그래야 iframe 안이 아니라 실제 대시보드가 전문성 MAP 탭으로
-    전환된다."""
+    전환된다.
+
+    사용자 요청으로 전문성 MAP 탭 자체가 숨김 처리되어(pages/researcher_similarity_map.py
+    의 _MAP_TAB_HIDDEN 참고) "연구원"/"연구원 ↔ 연구원" 리포트의 card-top에서는
+    더 이상 호출하지 않는다(process_researcher_expertise.py, process_researcher_similarity.py
+    의 card-top 참고) — 숨겨진 탭으로 이어지는 죽은 링크를 남기지 않기 위함.
+    함수 자체는 나중에 MAP 탭을 다시 열 경우를 위해 남겨둔다."""
     href = f'/researcher-similarity-map?highlight_researcher={researcher_id}'
     return (
         f'<a class="map-link" href="{href}" target="_top" title="전문성 MAP에서 위치 보기">'
@@ -174,22 +180,29 @@ def map_link_html(researcher_id: str) -> str:
 
 
 def profile_link_html(researcher_id: str) -> str:
-    """연구원 카드 우측 상단에 map_link_html()과 나란히 붙는 '연구원 프로필로
-    이동' 아이콘. researcher_profile.py의 layout(id=...)이 쿼리 파라미터
-    ?id=researcher_id를 그대로 받아 그 사람으로 선택해 보여준다. map_link_html과
-    동일하게 iframe 밖(최상위 대시보드)으로 이동해야 하므로 target="_top"."""
+    """연구원 카드 우측 상단에 붙는 '연구원 프로필로 이동' 아이콘 + '새 창으로
+    열기' 아이콘. researcher_profile.py의 layout(id=...)이 쿼리 파라미터
+    ?id=researcher_id를 그대로 받아 그 사람으로 선택해 보여준다. 기본 아이콘은
+    iframe 밖(최상위 대시보드)에서 그대로 이동해야 하므로 target="_top", 새 창
+    아이콘은 현재 화면을 유지한 채 프로필만 별도 창/탭으로 열도록 target="_blank"."""
     href = f'/researcher-profile?id={researcher_id}'
     return (
         f'<a class="map-link" href="{href}" target="_top" title="연구원 프로필로 이동">'
         f'👤 프로필</a>'
+        f'<a class="map-link" href="{href}" target="_blank" title="연구원 프로필을 새 창으로 열기">'
+        f'↗</a>'
     )
 
 
 def profile_icon_link_html(researcher_id: str) -> str:
     """유사 연구원 표처럼 좁은 공간(테이블 행)에 붙이는 아이콘 전용(텍스트
-    없는) 프로필 이동 링크 — profile_link_html의 소형 버전."""
+    없는) 프로필 이동 링크 — profile_link_html의 소형 버전. 이동(target="_top")
+    아이콘과 새 창으로 열기(target="_blank") 아이콘을 나란히 붙인다."""
     href = f'/researcher-profile?id={researcher_id}'
-    return f'<a class="row-icon-link" href="{href}" target="_top" title="연구원 프로필로 이동">👤</a>'
+    return (
+        f'<a class="row-icon-link" href="{href}" target="_top" title="연구원 프로필로 이동">👤</a>'
+        f'<a class="row-icon-link" href="{href}" target="_blank" title="연구원 프로필을 새 창으로 열기">↗</a>'
+    )
 
 
 def strength_section_html(fields: list, keywords: list) -> str:

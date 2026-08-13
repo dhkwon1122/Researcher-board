@@ -543,10 +543,6 @@ def _build_html(results: list, researchers_df: pd.DataFrame, profile_by_id: dict
             )
             nav_groups.append(f'<div class="nav-group"><div class="nav-group-label">{html.escape(dept)}</div>{entries}</div>')
 
-    total = len(results)
-    high_conf = sum(1 for it in results for s in it['similar'] if s.get('score', 0) >= 0.7)
-    flagged = sum(1 for it in results for s in it['similar'] if s.get('surface_only'))
-
     sections = []
     for dept, dept_items in mmd.group_ordered(results, lambda it: dept_map.get(it['researcher_id'], '')):
         sections.append(f'<div class="dept-heading">{html.escape(dept)}</div>')
@@ -580,7 +576,7 @@ def _build_html(results: list, researchers_df: pd.DataFrame, profile_by_id: dict
                     table = '<p class="empty">비교할 다른 연구원 데이터 없음</p>'
                 sections.append(f'''<div class="card" id="{anchor_of[rid]}">
   <div class="card-top"><h3>{name}</h3>{tenure_badge}
-    <div class="card-icons">{mmd.profile_link_html(rid)}{mmd.map_link_html(rid)}</div>
+    <div class="card-icons">{mmd.profile_link_html(rid)}</div>
   </div>
   {_chip_row_html(profile_by_id.get(rid, {}))}
   {table}
@@ -593,12 +589,10 @@ def _build_html(results: list, researchers_df: pd.DataFrame, profile_by_id: dict
         f'{mmd.org_search_input_html()}'
         f'{"".join(nav_groups)}'
     )
-    stats = mmd.stat_row_html([
-        mmd.coverage_stat(total, len(researchers_df), '유사도 분석 완료 / 전체 연구원'),
-        (high_conf, '고신뢰 매칭 (70%+)'),
-        (flagged, '표면 일치 주의 플래그'),
-        mmd.generated_at_stat(),
-    ])
+    # 사용자 요청으로 요약 카드를 "마지막 갱신" 하나만 남긴다(긴 직사각형으로
+    # 표시 — .stat-row가 grid-template-columns: repeat(auto-fit, minmax(150px,1fr))
+    # 라 카드가 1개면 자동으로 전체 폭을 채운다, CSS 변경 불필요).
+    stats = mmd.stat_row_html([mmd.generated_at_stat()])
     # 표시 개수(3/5/10, 그룹당) 토글 — JS 없이 radio + 형제 선택자로 행을 숨김/표시.
     # Senior/Junior가 각각 별도 <tbody>이므로 CSS의 tr:nth-child가 그룹별로 독립
     # 적용된다(3명 선택 시 시니어 3 + 주니어 3, 있는 만큼만). 데이터는 이미

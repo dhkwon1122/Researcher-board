@@ -394,7 +394,7 @@ def _researcher_card_html(item: dict, name_map: dict, anchor: str) -> str:
 
     return f'''<div class="card" id="{anchor}">
   <div class="card-top"><h3>{html.escape(rid)} {html.escape(name)}</h3>
-    <div class="card-icons">{mmd.profile_link_html(rid)}{mmd.map_link_html(rid)}</div>
+    <div class="card-icons">{mmd.profile_link_html(rid)}</div>
   </div>
   {chip_row}
   {body_html}
@@ -442,15 +442,10 @@ def _build_html(results: list, researchers_df: pd.DataFrame) -> str:
             )
             nav_groups.append(f'<div class="nav-group"><div class="nav-group-label">{html.escape(dept)}</div>{entries}</div>')
 
-    total = len(results)
-    resp_count = sum(1 for it in results if it.get('key_responsibilities'))
-    domain_skill_count = sum(1 for it in results if it.get('domain_knowledge_skill'))
-    stats = mmd.stat_row_html([
-        mmd.coverage_stat(total, len(researchers_df), '분석 완료 / 분석 대상 연구원'),
-        (resp_count, '주요 역할·책임 데이터 보유'),
-        (domain_skill_count, '전문지식 및 역량 데이터 보유'),
-        mmd.generated_at_stat(),
-    ])
+    # 사용자 요청으로 요약 카드를 "마지막 갱신" 하나만 남긴다(긴 직사각형으로
+    # 표시 — .stat-row가 grid-template-columns: repeat(auto-fit, minmax(150px,1fr))
+    # 라 카드가 1개면 자동으로 전체 폭을 채운다, CSS 변경 불필요).
+    stats = mmd.stat_row_html([mmd.generated_at_stat()])
 
     sections = []
     for dept, dept_items in mmd.group_ordered(results, lambda it: dept_map.get(it.get('researcher_id', ''), '')):

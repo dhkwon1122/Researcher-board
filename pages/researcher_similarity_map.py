@@ -35,6 +35,15 @@ from services.similarity_map import (
 dash.register_page(__name__, path='/researcher-similarity-map', name='보유 전문성',
                     title='연구원 보유 전문성')
 
+# 사용자 요청: "전문성 MAP"은 보여주기엔 좋으나 기능상 의미가 없어 탭 자체를
+# 숨긴다(코드는 남겨두고 진입 경로만 차단 — pages/org_comparison.py,
+# pages/jd_reconciliation.py와 동일한 _FEATURE_HIDDEN 관례, 재오픈 방법은
+# data/processed/CLAUDE.md 참고). 숨긴 동안은 Tabs에서 '전문성 MAP' 항목을
+# 빼고, highlight_researcher URL 쿼리(리포트 카드의 옛 '📍 전문성 MAP'
+# 아이콘이 전달하던 값 — 그 아이콘도 함께 제거됨, rd_specialist_markdown.py
+# 참고)로 진입해도 더 이상 map 탭으로 랜딩하지 않는다.
+_MAP_TAB_HIDDEN = True
+
 _REPORT_FILES = {
     'researcher': '연구원 보유 전문성 분석.html',
     'similarity': 'researcher_similarity.html',
@@ -629,26 +638,30 @@ def _download_panel():
 
 def layout(highlight_researcher=None, **_kwargs):
     """기본 진입 탭은 '연구원'. 다만 highlight_researcher가 있으면(URL 쿼리
-    파라미터, 예: /researcher-similarity-map?highlight_researcher=00000001 —
-    리포트 카드의 '📍 유사맵' 아이콘이 target="_top"으로 이 URL을 열 때 전달됨)
+    파라미터, 예: /researcher-similarity-map?highlight_researcher=00000001)
     그 연구원을 별 마커로 강조·확대해 보여줘야 하므로 예외적으로 '전문성 MAP'
-    탭에 바로 랜딩한다."""
+    탭에 바로 랜딩한다 — 단, _MAP_TAB_HIDDEN이면 그 탭 자체가 없으므로
+    항상 '연구원' 탭으로 진입한다."""
+    if _MAP_TAB_HIDDEN:
+        highlight_researcher = None
     default_tab = 'map' if highlight_researcher else 'researcher'
     initial_content = (
         _map_tab_content(highlighted_rid=highlight_researcher)
         if default_tab == 'map' else _iframe_tab('researcher')
     )
+    tabs = [
+        dbc.Tab(label='연구원', tab_id='researcher'),
+        dbc.Tab(label='연구원 ↔ 연구원', tab_id='similarity'),
+    ]
+    if not _MAP_TAB_HIDDEN:
+        tabs.append(dbc.Tab(label='전문성 MAP', tab_id='map'))
     return html.Div([
         html.H5(
             [html.I(className='bi bi-share-fill me-2 text-primary'), '보유 전문성'],
             className='fw-bold mb-3 mt-1',
         ),
         dbc.Tabs(
-            [
-                dbc.Tab(label='연구원', tab_id='researcher'),
-                dbc.Tab(label='연구원 ↔ 연구원', tab_id='similarity'),
-                dbc.Tab(label='전문성 MAP', tab_id='map'),
-            ],
+            tabs,
             id='expertise-tabs', active_tab=default_tab, className='mb-3',
         ),
         html.Div(

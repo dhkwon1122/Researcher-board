@@ -2626,3 +2626,102 @@ DataFrame으로 직접 호출해 교체/보존/추가/그룹교체 동작 확인
 후보군 계산을 항상 현재기준으로 고정하고 토글 자체를 넣지 않기로
 확정했다. 보유 전문성 조직도는 누적기준일 때 조직도 트리 탐색 대신
 이름/사번 검색만 허용하기로 확정. 이 화면 작업은 아직 시작 전이다.
+
+## 2026-08-13: 보유 전문성 요약카드 정리 / 전문성 MAP 숨김 / 연구원 명단 필터 모달화
+
+사용자가 "보유 전문성" 탭(연구원/연구원↔연구원) 요약 카드 스크린샷을 보내며
+5가지를 요청: ① 요약카드를 "마지막 갱신" 1개만 남기기(긴 직사각형으로) ②
+"전문성 MAP" 탭 숨김(보여주기엔 좋으나 기능상 의미 없음) ③ 연구원 명단
+메인 화면 필터를 부서/과제만 남기고 나머지는 별도 모달로 분리 ④
+"학력(최종)"을 "학력"으로 표기 변경 ⑤ "연구원"/"연구원 ↔ 연구원" 리포트의
+프로필 아이콘 클릭 시 새 창으로도 열 수 있게.
+
+**① 요약카드 축소(`pipeline/process_researcher_expertise.py`,
+`pipeline/process_researcher_similarity.py`)**: 두 파일의 `stat_row_html([...])`
+호출을 각각 `mmd.coverage_stat(...)`/`(resp_count, ...)`/`(domain_skill_count, ...)`
+등 3~4개 항목에서 `mmd.generated_at_stat()` 1개만 남기도록 축소. `.stat-row`가
+`grid-template-columns: repeat(auto-fit, minmax(150px,1fr))`라 카드가 1개면
+자동으로 전체 폭을 채워 "긴 직사각형"이 되므로 CSS 변경은 불필요했다(Playwright로
+독립 HTML 프리뷰 렌더링해 확인). 더 이상 쓰이지 않게 된 `total`/`high_conf`/
+`flagged`/`resp_count`/`domain_skill_count` 지역변수도 함께 제거.
+`mmd.coverage_stat()` 함수 자체는 다른 리포트(`process_project_expertise.py`
+등)가 쓸 수 있어 그대로 둠.
+
+**② 전문성 MAP 탭 숨김(`pages/researcher_similarity_map.py`)**:
+`pages/org_comparison.py`/`pages/jd_reconciliation.py`와 동일한
+`_FEATURE_HIDDEN` 관례를 이 페이지의 탭 단위로 적용 — `_MAP_TAB_HIDDEN = True`
+플래그를 추가해 `layout()`의 `dbc.Tabs` children에서 '전문성 MAP' 탭을
+제외하고, `highlight_researcher` URL 쿼리로 진입해도(옛 '📍 전문성 MAP'
+아이콘이 쓰던 경로) 더 이상 `map` 탭으로 랜딩하지 않고 '연구원' 탭 기본
+진입으로 처리. `_map_tab_content()`/`_umap_subview_content()` 등 실제
+구현 코드는 전부 남겨둬 재오픈 시 플래그만 `False`로 바꾸면 된다.
+
+같이 처리해야 했던 부분: "연구원"/"연구원 ↔ 연구원" 리포트 카드 우측 상단의
+'📍 전문성 MAP' 아이콘(`pipeline/rd_specialist_markdown.py`의
+`map_link_html()`)이 숨겨진 탭으로 이어지는 죽은 링크가 되므로,
+`process_researcher_expertise.py`/`process_researcher_similarity.py`의
+`card-icons`에서 `mmd.map_link_html(rid)` 호출을 제거(프로필 아이콘만 남김).
+`map_link_html()` 함수 자체는 나중에 재오픈할 경우를 위해 그대로 둠.
+`pipeline/process_project_expertise.py`가 쓰는 `_personnel_html()`의 유사한
+배지 링크는 그 리포트(`project_expertise_analysis.html`) 자체가 어느
+`pages/*.py`에서도 임베드되지 않는(앱에서 도달 불가능한) 산출물이라 이번
+작업 범위에서 제외 — 그대로 둠.
+
+**③ 연구원 명단 필터 모달화(`pages/researcher_list.py`)**: 메인 화면
+드롭다운 행에는 부서/과제만 남기고, 직급/학력/인센티브 드롭다운을 제거한
+뒤 그 자리에 '필터' 버튼(`open-filter-btn`)을 추가. 버튼을 누르면 여는
+`dbc.Modal`(`filter-modal`)에 직급/직책/성별/학력/전공/재직상태 6개
+드롭다운을 배치(`필터 초기화`/`적용` 버튼 포함). 재직상태는
+`_build_summary_df()`에 새 컬럼(`researchers.csv`의 `employment_status`
+그대로)을 추가해야 필터 대상이 됐다. 직책 드롭다운(`filter-title`)도
+새로 추가(기존엔 표에만 표시되고 필터는 없었음).
+
+판단해서 명확히 표시해 둘 부분 두 가지(사용자 지시 원문에 모호함이
+있어 임의로 정한 것):
+- 사용자가 나열한 모달 필터 목록에 "과제"가 포함돼 있었지만, 같은 문장에서
+  "부서, 과제를 남겨두고"라고도 했다 — 과제를 메인 화면과 모달에 중복
+  배치하지 않고 메인 화면에만 남겼다(모달에는 과제 없음).
+- "인센티브"는 메인 화면 제외 대상으로만 언급됐고, 모달의 필터 목록
+  7종(과제/직급/직책/성별/학력/전공/재직상태)에도 포함되지 않아 문자
+  그대로는 인센티브 필터 자체가 없어진다 — 그대로 따라 인센티브 필터를
+  완전히 제거했다. 되살리고 싶다면 모달에 `filter-incentive` 드롭다운을
+  다시 추가하면 된다(엑셀 다운로드의 "인센티브" 관련 데이터 자체는
+  안 건드림 — `_build_summary_df()`의 `인센티브` 컬럼은 표에 그대로
+  남아있고 표 자체 네이티브 필터로는 여전히 걸러진다).
+
+**필터링에 안 걸리는 나머지 컬럼(사용자 요청 "나머지 컬럼이 뭐가 있는지
+확인" 답변)**: `_build_summary_df()`가 만드는 컬럼 중 부서/과제(메인) +
+직급/직책/성별/학력/전공/재직상태(모달) 8개를 뺀 나머지 — `이름`(식별자,
+필터 대상이 아님), 평가등급 열(`'24평가`/`'25평가`/`'26평가` 등 연도별,
+`_EVAL_GRADE_COLUMNS`), `인센티브`(위 사유로 필터는 제거, 컬럼은 유지),
+`논문(전체)`/`논문(3년)`/`평균IF`, `특허(출원)`/`특허(등록)`, `수상`. 이
+컬럼들은 드롭다운 필터는 없지만 `dash_table`의 네이티브 컬럼 필터 행으로는
+계속 걸러진다.
+
+**④ 학력(최종) → 학력**: `pages/researcher_list.py` 전체(행 딕셔너리 키,
+`_filter_options()` 호출, 모달 라벨, `update_table()` 필터링 로직)에서
+`'학력(최종)'`을 `'학력'`으로 일괄 변경. 다른 파일에는 이 문자열이 코드로
+쓰인 곳이 없었다(grep 확인).
+
+**⑤ 프로필 아이콘 새 창 열기(`pipeline/rd_specialist_markdown.py`)**:
+`profile_link_html()`(카드 상단, 텍스트 있는 버전)과
+`profile_icon_link_html()`(유사 연구원 표 행, 아이콘만) 둘 다 기존
+`target="_top"`(iframe 밖 최상위 대시보드로 이동) 링크에 더해
+`target="_blank"`(새 창/탭으로 프로필만 열기) 링크(↗)를 나란히 추가.
+`.map-link`/`.row-icon-link`는 이미 여러 개 아이콘이 자연스럽게 나란히
+붙는 CSS라 추가 스타일 변경 없이 바로 적용됨.
+
+**검증**: `py_compile`로 수정한 5개 파일 전부 문법 확인. 이 컨테이너에는
+`data/raw`/실제 인력현황 데이터가 없어(`researchers.csv`조차 없음)
+파이프라인을 실제로 재실행해 정적 리포트를 새로 만들 수는 없었다 — 대신
+(1) `mmd.stat_row_html([mmd.generated_at_stat()])` + `mmd.profile_link_html()`
+를 실제 `CONSOLE_STYLE`과 함께 독립 HTML로 렌더링해 Playwright 스크린샷으로
+"긴 직사각형" 카드와 프로필/새창 아이콘 두 개가 나란히 보이는지 직접 확인,
+(2) `python3 app.py`를 백그라운드로 띄우고 Playwright로 `/researcher-list`
+(필터 버튼 클릭 → 모달에 직급/직책/성별/학력/전공/재직상태 6개 드롭다운 확인 →
+적용 버튼으로 모달 닫힘 확인, 메인 화면엔 부서/과제만 남고 '학력(최종)' 문자열
+없음 확인)와 `/researcher-similarity-map`(`#expertise-tabs`에 '연구원'/
+'연구원 ↔ 연구원' 2개만 남고 '전문성 MAP' 없음 확인)을 직접 조작해 확인했다.
+이 환경은 `dbc.themes.BOOTSTRAP` CDN을 못 받아와(네트워크 제한) 스크린샷의
+시각 스타일 자체는 깨져 보이지만(Bootstrap CSS 미적용), DOM 구조·라벨·
+필터 필드·탭 구성 등 기능적 정확성은 위 방법으로 모두 확인됨.
