@@ -132,6 +132,13 @@ def photo_block(rid: str, name: str, row=None, current_year: int = 2026):
             html.P(line2, className='text-muted text-center mb-0',
                    style={'fontSize': '0.78rem'}),
         ]
+
+        employment_status = str(row.get('employment_status', '') or '').strip()
+        if employment_status:
+            sub_lines.append(html.P(
+                f'재직상태 : {employment_status}', className='text-muted text-center mb-0',
+                style={'fontSize': '0.78rem'},
+            ))
     else:
         sub_lines = [html.P(name, className='fw-bold mt-2 mb-0 text-center small')]
 

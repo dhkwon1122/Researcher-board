@@ -291,6 +291,7 @@ def layout():
                                 {'label': '논문 포함', 'value': 'publications'},
                                 {'label': '직무 포함', 'value': 'job_function'},
                                 {'label': '직무이력 포함', 'value': 'job_profile'},
+                                {'label': '재직상태 포함', 'value': 'employment_status'},
                             ],
                             value=[], switch=True,
                             className='small mt-1',
@@ -478,6 +479,7 @@ def download_excel(n_clicks, virtual_data, excel_options):
         include_publications='publications' in excel_options,
         include_job_function='job_function' in excel_options,
         include_job_profile='job_profile' in excel_options,
+        include_employment_status='employment_status' in excel_options,
     )
     return dcc.send_bytes(data, researcher_profile_export.default_filename())
 

@@ -7,7 +7,7 @@
 읽는 컬럼:
   사원번호, 성명, 현소속부서명, CL, 비공식소속부서명, 직무, 4직종,
   국적, 근속 기준일_그룹입사일(YYYYMMDD), 법적생년월일성별, 성별,
-  승격산정기준일자, Knox ID, 인원실적년도, 인원실적월
+  승격산정기준일자, Knox ID, 인원실적년도, 인원실적월, 재직상태명
 
 계산 항목:
   birth_year    : 법적생년월일성별 앞 4자리
@@ -18,6 +18,10 @@
   position_year : ceil((2027-03-01 - promotion_date).days / 365) (표시 전용)
   valid_year    : 인원실적년도 (YYYY, 4자리)
   valid_month   : 인원실적월   (MM, 2자리 제로패딩)
+  employment_status: 재직상태명 원본 그대로(휴직/재직/퇴직 등) — is_current(최신
+                    인력현황 파일에 있었는지 여부, 위 참고)와는 별개 개념이다.
+                    예: 휴직 중인 사람도 이번 달 인력현황엔 있으므로 is_current='Y'
+                    이면서 employment_status='휴직'일 수 있다.
 
 컬럼명이 다를 경우 파일 상단의 COL_* 상수를 수정하세요.
 
@@ -72,6 +76,7 @@ COL_PROMO_DATE = '승격산정기준일자'
 COL_KNOX       = 'Knox ID'
 COL_VALID_YEAR  = '인원실적년도'
 COL_VALID_MONTH = '인원실적월'
+COL_EMPLOYMENT_STATUS = '재직상태명'
 # 직급연차 기준일 (2027-03-01)
 POSITION_YEAR_REF = date(2027, 3, 1)
 
@@ -222,6 +227,7 @@ def process(raw_dir: str = RAW_DIR) -> bool:
             'hire_date':       _date_str(hire_dt),
             'promotion_date':  _date_str(promo_dt),
             'knox_id':         str(row.get(COL_KNOX, '')).strip(),
+            'employment_status': str(row.get(COL_EMPLOYMENT_STATUS, '')).strip(),
             'valid_year':      _valid_year_str(row.get(COL_VALID_YEAR)),
             'valid_month':     _valid_month_str(row.get(COL_VALID_MONTH)),
         })

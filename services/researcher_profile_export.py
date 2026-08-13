@@ -347,6 +347,14 @@ def _col_job_function(_rid, rows):
     return _or_dash(r.get('job_function') if r else None)
 
 
+def _col_employment_status(_rid, rows):
+    """재직상태 — researchers.csv의 employment_status(휴직/재직/퇴직 등,
+    pipeline/process_researchers.py 원본 그대로) 값. is_current(최신
+    인력현황 파일 포함 여부)와는 별개 개념이라 값이 다를 수 있다."""
+    r = rows.get('researcher')
+    return _or_dash(r.get('employment_status') if r else None)
+
+
 def _col_job_profile(_rid, rows):
     """직무이력 — job_profile.csv(wide: job_profile_name_i/job_start_date_i/
     job_end_date_i)를 components/timeline_data.job_points()로 슬롯 해제한 뒤,
@@ -368,6 +376,7 @@ _PATENT_COLUMNS = [('특허 실적', _col_patents)]
 _PUBLICATION_COLUMNS = [('논문 실적', _col_publications)]
 _JOB_FUNCTION_COLUMNS = [('직무', _col_job_function)]
 _JOB_PROFILE_COLUMNS = [('직무이력', _col_job_profile)]
+_EMPLOYMENT_STATUS_COLUMNS = [('재직상태', _col_employment_status)]
 
 
 # (헤더, 값 계산 함수) — 순서 = 엑셀 컬럼 순서
@@ -495,6 +504,7 @@ def person_base_table(researcher_ids: list) -> dict:
 
 
 _COLUMN_WIDTHS = [12, 14, 16, 18, 12, 26, 22, 12, 10, 34, 30, 22, 30]
+_EMPLOYMENT_STATUS_COLUMN_WIDTH = 12
 _EXPERTISE_COLUMN_WIDTH = 26
 _PATENT_COLUMN_WIDTH = 40
 _PUBLICATION_COLUMN_WIDTH = 40
@@ -509,14 +519,15 @@ def build_profile_workbook(
     include_publications: bool = False,
     include_job_function: bool = False,
     include_job_profile: bool = False,
+    include_employment_status: bool = False,
 ) -> bytes:
     """선택된 researcher_id 목록으로 엑셀(xlsx) 바이트를 만들어 반환한다.
     양식: 바탕체 11pt, 전체 검정 테두리, 헤더만 볼드, 줄바꿈 셀은 자동 줄바꿈.
     include_*가 True인 항목만 해당 옵트인 컬럼 그룹(_PATENT_COLUMNS/
     _PUBLICATION_COLUMNS/_JOB_FUNCTION_COLUMNS/_JOB_PROFILE_COLUMNS/
-    _EXPERTISE_COLUMNS)을 이 순서대로 맨 끝에 추가한다 — 전부 기본값은
-    False(다운로드 화면 체크박스 기본 해제)이고, 켜져도 _COLUMNS 자체는
-    건드리지 않고 이 함수 안에서만 로컬 사본에 덧붙인다."""
+    _EMPLOYMENT_STATUS_COLUMNS/_EXPERTISE_COLUMNS)을 이 순서대로 맨 끝에
+    추가한다 — 전부 기본값은 False(다운로드 화면 체크박스 기본 해제)이고,
+    켜져도 _COLUMNS 자체는 건드리지 않고 이 함수 안에서만 로컬 사본에 덧붙인다."""
     tables = _load_tables()
 
     columns = list(_COLUMNS)
@@ -533,6 +544,9 @@ def build_profile_workbook(
     if include_job_profile:
         columns.extend(_JOB_PROFILE_COLUMNS)
         widths.extend([_JOB_PROFILE_COLUMN_WIDTH] * len(_JOB_PROFILE_COLUMNS))
+    if include_employment_status:
+        columns.extend(_EMPLOYMENT_STATUS_COLUMNS)
+        widths.extend([_EMPLOYMENT_STATUS_COLUMN_WIDTH] * len(_EMPLOYMENT_STATUS_COLUMNS))
     # 보유 전문성(LLM 산출, 부서장/본인 컨펌을 거치지 않은 비객관적 정보)은
     # 다른 옵트인 컬럼과 무엇을 같이 선택하든 항상 맨 마지막 컬럼이 되도록
     # 다른 그룹 뒤에 붙인다.
