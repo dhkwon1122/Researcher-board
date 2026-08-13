@@ -301,6 +301,13 @@ def project_card_html(item: dict, anchor: str) -> str:
 # 외부 CDN(Bootstrap/marked.js) 없이 완전히 독립적인 정적 페이지. 연구원 유사도/
 # 과제 전문성/연구원 전문성 3개 리포트가 모두 동일한 색상 토큰과 사이드바+
 # 요약통계+카드 문법을 공유해 한 가족처럼 보이도록 한다.
+#
+# 예전엔 @media (prefers-color-scheme: dark)로 OS/브라우저가 다크모드면 이
+# 색상 토큰도 자동으로 어둡게 바뀌었는데, 이 리포트를 iframe으로 담는
+# 대시보드 셸(app.py, dbc.themes.BOOTSTRAP)은 다크모드를 지원하지 않고 항상
+# 밝은 테마라, 사용자 환경이 다크모드일 때 리포트만 따로 어두워져 화면이
+# 어긋나 보였다(사용자 요청으로 발견). 라이트 토큰을 유일한 값으로 두고
+# 미디어쿼리 분기 자체를 제거해 시스템 설정과 무관하게 항상 밝게 고정.
 CONSOLE_STYLE = """
   :root {
     --bg: #f3f4f7; --sidebar: #ffffff; --panel: #ffffff; --line: #e2e4ea;
@@ -310,17 +317,6 @@ CONSOLE_STYLE = """
     --warn: #a3720a; --warn-weak: rgba(163,114,10,0.1);
     --low: #6b7080; --low-weak: rgba(107,112,128,0.1);
     --danger: #b23b3b; --danger-weak: rgba(178,59,59,0.1);
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #101218; --sidebar: #171a22; --panel: #171a22; --line: #272b36;
-      --ink: #e7e8ee; --ink-soft: #8b8fa3;
-      --accent: #8b97f5; --accent-weak: rgba(139,151,245,0.12);
-      --good: #5fbf90; --good-weak: rgba(95,191,144,0.12);
-      --warn: #d1a444; --warn-weak: rgba(209,164,68,0.12);
-      --low: #8b8fa3; --low-weak: rgba(139,143,163,0.12);
-      --danger: #d9776e; --danger-weak: rgba(217,119,110,0.12);
-    }
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
