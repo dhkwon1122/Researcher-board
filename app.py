@@ -270,9 +270,73 @@ def logout():
     return flask.redirect('/login')
 
 
+# ── 비밀번호 변경 (일괄 계정 생성으로 만든 임시 비밀번호 강제 교체) ───────────
+# scripts/bulk_create_users.py 로 만든 계정은 must_change_password=True 상태로
+# 시작한다 — 로그인은 되지만 아래 require_login 미들웨어가 이 화면 외의 다른
+# 페이지로 못 가게 막는다. 여기서 새 비밀번호를 설정하면 그 상태가 풀린다.
+@app.server.route('/change-password', methods=['GET', 'POST'])
+def change_password_page():
+    from services.auth import authenticate, change_password, get_current_user
+
+    user = get_current_user()
+    if user is None:
+        return flask.redirect('/login')
+
+    error = ''
+    if flask.request.method == 'POST':
+        current_pw = flask.request.form.get('current_password', '')
+        pw = flask.request.form.get('password', '')
+        pw2 = flask.request.form.get('password_confirm', '')
+        if not authenticate(user['user_id'], current_pw):
+            error = '현재 비밀번호(임시 비밀번호)가 올바르지 않습니다.'
+        elif not pw:
+            error = '새 비밀번호를 입력하세요.'
+        elif pw != pw2:
+            error = '새 비밀번호가 일치하지 않습니다.'
+        elif len(pw) < 8:
+            error = '비밀번호는 8자 이상이어야 합니다.'
+        elif pw == current_pw:
+            error = '기존 비밀번호와 다른 비밀번호를 입력하세요.'
+        else:
+            change_password(user['user_id'], pw)
+            flask.session['must_change_password'] = False
+            return flask.redirect('/')
+
+    notice = (
+        ''
+        if error
+        else '<div class="alert alert-warning py-2 small mb-3">'
+             '임시 비밀번호로 로그인하셨습니다. 계속하려면 비밀번호를 새로 설정하세요.</div>'
+    )
+    alert = f'<div class="alert alert-danger py-2 small mb-3">{error}</div>' if error else notice
+    body = f"""{alert}
+    <form method="POST" action="/change-password">
+      <div class="mb-2">
+        <label class="form-label small fw-semibold">현재 비밀번호(임시 비밀번호)</label>
+        <input type="password" class="form-control form-control-sm" name="current_password"
+               autocomplete="current-password" required autofocus>
+      </div>
+      <div class="mb-2">
+        <label class="form-label small fw-semibold">새 비밀번호 (8자 이상)</label>
+        <input type="password" class="form-control form-control-sm" name="password"
+               autocomplete="new-password" required>
+      </div>
+      <div class="mb-4">
+        <label class="form-label small fw-semibold">새 비밀번호 확인</label>
+        <input type="password" class="form-control form-control-sm" name="password_confirm"
+               autocomplete="new-password" required>
+      </div>
+      <button type="submit" class="btn btn-brand text-white w-100">
+        <i class="bi bi-key me-1"></i> 비밀번호 설정
+      </button>
+    </form>"""
+    return _html_page('비밀번호 변경', body)
+
+
 # ── 인증 미들웨어 ─────────────────────────────────────────────────────────────
 _AUTH_EXEMPT_PREFIXES = ('/assets/', '/photo/', '/_dash', '/_reload')
 _AUTH_EXEMPT_PATHS = {'/login', '/auth/login', '/logout', '/setup'}
+_PASSWORD_CHANGE_PATH = '/change-password'
 
 
 @app.server.before_request
@@ -282,10 +346,15 @@ def require_login():
         return None
     if any(path.startswith(p) for p in _AUTH_EXEMPT_PREFIXES):
         return None
+    is_json = flask.request.content_type and 'application/json' in flask.request.content_type
     if not flask.session.get('user_id'):
-        if flask.request.content_type and 'application/json' in flask.request.content_type:
+        if is_json:
             return flask.jsonify({'error': 'unauthorized'}), 401
         return flask.redirect(f'/login?next={path}')
+    if flask.session.get('must_change_password') and path != _PASSWORD_CHANGE_PATH:
+        if is_json:
+            return flask.jsonify({'error': 'password_change_required'}), 403
+        return flask.redirect(_PASSWORD_CHANGE_PATH)
     return None
 
 
