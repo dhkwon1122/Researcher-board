@@ -4,7 +4,7 @@ import secrets
 import dash
 import dash_bootstrap_components as dbc
 import flask
-from dash import Input, Output, callback, dcc, html
+from dash import Input, Output, callback, dcc, html, no_update
 
 from services.data_store import ASSETS_DIR, RAW_DIR
 
@@ -409,6 +409,13 @@ navbar = dbc.Navbar(
                     # CLAUDE.md에 재오픈 방법 기록).
                     # 관리자 메뉴 + 사용자 정보 (콜백으로 갱신)
                     html.Div(id='_navbar-user', className='d-flex align-items-center ms-3'),
+                    # '로그아웃'은 /logout이 Dash 페이지가 아니라 순수 Flask
+                    # 라우트라, 일반 <a href> 클릭을 Dash 페이지 라우터가 가로채면
+                    # (page_registry에 없는 경로라) 404로 렌더링돼버린다. 대신
+                    # 버튼 클릭 → 이 Location의 href를 콜백으로 채워
+                    # refresh=True로 진짜 브라우저 이동을 강제한다(연구원 명단/
+                    # 프로필 화면 이동과 동일한 패턴).
+                    dcc.Location(id='logout-redirect', refresh=True),
                 ],
                 navbar=True,
                 className='ms-auto align-items-center',
@@ -464,10 +471,24 @@ def refresh_navbar_user(_):
         ),
         dbc.NavLink(
             [html.I(className='bi bi-box-arrow-right me-1'), '로그아웃'],
-            href='/logout', className='text-white small px-0',
+            id='navbar-logout-link',
+            href='#', n_clicks=0, className='text-white small px-0',
+            style={'cursor': 'pointer'},
         ),
     ]
     return items
+
+
+@callback(
+    Output('logout-redirect', 'href'),
+    Input('navbar-logout-link', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def do_logout(n_clicks):
+    if not n_clicks:
+        return no_update
+    return '/logout'
+
 
 # WSGI 진입점 (gunicorn app:server 로 구동).
 server = app.server
