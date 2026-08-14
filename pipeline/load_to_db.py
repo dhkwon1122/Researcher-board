@@ -36,6 +36,7 @@ TABLES = [
     'leadership',
     'transfers',
     'tasks',
+    'tasks_information',
     'nurturing',
     'awards',
     'comments',
@@ -44,6 +45,11 @@ TABLES = [
     'technology_transfer',
     'certifications',
     'succession',
+    'hr_orders',
+    'core_technology',
+    'tech_ownership',
+    'job_profile',
+    'project_confl_address',
 ]
 
 
