@@ -15,31 +15,24 @@
   python pipeline/process_comments.py --llm     # LLM 통합 요약 포함
 """
 
-import csv
 import json
 import os
-import re
 import sys
 
 import pandas as pd
 
-DATA_OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
-
 # pipeline 디렉터리 + 프로젝트 루트를 path 에 추가 (services.llm 임포트용)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from excel_reader import norm_researcher_id_col
+from paths import RAW_DIR as DATA_RAW, OUT_DIR as DATA_OUT  # noqa: E402
+from excel_reader import is_blank, read_xlsx, norm_researcher_id_col
+from merge_utils import TABLE_KEYS, write_merged
 from source_reader import read_source
 
 COLS = ['researcher_id', 'year', 'commenter_type',
         'comment_raw', 'comment_summary', 'strengths', 'improvements']
 
-
-def _extract_json(text: str) -> str:
-    """응답 텍스트에서 첫 번째 JSON 객체 블록만 추출."""
-    text = re.sub(r'```(?:json)?', '', text).replace('```', '').strip()
-    m = re.search(r'\{[\s\S]*\}', text)
-    return m.group(0) if m else text
+_SYSTEM_PROMPT = '당신은 HR 전문 요약 어시스턴트입니다. 요청한 JSON 형식만 출력하세요.'
 
 
 def _call_llm(prompt: str) -> str:
@@ -51,7 +44,7 @@ def _call_llm(prompt: str) -> str:
     from services.llm import chat, LLMError
 
     messages = [
-        {'role': 'system', 'content': '당신은 HR 전문 요약 어시스턴트입니다. 요청한 JSON 형식만 출력하세요.'},
+        {'role': 'system', 'content': _SYSTEM_PROMPT},
         {'role': 'user',   'content': prompt},
     ]
     try:
@@ -61,8 +54,18 @@ def _call_llm(prompt: str) -> str:
         return ''
 
 
-def summarize_with_llm(comment_raw: str, researcher_name: str = '') -> dict:
-    """단일 부서장 코멘트 → 요약 dict (comment_summary / strengths / improvements)."""
+def extract_json(text: str) -> str:
+    """응답 텍스트에서 첫 번째 JSON 객체 블록만 추출."""
+    import re
+    text = re.sub(r'```(?:json)?', '', text).replace('```', '').strip()
+    m = re.search(r'\{[\s\S]*\}', text)
+    return m.group(0) if m else text
+
+
+def summarize_with_llm(comment_raw: str) -> dict:
+    """단일 부서장 코멘트 → 요약 dict (comment_summary / strengths / improvements).
+    프롬프트에는 researcher_id/이름 등 개인 식별 정보를 절대 포함하지 않는다.
+    코멘트 원문(content)만 LLM에 전달하고, 결과는 호출부에서 researcher_id에 매핑한다."""
     if not comment_raw.strip():
         return {'comment_summary': '', 'strengths': '', 'improvements': ''}
 
@@ -74,10 +77,10 @@ def summarize_with_llm(comment_raw: str, researcher_name: str = '') -> dict:
   "improvements": "개선점1, 개선점2"
 }}
 
-대상 연구원: {researcher_name}
 코멘트:
 {comment_raw}"""
 
+    # 추론형 모델의 사고 과정 토큰 소모를 감안해 여유 있게 잡는다.
     raw = _call_llm(prompt)
     if not raw:
         return {
@@ -85,7 +88,7 @@ def summarize_with_llm(comment_raw: str, researcher_name: str = '') -> dict:
             'strengths': '', 'improvements': '',
         }
     try:
-        result = json.loads(_extract_json(raw))
+        result = json.loads(extract_json(raw))
         return {
             'comment_summary': result.get('comment_summary', ''),
             'strengths':       result.get('strengths', ''),
@@ -95,10 +98,12 @@ def summarize_with_llm(comment_raw: str, researcher_name: str = '') -> dict:
         return {'comment_summary': raw[:200], 'strengths': '', 'improvements': ''}
 
 
-def summarize_researcher(rid: str, name: str, rows: pd.DataFrame) -> dict | None:
+def summarize_researcher(rid: str, rows: pd.DataFrame) -> dict | None:
     """
     한 연구원의 모든 코멘트(부서장 + 리더십진단)를 통합 요약.
     종합요약 행으로 저장할 dict 반환. LLM 실패 시 None.
+    프롬프트에는 researcher_id/이름 등 개인 식별 정보를 절대 포함하지 않는다.
+    코멘트 내용(content)만 사내 LLM에 전달하고, 결과는 호출부에서 rid에 매핑한다.
     """
     parts = []
 
@@ -106,7 +111,7 @@ def summarize_researcher(rid: str, name: str, rows: pd.DataFrame) -> dict | None
     mgr = rows[rows['commenter_type'] == '부서장']
     for _, r in mgr.iterrows():
         raw = str(r.get('comment_raw', '')).strip()
-        if raw and raw not in ('nan', 'None'):
+        if not is_blank(raw):
             yr = str(r.get('year', ''))
             parts.append(f'[{yr} 부서장] {raw}')
 
@@ -117,16 +122,16 @@ def summarize_researcher(rid: str, name: str, rows: pd.DataFrame) -> dict | None
         s = str(r.get('strengths', '')).strip()
         i = str(r.get('improvements', '')).strip()
         yr = str(r.get('year', ''))
-        if s and s not in ('nan', 'None'):
+        if not is_blank(s):
             parts.append(f'[{yr} {c_type} 강점] {s}')
-        if i and i not in ('nan', 'None'):
+        if not is_blank(i):
             parts.append(f'[{yr} {c_type} 개선점] {i}')
 
     if not parts:
         return None
 
     combined = '\n'.join(parts)
-    prompt = f"""아래는 연구원 {name}에 대한 평가자별 코멘트 모음입니다.
+    prompt = f"""아래는 한 연구원에 대한 평가자별 코멘트 모음입니다.
 전체 내용을 종합하여 다음 JSON 형식으로 요약하세요. JSON 외 텍스트는 출력하지 마세요.
 
 {{
@@ -138,11 +143,12 @@ def summarize_researcher(rid: str, name: str, rows: pd.DataFrame) -> dict | None
 평가 내용:
 {combined}"""
 
+    # 추론형 모델의 사고 과정 토큰 소모를 감안해 여유 있게 잡는다.
     raw = _call_llm(prompt)
     if not raw:
         return None
     try:
-        result = json.loads(_extract_json(raw))
+        result = json.loads(extract_json(raw))
         # year는 가장 최근 연도 사용
         try:
             latest_year = int(rows['year'].dropna().astype(str).str.extract(r'(\d{4})')[0].max())
@@ -161,36 +167,37 @@ def summarize_researcher(rid: str, name: str, rows: pd.DataFrame) -> dict | None
         return None
 
 
-def process(use_llm: bool = False):
+def process(use_llm: bool = False, raw_dir: str = DATA_RAW):
     """
     comments_raw.xlsx + leadership_comments.csv → comments.csv
 
     Args:
         use_llm: True 이면 LLM API를 호출하여 연구원별 종합요약 생성.
                  False 이면 종합요약 없이 원본 코멘트만 저장.
+        raw_dir: comments_raw.xlsx를 찾을 폴더(기본 data/raw, data/updates로 갱신 가능).
     """
     results = []
 
-    # ── 부서장 코멘트 (comments_raw.xlsx → comments 원천) ────────────────────
-    df = read_source('comments')
+    # ── 부서장 코멘트 ──────────────────────────────────────────────────────
+    # 기본 raw_dir(data/raw)이면 DB 스테이징/raw_csv 우선인 source_reader를
+    # 쓰고, run_update.py처럼 raw_dir이 명시적으로 오버라이드되면(예: data/
+    # updates) 그 폴더의 xlsx를 직접 읽는다.
+    if raw_dir == DATA_RAW:
+        df = read_source('comments')
+    else:
+        raw_path = os.path.join(raw_dir, 'comments_raw.xlsx')
+        df = read_xlsx(raw_path) if os.path.exists(raw_path) else None
+
     if df is not None:
         df = norm_researcher_id_col(df)
         required = {'researcher_id', 'year', 'comment_raw'}
         if not required.issubset(df.columns):
             print(f'[WARN] comments 원천 필수 컬럼 누락: {required - set(df.columns)}')
         else:
-            # researchers 이름 조회
-            res_path = os.path.join(DATA_OUT, 'researchers.csv')
-            name_map = {}
-            if os.path.exists(res_path):
-                res_df = pd.read_csv(res_path, dtype={'researcher_id': str})
-                name_map = res_df.set_index('researcher_id')['name'].to_dict()
-
             for _, row in df.iterrows():
                 raw = str(row['comment_raw'])
-                name = name_map.get(str(row['researcher_id']), '')
                 if use_llm:
-                    summary = summarize_with_llm(raw, name)
+                    summary = summarize_with_llm(raw)
                 else:
                     summary = {
                         'comment_summary': str(row.get('comment_summary', raw[:120] + '...')),
@@ -237,7 +244,7 @@ def process(use_llm: bool = False):
         for rid in rids:
             name = name_map.get(rid, rid)
             r_rows = out_df[out_df['researcher_id'] == rid]
-            summary = summarize_researcher(rid, name, r_rows)
+            summary = summarize_researcher(rid, r_rows)
             if summary:
                 summary_rows.append(summary)
                 print(f'    [{rid}] {name} 종합요약 완료')
@@ -252,10 +259,9 @@ def process(use_llm: bool = False):
               .sort_values(['researcher_id', 'commenter_type', 'year'])
               .reset_index(drop=True))
 
-    os.makedirs(DATA_OUT, exist_ok=True)
     out_path = os.path.join(DATA_OUT, 'comments.csv')
-    out_df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
-    print(f'comments.csv 저장 완료 ({len(out_df)}행)')
+    merged = write_merged(out_path, out_df, TABLE_KEYS['comments'])
+    print(f'comments.csv 저장 완료 (총 {len(merged)}행, 이번 실행 {len(out_df)}행 반영)')
 
 
 if __name__ == '__main__':

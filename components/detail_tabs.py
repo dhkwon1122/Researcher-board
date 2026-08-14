@@ -1,13 +1,26 @@
+from urllib.parse import quote
+
 import dash_bootstrap_components as dbc
 import pandas as pd
 from dash import html
 
+from components.timeline_data import (
+    cell,
+    count_true,
+    count_us_registered,
+    dedupe_patents,
+    is_registered,
+    share_sum,
+)
+
+_LEGEND_NEUTRAL = '#6e6e73'
+
 
 def publications_tab(pub_df, rid):
+    """연구원의 논문 실적 목록 (data/processed/publications.csv)."""
     if pub_df.empty:
         return html.Div('논문 데이터 없음', className='text-muted p-3')
 
-    # pub_date 기준 정렬 (없으면 pub_year)
     sort_col = 'pub_date' if 'pub_date' in pub_df.columns else 'pub_year'
     pub = pub_df[pub_df['researcher_id'] == rid].copy()
     if pub.empty:
@@ -19,14 +32,8 @@ def publications_tab(pub_df, rid):
     corr = int(corr_mask.sum())
 
     summary = dbc.Row([
-        dbc.Col(dbc.Card(dbc.CardBody([
-            html.H4(str(total), className='fw-bold text-primary mb-0'),
-            html.Small('총 논문 수', className='text-muted'),
-        ]), className='text-center border-0 bg-light'), md=2),
-        dbc.Col(dbc.Card(dbc.CardBody([
-            html.H4(str(corr), className='fw-bold text-warning mb-0'),
-            html.Small('교신저자', className='text-muted'),
-        ]), className='text-center border-0 bg-light'), md=2),
+        dbc.Col(_single_card(total, '총 논문 수', 'text-primary'), md=2),
+        dbc.Col(_single_card(corr, '교신저자', 'text-warning'), md=2),
     ], className='mb-3 g-2')
 
     rows = []
@@ -51,45 +58,46 @@ def publications_tab(pub_df, rid):
 
         rows.append(html.Tr([
             html.Td(str(row.get('pub_year', '') or row.get('pub_date', ''))[:7],
-                    className='small text-muted', style={'whiteSpace': 'nowrap'}),
+                    className='small text-muted', style={'wordBreak': 'break-word'}),
             html.Td(row.get('title', ''),
-                    style={'maxWidth': '320px', 'wordBreak': 'break-word', 'fontSize': '0.82rem'}),
+                    style={'wordBreak': 'break-word', 'fontSize': '0.82rem'}),
             html.Td(row.get('journal', ''), className='small text-muted',
-                    style={'maxWidth': '160px', 'wordBreak': 'break-word'}),
-            html.Td(rank_total, className='small text-center', style={'whiteSpace': 'nowrap'}),
+                    style={'wordBreak': 'break-word'}),
+            html.Td(rank_total, className='small text-center', style={'wordBreak': 'break-word'}),
             html.Td(f'{contrib}%' if contrib and contrib not in ('nan', '') else '',
                     className='small text-center'),
-            html.Td(html.Div(badges) if badges else ''),
+            html.Td(html.Div(badges) if badges else '', style={'wordBreak': 'break-word'}),
         ]))
 
     return html.Div([summary, dbc.Table([
         html.Thead(html.Tr([
-            html.Th('발표일', style={'width': '70px'}),
-            html.Th('제목'),
-            html.Th('게재처'),
-            html.Th('순위/총수', className='text-center', style={'width': '70px'}),
-            html.Th('기여도', className='text-center', style={'width': '55px'}),
-            html.Th('구분'),
+            html.Th('발표일', style={'width': '9%'}),
+            html.Th('제목', style={'width': '31%'}),
+            html.Th('게재처', style={'width': '20%'}),
+            html.Th('순위/총수', className='text-center', style={'width': '10%'}),
+            html.Th('기여도', className='text-center', style={'width': '10%'}),
+            html.Th('구분', style={'width': '20%'}),
         ]), className='table-light'),
         html.Tbody(rows),
-    ], bordered=False, hover=True, responsive=True, size='sm',
-       style={'maxHeight': '340px', 'overflowY': 'auto', 'display': 'block'})])
+    ], bordered=False, hover=True, size='sm',
+       style={'tableLayout': 'fixed', 'width': '100%'})])
 
 
 def patents_tab(pat_df, rid):
+    """연구원의 특허 실적 목록 (data/processed/patents.csv)."""
     if pat_df.empty:
         return html.Div('특허 데이터 없음', className='text-muted p-3')
     pat = pat_df[pat_df['researcher_id'] == rid].copy()
     if pat.empty:
         return html.Div('특허 실적 없음', className='text-muted p-3')
 
-    pat_dedup = _dedupe_patents(pat)
+    pat_dedup = dedupe_patents(pat)
     total_cnt = len(pat_dedup)
-    reg_cnt = int(pat_dedup['status'].apply(_is_registered).sum()) if 'status' in pat_dedup.columns else 0
-    lead_cnt = _count_true(pat_dedup, 'is_lead_inventor')
+    reg_cnt = int(pat_dedup['status'].apply(is_registered).sum()) if 'status' in pat_dedup.columns else 0
+    lead_cnt = count_true(pat_dedup, 'is_lead_inventor')
     strat_cnt = int((pat_dedup.get('patent_grade_a_sub', pd.Series(dtype=str)).astype(str).str.strip() == '전략출원').sum())
-    us_reg_cnt = _count_us_registered(pat_dedup)
-    share_sum = _share_sum(pat_dedup)
+    us_reg_cnt = count_us_registered(pat_dedup)
+    share_sum_val = share_sum(pat_dedup)
 
     summary = dbc.Row([
         dbc.Col(_dual_card(total_cnt, '전체 발명', 'text-dark',
@@ -98,8 +106,8 @@ def patents_tab(pat_df, rid):
                            reg_cnt, '등록', 'text-success'), md=3),
         dbc.Col(_single_card(strat_cnt, '전략 출원', 'text-warning'), md=2),
         dbc.Col(_single_card(us_reg_cnt, '미국 등록', 'text-info'), md=2),
-        dbc.Col(_single_card(share_sum, '지분율 합계', 'text-danger'), md=2),
-    ], className='mb-3')
+        dbc.Col(_single_card(share_sum_val, '지분율 합계', 'text-danger'), md=2),
+    ], className='mb-3 g-2')
 
     sort_col = 'application_date' if 'application_date' in pat_dedup.columns else pat_dedup.columns[0]
     rows = []
@@ -112,71 +120,161 @@ def patents_tab(pat_df, rid):
         share_val = row.get('share_ratio', '')
         share_str = f'{share_val}%' if str(share_val).replace('.', '').isdigit() else '-'
         rows.append(html.Tr([
-            html.Td(_cell(row, 'application_date')[:7]),
-            html.Td(_cell(row, 'title', 'title_ko'), style={'maxWidth': '280px', 'wordBreak': 'break-word'}),
-            html.Td(dbc.Badge('등록', color='success') if _is_registered(status_val)
+            html.Td(cell(row, 'application_date')[:7], style={'wordBreak': 'break-word'}),
+            html.Td(cell(row, 'title', 'title_ko'), style={'wordBreak': 'break-word'}),
+            html.Td(dbc.Badge('등록', color='success') if is_registered(status_val)
                     else dbc.Badge(status_val or '출원', color='primary')),
-            html.Td(_cell(row, 'application_id', 'application_no')),
+            html.Td(cell(row, 'application_id', 'application_no'), style={'wordBreak': 'break-word'}),
             html.Td(dbc.Badge('대표', color='warning', text_color='dark')
                     if lead in ('Y', 'y', '1', 'True', 'true') else ''),
             html.Td(share_str),
-            html.Td(grade_str or '-'),
-            html.Td(_cell(row, 'country')),
+            html.Td(grade_str or '-', style={'wordBreak': 'break-word'}),
+            html.Td(cell(row, 'country'), style={'wordBreak': 'break-word'}),
         ]))
 
     return html.Div([summary, dbc.Table([
         html.Thead(html.Tr([
-            html.Th('출원일'), html.Th('발명 명칭'), html.Th('상태'),
-            html.Th('접수ID/출원번호'), html.Th('대표발명자'), html.Th('지분율'),
-            html.Th('등급'), html.Th('출원 국가'),
+            html.Th('출원일', style={'width': '9%'}),
+            html.Th('발명 명칭', style={'width': '24%'}),
+            html.Th('상태', style={'width': '9%'}),
+            html.Th('접수ID/출원번호', style={'width': '14%'}),
+            html.Th('대표발명자', style={'width': '9%'}),
+            html.Th('지분율', style={'width': '8%'}),
+            html.Th('등급', style={'width': '12%'}),
+            html.Th('출원 국가', style={'width': '15%'}),
         ])),
         html.Tbody(rows),
-    ], bordered=False, hover=True, responsive=True, size='sm')])
+    ], bordered=False, hover=True, size='sm',
+       style={'tableLayout': 'fixed', 'width': '100%'})])
 
 
-def technology_transfer_tab(tt_df, rid):
-    if tt_df.empty:
-        return html.Div('기술 이전 데이터 없음', className='text-muted p-3')
-    tt = tt_df[tt_df['researcher_id'] == rid].sort_values('transfer_date', ascending=False)
-    if tt.empty:
-        return html.Div('기술 이전 실적 없음', className='text-muted p-3')
-    amount = pd.to_numeric(tt['amount'], errors='coerce').fillna(0).sum()
-    summary = dbc.Row([
-        dbc.Col(dbc.Card(dbc.CardBody([
-            html.H4(str(len(tt)), className='fw-bold text-primary mb-0'),
-            html.Small('총 건수', className='text-muted'),
-        ]), className='text-center border-0 bg-light'), md=2),
-        dbc.Col(dbc.Card(dbc.CardBody([
-            html.H4(f'{int(amount):,}만원', className='fw-bold text-success mb-0'),
-            html.Small('누적 금액', className='text-muted'),
-        ]), className='text-center border-0 bg-light'), md=3),
-    ], className='mb-3')
-    rows = [html.Tr([
-        html.Td(str(row.get('transfer_date', ''))[:10]),
-        html.Td(row.get('tech_name', '')),
-        html.Td(row.get('recipient', '')),
-        html.Td(row.get('transfer_type', '')),
-        html.Td(_money(row.get('amount')), className='text-end'),
-    ]) for _, row in tt.iterrows()]
-    return html.Div([summary, dbc.Table([
-        html.Thead(html.Tr([html.Th('이전일'), html.Th('기술명'), html.Th('거래처'),
-                            html.Th('유형'), html.Th('금액', className='text-end')])),
-        html.Tbody(rows),
-    ], bordered=False, hover=True, responsive=True, size='sm')])
+_PANEL_TITLE_STYLE = {'fontSize': '0.85rem', 'fontWeight': 600, 'color': '#1d1d1f'}
+_GRADE_PILL_COLOR = '#3f8f57'
+_E_SUPPORT_COLOR = '#0071e3'
+
+def llm_summary_block(profile: dict | None, similar: list | None = None, name_map: dict | None = None):
+    """전문성 요약(LLM) — 연구원 보유 전문성 분석.json의 핵심 분야(strength_fields)/
+    키워드(strength_keywords)를 배지로, 주요 역할·책임(key_responsibilities)/
+    전문지식 및 역량(domain_knowledge_skill)을 불릿 목록으로 보여준다.
+    similar(researcher_similarity.json의 해당 연구원 항목 중 'similar' 리스트,
+    시니어 우선으로 이미 정렬돼 있음)가 주어지면 시니어 3명·주니어 3명을 유사
+    연구원 배지로 덧붙인다. 해당 연구원이 분석 대상이 아니거나 아직 파이프라인을
+    실행하지 않아 데이터가 없으면 안내 문구만 표시한다."""
+    if not profile:
+        return html.Div('분석 데이터 없음', className='text-muted small p-1')
+
+    fields = profile.get('strength_fields') or []
+    keywords = profile.get('strength_keywords') or []
+    responsibilities = profile.get('key_responsibilities') or []
+    domain_skill = profile.get('domain_knowledge_skill') or []
+
+    children = []
+    if fields:
+        children.append(html.Div('Strength Field', className='small text-muted fw-semibold mb-1'))
+        children.append(html.Div(
+            [dbc.Badge(f, color='dark', className='me-1 mb-1') for f in fields],
+        ))
+    if keywords:
+        children.append(html.Div('Strength Keywords', className='small text-muted fw-semibold mt-2 mb-1'))
+        children.append(html.Div(
+            [dbc.Badge(k, color='secondary', className='me-1 mb-1') for k in keywords],
+        ))
+    if responsibilities:
+        children.append(html.Div('주요 역할·책임', className='small text-muted fw-semibold mt-2 mb-1'))
+        children.append(html.Ul([html.Li(r, className='small') for r in responsibilities], className='mb-0 ps-3'))
+    if domain_skill:
+        children.append(html.Div('전문지식 및 역량', className='small text-muted fw-semibold mt-2 mb-1'))
+        children.append(html.Ul([html.Li(d, className='small') for d in domain_skill], className='mb-0 ps-3'))
+
+    name_map = name_map or {}
+    senior = [s for s in (similar or []) if s.get('tenure_level') == 'Senior'][:3]
+    junior = [s for s in (similar or []) if s.get('tenure_level') == 'Junior'][:3]
+    if senior or junior:
+        def _badge(s, color):
+            rid = s.get('researcher_id', '')
+            return dbc.Badge(name_map.get(rid, rid), color=color, className='me-1 mb-1')
+
+        children.append(html.Div([
+            html.Div('유사 연구원', className='small text-muted fw-semibold mt-2 mb-1'),
+            html.Div([_badge(s, 'primary') for s in senior] + [_badge(s, 'info') for s in junior]),
+        ]))
+
+    if not children:
+        return html.Div('분석 데이터 없음', className='text-muted small p-1')
+    return children
 
 
-def _number(value, fmt):
+def _pill(text, bg, fg='#ffffff'):
+    return html.Span(text, style={
+        'display': 'inline-block',
+        'backgroundColor': bg,
+        'color': fg,
+        'borderRadius': '999px',
+        'padding': '2px 10px',
+        'fontSize': '0.7rem',
+        'fontWeight': 600,
+        'lineHeight': '1.5',
+        'whiteSpace': 'nowrap',
+    })
+
+
+def _e_support_pill(value):
+    v = str(value).strip().upper()
+    return _pill('E직군', _LEGEND_NEUTRAL) if v == 'E' else _pill('R직군', _E_SUPPORT_COLOR)
+
+
+def _info_hover(icon_id, label, image_filename):
+    return html.Div([
+        html.I(className='bi bi-info-circle', id=icon_id,
+               style={'fontSize': '0.85rem', 'color': _LEGEND_NEUTRAL, 'cursor': 'help'}),
+        html.Span(f' {label}', className='small text-muted ms-1'),
+        dbc.Tooltip(
+            html.Img(src=f'/raw-image/{quote(image_filename)}',
+                     style={'maxWidth': '360px', 'maxHeight': '360px', 'display': 'block'}),
+            target=icon_id, placement='top', className='info-hover-tooltip',
+        ),
+    ], className='d-flex align-items-center mt-2')
+
+
+def _clean_num_str(val) -> str:
+    """CSV 왕복 과정에서 컬럼에 빈 값이 섞이면 pandas가 float로 승격시켜
+    '3.0'처럼 불필요한 소수점이 붙는 경우가 있어, 표시 직전에 한 번 더 정리한다."""
+    s = str(val).strip()
+    if s in ('', 'nan', 'None', 'NaT'):
+        return ''
     try:
-        return fmt.format(float(value))
-    except (TypeError, ValueError):
-        return '-'
+        f = float(s)
+        return str(int(f)) if f == int(f) else s
+    except (ValueError, OverflowError):
+        return s
 
 
-def _money(value):
-    number = pd.to_numeric(value, errors='coerce')
-    if pd.isna(number):
-        number = 0
-    return f'{int(number):,}만원'
+def _core_technology_table(core_df):
+    if core_df.empty:
+        return html.Div('핵심기술 데이터 없음', className='text-muted small')
+
+    rows = []
+    for _, row in core_df.iterrows():
+        field = str(row.get('tech_field', '')).strip()
+        name = str(row.get('tech_name', '')).strip()
+        grade = _clean_num_str(row.get('tech_grade', '')) or '-'
+        grade_disp = f'{grade}급' if grade != '-' else '-'
+        rows.append(html.Tr([
+            html.Td(field, className='small', style={'wordBreak': 'break-word'}),
+            html.Td(html.Div([
+                _pill(grade_disp, _GRADE_PILL_COLOR),
+                html.Span(name, className='small ms-2'),
+            ], className='d-flex align-items-center'), style={'wordBreak': 'break-word'}),
+        ]))
+
+    return dbc.Table([
+        html.Thead(html.Tr([
+            html.Th('기술분야', style={'fontSize': '0.72rem', 'width': '35%'}),
+            html.Th('핵심기술', style={'fontSize': '0.72rem', 'width': '65%'}),
+        ]), className='table-light'),
+        html.Tbody(rows),
+    ], bordered=False, hover=True, size='sm', className='mb-0',
+       style={'tableLayout': 'fixed', 'width': '100%'})
 
 
 # '등록' 을 포함하지만 실제로는 등록이 아닌 상태(등록 전/무산). 필요시 추가.
@@ -191,69 +289,76 @@ def _is_registered(value):
     return not any(neg in s for neg in _NOT_REGISTERED_KEYWORDS)
 
 
-def _cell(row, *keys, default='-'):
-    for key in keys:
-        value = str(row.get(key, ''))
-        if value and value not in ('', 'nan', 'None'):
-            return value
-    return default
+def _tech_ownership_table(tech_row):
+    if tech_row is None:
+        return html.Div('보유기술 데이터 없음', className='text-muted small')
+
+    rows = []
+    for i in range(1, 6):
+        name = str(tech_row.get(f'tech_{i}', '')).strip()
+        if not name or name in ('nan', 'None'):
+            continue
+        lv = _clean_num_str(tech_row.get(f'lv_{i}', ''))
+        portion = _clean_num_str(tech_row.get(f'portion_{i}', ''))
+        rows.append(html.Tr([
+            html.Td(str(i), className='small text-center'),
+            html.Td(name, className='small', style={'wordBreak': 'break-word'}),
+            html.Td(lv or '-', className='small text-center'),
+            html.Td(f'{portion}%' if portion else '-', className='small text-center'),
+        ]))
+
+    if not rows:
+        return html.Div('보유기술 데이터 없음', className='text-muted small')
+
+    return dbc.Table([
+        html.Thead(html.Tr([
+            html.Th('구분', className='text-center', style={'fontSize': '0.72rem', 'width': '15%'}),
+            html.Th('전문분야', style={'fontSize': '0.72rem', 'width': '45%'}),
+            html.Th('Lv', className='text-center', style={'fontSize': '0.72rem', 'width': '15%'}),
+            html.Th('보유율', className='text-center', style={'fontSize': '0.72rem', 'width': '25%'}),
+        ]), className='table-light'),
+        html.Tbody(rows),
+    ], bordered=False, hover=True, size='sm', className='mb-0',
+       style={'tableLayout': 'fixed', 'width': '100%'})
 
 
-def _dedupe_patents(pat):
-    id_col = 'application_id' if 'application_id' in pat.columns else None
-    if not id_col:
-        return pat.copy()
+def owned_expertise_block(core_df, tech_df, rid):
+    """보유 전문성 — 핵심기술(core_technology.csv) / 보유기술(tech_ownership.csv)을
+    좌우로 나눠 표시. 좌: 기술분야·핵심기술(등급 배지). 우: 전문분야별 Lv·보유율,
+    상단에 E/R 직군 배지."""
+    core = core_df[core_df['researcher_id'] == rid] if not core_df.empty else pd.DataFrame()
+    tech = tech_df[tech_df['researcher_id'] == rid] if not tech_df.empty else pd.DataFrame()
+    tech_row = tech.iloc[0] if not tech.empty else None
+    e_support = tech_row.get('E_support') if tech_row is not None else None
 
-    def _merge_countries(series):
-        seen = {}
-        for value in series:
-            text = str(value).strip()
-            if text in ('', 'nan', 'None', '-'):
-                continue
-            for part in text.split(','):
-                part = part.strip()
-                if part:
-                    seen[part] = None
-        return ', '.join(seen.keys()) if seen else '-'
+    left = html.Div([
+        html.P('핵심기술', style=_PANEL_TITLE_STYLE, className='mb-2'),
+        _core_technology_table(core),
+        _info_hover('grade-info-icon', '등급 개요', '등급 개요.png'),
+    ])
 
-    def _agg_status(series):
-        values = series.astype(str).tolist()
-        for value in values:
-            if _is_registered(value):
-                return value
-        return values[0] if values else ''
+    right_title_children = [
+        html.Span('보유기술', style=_PANEL_TITLE_STYLE),
+        html.Span("('25년기준)", style={'fontSize': '0.68rem', 'color': _LEGEND_NEUTRAL, 'marginLeft': '3px'}),
+    ]
+    if e_support is not None:
+        right_title_children.append(html.Div(_e_support_pill(e_support), className='ms-auto'))
 
-    agg_dict = {col: 'first' for col in pat.columns if col not in (id_col, 'researcher_id', 'country', 'status')}
-    if 'status' in pat.columns:
-        agg_dict['status'] = _agg_status
-    if 'country' in pat.columns:
-        agg_dict['country'] = _merge_countries
-    return pat.groupby(id_col, sort=False).agg(agg_dict).reset_index()
+    right = html.Div([
+        html.Div(right_title_children, className='d-flex align-items-center mb-2'),
+        _tech_ownership_table(tech_row),
+        _info_hover('lv-info-icon', 'Lv 개요', 'lv 개요.png'),
+    ])
 
-
-def _count_true(df, col):
-    if col not in df.columns:
-        return 0
-    return int(df[col].astype(str).isin(['Y', 'y', '1', 'True', 'true']).sum())
-
-
-def _count_us_registered(df):
-    if 'country' not in df.columns or 'status' not in df.columns:
-        return 0
-    us_mask = df['country'].astype(str).str.contains('미국|USA|US', case=False, na=False)
-    return int((us_mask & df['status'].apply(_is_registered)).sum())
-
-
-def _share_sum(df):
-    if 'share_ratio' not in df.columns:
-        return '-'
-    shares = pd.to_numeric(df['share_ratio'], errors='coerce').dropna()
-    return f'{round(shares.sum(), 1)}%' if not shares.empty else '-'
+    return dbc.Row([
+        dbc.Col(left, md=6, className='pe-3'),
+        dbc.Col(right, md=6, className='ps-3 border-start'),
+    ], className='g-0')
 
 
 def _stat(value, label, color):
     return html.Div([
-        html.H5(str(value), className=f'fw-bold {color} mb-0'),
+        html.H5(str(value), className=f'fw-bold stat-value {color} mb-0'),
         html.Small(label, className='text-muted'),
     ], className='text-center px-2')
 
@@ -265,9 +370,9 @@ def _dual_card(left_value, left_label, left_color, right_value, right_label, rig
             dbc.Col(_stat(right_value, right_label, right_color), width=6),
         ], className='g-0 align-items-center'),
         className='p-2',
-    ), className='border-0 bg-light h-100')
+    ), className='profile-card h-100', style={'backgroundColor': '#fafafa'})
 
 
 def _single_card(value, label, color):
     return dbc.Card(dbc.CardBody(_stat(value, label, color), className='p-2'),
-                    className='border-0 bg-light h-100')
+                    className='profile-card h-100', style={'backgroundColor': '#fafafa'})

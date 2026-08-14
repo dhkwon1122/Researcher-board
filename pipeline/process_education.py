@@ -21,13 +21,13 @@
 컬럼명 설정은 파일 상단의 COL_* 상수에서 수정하세요.
 """
 
-import csv
 import os
 import sys
 
 import pandas as pd
 
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
+EDUCATION_FILE = '임직원_학력.xlsx'
+_EDUCATION_HEADER_ROW = 1  # sources.py 매니페스트 기준 (2번째 행)
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
 COL_ID        = '사번'
@@ -51,7 +51,9 @@ HIGHER_DEGREES = {'박사', '석사', '학사'}
 DEG_ORDER = {'박사': 0, '석사': 1, '학사': 2, '전문대': 3, '고교': 4}
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import norm_id
+from paths import RAW_DIR, OUT_DIR  # noqa: E402
+from excel_reader import clean_str, is_blank, read_xlsx, norm_id
+from merge_utils import TABLE_KEYS, write_merged
 from source_reader import read_source
 
 
@@ -68,7 +70,7 @@ def _extract_year(year_val, date_val) -> str:
     """학위 취득 연도 우선, 없으면 졸업일에서 연도 추출."""
     for v in (year_val, date_val):
         s = str(v).strip()
-        if s in ('', 'nan', 'None', 'NaT', 'NaN'):
+        if is_blank(s):
             continue
         try:
             y = int(float(s))
@@ -83,11 +85,21 @@ def _extract_year(year_val, date_val) -> str:
     return ''
 
 
-def process() -> bool:
-    df = read_source('education')
+def process(raw_dir: str = RAW_DIR) -> bool:
+    if raw_dir == RAW_DIR:
+        df = read_source('education')
+        if df is None:
+            print('[SKIP] education 원천 데이터 없음 '
+                  '(DB education_stg 또는 data/raw_csv/education.csv) — education_raw 폴백 시도')
+    else:
+        raw_path = os.path.join(raw_dir, EDUCATION_FILE)
+        if os.path.exists(raw_path):
+            df = read_xlsx(raw_path, header_row=_EDUCATION_HEADER_ROW)
+        else:
+            df = None
+            print(f'[SKIP] {EDUCATION_FILE} 파일 없음({raw_dir})')
+
     if df is None:
-        print('[SKIP] education 원천 데이터 없음 '
-              '(DB education_stg 또는 data/raw_csv/education.csv) — education_raw 폴백 시도')
         return False
     df.columns = [str(c).strip() for c in df.columns]
 
@@ -128,8 +140,8 @@ def process() -> bool:
             rows.append({
                 'researcher_id':   rid,
                 'degree':          deg,
-                'school':          school if school not in ('nan', 'None') else '',
-                'major':           major  if major  not in ('nan', 'None') else '',
+                'school':          clean_str(school),
+                'major':           clean_str(major),
                 'graduation_year': row['_grad_year'],
             })
 
@@ -140,12 +152,11 @@ def process() -> bool:
               .drop(columns=['_ord'])
               .reset_index(drop=True))
 
-    os.makedirs(OUT_DIR, exist_ok=True)
     out_path = os.path.join(OUT_DIR, 'education.csv')
-    result.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+    merged = write_merged(out_path, result, TABLE_KEYS['education'])
 
-    n = result['researcher_id'].nunique()
-    print(f'[OK]   education.csv 저장 ({len(result)}행, {n}명)')
+    n = merged['researcher_id'].nunique()
+    print(f'[OK]   education.csv 저장 (총 {len(merged)}행, {n}명, 이번 파일 {len(result)}행 반영)')
     return True
 
 

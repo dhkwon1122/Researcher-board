@@ -32,14 +32,14 @@ leadership_comments.csv 컬럼:
 컬럼명이 다를 경우 파일 상단의 COL_* 상수를 수정하세요.
 """
 
-import csv
 import os
 import sys
 from datetime import datetime
 
 import pandas as pd
 
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
+LEADERSHIP_FILE = '리더십진단.xlsx'
+_LEADERSHIP_HEADER_ROW = 0  # sources.py 매니페스트 기준 (1번째 행)
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
 COL_ID    = '진단대상자ID'
@@ -62,15 +62,27 @@ DIMS = list(COMPETENCY.keys())
 OTHERS_GROUPS = {'동료', '상사', '부서원'}
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import norm_id
+from paths import RAW_DIR, OUT_DIR  # noqa: E402
+from excel_reader import clean_str, is_blank, read_xlsx, norm_id
+from merge_utils import GROUP_REPLACE_KEYS, TABLE_KEYS, write_merged
 from source_reader import read_source
 
 
-def process() -> bool:
-    df = read_source('leadership')
+def process(raw_dir: str = RAW_DIR) -> bool:
+    if raw_dir == RAW_DIR:
+        df = read_source('leadership')
+        if df is None:
+            print('[SKIP] leadership 원천 데이터 없음 '
+                  '(DB leadership_stg 또는 data/raw_csv/leadership.csv) — leadership_raw 폴백 시도')
+    else:
+        raw_path = os.path.join(raw_dir, LEADERSHIP_FILE)
+        if os.path.exists(raw_path):
+            df = read_xlsx(raw_path, header_row=_LEADERSHIP_HEADER_ROW)
+        else:
+            df = None
+            print(f'[SKIP] {LEADERSHIP_FILE} 파일 없음({raw_dir})')
+
     if df is None:
-        print('[SKIP] leadership 원천 데이터 없음 '
-              '(DB leadership_stg 또는 data/raw_csv/leadership.csv) — leadership_raw 폴백 시도')
         return False
 
     # 컬럼명 정규화: xlwings가 숫자 헤더를 float로 읽으면 '1.0' → '1' 변환
@@ -125,7 +137,7 @@ def process() -> bool:
     for _, row in df.iterrows():
         s = str(row.get(COL_STR, '')).strip() if COL_STR in df.columns else ''
         i = str(row.get(COL_IMP,  '')).strip() if COL_IMP  in df.columns else ''
-        if s in ('', 'nan', 'None') and i in ('', 'nan', 'None'):
+        if is_blank(s) and is_blank(i):
             continue
         cmt_rows.append({
             'researcher_id':   row['researcher_id'],
@@ -133,15 +145,17 @@ def process() -> bool:
             'commenter_type':  f'리더십_{str(row[COL_GROUP]).strip()}',
             'comment_raw':     '',
             'comment_summary': '',
-            'strengths':       '' if s in ('nan', 'None') else s,
-            'improvements':    '' if i in ('nan', 'None') else i,
+            'strengths':       clean_str(s),
+            'improvements':    clean_str(i),
         })
     if cmt_rows:
         cmt_df = pd.DataFrame(cmt_rows)
         cmt_path = os.path.join(OUT_DIR, 'leadership_comments.csv')
-        os.makedirs(OUT_DIR, exist_ok=True)
-        cmt_df.to_csv(cmt_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
-        print(f'[OK]   leadership_comments.csv 저장 ({len(cmt_df)}행) — process_comments가 comments.csv에 병합')
+        cmt_merged = write_merged(
+            cmt_path, cmt_df, GROUP_REPLACE_KEYS['leadership_comments'], group_replace=True,
+        )
+        print(f'[OK]   leadership_comments.csv 저장 (총 {len(cmt_merged)}행, 이번 파일 {len(cmt_df)}행으로 해당 (연구원,연도,그룹) 통째 교체) '
+              f'— process_comments가 comments.csv에 병합')
 
     # ── 역량 점수 계산 ───────────────────────────────────────────────────────
     # 같은 (연구원, 연도, 그룹) 내 여러 평가자 → 문항별 평균 먼저 산출
@@ -176,13 +190,12 @@ def process() -> bool:
               .sort_values(['researcher_id', 'year', 'evaluator_group'])
               .reset_index(drop=True))
 
-    os.makedirs(OUT_DIR, exist_ok=True)
     out_path = os.path.join(OUT_DIR, 'leadership.csv')
-    result.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+    merged = write_merged(out_path, result, TABLE_KEYS['leadership'])
 
-    n = result['researcher_id'].nunique()
-    groups = sorted(result['evaluator_group'].unique())
-    print(f'[OK]   leadership.csv 저장 ({len(result)}행, {n}명, 그룹: {groups})')
+    n = merged['researcher_id'].nunique()
+    groups = sorted(merged['evaluator_group'].unique())
+    print(f'[OK]   leadership.csv 저장 (총 {len(merged)}행, {n}명, 그룹: {groups}, 이번 파일 {len(result)}행 반영)')
     return True
 
 

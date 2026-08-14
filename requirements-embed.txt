@@ -1,0 +1,12 @@
+# BGE-M3 로컬 임베딩 서버(services/bge_server.py) 전용 의존성.
+# torch 등 무거운 ML 패키지가 딸려오므로 requirements.txt와 분리했다 —
+# 파이프라인/대시보드 실행에는 필요 없고, 임베딩 서버를 직접(또는 자동) 기동할 때만 필요.
+#
+#   pip install -r requirements-embed.txt
+#
+# GPU(CUDA) 환경이면 torch를 먼저 해당 CUDA 빌드로 설치한 뒤 이 파일을 설치하세요
+# (예: https://pytorch.org/get-started/locally/ 안내에 따른 인덱스 URL 사용).
+
+fastapi>=0.110.0
+uvicorn>=0.29.0
+FlagEmbedding>=1.2.10

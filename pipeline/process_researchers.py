@@ -1,25 +1,57 @@
 """
 연구원 기본 정보 처리 모듈
 
-원천: source_reader.read_source('researchers')
+원천: 기본은 source_reader.read_source('researchers')
   → DB researchers_stg 테이블 또는 data/raw_csv/researchers.csv
   (1단계 xlsx_to_raw_csv.py가 data/raw/인력현황.xlsx를 DRM 제거해 만든 사본)
-출력 파일: data/processed/researchers.csv
+  raw_dir이 명시적으로 오버라이드되면(예: data/updates) 그 폴더의 인력현황.xlsx를
+  직접 읽는다 — 아래 참고.
+출력 파일: data/processed/researchers.csv, data/processed/researchers_history.csv
 
 읽는 컬럼:
-  사원번호, 성명, 현소속부서명, CL, 비공식소속부서명, 직무,
-  국적, 근속기준일_그룹입사일, 법적생년월일성별, 성별,
-  승격산정기준일자, Knox ID
+  사원번호, 성명, 현소속부서명, CL, 비공식소속부서명, 직무, 4직종,
+  국적, 근속 기준일_그룹입사일(YYYYMMDD), 법적생년월일성별, 성별,
+  승격산정기준일자, Knox ID, 인원실적년도, 인원실적월, 재직상태명
 
 계산 항목:
   birth_year    : 법적생년월일성별 앞 4자리
   age           : 올해연도 - birth_year  (표시 전용, CSV에는 저장 안 함)
-  hire_date     : 근속기준일_그룹입사일 (YYYY-MM-DD)
+  hire_date     : 근속 기준일_그룹입사일 (원본 YYYYMMDD → YYYY-MM-DD로 변환)
   tenure        : (오늘 - hire_date).days / 365, 소수 첫째자리 (표시 전용)
   promotion_date: 승격산정기준일자 (YYYY-MM-DD)
   position_year : ceil((2027-03-01 - promotion_date).days / 365) (표시 전용)
+  valid_year    : 인원실적년도 (YYYY, 4자리)
+  valid_month   : 인원실적월   (MM, 2자리 제로패딩)
+  employment_status: 재직상태명 원본 그대로(휴직/재직/퇴직 등) — is_current(최신
+                    인력현황 파일에 있었는지 여부, 위 참고)와는 별개 개념이다.
+                    예: 휴직 중인 사람도 이번 달 인력현황엔 있으므로 is_current='Y'
+                    이면서 employment_status='휴직'일 수 있다.
 
 컬럼명이 다를 경우 파일 상단의 COL_* 상수를 수정하세요.
+
+── 데이터 적재 방식(업서트) ────────────────────────────────────────────────
+매 실행마다 전량 덮어쓰지 않는다. researchers.csv는 researcher_id 기준
+업서트다 — 이번 파일에 있는 사람은 행 전체를 최신값으로 교체하고, 이번
+파일에 없는 사람(전배·퇴사 등)은 이전 행을 그대로 보존한다(삭제하지 않음).
+
+researchers.csv에 병합된 뒤, 파일 전체에서 (valid_year, valid_month)의
+최댓값(가장 최근 인원실적월)을 구해 각 행에 is_current(Y/N)를 다시 계산해
+채운다 — 그 행의 (valid_year, valid_month)가 전체 최신월과 같으면 'Y'
+(현재 소속), 다르면(더 과거면) 'N'(현재 미소속: 이번 달 인력현황에 없었다는
+뜻 — 전배/퇴사를 구분하진 못하지만 "지금 우리 조직 소속이 아님"은 알 수
+있다). valid_year/valid_month가 비어 있는 행(구버전 데이터, 또는 원본에
+인원실적년도/월 컬럼이 없는 경우)은 판단 근거가 없으므로 항상 'Y'로 둔다.
+
+researchers_history.csv는 별도로 (researcher_id, valid_year, valid_month)
+키로 계속 누적된다(같은 키는 교체, 다른 키는 새 행 추가, 절대 삭제하지
+않음) — "누적기준" 검색(한 번이라도 등록된 적 있는 전체 인원, 월별 스냅샷)
+전용이며, 다른 화면(명단/조직도/JOB Market/AI 검색 등)은 계속 researchers.csv
+(=현재 상태 1인 1행)만 그대로 사용하면 되므로 이 파일이 생겨도 영향받지
+않는다.
+
+raw_dir 인자로 원본 위치를 바꿀 수 있다 — 기본은 data/raw(최초 적재),
+data/updates를 넘기면 그 폴더의 파일로 업서트만 수행한다(pipeline/run_update.py
+참고).
 """
 
 import csv
@@ -30,7 +62,8 @@ from datetime import date, datetime
 
 import pandas as pd
 
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
+RESEARCHERS_FILE = '인력현황.xlsx'
+_RESEARCHERS_HEADER_ROW = 1  # sources.py 매니페스트 기준 (2번째 행)
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
 COL_ID         = '사원번호'
@@ -39,19 +72,34 @@ COL_DEPT       = '현소속부서명'
 COL_POSITION   = 'CL'
 COL_ORG        = '비공식소속부서명'
 COL_JOB        = '직무'
+COL_JOB_TYPE   = '4직종'
 COL_NATION     = '국적'
-COL_HIRE_DATE  = '근속기준일_그룹입사일'
+COL_HIRE_DATE  = '근속 기준일_그룹입사일'
 COL_BIRTH_SEX  = '법적생년월일성별'
 COL_GENDER     = '성별'
 COL_PROMO_DATE = '승격산정기준일자'
 COL_KNOX       = 'Knox ID'
+COL_VALID_YEAR  = '인원실적년도'
+COL_VALID_MONTH = '인원실적월'
+COL_EMPLOYMENT_STATUS = '재직상태명'
 # 직급연차 기준일 (2027-03-01)
 POSITION_YEAR_REF = date(2027, 3, 1)
+
+# CL 컬럼(COL_POSITION) 원본 값 중 영문 임원/특별 직책 표기를 한글로 통일
+# (그 외 값, 예: CL1~CL6은 원본 그대로 사용 — 사용자 확정 매핑).
+POSITION_LABEL_MAP = {
+    'Corporate VP': '상무',
+    'Corporate President': '사장',
+    'Senior Advisor': '고문',
+    'Corporate EVP': '부사장',
+}
 # ─────────────────────────────────────────────────────────────────────────────
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import norm_id
-from source_reader import read_source
+from paths import RAW_DIR, OUT_DIR  # noqa: E402
+from excel_reader import is_blank, read_xlsx, norm_id  # noqa: E402
+from merge_utils import TABLE_KEYS, write_merged  # noqa: E402
+from source_reader import read_source  # noqa: E402
 
 
 def _parse_date(val) -> date | None:
@@ -61,7 +109,7 @@ def _parse_date(val) -> date | None:
     if isinstance(val, (date, datetime)):
         return val.date() if isinstance(val, datetime) else val
     s = str(val).strip()
-    if s in ('', 'nan', 'None', 'NaT'):
+    if is_blank(s):
         return None
     for fmt in ('%Y-%m-%d', '%Y/%m/%d', '%Y.%m.%d', '%Y%m%d'):
         try:
@@ -75,11 +123,74 @@ def _date_str(d: date | None) -> str:
     return d.strftime('%Y-%m-%d') if d else ''
 
 
-def process() -> bool:
-    df = read_source('researchers')
+def _valid_year_str(val) -> str:
+    s = str(val).strip()
+    if is_blank(s) or s.lower() == 'nan':
+        return ''
+    s = s.split('.')[0]  # 엑셀이 숫자를 float로 읽었을 때 '2026.0' 방지
+    digits = ''.join(ch for ch in s if ch.isdigit())
+    return digits[:4] if len(digits) >= 4 else ''
+
+
+def _valid_month_str(val) -> str:
+    s = str(val).strip()
+    if is_blank(s) or s.lower() == 'nan':
+        return ''
+    s = s.split('.')[0]
+    digits = ''.join(ch for ch in s if ch.isdigit())
+    if not digits:
+        return ''
+    try:
+        m = int(digits)
+    except ValueError:
+        return ''
+    return f'{m:02d}' if 1 <= m <= 12 else ''
+
+
+def _compute_is_current(df: pd.DataFrame) -> pd.DataFrame:
+    """전체 파일에서 가장 최근 (valid_year, valid_month)를 찾아, 각 행이 그
+    최신월과 같으면 'Y', 다르면(비어있지 않은 채 더 과거면) 'N'을 채운다.
+    valid_year/valid_month가 비어 있는 행은 판단 근거가 없으므로 'Y'."""
+    df = df.copy()
+    if 'valid_year' not in df.columns or 'valid_month' not in df.columns:
+        df['is_current'] = 'Y'
+        return df
+
+    def _period(row):
+        y, m = row['valid_year'], row['valid_month']
+        if not y or not m:
+            return None
+        try:
+            return (int(y), int(m))
+        except ValueError:
+            return None
+
+    periods = df.apply(_period, axis=1)
+    valid_periods = periods.dropna()
+    if valid_periods.empty:
+        df['is_current'] = 'Y'
+        return df
+
+    latest = valid_periods.max()
+    df['is_current'] = periods.apply(lambda p: 'Y' if (p is None or p == latest) else 'N')
+    return df
+
+
+def process(raw_dir: str = RAW_DIR) -> bool:
+    if raw_dir == RAW_DIR:
+        df = read_source('researchers')
+        if df is None:
+            print('[SKIP] researchers 원천 데이터 없음 '
+                  '(DB researchers_stg 또는 data/raw_csv/researchers.csv) — researchers_raw 폴백 시도')
+    else:
+        raw_path = os.path.join(raw_dir, RESEARCHERS_FILE)
+        if os.path.exists(raw_path):
+            df = read_xlsx(raw_path, header_row=_RESEARCHERS_HEADER_ROW)
+        else:
+            df = None
+            print(f'[SKIP] {RESEARCHERS_FILE} 파일 없음({raw_dir}) — researchers_raw 폴백 시도')
+
     if df is None:
-        print('[SKIP] researchers 원천 데이터 없음 '
-              '(DB researchers_stg 또는 data/raw_csv/researchers.csv) — researchers_raw 폴백 시도')
         return False
     # 컬럼명 좌우 공백 제거 (탭 포함)
     df.columns = [str(c).strip() for c in df.columns]
@@ -94,7 +205,6 @@ def process() -> bool:
             )
             return False
 
-    today = date.today()
     rows = []
     for _, row in df.iterrows():
         rid = norm_id(row.get(COL_ID))
@@ -117,19 +227,24 @@ def process() -> bool:
         # 승격산정기준일
         promo_dt = _parse_date(row.get(COL_PROMO_DATE))
 
+        position_raw = str(row.get(COL_POSITION, '')).strip()
         rows.append({
             'researcher_id':   rid,
             'name':            str(row.get(COL_NAME, '')).strip(),
             'department':      str(row.get(COL_DEPT, '')).strip(),
             'org_code':        str(row.get(COL_ORG, '')).strip(),
-            'position':        str(row.get(COL_POSITION, '')).strip(),
+            'position':        POSITION_LABEL_MAP.get(position_raw, position_raw),
             'job_function':    str(row.get(COL_JOB, '')).strip(),
+            'job_type':        str(row.get(COL_JOB_TYPE, '')).strip(),
             'nationality':     str(row.get(COL_NATION, '')).strip(),
             'gender':          str(row.get(COL_GENDER, '')).strip(),
             'birth_year':      birth_year,
             'hire_date':       _date_str(hire_dt),
             'promotion_date':  _date_str(promo_dt),
             'knox_id':         str(row.get(COL_KNOX, '')).strip(),
+            'employment_status': str(row.get(COL_EMPLOYMENT_STATUS, '')).strip(),
+            'valid_year':      _valid_year_str(row.get(COL_VALID_YEAR)),
+            'valid_month':     _valid_month_str(row.get(COL_VALID_MONTH)),
         })
 
     result = pd.DataFrame(rows)
@@ -137,10 +252,22 @@ def process() -> bool:
     result = result.sort_values('researcher_id').reset_index(drop=True)
 
     os.makedirs(OUT_DIR, exist_ok=True)
-    out_path = os.path.join(OUT_DIR, 'researchers.csv')
-    result.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
 
-    print(f'[OK]   researchers.csv 저장 ({len(result)}명)')
+    # 1) researchers.csv — researcher_id 업서트(없는 사람은 보존) 후 is_current 재계산
+    out_path = os.path.join(OUT_DIR, 'researchers.csv')
+    merged = write_merged(out_path, result, TABLE_KEYS['researchers'])
+    merged = _compute_is_current(merged)
+    merged.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+
+    n_current = (merged['is_current'] == 'Y').sum()
+    n_not_current = (merged['is_current'] == 'N').sum()
+    print(f'[OK]   researchers.csv 저장 (총 {len(merged)}명, 현재 소속 {n_current}명, 미소속 {n_not_current}명)')
+
+    # 2) researchers_history.csv — (researcher_id, valid_year, valid_month) 누적(삭제 없음)
+    hist_path = os.path.join(OUT_DIR, 'researchers_history.csv')
+    hist_merged = write_merged(hist_path, result, TABLE_KEYS['researchers_history'])
+    print(f'[OK]   researchers_history.csv 저장 (누적 {len(hist_merged)}행)')
+
     return True
 
 

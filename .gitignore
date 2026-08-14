@@ -6,9 +6,20 @@ __pycache__/
 pipeline/llm_config.py
 data/raw/
 data/raw_csv/
-data/processed/
+data/processed/*
 *.csv
 *.xlsx
 saml/certs/*.key
 saml/certs/*.pem
 config/users.json
+
+# 국가과학기술표준분류 기준 데이터는 정적 참조 데이터라 형상관리에 포함
+!data/reference/*.csv
+
+# data/processed/ 는 파이프라인 산출물이라 전부 무시하지만, 작업 히스토리/
+# 컨텍스트 문서(CLAUDE.md)는 세션 간 지식 연속성을 위해 형상관리에 포함
+!data/processed/CLAUDE.md
+
+# 사내 CA 인증서는 커밋하지 않음 (README.md / .gitkeep 은 유지)
+certs/*.crt
+certs/*.pem
