@@ -3,9 +3,9 @@
 Source : 기본은 source_reader.read_source('publications')
          → DB publications_stg 테이블 또는 data/raw_csv/publications.csv
          (1단계 xlsx_to_raw_csv.py가 data/raw/개인별논문현황_2016_2026.xlsx를
-          DRM 제거해 만든 사본 — 헤더 행 위치(3번째 행, header_row=2)는 그 단계에서
+          DRM 제거해 만든 사본 — 헤더 행 위치(1번째 행, header_row=0)는 그 단계에서
           이미 처리됨). raw_dir이 명시적으로 오버라이드되면(예: data/updates) 그
-          폴더의 xlsx를 header_row=2로 직접 읽는다.
+          폴더의 xlsx를 header_row=0으로 직접 읽는다.
 Output : data/processed/publications.csv
 
 컬럼 매핑:
@@ -44,7 +44,7 @@ from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from merge_utils import TABLE_KEYS, write_merged  # noqa: E402
 
 SOURCE_FILE = '개인별논문현황_2016_2026.xlsx'
-_PUBLICATIONS_HEADER_ROW = 2  # sources.py 매니페스트 기준 (3번째 행)
+_PUBLICATIONS_HEADER_ROW = 0  # sources.py 매니페스트 기준 (1번째 행)
 OUTPUT = os.path.join(OUT_DIR, 'publications.csv')
 
 # 원본 컬럼 이름

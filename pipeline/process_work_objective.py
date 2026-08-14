@@ -7,8 +7,8 @@
    업무목표26.xlsx를 DRM 제거해 만든 사본)
 Output       : data/processed/work_objective.csv
 
-각 연도 파일은 컬럼이 많아 header_row='auto'로 실제 헤더 행을 자동 인식한 뒤,
-그 안에서 COL_ID/COL_NAME/COL_DETAIL(사번/목표명/상세설명) 컬럼명을 찾아 사용한다.
+각 연도 파일은 header_row=0(첫 행)에서 COL_ID/COL_NAME/COL_DETAIL(사번/목표명/
+상세설명) 컬럼명을 찾아 사용한다.
 한 연구원이 한 해에 목표를 여러 개(여러 행) 작성할 수 있어, 같은 행의
 목표명·상세설명을 "- 목표명 - 상세설명"으로 이어붙이고, 같은 연구원의 여러
 행은 줄바꿈으로 이어 그 해의 컬럼 하나(work_objective{year})에 담는다.
@@ -78,7 +78,7 @@ def _read_year_file(year: int, filename: str, raw_dir: str) -> pd.DataFrame:
             print(f'[SKIP] {path} 파일 없음')
             return empty
 
-        df = read_xlsx(path, header_row='auto')
+        df = read_xlsx(path, header_row=0)
         if df.empty:
             print(f'[SKIP] {filename} 읽기 결과가 비어 있습니다.')
             return empty

@@ -18,7 +18,7 @@ import sys
 import pandas as pd
 
 AWARDS_FILE = '시상 세부사항.xlsx'
-_AWARDS_HEADER_ROW = 8  # sources.py 매니페스트 기준 (9번째 행)
+_AWARDS_HEADER_ROW = 0  # sources.py 매니페스트 기준 (1번째 행)
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
 COL_ID          = '사번'

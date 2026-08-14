@@ -63,7 +63,7 @@ from datetime import date, datetime
 import pandas as pd
 
 RESEARCHERS_FILE = '인력현황.xlsx'
-_RESEARCHERS_HEADER_ROW = 1  # sources.py 매니페스트 기준 (2번째 행)
+_RESEARCHERS_HEADER_ROW = 0  # sources.py 매니페스트 기준 (1번째 행)
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
 COL_ID         = '사원번호'
