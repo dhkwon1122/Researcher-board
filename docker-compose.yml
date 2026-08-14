@@ -60,6 +60,14 @@ services:
     volumes:
       # 데이터는 이미지에 굽지 않고 호스트에서 마운트 (수정·교체 용이)
       - ./data:/app/data
+      # pipeline/llm_config.py 는 .dockerignore 로 이미지에서 제외되므로(비밀을
+      # 이미지에 굽지 않기 위함) 여기서 마운트해야 컨테이너에서 실제로 보인다 —
+      # 마운트가 없으면 llm_client.py의 `import llm_config`가 항상 실패해
+      # "[LLM 오류] llm_config.py 가 없어 API 호출을 건너뜁니다"만 뜬다.
+      # 먼저 호스트에서 pipeline/llm_config.example.py 를 pipeline/llm_config.py 로
+      # 복사해 값을 채워둔 뒤 컨테이너를 띄워야 한다(파일이 없으면 docker가 그
+      # 자리에 빈 디렉터리를 만들어버리므로 반드시 먼저 파일을 만들 것).
+      - ./pipeline/llm_config.py:/app/pipeline/llm_config.py:ro
 
   # 로컬 LLM (AI 검색용). 기본으로는 뜨지 않는다(profile llm).
   # 사용:  docker compose --profile llm up -d
