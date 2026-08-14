@@ -1,7 +1,9 @@
 """
 임직원 직무이력 처리 모듈
 
-원천 파일: data/raw/임직원_직무이력.xlsx
+원천: source_reader.read_source('job_profile')
+  → DB job_profile_stg 테이블 또는 data/raw_csv/job_profile.csv
+  (1단계 xlsx_to_raw_csv.py가 data/raw/임직원_직무이력.xlsx를 DRM 제거해 만든 사본)
 출력 파일: data/processed/job_profile.csv
 
 읽는 컬럼:
@@ -43,6 +45,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import clean_str as _clean, read_xlsx, norm_id
 from merge_utils import TABLE_KEYS, write_merged
+from source_reader import read_source
 
 
 def _parse_date(val):
@@ -73,12 +76,21 @@ def _merge_consecutive(records):
 
 
 def process(raw_dir: str = RAW_DIR) -> bool:
-    raw_path = os.path.join(raw_dir, JOB_PROFILE_FILE)
-    if not os.path.exists(raw_path):
-        print(f'[SKIP] {JOB_PROFILE_FILE} 파일 없음 — job_profile_raw 폴백 시도')
-        return False
+    if raw_dir == RAW_DIR:
+        df = read_source('job_profile')
+        if df is None:
+            print('[SKIP] job_profile 원천 데이터 없음 '
+                  '(DB job_profile_stg 또는 data/raw_csv/job_profile.csv) — job_profile_raw 폴백 시도')
+    else:
+        raw_path = os.path.join(raw_dir, JOB_PROFILE_FILE)
+        if os.path.exists(raw_path):
+            df = read_xlsx(raw_path)
+        else:
+            df = None
+            print(f'[SKIP] {JOB_PROFILE_FILE} 파일 없음({raw_dir})')
 
-    df = read_xlsx(raw_path)
+    if df is None:
+        return False
     df.columns = [str(c).strip() for c in df.columns]
 
     for col in (COL_ID, COL_JOB, COL_START, COL_END):

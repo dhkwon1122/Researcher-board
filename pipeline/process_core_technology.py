@@ -1,7 +1,9 @@
 """
 핵심기술 처리 모듈
 
-원천 파일: data/raw/핵심기술.xlsx
+원천: source_reader.read_source('core_technology')
+  → DB core_technology_stg 테이블 또는 data/raw_csv/core_technology.csv
+  (1단계 xlsx_to_raw_csv.py가 data/raw/핵심기술.xlsx를 DRM 제거해 만든 사본)
 출력 파일: data/processed/core_technology.csv
 
 읽는 컬럼:
@@ -33,15 +35,25 @@ COL_GRADE = '등급'
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import read_xlsx, norm_id
+from source_reader import read_source
 
 
-def process() -> bool:
-    raw_path = os.path.join(RAW_DIR, CORE_TECH_FILE)
-    if not os.path.exists(raw_path):
-        print(f'[SKIP] {CORE_TECH_FILE} 파일 없음 — core_technology_raw 폴백 시도')
+def process(raw_dir: str = RAW_DIR) -> bool:
+    if raw_dir == RAW_DIR:
+        df = read_source('core_technology')
+        if df is None:
+            print('[SKIP] core_technology 원천 데이터 없음 '
+                  '(DB core_technology_stg 또는 data/raw_csv/core_technology.csv) — core_technology_raw 폴백 시도')
+    else:
+        raw_path = os.path.join(raw_dir, CORE_TECH_FILE)
+        if os.path.exists(raw_path):
+            df = read_xlsx(raw_path)
+        else:
+            df = None
+            print(f'[SKIP] {CORE_TECH_FILE} 파일 없음({raw_dir})')
+
+    if df is None:
         return False
-
-    df = read_xlsx(raw_path)
     df.columns = [str(c).strip() for c in df.columns]
 
     if COL_ID not in df.columns:

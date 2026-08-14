@@ -1,7 +1,9 @@
 """
 보유기술 처리 모듈
 
-원천 파일: data/raw/보유기술.xlsx
+원천: source_reader.read_source('tech_ownership')
+  → DB tech_ownership_stg 테이블 또는 data/raw_csv/tech_ownership.csv
+  (1단계 xlsx_to_raw_csv.py가 data/raw/보유기술.xlsx를 DRM 제거해 만든 사본)
 출력 파일: data/processed/tech_ownership.csv
 
 읽는 컬럼:
@@ -39,6 +41,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import is_blank, read_xlsx, norm_id
 from merge_utils import TABLE_KEYS, write_merged
+from source_reader import read_source
 
 
 def _normalize_e_support(val) -> str:
@@ -71,12 +74,21 @@ def _scale_portion(val) -> str:
 
 
 def process(raw_dir: str = RAW_DIR) -> bool:
-    raw_path = os.path.join(raw_dir, TECH_OWNERSHIP_FILE)
-    if not os.path.exists(raw_path):
-        print(f'[SKIP] {TECH_OWNERSHIP_FILE} 파일 없음 — tech_ownership_raw 폴백 시도')
-        return False
+    if raw_dir == RAW_DIR:
+        df = read_source('tech_ownership')
+        if df is None:
+            print('[SKIP] tech_ownership 원천 데이터 없음 '
+                  '(DB tech_ownership_stg 또는 data/raw_csv/tech_ownership.csv) — tech_ownership_raw 폴백 시도')
+    else:
+        raw_path = os.path.join(raw_dir, TECH_OWNERSHIP_FILE)
+        if os.path.exists(raw_path):
+            df = read_xlsx(raw_path)
+        else:
+            df = None
+            print(f'[SKIP] {TECH_OWNERSHIP_FILE} 파일 없음({raw_dir})')
 
-    df = read_xlsx(raw_path)
+    if df is None:
+        return False
     df.columns = [str(c).strip() for c in df.columns]
 
     if COL_ID not in df.columns:

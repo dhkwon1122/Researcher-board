@@ -1,6 +1,9 @@
 """
 과제 수행 이력 전처리
-Source : data/raw/개인별과제투입기간데이터_260114.xlsb
+Source : source_reader.read_source('tasks')
+  → DB tasks_stg 테이블 또는 data/raw_csv/tasks.csv
+  (1단계 xlsx_to_raw_csv.py가 data/raw/개인별과제투입기간데이터_260114.xlsb를
+   DRM 제거해 만든 사본)
 Output : data/processed/tasks.csv
 
 컬럼 매핑:
@@ -226,14 +229,21 @@ def _apply_name_history(df: pd.DataFrame) -> pd.DataFrame:
 
 def process(raw_dir: str = RAW_DIR) -> bool:
     from excel_reader import norm_id, parse_yyyymmdd, read_xlsx
+    from source_reader import read_source
 
-    source = os.path.join(raw_dir, SOURCE_FILE)
-    if not os.path.exists(source):
-        print(f'[process_tasks] 파일 없음: {source}')
-        return False
-
-    print(f'[process_tasks] 읽는 중: {source}')
-    df = read_xlsx(source)
+    if raw_dir == RAW_DIR:
+        df = read_source('tasks')
+        if df is None:
+            print('[process_tasks] tasks 원천 데이터 없음 '
+                  '(DB tasks_stg 또는 data/raw_csv/tasks.csv)')
+            return False
+    else:
+        source = os.path.join(raw_dir, SOURCE_FILE)
+        if not os.path.exists(source):
+            print(f'[process_tasks] 파일 없음: {source}')
+            return False
+        print(f'[process_tasks] 읽는 중: {source}')
+        df = read_xlsx(source)
 
     missing = [c for c in [COL_ID, COL_TASK, COL_START, COL_END, COL_RATE]
                if c not in df.columns]

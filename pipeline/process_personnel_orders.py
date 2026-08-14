@@ -1,7 +1,9 @@
 """
 인사발령 이력 처리 모듈
 
-원천 파일: data/raw/인사발령이력.xlsx
+원천: source_reader.read_source('hr_orders')
+  → DB hr_orders_stg 테이블 또는 data/raw_csv/hr_orders.csv
+  (1단계 xlsx_to_raw_csv.py가 data/raw/인사발령이력.xlsx를 DRM 제거해 만든 사본)
 출력 파일: data/processed/hr_orders.csv
 
 ※ 앞쪽에 공란 행이 있어도 실제 값이 있는 첫 행을 헤더로 자동 인식합니다
@@ -45,6 +47,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import parse_yyyymmdd, read_xlsx, norm_id
 from merge_utils import TABLE_KEYS, write_merged
+from source_reader import read_source
 
 _PAREN_RE = re.compile(r'[\(（][^)）]*[\)）]')
 
@@ -56,12 +59,21 @@ def _strip_paren(val) -> str:
 
 
 def process(raw_dir: str = RAW_DIR) -> bool:
-    raw_path = os.path.join(raw_dir, ORDERS_FILE)
-    if not os.path.exists(raw_path):
-        print(f'[SKIP] {ORDERS_FILE} 파일 없음 — hr_orders_raw 폴백 시도')
-        return False
+    if raw_dir == RAW_DIR:
+        df = read_source('hr_orders')
+        if df is None:
+            print('[SKIP] hr_orders 원천 데이터 없음 '
+                  '(DB hr_orders_stg 또는 data/raw_csv/hr_orders.csv) — hr_orders_raw 폴백 시도')
+    else:
+        raw_path = os.path.join(raw_dir, ORDERS_FILE)
+        if os.path.exists(raw_path):
+            df = read_xlsx(raw_path, header_row='auto')
+        else:
+            df = None
+            print(f'[SKIP] {ORDERS_FILE} 파일 없음({raw_dir})')
 
-    df = read_xlsx(raw_path, header_row='auto')
+    if df is None:
+        return False
     df.columns = [str(c).strip() for c in df.columns]
 
     missing = [c for c in [COL_ID, COL_DATE] if c not in df.columns]

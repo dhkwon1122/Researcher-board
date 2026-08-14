@@ -33,4 +33,18 @@ SOURCES = [
     ('incentive_selection', '핵심이력.xlsx', 0),        # 1번째 행
     ('publications', '개인별논문현황_2016_2026.xlsx', 2),  # 3번째 행
     ('comments', 'comments_raw.xlsx', 0),               # 원본 없음 — 없으면 [SKIP]
+
+    # ── 이후 추가된 기능의 원천 파일 (모두 DRM 걸림) ──────────────────────────
+    ('hr_orders', '인사발령이력.xlsx', 'auto'),          # 앞쪽 공란 행 있어 자동 인식
+    ('tasks_information', '과제정보.xlsx', 0),           # 1번째 행
+    ('core_technology', '핵심기술.xlsx', 0),             # 1번째 행
+    ('tech_ownership', '보유기술.xlsx', 0),              # 1번째 행
+    ('job_profile', '임직원_직무이력.xlsx', 0),          # 1번째 행
+    ('work_objective_24', '업무목표24.xlsx', 'auto'),    # 컬럼 많아 자동 인식
+    ('work_objective_25', '업무목표25.xlsx', 'auto'),
+    ('work_objective_26', '업무목표26.xlsx', 'auto'),
+    ('tasks', '개인별과제투입기간데이터_260114.xlsb', 0),  # 1번째 행 (xlsb)
+    ('project_confl_address', '과제별컨플.xlsx', 0),     # 1번째 행
+    ('job_profile_info_standard', '직무정보_표준.xlsx', 0),  # 1번째 행
+    ('job_profile_info_sait', '직무정보_부서.xlsx', 0),  # 1번째 행
 ]
