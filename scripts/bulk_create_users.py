@@ -17,6 +17,10 @@ config/users.json에 저장된다 — services/auth.create_user()를 그대로 �
   권한   (또는 role)         : config/auth_config.py의 ROLE_LABELS에 등록된
                                역할 코드(예: talent_dev) 또는 한글 라벨(예:
                                인재개발 담당자) 둘 다 허용. 필수.
+  관리자 (또는 is_admin)     : 선택. Y/TRUE/1/O/예 중 하나면 사용자 관리
+                               페이지(manage_users) 접근 권한을 개인별로
+                               부여한다(역할과 무관 — config/auth_config.py
+                               참고). 비워두면 관리자 아님(기본값).
 
 사용법:
   cp scripts/bulk_create_users.example.csv scripts/people_team_users.csv
@@ -57,7 +61,10 @@ _COL_ALIASES = {
     'display_name': ('이름', 'display_name', '성명'),
     'email': ('이메일', 'email'),
     'role': ('권한', 'role', '역할'),
+    'is_admin': ('관리자', 'is_admin', '관리자여부'),
 }
+
+_TRUTHY = {'y', 'yes', 'true', '1', 'o', '예', '관리자'}
 
 _ROLE_CODE_BY_LABEL = {v: k for k, v in ROLE_LABELS.items()}
 
@@ -67,6 +74,10 @@ def _find_col(df: pd.DataFrame, key: str) -> str | None:
         if alias in df.columns:
             return alias
     return None
+
+
+def _parse_bool(raw: str) -> bool:
+    return str(raw or '').strip().lower() in _TRUTHY
 
 
 def _read_input(path: str) -> pd.DataFrame:
@@ -102,6 +113,7 @@ def main():
     col_name = _find_col(df, 'display_name')
     col_email = _find_col(df, 'email')
     col_role = _find_col(df, 'role')
+    col_admin = _find_col(df, 'is_admin')
 
     missing = [k for k, c in [('아이디', col_uid), ('이름', col_name), ('권한', col_role)] if c is None]
     if missing:
@@ -119,6 +131,7 @@ def main():
         name = str(row.get(col_name, '')).strip()
         email = str(row.get(col_email, '') or '').strip() if col_email else ''
         role_raw = str(row.get(col_role, '')).strip()
+        is_admin = _parse_bool(row.get(col_admin, '')) if col_admin else False
 
         if not uid or not name:
             skipped_invalid.append((uid or '(빈 아이디)', '아이디/이름 누락'))
@@ -135,7 +148,8 @@ def main():
             skipped_invalid.append((uid, '입력 파일 안에서 아이디 중복'))
             continue
         seen_in_file.add(uid)
-        created.append({'user_id': uid, 'display_name': name, 'email': email, 'role': role})
+        created.append({'user_id': uid, 'display_name': name, 'email': email, 'role': role,
+                        'is_admin': is_admin})
 
     print(f'입력 {len(df)}행 → 생성 대상 {len(created)}명, '
           f'이미 존재해서 건너뜀 {len(skipped_existing)}명, '
@@ -149,15 +163,16 @@ def main():
     if args.dry_run:
         print('\n--dry-run 이므로 실제로 계정을 만들지 않았습니다. 아래 목록을 확인하세요:')
         for u in created:
+            admin_tag = ' [관리자]' if u['is_admin'] else ''
             print(f"  {u['user_id']:<15} {u['display_name']:<10} "
-                  f"{ROLE_LABELS.get(u['role'], u['role']):<14} {u['email']}")
+                  f"{ROLE_LABELS.get(u['role'], u['role']):<14} {u['email']}{admin_tag}")
         return
 
     ok, failed = [], []
     for u in created:
         try:
             create_user(u['user_id'], temp_password, u['display_name'], u['role'],
-                        u['email'], must_change_password=True)
+                        u['email'], must_change_password=True, is_admin=u['is_admin'])
             ok.append(u['user_id'])
         except Exception as exc:
             failed.append((u['user_id'], str(exc)))
