@@ -226,7 +226,11 @@ def setup_page():
             error = '비밀번호는 8자 이상이어야 합니다.'
         else:
             try:
-                create_user(uid, pw, name, 'executive_org')
+                # manage_users는 역할이 아니라 계정별 is_admin으로만 부여되므로
+                # (services/auth.py, config/auth_config.py 참고) 첫 계정에는
+                # 여기서 명시적으로 관리자 권한을 줘야 한다 — 안 그러면 아무도
+                # /admin에 접근하지 못해 이후 관리자를 지정할 방법이 없어진다.
+                create_user(uid, pw, name, 'executive_org', is_admin=True)
                 return flask.redirect('/login?setup=1')
             except Exception as exc:
                 error = str(exc)

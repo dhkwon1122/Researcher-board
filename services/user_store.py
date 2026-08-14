@@ -31,21 +31,32 @@ users = Table(
     # 전까지 다른 화면 접근을 막는다. 비밀번호를 바꾸면(set_password_hash)
     # 항상 False로 되돌아간다.
     Column('must_change_password', Boolean, nullable=False, server_default='false'),
+    # manage_users(사용자 관리 페이지) 권한은 역할이 아니라 이 플래그로만
+    # 부여한다(config/auth_config.py 상단 설명 참고) — 같은 역할이라도
+    # 필요한 사람에게만 개별적으로 관리자 권한을 줄 수 있게 하기 위함이다.
+    Column('is_admin', Boolean, nullable=False, server_default='false'),
     Column('created_at', DateTime(timezone=True), nullable=False),
 )
 
 _table_ready = False
 
 
-def _ensure_must_change_password_column(engine) -> None:
-    """must_change_password 컬럼이 추가되기 전에 이미 app_users 테이블이
-    있었다면 create_all()은 기존 테이블을 건드리지 않으므로 컬럼이 없을 수
-    있다 — IF NOT EXISTS로 멱등하게 직접 추가해 항상 있도록 보장한다."""
+def _ensure_column(engine, column_name: str, ddl: str, *, backfill_sql: str | None = None) -> None:
+    """column_name 컬럼이 없으면 추가한다(ALTER TABLE ... ADD COLUMN이 아니라
+    먼저 information_schema로 존재 여부를 확인하는 이유: 방금 이 실행에서
+    컬럼을 새로 추가했을 때만 backfill_sql을 실행하기 위해서다 — 매번
+    실행하면, 나중에 관리자가 값을 일부러 바꿔둔 걸 재기동 때마다 덮어써버릴
+    수 있다(예: is_admin 백필). 이미 컬럼이 있으면 아무 것도 하지 않는다."""
     with engine.begin() as conn:
-        conn.execute(text(
-            'ALTER TABLE app_users ADD COLUMN IF NOT EXISTS '
-            'must_change_password BOOLEAN NOT NULL DEFAULT FALSE'
-        ))
+        exists = conn.execute(text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'app_users' AND column_name = :col"
+        ), {'col': column_name}).first()
+        if exists:
+            return
+        conn.execute(text(f'ALTER TABLE app_users ADD COLUMN IF NOT EXISTS {ddl}'))
+        if backfill_sql:
+            conn.execute(text(backfill_sql))
 
 
 def available() -> bool:
@@ -57,7 +68,17 @@ def available() -> bool:
     if not _table_ready:
         try:
             metadata.create_all(engine, tables=[users])
-            _ensure_must_change_password_column(engine)
+            _ensure_column(engine, 'must_change_password',
+                            'must_change_password BOOLEAN NOT NULL DEFAULT FALSE')
+            # is_admin이 이번에 처음 추가되는 경우, 이전까지는 role='executive_org'면
+            # 역할만으로 자동 관리자였다 — 그 계정들이 마이그레이션 직후 관리자
+            # 페이지에서 잠기지 않도록 한 번만 개인별 관리자 권한을 이어서 준다.
+            # (컬럼이 이미 있으면 이 UPDATE는 실행되지 않으므로, 이후 누군가 역할을
+            # executive_org로 바꾼다고 자동으로 관리자가 되지는 않는다.)
+            _ensure_column(engine, 'is_admin',
+                            "is_admin BOOLEAN NOT NULL DEFAULT FALSE",
+                            backfill_sql="UPDATE app_users SET is_admin = TRUE "
+                                         "WHERE role = 'executive_org'")
             _table_ready = True
         except Exception as exc:
             print(f'[user_store] app_users 테이블 준비 실패, JSON으로 폴백: {exc}')
@@ -73,6 +94,7 @@ def _row_to_dict(row) -> dict:
         'role': row['role'],
         'email': row.get('email') or '',
         'must_change_password': bool(row.get('must_change_password')),
+        'is_admin': bool(row.get('is_admin')),
     }
 
 
@@ -107,7 +129,8 @@ def has_any() -> bool:
 
 
 def create(user_id: str, password_hash: str, display_name: str,
-           role: str, email: str = '', must_change_password: bool = False) -> bool:
+           role: str, email: str = '', must_change_password: bool = False,
+           is_admin: bool = False) -> bool:
     if not available():
         return False
     try:
@@ -119,6 +142,7 @@ def create(user_id: str, password_hash: str, display_name: str,
                 role=role,
                 email=email or None,
                 must_change_password=must_change_password,
+                is_admin=is_admin,
                 created_at=datetime.now(timezone.utc),
             ))
         return True
@@ -128,7 +152,8 @@ def create(user_id: str, password_hash: str, display_name: str,
 
 
 def update_fields(user_id: str, display_name: str | None = None,
-                   role: str | None = None, email: str | None = None) -> bool:
+                   role: str | None = None, email: str | None = None,
+                   is_admin: bool | None = None) -> bool:
     if not available():
         return False
     values = {}
@@ -138,6 +163,8 @@ def update_fields(user_id: str, display_name: str | None = None,
         values['role'] = role
     if email is not None:
         values['email'] = email
+    if is_admin is not None:
+        values['is_admin'] = is_admin
     if not values:
         return True
     try:

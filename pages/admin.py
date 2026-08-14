@@ -30,9 +30,15 @@ def _user_row(user: dict, idx: int):
         if user.get('must_change_password')
         else dbc.Badge('정상', color='light', text_color='secondary', className='fw-normal border')
     )
+    name_cell = [user['display_name']]
+    if user.get('is_admin'):
+        name_cell.append(dbc.Badge(
+            [html.I(className='bi bi-shield-lock-fill me-1'), '관리자'],
+            color='primary', className='fw-normal ms-2',
+        ))
     return html.Tr([
         html.Td(user['user_id'], className='align-middle font-monospace small'),
-        html.Td(user['display_name'], className='align-middle'),
+        html.Td(name_cell, className='align-middle'),
         html.Td(ROLE_LABELS.get(user['role'], user['role']), className='align-middle small'),
         html.Td(user.get('email', ''), className='align-middle small text-muted'),
         html.Td(status, className='align-middle'),
@@ -84,6 +90,12 @@ def _user_modal():
                               autocomplete='off', size='sm'),
                 ], md=6),
             ], className='mb-2'),
+            dbc.Checklist(
+                id='modal-is-admin',
+                options=[{'label': ' 관리자 권한 부여 (사용자 관리 페이지 접근 — 역할과 무관하게 이 계정에만 적용)',
+                          'value': 'admin'}],
+                value=[], switch=True, className='mb-2 small',
+            ),
             html.Hr(className='my-2'),
             dbc.Row([
                 dbc.Col([
@@ -215,6 +227,7 @@ def refresh_user_table(_counter):
     Output('modal-password', 'value', allow_duplicate=True),
     Output('modal-password-confirm', 'value', allow_duplicate=True),
     Output('modal-pw-label', 'children', allow_duplicate=True),
+    Output('modal-is-admin', 'value', allow_duplicate=True),
     Output('user-modal-alert', 'children', allow_duplicate=True),
     Input('btn-add-user', 'n_clicks'),
     prevent_initial_call=True,
@@ -228,6 +241,7 @@ def open_add_modal(_):
         '',                 # email
         '', '',             # passwords
         '비밀번호 * (8자 이상)',
+        [],                 # is_admin: 기본 미부여
         [],
     )
 
@@ -246,6 +260,7 @@ def open_add_modal(_):
     Output('modal-password', 'value', allow_duplicate=True),
     Output('modal-password-confirm', 'value', allow_duplicate=True),
     Output('modal-pw-label', 'children', allow_duplicate=True),
+    Output('modal-is-admin', 'value', allow_duplicate=True),
     Output('user-modal-alert', 'children', allow_duplicate=True),
     Input({'type': 'btn-edit', 'index': ALL}, 'n_clicks'),
     State('user-list-store', 'data'),
@@ -254,13 +269,13 @@ def open_add_modal(_):
 def open_edit_modal(n_clicks_list, users):
     from dash import ctx
     if not any(n for n in n_clicks_list if n):
-        return [no_update] * 12
+        return [no_update] * 13
     triggered = ctx.triggered_id
     if triggered is None:
-        return [no_update] * 12
+        return [no_update] * 13
     idx = triggered['index']
     if idx >= len(users):
-        return [no_update] * 12
+        return [no_update] * 13
     u = users[idx]
     return (
         True, '사용자 수정', u['user_id'],
@@ -270,6 +285,7 @@ def open_edit_modal(n_clicks_list, users):
         u.get('email', ''),
         '', '',
         '새 비밀번호 (변경 시에만 입력)',
+        ['admin'] if u.get('is_admin') else [],
         [],
     )
 
@@ -288,11 +304,13 @@ def open_edit_modal(n_clicks_list, users):
     State('modal-email', 'value'),
     State('modal-password', 'value'),
     State('modal-password-confirm', 'value'),
+    State('modal-is-admin', 'value'),
     State('user-refresh-counter', 'data'),
     prevent_initial_call=True,
 )
-def save_user(_, editing_id, user_id, display_name, role, email, password, pw_confirm, counter):
-    from services.auth import can, change_password, create_user, update_user
+def save_user(_, editing_id, user_id, display_name, role, email, password, pw_confirm,
+              is_admin_value, counter):
+    from services.auth import can, change_password, create_user, get_current_user, update_user
     if not can('manage_users'):
         return _alert('권한이 없습니다.', 'danger'), no_update, no_update
 
@@ -301,6 +319,7 @@ def save_user(_, editing_id, user_id, display_name, role, email, password, pw_co
     email = (email or '').strip()
     password = password or ''
     pw_confirm = pw_confirm or ''
+    is_admin = 'admin' in (is_admin_value or [])
 
     if not display_name or not role:
         return _alert('이름과 역할은 필수입니다.', 'warning'), no_update, no_update
@@ -317,17 +336,21 @@ def save_user(_, editing_id, user_id, display_name, role, email, password, pw_co
         if password != pw_confirm:
             return _alert('비밀번호가 일치하지 않습니다.', 'warning'), no_update, no_update
         try:
-            create_user(user_id, password, display_name, role, email)
+            create_user(user_id, password, display_name, role, email, is_admin=is_admin)
         except ValueError as exc:
             return _alert(str(exc), 'danger'), no_update, no_update
     else:
+        current = get_current_user()
+        if current and current['user_id'] == editing_id and not is_admin:
+            return _alert('자기 자신의 관리자 권한은 해제할 수 없습니다. '
+                          '다른 관리자가 대신 해제해야 합니다.', 'warning'), no_update, no_update
         if password:
             if len(password) < 8:
                 return _alert('비밀번호는 8자 이상이어야 합니다.', 'warning'), no_update, no_update
             if password != pw_confirm:
                 return _alert('비밀번호가 일치하지 않습니다.', 'warning'), no_update, no_update
             change_password(editing_id, password)
-        update_user(editing_id, display_name=display_name, role=role, email=email)
+        update_user(editing_id, display_name=display_name, role=role, email=email, is_admin=is_admin)
 
     return [], False, (counter or 0) + 1
 
