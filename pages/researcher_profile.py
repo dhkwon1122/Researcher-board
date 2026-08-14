@@ -110,6 +110,7 @@ def layout(id=None, **_kwargs):
     from services.auth import can
     show_eval = can('view_evaluation')
     show_comments = can('view_comments')
+    can_edit_layout = can('manage_users')
 
     default_mode = 'current'
     dept_opts, all_opts, by_dept = _load_selector_data(current_only=True)
@@ -161,18 +162,22 @@ def layout(id=None, **_kwargs):
                 _right_column(),
             ], className='g-3 mb-3'),
         ], className='no-print'),
-        _print_modal(show_eval, show_comments),
+        _print_modal(show_eval, show_comments, can_edit_layout),
+        _layout_editor_modal(),
         html.Div(id='print-sheet-container'),
         dcc.Store(id='print-fire', data=0),
+        dcc.Store(id='print-layout-store'),
         html.Div(id='print-fire-sink', style={'display': 'none'}),
     ])
 
 
-def _print_modal(show_eval: bool, show_comments: bool):
+def _print_modal(show_eval: bool, show_comments: bool, can_edit_layout: bool):
     """출력 항목 선택 모달 — 상단(인사정보)/하단(전문성 이력) 체크리스트.
     평가·인물 코멘트는 열람 권한이 있을 때만 선택지로 노출한다(선택지 자체를
     숨기는 것과 별개로, handle_print_modal 콜백에서도 서버단에서 한 번 더
-    권한을 재확인한다 — 클라이언트가 보낸 체크값을 그대로 믿지 않음)."""
+    권한을 재확인한다 — 클라이언트가 보낸 체크값을 그대로 믿지 않음).
+    "레이아웃 편집" 버튼은 항목이 A4 한 장 위 어디에 놓일지(전 사용자 공통
+    템플릿)를 바꾸는 기능이라, 관리자 권한이 있을 때만 노출한다."""
     personnel_options = [
         {'label': label, 'value': key}
         for key, label, perm in profile_print.PERSONNEL_FIELDS
@@ -184,9 +189,21 @@ def _print_modal(show_eval: bool, show_comments: bool):
     default_personnel = [k for k in profile_print.DEFAULT_PERSONNEL
                           if any(o['value'] == k for o in personnel_options)]
 
+    footer = [dbc.Button('취소', id='print-cancel-btn', color='secondary', outline=True, size='sm')]
+    if can_edit_layout:
+        footer.append(dbc.Button([html.I(className='bi bi-layout-text-window me-1'), '레이아웃 편집'],
+                                  id='print-layout-edit-open-btn', color='secondary', outline=True, size='sm'))
+    footer.append(dbc.Button([html.I(className='bi bi-printer me-1'), '출력'],
+                              id='print-generate-btn', color='primary', size='sm'))
+
     return dbc.Modal([
         dbc.ModalHeader(dbc.ModalTitle('인쇄 / PDF 출력 항목 선택')),
         dbc.ModalBody([
+            html.P(
+                'A4 한 장에 맞춰 출력됩니다. 과제/논문/특허 등 목록형 항목은 최근 항목만 '
+                '보여주고 나머지는 "외 N건"으로 요약됩니다.',
+                className='text-muted small mb-3',
+            ),
             dbc.Label('상단 — 인사정보', className='fw-semibold small text-muted mb-2'),
             dbc.Checklist(id='print-personnel-check', options=personnel_options,
                           value=default_personnel, switch=True, className='mb-3'),
@@ -194,12 +211,37 @@ def _print_modal(show_eval: bool, show_comments: bool):
             dbc.Checklist(id='print-expertise-check', options=expertise_options,
                           value=list(profile_print.DEFAULT_EXPERTISE), switch=True),
         ]),
-        dbc.ModalFooter([
-            dbc.Button('취소', id='print-cancel-btn', color='secondary', outline=True, size='sm'),
-            dbc.Button([html.I(className='bi bi-printer me-1'), '출력'],
-                       id='print-generate-btn', color='primary', size='sm'),
-        ]),
+        dbc.ModalFooter(footer),
     ], id='print-modal', is_open=False, size='lg', className='no-print')
+
+
+def _layout_editor_modal():
+    """항목 배치(레이아웃) 편집기 — 그리드 칸 단위로 각 항목 박스를 드래그로
+    옮기고 모서리를 드래그해 크기를 바꾼다(실제 드래그/스냅 로직은
+    assets/print_layout_editor.js, 좌표 계산·저장은 services/print_layout.py).
+    전 사용자 공통 템플릿 하나만 저장한다(사용자 확정)."""
+    return dbc.Modal([
+        dbc.ModalHeader(dbc.ModalTitle('인쇄 레이아웃 편집 (A4 한 장, 전 사용자 공통)')),
+        dbc.ModalBody([
+            html.P(
+                '항목 박스를 드래그해 옮기고, 오른쪽 아래 모서리를 드래그해 크기를 바꾸세요. '
+                '변경사항은 "저장"을 눌러야 실제 출력에 반영됩니다.',
+                className='text-muted small mb-2',
+            ),
+            html.Div(
+                profile_print.render_layout_editor_blocks(),
+                id='pl-canvas', className='pl-grid',
+                **{'data-cols': str(profile_print.GRID_COLS), 'data-rows': str(profile_print.GRID_ROWS)},
+            ),
+        ]),
+        dbc.ModalFooter([
+            html.Span(id='print-layout-save-msg', className='small me-auto'),
+            dbc.Button('기본값으로 초기화', id='print-layout-reset-btn', color='secondary',
+                       outline=True, size='sm'),
+            dbc.Button('취소', id='print-layout-cancel-btn', color='secondary', outline=True, size='sm'),
+            dbc.Button('저장', id='print-layout-save-btn', color='primary', size='sm'),
+        ]),
+    ], id='print-layout-editor-modal', is_open=False, size='xl', className='no-print')
 
 
 def _selector_card(dept_opts, res_opts, default_dept, default_rid, default_mode='current'):
@@ -644,6 +686,7 @@ def update_leadership(rid, year):
     Input('print-open-btn', 'n_clicks'),
     Input('print-cancel-btn', 'n_clicks'),
     Input('print-generate-btn', 'n_clicks'),
+    Input('print-layout-edit-open-btn', 'n_clicks'),
     State('researcher-select', 'value'),
     State('leadership-year', 'value'),
     State('print-personnel-check', 'value'),
@@ -651,14 +694,16 @@ def update_leadership(rid, year):
     State('print-fire', 'data'),
     prevent_initial_call=True,
 )
-def handle_print_modal(_open_clicks, _cancel_clicks, _gen_clicks, rid, leadership_year,
+def handle_print_modal(_open_clicks, _cancel_clicks, _gen_clicks, _edit_clicks, rid, leadership_year,
                         selected_personnel, selected_expertise, fire_count):
     from services.auth import can
 
     triggered = dash.ctx.triggered_id
     if triggered == 'print-open-btn':
         return True, no_update, no_update
-    if triggered == 'print-cancel-btn':
+    if triggered in ('print-cancel-btn', 'print-layout-edit-open-btn'):
+        # '레이아웃 편집' 버튼도 여기서 처리 — 이 모달은 닫고, 편집기 모달을
+        # 여는 건 open_layout_editor 콜백이 같은 클릭을 별도로 구독해서 한다.
         return False, no_update, no_update
     if triggered != 'print-generate-btn' or not rid:
         return False, no_update, no_update
@@ -697,6 +742,53 @@ clientside_callback(
     Input('print-fire', 'data'),
     prevent_initial_call=True,
 )
+
+
+@callback(
+    Output('print-layout-editor-modal', 'is_open'),
+    Output('pl-canvas', 'children'),
+    Output('print-layout-store', 'data'),
+    Output('print-layout-save-msg', 'children'),
+    Input('print-layout-edit-open-btn', 'n_clicks'),
+    Input('print-layout-reset-btn', 'n_clicks'),
+    Input('print-layout-cancel-btn', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def handle_layout_editor(_open_clicks, _reset_clicks, _cancel_clicks):
+    """편집기 열기 — 저장된 배치를 불러와 캔버스에 그린다.
+    기본값 초기화 — 캔버스만 기본 배치로 되돌린다(저장 전까지는 실제
+    출력에 영향 없음, '저장'을 눌러야 반영).
+    취소 — 아무것도 저장하지 않고 모달만 닫는다(다음에 다시 열면 저장된
+    값부터 다시 시작)."""
+    from services.auth import can
+    if not can('manage_users'):
+        return False, no_update, no_update, no_update
+
+    triggered = dash.ctx.triggered_id
+    if triggered == 'print-layout-edit-open-btn':
+        layout = profile_print.read_layout()
+        return True, profile_print.render_layout_editor_blocks(layout), layout, ''
+    if triggered == 'print-layout-reset-btn':
+        layout = dict(profile_print.DEFAULT_LAYOUT)
+        return no_update, profile_print.render_layout_editor_blocks(layout), layout, '기본값으로 되돌렸습니다(아직 저장 전).'
+    return False, no_update, no_update, ''
+
+
+@callback(
+    Output('print-layout-save-msg', 'children', allow_duplicate=True),
+    Input('print-layout-save-btn', 'n_clicks'),
+    State('print-layout-store', 'data'),
+    prevent_initial_call=True,
+)
+def save_layout(n_clicks, layout_data):
+    from services.auth import can
+    if not n_clicks:
+        return no_update
+    if not can('manage_users'):
+        return dbc.Alert('저장 권한이 없습니다.', color='warning', className='py-1 px-2 mb-0 d-inline-block')
+    profile_print.write_layout(layout_data or {})
+    return html.Span([html.I(className='bi bi-check-circle-fill me-1'), '저장되었습니다.'],
+                      className='text-success')
 
 
 @callback(
