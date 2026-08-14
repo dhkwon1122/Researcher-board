@@ -16,7 +16,38 @@ app = dash.Dash(
     title='연구원 대시보드',
 )
 
-app.server.secret_key = os.getenv('FLASK_SECRET_KEY', secrets.token_hex(32))
+
+def _get_or_create_secret_key() -> str:
+    """Flask 세션 서명용 비밀키. FLASK_SECRET_KEY 환경변수가 있으면 그 값을
+    쓰고, 없으면 config/.flask_secret_key 에 한 번 생성해 저장한 뒤 재사용한다.
+
+    gunicorn --workers 2 처럼 워커가 여러 개면 각 워커가 이 모듈을 독립적으로
+    import 한다 — 매번 secrets.token_hex()로 새 키를 만들면 워커마다 키가
+    달라져, 로그인 응답을 처리한 워커가 서명한 세션 쿠키를 다른 워커가 검증하지
+    못해(무작위로 요청이 이 워커 저 워커로 분산되므로) 로그인 직후 다시
+    로그아웃 상태로 튕기는 것처럼 보인다. 파일에 고정해두면 모든 워커가 같은
+    키를 쓴다. 파일 생성은 os.O_EXCL로 원자적으로 시도해, 여러 워커가 거의
+    동시에 뜨더라도 하나만 파일을 쓰고 나머지는 그 값을 읽는다."""
+    env_key = os.environ.get('FLASK_SECRET_KEY', '').strip()
+    if env_key:
+        return env_key
+
+    key_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config', '.flask_secret_key')
+    os.makedirs(os.path.dirname(key_path), exist_ok=True)
+    try:
+        fd = os.open(key_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        try:
+            key = secrets.token_hex(32)
+            os.write(fd, key.encode('utf-8'))
+        finally:
+            os.close(fd)
+        return key
+    except FileExistsError:
+        with open(key_path, encoding='utf-8') as f:
+            return f.read().strip()
+
+
+app.server.secret_key = _get_or_create_secret_key()
 
 # pages/*.py 콜백은 use_pages=True 스캔 과정에서 자동 등록되지만, 이 모듈들은
 # 페이지가 아니라 전 탭 공용 컴포넌트라 Dash 인스턴스 생성 이후 직접
