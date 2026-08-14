@@ -6,9 +6,6 @@
   (1단계 xlsx_to_raw_csv.py가 data/raw/인사발령이력.xlsx를 DRM 제거해 만든 사본)
 출력 파일: data/processed/hr_orders.csv
 
-※ 앞쪽에 공란 행이 있어도 실제 값이 있는 첫 행을 헤더로 자동 인식합니다
-   (excel_reader.read_xlsx 의 header_row='auto').
-
 컬럼 매핑:
   사원번호 → researcher_id (8자리 제로패딩)
   발령일자(YYYYMMDD) → order_date (YYYY-MM-DD)
@@ -67,7 +64,7 @@ def process(raw_dir: str = RAW_DIR) -> bool:
     else:
         raw_path = os.path.join(raw_dir, ORDERS_FILE)
         if os.path.exists(raw_path):
-            df = read_xlsx(raw_path, header_row='auto')
+            df = read_xlsx(raw_path, header_row=0)
         else:
             df = None
             print(f'[SKIP] {ORDERS_FILE} 파일 없음({raw_dir})')

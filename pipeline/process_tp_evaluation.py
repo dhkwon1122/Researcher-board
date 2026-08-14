@@ -48,7 +48,7 @@ from services.evaluations import (  # noqa: E402
 )
 
 TP_FILE = 'T&P_기본_인사_정보.xlsx'
-_TP_HEADER_ROW = 8  # sources.py 매니페스트 기준 (9번째 행)
+_TP_HEADER_ROW = 0  # sources.py 매니페스트 기준 (1번째 행)
 
 
 def _parse_birth_year(val) -> int | None:

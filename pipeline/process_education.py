@@ -27,7 +27,7 @@ import sys
 import pandas as pd
 
 EDUCATION_FILE = '임직원_학력.xlsx'
-_EDUCATION_HEADER_ROW = 1  # sources.py 매니페스트 기준 (2번째 행)
+_EDUCATION_HEADER_ROW = 0  # sources.py 매니페스트 기준 (1번째 행)
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
 COL_ID        = '사번'
