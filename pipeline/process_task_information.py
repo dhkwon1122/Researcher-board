@@ -1,7 +1,9 @@
 """
 과제 정보 처리 모듈
 
-원천 파일: data/raw/과제정보.xlsx
+원천: source_reader.read_source('tasks_information')
+  → DB tasks_information_stg 테이블 또는 data/raw_csv/tasks_information.csv
+  (1단계 xlsx_to_raw_csv.py가 data/raw/과제정보.xlsx를 DRM 제거해 만든 사본)
 출력 파일: data/processed/tasks_information.csv
 
 컬럼 매핑:
@@ -62,6 +64,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import excel_safe_text, is_blank, parse_yyyymmdd, read_xlsx
 from merge_utils import TABLE_KEYS, write_merged
+from source_reader import read_source
 
 _CONTENT_COLS = [
     'task_collabo', 'task_goal', 'task_value', 'task_howtoget',
@@ -91,12 +94,21 @@ def _dedupe_by_name(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def process(raw_dir: str = RAW_DIR) -> bool:
-    raw_path = os.path.join(raw_dir, TASK_INFO_FILE)
-    if not os.path.exists(raw_path):
-        print(f'[SKIP] {TASK_INFO_FILE} 파일 없음 — tasks_information_raw 폴백 시도')
-        return False
+    if raw_dir == RAW_DIR:
+        df = read_source('tasks_information')
+        if df is None:
+            print('[SKIP] tasks_information 원천 데이터 없음 '
+                  '(DB tasks_information_stg 또는 data/raw_csv/tasks_information.csv) — tasks_information_raw 폴백 시도')
+    else:
+        raw_path = os.path.join(raw_dir, TASK_INFO_FILE)
+        if os.path.exists(raw_path):
+            df = read_xlsx(raw_path)
+        else:
+            df = None
+            print(f'[SKIP] {TASK_INFO_FILE} 파일 없음({raw_dir})')
 
-    df = read_xlsx(raw_path)
+    if df is None:
+        return False
     df.columns = [str(c).strip() for c in df.columns]
 
     required = [COL_NAME, COL_CODE, COL_WRITE_DATE]

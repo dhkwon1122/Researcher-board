@@ -1,7 +1,10 @@
 """
 업무목표 전처리
 
-원천 파일 위치: data/raw/업무목표24.xlsx, 업무목표25.xlsx, 업무목표26.xlsx
+원천: source_reader.read_source('work_objective_24'/'_25'/'_26')
+  → DB work_objective_{yy}_stg 테이블 또는 data/raw_csv/work_objective_{yy}.csv
+  (1단계 xlsx_to_raw_csv.py가 data/raw/업무목표24.xlsx, 업무목표25.xlsx,
+   업무목표26.xlsx를 DRM 제거해 만든 사본)
 Output       : data/processed/work_objective.csv
 
 각 연도 파일은 컬럼이 많아 header_row='auto'로 실제 헤더 행을 자동 인식한 뒤,
@@ -31,6 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import clean_str, read_xlsx, norm_id
 from merge_utils import TABLE_KEYS, write_merged
+from source_reader import read_source
 
 # 원본 컬럼 이름 (파일에 없으면 아래 값을 실제 헤더명으로 수정)
 COL_ID = '사번'
@@ -60,16 +64,24 @@ def _read_year_file(year: int, filename: str, raw_dir: str) -> pd.DataFrame:
     파일이 없거나 비어 있으면 빈 DataFrame(같은 컬럼 구조)을 반환한다."""
     col = f'work_objective{year}'
     empty = pd.DataFrame(columns=['researcher_id', col])
+    source_name = f'work_objective_{year}'
 
-    path = os.path.join(raw_dir, filename)
-    if not os.path.exists(path):
-        print(f'[SKIP] {path} 파일 없음')
-        return empty
+    if raw_dir == RAW_DIR:
+        df = read_source(source_name)
+        if df is None:
+            print(f'[SKIP] {source_name} 원천 데이터 없음 '
+                  f'(DB {source_name}_stg 또는 data/raw_csv/{source_name}.csv)')
+            return empty
+    else:
+        path = os.path.join(raw_dir, filename)
+        if not os.path.exists(path):
+            print(f'[SKIP] {path} 파일 없음')
+            return empty
 
-    df = read_xlsx(path, header_row='auto')
-    if df.empty:
-        print(f'[SKIP] {filename} 읽기 결과가 비어 있습니다.')
-        return empty
+        df = read_xlsx(path, header_row='auto')
+        if df.empty:
+            print(f'[SKIP] {filename} 읽기 결과가 비어 있습니다.')
+            return empty
 
     missing = [c for c in (COL_ID, COL_NAME, COL_DETAIL) if c not in df.columns]
     if missing:

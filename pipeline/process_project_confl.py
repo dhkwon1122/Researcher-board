@@ -1,7 +1,9 @@
 """
 과제별 컨플루언스 주소 처리 모듈
 
-원천 파일: data/raw/과제별컨플.xlsx
+원천: source_reader.read_source('project_confl_address')
+  → DB project_confl_address_stg 테이블 또는 data/raw_csv/project_confl_address.csv
+  (1단계 xlsx_to_raw_csv.py가 data/raw/과제별컨플.xlsx를 DRM 제거해 만든 사본)
 출력 파일: data/processed/project_confl_address.csv
 
 읽는 컬럼:
@@ -22,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import clean_str as _clean, read_xlsx
 from merge_utils import TABLE_KEYS, write_merged
+from source_reader import read_source
 
 SOURCE_FILE = '과제별컨플.xlsx'
 
@@ -33,12 +36,19 @@ COL_CONFL = '컨플 주소'
 
 
 def process(raw_dir: str = RAW_DIR) -> bool:
-    raw_path = os.path.join(raw_dir, SOURCE_FILE)
-    if not os.path.exists(raw_path):
-        print(f'[SKIP] {SOURCE_FILE} 파일 없음')
-        return False
+    if raw_dir == RAW_DIR:
+        df = read_source('project_confl_address')
+        if df is None:
+            print('[SKIP] project_confl_address 원천 데이터 없음 '
+                  '(DB project_confl_address_stg 또는 data/raw_csv/project_confl_address.csv)')
+            return False
+    else:
+        raw_path = os.path.join(raw_dir, SOURCE_FILE)
+        if not os.path.exists(raw_path):
+            print(f'[SKIP] {SOURCE_FILE} 파일 없음')
+            return False
+        df = read_xlsx(raw_path)
 
-    df = read_xlsx(raw_path)
     df.columns = [str(c).strip() for c in df.columns]
 
     for col in (COL_DEP, COL_PROJECT, COL_CONFL):
