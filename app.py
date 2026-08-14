@@ -354,10 +354,12 @@ app.layout = html.Div(
         navbar,
         dbc.Container(
             [
-                # 전 탭 공용 자연어 질문 바 — 어느 탭에 있든 항상 보이도록
-                # 네비게이션 바로 아래, 페이지 콘텐츠 위에 고정 배치한다
-                # (구 "연구원 목록" 탭 전용 AI 검색을 대체).
-                nl_query_bar.render(),
+                # AI 검색(자연어 질문 바) — 레이아웃은 네비게이션 바로 아래에
+                # 한 번만 두되(모든 탭에서 같은 컴포넌트/콜백 상태 유지),
+                # "연구원 명단" 탭(/researcher-list)에서만 보이도록 아래
+                # _toggle_nl_query_bar 콜백이 pathname에 따라 숨긴다
+                # (사용자 요청 — 다른 탭에서는 노출 안 함).
+                html.Div(nl_query_bar.render(), id='_nl-query-bar-wrap'),
                 html.Hr(className='mt-1 mb-3'),
                 dash.page_container,
             ],
@@ -367,6 +369,14 @@ app.layout = html.Div(
     ],
     style={'minHeight': '100vh', 'backgroundColor': '#f5f5f7'},
 )
+
+
+@callback(
+    Output('_nl-query-bar-wrap', 'style'),
+    Input('_pages_location', 'pathname'),
+)
+def _toggle_nl_query_bar(pathname):
+    return {} if pathname == '/researcher-list' else {'display': 'none'}
 
 
 @callback(

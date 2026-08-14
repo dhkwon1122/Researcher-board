@@ -11,6 +11,7 @@
 """
 import io
 import math
+import re
 from datetime import date, datetime
 
 import pandas as pd
@@ -244,9 +245,32 @@ def _col_incentive(_rid, rows):
     return '\n'.join(lines) if lines else '-'
 
 
+def _lv_label(v) -> str:
+    """lv_N 원본 값이 이미 "Lv4"처럼 접두어를 포함하는 경우가 있어, 앞의
+    "Lv"(대소문자 무관)를 한 번 떼어내고 다시 붙여 "Lv Lv4"처럼 중복되지
+    않게 한다."""
+    s = _s(v)
+    if not s:
+        return ''
+    core = re.sub(r'(?i)^lv\s*', '', s).strip()
+    return f'Lv{core}' if core else s
+
+
+def _portion_label(v) -> str:
+    """portion_N을 정수 퍼센트 문자열로 — CSV 왕복 중 float로 승격돼 "30.0"
+    처럼 붙는 소수점을 없앤다."""
+    s = _s(v)
+    if not s:
+        return ''
+    try:
+        return str(int(round(float(s))))
+    except ValueError:
+        return s
+
+
 def _col_tech_ownership(_rid, rows):
     """보유기술 — components/detail_tabs.py의 _tech_ownership_table()과 동일하게
-    tech_ownership.csv의 tech_1~5/lv_1~5/portion_1~5를 "전문분야(Lv N, 보유율 M%)"
+    tech_ownership.csv의 tech_1~5/lv_1~5/portion_1~5를 "전문분야(Lv N 보유율 M%)"
     형태로 한 셀에 줄바꿈 나열한다(화면의 '보유기술' 표와 동일 항목, 데이터 없는
     슬롯은 건너뜀)."""
     tech_rows = rows['tech_ownership']
@@ -258,10 +282,10 @@ def _col_tech_ownership(_rid, rows):
         name = _s(tech_row.get(f'tech_{i}'))
         if not name:
             continue
-        lv = _s(tech_row.get(f'lv_{i}')) or '-'
-        portion = _s(tech_row.get(f'portion_{i}'))
+        lv = _lv_label(tech_row.get(f'lv_{i}')) or '-'
+        portion = _portion_label(tech_row.get(f'portion_{i}'))
         portion_disp = f'{portion}%' if portion else '-'
-        lines.append(f'{name} (Lv {lv}, 보유율 {portion_disp})')
+        lines.append(f'{name}({lv} 보유율 {portion_disp})')
     return '\n'.join(lines) if lines else '-'
 
 
@@ -503,6 +527,12 @@ def person_base_table(researcher_ids: list) -> dict:
     return out
 
 
+# 왼쪽 맞춤 유지 컬럼(사용자 확정) — 그 외 전체 컬럼은 가운데 맞춤으로 변경.
+_LEFT_ALIGN_HEADERS = {
+    '학력', '과제수행이력',
+    '보유전문성(주요 역할·책임)', '보유전문성(전문지식 및 역량)',
+}
+
 _COLUMN_WIDTHS = [12, 14, 16, 18, 12, 26, 22, 12, 10, 34, 30, 22, 30]
 _EMPLOYMENT_STATUS_COLUMN_WIDTH = 12
 _EXPERTISE_COLUMN_WIDTH = 26
@@ -571,12 +601,12 @@ def build_profile_workbook(
 
     for row_idx, rid in enumerate(researcher_ids, start=2):
         ctx = _researcher_row_context(rid, tables)
-        for col_idx, (_header, fn) in enumerate(columns, start=1):
+        for col_idx, (header, fn) in enumerate(columns, start=1):
             value = fn(rid, ctx)
             cell = ws.cell(row=row_idx, column=col_idx, value=value)
             cell.font = body_font
             cell.border = _BORDER
-            cell.alignment = wrap_left
+            cell.alignment = wrap_left if header in _LEFT_ALIGN_HEADERS else wrap_center
 
     for col_idx, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(col_idx)].width = width

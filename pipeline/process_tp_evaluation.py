@@ -13,9 +13,9 @@ T&P 기본 인사 정보 파일에서 연봉등급/상·하반기업적(평가)�
   - researchers     : 이름, 성별, 생년월일(출생연도) → 반환 DataFrame으로 제공
                       (호출자가 기존 researchers DataFrame에 병합)
 
-등급 체계: 연봉등급 가(최우수) > 나 > 다 > 라 > 마(최하) / 상·하반기업적 EM·ES·MT
-(services.evaluations.SALARY_GRADES/HALF_GRADES 참고 — 어느 값도 순위/점수를
-매기지 않고 유효값 체크에만 쓴다).
+등급 체계: 연봉등급 가(최우수) > 나 > 다 > 라 > 마(최하) / 상·하반기업적 EM·ES·MT가
+일반적이지만, 셀 값을 이 목록으로 걸러내지 않고 원본 표기를 그대로 저장한다
+(사용자 확정 — 오탈자/신설 등급도 그대로 반영).
 """
 
 import os
@@ -43,8 +43,7 @@ from source_reader import read_source  # noqa: E402
 
 sys.path.insert(0, BASE_DIR)
 from services.evaluations import (  # noqa: E402
-    HALF_GRADES, SALARY_GRADES, evaluation_years,
-    first_half_column, salary_grade_column, second_half_column,
+    evaluation_years, first_half_column, salary_grade_column, second_half_column,
 )
 
 TP_FILE = 'T&P_기본_인사_정보.xlsx'
@@ -144,26 +143,24 @@ def process(raw_dir: str = RAW_DIR):
     result = pd.DataFrame({'researcher_id': df['_rid']})
     filled_cols = []
 
-    def _extract(col_name: str, out_col: str, valid_values: tuple, label: str):
+    def _extract(col_name: str, out_col: str):
+        """셀 값을 유효값(가/나/다/라/마, EM/ES/MT) 여부와 무관하게 그대로
+        가져온다 — 원본 표기가 늘어날 수 있어(예: 오탈자, 신설 등급) 더 이상
+        허용값으로 걸러내지 않는다(사용자 확정)."""
         if col_name not in df.columns:
             print(f'  [WARN] "{col_name}" 컬럼 없음 — {out_col} 비워둠')
             result[out_col] = ''
             return
         values = df[col_name].astype(str).str.strip()
         values = values.where(values != 'nan', '')
-        valid = values.isin(valid_values) | (values == '')
-        skipped = (~valid).sum()
-        if skipped:
-            print(f'  [WARN] "{col_name}" — 유효하지 않은 {label} {skipped}건 제외 '
-                  f'(허용값: {list(valid_values)})')
-        result[out_col] = values.where(valid, '')
+        result[out_col] = values
         filled_cols.append(out_col)
 
     for year in salary_years:
-        _extract(f'{year} 연봉등급', salary_grade_column(year), SALARY_GRADES, '연봉등급')
+        _extract(f'{year} 연봉등급', salary_grade_column(year))
     for year in half_years:
-        _extract(f'{year} 상반기업적', first_half_column(year), HALF_GRADES, '상반기업적')
-        _extract(f'{year} 하반기업적', second_half_column(year), HALF_GRADES, '하반기업적')
+        _extract(f'{year} 상반기업적', first_half_column(year))
+        _extract(f'{year} 하반기업적', second_half_column(year))
 
     if not filled_cols:
         print('[SKIP] 추출된 평가 데이터가 없습니다.')
