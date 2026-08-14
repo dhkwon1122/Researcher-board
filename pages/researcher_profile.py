@@ -6,8 +6,9 @@ from datetime import datetime
 
 import dash
 import dash_bootstrap_components as dbc
-from dash import Input, Output, State, callback, dcc, html, no_update
+from dash import Input, Output, State, callback, clientside_callback, dcc, html, no_update
 
+from components import profile_print
 from components.detail_tabs import llm_summary_block, owned_expertise_block
 from components.profile_sections import (
     avatar,
@@ -136,16 +137,69 @@ def layout(id=None, **_kwargs):
                 pass
 
     return html.Div([
-        html.H5(
-            [html.I(className='bi bi-person-badge-fill me-2 text-primary'), '연구원 개별 프로필'],
-            className='fw-bold mb-3 mt-1',
-        ),
-        _selector_card(dept_opts, res_opts, default_dept, default_rid, default_mode),
-        dbc.Row([
-            _left_stack_col(show_eval, show_comments),
-            _right_column(),
-        ], className='g-3 mb-3'),
+        html.Div([
+            dbc.Row([
+                dbc.Col(
+                    html.H5(
+                        [html.I(className='bi bi-person-badge-fill me-2 text-primary'), '연구원 개별 프로필'],
+                        className='fw-bold mb-0 mt-1',
+                    ),
+                    className='d-flex align-items-center',
+                ),
+                dbc.Col(
+                    dbc.Button(
+                        [html.I(className='bi bi-printer me-1'), '인쇄 / PDF 출력'],
+                        id='print-open-btn', color='secondary', outline=True, size='sm',
+                        className='float-end',
+                    ),
+                    className='d-flex align-items-center justify-content-end',
+                ),
+            ], className='mb-3'),
+            _selector_card(dept_opts, res_opts, default_dept, default_rid, default_mode),
+            dbc.Row([
+                _left_stack_col(show_eval, show_comments),
+                _right_column(),
+            ], className='g-3 mb-3'),
+        ], className='no-print'),
+        _print_modal(show_eval, show_comments),
+        html.Div(id='print-sheet-container'),
+        dcc.Store(id='print-fire', data=0),
+        html.Div(id='print-fire-sink', style={'display': 'none'}),
     ])
+
+
+def _print_modal(show_eval: bool, show_comments: bool):
+    """출력 항목 선택 모달 — 상단(인사정보)/하단(전문성 이력) 체크리스트.
+    평가·인물 코멘트는 열람 권한이 있을 때만 선택지로 노출한다(선택지 자체를
+    숨기는 것과 별개로, handle_print_modal 콜백에서도 서버단에서 한 번 더
+    권한을 재확인한다 — 클라이언트가 보낸 체크값을 그대로 믿지 않음)."""
+    personnel_options = [
+        {'label': label, 'value': key}
+        for key, label, perm in profile_print.PERSONNEL_FIELDS
+        if perm is None
+        or (perm == 'view_evaluation' and show_eval)
+        or (perm == 'view_comments' and show_comments)
+    ]
+    expertise_options = [{'label': label, 'value': key} for key, label, _perm in profile_print.EXPERTISE_FIELDS]
+    default_personnel = [k for k in profile_print.DEFAULT_PERSONNEL
+                          if any(o['value'] == k for o in personnel_options)]
+
+    return dbc.Modal([
+        dbc.ModalHeader(dbc.ModalTitle('인쇄 / PDF 출력 항목 선택')),
+        dbc.ModalBody([
+            dbc.Label('상단 — 인사정보', className='fw-semibold small text-muted mb-2'),
+            dbc.Checklist(id='print-personnel-check', options=personnel_options,
+                          value=default_personnel, switch=True, className='mb-3'),
+            dbc.Label('하단 — 전문성 이력', className='fw-semibold small text-muted mb-2'),
+            dbc.Checklist(id='print-expertise-check', options=expertise_options,
+                          value=list(profile_print.DEFAULT_EXPERTISE), switch=True),
+        ]),
+        dbc.ModalFooter([
+            dbc.Button('취소', id='print-cancel-btn', color='secondary', outline=True, size='sm'),
+            dbc.Button([html.I(className='bi bi-printer me-1'), '출력'],
+                       id='print-generate-btn', color='primary', size='sm'),
+        ]),
+    ], id='print-modal', is_open=False, size='lg', className='no-print')
 
 
 def _selector_card(dept_opts, res_opts, default_dept, default_rid, default_mode='current'):
@@ -581,6 +635,68 @@ def update_profile(rid):
 def update_leadership(rid, year):
     rid = str(rid).zfill(8) if rid else rid
     return leadership_figure(read_processed('leadership'), rid, year)
+
+
+@callback(
+    Output('print-modal', 'is_open'),
+    Output('print-sheet-container', 'children'),
+    Output('print-fire', 'data'),
+    Input('print-open-btn', 'n_clicks'),
+    Input('print-cancel-btn', 'n_clicks'),
+    Input('print-generate-btn', 'n_clicks'),
+    State('researcher-select', 'value'),
+    State('leadership-year', 'value'),
+    State('print-personnel-check', 'value'),
+    State('print-expertise-check', 'value'),
+    State('print-fire', 'data'),
+    prevent_initial_call=True,
+)
+def handle_print_modal(_open_clicks, _cancel_clicks, _gen_clicks, rid, leadership_year,
+                        selected_personnel, selected_expertise, fire_count):
+    from services.auth import can
+
+    triggered = dash.ctx.triggered_id
+    if triggered == 'print-open-btn':
+        return True, no_update, no_update
+    if triggered == 'print-cancel-btn':
+        return False, no_update, no_update
+    if triggered != 'print-generate-btn' or not rid:
+        return False, no_update, no_update
+
+    tables = read_profile_tables()
+    researchers = tables['researchers']
+    rid = str(rid).zfill(8)
+    rows = researchers[researchers['researcher_id'] == rid]
+    if rows.empty:
+        return False, no_update, no_update
+
+    # 클라이언트가 보낸 체크값을 그대로 믿지 않고, 평가/코멘트는 여기서 다시
+    # 권한을 확인해 없으면 선택돼 있어도 제외한다.
+    show_eval = can('view_evaluation')
+    show_comments = can('view_comments')
+    selected_personnel = [
+        k for k in (selected_personnel or [])
+        if not (k == 'evaluation' and not show_eval) and not (k == 'comments' and not show_comments)
+    ]
+
+    researcher_row = rows.iloc[0]
+    profile = read_expertise_profiles().get(rid)
+    similar = read_similar_researchers().get(rid, {}).get('similar', [])
+    name_map = researchers.set_index('researcher_id')['name'].to_dict()
+
+    sheet = profile_print.build_print_sheet(
+        rid, researcher_row, tables, profile, similar, name_map, leadership_year,
+        selected_personnel, selected_expertise or [],
+    )
+    return False, sheet, (fire_count or 0) + 1
+
+
+clientside_callback(
+    "function(n) { if (n) { window.print(); } return ''; }",
+    Output('print-fire-sink', 'children'),
+    Input('print-fire', 'data'),
+    prevent_initial_call=True,
+)
 
 
 @callback(

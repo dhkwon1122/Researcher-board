@@ -363,6 +363,129 @@ h1, h2, h3, h4, h5, h6 {
   }
 }
 
+/* ════════════════════════════════════════════════
+   연구원 개별 프로필 — 선택 항목 인쇄/PDF 출력
+   (평소엔 숨겨두고, 출력 버튼으로 채운 뒤 인쇄 시에만 보인다 — .no-print로
+   감싼 평소 화면 콘텐츠는 기존 A3 인쇄 규칙의 .no-print에 그대로 얹힌다.)
+   ════════════════════════════════════════════════ */
+#print-sheet-container {
+  display: none;
+}
+
+@media print {
+  #print-sheet-container {
+    display: block !important;
+  }
+  .print-sheet {
+    font-size: 10px;
+    color: #000;
+  }
+  .print-band,
+  .print-rect,
+  .print-card {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}
+
+.print-doc-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  border-bottom: 2px solid #1e3a5f;
+  padding-bottom: 6px;
+  margin-bottom: 10px;
+}
+.print-doc-title { font-size: 16px; font-weight: 700; color: #1e3a5f; }
+.print-doc-date { font-size: 11px; color: #6e6e73; }
+
+.print-band {
+  display: flex;
+  gap: 16px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+.print-photo-col {
+  flex: 0 0 110px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.print-info-grid {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px 20px;
+  align-content: start;
+}
+.print-header-line {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #3a3a3c;
+  border-bottom: 1px solid #eee;
+  padding-bottom: 6px;
+  margin-bottom: 2px;
+}
+.print-field-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #6e6e73;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  margin: 0 0 4px;
+}
+.print-field { min-width: 0; }
+
+.print-rect {
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+.print-rect-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #1e3a5f;
+  margin: 0 0 8px;
+}
+.print-rect-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+.print-rect-cols:has(> :only-child) {
+  grid-template-columns: 1fr;
+}
+
+.print-cards-row {
+  display: flex;
+  gap: 10px;
+}
+.print-card {
+  flex: 1 1 0;
+  min-width: 0;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 12px 14px;
+}
+.print-card-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #1e3a5f;
+  margin: 0 0 8px;
+}
+.print-subtitle {
+  font-size: 11px;
+  font-weight: 700;
+  color: #6e6e73;
+  margin: 10px 0 4px;
+}
+
 /* 드래그 앤 드롭 업로드 영역 */
 .jd-upload-dropzone {
   transition: background-color 0.15s ease, border-color 0.15s ease;
