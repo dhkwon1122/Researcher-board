@@ -25,11 +25,17 @@ def _access_denied():
 
 
 def _user_row(user: dict, idx: int):
+    status = (
+        dbc.Badge('임시 비밀번호', color='warning', text_color='dark', className='fw-normal')
+        if user.get('must_change_password')
+        else dbc.Badge('정상', color='light', text_color='secondary', className='fw-normal border')
+    )
     return html.Tr([
         html.Td(user['user_id'], className='align-middle font-monospace small'),
         html.Td(user['display_name'], className='align-middle'),
         html.Td(ROLE_LABELS.get(user['role'], user['role']), className='align-middle small'),
         html.Td(user.get('email', ''), className='align-middle small text-muted'),
+        html.Td(status, className='align-middle'),
         html.Td(
             dbc.ButtonGroup([
                 dbc.Button(
@@ -132,6 +138,7 @@ def layout():
                 html.Th('이름'),
                 html.Th('역할'),
                 html.Th('이메일'),
+                html.Th('상태'),
                 html.Th(''),
             ])),
             html.Tbody(rows, id='user-table-body'),

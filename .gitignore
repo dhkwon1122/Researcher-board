@@ -17,6 +17,10 @@ config/.flask_secret_key
 # 국가과학기술표준분류 기준 데이터는 정적 참조 데이터라 형상관리에 포함
 !data/reference/*.csv
 
+# scripts/bulk_create_users.py 의 예시 템플릿만 형상관리에 포함 — 실제로 채운
+# 명단 파일(예: scripts/people_team_users.csv)은 위 *.csv 규칙으로 계속 제외된다.
+!scripts/*.example.csv
+
 # data/processed/ 는 파이프라인 산출물이라 전부 무시하지만, 작업 히스토리/
 # 컨텍스트 문서(CLAUDE.md)는 세션 간 지식 연속성을 위해 형상관리에 포함
 !data/processed/CLAUDE.md

@@ -79,6 +79,7 @@ def authenticate(username: str, password: str) -> dict | None:
                 'display_name': data.get('display_name', username),
                 'email': data.get('email', ''),
                 'role': data.get('role', DEFAULT_ROLE),
+                'must_change_password': bool(data.get('must_change_password')),
             }
 
     data = _load_users_json().get(username)
@@ -91,6 +92,7 @@ def authenticate(username: str, password: str) -> dict | None:
         'display_name': data.get('display_name', username),
         'email': data.get('email', ''),
         'role': data.get('role', DEFAULT_ROLE),
+        'must_change_password': bool(data.get('must_change_password')),
     }
 
 
@@ -110,6 +112,7 @@ def list_users() -> list[dict]:
                 'display_name': d.get('display_name', ''),
                 'email': d.get('email', ''),
                 'role': d.get('role', DEFAULT_ROLE),
+                'must_change_password': bool(d.get('must_change_password')),
             }
             for d in user_store.list_all()
         ]
@@ -119,17 +122,22 @@ def list_users() -> list[dict]:
             'display_name': d.get('display_name', ''),
             'email': d.get('email', ''),
             'role': d.get('role', DEFAULT_ROLE),
+            'must_change_password': bool(d.get('must_change_password')),
         }
         for uid, d in _load_users_json().items()
     ]
 
 
 def create_user(user_id: str, password: str, display_name: str,
-                role: str, email: str = '') -> None:
+                role: str, email: str = '', must_change_password: bool = False) -> None:
+    """계정을 만든다. must_change_password=True로 만들면(예: 일괄 계정 생성)
+    본인이 비밀번호를 바꾸기 전까지 로그인 직후 강제로 비밀번호 변경 화면만
+    보게 된다(app.py의 require_login 참고)."""
     if user_store.available():
         if user_store.get_user(user_id) is not None:
             raise ValueError(f'이미 존재하는 계정입니다: {user_id}')
-        if user_store.create(user_id, generate_password_hash(password), display_name, role, email):
+        if user_store.create(user_id, generate_password_hash(password), display_name, role, email,
+                              must_change_password=must_change_password):
             return
         # DB insert 실패 시에도 계정 생성 자체는 막지 않고 JSON으로 폴백한다.
 
@@ -141,6 +149,7 @@ def create_user(user_id: str, password: str, display_name: str,
         'display_name': display_name,
         'role': role,
         'email': email,
+        'must_change_password': must_change_password,
     }
     _save_users_json(users)
 
@@ -165,6 +174,8 @@ def update_user(user_id: str, display_name: str | None = None,
 
 
 def change_password(user_id: str, new_password: str) -> bool:
+    """비밀번호를 바꾼다. 임시 비밀번호로 만들어진 계정(must_change_password=True)
+    이었다면 이 호출로 그 상태가 해제된다."""
     if user_store.available():
         if user_store.get_user(user_id) is not None:
             return user_store.set_password_hash(user_id, generate_password_hash(new_password))
@@ -173,6 +184,7 @@ def change_password(user_id: str, new_password: str) -> bool:
     if user_id not in users:
         return False
     users[user_id]['password_hash'] = generate_password_hash(new_password)
+    users[user_id]['must_change_password'] = False
     _save_users_json(users)
     return True
 
@@ -200,6 +212,7 @@ def get_current_user() -> dict | None:
         'display_name': flask.session.get('display_name', ''),
         'role': flask.session.get('role', DEFAULT_ROLE),
         'email': flask.session.get('email', ''),
+        'must_change_password': bool(flask.session.get('must_change_password')),
     }
 
 
@@ -218,6 +231,7 @@ def set_session(user: dict) -> None:
     flask.session['display_name'] = user['display_name']
     flask.session['role'] = user['role']
     flask.session['email'] = user.get('email', '')
+    flask.session['must_change_password'] = bool(user.get('must_change_password'))
     flask.current_app.permanent_session_lifetime = timedelta(hours=SESSION_LIFETIME_HOURS)
 
 
