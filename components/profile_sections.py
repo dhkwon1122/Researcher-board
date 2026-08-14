@@ -9,6 +9,7 @@ import plotly.graph_objects as go
 from dash import html
 
 from services.data_store import ASSETS_DIR, RAW_DIR
+from services.evaluations import first_half_column, format_evaluation_cell, salary_grade_column, second_half_column
 
 DEGREE_ORDER = ['박사', '석사', '학사', '전문대', '고교']
 GRADE_COLOR = {
@@ -72,7 +73,7 @@ def avatar(name: str, size: int = 88):
 
 def photo_block(rid: str, name: str, row=None, current_year: int = 2026):
     photo_el = None
-    IMG_STYLE = {'width': '100%', 'maxHeight': '200px',
+    IMG_STYLE = {'width': 'auto', 'maxWidth': '100%', 'height': 'auto', 'maxHeight': '200px',
                  'objectFit': 'contain', 'borderRadius': '8px', 'display': 'block'}
 
     src = load_photo_src(rid)
@@ -131,6 +132,13 @@ def photo_block(rid: str, name: str, row=None, current_year: int = 2026):
             html.P(line2, className='text-muted text-center mb-0',
                    style={'fontSize': '0.78rem'}),
         ]
+
+        employment_status = str(row.get('employment_status', '') or '').strip()
+        if employment_status:
+            sub_lines.append(html.P(
+                f'재직상태 : {employment_status}', className='text-muted text-center mb-0',
+                style={'fontSize': '0.78rem'},
+            ))
     else:
         sub_lines = [html.P(name, className='fw-bold mt-2 mb-0 text-center small')]
 
@@ -195,9 +203,20 @@ def education_block(edu_df: pd.DataFrame, rid: str):
     return html.Div(items) if items else html.Div('학력 정보 없음', className='text-muted small')
 
 
+def _clean_str(val) -> str:
+    s = str(val).strip() if val is not None else ''
+    return '' if s.lower() in ('', 'nan', 'none', 'nat') else s
+
+
 def evaluation_incentive_block(eva_df, inc_df, rid: str, years: list[int]):
+    """years: 연봉등급 연도 리스트(오름차순, 예: [2024,2025,2026]) — 각 연도
+    열은 그 해 연봉등급과, 대응하는 전년도(연도-1) 상/하반기업적을 합쳐
+    services.evaluations.format_evaluation_cell()로 한 셀에 표시한다(예:
+    "다(EM/EM)"). evaluations.csv가 researcher_id당 1행(wide)이라 eva는
+    최대 1행."""
     inc = inc_df[inc_df['researcher_id'] == rid] if not inc_df.empty else pd.DataFrame()
-    eva = eva_df[eva_df['researcher_id'] == rid] if not eva_df.empty else pd.DataFrame()
+    eva_rows = eva_df[eva_df['researcher_id'] == rid] if not eva_df.empty else pd.DataFrame()
+    eva = eva_rows.iloc[0] if not eva_rows.empty else None
 
     def _inc_label(year):
         if inc.empty:
@@ -211,42 +230,48 @@ def evaluation_incentive_block(eva_df, inc_df, rid: str, years: list[int]):
             return '최우수' if '최우수' in category else ('우수' if '우수' in category else category[:4])
         return '-'
 
-    def _grade(year):
-        if eva.empty:
-            return '-'
-        row = eva[eva['year'].astype(str) == str(year)]
-        return str(row.iloc[0].get('grade', '-')) if not row.empty else '-'
+    def _eval_cell(year):
+        """(색상 기준 연봉등급, 화면 표시 문자열) 튜플. eva가 없으면 둘 다 '-'."""
+        if eva is None:
+            return '-', '-'
+        salary = _clean_str(eva.get(salary_grade_column(year)))
+        first_half = _clean_str(eva.get(first_half_column(year - 1)))
+        second_half = _clean_str(eva.get(second_half_column(year - 1)))
+        display = format_evaluation_cell(salary, first_half, second_half)
+        return salary, display
 
-    def _grade_td(grade):
-        color = GRADE_COLOR.get(grade, '#aaa')
+    def _grade_td(salary_grade, display):
+        color = GRADE_COLOR.get(salary_grade, '#aaa')
         return html.Td(
-            html.Span(grade, style={'color': color, 'fontWeight': '700', 'fontSize': '0.9rem'}),
-            className='text-center',
+            html.Span(display, style={'color': color, 'fontWeight': '700', 'fontSize': '0.8rem'}),
+            className='text-center', style={'verticalAlign': 'middle'},
         )
 
     return dbc.Table([
         html.Thead(
             html.Tr(
-                [html.Th('구분', style={'fontSize': '0.72rem', 'width': '55px'})] +
+                [html.Th('구분', className='text-center',
+                         style={'fontSize': '0.72rem', 'width': '55px', 'verticalAlign': 'middle'})] +
                 [html.Th(f"'{str(year)[-2:]}", className='text-center',
-                         style={'fontSize': '0.72rem'})
+                         style={'fontSize': '0.72rem', 'verticalAlign': 'middle'})
                  for year in years]
             ),
             className='table-light',
         ),
         html.Tbody([
             html.Tr(
-                [html.Td('인센티브', className='small text-muted',
-                         style={'whiteSpace': 'nowrap', 'fontSize': '0.75rem'})] +
-                [html.Td(_inc_label(year), className='text-center small') for year in years]
+                [html.Td('인센티브', className='small text-muted text-center',
+                         style={'whiteSpace': 'nowrap', 'fontSize': '0.75rem', 'verticalAlign': 'middle'})] +
+                [html.Td(_inc_label(year), className='text-center small',
+                         style={'verticalAlign': 'middle'}) for year in years]
             ),
             html.Tr(
-                [html.Td('평가등급', className='small text-muted',
-                         style={'whiteSpace': 'nowrap', 'fontSize': '0.75rem'})] +
-                [_grade_td(_grade(year)) for year in years]
+                [html.Td('평가등급', className='small text-muted text-center',
+                         style={'whiteSpace': 'nowrap', 'fontSize': '0.75rem', 'verticalAlign': 'middle'})] +
+                [_grade_td(*_eval_cell(year)) for year in years]
             ),
         ]),
-    ], bordered=True, size='sm', className='mb-0', style={'fontSize': '0.8rem'})
+    ], bordered=True, size='sm', className='mb-0 eval-incentive-table', style={'fontSize': '0.8rem'})
 
 
 def nurturing_block(nur_df, rid: str, *, limit: int | None = None):
@@ -326,6 +351,22 @@ def _fmt_rate(val) -> str:
         return '-'
 
 
+def _has_min_duration(start_raw, end_raw, min_days: int = 30) -> bool:
+    """과제 참여기간(종료일-시작일)이 min_days 이하이면 False (해당 과제는 제외).
+    종료일이 비어있으면(진행중) 오늘 날짜를 종료일로 간주해 계산한다.
+    start_date/end_date가 YYYYMMDD 정수로 들어올 수 있어, pandas가 나노초로
+    오인하지 않도록 반드시 문자열로 변환한 뒤 파싱한다."""
+    start = pd.to_datetime(str(start_raw).strip(), errors='coerce') if start_raw is not None else pd.NaT
+    if pd.isna(start):
+        return False
+    end_s = str(end_raw).strip() if end_raw is not None else ''
+    is_empty_end = end_s == '' or end_s.lower() in _TASK_EMPTY
+    end = pd.Timestamp(datetime.now().date()) if is_empty_end else pd.to_datetime(end_s, errors='coerce')
+    if pd.isna(end):
+        end = pd.Timestamp(datetime.now().date())
+    return (end - start).days > min_days
+
+
 def _fmt_period(start_raw, end_raw) -> str:
     """기간 표시: 'YYYY-MM ~ YYYY-MM' 또는 'YYYY-MM ~ 현재'."""
     start = str(start_raw).strip()[:7] if start_raw is not None else ''
@@ -347,10 +388,13 @@ def _fmt_period(start_raw, end_raw) -> str:
 
 
 def tasks_block(task_df, rid: str):
-    """과제 수행 이력 테이블 (tasks.csv 기반)."""
+    """과제 수행 이력 테이블 (tasks.csv 기반). 투입률 0도 포함하고, 참여기간
+    (종료일-시작일)이 30일 이하인 과제만 제외한다(타임라인 스파인과 동일 기준)."""
     rows = (task_df[task_df['researcher_id'] == rid]
             .sort_values('start_date', ascending=False)
             if not task_df.empty else pd.DataFrame())
+    if not rows.empty:
+        rows = rows[rows.apply(lambda r: _has_min_duration(r.get('start_date'), r.get('end_date')), axis=1)]
     if rows.empty:
         return html.Div('과제 수행 이력 없음', className='text-muted small')
 
@@ -358,21 +402,25 @@ def tasks_block(task_df, rid: str):
     for _, row in rows.iterrows():
         period = _fmt_period(row.get('start_date'), row.get('end_date'))
         rate   = _fmt_rate(row.get('input_rate'))
+        # the_task_name(참여 당시 실제 과제명, pipeline/process_tasks.py 보정)이
+        # 있으면 그걸, 없으면(구버전 CSV/매핑 실패 폴백) 원본 task_name.
+        the_name = _clean_str(row.get('the_task_name', ''))
+        name = the_name or str(row.get('task_name', '') or '').strip() or '-'
         table_rows.append(html.Tr([
-            html.Td(str(row.get('task_name', '-')), className='small'),
-            html.Td(period, className='small text-muted', style={'whiteSpace': 'nowrap'}),
-            html.Td(rate, className='small text-center', style={'whiteSpace': 'nowrap'}),
+            html.Td(name, className='small', style={'wordBreak': 'break-word'}),
+            html.Td(period, className='small text-muted', style={'wordBreak': 'break-word'}),
+            html.Td(rate, className='small text-center', style={'wordBreak': 'break-word'}),
         ]))
 
     return dbc.Table([
         html.Thead(html.Tr([
-            html.Th('과제명',  style={'fontSize': '0.72rem'}),
-            html.Th('기간',    style={'fontSize': '0.72rem'}),
-            html.Th('투입률',  style={'fontSize': '0.72rem'}),
+            html.Th('과제명',  style={'fontSize': '0.72rem', 'width': '50%'}),
+            html.Th('기간',    style={'fontSize': '0.72rem', 'width': '35%'}),
+            html.Th('투입률',  style={'fontSize': '0.72rem', 'width': '15%'}),
         ]), className='table-light'),
         html.Tbody(table_rows),
-    ], bordered=False, hover=True, responsive=True, size='sm',
-       className='mb-0', style={'maxHeight': '160px', 'overflowY': 'auto', 'display': 'block'})
+    ], bordered=False, hover=True, size='sm', className='mb-0',
+       style={'tableLayout': 'fixed', 'width': '100%'})
 
 
 def transfer_block(tra_df, rid: str):
@@ -382,23 +430,23 @@ def transfer_block(tra_df, rid: str):
     table_rows = [
         html.Tr([
             html.Td(str(row.get('date', ''))[:7], className='small text-muted',
-                    style={'whiteSpace': 'nowrap'}),
+                    style={'wordBreak': 'break-word'}),
             html.Td(dbc.Badge(str(row.get('type', '')),
                               color=TRANSFER_BADGE.get(str(row.get('type', '')), 'light'),
                               className='small')),
-            html.Td(str(row.get('description', '')), className='small'),
+            html.Td(str(row.get('description', '')), className='small', style={'wordBreak': 'break-word'}),
         ])
         for _, row in rows.iterrows()
     ]
     return dbc.Table([
         html.Thead(html.Tr([
-            html.Th('시기', style={'fontSize': '0.72rem'}),
-            html.Th('유형', style={'fontSize': '0.72rem'}),
-            html.Th('내용', style={'fontSize': '0.72rem'}),
+            html.Th('시기', style={'fontSize': '0.72rem', 'width': '15%'}),
+            html.Th('유형', style={'fontSize': '0.72rem', 'width': '20%'}),
+            html.Th('내용', style={'fontSize': '0.72rem', 'width': '65%'}),
         ]), className='table-light'),
         html.Tbody(table_rows),
-    ], bordered=False, hover=True, responsive=True, size='sm',
-       className='mb-0', style={'maxHeight': '130px', 'overflowY': 'auto', 'display': 'block'})
+    ], bordered=False, hover=True, size='sm', className='mb-0',
+       style={'tableLayout': 'fixed', 'width': '100%'})
 
 
 def comments_block(cmt_df, rid: str):

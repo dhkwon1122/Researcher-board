@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>보유 전문성 기능 안내</title>
+<style>
+  :root {
+    --bg: #f3f4f7; --panel: #ffffff; --line: #e2e4ea;
+    --ink: #1a1d29; --ink-soft: #6b7080;
+    --accent: #4453d6; --accent-weak: rgba(68,83,214,0.08);
+    --good: #1f8a5f; --good-weak: rgba(31,138,95,0.1);
+    --warn: #a3720a; --warn-weak: rgba(163,114,10,0.1);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101218; --panel: #171a22; --line: #272b36;
+      --ink: #e7e8ee; --ink-soft: #8b8fa3;
+      --accent: #8b97f5; --accent-weak: rgba(139,151,245,0.12);
+      --good: #5fbf90; --good-weak: rgba(95,191,144,0.12);
+      --warn: #d1a444; --warn-weak: rgba(209,164,68,0.12);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--ink); margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    line-height: 1.6;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 48px 24px 100px; }
+  h1 { font-size: 1.6rem; font-weight: 800; letter-spacing: -0.01em; margin: 0 0 6px; }
+  .subtitle { color: var(--ink-soft); font-size: 0.95rem; margin: 0 0 40px; }
+  h2 {
+    font-size: 1.05rem; font-weight: 800; margin: 48px 0 16px; padding-bottom: 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  h2 .num { color: var(--accent); margin-right: 6px; }
+  h3 { font-size: 0.92rem; font-weight: 700; margin: 20px 0 8px; }
+  p { margin: 0 0 12px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 18px 20px; margin-bottom: 12px;
+  }
+  .tab-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px,1fr)); gap: 14px; }
+  .tab-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; }
+  .tab-card .badge {
+    display: inline-block; font-size: 0.68rem; font-weight: 700; color: var(--accent);
+    background: var(--accent-weak); border-radius: 999px; padding: 3px 10px; margin-bottom: 10px;
+  }
+  .tab-card h3 { margin: 0 0 8px; font-size: 1rem; }
+  .tab-card p { font-size: 0.86rem; color: var(--ink-soft); margin: 0; }
+  .flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; margin: 20px 0; }
+  .flow-step {
+    flex: 1 1 150px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px; font-size: 0.82rem; position: relative;
+  }
+  .flow-step .step-no {
+    display: inline-block; width: 20px; height: 20px; line-height: 20px; text-align: center;
+    border-radius: 50%; background: var(--accent); color: #fff; font-size: 0.7rem; font-weight: 700;
+    margin-bottom: 8px;
+  }
+  .flow-step b { display: block; margin-bottom: 4px; }
+  .flow-step span { color: var(--ink-soft); }
+  .flow-arrow {
+    display: flex; align-items: center; justify-content: center; color: var(--ink-soft);
+    font-size: 1.1rem; flex: 0 0 auto; padding: 0 2px;
+  }
+  @media (max-width: 760px) { .flow-arrow { display: none; } }
+  table { width: 100%; border-collapse: collapse; font-size: 0.84rem; margin: 8px 0 20px; }
+  th {
+    text-align: left; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--ink-soft); font-weight: 700; padding: 8px 10px; border-bottom: 1px solid var(--line);
+  }
+  td { padding: 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  code {
+    background: var(--accent-weak); color: var(--accent); padding: 1px 6px; border-radius: 4px;
+    font-size: 0.82em; font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  }
+  .note {
+    display: flex; gap: 10px; background: var(--warn-weak); border: 1px solid var(--warn);
+    border-radius: 10px; padding: 12px 16px; font-size: 0.86rem; margin: 14px 0;
+  }
+  .note b { color: var(--warn); }
+  .good-note {
+    display: flex; gap: 10px; background: var(--good-weak); border: 1px solid var(--good);
+    border-radius: 10px; padding: 12px 16px; font-size: 0.86rem; margin: 14px 0;
+  }
+  .good-note b { color: var(--good); }
+  ul { margin: 0 0 12px; padding-left: 20px; }
+  li { margin: 4px 0; }
+  .toc { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+  .toc a {
+    font-size: 0.8rem; color: var(--ink-soft); text-decoration: none; border: 1px solid var(--line);
+    border-radius: 999px; padding: 5px 12px;
+  }
+  .toc a:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-weak); }
+  .appendix pre {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px;
+    font-size: 0.78rem; overflow-x: auto; font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  }
+  footer { margin-top: 60px; color: var(--ink-soft); font-size: 0.78rem; border-top: 1px solid var(--line); padding-top: 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>보유 전문성 기능 안내</h1>
+  <p class="subtitle">대시보드의 "보유 전문성" 화면이 무엇을 보여주고, 그 내용이 어떤 데이터와 절차로 만들어지는지 설명합니다.</p>
+
+  <div class="toc">
+    <a href="#overview">① 화면 구성</a>
+    <a href="#process">② 만들어지는 과정</a>
+    <a href="#caveats">③ 결과를 읽을 때 유의할 점</a>
+    <a href="#files">④ 참조 파일</a>
+    <a href="#appendix">부록: 실행 순서</a>
+  </div>
+
+  <h2 id="overview"><span class="num">①</span>화면 구성 — 4개 탭</h2>
+  <p>"보유 전문성"은 연구원 개개인의 실제 전문성(과제명이 아니라 실제로 어떤 기술/지식을 갖고 있는가)을
+     사내 LLM과 임베딩으로 분석해 보여주는 화면입니다. 좌측 사이드바의 조직도를 통해 부서/과제 단위로
+     찾아 들어갈 수 있고, 이름·사번으로 바로 검색할 수도 있습니다.</p>
+
+  <div class="tab-grid">
+    <div class="tab-card">
+      <span class="badge">연구원</span>
+      <h3>연구원별 보유 전문성 카드</h3>
+      <p>학력·과제 이력·직무 이력·핵심기술·보유기술·논문·특허를 종합해, 연구원 한 명 한 명의
+         강점 분야/키워드/Hard Skills/Domain Knowledge를 카드로 정리해 보여줍니다.</p>
+    </div>
+    <div class="tab-card">
+      <span class="badge">연구원 ↔ 연구원</span>
+      <h3>전문성이 비슷한 사람 찾기</h3>
+      <p>과제가 완전히 달라도(예: A과제 vs B과제) 실제 보유 전문성이 겹치는 연구원을 찾아 보여줍니다.
+         시니어를 먼저, 그다음 주니어 순으로 표시하며, 근거 없이 점수만 높은 매칭은 제외합니다.</p>
+    </div>
+    <div class="tab-card">
+      <span class="badge">연구원 ↔ 과제</span>
+      <h3>과제·직무와 연구원 매칭</h3>
+      <p>"과제 기준"(이 직무에 맞는 사람은 누구인지), "인별 기준"(이 사람에게 맞는 과제·직무는 무엇인지),
+         "과제 전문성"(과제별 필요 전문성 딥다이브)을 한 화면에서 오가며 볼 수 있습니다.</p>
+    </div>
+    <div class="tab-card">
+      <span class="badge">전문성 MAP</span>
+      <h3>전사 전문성 지도(산점도)</h3>
+      <p>모든 연구원의 전문성을 2차원 지도 위에 점으로 뿌려, 가까이 모인 점일수록 실제로 비슷한 일을
+         하는 사람들임을 한눈에 보여줍니다. 이름/사번으로 검색해 위치를 바로 확인할 수 있습니다.</p>
+    </div>
+  </div>
+
+  <h2 id="process"><span class="num">②</span>어떻게 만들어지나</h2>
+  <p>네 개 탭은 모두 같은 5단계 파이프라인 위에서 만들어집니다. 사람이 매번 새로 작성하는 것이 아니라,
+     아래 단계를 스크립트가 순서대로 실행해 데이터를 준비합니다.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <span class="step-no">1</span>
+      <b>원본 정리</b>
+      <span>인사·과제·조직도 엑셀을 표준 형식(csv/json)으로 정리</span>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step">
+      <span class="step-no">2</span>
+      <b>전문성 추출 (LLM)</b>
+      <span>연구원·과제 각각의 이력을 사내 LLM에 분석시켜 핵심 분야/키워드/필요 기술 도출</span>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step">
+      <span class="step-no">3</span>
+      <b>임베딩</b>
+      <span>추출된 전문성 설명을 BGE-M3로 숫자 벡터화 — 의미가 비슷하면 벡터도 가까워짐</span>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step">
+      <span class="step-no">4</span>
+      <b>매칭·유사도 (LLM)</b>
+      <span>벡터로 후보를 추린 뒤, LLM이 실제로 근거 있는 유사/적합인지 한 번 더 정성 판정</span>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step">
+      <span class="step-no">5</span>
+      <b>화면 표시</b>
+      <span>결과를 콘솔형 리포트/지도로 렌더링해 대시보드에 그대로 띄움</span>
+    </div>
+  </div>
+
+  <h3>왜 임베딩과 LLM 두 단계를 다 쓰나요?</h3>
+  <p>임베딩(3단계)만으로는 "왜 비슷한지"를 알 수 없고, 단어만 겹치고 실제 업무는 다른 경우
+     (예: 둘 다 "AI"를 언급하지만 하나는 신호처리, 하나는 자연어처리)를 걸러내지 못합니다.
+     그래서 임베딩으로 후보를 저비용으로 추린 뒤(1차), 후보에 대해서만 LLM이 실제 근거를 대며
+     한 번 더 정성 판정(2차)합니다 — 비용은 아끼면서 신뢰도는 높이는 2단계 구조입니다.</p>
+  <p><code>pipeline/show_embedding.py &lt;사번&gt;</code>을 실행하면 특정 연구원 한 명을 예시로
+     이 임베딩 변환 과정을 실제 숫자로 확인할 수 있는 보고용 리포트가 만들어집니다.</p>
+
+  <h2 id="caveats"><span class="num">③</span>결과를 읽을 때 유의할 점</h2>
+
+  <div class="good-note">
+    <b>✓</b>
+    <div><b>근거 없는 매칭은 애초에 제외됩니다.</b> "연구원 ↔ 연구원"에서 보이는 후보는 전부
+    LLM이 구체적 근거를 댄 경우만 남긴 것입니다 — 유사도 점수만 높고 근거가 빈 경우는 목록에서
+    빠집니다.</div>
+  </div>
+  <div class="note">
+    <b>⚠</b>
+    <div><b>표면적 어휘 일치 ≠ 실질적 업무 일치.</b> 두 사람이 같은 단어를 언급해도 실제 응용
+    분야가 다르면 낮은 등급으로 판정되고, 그 경우 "표면 일치 주의" 표시가 붙습니다.</div>
+  </div>
+  <div class="note">
+    <b>⚠</b>
+    <div><b>조직도가 안 보이거나 이상해 보이면</b> <code>team_refer.csv</code>(팀참조시트.xlsx
+    전처리 결과)가 최신인지 확인하세요. 이 파일이 없으면 조직도 없이 부서명 평면 목록으로만
+    표시됩니다(오류는 아니지만 탐색이 불편해집니다).</div>
+  </div>
+  <div class="note">
+    <b>⚠</b>
+    <div><b>화면은 실행 시점의 스냅샷입니다.</b> 사람이 매번 새로 접속할 때 재계산하는 것이 아니라,
+    파이프라인을 실행한 시점의 결과가 파일로 저장되어 그대로 보입니다. 인사 이동·신규 과제 반영이
+    필요하면 아래 참조 파일을 갱신한 뒤 파이프라인을 다시 실행해야 합니다.</div>
+  </div>
+
+  <h2 id="files"><span class="num">④</span>참조 파일</h2>
+  <p>이 기능만을 위해 별도로 준비해야 하는 원본 파일과, 각 단계가 만들어내는 결과 파일입니다.
+     (인사기본정보·논문·특허 등 공통 기초 데이터는 대시보드 전체가 공유하는 별도 준비 과정이라
+     여기서는 생략합니다.)</p>
+
+  <table>
+    <thead><tr><th>원본 파일 (data/raw)</th><th>담당 스크립트</th><th>쓰임새</th><th>결과 파일 (data/processed)</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>팀참조시트.xlsx</td>
+        <td><code>process_team_refer.py</code></td>
+        <td>조직도 계층 구조(부서→팀→파트) — 사이드바 트리를 만드는 원천. <b>부서ID/상위부서ID</b>
+            컬럼으로 계층을 판단하므로 두 컬럼이 채워져 있어야 합니다.</td>
+        <td>team_refer.csv</td>
+      </tr>
+      <tr>
+        <td>과제별컨플.xlsx</td>
+        <td><code>process_project_confl.py</code></td>
+        <td>과제별 컨플루언스 문서 주소 — 과제 전문성 분석의 원본 텍스트를 가져올 위치</td>
+        <td>project_confl_address.csv</td>
+      </tr>
+      <tr>
+        <td>전문성 분석 부서.xlsx <i>(선택)</i></td>
+        <td><code>process_analysis_dep.py</code></td>
+        <td>연구원 전문성 분석 대상을 특정 부서로 한정하고 싶을 때만 사용(없으면 전체 분석)</td>
+        <td>analysis_dep.csv</td>
+      </tr>
+      <tr>
+        <td><i>(공통 기초 데이터: researchers.csv, education.csv, tasks.csv 등)</i></td>
+        <td><code>process_researcher_expertise.py</code></td>
+        <td>학력·과제·직무·기술·논문·특허를 종합해 연구원별 전문성(강점 분야/키워드/Hard Skills/
+            Domain Knowledge)을 LLM으로 추출</td>
+        <td>연구원 보유 전문성 분석.json / .html</td>
+      </tr>
+      <tr>
+        <td>project_confl_address.csv (위 결과)</td>
+        <td><code>process_project_expertise.py</code></td>
+        <td>과제별 컨플루언스 문서를 요약하고, 과제에 필요한 직무·전문성을 LLM으로 딥다이브 분석</td>
+        <td>project_expertise_analysis.json / .html</td>
+      </tr>
+      <tr>
+        <td>위 두 결과 (연구원 전문성 + 과제 전문성)</td>
+        <td><code>process_project_researcher_fit.py</code></td>
+        <td>임베딩으로 후보를 추린 뒤 LLM이 과제↔연구원 적합도를 정성 판정("과제 기준"/"인별 기준"),
+            과제 전문성 카드도 함께 묶어 표시("과제 전문성")</td>
+        <td>project_fit_by_project.json / project_fit_by_researcher.json / project_researcher_fit.html</td>
+      </tr>
+      <tr>
+        <td>연구원 보유 전문성 분석.json (위 결과)</td>
+        <td><code>process_researcher_similarity.py</code></td>
+        <td>임베딩으로 근속(시니어/주니어) 그룹별 후보를 추리고, LLM이 실제 근거를 대며 유사도를
+            정성 판정 — 근거 없는 후보는 최종 목록에서 제외</td>
+        <td>researcher_similarity.json / .html</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>"전문성 MAP" 탭은 별도 결과 파일이 없습니다</h3>
+  <p>위 임베딩 계산 과정에서 함께 쌓이는 <code>embedding_cache.json</code>과 연구원 전문성
+     JSON을 그때그때 읽어 UMAP으로 2차원 좌표를 계산해 그리는 방식이라, 화면을 열 때마다
+     즉석에서 계산됩니다(별도로 저장해두는 결과 파일이 없습니다).</p>
+
+  <div class="appendix" id="appendix">
+    <h2><span class="num"></span>부록: 실행 순서 (실무자용)</h2>
+    <p>아래는 데이터를 처음부터 새로 갱신할 때의 순서입니다. 조직도/과제 컨플 주소처럼 원본
+       엑셀만 바뀐 경우는 해당 단계만 다시 실행하면 됩니다.</p>
+    <pre>python pipeline/process_team_refer.py                  # 조직도
+python pipeline/process_project_confl.py               # 과제 컨플루언스 주소
+python pipeline/process_project_expertise.py           # 과제 전문성 분석 (LLM)
+python pipeline/process_researcher_expertise.py        # 연구원 전문성 분석 (LLM)
+python pipeline/process_project_researcher_fit.py      # 과제 ↔ 연구원 매칭 (임베딩+LLM)
+python pipeline/process_researcher_similarity.py --refresh-judgments  # 연구원 ↔ 연구원 유사도</pre>
+    <p>위 1~2단계(전처리, LLM 비용 없음)는 <code>python pipeline/run_expertise.py</code>로,
+       3~6단계(LLM 호출, 비용 발생)는 <code>python pipeline/run_analysis.py</code>로 한 번에
+       실행할 수 있습니다. 전체를 이어서 실행하려면
+       <code>python pipeline/run_integration.py</code>를 사용하세요(실행 전
+       <code>pipeline/run_ready.py</code>로 사내 LLM/임베딩 서버 연결을 먼저 점검하는 것을
+       권장합니다).</p>
+  </div>
+
+  <footer>
+    이 문서는 대시보드 코드와 함께 저장소(docs/보유_전문성_가이드.html)에 보관되며,
+    기능이 바뀌면 함께 갱신됩니다.
+  </footer>
+
+</div>
+</body>
+</html>

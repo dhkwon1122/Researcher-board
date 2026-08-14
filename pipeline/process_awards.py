@@ -12,13 +12,13 @@
 컬럼명 설정은 파일 상단의 COL_* 상수에서 수정하세요.
 """
 
-import csv
 import os
 import sys
 
 import pandas as pd
 
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
+AWARDS_FILE = '시상 세부사항.xlsx'
+_AWARDS_HEADER_ROW = 8  # sources.py 매니페스트 기준 (9번째 행)
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
 COL_ID          = '사번'
@@ -30,27 +30,27 @@ COL_DESC        = '설명'
 # ─────────────────────────────────────────────────────────────────────────────
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from excel_reader import norm_id
+from paths import RAW_DIR, OUT_DIR  # noqa: E402
+from excel_reader import parse_flexible_date as _fmt_date, read_xlsx, norm_id
+from merge_utils import TABLE_KEYS, write_merged
 from source_reader import read_source
 
 
-def _fmt_date(val) -> str:
-    if val is None or (isinstance(val, float) and pd.isna(val)):
-        return ''
-    s = str(val).strip()
-    if s in ('', 'nan', 'None', 'NaT'):
-        return ''
-    try:
-        return pd.to_datetime(s).strftime('%Y-%m-%d')
-    except Exception:
-        return s
+def process(raw_dir: str = RAW_DIR) -> bool:
+    if raw_dir == RAW_DIR:
+        df = read_source('awards')
+        if df is None:
+            print('[SKIP] awards 원천 데이터 없음 '
+                  '(DB awards_stg 또는 data/raw_csv/awards.csv) — awards_raw 폴백 시도')
+    else:
+        raw_path = os.path.join(raw_dir, AWARDS_FILE)
+        if os.path.exists(raw_path):
+            df = read_xlsx(raw_path, header_row=_AWARDS_HEADER_ROW)
+        else:
+            df = None
+            print(f'[SKIP] {AWARDS_FILE} 파일 없음({raw_dir})')
 
-
-def process() -> bool:
-    df = read_source('awards')
     if df is None:
-        print('[SKIP] awards 원천 데이터 없음 '
-              '(DB awards_stg 또는 data/raw_csv/awards.csv) — awards_raw 폴백 시도')
         return False
     df.columns = [str(c).strip() for c in df.columns]
 
@@ -81,12 +81,11 @@ def process() -> bool:
     result['year'] = result['award_date'].str[:4].replace('', pd.NA)
     result = result.sort_values(['researcher_id', 'award_date'], ascending=[True, False]).reset_index(drop=True)
 
-    os.makedirs(OUT_DIR, exist_ok=True)
     out_path = os.path.join(OUT_DIR, 'awards.csv')
-    result.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+    merged = write_merged(out_path, result, TABLE_KEYS['awards'])
 
-    n = result['researcher_id'].nunique()
-    print(f'[OK]   awards.csv 저장 ({len(result)}행, {n}명)')
+    n = merged['researcher_id'].nunique()
+    print(f'[OK]   awards.csv 저장 (총 {len(merged)}행, {n}명, 이번 파일 {len(result)}행 반영)')
     return True
 
 

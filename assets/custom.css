@@ -1,48 +1,188 @@
+/* ════════════════════════════════════════════════
+   애플(apple.com) 스타일 참고 — 절제된 무채색 베이스,
+   넉넉한 여백, 또렷한 타이포그래피, 은은한 인터랙션.
+   장식은 최소화하고 콘텐츠 자체의 위계로 가독성을 만든다.
+   ════════════════════════════════════════════════ */
+
 /* ── 전역 ── */
+:root {
+  --gs-bg:        #f5f5f7;
+  --gs-surface:   #ffffff;
+  --gs-border:    #e8e8ed;
+  --gs-border-2:  #d2d2d7;
+  --gs-text:      #1d1d1f;
+  --gs-muted:     #6e6e73;
+  --gs-label:     #86868b;
+  --gs-accent:    #0071e3;
+  --gs-accent-hover: #0077ed;
+  --gs-radius:    14px;
+  --gs-radius-sm: 10px;
+  --gs-font: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text',
+             'Noto Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+}
+
 body {
-  font-family: 'Noto Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
-  color: #1a1a2e;
+  font-family: var(--gs-font);
+  color: var(--gs-text);
+  background-color: var(--gs-bg);
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.011em;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--gs-font);
+  letter-spacing: -0.02em;
+  font-weight: 600;
+}
+
+/* 섹션 라벨 (카드 상단 소제목) */
+.section-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-transform: none;
+  color: var(--gs-label);
+  margin-bottom: 0.65rem;
+}
+
+/* 숫자 강조(통계 타일) — 굵고 또렷하게, 애플 특유의 큰 숫자 강조 */
+.stat-value {
+  font-family: var(--gs-font);
+  letter-spacing: -0.02em;
+  font-weight: 700;
 }
 
 /* ── 카드 ── */
 .card {
-  border: none;
-  border-radius: 10px;
+  border: 1px solid var(--gs-border);
+  border-radius: var(--gs-radius);
+  box-shadow: none !important;
+  background-color: var(--gs-surface);
 }
 .card-body {
-  padding: 1rem 1.2rem;
+  padding: 1.1rem 1.3rem;
+}
+.shadow-sm {
+  box-shadow: none !important;
+  border: 1px solid var(--gs-border) !important;
 }
 
-/* ── 네비게이션 ── */
+/* 프로필 페이지 카드 — 은은한 호버 리프트 */
+.profile-card {
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+.profile-card:hover {
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.05) !important;
+  border-color: var(--gs-border-2) !important;
+}
+
+/* ── 네비게이션 (블러 처리된 반투명 다크 바) ── */
+.app-navbar {
+  background-color: rgba(29, 29, 31, 0.82) !important;
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.app-navbar .navbar-brand {
+  color: #fff !important;
+}
 .navbar-nav .nav-link {
-  font-size: 0.9rem;
-  font-weight: 500;
+  font-size: 0.86rem;
+  font-weight: 400;
   padding: 0.4rem 0.9rem !important;
-  border-radius: 6px;
-  transition: background 0.2s;
+  border-radius: 980px;
+  transition: color 0.2s;
+  color: rgba(255, 255, 255, 0.8) !important;
 }
 .navbar-nav .nav-link:hover {
-  background: rgba(255, 255, 255, 0.15);
+  color: #fff !important;
 }
 .navbar-nav .nav-link.active {
-  background: rgba(255, 255, 255, 0.2) !important;
+  background: rgba(255, 255, 255, 0.12) !important;
+  color: #fff !important;
+}
+
+/* ── 버튼 (애플 특유의 필 버튼) ── */
+.btn {
+  border-radius: 980px;
+  font-weight: 500;
+  font-size: 0.85rem;
+  transition: background 0.15s, border-color 0.15s, opacity 0.1s;
+}
+.btn-primary {
+  background-color: var(--gs-accent) !important;
+  border-color: var(--gs-accent) !important;
+}
+.btn-primary:hover {
+  background-color: var(--gs-accent-hover) !important;
+  border-color: var(--gs-accent-hover) !important;
+}
+.btn-primary:active {
+  opacity: 0.85;
+}
+.text-primary {
+  color: var(--gs-accent) !important;
+}
+.bg-primary {
+  background-color: var(--gs-accent) !important;
+}
+.border-primary {
+  border-color: var(--gs-accent) !important;
+}
+.text-danger {
+  color: #ff3b30 !important;
+}
+
+/* ── 뱃지 (필 형태) ── */
+.badge {
+  border-radius: 999px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  padding: 0.32em 0.7em;
 }
 
 /* ── Dash Dropdown ── */
-.Select-control {
-  border-radius: 6px !important;
+.Select-control,
+.dash-dropdown .Select-control {
+  border-radius: var(--gs-radius-sm) !important;
+  border-color: var(--gs-border-2) !important;
+}
+.dash-dropdown div[class*="-control"] {
+  border-radius: var(--gs-radius-sm) !important;
+  border-color: var(--gs-border-2) !important;
+  min-height: 36px !important;
+}
+.dash-dropdown div[class*="-control"]:hover {
+  border-color: #adadb2 !important;
+}
+.dash-dropdown div[class*="-control"]:focus-within {
+  border-color: var(--gs-accent) !important;
+  box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.15) !important;
 }
 
 /* ── 테이블 헤더 ── */
 .table thead th {
-  font-size: 0.8rem;
+  font-size: 0.7rem;
   font-weight: 600;
   letter-spacing: 0.03em;
-  border-bottom: 2px solid #dee2e6;
+  text-transform: none;
+  color: var(--gs-muted);
+  border-bottom: 1px solid var(--gs-border);
 }
 .table tbody td {
   font-size: 0.85rem;
   vertical-align: middle;
+  border-color: var(--gs-border) !important;
+}
+.table-hover tbody tr:hover {
+  background-color: var(--gs-bg);
+}
+
+/* 평가/인센티브 이력 테이블 — 외곽선 색을 헤더/바디 구분 없이 통일 */
+.eval-incentive-table,
+.eval-incentive-table th,
+.eval-incentive-table td {
+  border-color: var(--gs-border-2) !important;
 }
 
 /* ── KPI 카드 ── */
@@ -50,21 +190,51 @@ body {
   opacity: 0.9;
 }
 
-/* ── 탭 ── */
+/* ── 탭 (밑줄형 미니멀) ── */
+.nav-tabs {
+  border-bottom: 1px solid var(--gs-border);
+  gap: 0.25rem;
+}
 .nav-tabs .nav-link {
   font-size: 0.85rem;
   font-weight: 500;
-  color: #555;
+  color: var(--gs-muted);
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: 0.55rem 0.9rem;
+  transition: color 0.15s, border-color 0.15s;
+}
+.nav-tabs .nav-link:hover {
+  color: var(--gs-text);
+  border-color: var(--gs-border-2);
 }
 .nav-tabs .nav-link.active {
-  font-weight: 700;
-  color: #1e3a5f;
-  border-bottom: 2px solid #1e3a5f;
+  font-weight: 600;
+  color: var(--gs-text);
+  background: transparent;
+  border-color: var(--gs-accent);
 }
 
 /* ── Plotly 차트 배경 투명 처리 ── */
 .js-plotly-plot .plotly .bg {
   fill: transparent !important;
+}
+
+/* Plotly 호버 라벨 — 다크 카드형 툴팁 */
+.js-plotly-plot .hoverlayer .hovertext text {
+  font-family: var(--gs-font) !important;
+}
+
+/* 보유 전문성 — 등급/Lv 개요 이미지 호버 툴팁: 검은 배경 제거(이미지만 노출) */
+.info-hover-tooltip .tooltip-inner {
+  background-color: transparent !important;
+  max-width: none;
+  padding: 0;
+  box-shadow: none;
+}
+.info-hover-tooltip .tooltip-arrow::before {
+  display: none;
 }
 
 /* ── 스크롤 가능한 테이블 ── */
@@ -191,4 +361,13 @@ body {
     height: 48px !important;
     font-size: 14px !important;
   }
+}
+
+/* 드래그 앤 드롭 업로드 영역 */
+.jd-upload-dropzone {
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.jd-upload-dropzone:hover {
+  background-color: #f8f9fa;
+  border-color: #6c757d !important;
 }

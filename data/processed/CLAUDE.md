@@ -1,0 +1,2750 @@
+# data/processed — 작업 히스토리 & 컨텍스트
+
+이 디렉터리에서 작업할 때 먼저 읽을 문서. `Researcher-board`는 연구원 인사/성과
+데이터를 다루는 Dash 대시보드로, `data/raw/`의 원천 엑셀/csv를 `pipeline/process_*.py`
+스크립트가 정제해 이 디렉터리(`data/processed/`)에 CSV/JSON으로 쌓고,
+`services/data_store.py`를 통해 Dash 화면이 읽는다.
+
+## 이 디렉터리의 두 종류 파일
+
+1. **원천 1:1 정제 테이블** (CSV, `pipeline/process_*.py`가 원천 엑셀을 그대로
+   컬럼 정리만 해서 생성 — LLM 미사용): `researchers.csv`, `education.csv`,
+   `tasks.csv`/`tasks_information.csv`, `publications.csv`, `patents.csv`,
+   `evaluations.csv`, `leadership.csv`, `succession.csv`, `incentive_selection.csv`,
+   `awards.csv`, `certifications.csv`, `nurturing.csv`, `comments.csv`,
+   `technology_transfer.csv`, `transfers.csv`, `hr_orders.csv`, `core_technology.csv`,
+   `tech_ownership.csv`, `job_profile.csv`, `work_objective.csv`,
+   `project_confl_address.csv`, `analysis_dep.csv`, `team_refer.csv` 등.
+   `DATABASE_URL`이 설정돼 있으면 `pipeline/load_to_db.py`가 이 CSV들을 PostgreSQL로
+   그대로 적재하고(테이블명 = 파일명), `services/data_store.read_processed()`가
+   DB 유무에 따라 자동으로 CSV/DB를 오간다(`docs/database.md` 참고). **`DATABASE_URL`
+   미설정이 기본값**이며, 이 저장소(개발 환경)에는 `.env`가 없다 — 실제 운영 환경에
+   DB가 붙어 있는지는 세션마다 확인 필요.
+
+2. **LLM 파생 분석 산출물** (JSON/HTML, `pipeline/process_*.py`가 사내 LLM 프롬프트로
+   생성 — 원본 데이터를 요약/판단/구조화한 결과): `연구원 보유 전문성 분석.json/.html`,
+   `project_expertise_analysis.json/.html`, `project_fit_by_project.json`,
+   `project_fit_by_researcher.json`, `project_researcher_fit.html`,
+   `researcher_similarity.json/.html`, `researcher_pair_judgment.json`(쌍 판정 캐시),
+   `journal_authority.json`(캐시), `strength_taxonomy*.json`(표준화 작업, 아래 참고),
+   `embedding_cache.json`(BGE-M3 벡터 캐시, 텍스트 해시 키). 전체 LLM 프롬프트
+   목록·원문은 세션 산출물로 사용자에게 전달된 `LLM_프롬프트_전체_목록.md` 참고
+   (이 파일 자체는 저장소에 커밋돼 있지 않음 — 필요하면 재생성 가능).
+
+## 핵심 설계 원칙 (지금까지 지켜온 것)
+
+- **PII를 LLM 프롬프트에 절대 포함하지 않음**: `researcher_id`/이름은 프롬프트 밖에서
+  결과에 매핑. 모든 `pipeline/process_*.py`의 LLM 호출이 이 원칙을 지킴.
+- **구조화 출력 강제, 자유 생성 최소화**: 대부분 "① 임베딩/규칙으로 후보를 싸게
+  추린 뒤 ② LLM에는 JSON만 강제 출력"하는 패턴(`researcher_fit.py`,
+  `process_researcher_similarity.py`). 환각 방지를 위해 랭킹/판정 자체를 LLM 자유
+  생성에 맡기지 않음.
+- **캐시 우선**: 저널 권위도/과제 요약/쌍 판정/임베딩은 전부 텍스트 해시 또는 키
+  기준으로 캐시해 재호출 비용을 줄임.
+- **동시성 제어**: `pipeline/llm_client.call_llm()`이 모듈 전역 세마포어
+  (`llm_config.LLM2_MAX_CONCURRENT`, 기본 8)로 배치 스크립트 전체의 동시 LLM 호출을
+  제한. 화면에서 실시간으로 응답을 기다리는 호출(`services/nl_query.py`)은
+  `max_wait`(기본 15초, `LLM2_QUERY_MAX_WAIT_SECONDS`)로 슬롯을 못 얻으면 무한
+  대기 대신 빠르게 실패 처리.
+  ⚠️ **`services/text2sql.py`는 이 세마포어를 안 씀** — `pipeline/llm_client.py`가
+  아니라 `services/llm.py`의 `chat()`을 직접 호출해 동시성 제한이 없는 별도 경로임
+  (아래 "진행 중인 논의" 참고).
+
+## 지금까지의 진행 히스토리 (요약)
+
+같은 세션에서 이어져 온 작업 순서(오래된 것 → 최근):
+
+1. **기반 대시보드**: 조직별 비교/연구원 목록/연구원 프로필 3개 탭 + 밀도 적응형
+   타임라인 컴포넌트 구축.
+2. **보유 전문성 파이프라인 신설**: `process_project_expertise.py`(과제 직무
+   딥다이브), `process_researcher_expertise.py`(연구원 전문성 분석),
+   `process_project_researcher_fit.py`(과제↔연구원 매칭), `process_researcher_similarity.py`
+   (연구원↔연구원 유사도) 4개 스크립트를 사내 LLM + BGE-M3 임베딩으로 구축.
+   모두 콘솔형 정적 HTML 리포트(`rd_specialist_markdown.py` 공용 셸) + JSON으로 저장.
+3. **"보유 전문성" Dash 탭 통합**: 연구원/연구원↔연구원/연구원↔과제/전문성 MAP
+   4개 서브탭(`pages/researcher_similarity_map.py`)으로 묶고, UMAP 산점도 +
+   HDBSCAN 2단계 클러스터링, 조직도 트리 사이드바(`team_refer.csv` 기반), 이름/사번
+   검색, 지도↔카드 상호 이동(하이라이트) 등을 반복 개선.
+4. **신뢰도 보강**: 근거 없는 유사도 후보 필터링, LLM 프롬프트에 "근거 필수" 명시,
+   커버리지 스탯 카드("분석 완료/분석 대상", "마지막 갱신") 4개 리포트에 추가,
+   소규모 파일럿 검증 가이드 문서 작성.
+5. **UI 미세 조정**: 연구원↔연구원 표시 개수(3/5/10)를 "시니어 N + 주니어 N"(그룹당)
+   의미로 재정의 — `<tbody>`를 그룹별로 분리해 기존 CSS `:nth-child` 토글이 그룹별로
+   독립 적용되게 함. 전문성 MAP 호버 라벨을 `researcher_id name` → `name(id)(E직군/R직군)`
+   로 변경(`tech_ownership.csv`의 `E_support` 조인). 대시보드 상단 탭 순서 변경,
+   조직도 사이드바 기본폭 400→500px/최대 500→600px.
+6. **`strength_fields`/`strength_keywords` 표준화 착수**: 자유 생성이라 표기가
+   제각각인 문제(예: "로봇 제어"/"로봇제어") 해결 위해 3단계 계획(①현황 집계+
+   클러스터링 → ②표준 목록 정의 → ③재할당) 수립. `pipeline/build_strength_taxonomy.py`
+   신설 — BGE-M3 임베딩 코사인 유사도로 유사 표기를 묶어 `strength_taxonomy_review.json/html`
+   (사람이 보는 현황), `strength_taxonomy_draft.json`(초안, 매번 재생성),
+   `strength_taxonomy.json`(확정본, **최초 1회만 자동 생성 — 이미 있으면 절대 덮어쓰지
+   않음**, 사람이 직접 수정하는 파일)을 생성. **③ 재할당(연구원별 실제 태그를 표준
+   목록으로 다시 매핑) 단계는 아직 미착수.**
+7. **카드 라벨 명확화**: `strength_fields`/`strength_keywords` 칩이 라벨 없이
+   붙어 있던 것을 "Strength Field"/"Strength Keywords" 라벨로 분리(`rd_specialist_markdown.py`
+   의 `strength_section_html()` 공용 헬퍼로 통합 — 정적 리포트 2곳 + Dash
+   `components/detail_tabs.py`가 공유).
+8. **자연어 질문 기능 1차 버전** (`services/nl_query.py`, "보유 전문성" 탭 상단):
+   질문 → 사내 LLM이 **3개 intent(find_researchers_by_expertise/
+   find_researchers_for_project/find_projects_for_researcher) + unsupported**로
+   구조화 분류만 하고, 실제 조회는 이미 계산된 배치 산출물(연구원 보유 전문성
+   분석.json, project_fit_by_project/by_researcher.json, tasks.csv)을 파이썬
+   코드가 결정적으로 필터링. LLM은 "질문 이해"만, "답"은 항상 기존 데이터 조회
+   결과 — 환각 방지. 전문성 검색은 `strength_taxonomy.json` 동의어 확장 →
+   원문 substring → BGE-M3 임베딩 유사도 순으로 폴백.
+9. **연구원 보유 전문성 분석 프롬프트 스키마 변경**: 출력 필드를
+   `hard_skills`(하위 3항목)/`domain_knowledge`(하위 3항목) 고정 dict →
+   `key_responsibilities`(주요 역할·책임, 과제 수행이력/직무 이력/업무목표 근거)/
+   `domain_knowledge_skill`(전문지식 및 역량, 학력/핵심기술/보유기술/논문/특허 근거)
+   두 개의 자유 리스트로 교체. `strength_fields`/`strength_keywords`는 유지.
+   `researcher_fit.researcher_profile_text()`(임베딩 입력 텍스트 생성 — 유사도/
+   매칭/자연어질문이 전부 공유)도 함께 갱신.
+10. **자연어 질문 기능에 개방형 질의(`open_data_query`) 폴백 추가**: 아래
+    "완료: 개방형 질의(open_data_query) 확장" 섹션 참고.
+11. **자연어 질문 결과 → 연구원 프로필 엑셀 다운로드**: 아래 "완료: 연구원
+    프로필 엑셀 다운로드" 섹션 참고.
+12. **자연어 질문 결과 화면 전면 개편(4개 intent 통합 표, 정렬/필터, 인라인
+    선택)**: 아래 "완료: 자연어 질문 결과 표 통합 개편" 섹션 참고.
+
+## 완료: 자연어 질문 결과 표 통합 개편
+
+"보유 전문성" 자연어 질문 결과 화면을 사용자 피드백 6건 반영해 다시 짰다.
+핵심은 **4개 intent(정형 3개 + open_data_query)가 전부 같은
+{columns, labels, rows} 표 형태로 결과를 내도록 통일**한 것 — 그 덕에
+정렬/필터/체크박스 선택/엑셀 다운로드를 렌더러 하나로 4개 intent 모두에
+동시에 적용할 수 있었다(사용자가 "구조 자체를 바꿔도 된다"고 허용한 부분).
+단, 정형 3-intent의 실제 조회/판단 로직(임베딩 매칭, 배치 매칭 결과 필터링
+등)은 그대로 유지 — LLM SQL 생성으로 바꾸진 않았다(이 프로젝트가 계속
+지켜온 "구조화 출력 강제, 자유 생성 최소화" 원칙을 깨지 않기 위해). 바뀐
+건 **최종 결과를 포장하는 방식**뿐이다.
+
+- **`services/data_labels.py`**(신규): `data/processed/*.csv` + LLM 파생
+  JSON 전체 컬럼 → 한글 라벨 사전(`label_for()`/`label_columns()`, 매핑에
+  없으면 원래 이름 그대로 폴백). 소스 파일마다 원본 헤더 표현이 달라도
+  (사원번호/KNOXID 등) 같은 개념은 항상 같은 한글 라벨로 통일(사용자
+  선택: 원본 헤더 재사용이 아니라 통일된 라벨).
+- **`services/researcher_profile_export.py`**: `PERSON_BASE_COLUMNS`
+  (`researcher_id/name/department/org_code/position/degree_major/age`)와
+  `person_base_table(researcher_ids)` 추가 — 엑셀 다운로드와 자연어 질문
+  결과 표가 "같은 사람은 어디서 봐도 같은 학력·나이 표기"를 공유하도록
+  로직을 여기 한 곳에 모았다(학력은 엑셀처럼 전체 이력이 아니라
+  `_highest_degree_str()`로 최종 학력 1건만).
+- **`services/open_data_query.py`**: `DISPLAY_LIMIT`/`_cap_limit` 50→1000건
+  (상한만 올리고 화면 기본 표시는 30건 — 아래 UI). `inject_person_columns()`
+  신규 — 결과에 `researcher_id`가 있으면(=사람 데이터로 판단) 사번/성명/
+  부서/과제/CL/학력·전공/나이 7개를 항상 앞에 붙이고, 겹치는 원본 컬럼
+  (department/org_code/position/degree/major/birth_year 등)은 제거해
+  중복 표시하지 않는다. SQL 생성 프롬프트에 "사람에 대한 질문이면
+  researcher_id를 SELECT에 반드시 포함하라" 규칙 추가(이 판단 로직이
+  기댈 신호를 LLM이 빠뜨리지 않도록). 응답에 `labels`(표시용 한글) 필드
+  추가(`columns`는 정렬/필터가 참조할 원본명 그대로 유지).
+- **`services/nl_query.py`**: 정형 3-intent
+  (`find_researchers_by_expertise`/`find_researchers_for_project`/
+  `find_projects_for_researcher`)의 반환값을 기존 `items: [...]`(카드/표
+  각각 다른 모양)에서 `open_data_query`와 동일한 `columns/labels/rows`
+  구조로 변경(`_build_table_result()` 공용 헬퍼, 내부적으로
+  `open_data_query.inject_person_columns()` 재사용) — 조회/판단 로직
+  자체는 한 줄도 안 바꾸고 마지막 포장만 바꿨다.
+- **`pages/researcher_similarity_map.py`**: 결과 표 렌더링을 전면 재작성.
+  - **표시 개수**: 기본 30건, 상한 1000건까지 "전체 N건 보기"로 펼침
+    (건수는 필터 적용 여부와 무관하게 항상 헤더 위에 "총 N건" 상시 표시).
+  - **정렬**: 컬럼 헤더 옆 드롭다운(오름차순/내림차순), `department`
+    컬럼만 추가로 "건재순"(advanced device platform(sait) 등 사용자 지정
+    7개 우선순위 + 나머지는 이름순, `_DEPT_ORDER`/`_dept_sort_key()`).
+    "정렬 해제" 링크로 초기화.
+  - **필터**: 모든 컬럼에 값 다중선택 드롭다운(현재 받아온 전체 데이터
+    기준 고유값 목록) — 재질의 없이 브라우저에서만 걸러낸다
+    (`_passes_filters()`). "필터 초기화" 링크로 초기화.
+  - **엑셀 다운로드**: 별도 모달을 없애고, 결과 표 각 행에 체크박스를
+    바로 두는 방식으로 변경(헤더 체크박스로 전체선택/해제). 선택된 행
+    수가 버튼 라벨에 실시간 반영되고, researcher_id가 있는 결과에서만
+    버튼이 나타난다.
+  - **Dash 팬텀 트리거 대응**: 정렬/필터/체크박스는 모두 매 렌더링마다
+    새로 그려지는 동적 컴포넌트라(컬럼 수 자체가 질문마다 달라 고정
+    컴포넌트로 둘 수 없음), 이전 엑셀 모달 버그 때처럼 컴포넌트를 고정하는
+    대신 **콜백을 전부 "현재 상태로부터 다음 상태를 그대로 계산"하는 순수
+    함수**로 짜서(토글/증가 없음) 팬텀 트리거가 와도 상태가 그대로
+    유지되게 했다. n_clicks 기반 콜백(정렬/필터 초기화, 엑셀 다운로드)은
+    추가로 `if not n_clicks: return dash.no_update`로 방어.
+  - **알려진 제약**: 부서 "건재순" 우선순위 목록은 이 저장소의 개발
+    샘플 데이터(`AI융합연구팀` 등 한글 팀명)엔 매칭되는 값이 없어 전부
+    "나머지" 취급(이름순)으로 보임 — 운영 데이터의 `department` 값이
+    실제로 `advanced device platform(sait)` 형태인지 확인 필요(사용자
+    확인 완료, 운영 데이터 기준으로는 정상 동작 예상).
+
+**후속 개선 (같은 세션, 사용자 피드백 반영)**:
+- **근거 컬럼 노출**: `open_data_query.py`의 SQL 생성 프롬프트에 "질문의
+  판단 근거로 쓰는 컬럼(WHERE/LIKE/JOIN 조건에 쓴 컬럼)은 SELECT에도 반드시
+  포함하라, 최대 3개"는 규칙 추가 — 예를 들어 "미생물 관련 연구이력이 있는
+  사람 찾아줘"처럼 물으면 `task_name`(또는 판단에 쓰인 컬럼)이 기본 7컬럼
+  뒤에 추가로 붙어 "왜 이 사람이 뽑혔는지"가 보인다. 프롬프트 지시일 뿐이라
+  100% 보장은 아님(사용자도 인지, 우선 이 정도로 진행하기로 확정) — 자주
+  빠지면 추후 강화 검토.
+- **CL → CL/년차**: `PERSON_BASE_COLUMNS`의 `position` 슬롯을
+  `position_year`로 교체, 값은 엑셀 다운로드의 `_col_position_year()`를
+  그대로 재사용(`services/researcher_profile_export.py`) — 브라우저 결과
+  표와 엑셀이 "CL4-17"/"CL4"(승격기준일 없으면 CL만) 표기를 공유한다.
+  엑셀 헤더도 "직급/년차" → "CL/년차"로 통일.
+- **필터 정리**: 사번/성명/나이 컬럼은 정렬만 남기고 값 필터를 제거(식별자
+  성격이라 필터가 의미 없다는 사용자 판단, `_NO_FILTER_COLUMNS`). 학력/전공
+  컬럼은 "박)학교 전공" 원문 그대로 필터 목록을 만들면 사실상 다 다른 값이
+  되어 필터가 무의미해지므로, 전공만 필터에서 빼고 학위 구분(박/석/학/전문대/
+  고교)은 전부 필터 대상에 남긴다(`_degree_prefix()`, `_DEGREE_FILTER_OPTIONS`
+  5개 옵션). ⚠️ 처음엔 박/석/학 3개만 필터로 남기고 전문대/고교를 실수로
+  빼버렸었다 — "전공만 빼고 학력은 다 남겨달라"는 재확인을 받아 5개로
+  수정. 이에 맞춰 `_highest_degree_str()`(자연어 질문 화면 전용, 엑셀의
+  `_col_education()`과는 별개)도 박/석/학 3개 제한을 풀고
+  `_DEGREE_ORDER_FULL`(박사>석사>학사>전문대>고교, `pipeline/
+  process_education.py`의 `DEG_ORDER`와 동일한 5단계 우선순위)로 확장 —
+  education.csv 자체가 이미 "학사 이상이 있으면 전문대/고교는 제외"하고
+  저장하므로, 여기 남아 있는 전문대/고교 레코드는 그게 그 사람의 진짜 최종
+  학력이라는 뜻이라 그대로 인정한다. 엑셀 다운로드의 `_col_education()`
+  (박/석/학 3개만, 나머지 제외)은 훨씬 이전에 사용자가 명시적으로 확정한
+  별개의 규칙이라 이번 변경 대상이 아니다 — 그대로 유지.
+
+## 완료: 연구원 프로필 엑셀 다운로드
+
+"보유 전문성" 탭 자연어 질문 결과(구조화 3-intent든 open_data_query든)에서
+찾은 연구원 중 원하는 대상을 선택해 인사 프로필을 엑셀로 내보내는 기능.
+컬럼 구성과 각 필드 표기 규칙(날짜 축약, 다중 이력 줄바꿈 표기 등)은 전부
+사용자 인터뷰로 확정한 것을 그대로 코드화했다 — 규칙을 바꾸려면
+`services/researcher_profile_export.py`의 `_COLUMNS`와 `_col_*` 함수만
+고치면 된다.
+
+- **`services/researcher_profile_export.py`** (신규): `build_profile_workbook
+  (researcher_ids)`가 openpyxl로 xlsx 바이트를 만든다. 양식은 바탕체 11pt,
+  전체 셀 검정 테두리, 헤더 행만 볼드, 여러 줄 값은 자동 줄바꿈. 컬럼은 사번/
+  Knox ID/성명(성별·나이)/부서(비공식소속명)/입사일(근속연수)/학력(박→석→학
+  순, "코드)학교 전공" 줄바꿈 나열)/평가('24~'26 등급 슬래시)/직급·연차
+  (승격기준일로부터 다음 3/1까지 연차, 소수 첫째자리 버림)/과제수행이력·
+  양성이력·핵심이력(전부 다중 이력을 줄바꿈으로 나열, 값 없으면 "-"). 값이
+  없는 원천 컬럼(예: 이 저장소 개발 샘플 데이터엔 없는 `knox_id`/`hire_date`/
+  `promotion_date` — 운영 환경에선 `pipeline/process_researchers.py`가
+  채운다)은 전부 "-"로 안전하게 처리.
+- **`pages/researcher_similarity_map.py`**: `_nl_query_bar()`에 "엑셀
+  다운로드" 버튼(`nl-query-excel-btn`) + `dcc.Download`. 다운로드 파일명은
+  `연구원_프로필_YYYYMMDDHHMM.xlsx`(분 단위까지).
+  ⚠️ **UI는 이후 "자연어 질문 결과 표 통합 개편"(위 12번 항목)에서 다시
+  바뀌었다** — 처음엔 대상 선택 모달(`nl-query-excel-modal`) 방식이었지만,
+  지금은 모달 없이 결과 표에 체크박스를 바로 두는 방식으로 교체됐다.
+  아래 두 문단은 그 이전 버전(모달) 설명이니 최신 구현은 위 12번 섹션을
+  참고할 것 — 남겨두는 이유는 "컴포넌트 고정 + 속성만 갱신"이라는 팬텀
+  트리거 대응 패턴이 처음 등장한 사례라 히스토리로서 가치가 있어서다.
+
+## 완료: 개방형 질의(open_data_query) 확장
+
+8번 항목(폐쇄형 3-intent 라우터)을 유지한 채, 그 밖의 질문("물리학 전공한 사람
+찾아줘", "양자컴 과제 수행 중인 연구원 보여줘")을 `data/processed`의 원천 CSV +
+LLM 파생 JSON 전체를 대상으로 사내 LLM이 즉석 SQL을 생성해 답하는 4번째 intent로
+구현 완료. 설계 확정 과정(사용자 인터뷰, `text2sql.py` 선행 조사, 대안 검토)은
+아래 "설계 결정 기록"에 남겨둠 — 실제 구현은 다음 파일:
+
+- **`services/open_data_query.py`** (신규): `answer(question)` 진입점.
+  `data/processed/*.csv`를 매 질의 시점에 동적 스캔(`_discover_csv_tables()`,
+  `services.data_store.read_processed()` 재사용 — DB 생기면 자동으로 DB로 전환)
+  + LLM 파생 JSON 3종(`expertise_profiles`/`project_fit_by_project`/
+  `project_fit_by_researcher`, `_discover_json_tables()`)을 flat DataFrame으로
+  등록. DuckDB(`:memory:`, `requirements.txt`에 `duckdb>=0.10.0` 추가)에
+  `con.register()`로 붙여 SQL 실행. SQL 생성은 `pipeline/llm_client.call_llm(
+  ..., max_wait=...)` 경유(동시성 보호 적용 — `text2sql.py`엔 없던 보호를
+  여기선 적용). `services/text2sql.py`의 `sanitize_sql()`을 그대로 재사용해
+  쓰기/DDL 차단 + LIMIT 자동 부착. 결과는 Python 레이어에서 항상 상위 50건
+  (`DISPLAY_LIMIT`)으로 자름. SQL 1차 실행이 0건이면 LLM이 함께 준
+  `fallback_table`/`fallback_column`/`fallback_term`으로 BGE-M3 코사인 유사도
+  폴백(`_semantic_fallback()`, threshold 0.75, `nl_query.expand_term()`과 동일
+  철학).
+- **`services/nl_query.py`**: `_KNOWN_INTENTS`/`QUERY_SYSTEM_PROMPT`에
+  `open_data_query` 5번째(unsupported 포함) 추가, `execute_query()`가
+  `open_data_query.answer(parsed['question'])`로 위임.
+- **`pages/researcher_similarity_map.py`**: 결과 저장용 `dcc.Store`
+  (`nl-query-full-result`) + 펼침 상태 `dcc.Store`(`nl-query-expanded`) 2개와
+  콜백 3개(`_run_nl_query`/`_render_nl_query_store`/`_toggle_nl_query_expand`)로
+  "기본 10건 표시 + 전체 N건 보기(최대 50)" UI 구현. LLM 재호출 없이 이미 받아온
+  최대 50건 중 몇 건을 보여줄지만 토글.
+
+**⚠️ 구현 중 발견한 Dash 함정 (재발 방지용 기록)**: "전체 보기" 버튼을
+`_render_open_data_query_result()` 안에서 매번 새로 `dbc.Button(id='nl-query-toggle-btn', ...)`
+으로 만들어 반환했더니, 클릭이 서버 로그상 200으로 정상 처리되는데도 화면이
+안 바뀌는 버그가 있었다. 원인: Dash는 `prevent_initial_call=True`여도, 콜백의
+Input으로 걸린 컴포넌트가 **레이아웃에 처음 나타나는 시점**(동적으로 삽입될 때
+포함)에 한 번 "유령 실행"을 시킨다 — 즉 버튼이 렌더링되자마자 클릭 없이
+`_toggle_nl_query_expand`가 한 번 실행돼 상태를 뒤집어 버리고, 그 직후 실제
+클릭이 다시 뒤집어서 순 효과가 0이 되어 "아무 반응 없음"처럼 보였다(Playwright로
+네트워크 요청/응답 바디를 직접 캡처해 `nl-query-expanded.data`가 클릭 전에
+이미 한 번 바뀌어 있는 것을 확인해 특정). **해결**: 버튼을 매 렌더링마다
+새로 만들지 않고 레이아웃에 상시 존재하는 고정 컴포넌트로 두고(`_nl_query_bar()`
+에서 `style={'display': 'none'}`로 최초 삽입), 렌더 콜백이 버튼의 `children`
+(라벨)/`style`(표시 여부)만 별도 Output으로 갱신하도록 변경(`_toggle_button_props()`).
+→ **다음에 "결과에 따라 동적으로 나타나는 버튼/인풋에 콜백을 건다"류 UI를
+추가할 때는 이 패턴(컴포넌트는 고정, 속성만 콜백으로 갱신)을 기본으로 쓸 것.**
+
+### 설계 결정 기록 (구현 전 인터뷰 내용)
+
+**배경**: 기존(8번 항목)은 이미 계산된 전문성 분석 결과 안에서만 답하는 **폐쇄형
+3-intent 라우터**. "물리학 전공한 사람", "양자컴 과제 수행 중인 연구원"처럼
+`data/processed`의 원천 정제 테이블 전체를 대상으로 사내 LLM이 즉석에서 원하는
+데이터를 뽑아내는 **개방형 질의**로 확장하기로 함.
+
+**중요 사전 조사**: 이 저장소에는 이미 유사 기능(`services/text2sql.py`)이 있음 —
+"연구원 목록" 탭 "AI 검색"이 자연어 → PostgreSQL SELECT 생성 → `sanitize_sql()`
+안전 검증(쓰기/DDL 차단, LIMIT 자동 부착, read-only 트랜잭션, 10초 timeout) →
+실행까지 구현/문서화(`docs/text2sql.md`)돼 있음. 단 PostgreSQL 필수(CSV 폴백 없음)
+이고 동시성 제한이 없어(아래 결정에 따라) 그대로 재사용은 어려움 — `sanitize_sql`
+등 안전 검증 로직 자체는 DB 비의존적이라 재사용 가능.
+
+**사용자 인터뷰 결과 (확정)**:
+1. **재사용 방향** → `nl_query.py`의 구조화 우선 라우터는 유지하고, 기존 3개
+   intent 밖 질문에 대해서만 새 개방형 폴백 경로를 추가(완전 재설계 아님).
+2. **민감정보 범위** → 전체 테이블 허용(전문성 테이블로 제한하지 않음). ⚠️ 이
+   앱에는 로그인/역할 기반 접근 제어가 없으므로, 이 결정은 "보유 전문성" 탭에
+   접근 가능한 사람이면 누구나 평가등급/리더십진단/승계후보 등 인사 민감정보도
+   조회 가능해짐을 의미 — 실제 배포 전 접근 제어 도입 여부를 별도로 재확인할 것.
+3. **DB vs CSV** → 운영 환경에 PostgreSQL 없음, CSV만 사용. 즉 `text2sql.py`를
+   그대로 못 쓰고, `data/processed/*.csv`(pandas DataFrame)를 대상으로 하는
+   새 질의 엔진이 필요 — DuckDB(SQL-over-DataFrame, 서버 불필요, `requirements.txt`
+   에 아직 없음)를 실행 계층 후보로 검토 중.
+4. **매칭 방식** → 키워드/컬럼 매칭에서 끝나지 않고 의미 기반(임베딩) 매칭까지
+   지원. 1차 SQL/키워드 매칭이 0건이거나 애매하면 BGE-M3 임베딩 유사도로 2차
+   매칭(`nl_query.py`의 `expand_term()`이 이미 쓰는 패턴과 동일한 폴백 철학).
+
+**구체 설계안 확정** (구현 직전 단계):
+
+- **아키텍처**: `nl_query.py`에 4번째 intent `open_data_query` 추가. 라우팅
+  프롬프트(1단계, 가벼움)는 그대로 두고, `open_data_query`로 분류된 질문만
+  스키마 전체를 실은 2단계 프롬프트로 SQL 생성(`text2sql.py`의 `generate_sql()`
+  패턴 재사용, DuckDB 방언).
+- **스키마 소스**: 수동 테이블 목록 대신 `data/processed/*.csv`를 매 질의 시점에
+  동적 스캔(`services.data_store.read_processed()`로 로드 — DB 생기면 자동으로
+  DB를 씀) + LLM 파생 JSON(연구원 보유 전문성 분석/project_fit_by_*)도 flat
+  DataFrame으로 변환해 함께 등록. 한글 파일명은 영문 별칭으로 등록(예:
+  `연구원 보유 전문성 분석.json` → `expertise_profiles`) — 별칭 네이밍은 구현
+  시 자유롭게 정하기로 함.
+- **실행 계층**: DuckDB(신규 의존성, `requirements.txt`에 추가 예정) — pandas
+  DataFrame을 그대로 SQL로 조회, 별도 서버 불필요.
+- **안전장치**: `text2sql.sanitize_sql()` 그대로 재사용(DB 비의존적 순수 문자열
+  검증). SQL 생성 호출은 `services.llm.chat()`이 아니라 `pipeline/llm_client.call_llm(
+  ..., max_wait=...)`로 라우팅해 기존 동시성 보호(세마포어 공유 + 타임아웃)를
+  적용(`text2sql.py`엔 없던 보호를 여기선 적용).
+- **의미 기반 폴백**: SQL 1차 실행이 0건이면, LLM이 SQL과 함께 준
+  `fallback_table`/`fallback_column`/`fallback_term`을 `nl_query.expand_term()`과
+  동일한 패턴(BGE-M3 코사인 유사도, threshold 0.75)으로 재매칭 — 재-SQL 생성
+  없이 끝남.
+- **결과 개수/정렬** (사용자 확정):
+  - SQL 자체 실행 결과는 Python 레이어에서 **항상 상위 50건으로 자름**(SQL의
+    LIMIT 절과 무관하게 사후 slice — `sanitize_sql`이 붙이는 LIMIT은 쿼리
+    자체의 안전장치일 뿐, 응답에 실제로 담기는 건 최대 50건).
+  - **정렬**: 의미 기반 폴백 결과는 코사인 유사도 내림차순(자연스러운 "유사도
+    순"). 일반 SQL 조회 결과는 "유사도"라는 개념이 없으므로, 질문이 순위를
+    암시하면(예: "논문이 가장 많은") LLM이 SQL에 `ORDER BY`를 포함하도록
+    프롬프트에 지시하고, 그 외에는 SQL이 반환한 순서 그대로 — 이 한계를
+    화면에 별도 경고하진 않지만 알아둘 것.
+  - **표시**: 기본 10건만 렌더링하고, 50건까지 받아온 전체 결과는
+    `dcc.Store`에 담아 둔 채 "전체 N건 보기" 버튼으로 펼치는 방식(Dash
+    callback으로 구현 가능, 재질의/재호출 없음 — 이미 받아온 데이터를
+    보여주기만 전환).
+  - **SQL 노출**: "연구원 목록" 탭의 기존 AI 검색과 동일하게, 실행된 SQL을
+    접이식으로 화면에 표시(기존 기능과 UX 통일).
+
+위 설계대로 구현 완료 — 실제 파일 경로/함수명 및 구현 중 발견한 이슈는 위
+"완료: 개방형 질의(open_data_query) 확장" 섹션 참고.
+
+## 완료: AI 검색 전역화 + 조직별 비교 표시 안 되던 문제 수정
+
+사용자 요청 3건: (1) "연구원 목록" 탭 전용 AI 검색(text2sql 기반, DB
+전용) 삭제, (2) "보유 전문성" 탭에 있던 자연어 질문 바를 전 탭 공용으로
+이동, (3) "조직별 비교" 탭 내용이 안 보이는 원인 확인.
+
+- **`components/nl_query_bar.py`**(신규): `pages/researcher_similarity_map.py`
+  안에 있던 자연어 질문 바 UI+콜백 11개를 그대로 옮겨 온 모듈. 페이지가
+  아니라 `app.py`가 `Dash()` 인스턴스 생성 직후 한 번 import해서
+  module-level `@callback`을 등록하고, `render()`를 `app.layout`에서
+  `dash.page_container` 위(네비게이션 바로 아래)에 직접 삽입 — 탭을
+  이동해도 다시 생성되지 않고 항상 같은 자리에 유지된다. 기존 "연구원
+  목록"의 페이지 전용 AI 검색(`services/text2sql.py`, PostgreSQL 전용,
+  DB 없으면 동작 안 함)은 완전히 삭제하고 이 전역 바 하나로 통합.
+- **`pages/researcher_list.py`** / **`pages/researcher_similarity_map.py`**:
+  각각 구 AI 검색 카드/콜백, 이동된 nl-query 바 블록 제거. 남은 미사용
+  import(`db_enabled`, `text2sql`, `json`, `ALL`, `nl_query`,
+  `researcher_profile_export`) 정리.
+- **조직별 비교 표시 안 되던 원인**: `_dept_section()`이 succession
+  데이터의 `rank_type`을 `'Ready Now'`/`'Ready Later'` 문자열과
+  **완전 일치**로만 매칭했다. 원본(raw) 데이터에 대소문자/공백이 조금만
+  달라도(엑셀 수기 입력 특성상 흔함) 4개 슬롯이 전부 매칭 실패 →
+  해당 부서 카드가 0개 → `_dept_section`이 `None`을 반환해 그 부서
+  섹션 자체가 화면에서 조용히 사라짐(에러 없이 헤더+인쇄버튼만 남는
+  빈 화면). 샘플 데이터 생성기는 문자열을 정확히 하드코딩해서 만들기
+  때문에 개발 샌드박스에서는 재현되지 않았다.
+  - **수정**: `rank_type` 매칭을 `strip()` + 소문자 비교로 완화해
+    표기 차이에 영향받지 않도록 함.
+  - **추가 안전장치**: 그래도 카드가 0개인 부서는 조용히 사라지는 대신,
+    "rank_type 값이 일치하지 않습니다(원본 값: …)" 또는 "researcher_id가
+    researchers 데이터에 없습니다(…)" 같은 구체적 사유를 담은
+    `dbc.Alert`를 해당 부서 자리에 표시(`pages/org_comparison.py`
+    `_dept_section()`) — 향후 같은 유형의 원천 데이터 표기 문제가
+    생겨도 화면에서 바로 원인이 보이도록 함.
+
+## 완료: AI 검색에 5번째 intent `find_similar_researchers` 추가
+
+사용자가 "홍길동 연구원의 전문성과 유사한 전문성을 가진 연구원 찾아줘"라고
+질문하면 "홍길동"을 `find_researchers_by_expertise`의 전문성 키워드로
+잘못 분류해(사람 이름을 강점 태그로 오인) `expand_term()`이 매칭 실패하고
+"해당하는 표기를 찾지 못했습니다"만 반환하던 문제. 실제로 이 질문이
+가리키는 기능은 이미 배치로 계산돼 있는 "연구원↔연구원 유사도"
+(`pipeline/process_researcher_similarity.py` → `researcher_similarity.json`,
+LLM 근거 판정까지 끝난 값, `data_store.read_similar_researchers()`로 이미
+읽고 있었음 — 보유 전문성 탭의 "연구원 ↔ 연구원" 서브탭에서 씀)인데,
+자연어 질문 라우터에는 이 intent가 아예 없었다.
+
+- **`services/nl_query.py`**: `QUERY_SYSTEM_PROMPT`에 5번째 intent
+  `find_similar_researchers` 추가(researcher_query에 이름/사번, 기존
+  `find_projects_for_researcher`와 같은 필드 재사용) — "전문성 키워드로
+  찾기"가 아니라 "특정 사람과 비슷한 사람 찾기"임을 예시와 함께 명시해
+  `find_researchers_by_expertise`와 혼동하지 않도록 라우팅 규칙을
+  분리했다. `find_similar_researchers()` 함수 신규 — `_resolve_researcher()`
+  로 이름→사번 해석(동명이인 처리 동일 패턴) 후
+  `data_store.read_similar_researchers()`의 배치 결과를 그대로 표로
+  변환(researcher_id/name/department/level/score/evidence, 새로 계산하지
+  않음). `execute_query()`에 라우팅 분기 추가.
+- **`services/data_labels.py`**: `level`(유사도 등급)/`evidence`(유사
+  근거) 라벨 추가. `score`는 기존에 이미 '유사도점수'로 매핑돼 있던 것을
+  그대로 재사용(다만 이 매핑이 `evaluations.csv`의 일반 `score`(점수)
+  라벨을 덮어쓰고 있는 기존 dict 중복 키 이슈를 발견 — 이번 작업 범위
+  밖이라 손대지 않았고, 자연어 질문 화면에는 영향 없음).
+- **한계**: 이 sandbox에는 `llm_config.py`(LLM 자격증명)가 없어 실제
+  질문→intent 분류가 되는지는 라이브로 확인하지 못했다. 대신 (1)
+  `find_similar_researchers()`를 모의 `researcher_similarity.json`으로
+  직접 호출, (2) `execute_query()`에 라우터가 반환할 법한 parsed dict를
+  직접 넣어 호출 — 두 경로 모두 정상 동작 확인(7개 기본 컬럼 + level/
+  score/evidence 정상 조립). 실제 사용자 환경에서 질문 분류 자체가
+  잘 되는지는 배포 후 확인 필요.
+
+## 완료: 개방형 질의(open_data_query) 커버리지 확장 — "가능한 모든 질문에 답"
+
+사용자 요청: 자연어 질문이 LLM/임베딩 파생 산출물이든 원천 CSV든 가리지
+않고 최대한 많은 질문에 답할 수 있게 해달라는 것. 점검해 보니 구멍 2개.
+
+- **`services/open_data_query.py`**: `_discover_json_tables()`에
+  `researcher_similarity` 테이블 추가(`_researcher_similarity_table()`,
+  `researcher_similarity.json`을 researcher_id/similar_researcher_id/
+  score/level/evidence 행으로 평탄화) — 방금 추가한
+  `find_similar_researchers` intent가 못 잡아내는 변형 질문(예: "유사도
+  0.8 이상인 연구원 쌍이 몇 개야?" 같은 집계성 질문)도 개방형 SQL
+  경로로는 답할 수 있게 됨.
+- **`services/nl_query.py`**: 라우터가 6개 intent 어디에도 못 넣고
+  `unsupported`로 분류하면, 예전에는 그 즉시 안내 문구만 반환하고
+  끝냈다. 이제는 포기하기 전에 `open_data_query.answer()`를 한 번 더
+  시도(마지막 수단 폴백) — 결과가 있으면 그걸 보여주고, 그래도 없으면
+  기존 안내 문구로 폴백. `parse_question()`의 `unsupported` 조기 반환에
+  `question` 필드를 추가로 실어 보내야 이 폴백 호출이 가능해서 함께
+  수정.
+- **의도적으로 안 한 것**: 4개 구조화 intent(전문성/과제매칭/유사도)가
+  매칭은 됐지만 결과가 0건인 경우까지 개방형 SQL로 재시도하지는 않음
+  — 그 경우는 이미 구체적인 사유("~데이터가 없습니다" 등)를 보여주고
+  있어, 이걸 다른 답으로 덮어쓰면 오히려 혼란을 줄 수 있다고 판단.
+  폴백은 순수 "unsupported"(질문 자체를 못 알아들은 경우)에만 적용.
+
+## 완료: 화면에서 편집 가능한 AI 검색 커스텀 규칙
+
+사용자 요청: "상위평가=가/나 등급" 같은 용어 정의나 "답변에 근거를 더
+자세히 포함해줘" 같은 출력 형식 지시를, 코드 배포 없이 화면에서 직접
+추가/수정하고 싶다. 확인 결과 사용자가 선택한 설계: (1) 용어 정의와
+출력 형식 지시를 굳이 나누지 않고 규칙 텍스트 하나로 통합, (2) 편집
+패널은 별도 관리자 페이지가 아니라 AI 검색 바 바로 옆에 토글로 열리는
+작은 패널.
+
+- **`services/query_settings.py`**(신규): 규칙 텍스트를
+  `data/processed/nl_query_custom_rules.txt`에 저장/조회
+  (`read_rules()`/`write_rules()`, 최대 4000자). `apply(system_prompt)`가
+  기존 시스템 프롬프트 뒤에 "# 사용자 정의 추가 규칙" 섹션으로 그대로
+  덧붙여 반환 — 코드에 있는 원본 프롬프트 상수(`nl_query.QUERY_SYSTEM_PROMPT`,
+  `open_data_query._SQL_GEN_SYSTEM_TEMPLATE`)는 건드리지 않는다. 저장
+  파일은 `data/processed/*`라 다른 CSV/JSON 산출물과 마찬가지로
+  형상관리 대상이 아니다(파이프라인 산출물은 아니지만, 배포 환경마다
+  다른 사용자 입력이라는 점에서 성격이 같음).
+- **`services/nl_query.py`** / **`services/open_data_query.py`**: 각각
+  LLM 호출 직전에 `query_settings.apply()`를 거치도록 한 줄씩 수정
+  (라우팅 프롬프트, SQL 생성 프롬프트 양쪽 다 적용).
+- **`components/nl_query_bar.py`**: AI 검색 제목 오른쪽에 "규칙 설정"
+  버튼(`nl-query-rules-toggle-btn`) 추가, 클릭 시 `dbc.Collapse` 패널이
+  열리며 `dcc.Textarea` + 저장 버튼 노출. 패널을 열 때마다(저장 후
+  재오픈 포함) `query_settings.read_rules()`로 디스크에서 다시
+  읽어와 텍스트영역에 채운다 — `render()`가 앱 시작 시 딱 한 번만
+  호출되므로, 초기 레이아웃에 값을 미리 심어두면 다른 세션이 그 사이
+  저장한 최신 내용을 못 보는 문제가 생겨 매번 재조회하는 방식으로 짬.
+  저장 버튼은 이 세션 전용 콜백 규약(`if not n_clicks: return
+  dash.no_update`)을 그대로 따름.
+- Playwright로 패널 열기→입력→저장→닫기→재열기까지 end-to-end 확인,
+  저장된 텍스트가 `query_settings.apply()`를 통해 프롬프트 끝에 정상
+  결합되는 것도 별도 확인.
+
+## 완료: "과제 직무/대상자 검증" 탭 신설 — 직무기술서 ↔ 인사데이터 대조
+
+사용자 요청: 특정 과제의 채용 근거 문서(.docx, 직무기술서 형태 — 예:
+"AI 과제는 Knowledge/Validation/Reasoning/공통 4개 직무, 각 5/3/2/1명")를
+업로드하면, 그 과제에 실제 배정된 인사데이터 인원 중 각 직무에 전문성이
+있다고 판단되는 사람을 근거와 함께 매핑해 문서 수치와 데이터 기반 판정을
+대조해 달라는 것. 사용자(HR 담당자, 직무 비전문가)가 이해할 수 있도록
+근거는 쉬운 말로. 여러 라운드에 걸쳐 설계를 확정한 뒤 구현:
+- 과제는 화면 드롭다운에서 직접 선택(문서에서 자동 추출한 이름을
+  신뢰하지 않음).
+- 검증 실행마다 결과를 이력으로 저장, 화면에서 다시 조회 가능.
+- 새 탭 "과제 직무/대상자 검증"(경로 `/jd-reconciliation`).
+- 문서에 표와 서술형이 둘 다 있을 수 있어 각각 추출하고, 표의 "현인원"을
+  authoritative로 삼되 서술형과 다르면 "문서 내부 불일치"로 노출.
+- 사람별로 "가장 가까운 직무 1개"만 매핑(다중 매핑 안 함).
+
+- **`services/jd_reconciliation.py`**(신규, 모듈 docstring에 전체 흐름
+  정리): 
+  - `list_project_names()`/`get_project_members()` — `tasks.csv` 기준
+    과제 목록/현재 배정 인원 조회(결정적, LLM 미사용). `tasks.csv`는
+    `pipeline/process_tasks.py` 산출물이며 이 개발 sandbox에는 현재
+    파일이 없어(원천 데이터 미제공) 목록이 비어 있을 수 있음 — 정상
+    동작이며, 화면은 빈 목록을 그대로 보여준다(별도 에러 처리 불필요한
+    수준의 정상 상태로 취급).
+  - `extract_docx()` — `python-docx`로 표/서술형을 분리해서 텍스트로
+    추출(표는 셀을 `' | '`로 이어 붙여 LLM이 열 구조를 스스로 해석하게
+    함 — 문서마다 헤더/열 순서가 달라 고정 파싱은 깨지기 쉬움).
+  - `_extract_roles()` — 표/서술형 각각을 LLM으로 구조화 추출(판단 없이
+    추출만, 이 프로젝트의 "구조화 출력 강제" 원칙 유지).
+  - `merge_roles()` — role_name 정규화 매칭으로 표/서술형을 병합, 표의
+    headcount를 최종 비교 기준으로 삼고 서술형과 다르면
+    `consistency_notes`에 기록.
+  - `match_members_to_roles()` — 실제 배정자 각각에 대해 LLM 1회 호출로
+    "가장 가까운 직무 1개"만 판정(`_MATCH_SYSTEM_PROMPT`가 "HR 담당자가
+    이해할 수 있는 쉬운 말로 설명"을 명시적으로 지시 — 전문 용어 금지).
+    전문성 분석 데이터가 없는 사람은 LLM 호출 없이 바로 "미분류" 처리.
+  - `build_report()` — 직무별 문서 인원 vs 실제 매칭 인원 대조표,
+    미분류 인원, 총원 비교, 쉬운 말 요약 문장 조립.
+  - `save_history()`/`list_history()`/`load_history()` —
+    `data/processed/jd_reconciliation/{과제명}_{실행시각}.json`에 실행마다
+    저장. `load_history()`는 `os.path.basename()`으로 경로 조작을 막음.
+- **`pages/jd_reconciliation.py`**(신규): 과제 드롭다운 + `dcc.Upload`
+  (.docx) + "검증 시작" 버튼 → 결과 카드(직무별 대조, 미분류, 불일치
+  경고) + 이력 테이블(행마다 "보기" 버튼으로 재조회,
+  `{'type':'jd-history-view','file':...}` 패턴매칭 id 사용, 이 세션의
+  팬텀 트리거 방지 규약대로 `n_clicks` 가드 적용).
+- **`app.py`**: 네비게이션에 "과제 직무/대상자 검증" 링크 추가.
+- **`requirements.txt`**: `python-docx` 추가.
+- **테스트**: 실제 LLM 없이(이 sandbox에 `llm_config.py` 없음)
+  `services/jd_reconciliation.py`의 결정적 로직(`extract_docx`,
+  `merge_roles`의 불일치 감지, `get_project_members`의 종료 배정 제외,
+  `build_report`, 이력 저장/재조회)은 모의 데이터로 직접 검증했고,
+  `match_members_to_roles`는 `llm_client.call_llm`을 모킹해 라벨→직무명
+  역매핑까지 검증. 페이지 자체는 Playwright로 과제 선택 → .docx 업로드 →
+  검증 시작 → 결과 렌더링 → 이력 재조회까지 end-to-end 확인(LLM 미설정
+  환경이라 역할 추출 자체는 빈 값으로 나왔지만, 그 상태에서도 화면이
+  깨지지 않고 "미분류"로 안전하게 처리되는 것까지 확인). 실제 LLM
+  연결 환경에서 추출 정확도(특히 표/서술형 구분 인식)는 배포 후 확인
+  필요.
+
+## 완료: process_project_expertise.py 목적 변경 — 직무 딥다이브 매핑 제거,
+## 문서 상세 분석 + 인력 매칭으로 전환 (+ 과제↔연구원 매칭 기능 전체 삭제)
+
+사용자 요청: `process_project_expertise.py`에서 "R&D Project Specialist
+Agent"(직무 딥다이브 매핑) 기능을 빼고, 대신 "R&D 과제 문서 분석
+전문가"(핵심기술/산출물/난제/키워드 추출) 기능을 심화하고, 문서에 언급된
+인력과 그 담당 업무를 함께 추출해 `process_researcher_expertise.py`의 새
+근거로 넣어 달라는 것. 조사 결과 "직무 딥다이브 매핑"은
+`process_project_researcher_fit.py`(과제↔연구원 매칭)의 유일한 입력이라,
+사용자 확인 후 그 기능 전체를 함께 삭제했다.
+
+**사용자가 확정한 세부 결정**:
+1. 과제↔연구원 매칭 기능(스크립트/탭/AI 검색 intent 전부) 삭제.
+2. 인력 이름 매칭 실패 시 원문 이름만 남김(추측 배정 안 함).
+3. 이름 후보 좁히기는 `researchers.csv`의 `org_code == project_name` 기준.
+4. 기존 4개 항목은 더 길고 구체적으로, 문서 탐색 중 발견되는 새 하위
+   항목(연구 배경/추진 일정/기대효과)도 추가.
+5. 컨플루언스 검색으로 찾은 인력을 별도 CSV(`project_personnel.csv`)로
+   모아 `process_researcher_expertise.py`의 신규 근거로 추가.
+
+**동명이인 판별 규칙**(사용자 설명 그대로 구현): 문서에 "김재연(17)"처럼
+이름 옆 괄호 숫자가 있으면, 그 숫자와 후보 `researcher_id`의 앞 2자리를
+비교해 판별. 후보가 1명이면 그대로 매칭, 0명이거나 판별 불가(괄호 숫자
+없음/불일치)면 매칭하지 않고 원문 이름만 보존.
+
+### 새 목적 (`pipeline/process_project_expertise.py`)
+- `project_summary._SUMMARY_SYSTEM_PROMPT` 심화: 기존
+  `core_tech`/`deliverable`/`challenge`/`keywords_kr`/`keywords_en` 5개
+  항목을 "한두 문장 요약이 아니라 최대한 상세하게" 쓰도록 지시 강화, 신규
+  항목 `background`(연구 배경)/`milestones`(추진 일정, 리스트)/
+  `expected_impact`(기대효과) 추가. 새로 `personnel`(문서에 언급된 인력)
+  추출 지침도 추가 — `name`/`name_suffix`(괄호 숫자)/`role_description`
+  (구체적 담당 업무). `_summarize()` 호출의 `max_tokens`를 3000→6000으로
+  올림(심화 분석 + 인력 추출까지 한 번에 요구하므로).
+  `process_project_search.py`(유사 기업/학계 탐색)도 같은 캐시를
+  공유하지만 새 필드는 무시하고 기존 5개만 쓰므로 영향 없음.
+- `process_project_expertise.py`의 `process()`를 재작성: 예전엔 1단계
+  (문서 요약, 순차) → 2단계(딥다이브 분석, 동시 LLM 호출)였는데, 딥다이브
+  단계가 통째로 없어지고 실제 분석 자체가 이미 1단계(project_summary
+  호출) 안에서 끝나므로 2단계 개념이 사라짐. 대신 각 과제 처리 후
+  `_resolve_personnel()`로 인력 이름→researcher_id 매핑(위 규칙)을
+  수행하고, 매핑 결과를 `project_personnel.csv`로 저장(`_write_personnel_csv`,
+  `quoting=csv.QUOTE_NONNUMERIC`로 사번 텍스트 형식 보장 — 이 세션이
+  이전에 정한 CSV 저장 관례 그대로 따름).
+- `project_expertise_analysis.json`의 항목 구조가 바뀜: 예전엔
+  `expertise_analysis`(마크다운 원문) 필드 하나에 딥다이브 내용이 다
+  들어 있었는데, 이제는 `background`/`milestones`/`expected_impact`
+  + `personnel`(researcher_id 매핑 포함) 필드로 구조화됨.
+- **`pipeline/rd_specialist_markdown.py`**: "R&D Project Specialist
+  Agent" 페르소나 프롬프트(`RD_SPECIALIST_SYSTEM_PROMPT`)와 그 마크다운
+  파싱 헬퍼들(`analyze_expertise`/`split_top_sections`/`is_deepdive_section`/
+  `split_job_blocks`/`extract_difficulty`/`extract_job_title`/`job_body`/
+  `deepdive_jobs`/`parse_job_fields`/`job_card_html`) 전부 삭제.
+  `project_card_html()`을 새 스키마용으로 재작성 — 직무 카드 대신
+  핵심기술/산출물/난제/배경/기대효과 요약(`dl.kv`) + 추진 일정(불릿
+  목록) + 인력 목록(`.personnel-row`, researcher_id 매핑된 사람은
+  전문성 MAP 바로가기 링크가 붙는 배지, 미매칭이면 회색 "미매칭" 배지)을
+  렌더링. 이제 아무도 안 쓰는 CSS(`.job-*`, `details.more`, `.tabs`/
+  `.tab-bar`/CSS 전용 탭 :has() 동기화 규칙)도 함께 정리.
+- **`pipeline/process_researcher_expertise.py`**: 새 근거 섹션 `[과제 내
+  담당 업무]` 추가 — `_project_role_text()`가 `project_personnel.csv`에서
+  해당 researcher_id 행만 추려 텍스트로 구성, `_build_prompt()`에
+  `[과제 수행 이력]` 바로 다음 섹션으로 삽입. 시스템 프롬프트의
+  `key_responsibilities` 지침에 "과제 문서에 실제로 기록된 내용 — 있으면
+  가장 신뢰도 높은 근거로 우선 활용" 문구 추가. 이 CSV가 없거나 해당
+  연구원 행이 없어도(파이프라인 미실행/문서에 언급 안 됨) "(데이터
+  없음)"으로 정상 동작 — 필수 입력 아님.
+
+### 삭제한 것 (과제↔연구원 매칭 기능 전체)
+- `pipeline/process_project_researcher_fit.py` 파일 자체 삭제.
+- `pipeline/researcher_fit.py`: 매칭 전용 함수들(`SYSTEM_PROMPT_BY_TARGET`/
+  `SYSTEM_PROMPT_BY_RESEARCHER`/`run_matching_llm`/`_label_of`/
+  `match_by_target`/`match_by_researcher`/`job_text`/`FIT_VARIANT`/
+  `_fit_pill_html`/`build_fit_html`/`read_json`) 삭제, 공용 유틸
+  (`researcher_profile_text`/`cached_embed`/`cosine_sim_matrix`/
+  `top_k_idx`/`read_researchers`)만 남김 — `process_researcher_similarity.py`와
+  `services/jd_reconciliation.py`가 계속 이 나머지를 재사용.
+- **`services/data_store.py`**: `read_project_fit_by_project()`/
+  `read_project_fit_by_researcher()` 삭제.
+- **`services/open_data_query.py`**: `project_fit_by_project`/
+  `project_fit_by_researcher` 테이블 등록 삭제.
+- **`services/nl_query.py`**: `find_researchers_for_project`/
+  `find_projects_for_researcher` intent와 그 전용 함수
+  (`find_researchers_for_project`/`find_projects_for_researcher`/
+  `_fit_rank_key`/`_match_project_entries`/`_current_project_names`)
+  전부 삭제 — 라우터가 이제 4개 intent(전문성 태그/유사 연구원/개방형
+  질의/unsupported)만 분류. `_resolve_researcher()`는
+  `find_similar_researchers`와 공유라 유지.
+- **`pages/researcher_similarity_map.py`**: "연구원 ↔ 과제" 탭 삭제(4개
+  → 3개 탭: 연구원/연구원↔연구원/전문성 MAP). 예전엔 "과제 전문성"
+  리포트가 이 탭(`project_researcher_fit.html`) 안 3번째 서브탭으로
+  통합돼 있었는데, 그 통합도 함께 사라짐 — `project_expertise_analysis.html`은
+  다시 독립 정적 리포트로 돌아갔고(Dash 탭에는 연결 안 됨, 필요하면
+  파일을 직접 열어서 봄), 이 부분은 사용자가 별도로 요청하지 않아
+  Dash 탭으로 재연결하지 않았다.
+- **`pipeline/run_pipeline.py`/`run_expertise.py`/`run_analysis.py`**:
+  실행 순서 문서/print 안내에서 과제↔연구원 매칭 단계 제거, 단계
+  번호 재정렬. `run_analysis.py`는 실제로 `process_project_researcher_fit.process()`를
+  호출하던 3/4단계를 코드에서도 제거(3단계 체인으로 축소).
+  `run_expertise.py`의 BGE-M3 사전 기동 이유도
+  "process_project_researcher_fit.py 대비" → "process_researcher_similarity.py
+  대비"로 정정.
+- 그 외 `services/similarity_map.py`/`pipeline/result_archive.py`/
+  `pipeline/show_embedding.py`/`pipeline/embed_server.py`/
+  `services/bge_server.py`의 docstring에 남아 있던
+  `process_project_researcher_fit.py` 언급도 정리(기능 설명, 동작에는
+  영향 없음).
+
+### 검증
+LLM 없이(이 sandbox) `process_project_expertise.py`의 결정적 로직을
+모의 `project_summary.get_project_summary` 응답으로 직접 실행 검증 —
+동명이인 2명(표기 다른 접미사) + 단독 이름 1명 + 미등록 이름 1명을
+넣어 매칭 규칙(정확히 3명 매칭, 1명 미매칭)을 확인했고, 그 결과가
+`project_personnel.csv`/`project_expertise_analysis.json`/`.html`에
+올바르게 반영되는 것도 확인했다. `process_researcher_expertise.py`의
+`_project_role_text()`/`_build_prompt()`도 이 CSV를 직접 읽어 새 섹션이
+프롬프트에 올바르게 삽입되는 것을 확인. 전체 파이프라인(`generate_sample_data.py`로
+정상 규모 샘플 재생성 후 `process_researcher_expertise.py` 실행)과 Dash
+앱(보유 전문성 3탭 구조, 조직별 비교, 연구원 프로필, 과제 직무/대상자
+검증)을 Playwright로 재확인 — 전부 정상, 콘솔 에러 없음(연구원 프로필의
+`leadership_figure` `KeyError: 'evaluator_group'`는 이 세션 이전부터
+있던 무관한 기존 버그로 별도 확인됨).
+
+## 완료: "과제 직무/대상자 검증" — 과제명 기준을 project_confl_address.csv로
+## 통일 + 컨플루언스 요약 기반 쉬운 말 직무 설명 추가
+
+사용자 요청: 드롭다운/인원 조회 기준을 `tasks.csv`가 아니라
+`project_confl_address.csv`(컨플루언스 과제명 체계, `process_project_expertise.py`가
+분석하는 것과 동일)로 바꾸고, 선택한 과제의 컨플루언스 과제 요약 +
+업로드한 직무기술서 내용을 함께 활용해 직무 설명을 기술 비전문가인
+인사담당자도 이해하기 쉬운 말로 풀어 달라는 것. 현재 인원수 파악(서술형+표
+검증)과, 실 배정 인원 중 문서상 직무에 해당하는 사람을 LLM 전문성 분석
+기반으로 매핑해 문서 수치와 대조하는 기능(매칭 인원수는 문서 인원수와
+독립적으로 나올 수 있음)은 이미 기존 구현이 요구사항을 충족하는 것으로
+확인해 별도 코드 변경 없이 유지했다.
+
+**`services/jd_reconciliation.py` 변경**:
+- `list_project_names()`: `tasks.csv`(HR 개인별과제투입기간데이터 기반) 대신
+  `project_confl_address.csv`의 `project_name`을 드롭다운 목록으로 사용.
+- `get_project_members()`: 예전엔 `tasks.csv`를 `pd.Timestamp.now()` 기준
+  시작/종료일로 필터링해 "현재 이 과제에 투입 중인 사람"을 골랐는데,
+  `researchers.csv`의 `org_code == project_name`(현재 소속 과제) 기준으로
+  단순화 — `process_project_expertise.py`의 `_resolve_personnel()`이 문서 내
+  인력 이름을 researcher_id로 매핑할 때 쓰는 것과 동일한 기준이라 두
+  기능의 "이 과제 사람" 정의가 일관됨. 이제 `pandas`를 직접 쓰지 않아
+  `import pandas as pd` 제거.
+- 신규 `_read_confluence_summary(project_name)`: `process_project_expertise.py`가
+  만든 `project_expertise_analysis.json`에서 이 과제명과 일치하는 항목을
+  찾는다(파일 없음/미일치면 `None` — 컨플루언스 분석 없이도 직무기술서만으로
+  동작).
+- 신규 `_confluence_context_text(entry)`: 핵심기술/배경/최종산출물/기술적
+  난제/기대효과/마일스톤을 텍스트로 정리(값이 "확인 불가"거나 빈 경우
+  제외).
+- 신규 `_PLAIN_EXPLAIN_SYSTEM_PROMPT` + `_plain_explain_roles(roles,
+  confluence_context)`: `merge_roles()`가 만든 직무별 설명(기술 용어 포함
+  가능)을, 컨플루언스 맥락을 참고 정보로 삼아 쉬운 말로 다시 쓰는 LLM
+  호출 1회(직무 전체를 한 번에 처리). 원문은 `raw_description`으로 보존해
+  화면에서 대조 가능하게 하고, LLM 실패/응답에 없는 직무는 원문 그대로
+  폴백.
+- `build_report()`: `confluence_entry` 파라미터 추가, 반환 dict에
+  `confluence_available`/`project_overview` 필드 추가, 각 `role_rows` 항목에
+  `description`(쉬운 말)/`raw_description`(원문) 추가. 컨플루언스 분석이
+  없는 과제는 `summary_text`에 안내 문구를 덧붙임.
+- `run_reconciliation()`: `merge_roles()` 이후 `_read_confluence_summary()` →
+  `_plain_explain_roles()`를 거쳐 쉬운 말로 바뀐 `roles`를
+  `match_members_to_roles()`/`build_report()`에 전달하도록 흐름 변경.
+
+**`pages/jd_reconciliation.py` 변경**:
+- `_role_card()`: 쉬운 말 `description`을 본문에 표시하고, 원문과 다르면
+  `raw_description`을 작은 회색 글씨로 "원문: ..."로 함께 노출(검증용).
+- `_render_report()`: `confluence_available`이면 요약 알럿 아래에 "과제
+  개요(컨플루언스 분석 기반)" 카드를 추가로 표시.
+- 상단 안내 문구를 새 흐름(컨플루언스 요약 + 쉬운 말 설명)을 반영해 수정.
+
+**검증**: `project_confl_address.csv`/`project_expertise_analysis.json`
+픽스처(기존 `researchers.csv`의 `org_code=ORG01`, 10명)로
+`list_project_names`/`get_project_members`/`_read_confluence_summary`/
+`_confluence_context_text` 확인. `_plain_explain_roles`는 LLM 응답을
+모킹해 정상 매핑과, LLM 실패 시 원문 폴백(둘 다 정상) 확인.
+`match_members_to_roles`/`build_report`도 모킹으로 전체 흐름 확인 —
+`confluence_available=True`, `project_overview` 채워짐, `role_rows`에
+`description`/`raw_description` 정상 반영. `pages/jd_reconciliation.py`의
+`_render_report()`/`layout()`도 더미 리포트로 렌더 확인. 테스트 중 만든
+픽스처 파일은 스크립트 종료 시 자동 삭제(원래 없던 파일만 정리).
+
+## 완료: process_project_expertise.py에 `--refresh` 캐시 무효화 플래그 추가
+
+배경: `process_project_expertise.py`의 목적을 바꾸며 `project_summary.py`의
+`_SUMMARY_SYSTEM_PROMPT`에 `personnel`/`background`/`milestones`/
+`expected_impact` 항목을 추가했는데, 프롬프트가 바뀌기 전에 이미 쌓여 있던
+`project_summary_cache.json`은 예전 프롬프트 결과 그대로라 이 새 항목들이
+비어 있다. `get_project_summary()`는 캐시 키가 있으면 LLM을 다시 부르지
+않고 캐시값을 그대로 반환하므로, 이 상태에서 `process_project_expertise.py`를
+재실행해도 인력(personnel) 등 새 항목이 계속 빈 값으로 나온다 — 코드
+버그가 아니라 캐시 무효화 수단이 없어서 생기는 문제였다.
+
+`journal_authority.py`의 `--refresh-journals`와 동일한 패턴으로 해결:
+- `project_summary.get_project_summary()`에 `force: bool = False` 파라미터
+  추가 — `force=True`면 `summary_cache`에 값이 있어도 무시하고 다시
+  요약한다. 원문 캐시(`project_page_cache.json`)는 그대로 재사용한다
+  (Confluence/PDF 재조회는 불필요 — 문서 원문 자체는 안 바뀌었으므로).
+- `process_project_expertise.py`의 `process()`에 `force` 파라미터를 추가해
+  그대로 전달하고, `--refresh` CLI 인자로 노출(`process(force='--refresh' in sys.argv)`).
+- `process_project_search.py`도 같은 `get_project_summary()`를 호출하지만
+  `force` 파라미터를 안 넘기므로(기본값 False) 동작에 영향 없음.
+
+사용법: `python pipeline/process_project_expertise.py --refresh`
+
+검증: `get_project_summary()`를 직접 호출하는 단위 테스트로
+`force=False`일 때 캐시에 값이 있으면 LLM 호출 없이 캐시값 그대로 반환,
+`force=True`일 때는 캐시 무시하고 LLM을 호출해 새 값으로 캐시를 덮어쓰는
+것을 확인.
+
+## 완료: "과제 직무/대상자 검증" 업로드 — .pdf 지원 추가 + .docx 오류 메시지 개선
+
+배경: 직무기술서를 .docx로 업로드할 때 "오류가 발생했습니다"만 뜨고 원인을
+알기 어렵다는 문의. 원인은 대부분 확장자만 .docx로 바뀐 옛 .doc(바이너리)
+파일이거나 손상된 파일 — python-docx의 `Document()`는 이런 경우
+`zipfile.BadZipFile`(.docx는 내부적으로 zip/OOXML 포맷이라 zip으로도 못
+열림) 또는 `docx.opc.exceptions.PackageNotFoundError`(zip은 맞지만 OOXML
+필수 구성요소가 없음)를 던지는데, 예전엔 이걸 그대로 문자열화해 화면에
+노출해서 사용자가 원인을 알기 어려웠다. 겸사겸사 .docx 외에 .pdf 직무기술서도
+받을 수 있게 확장했다(이미 `pipeline/pdf_reader.py`가 pypdf로 PDF 텍스트를
+뽑는 로직을 갖고 있어 재사용 가능했음).
+
+**`pipeline/pdf_reader.py`**: 기존 `fetch_pdf_text(project_name)`(고정 경로
+`data/raw/conflue_MPR/{project_name}.pdf`에서 읽음)의 핵심 추출 로직을
+`extract_text_from_bytes(file_bytes, label='PDF')`로 분리 — 임의의 PDF
+바이트에서 텍스트를 뽑는 범용 함수. `fetch_pdf_text()`는 이제 파일을 읽어
+바이트로 넘기는 방식으로 이 함수를 호출(동작은 그대로, 코드만 재사용
+가능하게 분리).
+
+**`services/jd_reconciliation.py`**:
+- `extract_docx(file_bytes)` → `_extract_docx(file_bytes)`로 이름 변경(내부
+  함수화), `DocumentReadError` 신설(스택 트레이스 대신 화면에 그대로 보여줘도
+  되는 한국어 메시지를 담는 예외).
+  - `Document()` 호출을 `try/except (PackageNotFoundError, zipfile.BadZipFile)`로
+    감싸 "올바른 .docx 파일이 아닌 것 같습니다(예: 오래된 .doc 형식이거나
+    파일이 손상됨)... 다시 저장한 뒤 업로드해주세요" 메시지로 변환.
+  - 그 외 예상 못한 예외도 `except Exception`으로 잡아 최소한 원인 문자열은
+    보여주는 `DocumentReadError`로 감쌈(파일 파싱은 외부 입력 경계).
+- 신규 `_extract_pdf(file_bytes)`: `pdf_reader.extract_text_from_bytes()`로
+  텍스트를 뽑아 전부 `narrative_text`로 취급(`tables_text`는 빈 문자열 —
+  일반 PDF에는 docx 같은 구조화된 표 정보가 없음). 실패(암호화/스캔 이미지
+  PDF 등)는 `pdf_reader.PdfNotFoundError`를 `DocumentReadError`로 변환.
+- 신규 `extract_document(file_bytes, filename)`: 확장자(`.docx`/`.pdf`)로
+  분기 호출, 그 외 확장자는 `DocumentReadError`("지원하지 않는 파일
+  형식입니다..."). `run_reconciliation()`이 `extract_docx()` 대신 이 함수를
+  호출하도록 변경.
+
+**`pages/jd_reconciliation.py`**:
+- `dcc.Upload`의 `accept`를 `.docx` → `.docx,.pdf`로, 라벨/안내 문구도 두
+  형식을 함께 언급하도록 수정. 업로드된 파일명 표시 아이콘도 확장자에 따라
+  Word/PDF 아이콘으로 분기.
+- `_run()` 콜백에 `except jd.DocumentReadError` 분기를 추가해 그 메시지를
+  그대로(가공 없이) warning 색상 알럿으로 보여줌 — 기존 `except Exception`
+  (danger 색상, "검증 중 오류가 발생했습니다: ..." 접두문구)은 진짜 예기치
+  못한 오류만 잡도록 남겨둠.
+
+**검증**: 정상 .docx(표+서술형 둘 다 있는 문서), 손상된/가짜 .docx 바이트,
+zip이지만 OOXML이 아닌 바이트, 지원하지 않는 확장자(.hwp), 빈 페이지 PDF
+(텍스트 없음 경로) 각각에 대해 `extract_document()`를 직접 호출해 기대한
+결과/메시지가 나오는지 확인. `run_reconciliation()`을 통해서도
+`DocumentReadError`가 그대로 전파되는 것을 확인. `pages/jd_reconciliation.py`의
+`layout()` 렌더도 재확인.
+
+## 완료: org_code ↔ project_name 표기 형식 불일치 수정 (대괄호 태그/띄어쓰기)
+
+배경: `project_confl_address.csv`의 `project_name`은 `"[탐색] 가나다라마바사"`
+처럼 앞에 대괄호 분류 태그가 붙고 띄어쓰기 유무도 문서마다 다른 반면,
+`researchers.csv`의 `org_code`는 `"가나다라마바사"`처럼 태그도 공백도 없는
+형태다. `_resolve_personnel()`(`process_project_expertise.py`)과
+`get_project_members()`(`jd_reconciliation.py`)는 둘 다
+`org_code == project_name` 정확 일치로 비교하고 있어서, 이 형식 차이 때문에
+**항상 후보 0명**으로 나오고 있었다 — 인력 매칭도, 과제 직무/대상자 검증
+탭의 배정 인원 조회도 조용히 실패하는 상태였다(에러 없이 빈 결과만 나와
+알아채기 어려움).
+
+**해결**: `pipeline/researcher_fit.py`에 `normalize_org_code(text)` 공용
+함수 추가 — 앞쪽 대괄호 태그(`^\[[^\]]*\]\s*`, 있으면)를 떼고 모든 공백을
+제거한다. `org_code`/`project_name` 양쪽에 이 함수를 적용한 뒤 비교하도록
+`_resolve_personnel()`과 `get_project_members()`를 수정 — 두 함수가 항상
+같은 파일(`researcher_fit.py`)의 같은 정규화 기준을 공유해 드리프트가
+안 생기게 했다.
+
+검증: `normalize_org_code()`에 대괄호 태그+띄어쓰기 유무 여러 조합("[탐색]
+가나다라마바사", "[탐색 또는 연구] 가나 다라마바사", "[연구]가나다라마바사",
+공백 없는 원본 등)을 넣어 전부 "가나다라마바사"로 정규화되는지 확인.
+`get_project_members("[탐색] ORG01")`이 `org_code="ORG01"`인 연구원들을
+정상적으로 찾는 것, `_resolve_personnel("[탐색] ORG01", ...)`이 동명이인
+suffix 판별을 포함해 정상 매칭되는 것을 각각 fixture로 확인.
+
+## 완료: python-docx 미설치 시 ModuleNotFoundError가 그대로 노출되던 문제 수정
+
+배경: "과제 직무/대상자 검증"에서 과제 선택 후 .docx를 업로드하면
+"검증 중 오류가 발생했습니다: No module named 'docx'"가 나온다는 문의(PDF는
+정상 동작). 원인은 두 가지가 겹쳤다:
+1. (환경) `requirements.txt`에는 `python-docx>=1.1.0`이 있지만, 실제로 앱을
+   구동하는 서버/컨테이너에 이 의존성이 설치돼 있지 않았음(또는
+   requirements.txt에 추가된 뒤 재설치가 안 됨) — `pip install -r
+   requirements.txt` 재실행 + 앱 재시작이 필요.
+2. (코드) `_extract_docx()`의 `from docx import Document`가 `try` 블록
+   *밖*에 있어서, 패키지가 없을 때 나는 `ModuleNotFoundError`가 어떤
+   `except`에도 안 잡히고 그대로 `pages/jd_reconciliation.py`의 최종
+   `except Exception` 폴백까지 새어나가 원문 그대로("No module named
+   'docx'") 노출되고 있었다. `pdf_reader.py`가 `pypdf` 없을 때 이미 하고
+   있는 것과 같은 방식으로 고쳤다.
+
+**수정**: `_extract_docx()`의 `from docx import Document`/
+`from docx.opc.exceptions import PackageNotFoundError`를 `try/except
+ModuleNotFoundError`로 감싸, "python-docx 패키지가 설치되어 있지 않아 .docx
+파일을 읽을 수 없습니다. 서버에서 pip install -r requirements.txt(또는 pip
+install python-docx)를 실행한 뒤 앱을 재시작해주세요."라는 `DocumentReadError`로
+변환. 화면에는 이 메시지가 warning 알럿으로 그대로 표시된다(이전 세션에서
+`DocumentReadError`를 warning 색상으로 렌더링하도록 이미 처리해둠).
+
+검증: `builtins.__import__`를 가로채 `docx` 모듈이 없는 상황을 흉내내
+`extract_document()`가 원하는 `DocumentReadError` 메시지를 던지는지 확인.
+정상 상태(모듈 있음)에서 표+서술형이 있는 .docx 추출도 회귀 테스트로 재확인.
+
+## 완료: "JOB Market" 탭 신설 — 과제 종료 시 보유 전문성 기준 재배치 추천
+
+사용자 요청: 특정 과제가 종료된다고 가정할 때, 그 과제원들이 보유 전문성
+기준으로 어떤 다른 과제에 참여 가능한지(가장 가까운 과제가 무엇인지)를
+보여주는 새 탭. 개념적으로는 이 세션 초반에 완전히 삭제한
+`process_project_researcher_fit.py`(과제↔연구원 매칭)와 비슷한 성격이지만,
+"이 과제엔 누가 맞는가"가 아니라 "이 사람들이 다른 어떤 과제로 갈 수
+있는가"를 인력 재배치 관점에서 보는 별도 기능으로 새로 설계했다.
+
+**사용자가 확정한 세부 결정**:
+1. 근거는 두 가지를 모두 보여주되 구분 표기: A) 과제 분석(컨플루언스 요약)
+   기반, B) 그 과제에 배정된 연구원들의 보유 전문성 프로필 기반. 어느 한쪽
+   데이터가 없으면 그 항목만 개별적으로 "데이터 없음"으로 표시(과제 전체를
+   후보에서 빼지 않음 — 단, 둘 다 없으면 비교 근거가 아예 없으므로 후보에서
+   제외).
+2. department 드롭다운은 project_confl_address.csv의 dep_name 기준.
+3. 표시 항목 중 년차는 "직급연차"(CL/년차), 학력/전공은 최종학력 1개만.
+4. 후보 과제 풀은 project_confl_address.csv에 등록된 전체 과제.
+5. 계산은 "검색" 버튼 클릭 시 그 자리에서 임베딩+LLM 실행(배치 파이프라인
+   아님).
+6. 본인이 현재 속한 과제는 항상 자동으로 후보에서 제외되고, 제외 필터도
+   동일하게 적용됨(과제 단위/개인별 검색 공통).
+
+### `services/job_market.py` (신규)
+- `list_departments()`/`list_projects(department=None)` — 드롭다운용, 결정적.
+- `build_roster(researcher_ids)` — 명단(사번/성명/부서/과제/CL·년차/학력·전공/
+  나이)을 만든다. 직접 계산하지 않고 `services/researcher_profile_export.py`의
+  `person_base_table()`을 그대로 재사용 — 그 모듈이 이미 정확히 이 7개
+  컬럼(`PERSON_BASE_COLUMNS`, 라벨도 "CL/년차"·"학력/전공"으로 이미 확정돼
+  있음)을 계산해 두고 있어서 새로 만들 필요가 없었다.
+- `_dedup_candidate_rows()` — project_confl_address.csv를
+  `fit.normalize_org_code()` 기준으로 묶어 대괄호 태그/띄어쓰기가 다른
+  중복 표기를 대표 행 하나로 합친다(직전에 고친 org_code/project_name
+  정규화 이슈와 동일한 문제가 후보 과제 목록 자체에도 있을 수 있어 여기서도
+  적용).
+- `_expand_excluded_projects()` — 제외 부서를 그 부서의 모든 과제로 펼치고
+  제외 과제와 합쳐 정규화된 제외 집합을 만든다.
+- `_build_candidate_pool()` — 후보 과제별로 근거 A 텍스트(있으면,
+  `jd_reconciliation.read_confluence_summary`/`confluence_context_text`
+  재사용)와 근거 B(현재 배정 인력의 전문성 프로필 텍스트 목록, 있는 사람만)를
+  모아 `fit.cached_embed()`로 한 번에 임베딩한다(캐시 재사용 — 후보/인원이
+  늘어도 반복 임베딩 호출 없음). A/B 둘 다 없는 과제는 이 단계에서 제외.
+- `_score_candidates()` — 결정적 로직(LLM 미사용). 대상자 프로필 임베딩과
+  각 후보의 A 임베딩/B 최댓값(가장 가까운 배정 인력 1명)을 코사인 유사도로
+  비교해 결합 점수(둘 중 높은 쪽) 내림차순 정렬.
+- `_judge_recommendations()` — 임베딩 상위 8개만 LLM에 보여주고 최대 3개를
+  사유와 함께 고르게 한다(구조화 출력 강제 — 순위는 이미 Python이 정해
+  둔 후보 중에서만 고르게 해 할루시네이션 방지, 목록에 없는 과제명이
+  나오면 버림). LLM 프롬프트에는 researcher_id/이름을 전혀 포함하지
+  않는다(이 프로젝트 전체 원칙 — 대상자 본인도 B 근거로 쓰는 대표 인력도
+  프로필 텍스트만 전달).
+- `recommend_for_researcher()` — 위 단계를 묶은 사람 1명 단위 함수.
+  `run_project_search()`(과제 단위, 배정 인원 전체에 대해 동시 실행 —
+  `llm_client.run_concurrent()` 재사용)와 `run_individual_search()`(개인별
+  검색, 이름/사번 검색은 `nl_query._resolve_researcher()`와 같은 방식을
+  로컬로 둠)가 candidate_pool을 한 번만 만들어 공유하며 이 함수를 호출한다.
+
+### `services/jd_reconciliation.py` (기존 파일 소폭 변경)
+`_read_confluence_summary()`/`_confluence_context_text()`를
+`read_confluence_summary()`/`confluence_context_text()`로 공개 함수화(내부
+로직 변경 없음) — job_market.py가 재사용하기 위함. 내부 호출부도 함께 갱신.
+
+### `pages/job_market.py` (신규) + `app.py`
+새 탭 "JOB Market"(`/job-market`) 추가. 화면 구성: 모드 전환(과제 단위/
+개인별 검색, RadioItems) → 종료 예정 과제 선택(부서 드롭다운 선택 시
+과제 드롭다운이 그 부서로 좁혀지는 cascading, `jm-project-dept` →
+`jm-project-select`) 또는 개인별 검색어 입력 → 제외 부서/제외 과제(각각
+독립적인 다중 선택 드롭다운, 전체 목록 대상) → 검색 버튼 → 명단 테이블 +
+사람별 추천 카드(과제명·소속·A/B 점수 배지·사유, 0~3개 또는 "데이터
+없음"/"근거 없음" 안내).
+
+**검증**: `services/job_market.py`는 project_confl_address.csv(대괄호 태그
+포함/미포함 혼재)·project_expertise_analysis.json·연구원 보유 전문성
+분석.json 픽스처 + `fit.cached_embed`/`llm_client.call_llm` 모킹으로
+후보 풀 구성(제외 집합 계산, A/B 둘 다 없는 과제 자동 제외, 대괄호 태그
+중복 제거)과 과제 단위/개인별 검색 전체 흐름을 확인. `pages/job_market.py`는
+Playwright로 실제 앱 기동 후: 네비게이션 탭 노출, 모드 전환 UI 토글,
+부서→과제 cascading 드롭다운이 실제로 좁혀지는지, 제외 드롭다운 2개가
+서로 독립적으로 전체 목록을 보여주는지, 검색 버튼 클릭 시(임베딩 서버
+없는 개발 환경이라 "후보 과제 0건"으로 정상적으로 우아하게 처리됨 — 크래시
+없음) 결과 영역이 렌더링되는지, 필수 입력 누락 시 경고 알럿이 뜨는지 확인.
+기존 페이지(jd-reconciliation)에서도 동일하게 발생하는 무관한 콘솔 에러
+(`ERR_TUNNEL_CONNECTION_FAILED`, 샌드박스 프록시 환경 이슈)를 제외하면
+콘솔 에러 없음. 테스트 중 만든 픽스처 파일은 전부 삭제하고 원상 복구.
+
+## 완료: 엑셀 프로필 다운로드 — 중복 인물 제거 + 과제수행이력 최신순 정렬
+
+1. `components/nl_query_bar.py`의 `_selected_researcher_ids()` — 한 질문의
+   결과 테이블에 같은 연구원이 여러 행(과제/논문/특허 등 항목별 한 행씩)으로
+   나올 수 있어, 그중 여러 행을 선택하면 같은 researcher_id가 중복으로
+   담겨 "선택 N명" 표시가 실제 인원수보다 부풀려지고 엑셀에도 같은 사람의
+   프로필이 여러 번 나오는 문제가 있었다. 처음 나온 순서를 유지하며
+   중복을 제거하도록 수정 — 이 함수가 "선택 N명" 라벨과 엑셀 다운로드
+   둘 다의 유일한 소스라 한 곳만 고치면 둘 다 해결됨.
+2. `services/researcher_profile_export.py`의 `_col_tasks()`(엑셀 "과제수행이력"
+   컬럼) — `start_date` 오름차순 정렬을 `reverse=True`로 바꿔 최근 이력이
+   상단에 오도록 수정.
+
+## 완료: JOB Market — 종료 예정 과제 복수 선택 지원
+
+"종료 예정 과제" 선택을 단일 선택에서 복수 선택으로 확장(제외 과제
+섹션과 동일하게 부서/과제 드롭다운 모두 `multi=True`).
+
+- `services/job_market.py`: `list_projects(department)`가 department를
+  문자열 1개 또는 리스트 모두 받도록 일반화. `run_project_search()`가
+  `project_name: str` 대신 `project_names: list`를 받아 선택한 과제 전체의
+  배정 인원을 합친다(중복 인원은 한 번만). 제외 집합에는 선택한 과제
+  전체를 넣는다 — 함께 종료되는 과제끼리 서로 재추천되지 않도록(과제 A와
+  B가 같이 끝나면, A 소속이었던 사람에게 B를 추천하지 않음). 결과 dict의
+  키도 `project_name` → `project_names`(리스트)로 변경.
+- `pages/job_market.py`: 두 드롭다운에 `multi=True` 추가, `_run()` 콜백이
+  리스트를 받아 그대로 전달, 결과 상단 알럿에 "선택한 과제(A, B)를
+  기준으로..." 문구 추가.
+
+검증: `list_projects()`에 부서 리스트를 넘겨 여러 부서의 과제가 모두
+나오는지, `run_project_search(['ORG01','ORG02'], ...)`가 두 과제의 인원을
+합친 명단(중복 없음)을 만들고 두 과제 모두 후보에서 제외하는지 픽스처로
+확인. Playwright로 실제 화면에서 부서 2개 → 과제 2개를 순서대로 다중
+선택해 cascading 옵션이 정확히 좁혀지는지, 검색 결과 상단에 선택한 과제
+둘 다 표시되는지 확인.
+
+## 완료: JOB Market — 검색 이력, 부서→과제 제외 드롭다운 cascading, 개인별 검색 버그 수정
+
+1. **검색 이력**: `jd_reconciliation.py`와 동일한 패턴(`save_history`/
+   `list_history`/`load_history`, `HISTORY_DIR = data/processed/job_market/`)을
+   `services/job_market.py`에 추가. `run_project_search()`/`run_individual_search()`
+   성공 시(에러 아닐 때만) 자동 저장. 화면에는 검색 결과 아래 "검색 이력"
+   테이블(실행일시/구분/대상/인원/후보 과제/보기)을 추가, "보기" 클릭 시
+   그 이력의 결과를 다시 렌더링(jd_reconciliation의 이력 보기 버튼과 동일한
+   pattern-matching 콜백 구조).
+2. **제외 과제 드롭다운도 부서 선택 시 좁혀지도록**: `jm-exclude-dept` 선택값을
+   `jm-exclude-project`의 옵션 필터링에도 쓰도록 변경("종료 예정 과제"
+   섹션과 동일한 cascading). 단, 실제 제외 계산(`_expand_excluded_projects`)의
+   "부서 제외 + 과제 제외는 독립적으로 합쳐진다" 로직 자체는 그대로 — 여기서
+   바뀐 건 드롭다운에 "보여주는 옵션"만이다.
+3. **개인별 검색이 아무 결과도 안 보이던 버그**: `run_project_search()`는
+   사람별 추천 계산(`recommend_for_researcher`)을 `llm_client.run_concurrent()`로
+   감싸서 실행하기 때문에, 그 안에서 예상 못한 예외(예: 캐시에 차원이 다른
+   임베딩이 섞여 있는 경우 등)가 나도 안전하게 잡아 "처리 중 오류" 노트로
+   보여준다. 그런데 `run_individual_search()`는 같은 함수를 **직접** 호출하고
+   있어서 이 안전망이 없었다 — 그런 예외가 나면 Dash 콜백 자체가 죽어서
+   화면에 "아무 결과도 안 나오는" 것처럼 보였다(개인별 검색만 실패하고
+   과제 단위 검색은 정상이었던 이유). `run_individual_search()`도
+   `run_concurrent()`에 태워(1건이라도) 호출하도록 바꿔 과제 단위 검색과
+   동일한 안전망을 갖도록 통일.
+
+검증: `save_history`/`list_history`/`load_history`를 과제 단위·개인별 검색
+둘 다로 픽스처 테스트. `recommend_for_researcher`를 몽키패치로 예외를
+던지게 만들어 `run_individual_search()`가 예외를 그대로 전파하지 않고
+"처리 중 오류: ..." 노트가 담긴 정상적인 결과 dict를 반환하는지 확인.
+`jm.list_projects(department)`가 부서로 옵션을 좁히는지 확인. Playwright로
+실제 화면에서 검색 이력 테이블이 채워지고 "보기" 버튼이 과거 결과를
+다시 렌더링하는지, 제외 과제 드롭다운이 부서 선택 시 실제로 좁혀지는지,
+개인별 검색이 정상적으로 결과를 보여주는지 모두 재확인.
+
+## 완료: JOB Market — 검색 콜백 전체를 감싸는 최종 안전망 추가
+
+이전에 `run_individual_search()` 내부의 사람별 추천 계산 단계만
+`run_concurrent()`로 감싸 예외 안전망을 갖췄는데도, "개인별 검색에서
+이름/사번을 넣고 검색해도 응답 자체가 없다"는 재현이 계속 보고됨 — 이
+개발 샌드박스의 샘플 데이터로는 재현되지 않아, 실데이터 환경에만 있는
+조건(예: 명단 구성/후보 조회 단계에서 나는 예외 등, run_concurrent
+바깥의 코드)이 원인일 가능성이 높다고 보고 근본 원인 대신 증상 자체를
+근본적으로 막기로 했다.
+
+`pages/job_market.py`의 `_run()` 콜백 전체(모드 분기 + `jm.run_project_search`/
+`jm.run_individual_search` 호출)를 `try/except Exception`으로 감싸, 어떤
+원인의 예외든 "검색 중 오류가 발생했습니다: ..."라는 눈에 보이는 알럿으로
+바뀌도록 했다 — Dash는 콜백 안에서 처리 안 된 예외가 나면(운영
+모드 `debug=False`) 해당 콜백의 Output이 아예 갱신되지 않아, 사용자
+입장에서는 "버튼을 눌러도 화면에 아무 반응이 없는" 것처럼 보인다. 이
+최종 안전망으로 최소한 항상 뭔가는 화면에 뜨게 만들었다 — 이후 실제
+알럿 메시지를 통해 정확한 원인을 알 수 있게 됨.
+
+검증: `jm.run_individual_search`를 몽키패치로 임의 예외를 던지게 만들어
+`_run()`이 예외를 삼키지 않고 `dbc.Alert(danger)`를 반환하는지 확인.
+정상 동작(과제 단위/개인별 검색, 이력, cascading 드롭다운)은 Playwright로
+재확인해 회귀 없음을 확인.
+
+## 완료: JOB Market — 개인별 검색에서 Enter 키가 아무 반응이 없던 진짜 원인
+
+이전 두 번의 시도(run_concurrent 안전망, 콜백 전체 try/except)로도
+"개인별 검색에서 이름/사번을 넣어도 응답이 없다"가 재현된다는 보고가
+계속돼, Playwright로 실제 사용자가 할 법한 다른 조작 패턴을 하나씩
+테스트해 봤다 — 검색창에 이름을 입력하고 **Enter 키**를 누르는 경우
+(버튼을 따로 클릭하지 않고)를 재현하자 실제로 화면에 아무 변화가 없는
+것을 확인했다: `_run()` 콜백이 `Input('jm-run-btn', 'n_clicks')`만
+듣고 있어서, Enter는 `dcc.Input`의 `n_submit` 값만 올릴 뿐 어떤
+콜백도 트리거하지 않았다. 이전의 안전망들은 전부 콜백이 "실행된 이후"
+발생하는 예외를 잡는 것들이라, 콜백 자체가 트리거되지 않는 이 케이스는
+전혀 손대지 못하고 있었다.
+
+`pages/job_market.py`의 `_run()` 콜백에
+`Input('jm-individual-query', 'n_submit')`을 추가해 Enter로도 검색이
+실행되도록 했다(`n_clicks`가 0이어도 `n_submit`으로 트리거될 수 있어야
+하므로 `if not n_clicks: return ...` 가드도 제거 — `prevent_initial_call=True`가
+이미 최초 로드 시 오발동을 막아 준다).
+
+검증: Playwright로 검색창에 이름을 입력한 뒤 버튼 클릭 없이 Enter만
+눌러 정상적으로 결과가 렌더링되는지 확인(수정 전엔 빈 화면, 수정 후엔
+정상 결과). 기존 버튼 클릭 경로, 과제 단위 복수 선택 검색도 회귀
+없음을 재확인.
+
+## 완료: JOB Market — 개인별 검색을 3단계(검색→선택→검색 실행) 흐름으로 재설계
+
+사용자 요청: 개인별 검색을 하나의 텍스트 입력으로 즉시 실행하는 대신,
+1) 검색창에 이름/사번을 검색하면 대상자 후보가 나와서 고를 수 있고(다시
+검색해서 복수 대상자를 계속 추가 가능), 2) 제외 부서/과제 선택, 3) "검색"
+버튼으로 선택된 한 명 또는 여러 명 전체의 결과를 한 번에 보여주는 3단계
+흐름으로 바꿔 달라는 것.
+
+**`services/job_market.py`**:
+- 신규 `search_researchers(query)` — 검색창용. 기존 `_resolve_researcher_query()`
+  (정확 일치 우선, 없으면 부분 일치)를 그대로 재사용하되, 동명이인이어도
+  에러 내지 않고 전부(최대 `MAX_SEARCH_RESULTS`=20건) 반환해 화면에서
+  고르게 한다.
+- `run_individual_search()` 시그니처를 `researcher_query: str`(단일 텍스트,
+  내부에서 동명이인이면 에러) → `researcher_ids: list`(화면에서 이미 확정한
+  1명 이상)로 변경. 사람마다 "현재 속한 과제" 제외 조건이 다를 수 있어
+  후보 풀도 사람별로 계산하되, 같은 소속(정규화된 org_code)인 사람끼리는
+  풀을 재사용해 임베딩 반복 계산을 피한다. 나머지(LLM 최종 판정)는
+  `run_project_search()`와 동일하게 `run_concurrent()`로 동시 처리.
+- `_history_label()`이 개인별 검색 결과가 이제 여러 명일 수 있음을 반영
+  (1명이면 "이름(사번)", 여러 명이면 "이름1, 이름2 외 N명").
+
+**`pages/job_market.py`**:
+- 개인별 검색 영역을 검색창+"찾기" 버튼(Enter로도 검색) → 후보 목록(각
+  후보에 "추가" 버튼) → "선택된 대상자" 칩 목록(각 칩에 "×" 제거 버튼) 구조로
+  재구성. `dcc.Store`(`jm-individual-candidates-store`: 마지막 검색 결과,
+  `jm-individual-selected-store`: 누적된 선택 목록)로 상태 관리.
+- 새 콜백 3개: `_search_candidates`(검색 버튼/Enter → 후보 렌더링),
+  `_update_selected`(패턴 매칭 — "추가"/"×" 버튼 클릭에 따라 선택 목록에
+  더하거나 뺌, 중복 추가는 무시), `_render_selected`(선택 목록 렌더링).
+- 최종 "검색" 버튼(`_run`)은 이제 `jm-individual-selected-store`에서
+  researcher_id 목록을 뽑아 `run_individual_search(researcher_ids, ...)`를
+  호출 — 1명이든 여러 명이든 동일한 경로.
+
+검증: `search_researchers`가 동명이인/부분일치를 전부 반환하는지,
+`run_individual_search`가 서로 다른 소속의 여러 사람을 한 번에 처리하고
+입력에 중복 researcher_id가 있어도 한 번만 처리하는지 픽스처로 확인.
+Playwright로 실제 화면에서 "정재원" 검색→추가, "오지아" 검색→추가로
+두 명을 누적한 뒤 최종 검색을 누르면 두 사람 모두의 결과가 한 번에
+나오는 것, 칩의 "×"로 제거가 되는 것, 과제 단위 검색(복수 선택)/이력/
+제외 드롭다운 cascading에 회귀가 없는 것을 확인.
+
+## 완료: JOB Market — 참여 가능한 과제가 없는 사람에게도 근거 표시
+
+사용자 요청: 참여 가능한 과제를 찾지 못한 사람도 그냥 "없음"으로 끝내지
+말고, "그나마 가장 가까운 과제는 이건데, 이것도 전문성이 이러이러해서
+다르다" 식으로 근거를 보여 달라는 것.
+
+**`services/job_market.py`**:
+- `_RECOMMEND_SYSTEM_PROMPT`에 `closest_non_match` 출력 필드 추가 —
+  `recommendations`가 빈 리스트면(뚜렷이 맞는 과제가 없으면) 그나마 가장
+  가까운 후보 하나와 "왜 이것도 충분히 맞지 않는지" 사유를 담게 하고,
+  `recommendations`에 1개 이상 있으면 반드시 `null`로 두게 지시. 추가
+  LLM 호출 없이 기존 1회 호출의 출력 형식만 확장(구조화 출력 강제 원칙
+  유지).
+- `_judge_recommendations()`가 `(recommendations, closest_non_match)`
+  튜플을 반환하도록 변경. `closest_non_match`도 `recommendations`와
+  동일하게 "shortlist(임베딩 상위 후보)에 실제로 있던 과제명인지" 검증해
+  할루시네이션이면 버림(신규 `_attach()` 헬퍼로 두 경로가 같은 검증 로직
+  공유).
+- `recommend_for_researcher()`의 반환 dict에 `closest_non_match` 필드
+  추가(정상 케이스는 값 또는 None, "전문성 데이터 없음"/"후보 과제 없음"/
+  "임베딩 실패"처럼 애초에 비교 자체를 못 한 케이스는 None — 비교할
+  근거가 없으므로 억지로 만들지 않음).
+
+**`pages/job_market.py`**: `recommendations`가 비어 있고 `closest_non_match`가
+있으면, 실제 추천과는 시각적으로 구분되는(회색 배경 박스) "참여 가능한
+과제를 찾지 못했습니다 + 그나마 가장 가까운 과제: OO(A/B 점수 배지) + 왜
+안 맞는지 사유(이탤릭)" 블록을 보여준다. `closest_non_match`도 없으면
+(비교 자체가 불가능했던 경우) 기존처럼 note 문구만 표시.
+
+검증: (1) 추천 0건 + closest_non_match 있음 → 정상 표시, (2) LLM이
+후보 목록에 없는 과제명을 closest_non_match로 냈을 때(할루시네이션) →
+버려지고 None, (3) 실제 추천이 1건 이상 있을 때 → closest_non_match를
+LLM이 실수로 채워도 무시하고 None으로 정규화 — 세 시나리오 모두 픽스처로
+확인. `_render_result()`가 이 새 필드를 포함한 결과를 크래시 없이
+렌더링하는지, 기존 개인별 검색(검색→추가→검색 실행) 흐름과 과제 단위
+검색에 회귀가 없는지 Playwright로 재확인.
+
+## 완료: JOB Market — 검색 결과 상단에 재배치 요약 지표 + 재배치 가능자 우선 정렬
+
+사용자 요청: 검색 결과 상단에 "총 N명 중 M명 재배치 가능 예상(재배치율
+X%), 대상 과제 K개" 같은 요약 지표를 보여주고, 재배치 가능한 사람은
+위쪽에, 어려운 사람은 아래쪽에 정렬해 달라는 것.
+
+**`pages/job_market.py`**:
+- 신규 `_summary_stats(results)` — `results` dict(사람별 추천 결과)에서
+  결정적으로 계산(추가 LLM 호출 없음): 대상 인원(`len(results)`),
+  재배치 가능 인원(`recommendations`가 1개 이상인 사람 수), 재배치율(%),
+  대상 과제 수(모든 사람의 `recommendations`에 등장한 `project_name`의
+  distinct 합집합 — 여러 명이 같은 과제로 추천돼도 1개로 집계).
+- 신규 `_summary_bar(results)` — 위 지표 3개를 상단에 타일 형태로 표시.
+- `_render_result()`가 `results.items()`를 그대로 순회하던 것을,
+  "추천 1개 이상 있음"을 우선 기준으로 `sorted()`(안정 정렬)해 재배치
+  가능한 사람이 먼저 나오고, 그 안에서는 원래 순서(명단 순서)가 유지되게
+  했다 — 재배치 어려운 사람(빈 추천, closest_non_match만 있거나 note만
+  있는 경우)은 자동으로 하단에 모인다.
+- history에서 과거 결과를 "보기"로 다시 열 때도 `_render_result()`를
+  그대로 재사용하므로 저장된 이력에도 동일하게 요약 지표/정렬이 적용된다
+  (지표를 report 저장 시점이 아니라 렌더링 시점에 매번 계산하므로, 이미
+  저장된 옛 이력에도 별도 마이그레이션 없이 바로 적용됨).
+
+검증: 4명(재배치 가능 2명 - 서로 다른 과제, 데이터 없음 1명,
+closest_non_match만 있는 1명) 픽스처로 `_summary_stats`가 "총 4명 중
+2명(50%), 대상 과제 2개"를 정확히 계산하는지, 정렬 결과가 재배치 가능
+2명이 먼저(원래 순서 유지) 오고 나머지가 뒤따르는지 확인. Playwright로
+실제 화면에서 요약 바가 렌더링되는지(개발 샌드박스는 임베딩/LLM 서버가
+없어 0명/0%/0개로 나오지만 렌더링 자체와 계산 로직은 정상), 기존 흐름에
+회귀가 없는지 재확인.
+
+## 완료: 과제 직무/대상자 검증 — 현인원/채용 목표 인원수 혼동 수정 + 업로드 드래그앤드롭
+
+사용자 요청 요약: 직무기술서에서 "'27년 채용 대상자 수"를 현재
+인원수(현인원)로 잘못 읽어오는 버그. 원하는 동작은 (1) "현재
+배정되어 있는 인원수"만 headcount로 읽고, (2) 채용 계획/목표 인원수는
+버리지 말고 참고용으로 같이 보여달라는 것. 확인 결과 표(현인원 컬럼)와
+서술형("현재 N명") 둘 다 현재 인원을 나타내며, 표를 우선하되 서술형과
+비교(불일치 시 안내)하는 기존 `merge_roles()` 설계를 그대로 살리면
+됨 — docx/이를 변환한 pdf 모두 동일하게 재현되어 원인이 포맷별 코드가
+아니라 공용 추출 프롬프트에 있음을 확인.
+
+**`services/jd_reconciliation.py`**:
+- `_ROLE_EXTRACTION_SYSTEM_PROMPT`을 재작성 — "인원수 구분" 섹션을
+  추가해 `headcount`("현재" 시점 실배정 인원 — 표의 "현인원"/"현원"/
+  "현재 인원" 컬럼, 서술형의 "현재 N명")와 `hiring_target`(미래 채용
+  계획/목표, 예: "'27년 채용 대상자 수" — "이건 headcount가
+  아닙니다"라고 명시)을 뚜렷이 분리해서 추출하도록 지시. Output
+  JSON에 `hiring_target` 필드 추가.
+- `_extract_roles()` — 파싱 결과에 `hiring_target`(문자열, 숫자가
+  아니어도 원문 표현 그대로 허용) 필드 추가.
+- `merge_roles()` — `hiring_target`을 표/서술형 병합의 세 갈래
+  전부(표+서술형 모두 있음/표만/서술형만)에서 함께 이어 감. 표+서술형
+  모두 있을 때는 `t['hiring_target'] or n['hiring_target']`로 표를
+  우선하되 표에 없으면 서술형 값을 채택. headcount 불일치 안내 로직은
+  기존 그대로 유지(변경 없음).
+- `build_report()` — 각 `role_rows` 항목에 `hiring_target` 필드 추가.
+
+**`pages/jd_reconciliation.py`** `_role_card()`: `hiring_target`이
+있을 때만 "채용 목표(참고용, 비교 대상 아님): ..." 문구를 회색
+이탤릭체로, 문서 인원/실제 매칭 비교 줄과 분리된 별도 줄로 표시(비교
+대상인 `document_count`/`matched_count`/`diff`와 시각적으로 섞이지
+않도록).
+
+**업로드 드래그앤드롭**: `dcc.Upload`는 원래부터 드래그앤드롭을
+기본 지원하므로 기능 추가가 아니라 발견성(어포던스) 개선만 진행.
+`jd-doc-upload`에 점선 테두리(`border: 2px dashed`), 업로드 아이콘,
+"여기로 파일을 끌어다 놓거나 클릭해서 업로드" 안내 문구를 추가하고,
+`style_active`/`style_reject`로 드래그 중/거부 시 테두리·배경색이
+바뀌도록 설정. `assets/custom.css`에 `.jd-upload-dropzone:hover`
+스타일 추가.
+
+검증: `merge_roles()`/`build_report()`를 표 headcount=3 + 서술형
+"현재 0명" + 표 hiring_target 픽스처로 직접 호출해 표 headcount가
+채택되고 hiring_target이 role_rows까지 그대로 전달되는지 확인.
+`_extract_roles()`를 `call_llm`을 모킹해 JSON 응답에서
+`hiring_target`이 올바르게 파싱되는지 확인. `_role_card()`를 직접
+렌더링해 `hiring_target`이 있을 때는 참고용 문구가, 없을 때는 문구
+자체가 렌더링되지 않는지 확인. Playwright로 업로드 영역에 점선
+테두리·아이콘·안내 문구가 실제 화면에 렌더링되는지, 콘솔 에러가
+없는지 확인.
+
+## 완료: JOB Market — 결과 카드에 연구원 본인의 보유 전문성 추가 표시
+
+사용자 요청: 검색 결과가 매칭된 과제에 대한 설명만 보여줘서 신뢰성이
+떨어지니, 그 연구원이 실제로 어떤 전문성을 갖고 있는지도 추천 사유와
+함께 보여달라는 것.
+
+**`services/job_market.py`** `recommend_for_researcher()`: 이미
+내부에서 `expertise_profiles.get(researcher_id)`로 읽고 있던 프로필
+원본을 반환값에 `'profile'` 키로 추가(조기 반환하는 4개 분기 — 데이터
+없음/후보 없음/임베딩 실패/정상 — 전부에 포함, 데이터가 없을 때만
+`None`). 추가 LLM 호출이나 임베딩 계산 없이 이미 로드해 둔 값을 그대로
+얹기만 하므로 성능에 영향 없음.
+
+**`pages/job_market.py`**: `components.detail_tabs.llm_summary_block`
+(researcher_profile.py의 "전문성 요약(LLM)"과 동일한 컴포넌트 —
+강점 분야/키워드는 배지로, 주요 역할·책임/전문지식 및 역량은 불릿
+목록으로 렌더링)을 그대로 재사용해, 신규 `_profile_block(profile)`을
+만들고 `_person_card()`에서 사람 이름/부서 줄과 추천 결과 사이에
+"보유 전문성" 섹션으로 삽입. 프로필이 없으면 `llm_summary_block(None)`이
+알아서 "분석 데이터 없음"을 보여주므로 별도 분기 불필요. history에
+저장된 report에도 `profile`이 함께 저장되므로, 과거 이력을 "보기"로
+다시 열 때도 `_render_result()`가 그대로 재사용돼 동일하게 표시된다
+(저장 당시 `profile`이 없던 옛 이력은 `.get('profile')`이 `None`을
+반환해 "분석 데이터 없음"으로 안전하게 처리).
+
+검증: `_person_card()`를 프로필 있음/없음 두 픽스처로 직접 렌더링해
+각각 "보유 전문성" 섹션에 강점 분야/키워드가 포함되는지, 프로필이
+없을 때 "분석 데이터 없음"으로 대체되는지 확인. Playwright로 JOB
+Market 페이지가 콘솔 에러 없이 로드되는지 확인.
+
+## 완료: process_researcher_expertise.py / process_researcher_similarity.py max_tokens 상향
+
+사용자 보고: JOB Market에서 쓸 데이터를 준비하려고 이 두 파이프라인을
+돌리면 `[LLM 경고] content가 비어 있어 reasoning_content로 대체 사용
+(finish_reason=length)`가 종종 뜬다는 것. 원인은 사내 LLM(thinkingcap)이
+추론형 모델이라 최종 답변 전 사고 과정에도 토큰을 쓰는데, 요청
+`max_tokens`(자동으로 `LLM2_MAX_TOKENS_MULTIPLIER`, 기본 3배가 곱해짐)를
+사고 과정만으로 다 써버리면 `content`가 비어 응답이 잘리기 때문 —
+`reasoning_content`로 대체는 되지만 그 안의 텍스트는 JSON 형식이 아닐
+수 있어 이후 파싱이 실패하고, 그러면 캐시에 값이 안 남아 다음 실행 때
+다시 시도돼야 한다.
+
+자체 서버 운영 중이라 비용 부담이 없으므로 두 호출의 `max_tokens`를
+상향:
+- `process_researcher_expertise.py` `_analyze_researcher()`: 4000 ->
+  6000(배수 적용 시 12000 -> 18000). 사람마다 과제/논문/특허 이력
+  길이 편차가 커서 사고 과정도 그만큼 길어질 수 있음.
+- `process_researcher_similarity.py` `_judge_pair()`: 1500 ->
+  2500(배수 적용 시 4500 -> 7500).
+
+검증: `ast.parse`로 두 파일 컴파일 확인. 실제 완화 효과는 사내 LLM
+서버에 접근 가능한 환경에서 파이프라인을 재실행해 경고 빈도로
+확인해야 함(이 개발 샌드박스에는 `llm_config.py`가 없어 재현 불가).
+
+## 완료: LLM content-비어있음(finish_reason=length) 경고 발생 횟수 집계
+
+사용자 요청: 위 max_tokens 상향으로 완전히 없앨 수는 없으니, 모듈을
+실행했을 때 그 경고가 몇 번 발생했는지 결과에 표시해달라는 것.
+
+**`pipeline/llm_client.py`**: 스레드 안전한 모듈 전역 카운터
+`_truncation_count` 추가(`_stats_lock`으로 보호 — call_llm()이
+`run_concurrent()`로 여러 스레드에서 동시에 호출되므로). `content`가
+비어 `reasoning_content`로 대체하거나(그마저 없어 빈 문자열을
+반환하거나) 하는 두 경고 분기 모두에서 `_record_truncation()`으로
+증가. `get_truncation_count()`/`reset_truncation_count()`를 공개
+함수로 노출 — reset은 배치 스크립트가 자기 실행분만 집계하도록
+`process()` 시작 시 호출한다(이 모듈을 계속 import해 쓰는 장기 실행
+서버가 아니라 스크립트 1회 실행 = 1번의 집계 단위이므로 이걸로 충분).
+
+**`pipeline/researcher_fit.py`**: `llm_client`에서 두 함수를 추가로
+import해 그대로 재노출 — `process_researcher_similarity.py`가 기존
+`fit.call_llm`/`fit.run_concurrent`처럼 `fit.` 경유로 쓸 수 있게
+(직접 `llm_client`를 import하지 않는 기존 관례 유지).
+
+**`process_researcher_expertise.py`**: `process()` 시작에서
+`reset_truncation_count()`, `연구원 보유 전문성 분석.json` 저장 로그
+직후 `get_truncation_count()`가 0보다 크면 "[알림] LLM 응답 content가
+비어(주로 finish_reason=length) 대체 처리된 횟수: N회" 출력(0이면
+출력 안 함 — 정상 실행 로그에 잡음 추가하지 않음). 이 함수 안에서
+`journal_authority.update_authority()`도 호출되므로(같은
+`llm_client` 전역 카운터를 공유), 저널 조회 중 발생한 경고도 함께
+집계된다.
+
+**`process_researcher_similarity.py`**: `process()` 시작에서
+`fit.reset_truncation_count()`, `researcher_similarity.html` 저장
+로그 직후 동일한 형식으로 출력.
+
+검증: `requests.post`를 모킹해 content가 비고 finish_reason=length인
+응답을 반환하도록 하고 `call_llm()`을 호출 — 카운터가 1 증가하는지,
+성공 응답(content 있음)에서는 증가하지 않는지, `reset_truncation_count()`
+호출 후 0으로 돌아가는지 확인. `researcher_fit.py`를 통해서도 같은
+카운터 함수에 접근되는지 확인. 4개 파일 모두 `ast.parse` 컴파일
+확인(사내 LLM 서버가 없는 이 샌드박스에서는 실제 파이프라인 재실행으로
+로그 출력까지는 확인 불가).
+
+## 완료: "연구원 목록" → "연구원 명단" 리네이밍 + 컬럼/필터/검색·엑셀 다운로드 재구성
+
+사용자 요청 4건: (1) 탭 이름 변경 + 컬럼에 과제(org_code) 추가(부서~직급
+사이)/리더십·TOEIC 제거/최종학위→학력(최종)/전공 추가(학력~평가 사이)
+(2) 필터에 과제 추가 + 부서→과제 캐스케이딩 (3) 필터 우측에 검색
+아이콘 — 눌러야 필터 적용 (4) 검색 아이콘 옆 엑셀 아이콘 — 필터 대상
+프로필 다운로드. 사전 확인 4문항에 대한 사용자 답변: 과제 필터는 이
+페이지 자체 데이터(researchers.csv)로만 구성, 엑셀은
+`researcher_profile_export.build_profile_workbook()` 재사용, 다운로드
+범위는 "지금 화면에 실제로 보이는 행", 필터 초기화 시 테이블도 전체
+목록으로 복귀.
+
+**`pages/researcher_list.py`**:
+- `dash.register_page`의 name/title과 페이지 H5 제목을 "연구원
+  명단"으로 변경(`app.py`의 nav 링크 라벨도 동일하게 변경).
+- `_build_summary_df()`: 리더십(`lea`)/TOEIC(`cert`) 관련 읽기·계산
+  블록과 `_LEA_DIMS`를 전부 제거(컬럼이 없어지면 죽은 코드가 되므로).
+  `과제` 컬럼을 `researchers.csv`의 `org_code`에서 추가. 기존
+  "최종학위" 계산 블록에서 최고 학위 행을 그대로 재사용해 `학력(최종)`
+  (학위명만)과 `전공`(그 행의 `major`)을 분리해서 담음. 최종 컬럼
+  순서: 이름/부서/과제/직급/성별/학력(최종)/전공/'24~'26평가/인센티브/
+  논문(전체)/논문(3년)/평균IF/특허(출원)/특허(등록)/수상.
+- 신규 `_project_options(department=None)`: `researchers.csv`만
+  읽어(무거운 `_build_summary_df()` 전체 재계산 없이) 부서 선택 시 그
+  부서 소속 연구원들의 org_code만 남기는 캐스케이딩 옵션을 만든다 —
+  JOB Market이 쓰는 `project_confl_address.csv` 카탈로그와는 별개(이
+  페이지의 '부서' 표기가 그쪽 dep_name과 일치한다는 보장이 없어 자기
+  완결적으로 둠, 사용자 확정 (a)).
+- 필터 카드에 `과제` 드롭다운 추가, 그 옆에 검색(`bi-search`)/엑셀
+  (`bi-file-earmark-excel`) 아이콘 버튼을 `dbc.ButtonGroup`으로 배치.
+  `dcc.Download(id='researcher-list-excel-download')` 추가.
+- DataTable의 `data`를 더 이상 `researcher_id`를 드롭하지 않고 그대로
+  둔다(`columns` 목록에는 여전히 안 넣어 화면엔 안 보임) — 이러면
+  `derived_virtual_data`(네이티브 필터/정렬 반영된 실제 표시 행)에도
+  `researcher_id`가 숨은 필드로 남아, 엑셀 다운로드와 행 클릭 이동
+  콜백이 이름으로 역조회할 필요 없이 바로 꺼내 쓸 수 있다(동명이인
+  버그도 부수적으로 해결).
+- 콜백 재구성: `update_project_options`(부서→과제 캐스케이딩),
+  `update_table`은 드롭다운을 전부 `State`로 바꾸고 `list-search-btn`/
+  `clear-filters-btn`의 `n_clicks`만 `Input`으로 받아 `dash.ctx.triggered_id`로
+  분기(초기화 버튼이면 필터값과 무관하게 항상 전체 목록 반환),
+  `clear_filters`는 드롭다운 5개 값만 비움(필터 5개로 늘어 Output도
+  5개로 확장), 신규 `download_excel`(엑셀 버튼 클릭 시
+  `derived_virtual_data`에서 `researcher_id`를 모아
+  `build_profile_workbook()` 호출 후 `dcc.send_bytes`),
+  `navigate_to_profile`은 `derived_virtual_data`를 `Input`에서
+  `State`로 바꾸고(행 클릭 시에만 반응하도록) 이름 재조회 대신 숨은
+  `researcher_id` 필드를 직접 사용하도록 단순화.
+
+검증: `_build_summary_df()`/`_project_options()`를 직접 호출해 컬럼
+구성과 부서→과제 캐스케이딩 결과 확인. Playwright로 실제 화면에서
+(1) nav 라벨/제목 변경 (2) 헤더에 과제/학력(최종)/전공 존재, 리더십/
+TOEIC 없음 (3) 부서 선택 시 과제 옵션이 좁혀짐 (4) 드롭다운만 바꿔서는
+표가 안 바뀌다가 검색 버튼을 눌러야 바뀜 (5) 필터 초기화 시 표가 전체
+목록으로 복귀 (6) 엑셀 다운로드 버튼 클릭 시 실제 파일 다운로드 발생
+(7) 행 클릭 시 `/researcher-profile?id=...`로 정상 이동 — 을 모두
+확인. 필터 드롭다운들이 화면에서 세로로 쌓여 보이는 현상은 이
+샌드박스의 프록시가 Bootstrap CDN을 차단(403)해 그리드 CSS 자체가
+로드되지 않는 환경 한정 아티팩트로 확인(기존 JOB Market 페이지도
+동일하게 재현됨 — `col-md-*` 클래스 자체는 정상 적용되어 있어 실제
+배포 환경에서는 문제 없음).
+
+## 완료: 연구원 명단/엑셀 다운로드에 "직책"(team_refer.csv assignment_name) 추가
+
+사용자 요청 2건: (1) 연구원 명단 컬럼에 직책 추가(직급~성별 사이,
+team_refer.csv의 assignment_name 매핑, 없으면 "-") (2) 프로필 엑셀
+다운로드에도 CL/년차~과제수행이력 사이에 직책 추가. 확인 결과 2번은
+`pages/researcher_list.py`가 아니라 공용 모듈
+`services/researcher_profile_export.py`(`build_profile_workbook()`)의
+`_COLUMNS`를 가리키는 것이었고, 이 모듈은 연구원 명단 탭의 엑셀
+다운로드뿐 아니라 "보유 전문성" 탭 AI 검색 결과 엑셀 다운로드
+(`components/nl_query_bar.py`)에도 공유되는 함수라 두 화면 모두에
+반영되는 게 맞는지 확인 — 사용자가 "둘 다 적용되는게 맞다"고 확정.
+
+`team_refer.csv`는 조직장급 9명(소장/본부장/PL/파트장)만 `researcher_id`
+당 1행씩 등록돼 있고(중복 없음 확인) 나머지는 매핑이 없어 "-"로
+표기된다.
+
+**`pages/researcher_list.py`** `_build_summary_df()`: `team_refer`를
+추가로 읽어 `researcher_id -> assignment_name` dict(`title_by_id`)를
+만들고, rows 딕셔너리에 `직책` 키를 `직급`과 `성별` 사이에 추가
+(`title_by_id.get(rid) or '-'`).
+
+**`services/researcher_profile_export.py`**: `_load_tables()`/
+`_researcher_row_context()`에 `team_refer` 추가, 신규
+`_col_position_title(_rid, rows)`(`team_refer` 행이 있으면
+`assignment_name`, 없으면 "-")를 `_COLUMNS`의 `'CL/년차'`와
+`'과제수행이력'` 사이에 삽입.
+
+검증: `_build_summary_df()`를 직접 호출해 직책 컬럼 값(PL/파트장/소장/
+"-")과 컬럼 순서(직급→직책→성별) 확인. `build_profile_workbook()`으로
+실제 xlsx를 만들어 openpyxl로 다시 열어 헤더 순서(CL/년차→직책→
+과제수행이력)와 셀 값을 검증.
+
+## 완료: AI 검색 답변/초기화 + 전문성 MAP 줌 버그 수정 + 옵시디언식 관계 그래프
+
+사용자 요청 3건, 확인 문답으로 범위 확정:
+1. AI 검색 결과에 "왜 이렇게 찾았는지" LLM 설명을 추가(표에 실제로 있는
+   내용만 근거로, 새 판단/환각 금지 — 사용자 확정 "예").
+2. 검색창/답변/명단을 한 번에 비우는 "초기화" 버튼 추가(검색어 텍스트도
+   포함해 완전 초기화 — 사용자 확정).
+3. 전문성 MAP에서 확대할 때 화면이 리셋되는 버그 수정 + UMAP 산점도를
+   "옵시디언 방식"(힘-기반 노드-링크 그래프)으로도 볼 수 있게, 버튼/탭
+   전환으로 두 방식을 다 유지(사용자 확정: `researcher_similarity.json`
+   기준 엣지, 라이브러리 추가 OK, 완전 교체 아니라 토글).
+
+**1) AI 검색 답변 — `services/nl_query.py`**: 기존 3개 intent
+(find_researchers_by_expertise/find_similar_researchers/open_data_query)
+는 그대로 두고, 공용 진입점 `answer_question()`에서 조회가 끝난 뒤
+한 번 더 LLM을 호출해(`_generate_answer_summary()`) 결과를 설명하는
+텍스트를 `result['answer']`에 담는다. 새 `_ANSWER_SYSTEM_PROMPT`가
+"표에 실제로 있는 내용만 근거로 쓰고 새 사실을 만들어내지 말라"고 강하게
+제약 — 이 모듈의 기존 원칙("LLM은 판단하지 않고 조회만")을 깨지 않으면서
+"이미 나온 결과를 설명"하는 역할만 추가한 것. rows가 비었거나 intent가
+error/unsupported면 answer를 생성하지 않는다(설명할 게 없으므로). 표
+데이터는 최대 20행만 프롬프트에 담고(`_ANSWER_MAX_ROWS`), 나머지는
+"총 N건 중 20건만 보여줬다"는 문구로 대체.
+
+**2) 초기화 버튼 — `components/nl_query_bar.py`**: 입력창 옆에
+"초기화" 버튼 추가. `_reset_query()` 콜백이 검색어(`nl-query-input`)와
+5개 Store(`full-result`/`filters`/`sort`/`expanded`/`selected`)를 전부
+빈 값으로 되돌린다. `_render_nl_query_store()`의 `if not full_result`
+분기를 `dash.no_update` 대신 `None`(빈 children)을 반환하도록 고쳐서 —
+안 그러면 초기화해도 화면에 이전 결과가 그대로 남는다. 결과 표 위에
+`_answer_block()`으로 `full_result.get('answer')`를 눈에 띄게(파란
+Alert) 표시.
+
+**3-a) 줌 리셋 버그 — `pages/researcher_similarity_map.py`**: 원인은
+Plotly 그래프에 `uirevision`이 없었던 것. 기존엔 `_toggle_small_tier_by_zoom`
+콜백이 relayoutData에서 읽은 확대 범위를 매번 수동으로 다시 그려
+리셋을 막고 있었는데, 빠르게 연속으로 확대하면 서버 왕복 지연으로
+뒤늦게 도착한 relayoutData가 이미 더 확대된 화면을 예전 범위로 덮어써
+순간적으로 "리셋되는 것처럼" 보이는 레이스컨디션이 있었다. 신규
+`_uirevision_for(rid)`(검색 대상 rid가 바뀔 때만 값이 달라짐)를 초기
+figure 생성 시 `uirevision`으로 설정 — Plotly가 uirevision이 같은 한
+사용자의 현재 확대/이동을 새 figure prop보다 우선해서 유지해 준다(공식
+권장 방식). `_toggle_small_tier_by_zoom`에서 수동 range 재적용 로직을
+전부 제거(트레이스 visible/hoverinfo 토글만 남김). 반대로
+`_highlight_search_result`(검색으로 특정 지점에 의도적으로
+확대·포커스하는 콜백)는 `uirevision`을 `selected_rid` 기준으로
+명시적으로 바꿔서, 그 "의도된" 확대가 이전 수동 확대 상태에 가려지지
+않고 실제로 반영되게 했다.
+
+**3-b) 옵시디언식 관계 그래프**: `requirements.txt`에
+`dash-cytoscape>=1.0.2` 추가.
+- **`services/similarity_map.py`** 신규 `build_similarity_graph_elements()`:
+  `researcher_similarity.json`(이미 배치로 판정된 연구원↔연구원 유사도)을
+  dash_cytoscape elements(노드=연구원, 엣지=유사도 쌍)로 변환. 각
+  연구원의 top-K 목록은 방향성이 있어(A 목록에 B가 있어도 B 목록엔
+  A가 없을 수 있음) A-B/B-A를 정렬된 튜플로 묶어 한 번만 엣지로 만들고
+  (process_researcher_similarity.py의 `_pair_key()`와 동일한 발상),
+  양쪽 score가 다르면 더 높은 쪽을 채택. 노드에는 부서별 팔레트
+  인덱스를 클래스(`dept-N`)로 붙이고, `similarity_graph_department_classes()`가
+  그 클래스에 맞는 cytoscape 스타일시트를 만든다.
+- **`pages/researcher_similarity_map.py`**: 전문성 MAP 탭 상단에
+  "UMAP 지도"/"관계 그래프" 버튼 토글(`_subview_toggle()`) 추가. 기존
+  탭 콘텐츠를 `_umap_subview_content()`로 그대로 옮기고, 신규
+  `_graph_subview_content()`가 `cyto.Cytoscape`(레이아웃 `cose` — 별도
+  확장 없이 기본 제공되는 힘-기반 레이아웃, 옵시디언 그래프 뷰와 같은
+  "떠다니는" 느낌)를 렌더링. 엣지 두께/색은 cytoscape 스타일시트의
+  `mapData(score, ...)`와 판정 레벨(상/중/하)별 클래스로 표현. 노드
+  클릭 시 UMAP 점 클릭과 동일하게 '연구원' 탭으로 이동하도록
+  `_go_to_researcher_card_from_graph()` 콜백 추가(기존
+  `_go_to_researcher_card`와 입력 컴포넌트만 다름). 서브뷰는 "전문성
+  MAP" 탭을 벗어났다 돌아오면 항상 UMAP 기본값으로 리셋(이 화면의
+  기존 관례와 동일).
+
+검증: `_generate_answer_summary()`/`answer_question()`을 `call_llm`
+모킹으로 직접 호출해 답변 생성/스킵 조건 확인. 초기화 버튼은 Playwright로
+실제 화면에서 입력창·결과 영역이 모두 비는지 확인. 줌 버그/관계 그래프는
+연구원 12명 분량의 임시 픽스처(`연구원 보유 전문성 분석.json`/
+`embedding_cache.json`/`researcher_similarity.json` — 테스트 후
+원본으로 복원, 이 파일들은 전부 `.gitignore` 대상이라 커밋에는 영향
+없음)로 실제 서버를 띄워 Playwright로: uirevision 값 확인, 마우스 휠로
+확대 후 xaxis range가 리셋되지 않고 유지되는지 확인, 토글로 관계
+그래프 전환 시 노드 12개가 정상 렌더링되는지, 다시 UMAP으로 돌아오는지,
+그래프 노드를 tap하면 '연구원' 탭으로 이동하는지(cytoscape 인스턴스에
+직접 tap 이벤트를 발생시켜 확인 — cose 레이아웃이 매번 다른 좌표를
+계산해 마우스 좌표 클릭은 재현성이 없었음) 확인. 콘솔 에러 없음.
+
+## 완료: python app.py 단독 실행 시 연결 끊김 완화(threaded=True)
+
+사용자 보고: `python app.py`로 띄워두면 종종 연결이 끊긴다는 것. 원인은
+`app.run(host='0.0.0.0', port=port, debug=False)`에 `threaded=True`가
+없어 Werkzeug 개발 서버가 기본값(싱글 스레드)으로 동작했기 때문 —
+UMAP 계산(콜드 스타트 시 numba JIT 포함 최대 30초 가까이 걸림, 오늘
+테스트 중 직접 확인), LLM 호출(최대 300초 타임아웃), 전문성 MAP의
+0.55초 주기 깜빡임 폴링처럼 오래 걸리거나 잦은 요청 하나가 서버
+전체를 붙잡아 다른 요청이 밀리다 타임아웃 나는 구조였다.
+
+**개인 데스크탑에서 소수 인원 베타테스트하는 용도**로 무엇이 적절한지
+확인 — gunicorn(이미 `server = app.server`로 진입점은 준비돼 있음)은
+Windows에서 아예 동작하지 않고(fork 기반) 이 규모엔 멀티 워커 관리가
+과함, waitress는 Windows도 되지만 새 의존성이 필요함. 결론:
+`app.run(..., threaded=True)` — 의존성 추가나 OS 제약 없이
+`python app.py` 그대로 쓰면서 동시 요청을 스레드로 처리하게 하는 게
+이 용도엔 충분하다고 판단, 사용자 동의로 적용.
+
+**`app.py`**: `if __name__ == '__main__':` 블록의 `app.run()` 호출에
+`threaded=True` 추가.
+
+검증: `ast.parse` 컴파일 확인, 서버 재기동 후 정상 구동 확인. 동시
+요청이 실제로 안 막히는지는 페이지 최초 GET(SPA 껍데기만 반환, 가벼움)
+2개를 동시에 보내는 걸로는 유의미하게 검증되지 않았다(둘 다 즉시
+응답) — 실제 무거운 연산은 페이지 로드 후 클라이언트가 보내는
+`_dash-update-component` 콜백 요청에서 일어나는데, 그 요청을 재현하려면
+콜백별 정확한 JSON payload가 필요해 이번엔 별도 부하테스트까지는
+하지 않았다. `threaded=True`는 Flask/Werkzeug의 표준 옵션이라 동작
+자체는 문서화된 대로 신뢰할 수 있지만, 완전한 동시성 재현 테스트는
+못 했다는 점을 사용자에게 그대로 전달함.
+
+## 완료: 관리자/유저 구분 없이 '조직별 비교'/'과제 직무/대상자 검증' 임시 숨김
+
+사용자 요청: 관리자/유저를 구분할 수 있으면 두 기능(조직별 비교, 과제
+직무/대상자 검증)을 유저에게만 숨기고, 구분이 어려우면 일단 전체
+숨겼다가 나중에 보완해서 다시 열고 싶다는 것. 코드 전체를 확인한 결과
+로그인/세션/권한 체계가 전혀 없어(auth/login/session 관련 코드 0건)
+"관리자/유저 구분" 자체가 불가능한 상태 — 사용자가 제시한 두 번째
+조건(전체 숨김)을 적용.
+
+**`pages/org_comparison.py`**: `path='/'`(이 페이지가 원래 앱의 루트
+경로)는 그대로 두고, 최상단에 `_FEATURE_HIDDEN = True` 플래그 추가.
+`layout()`이 플래그가 켜져 있으면 실제 데이터 조회 없이
+`dcc.Location(href='/researcher-profile', ...)`을 반환해 루트 진입 시
+'연구원 프로필' 탭으로 클라이언트 사이드 리다이렉트한다. (참고: 처음엔
+`dash.register_page(..., redirect_from=['/'])`를 다른 페이지에 걸어
+루트를 넘기려 했으나, Dash가 루트를 프레임워크 자체 인덱스 라우트로
+이미 예약해 둬서 Flask 라우트 충돌로 서버가 아예 기동하지 않았다 —
+그래서 각 페이지가 자기 자신을 리다이렉트하는 방식으로 처리.)
+
+**`pages/jd_reconciliation.py`**: 마찬가지로 `_FEATURE_HIDDEN = True`
+추가, `layout()`이 플래그가 켜져 있으면 실제 업로드/검증 UI 대신
+"이 기능은 현재 준비 중입니다." 안내만 보여준다(URL을 직접 알고
+들어와도 기능 자체는 동작하지 않음).
+
+**`app.py`**: 네비게이션 바에서 '조직별 비교'/'과제 직무/대상자 검증'
+`dbc.NavItem`을 제거(발견 경로 차단). 재오픈 방법: 두 페이지 파일의
+`_FEATURE_HIDDEN`을 `False`로 바꾸고, 이 커밋에서 지운 두 `dbc.NavItem`
+블록을 git으로 복원하면 된다.
+
+검증: Playwright로 실제 서버에서 (1) `/` 진입 시
+`/researcher-profile`로 리다이렉트되는지 (2) 네비게이션 바에 4개
+링크(연구원 프로필/보유 전문성/연구원 명단/JOB Market)만 남았는지
+(3) `/jd-reconciliation`을 URL로 직접 열어도 "준비 중" 안내만 뜨고
+실제 폼은 안 보이는지 확인.
+
+## 완료: 좌측 상단 "의견 제출하기" 버튼 + 누적 CSV 저장
+
+사용자 요청: 관리자/유저 구분 대신, 좌측 상단 "연구원 대시보드" 옆에
+밝은 색 버튼으로 "기능 관련 수정/추가/보완/기타 의견 제출하기"를
+추가해 베타테스터 의견을 받고 싶다는 것. 확인 문답으로 확정된 사항:
+저장 위치는 `data/processed/` 하위(다른 기능들의 이력 저장 위치와
+동일한 관례), 제출마다 새 파일이 아니라 **파일 하나에 누적**, 작성자는
+**선택 입력**, 파일명은 사용자가 재확인한 표기 그대로 `request_fucntion`
+(오타로 보이지만 사용자가 명시적으로 확정).
+
+**형식은 CSV로 추천·채택**: 제출일시/구분/작성자/내용처럼 여러 항목을
+구조적으로 담아야 하고, 이 프로젝트 전반에서 이미 엑셀을 검토 도구로
+쓰고 있어 나중에 엑셀로 열어 정렬·필터링하며 보기 편하다. txt는 여러
+줄짜리 의견이 여러 건 쌓이면 항목 구분이 애매해질 수 있어 제외.
+
+**`services/feedback.py`**(신규): `FEEDBACK_DIR = data/processed/feedback`,
+`FEEDBACK_PATH = .../request_fucntion.csv`. `submit_feedback(category,
+message, author='')` — 카테고리가 4개(수정/추가/보완/기타) 밖이면
+"기타"로 폴백, 내용이 비어 있으면 `ValueError`(호출부가 그대로 화면에
+안내). `csv.DictWriter`로 파일이 없으면 헤더부터 쓰고, 있으면 한 줄
+추가(append) — 매번 전체를 다시 쓰는 `services/comments.py` 방식과
+달리 로그성 데이터라 append가 더 알맞다고 판단. `app.py`가
+`threaded=True`라 여러 사용자가 동시에 제출할 수 있어, 프로세스 내
+`threading.Lock()`으로 파일 쓰기가 서로 섞이지 않게 함(멀티프로세스
+운영은 아직 아니라서 파일 락까지는 필요 없다고 판단).
+
+**`components/feedback_modal.py`**(신규, `nl_query_bar.py`와 동일한
+패턴 — app.py가 `dash.Dash()` 생성 후 명시적으로 import해야 모듈
+콜백이 등록됨): `render()`가 버튼 + `dbc.Modal`(구분 라디오/내용
+Textarea/작성자 선택 Input)을 반환. 콜백 하나가 열기/취소/제출 3개
+버튼을 `dash.ctx.triggered_id`로 분기 — 열 때 필드 초기화, 취소 시
+닫기, 제출 시 내용 비어있으면 경고, 성공하면 모달은 열어둔 채 필드만
+비우고 초록색 성공 메시지 표시(제출 확인을 사용자가 보게 하려고 자동
+닫기 대신 이렇게 함).
+
+**버튼 색상 관련 이슈 발견·수정**: 처음엔 `dbc.Button`을 색 지정 없이
+(기본값 `color='primary'`) 만들고 인라인 `style`로 배경색을 주황으로
+덮어썼는데, 실제로는 계속 이 앱의 기본 파란색으로 보였다 — 원인은
+`assets/custom.css`의 `.btn-primary { background-color: ... !important;
+}` 규칙이 인라인 style보다 우선 적용되기 때문. `!important`가 없는
+Bootstrap 기본 `color='warning'`(밝은 노랑/주황 계열)로 바꿔 이 충돌을
+피하고, 텍스트 색·굵기만 인라인 style로 남겼다.
+
+**`app.py`**: `feedback_modal` import 추가(nl_query_bar와 같은 줄),
+네비게이션 바 상단 Row에서 `연구원 대시보드` 브랜드 타이틀 바로 옆
+Col로 버튼 배치(버튼 자체에 `className='ms-3'`로 간격).
+
+검증: `submit_feedback()`을 직접 호출해 CSV 헤더/여러 줄 메시지(개행
+포함) 왕복, 빈 내용 시 `ValueError`, 잘못된 카테고리 폴백 확인.
+Playwright로 실제 서버에서 버튼 클릭 → 모달 오픈 → 빈 제출 시 경고 →
+정상 제출 시 성공 메시지 → 취소로 닫힘까지 전체 흐름 확인, 실제로
+`request_fucntion.csv`에 제출한 내용이 그대로 기록됐는지 확인. 버튼
+배경색 자체가 브라우저에서 노란색으로 보이는지는 이 샌드박스의
+Bootstrap CDN 차단(기존에 여러 번 확인된 프록시 아티팩트) 때문에
+직접 확인은 못 했지만, DOM에 `btn-warning` 클래스가 정확히 붙고
+`custom.css`에 이를 덮어쓰는 규칙이 없음을 확인해 실제 배포
+환경에서는 정상적으로 밝은 노랑으로 보일 것으로 판단.
+
+## 완료: 엑셀 다운로드에 "보유 전문성"(LLM) 선택 컬럼 추가 + 보유 전문성 탭 기본값 변경
+
+사용자 요청 두 가지: (1) AI 검색/연구원 명단 엑셀 다운로드에 LLM이
+산출한 "연구원 보유 전문성 분석.json" 내용까지 받을 수 있게 하되,
+선택(옵트인) 가능하도록. (2) "보유 전문성" 페이지 진입 시 첫 화면을
+현재의 "전문성 MAP"에서 "연구원" 탭으로 변경. 확인 문답으로 확정된
+사항: 전문성 4개 필드(강점 분야/강점 키워드/주요 역할·책임/전문지식 및
+역량) 전부 포함, 체크박스는 **기본 해제(미포함) 상태**, 리포트 카드의
+"📍 유사맵" 아이콘이 여는 `?highlight_researcher=...` 딥링크는 기존처럼
+"전문성 MAP" 탭으로 강제 랜딩하는 것을 그대로 유지(새 기본값은 일반
+진입에만 적용).
+
+**`services/researcher_profile_export.py`**: `build_profile_workbook()`은
+`nl_query_bar.py`(AI 검색)와 `researcher_list.py`(연구원 명단) 두 곳에서만
+쓰이는 공용 함수라, 여기 하나만 고치면 두 화면 모두에 반영된다.
+- `_load_tables()`에 `'expertise_profiles': data_store.read_expertise_profiles()`
+  추가(다른 테이블과 달리 DataFrame이 아니라 `researcher_id -> dict`).
+- `_researcher_row_context()`에 `'expertise_profile': tables['expertise_profiles'].get(researcher_id)`
+  추가.
+- `_expertise_field(field)` 신규 — 필드 하나(strength_fields 등)를 한
+  셀에 줄바꿈으로 나열하는 컬럼 함수를 만드는 팩토리. 처음엔 4개 필드를
+  `_col_expertise()` 하나로 합쳐 한 셀에 넣었으나, "4개 항목을 컬럼으로
+  나눠 달라(보유전문성(강점 분야), 보유전문성(강점 키워드) 형식)"는
+  후속 요청으로 `_EXPERTISE_COLUMNS`(4개 (헤더, 함수) 튜플 리스트 —
+  `components/detail_tabs.py`의 `llm_summary_block()`과 동일한 필드/순서)로
+  분리.
+- `build_profile_workbook(researcher_ids, include_expertise=False)` —
+  `include_expertise=True`일 때만 `_COLUMNS`의 로컬 사본에
+  `_EXPERTISE_COLUMNS` 4개(각 너비 26)를 통째로 덧붙인다(모듈 상수
+  `_COLUMNS` 자체는 건드리지 않음).
+- 겸사겸사 발견한 기존 버그 수정: `widths` 리스트가 11개뿐이라
+  `_COLUMNS`(이번 세션에 `직책`이 추가되며 12개가 됨)와 개수가 안 맞아
+  마지막 컬럼(핵심이력)에 명시적 너비가 적용되지 않고 있었음 — `직책`
+  칸에 너비 10을 추가해 `_COLUMN_WIDTHS`(12개)로 상수화.
+
+**`components/nl_query_bar.py`**: 엑셀 버튼 옆에 `dbc.Checklist`(스위치형,
+id `nl-query-excel-expertise-check`, 기본값 `[]`=미포함) 추가, 버튼과
+같은 `_update_excel_button` 콜백에서 결과가 사람 데이터일 때만 같이
+보이도록(`style` 출력 하나 추가) 동기화. `_download_excel` 콜백에
+`State('nl-query-excel-expertise-check', 'value')`를 추가해
+`include_expertise='include' in (value or [])`로 변환해 전달.
+
+**`pages/researcher_list.py`**: 엑셀 버튼이 있는 `dbc.ButtonGroup` 아래
+같은 컬럼(md=2)에 동일한 스위치형 체크박스(id
+`list-excel-expertise-check`, 기본 미포함) 추가. `download_excel` 콜백에
+`State`로 추가해 동일하게 `include_expertise`로 변환 후
+`build_profile_workbook()`에 전달.
+
+**`pages/researcher_similarity_map.py`**: `layout()`의 기본 진입 탭을
+`highlight_researcher` 유무로 분기 — 없으면 `'researcher'`(신규 기본값),
+있으면 기존처럼 `'map'`. `expertise-tab-content`의 초기 `children`도
+탭 클릭 콜백(`_render_expertise_tab`)이 생성하는 것과 동일한 내용이
+되도록 함께 분기(`researcher`면 `_iframe_tab('researcher')`, `map`이면
+기존 `_map_tab_content(...)`) — 그렇지 않으면 활성 탭 표시와 실제 렌더된
+내용이 어긋난다.
+
+검증: (1) `_col_expertise()`를 목(mock) 프로필로 직접 호출해 4개 필드
+레이블·순서·불릿 형식 확인, 프로필 없을 때 `'-'` 확인. (2)
+`_load_tables()`를 목 데이터로 몬키패치해 `build_profile_workbook()`을
+`include_expertise=True/False` 양쪽으로 실행 — 헤더 개수(12/13)·순서,
+"보유 전문성" 셀 내용, 컬럼 너비(마지막 40) openpyxl로 열어서 확인.
+(3) `nl_query_bar.render()`를 직접 호출해 새 체크박스 컴포넌트가
+레이아웃 트리에 포함되는지 확인. (4)
+`pages/researcher_similarity_map.layout()`을 `highlight_researcher` 유무
+양쪽으로 직접 호출해 `active_tab`이 각각 `'researcher'`/`'map'`으로
+갈리고, 초기 콘텐츠가 탭 전환 콜백과 같은 종류(iframe/지도)로 렌더되는지
+확인(이 세션 컨테이너에는 `data/processed/`에 실제 파이프라인 산출물이
+없어 iframe 쪽은 "리포트가 없습니다" 안내로 정상 폴백되는 것까지 확인 —
+실제 데이터가 있는 환경에서는 그 자리에 리포트가 렌더된다). Playwright
+브라우저 구동 테스트는 이번 세션 컨테이너에 `data/processed/`가
+비어 있어(파이프라인 미실행) 실질적인 화면 검증이 어려워 생략 —
+위 함수 단위 검증으로 로직을 대신 확인했다.
+
+### 후속: "보유기술"(tech_ownership.csv) 컬럼 추가
+
+연구원 프로필 화면(`components/detail_tabs.py`의 `owned_expertise_block()`
+우측 "보유기술" 표 — `_tech_ownership_table()`, `tech_ownership.csv`의
+`tech_1~5`/`lv_1~5`/`portion_1~5`)을 엑셀에도 넣어 달라는 요청. 이번
+것은 LLM 산출물이 아니라 `핵심이력`/`학력` 등과 같은 성격의 원천 데이터라,
+앞서 만든 "보유 전문성 포함" 체크박스(LLM 4필드 전용)와 묶지 않고
+`_COLUMNS`에 **항상 포함**되는 일반 컬럼으로 추가했다(직책/과제수행이력
+옆에 있는 핵심이력 바로 뒤, 헤더 "보유기술").
+
+- `_load_tables()`/`_researcher_row_context()`에 `tech_ownership`
+  (`data_store.read_processed('tech_ownership')`) 추가.
+- `_col_tech_ownership(_rid, rows)` 신규 — 화면의 `_tech_ownership_table()`과
+  동일하게 5개 슬롯(`tech_i`/`lv_i`/`portion_i`)을 돌며 이름이 있는
+  슬롯만 `"전문분야 (Lv N, 보유율 M%)"` 형태로 줄바꿈 나열, 슬롯이
+  하나도 없으면 `'-'`.
+- `_COLUMNS`에 `('보유기술', _col_tech_ownership)`을 `핵심이력` 다음에
+  추가(기본 컬럼이 12개→13개가 되며 `_COLUMN_WIDTHS`에도 너비 30 추가).
+
+검증: `_load_tables()`를 목 데이터(2개 슬롯만 채운 tech_ownership 행)로
+몬키패치해 `build_profile_workbook()`을 `include_expertise=True/False`
+양쪽으로 실행 — 헤더 개수(13/17)·순서, "보유기술" 셀에 두 슬롯이
+줄바꿈으로 정확히 나열되고 빈 슬롯은 건너뛰는지, 컬럼 너비까지 openpyxl로
+확인.
+
+### 후속: "특허 실적"/"논문 실적" 선택 컬럼 추가
+
+"특허/논문도 엑셀에 선택적으로 다운받을 수 있게 해줘" 요청. 특허/논문은
+연구원마다 여러 건이 쌓이는 실적 데이터라 항상 켜두면 셀이 매우 길어질
+수 있어, 보유 전문성과 같은 옵트인(기본 해제) 방식을 그대로 따르되
+"특허 포함"/"논문 포함"을 별도 체크박스로 분리했다(하나로 묶으면
+특허만 필요하거나 논문만 필요한 경우를 못 고르게 되므로).
+
+**`services/researcher_profile_export.py`**:
+- `components.timeline_data`에서 `dedupe_patents`/`is_registered`를
+  가져와 재사용 — 화면(`patents_tab()`)과 동일하게 국가별로 중복
+  출원된 같은 특허(`application_id` 동일)를 한 행으로 합친다(등록국이
+  하나라도 있으면 상태를 "등록"으로, 국가는 콤마로 병합).
+- `_df_for(df, researcher_id)` 신규(`_rows_for()`의 DataFrame 버전) —
+  `dedupe_patents()`가 DataFrame을 받아야 해서 특허만 리스트가 아니라
+  필터링된 DataFrame 그대로 컨텍스트에 넣는다.
+- `_load_tables()`/`_researcher_row_context()`에 `patents`(DataFrame,
+  `patents_df` 키로 저장)·`publications`(리스트) 추가.
+- `_col_patents(_rid, rows)` 신규 — dedupe 후 출원일 내림차순으로
+  `"출원일 : 발명명칭 (상태, 대표발명자, 지분율%, 등급(전략출원 등))"`을
+  한 셀에 줄바꿈 나열.
+- `_col_publications(_rid, rows)` 신규 — `pub_date`(없으면 `pub_year`)
+  내림차순으로 `"발표일 : 제목 (게재처, 순위/총수, 기여도%, 교신)"`을
+  한 셀에 줄바꿈 나열.
+- `_PATENT_COLUMNS`/`_PUBLICATION_COLUMNS`(각각 컬럼 1개)를
+  `_EXPERTISE_COLUMNS`와 같은 패턴으로 정의.
+- `build_profile_workbook(researcher_ids, include_expertise=False,
+  include_patents=False, include_publications=False)` — 세 플래그가
+  각각 독립적으로 해당 옵트인 컬럼 그룹을 이 순서(특허 → 논문 → 전문성)로
+  덧붙인다 — 전문성 그룹을 맨 뒤에 고정한 이유는 아래 후속 참고.
+
+**`components/nl_query_bar.py`/`pages/researcher_list.py`**: 기존
+"보유 전문성 포함" 단일 체크박스를 3개 옵션짜리 `dbc.Checklist`(값
+`expertise`/`patents`/`publications`, 전부 기본 해제)로 확장 —
+id를 `*-excel-expertise-check`에서 `*-excel-options-check`로 변경(아직
+릴리즈되지 않은 최근 기능이라 하위호환 부담 없음). 각 다운로드 콜백은
+선택된 값 리스트에서 `'expertise'/'patents'/'publications'`가 있는지
+판별해 `build_profile_workbook()`의 세 플래그로 그대로 전달.
+
+검증: `_load_tables()`를 목 데이터(같은 `application_id`로 국가만
+다른 특허 2건 + 다른 특허 1건, 논문 1건)로 몬키패치해
+`build_profile_workbook(include_patents=True, include_publications=True)`
+실행 — 헤더에 "특허 실적"/"논문 실적" 추가, 특허 셀에서 두 국가 출원이
+한 줄로 합쳐지고(등록국 우선으로 상태 "등록") 서로 다른 특허는 별도
+줄로 유지되는지, 논문 셀 형식(게재처/순위/기여도/교신) 확인. 세 플래그
+모두 기본값(False)일 때 기존 13개 기본 컬럼만 나오는지도 함께 확인.
+`nl_query_bar.render()`를 직접 호출해 새 체크리스트(3옵션)가 레이아웃에
+포함되는지 확인.
+
+### 후속: 보유 전문성 컬럼을 항상 맨 마지막으로 고정
+
+"보유 전문성은 객관적인 내용이 아니므로(부서장/본인 컨펌 X) 엑셀의
+가장 마지막 컬럼에 반영되도록 해줘" 요청 — 특허/논문(원천 실적 데이터)과
+달리 보유 전문성은 LLM이 추정한 값이라 신뢰도 성격이 달라, 어떤 옵트인
+조합을 선택해도 항상 맨 끝에 오도록 `build_profile_workbook()`의
+추가 순서를 특허 → 논문 → 전문성으로 바꿨다(이전엔 전문성 → 특허 → 논문
+순이라 셋 다 선택하면 전문성이 중간에 끼었음). 검증: 세 플래그를 모두
+`True`로 `build_profile_workbook()`을 실행해 헤더 마지막 4개가 정확히
+`보유전문성(강점 분야/강점 키워드/주요 역할·책임/전문지식 및 역량)`
+순서로 오는지 openpyxl로 확인.
+
+## 완료: JOB Market 검색 결과 엑셀 다운로드(사번 1열, 결과 2열)
+
+"JOB market에서 검색한 결과를 엑셀로 다운로드 받을 수 있게 해줘.
+재배치가 가능한 연구원의 사번을 첫번째 컬럼, 결과를 두번째 컬럼에
+반영" 요청. "재배치가 가능한"이라는 표현대로 추천이 1건 이상인
+사람만 포함하고(추천 0건인 사람은 행 자체를 뺌), 딱 2개 컬럼(사번/결과)
+구성으로 만들었다 — 화면에 있는 사진/전문성 요약 카드 등은 엑셀에
+옮기지 않고, 화면의 추천 한 줄(`_recommendation_row` — 과제명/부서/A·B
+점수/사유)만 텍스트로 압축해 담았다.
+
+**`services/job_market.py`**: `build_result_workbook(result)` 신규 —
+`run_project_search()`/`run_individual_search()`/`load_history()`가
+반환하는 report(`roster`, `results` 등)를 그대로 받는다. `roster` 순서를
+따라 `results[rid]['recommendations']`가 있는 사람만 골라, 추천마다
+`"N. 과제명 (부서명) - A: xx%, B: xx%"` + (있으면) `"   사유: ..."` 두 줄을
+만들고 여러 추천은 빈 줄로 이어붙여 한 셀에 담는다(A/B 점수가 없는
+쪽은 "데이터없음"). `researcher_profile_export.py`와 같은 스타일(바탕체
+11pt, 전체 테두리, 헤더 볼드, 줄바꿈 셀)로 새 워크북을 직접 만든다(대상
+데이터 구조가 완전히 달라 그 모듈 함수는 재사용하지 않음). openpyxl/io
+임포트 추가. `result_default_filename()`도 추가(`JOB_Market_결과_YYYYMMDDHHMM.xlsx`).
+
+**`pages/job_market.py`**: 검색 결과 영역(`dcc.Loading(html.Div(id='jm-result'))`)
+바로 아래에 엑셀 다운로드 버튼(`jm-excel-btn`, 기본 숨김) + `dcc.Download`
+추가, 결과 원본을 담아두는 `dcc.Store(id='jm-result-store')` 신규 —
+검색(`_run`)과 이력 보기(`_view_history`) 콜백 둘 다 `_render_result()`로
+화면을 그릴 때 같은 원본 `result`를 이 스토어에도 함께 저장한다(에러
+결과는 `None`으로 비움). `_update_excel_button()` 콜백이 스토어 변화를
+지켜보다 재배치 가능한 사람이 1명이라도 있을 때만 버튼을 보이게/눌리게
+하고, `_download_excel()`이 그 스토어 값을 그대로
+`build_result_workbook()`에 넘긴다.
+
+검증: `build_result_workbook()`을 목 결과(3명 중 2명만 추천 있음, 그중
+한 명은 추천 2건에 점수 없는 필드/빈 사유 섞음)로 직접 호출해 —
+추천 없는 사람이 행에서 빠지는지, 사번이 roster 순서 그대로 1열에
+오는지, 2열 줄바꿈/번호/사유 서식과 "데이터없음" 폴백이 맞는지 openpyxl로
+확인. `pages.job_market.layout()`을 직접 호출해 `jm-excel-btn`/
+`jm-excel-download`/`jm-result-store`가 레이아웃에 포함되는지 확인.
+Playwright 브라우저 테스트는 이번 세션 컨테이너에 `data/processed/`가
+비어 있어(LLM 호출까지 필요한 실제 검색 자체가 불가능) 생략 — 위 함수
+단위 검증으로 로직을 대신 확인했다.
+
+## 완료: 보유 전문성 "연구원"/"연구원↔연구원" 탭을 조직도 클릭식 상세보기로 전환
+
+"보유 전문성 탭의 연구원과 연구원↔연구원 탭에서 모든 연구원 정보가 카드
+형태로 쭉 나열되어있는데, 조직도 상에서 클릭하면 그때 해당 연구원의
+정보가 보이도록 수정해줘" 요청. 이 두 탭은 `pages/researcher_similarity_map.py`가
+정적 HTML 리포트(`연구원 보유 전문성 분석.html`/`researcher_similarity.html`,
+각각 `pipeline/process_researcher_expertise.py`/`process_researcher_similarity.py`가
+생성)를 iframe(srcDoc)으로 그대로 띄우는 구조이고, 좌측 사이드바 조직도는
+이미 있었지만(`team_refer.csv` 기반, `rd_specialist_markdown.build_org_tree()`)
+클릭 시 "그 사람 카드로 스크롤"만 할 뿐 본문엔 항상 전체 연구원 카드가
+나열돼 있었다 — 그래서 스크롤 없이 원하는 사람을 찾기 번거로웠다.
+
+**`pipeline/rd_specialist_markdown.py`**(3개 콘솔형 리포트의 공용 인프라 —
+과제 전문성/strength 표준화/임베딩 설명 리포트도 같은 `console_page()`를
+쓰므로, 영향 범위를 연구원/연구원↔연구원 두 리포트로만 좁히기 위해
+옵트인 플래그로 구현):
+- `console_page(title, sidebar_html, body_html, detail_view=False)` —
+  `detail_view=True`면 `<body class="detail-view">`를 붙이고, 본문 맨 앞에
+  안내 문구(`.detail-placeholder`, "◀ 왼쪽 조직도에서 연구원을 선택하면
+  정보가 표시됩니다.")를 넣는다. 기본값 False라 다른 3개 리포트는 기존
+  동작 그대로.
+- `CONSOLE_STYLE`에 규칙 추가: `body.detail-view .content` 안의
+  `.card`/`.dept-heading`/`.org-heading`을 기본 `display:none`(카드가
+  `.sim-sections` 같은 중첩 래퍼 안에 있어도 맞도록 자손 선택자 사용),
+  `.card.detail-active`만 `display:block`. `.detail-placeholder`는
+  `detail-view`가 아닐 때는 항상 숨김.
+- `_CONSOLE_SCRIPT`의 기존 `a[href^="#"]` 클릭 핸들러(원래 스크롤만 하던
+  곳)에 `document.body.classList.contains('detail-view')`일 때의 분기를
+  추가 — 클릭한 카드에만 `.detail-active`를 옮겨 붙이고(기존 활성 카드는
+  제거) 안내 문구를 숨긴다. 조직도 검색(`org-search-input`)이나
+  드래그 리사이즈 등 나머지 인터랙션은 그대로.
+
+**`pipeline/process_researcher_expertise.py`/`process_researcher_similarity.py`**:
+각각의 `console_page(...)` 호출에 `detail_view=True`만 추가.
+
+**`pages/researcher_similarity_map.py`의 `_iframe_tab()`**: UMAP 점 클릭이나
+관계 그래프 노드 클릭으로 "연구원" 탭으로 넘어올 때(`scroll_to` 인자)
+주입하는 스크립트가 기존엔 `el.scrollIntoView()`만 호출했는데, detail-view
+아래에서는 그 카드가 `.detail-active`가 아니라서 숨겨진 채로 스크롤만
+되어 화면엔 아무것도 안 보이는 회귀가 생길 뻔했다 — 사이드바 클릭
+핸들러와 동일한 로직(다른 카드의 `.detail-active` 제거 → 대상 카드에
+추가 → 안내 문구 숨김)을 이 주입 스크립트에도 그대로 추가해 미리 잡았다.
+
+검증: `rd_specialist_markdown` 함수들로 카드 2개짜리 목(mock) 리포트를
+직접 만들어(`console_page(..., detail_view=True)`) 로컬 HTML로 저장한 뒤
+Playwright(Chromium)로 열어 — 초기 상태에서 카드 2개·부서 헤딩 모두
+숨겨지고 안내 문구만 보이는지, 조직도에서 첫 번째 사람을 클릭하면 그
+사람 카드만 보이고 안내 문구가 사라지는지, 이어서 두 번째 사람을
+클릭하면 첫 번째 카드는 다시 숨고 두 번째 카드로 바뀌는지 확인. 별도로
+`researcher_similarity_map._iframe_tab('researcher', scroll_to='r-002')`가
+만드는 주입 스크립트를 같은 목 리포트에 적용해 Playwright로 열어보고,
+로드 즉시(클릭 없이) 목표 카드가 `.detail-active`로 바로 보이는지도
+확인. 이번 세션 컨테이너엔 실제 파이프라인 산출물이 없어 진짜
+`연구원 보유 전문성 분석.html`/`researcher_similarity.html`로는 확인하지
+못했지만, 두 리포트 모두 같은 `rd_specialist_markdown` 함수와 카드 DOM
+구조(`class="card" id="r-{사번}"`)를 공유하므로 위 검증이 그대로
+적용된다.
+
+## 완료: 연구원/연구원↔연구원 탭 — 프로필 이동 아이콘 + 엑셀 다운로드 + 표시 개수/검색 개선
+
+한 메시지로 들어온 5개 요청. 1·3·4·5는 범위가 명확해 바로 구현했고,
+2(부서 단위 엑셀 다운로드)는 UI 위치/부서 트리 기준/유사 연구원 명단
+범위 3가지가 설계에 직접 영향을 줘 `AskUserQuestion`으로 확인 후 구현—
+셋 다 추천안(①탭 바깥 별도 패널 ②조직도(team_refer.csv) 트리 ③저장된
+전체 목록)으로 확정됐다.
+
+**1) 카드에 "연구원 프로필로 이동" 아이콘 추가** (`pipeline/rd_specialist_markdown.py`):
+- `profile_link_html(researcher_id)` 신규 — `map_link_html()`과 동일한
+  `.map-link` 스타일, `/researcher-profile?id={rid}` + `target="_top"`으로
+  이동(researcher_profile.py의 `layout(id=...)`이 그대로 받아 그 사람을
+  선택해 보여주는 기존 동작 재사용).
+- `.card-top` 안에서 두 아이콘(프로필/전문성 MAP)이 항상 한 덩어리로
+  오른쪽에 붙도록 `<div class="card-icons">{profile_link_html}{map_link_html}</div>`로
+  묶었다 — 기존엔 `.map-link` 자체에 `margin-left:auto`가 있어 아이콘이
+  하나뿐일 때만 맞는 방식이었으므로, `margin-left:auto`를 `.card-icons`
+  래퍼로 옮기고 개별 `.map-link`에서는 뺐다.
+- `pipeline/process_researcher_expertise.py`(`_researcher_card_html`)와
+  `pipeline/process_researcher_similarity.py`(카드 헤더) 둘 다 이 래퍼로
+  교체.
+
+**3) 유사 연구원 리스트 행에도 프로필 이동 아이콘** (`process_researcher_similarity.py`):
+`profile_icon_link_html(researcher_id)` 신규(아이콘만, 텍스트 없는 소형
+버전 — 표 행처럼 좁은 공간용) — `_match_row_html()`의 이름 옆에 붙였다.
+
+**4) 유사 연구원 표시 개수 기본값 3명**: `count_toggle`의 라디오 버튼
+`checked` 속성을 `count-5`에서 `count-3`으로 옮겼다(CSS `:checked ~`
+형제 선택자 기반이라 이 한 줄만 바꾸면 됨 — JS 불필요).
+
+**5) 연구원 개별 프로필 이름 검색에 부서명 추가**(`pages/researcher_profile.py`
+`_load_selector_data()`의 `_opt()`): 라벨을
+`"이름 [부서]  (사번) — 직급"` 형태로 바꿔 동명이인을 부서로 구분할 수
+있게 했다.
+
+**2) 보유 전문성 + 유사 연구원 명단 엑셀 다운로드(개인별/부서 단위)**:
+- `services/similarity_map.py`에 조직도 유틸 추가 —
+  `pipeline.rd_specialist_markdown.build_org_tree`/`read_team_refer`를
+  그대로 가져와(`pipeline`이 실제 파이썬 패키지라 `services/job_market.py`의
+  sys.path 트릭 없이 바로 import 가능) `org_tree_options()`(들여쓰기로
+  평탄화한 부서 드롭다운 옵션, value=dep_id), `researchers_under_departments
+  (dep_ids, include_children)`(선택 부서(들)의 org_code + include_children면
+  하위 부서 org_code까지 모아 researchers.csv와 매칭), `individual_search_options()`
+  ("이름 [부서] (사번)" 형식, researcher_profile.py와 동일 표기)를 만들었다.
+- `services/researcher_profile_export.py`에 `expertise_field_lines(profile,
+  field)` 공개 함수 추가 — 기존 `_expertise_field()`(`_researcher_row_context()`
+  전제)의 내부 로직을 분리해, profile dict만 있는 호출부(이번 신규 기능)도
+  같은 서식(강점 분야/키워드/역할·책임/역량 4필드)을 재사용할 수 있게 했다.
+- `services/similarity_map.py`에 `build_expertise_similarity_workbook
+  (researcher_ids)` 신규 — 컬럼: 사번/성명/부서/보유전문성 4개(위 함수 재사용)/
+  유사 연구원 명단(researcher_similarity.json의 `similar` 리스트 **전체**를
+  "이름(부서) - 유사도% [판정]" 줄로, 화면의 3/5/10 표시개수 제한과 무관).
+  `researcher_ids` 중복은 순서를 유지하며 제거. `researcher_profile_export.py`
+  스타일(바탕체 11pt, 테두리, 헤더 볼드, 줄바꿈 셀)을 그대로 따름.
+- `pages/researcher_similarity_map.py`: 탭(`dcc.Loading(...expertise-tab-content)`)
+  아래 `_download_panel()`을 상시 배치하고, `expertise-tabs.active_tab`을
+  구독하는 콜백으로 "전문성 MAP" 탭에서는 숨긴다(요청이 "연구원,
+  연구원↔연구원 탭에서"로 한정했으므로). 패널 안: `dbc.RadioItems`로
+  "개인별 검색"/"부서 선택(조직도)" 모드 전환(다른 모드의 입력 행은 숨김),
+  개인별은 `dcc.Dropdown(multi=True)` + `individual_search_options()`,
+  부서는 `dcc.Dropdown(multi=True)` + `org_tree_options()` + "하위부서
+  포함" 스위치(기본 켬). 다운로드 콜백은 선택 검증(미선택/매칭 없음 시
+  빨간 안내 문구) 후 `build_expertise_similarity_workbook()` 호출.
+
+검증: `services/similarity_map.py`의 새 함수들을 `read_team_refer`/
+`read_processed`/`read_expertise_profiles`/`read_similar_researchers`를
+목(mock) 데이터로 몬키패치해 직접 호출 — 3단 조직도(루트+하위 2개)에서
+`include_children=False`면 루트 소속 1명만, `True`면 하위 부서 포함
+3명 전부 나오는지, 개별 하위부서만 선택하면 그 부서 소속만 나오는지,
+개인별 검색 옵션 라벨에 부서가 포함되는지 확인. `build_expertise_similarity_workbook()`은
+중복 ID 제거, 프로필 없는 사람은 4개 필드 전부 "-", 유사 연구원 점수가
+없을 때 "데이터없음" 폴백, 유사 연구원이 명단에 없는(이름 매핑 안 되는)
+경우 사번 그대로 표시되는지까지 openpyxl로 열어 확인. 프로필/전문성MAP
+아이콘은 `rd_specialist_markdown` 함수로 만든 목 카드 HTML을 Playwright로
+열어 두 아이콘의 텍스트·href가 정확한지, `.card-icons`로 오른쪽에 나란히
+붙는지(스크린샷) 확인. `pages/researcher_similarity_map.layout()`을 직접
+호출해 다운로드 패널의 모든 컴포넌트 id가 레이아웃에 포함되는지 확인.
+이번 세션 컨테이너엔 실제 파이프라인 산출물(HTML 리포트)이 없어 진짜
+브라우저로 전체 흐름(조직도 선택 → 다운로드 클릭 → 파일 저장)을 끝까지
+확인하지는 못했다 — 화면에 반영하려면 `process_researcher_expertise.py`/
+`process_researcher_similarity.py`를 다시 실행해 두 HTML을 재생성해야
+한다(직전 완료 항목과 동일한 제약).
+
+## 완료: 엑셀 다운로드에 "직무"/"직무이력" 선택 컬럼 추가
+
+"AI검색, 연구원 명단 엑셀 다운로드 시 직무(researchers.csv의
+job_function), 직무이력(job_profile.csv)을 선택적으로 다운받을 수
+있도록 해줘" 요청. 특허/논문과 같은 성격(LLM 산출물이 아닌 원천 데이터)
+이지만, 사용자가 명시적으로 "선택적으로"라고 했고 서로 다른 두 출처
+(researchers.csv 단일 값 vs job_profile.csv 이력)라 특허/논문처럼
+독립적인 체크박스 2개("직무 포함"/"직무이력 포함")로 추가했다.
+
+**`services/researcher_profile_export.py`**: `build_profile_workbook()`
+공용 함수라 여기 한 곳만 고치면 AI 검색/연구원 명단 다운로드 둘 다 반영.
+- `components.timeline_data.job_points()`(이미 있던 job_profile.csv wide
+  포맷 파서 — researcher_profile.py 타임라인이 쓰는 것과 동일 로직) 재사용.
+- `_load_tables()`/`_researcher_row_context()`에 `job_profile`
+  (DataFrame, `job_profile_df` 키 — `_df_for()`로 필터링, dedupe_patents
+  처럼 DataFrame 그대로 필요) 추가.
+- `_col_job_function(_rid, rows)` 신규 — `researcher.job_function` 값
+  그대로(단일 값이라 다른 컬럼처럼 목록 서식 불필요).
+- `_col_job_profile(_rid, rows)` 신규 — `job_points()`로 슬롯을 푼 뒤
+  시작일 내림차순 정렬, `"직무명('YY ~ 'YY/현재)"`를 과제수행이력과 동일한
+  표기 규칙으로 줄바꿈 나열.
+- `_JOB_FUNCTION_COLUMNS`/`_JOB_PROFILE_COLUMNS`(각 컬럼 1개)를 기존
+  `_PATENT_COLUMNS`/`_PUBLICATION_COLUMNS`와 같은 패턴으로 추가.
+- `build_profile_workbook()`에 `include_job_function=False`/
+  `include_job_profile=False` 파라미터 추가, 특허 → 논문 → 직무 → 직무이력
+  → (항상 마지막) 보유 전문성 순으로 옵트인 컬럼을 붙인다.
+
+**`components/nl_query_bar.py`/`pages/researcher_list.py`**: 기존
+3옵션(보유 전문성/특허/논문) 체크리스트에 "직무 포함"/"직무이력 포함"
+2개를 추가(총 5옵션, 전부 기본 해제). 두 다운로드 콜백 모두
+`'job_function'/'job_profile' in excel_options`를 새 파라미터로 그대로
+전달.
+
+검증: `_load_tables()`를 목 데이터(job_function='SW개발', job_profile.csv
+2개 슬롯 — 하나는 종료일 있음, 하나는 진행중)로 몬키패치해
+`build_profile_workbook(include_job_function=True, include_job_profile=True)`
+실행 — 헤더에 "직무"/"직무이력" 추가, "직무" 셀 값, "직무이력" 셀이
+최신(진행중) 항목부터 내림차순으로 두 줄 나열되고 진행중 항목은 "현재"로
+표기되는지 openpyxl로 확인. 플래그 전부 기본값(False)일 때 기존 13개
+기본 컬럼만 나오는 것도 함께 확인. `nl_query_bar.render()`로 새
+체크리스트 5개 옵션이 레이아웃에 포함되는지 확인.
+
+## 완료: evaluations.csv를 long → wide로 재구성 + 상/하반기업적 추가 + 3월 기준 회계연도
+
+"evaluations.csv 생성 로직 설명해줘(확인 후 수정예정)"로 시작해, 여러 차례
+문답으로 확정된 대규모 스키마 변경. 기존엔 `researcher_id, year, grade,
+score`(long, 연봉등급만) 였는데, 다음으로 바뀌었다:
+
+**확정된 요구사항**:
+1. **researcher_id당 1행(wide)**, 연봉등급 3개년 + 상/하반기업적(EM/ES/MT)
+   3개년 컬럼(`{연도}_salary_grade`, `{연도}_first_half_grade`,
+   `{연도}_second_half_grade`) — 점수(score) 컬럼은 없음(연봉등급도
+   상/하반기업적도 점수 환산 안 함 — 다운스트림에서 원래 안 쓰이던 값이라
+   완전히 제거).
+2. **연도 기준을 "매년 3월 시작 회계연도"로 통일**: 오늘이 3월 이후면
+   FY=올해, 1~2월이면 FY=작년. 연봉등급 3개년=[FY,FY-1,FY-2], 상/하반기업적
+   3개년=[FY-1,FY-2,FY-3](그 해 연봉등급이 전년도 업적 평가를 반영하므로
+   항상 연봉등급 연도-1). 기존에 논의했던 "원본에 해당 연도 컬럼이
+   있는지로 분기"하는 방식은 전부 이 날짜 기반 계산으로 대체됐다(더 이상
+   원본 파일 컬럼 존재 여부를 보지 않음 — 특정 연도 컬럼이 원본에 없으면
+   그 컬럼만 비워둘 뿐, 3개년 범위 자체는 안 바뀜).
+3. **연구원 개별 프로필 표(`evaluation_incentive_block`)**: 연도 열마다
+   그 해 연봉등급과 (그 해-1) 상/하반기업적을 합쳐 한 셀로 표시.
+4. **엑셀 다운로드("평가" 컬럼)**: 2줄 — 1줄: 연봉등급 3개년 슬래시("다/다/다"),
+   2줄: 상/하반기업적 3개년 쌍을 괄호로 묶어 콤마 나열("(MT/MT, MT/MT, MT/MT)").
+5. **합성 표기 규칙**(문답으로 8가지 조합 전부 확정):
+   - 연봉등급 있음 → `"{연봉등급}({있는 반기만 슬래시로 이어붙임})"`,
+     반기 둘 다 없으면 괄호 없이 연봉등급만("다").
+   - 연봉등급 없음 → 반기 두 자리를 항상 `"{첫자리 or '-'}/{둘째자리 or '-'}"`로
+     (예: `-/MT`, `MT/-`, `-/-`) — 있는 것만 골라 보여주는 위 규칙과 달리
+     이쪽은 자리를 항상 유지한다(사용자가 초안의 "MT" 단독 표기를
+     "-/MT"로 직접 수정하며 확정).
+   - 이 규칙을 프로필 표/엑셀 다운로드 양쪽에 동일하게 적용.
+6. 색상은 기존 `GRADE_COLOR`(가~마 5색) 그대로 — 합성 문자열이 돼도
+   앞의 연봉등급 부분 기준으로 계속 색칠.
+7. `pages/researcher_list.py`의 하드코딩된 `"'24평가"/"'25평가"/"'26평가"`
+   3개 컬럼도 동적 연도로 전환.
+
+**`services/evaluations.py`**(신규) — 위 로직의 단일 출처. 파이프라인과
+3곳의 화면/엑셀 소비처가 전부 이 모듈 하나만 보고 계산하게 해서, 한쪽만
+고치고 다른 쪽을 깜빡하는 사고를 막는다.
+- `current_fiscal_year(today=None)` — 3월 기준 회계연도 계산.
+- `evaluation_years(today=None)` — `(연봉등급 3개년, 업적 3개년)`, 둘 다
+  내림차순.
+- `salary_grade_column(year)`/`first_half_column(year)`/`second_half_column(year)`
+  — 컬럼명 생성기(오타 방지, 한 곳에서만 포맷 정의).
+- `format_half_pair(first, second)` — "{first or '-'}/{second or '-'}".
+- `format_evaluation_cell(salary, first, second)` — 위 6가지 조합 규칙을
+  구현한 합성 함수. `SALARY_GRADES`(가나다라마)/`HALF_GRADES`(EM/ES/MT)
+  튜플도 여기서 export.
+
+**`pipeline/process_tp_evaluation.py`**: 기존 `GRADE_COLS`(연도 3개
+하드코딩)/`GRADE_TO_SCORE`(점수 매핑) 상수를 걷어내고, `evaluation_years()`로
+얻은 6개 연도(연봉등급 3 + 업적 3)에 대해 원본 컬럼(`"{연도} 연봉등급"`,
+`"{연도} 상반기업적"`, `"{연도} 하반기업적"`)을 하나씩 읽어 유효값(가~마 /
+EM·ES·MT)만 남기고 `researcher_id`당 1행짜리 `result` DataFrame에
+컬럼으로 직접 붙인다(예전처럼 연도별로 melt해서 세로로 쌓지 않음). 원본에
+특정 연도 컬럼이 없으면 그 컬럼만 빈 문자열로 두고 WARN, 유효하지 않은
+값(오타 등)도 그 셀만 비우고 WARN — 나머지는 그대로 저장. 이름/성별/
+생년월일 추출(1번 섹션)은 이번 변경과 무관해 그대로 둠.
+
+**`services/researcher_profile_export.py`**: `_col_evaluation()`을
+wide 컬럼(`evaluations.salary_grade_column()` 등)을 읽어
+`format_half_pair()`로 조립하는 2줄(`\n` 하나) 문자열로 재작성. 헤더
+`"평가('24~'26)"`도 하드코딩을 걷어내고 모듈 임포트 시점에
+`_EVAL_SALARY_YEARS`(evaluation_years() 결과)로 동적 생성(`_EVAL_HEADER`)
+— 회계연도가 바뀌는 건 1년에 한 번뿐이라 매 요청마다 재계산할 필요 없이
+프로세스 기동 시 한 번이면 충분(이 앱의 다른 "현재 시점 기준" 값들과
+동일한 전제). 평가 컬럼 너비도 12→22로 넓힘(2줄째 반기 표기가 더 길어져서).
+
+**`components/profile_sections.py`**: `evaluation_incentive_block()`의
+`_grade()`(단순 조회)를 `_eval_cell()`(연봉등급 + 전년도 반기 조회 →
+`format_evaluation_cell()`로 합성, `(색상용 연봉등급, 표시 문자열)` 튜플
+반환)로 교체. `_grade_td()`는 색상은 첫 번째 값(연봉등급)으로, 텍스트는
+두 번째 값(합성 문자열)으로 렌더링하도록 시그니처 변경. 문자열이 길어져
+폰트 크기를 0.9rem→0.8rem으로 살짝 줄임. NaN-as-string("nan"/"None")
+정리용 `_clean_grade()` 헬퍼 추가(evaluations.csv를 `read_processed()`로
+읽으면 빈 셀이 파이썬 float NaN이 되고, 이걸 다시 문자열화하면 "nan"이
+되는 이 프로젝트 공통 패턴 — 다른 CSV들의 `_s()` 계열 헬퍼와 동일 목적).
+
+**`pages/researcher_profile.py`**: `years = [CURRENT_YEAR-2, CURRENT_YEAR-1,
+CURRENT_YEAR]`(달력연도)를 `sorted(evaluation_years()[0])`(회계연도, 3월
+기준)로 교체 — 안 그러면 1~2월엔 화면이 찾는 연도와 evaluations.csv에
+실제로 있는 컬럼이 어긋난다. 나이 계산 등에 쓰는 `CURRENT_YEAR` 자체는
+달력연도 그대로 유지(이번 요청과 무관).
+
+**`pages/researcher_list.py`**: 모듈 상단에 `_EVAL_SALARY_YEARS`(오름차순)/
+`_EVAL_GRADE_COLUMNS`(`"'24평가"` 형태, 동적)를 계산해두고, `_grade()`
+조회 로직과 `_GRADE_STYLES`(조건부 배경색) 둘 다 이 동적 목록을 쓰도록
+교체. 이 표는 "직급/직무" 같은 정량 지표 나열이 목적이라, 프로필/엑셀과
+달리 상/하반기업적을 합성하지 않고 연봉등급만 표시(사용자 확인: 하드코딩
+연도만 동적으로 바꾸면 됨, 서식 자체는 그대로).
+
+**`services/data_labels.py`**: 없어진 `grade`/`score`(evaluations.csv)
+고정 라벨 항목을 지우고, `label_for()`에 `{연도}_salary_grade` 등 동적
+평가 컬럼명을 정규식으로 인식해 `"2026 연봉등급"`처럼 라벨링하는 분기
+추가(AI 검색 결과 테이블 헤더용).
+
+**알려진 미반영 항목**: `pages/org_comparison.py`(조직별 비교, 이미
+`_FEATURE_HIDDEN=True`로 항상 리다이렉트되는 죽은 코드)도 옛 long 포맷
+(`eva['year']`)을 그대로 쓰고 있어 이번 변경으로 논리상 깨졌다. 지금은
+도달 불가능한 코드라 당장 영향은 없지만, 나중에 이 기능을 다시 켠다면
+`pages/researcher_list.py`와 같은 방식으로 같이 고쳐야 한다.
+
+검증: `services/evaluations.py`의 회계연도 계산을 2026-01/2026-03/
+2026-08/2027-01/2027-03 등 여러 날짜로 직접 호출해 3월 경계가 정확히
+지켜지는지, `format_evaluation_cell()`을 8가지 조합 전부 표로 돌려
+확정된 표기와 정확히 일치하는지 확인. `pipeline/process_tp_evaluation.py`를
+목(mock) T&P DataFrame(정상값/빈값/잘못된 값 섞음)으로 직접 실행해
+evaluations.csv가 wide로 정확히 저장되는지, 유효하지 않은 값만 선택적으로
+빈 칸 처리되는지 raw CSV 파일까지 열어 확인. `_col_evaluation()`/
+`evaluation_incentive_block()` 둘 다 목 데이터로 직접 호출해 8가지 조합
+전부(둘 다 있음/연봉등급만/반기만/전부 없음 등) 기대한 문자열·색상이
+나오는지 확인. `pages/researcher_list.py`의 `_build_summary_df()`를
+목 데이터로 실행해 동적 연도 컬럼명·조건부 스타일 규칙(15개 = 5등급×3년)이
+올바르게 생성되는지 확인. 관련 5개 파일 전부 `ast.parse`로 구문 확인,
+`pages.researcher_list`/`pages.researcher_profile`를 Dash 앱 컨텍스트에서
+직접 import해 모듈 로드 자체가 깨지지 않는지 확인. 이번 세션 컨테이너엔
+실제 T&P 원본 파일이 없어 진짜 파이프라인 재실행·브라우저 확인은
+못 했다 — 화면에 반영하려면 `python pipeline/process_tp_evaluation.py`
+(또는 전체 파이프라인)를 다시 실행해 evaluations.csv를 재생성해야 한다.
+
+## 완료: JOB Market 추천 결과의 A/B 유사도 의미를 안내 아이콘으로 표기
+
+"job market 결과에서 A 유사도 B 유사도가 뭘 의미하는거였지? 아이콘에
+어떤 의미인지 표기해줘" — 기존엔 결과 상단 Alert 문구에만 짧게("A: 과제
+분석 기반, B: 배정 인력 전문성 기반") 적혀 있어 눈에 잘 안 띄었다.
+`services/job_market.py` 모듈 docstring에 있던 A/B 정의(A=과제 자체의
+분석 문서 임베딩과 비교, B=그 과제에 배정된 사람 중 가장 가까운 1명과
+비교)를 그대로 옮겨, "추천 결과" 제목 옆에 hover 안내 아이콘(ⓘ)을
+추가했다 — `components/detail_tabs.py`의 등급/Lv 안내 아이콘과 동일한
+hover 패턴(다만 이미지 대신 텍스트 툴팁).
+
+**`pages/job_market.py`**: `_score_info_icon()` 신규 — `bi-info-circle`
+아이콘 + `dbc.Tooltip`(A/B 각각 한 줄 설명 + "데이터 없음일 때" 안내).
+`_render_result()`의 "추천 결과" `html.H6` 옆에 붙였다(추천 목록 전체에
+한 번만 — 등급/Lv 안내 아이콘처럼 반복되는 배지마다가 아니라 섹션당
+하나로 충분).
+
+검증: `_render_result()`를 목 결과로 직접 호출해 아이콘 id/Tooltip
+target이 일치하는지, 툴팁 내용에 A/B 설명 문구가 정확히 들어가는지 확인.
+
+## 완료: 연구원 개별 프로필 검색에 과제명 추가 + 최근 검색 이력
+
+"1. 연구원 개별 프로필에서 연구원 검색 시 기존 부서명에서 과제명도
+추가해줘. 2. 연구원 검색 시 내가 검색했었던 연구원 이력이 남아있어서
+다시 찾아볼 수 있게해줘" 요청.
+
+**1) 검색 라벨에 과제명(org_code) 추가**(`pages/researcher_profile.py`
+`_load_selector_data()`의 `_opt()`): 기존 `"이름 [부서]  (사번) — 직급"`을
+`"이름 [부서 · 과제]  (사번) — 직급"`으로 — 부서/과제 둘 다 비어있지
+않은 것만 `·`로 이어 대괄호 안에 넣는다(둘 다 없으면 대괄호 자체 생략).
+
+**2) 최근 검색 이력**: 로그인 체계가 없어(이 프로젝트 공통 제약) 서버에
+"누구의" 이력인지 구분할 방법이 없다 — 대신 `dcc.Store(id='researcher-
+search-history', storage_type='local')`로 **브라우저 localStorage**에
+남겨, 같은 브라우저로 새로고침/재방문해도 이어서 보이게 했다("나" =
+이 브라우저 하나로 구분).
+- `_record_search_history()` — `researcher-select` 값이 바뀔 때마다(직접
+  검색이든 이력 칩 클릭이든) 그 사람을 이력 맨 앞으로 올린다. 이미 있던
+  항목은 지우고 다시 넣어 중복 없이 최신순 유지, 최대 8개(`_HISTORY_LIMIT`)
+  만 보관.
+- `_render_history_chips()` — 선택 카드 하단에 "최근 검색" 칩(`dbc.Badge`,
+  패턴매칭 id `{'type':'researcher-history-chip','rid':...}`)으로 렌더링,
+  비어 있으면 안내 문구.
+- `_select_from_history()` — 칩을 누르면 그 사람의 부서로 `dept-select`도
+  같이 옮긴 뒤 `researcher-select` 값을 설정한다 — 부서를 안 맞추면
+  현재 부서 필터에 그 사람이 없어 선택이 무시될 수 있어서(`layout()`의
+  `id=` 딥링크가 처음부터 default_dept/default_rid를 함께 계산해 두는 것과
+  동일한 이유). `Output('researcher-select', 'value', allow_duplicate=True)`
+  — 이미 `filter_by_dept` 콜백이 같은 Output을 갖고 있어 중복 허용 필요.
+
+검증: `_load_selector_data()`로 라벨에 "부서 · 과제"가 올바르게 붙는지
+확인. `_record_search_history()`를 연속 호출해(A선택→B선택→A재선택)
+최신순·중복제거가 맞는지, `_render_history_chips()`가 그 목록으로 올바른
+배지(텍스트/패턴매칭 id)를 만드는지 확인. `layout()`을 직접 호출해
+`researcher-search-history`/`researcher-history-chips` 컴포넌트가
+레이아웃에 포함되는지 확인. `_select_from_history()`는 `dash.ctx.
+triggered_id`를 쓰는 함수라 테스트 스크립트에서 직접 호출하면 컨텍스트
+오류가 나는 게 정상(이 앱의 다른 패턴매칭 id 콜백들과 동일한 제약) —
+로직 자체는 소스 리뷰로 확인.
+
+## 완료: JOB Market "제외" 부서 선택이 결과에 영향을 주지 않도록 수정
+
+이전 턴에서 "부서를 선택하면 그 부서의 모든 과제가 제외되는 게 맞냐"고
+확인을 요청하셨고(전체 42개 과제 중 5개 과제짜리 부서를 제외하면 37개로
+줄어드는 걸 관찰) — 코드를 다시 확인해 그게 `_expand_excluded_projects()`
+가 부서를 그 부서 소속 과제 전체로 펼쳐 제외 집합에 합치기 때문이라고
+설명했다. 이번 요청은 그 동작을 **원치 않는 것으로 확정** — "부서는
+단순히 과제를 선택하기 위한 캐스캐이딩 역할만 하고, 실제 제외/검토는
+과제 단위에서만 선택하게, 부서는 결과에 아무 영향이 없도록" 수정.
+
+**`services/job_market.py`**: `_expand_excluded_projects(excluded_departments,
+excluded_org_codes, all_rows)`(부서→과제 펼치기 로직)를 완전히 제거하고,
+`_normalize_excluded_projects(excluded_org_codes)`(과제명 정규화만 하는
+한 줄짜리 함수)로 교체. `run_project_search()`/`run_individual_search()`
+시그니처에서 `excluded_departments` 파라미터 자체를 삭제(부서 값이
+함수에 전달될 통로 자체를 없애 "결과에 영향 없음"을 구조적으로 보장) —
+이제 두 함수 다 `excluded_org_codes`(제외할 과제 목록)만 받는다. 이
+파라미터를 위해서만 읽던 `project_confl_address.csv`/`_dedup_candidate_rows()`
+호출도 두 함수에서 같이 제거(불필요해짐).
+
+**`pages/job_market.py`**: `_run()` 콜백에서 `State('jm-exclude-dept',
+'value')`를 제거하고 `jm.run_project_search()`/`run_individual_search()`
+호출에서 `excluded_depts` 인자를 뺐다. `jm-exclude-dept` 드롭다운
+자체는 그대로 남겨뒀다 — `_update_exclude_project_options()`가 이미
+그 값으로 "제외할 과제" 드롭다운의 옵션만 좁혀 보여주는 순수 캐스케이딩
+용도로만 쓰고 있어서(결과 계산에는 관여하지 않음), 과제를 부서별로
+빠르게 찾는 용도로는 계속 유용하다. 다만 오해의 소지가 있어 placeholder
+문구를 "제외할 부서(복수 선택)" → "부서로 좁혀 찾기(선택, 결과엔 영향
+없음)"로 바꾸고, 섹션 제목 아래에 "실제로 제외되는 건 아래 '제외할
+과제'에서 고른 과제뿐입니다" 안내 문구를 추가했다. 스테일해진 주석
+("_expand_excluded_projects — 부서 제외와 개별 과제 제외는 계속
+독립적으로 합쳐진다")도 새 동작에 맞게 수정.
+
+검증: `_normalize_excluded_projects()`가 과제명만 정규화하는지 확인.
+사용자가 관찰한 시나리오(전체 42개 프로젝트, 그중 5개가 특정 부서 소속)를
+목 DataFrame으로 재현해 — 부서를 제외 집합에 전혀 넣지 않고도(새 함수
+시그니처 자체가 부서를 받지 않으므로 구조적으로 불가능) 42개가 그대로
+후보로 남는지 확인. `run_project_search`/`run_individual_search`의
+`inspect.signature()`로 `excluded_departments` 파라미터가 완전히
+사라졌는지 확인. `pages.job_market.layout()`을 직접 호출해
+`jm-exclude-dept`/`jm-exclude-project` 두 컴포넌트가 여전히 레이아웃에
+있는지(드롭다운 자체는 유지) 확인.
+
+## 완료: JOB Market 추천에 "반드시 배치해야 한다면" 강제 후보 1~3개 추가
+
+"재배치 결과를 지금과 같이 유지하되, 재배치가 불가능한 과제를 제외하고
+반드시 나머지 과제 중 배치해야 한다고 가정했을 때 1~3개를 반드시 고른
+값도 함께 보여달라" 요청. 문답으로 확정: (1) 기존 LLM 호출 하나를
+그대로 재사용하되 출력 형식만 확장(별도 LLM 호출 추가 안 함), (2) 최소
+1개는 반드시 나와야 함(후보가 있는 한), (3) 재배치 가능 여부
+통계/엑셀 다운로드 기준은 그대로 `recommendations`만 보고, 이번 추가는
+**화면에만 보이는 참고 정보**, (4) 기존 추천/근접 후보 블록 아래에
+경고색으로 구분해서 표시.
+
+**`services/job_market.py`**:
+- `_RECOMMEND_SYSTEM_PROMPT`에 5번 규칙 추가 — `recommendations`/
+  `closest_non_match` 판단과 완전히 별개로, "무조건 후보 중 하나로
+  재배치해야 한다"고 가정했을 때 그나마 최선인 과제를 `must_place`에
+  반드시 1~3개(빈 리스트 금지) 담게 지시. 같은 프롬프트/같은 LLM 호출
+  안에서 세 번째 필드로만 추가돼 호출 횟수는 그대로.
+- `_fallback_must_place(shortlist)` 신규 — LLM이 규칙을 안 지켰거나(빈
+  `must_place`) 호출/파싱 자체가 실패해도, 후보(shortlist)가 하나라도
+  있으면 임베딩 유사도 1순위를 그대로 `must_place`에 채워 넣는 안전망.
+  "1개는 꼭 반드시" 요구를 LLM 순응 여부와 무관하게 코드 레벨에서 보장.
+- `_judge_recommendations()` 반환값이 2-tuple → 3-tuple(`recommendations,
+  closest_non_match, must_place`)로 확장, 모든 실패 경로(raw 없음/JSON
+  파싱 실패/must_place 누락)에서 `_fallback_must_place()`를 적용.
+  `shortlist`가 애초에 비어 있으면(후보 자체가 없음) `must_place`도
+  `[]`(강제할 대상 자체가 없으므로 예외).
+- `recommend_for_researcher()`가 `must_place`를 반환 dict에 추가(그 외
+  실패 경로 — 프로필/후보 풀 없음, 임베딩 실패 — 는 전부 `[]`).
+
+**`pages/job_market.py`**: `_must_place_block(must_place)` 신규 —
+`bi-exclamation-triangle-fill` 아이콘 + "반드시 배치해야 한다면" 제목의
+경고색(`bg-warning bg-opacity-10 border-warning`) 박스로 1~3개를
+나열(과제명/부서/A·B 배지/사유, 기존 추천 행과 같은 정보 밀도).
+`must_place`가 비어 있으면 `None`을 반환해 아예 렌더링되지 않는다(후보
+자체가 없는 극단적 케이스). `_person_card()`의 기존 추천/근접 후보
+블록(`body`) 아래에 이 블록을 추가 — 기존 표시 로직은 전혀 안 건드림
+(요청대로 "지금과 같이 유지"). `_summary_stats()`/`build_result_workbook()`
+등 재배치 가능 통계·엑셀 다운로드 기준은 이번 변경에서 손대지 않음
+(여전히 `recommendations` 기준).
+
+검증: `_judge_recommendations()`를 4가지 시나리오(LLM이 정상적으로 둘 다
+줌 / recommendations는 비었지만 must_place도 깜빡함 / LLM 호출 자체가
+실패(raw=None) / 애초에 shortlist가 비어 있음)로 직접 호출해 각각
+기대한 대로 동작하는지 확인 — 특히 2·3번 케이스에서 폴백이 정확히
+임베딩 1순위로 채워지는지, 4번은 강제할 대상이 없어 `[]`로 남는지 확인.
+`_person_card()`를 목 결과로 렌더링해 경고 박스가 올바른 항목 수·문구로
+나오는지, `must_place`가 빈 리스트일 때는 그 블록 자체가 안 나오는지
+(`None` 반환) 확인.
+
+### 후속: "반드시 배치해야 한다면"을 엑셀 별도 컬럼으로 추가
+
+"반드시 배치해야 한다면 결과를 엑셀에만 추가를 해줄 수 있을까?(별도의
+컬럼으로)" — 엑셀 행 범위를 바꿀지(`AskUserQuestion`) 확인: 지금은
+`recommendations`가 있는(재배치 가능한) 사람만 엑셀에 포함되는데,
+"재배치 불가 인원도 포함(추천)"으로 확정 — must_place는 애초에 재배치가
+어려운 사람을 위해 만든 값이라, 그 사람들이 빠지면 의미가 없다는 이유.
+
+**`services/job_market.py`**: `_format_picks(picks)` 신규 — 기존
+`build_result_workbook()` 안에 있던 "N. 과제명 (부서) - A/B%\n   사유:
+..." 줄바꿈 조합 로직을 뽑아낸 공용 함수(결과/반드시 배치해야 한다면
+두 컬럼이 똑같은 모양의 데이터를 받으므로 재사용). `build_result_workbook()`
+을 3컬럼(사번/결과/반드시 배치해야 한다면)으로 확장하고, 행 포함 조건을
+`recommendations 있음` → `recommendations 또는 must_place 중 하나라도
+있음`으로 넓혔다 — `recommendations`가 없는 사람은 "결과" 셀만 `'-'`로
+비워두고 "반드시 배치해야 한다면" 셀은 채운다. `openpyxl.utils.
+get_column_letter` 임포트 추가(컬럼이 3개로 늘어 너비 지정에 필요).
+
+검증: 3명(추천+강제배치 둘 다 있음 / 추천은 없고 강제배치만 있음 / 둘 다
+없음) 목 데이터로 `build_result_workbook()`을 실행해 — 헤더 3개,
+"추천은 없고 강제배치만 있음"인 사람이 이제 엑셀에 포함되고 "결과" 셀이
+`'-'`인지, "둘 다 없음"인 사람은 여전히 제외되는지 openpyxl로 확인.
+
+## 완료: 프로필 엑셀 "평가" 컬럼 둘째 줄 — 연봉등급 있을 때 빈 반기 자리 표시 안 함
+
+"엑셀 다운로드 시 평가 컬럼에서 표시 로직을 변경해줘. 연봉등급이 있고
+상반기 연봉등급이 없을 때는 표시를 하지 말아줘" — 예시: `가/나/나` +
+`(-/EM, -/ES, -/ES)` → `가/나/나` + `(EM, ES, ES)`.
+
+기존엔 둘째 줄(반기 쌍)을 `evaluations.format_half_pair()`로 만들었는데,
+이 함수는 그 해 연봉등급 유무와 무관하게 항상 두 자리를 다 보여주고
+빈 자리는 `'-'`로 채우는 규칙(연봉등급이 아예 없을 때를 위한 규칙 —
+이전에 사용자가 "MT" 단독 표기를 "-/MT"로 직접 고쳐 확정한 바로 그
+규칙)이었다. 그런데 둘째 줄은 첫째 줄(연봉등급)과 별개로 계산돼서,
+연봉등급이 있는 해에도 반기 하나가 비면 똑같이 `-/EM`처럼 나왔던 것 —
+연구원 개별 프로필 화면(`format_evaluation_cell()`)은 애초에 연봉등급이
+있을 때 "있는 반기만 이어붙이는" 규칙이라 이 문제가 없었고, 엑셀만
+어긋나 있었다.
+
+**`services/evaluations.py`**: `format_half_display(salary_grade,
+first_half, second_half)` 신규 — `format_evaluation_cell()`과 같은
+판단이지만 연봉등급 부분은 이미 첫째 줄에 있으므로 괄호 안에 들어갈
+반기 부분만 반환한다. 연봉등급이 있으면 있는 반기만 이어붙이고(둘 다
+없으면 `'-'` 하나만), 연봉등급이 없으면 기존 `format_half_pair()`
+그대로(빈 자리 `-` 유지 — 이 경우는 이번 요청 범위 밖이라 안 건드림).
+
+**`services/researcher_profile_export.py`**: `_col_evaluation()`의
+둘째 줄 조합에서 `format_half_pair()` 대신 `format_half_display()`를
+쓰도록 교체 — 각 반기 연도(y)에 대응하는 연봉등급 연도(y+1)의 값을
+같이 넘겨준다(`evaluations.salary_grade_column(y + 1)`).
+
+검증: `format_half_display()`를 8가지 조합으로 직접 호출해 연봉등급
+있을 때(반기 하나만 있음/둘 다 있음/둘 다 없음)와 없을 때(기존 대시
+유지) 전부 기대값과 일치하는지 확인. 사용자가 준 예시를 그대로
+`build_profile_workbook()`으로 재현해 `가/나/나\n(EM, ES, ES)`가 정확히
+나오는지 확인. 연봉등급이 없는 해가 섞인 경우(`-/나/가\n(-/MT, ES, -)`)
+로도 확인해, "연봉등급 없을 때는 대시 유지" 기존 규칙이 그대로
+살아있는지 함께 검증.
+
+## 완료: position 영문 라벨 한글화 + 보유 전문성 시니어/주니어 분류를 CL/년차 기준으로 변경 + 임원 제외
+
+두 가지 요청. (1) `researchers.csv`의 `position`(원본 CL 컬럼) 값 중 영문
+임원 표기를 한글로 통일. (2) "연구원 ↔ 연구원" 유사도 리포트의 시니어/
+주니어 구분을 기존 "근속 5년" 기준에서 "CL/년차" 기준으로 바꾸고, 임원은
+유사 연구원 매칭 대상에서 완전히 제외.
+
+**1) `pipeline/process_researchers.py`**: `POSITION_LABEL_MAP` 신규 —
+`{'Corporate VP': '상무', 'Corporate President': '사장', 'Senior Advisor':
+'고문', 'Corporate EVP': '부사장'}`(그 외 값, 예: CL1~CL6은 원본 그대로).
+`position` 필드를 만들 때 이 맵으로 치환(매핑에 없으면 원본 그대로 폴백).
+
+**2) 시니어/주니어 분류 기준 변경**:
+- **`services/researcher_profile_export.py`**: 기존 `_col_position_year()`
+  (엑셀 "CL/년차" 컬럼, 예: "CL3-5")의 "년차" 계산 부분을 `position_years
+  (promotion_date)`라는 공개 함수로 분리했다 — 승격기준일 기준 회계연도
+  계산(`_next_promotion_ref_date`, 2027-03-01 시작 매년 3월 기준일)은
+  이미 있던 로직 그대로, 재사용 가능하게 이름만 붙여 뺀 것(동작 변경
+  없음, `_col_position_year()`는 이 함수를 호출하도록 리팩터링).
+- **`pipeline/process_researcher_similarity.py`**: `_tenure_level()`을
+  `hire_date` 기반(근속 5년 미만/이상)에서 `position`(CL)/`promotion_date`
+  기반으로 전면 교체 — "CL3-5 이상이면 시니어, CL3-4 이하면 주니어"라는
+  확정 문구를 CL 레벨 전체로 일반화해, **CL3 미만은 항상 Junior, CL3
+  초과는 항상 Senior, 정확히 CL3일 때만** `position_years()`로 계산한
+  년차가 5 이상이면 Senior·미만이면 Junior로 갈리게 했다(이 CL3 이외
+  레벨에 대한 일반화는 사용자가 명시하지 않아 합리적으로 추정한 부분 —
+  다르게 원하시면 `_CL_SENIOR_THRESHOLD_LEVEL`/`_cl_level()` 판단부만
+  고치면 됨). `_cl_level(position)` 신규 — `"CL3"` → `3`처럼 CL 접두사 +
+  숫자 형태만 파싱하고, 임원 직책처럼 그 형태가 아니면 `None`(미분류).
+  `build_tenure_map()`도 `hire_date` 컬럼 대신 `position`/`promotion_date`
+  컬럼을 읽도록 교체. `datetime`/`date` 임포트가 더 이상 안 쓰여서 제거.
+- 임원 제외: `_EXCLUDED_POSITIONS = {'상무','사장','고문','부사장','Master'}`
+  신규. `process()`에서 `연구원 보유 전문성 분석.json`을 읽은 직후
+  `researchers.csv`의 `position`으로 이 집합에 속하는 사람을 `profiles`
+  에서 아예 걸러낸다 — 이후 임베딩/LLM 판정/결과 저장 전 과정에서 그
+  사람은 존재하지 않는 것처럼 처리되어, **자기 카드도 안 생기고 다른
+  누구의 유사 연구원 후보로도 뽑히지 않는다**("연구원 보유 전문성 분석"
+  자체(process_researcher_expertise.py)는 건드리지 않아 그 사람의
+  개인 프로필 페이지는 그대로 남음 — 요청이 "유사 연구원을 찾을 때"로
+  한정했으므로).
+- 관련 docstring(모듈 헤더의 "3단계" 설명, `compute_similarity()`/
+  `attach_tenure_levels()` 주석, HTML 사이드바 태그라인 "근속 시니어
+  우선" → "CL 시니어 우선")도 새 기준에 맞게 업데이트.
+
+검증: `process_researchers.process()`를 목 원본 데이터(CL 컬럼에
+"Corporate VP"/"CL3" 섞음)로 실행해 `researchers.csv`에 "상무"/"CL3"로
+정확히 저장되는지 확인. `_cl_level()`을 여러 입력(CL1~CL6/임원 직책/빈
+값/이상한 형식)으로 확인. `_tenure_level()`을 6가지 경계 케이스(CL2,
+CL4, CL3+5년이상, CL3+5년미만, CL3+승격일없음, 비CL직책)로 직접 호출해
+전부 기대값과 일치하는지 확인. `build_tenure_map()`을 목 DataFrame으로
+확인. `process()` 전체를 LLM/임베딩 관련 함수는 스텁으로 바꾼 채
+실행해서 — 임원 1명이 로그에 찍히며 `profiles`에서 실제로 제외되고
+(`compute_similarity`에 넘어가는 목록에 안 보임), `tenure_map`은
+그 사람도 포함해 계산되지만(단순 조회용이라 무해) 최종 결과에는
+영향이 없는지 확인. 관련 3개 파일 전부 `ast.parse` 구문 확인,
+`process_researcher_similarity` 모듈을 실제로 import해(services 쪽
+연쇄 임포트 포함) 깨지지 않는지 확인. 이번 세션 컨테이너엔 실제
+원본 데이터/파이프라인 산출물이 없어, 실제 재실행·브라우저 확인은
+못 했다 — 화면에 반영하려면 `python pipeline/process_researchers.py`와
+`python pipeline/process_researcher_similarity.py`(또는 전체 파이프라인)
+를 다시 실행해야 한다.
+
+## 완료: 과제 이력의 과제명을 참여 당시 실제 이름으로 보정(the_task_name)
+
+"tasks.csv의 과제 이력이 과거 참여 당시 이름이 아니라 현재(최신) 과제명으로
+표시되는 문제" — 예: 지금은 2DM인 과제가 예전엔 GRAPH였는데, 과거 참여
+기간도 전부 "2DM"으로 나옴(tasks.csv 원본 자체가 과제코드 기준 "현재
+이름"을 내려주는 원천 시스템 특성). 문답으로 확정된 해결책은 tasks.csv
+행을 개명 시점 기준으로 **여러 구간으로 쪼개는** 것 — 처음 제안(컬럼 하나
+추가, 1행=1값)보다 큰 변경으로, 사용자가 직접 예시를 만들어 확정:
+GROTH(2019-02-01 기록)/GRAPH(2020-06-01 기록)/2DM(2023-01-01 기록) 이력이
+있고 참여기간이 2019-06-01~2023-02-01이면 → GROTH(2019-06-01~2020-05-31),
+GRAPH(2020-06-01~2022-12-31), 2DM(2023-01-01~2023-02-01) 3구간으로 분리.
+매핑 실패/이력 없음/참여 시작 이전 이력 없음은 전부 원본 task_name 그대로
+폴백(정보 유실 방지, 확정). 반영 범위는 과제 이력이 보이는 모든 곳
+(타임라인 막대·과제 표·엑셀 다운로드) 전부.
+
+**핵심 아이디어**: `tasks_information.csv`(process_task_information.py)는
+이미 "task_code가 같아도 task_name이 다르면(개명) 별도 행으로 보존"하고
+`task_name` 기준 중복 제거가 되어 있어(1개 task_name = 1개 task_code
+보장), 이 파일이 곧 "이 과제코드가 시간에 따라 어떻게 불렸는지"의
+이력 데이터베이스 역할을 한다. 파이프라인 순서도 이미
+`process_task_information.py`(5번)가 `process_tasks.py`(9-6번)보다
+먼저 실행되므로, 순서를 바꿀 필요 없이 `process_tasks.py`가 그 결과물을
+그대로 읽어 쓰면 된다.
+
+**`pipeline/process_tasks.py`**: 기존 `_merge_consecutive_periods()`(연속
+참여기간 병합, 안 건드림) 직후에 새 단계 `_apply_name_history()`를 추가.
+- `_read_tasks_information()` — `tasks_information.csv`를 읽되 없으면
+  빈 DataFrame(그래프 폴백 트리거).
+- `_name_to_code_map(tasks_info_df)` — `task_name → task_code`
+  (`components/timeline_data.py`의 기존 `task_code_map()`과 같은 로직,
+  pipeline 스크립트는 관례상 `components/`를 안 끌어써서 여기 별도로
+  작게 구현).
+- `_code_to_history_map(tasks_info_df)` — `task_code → [(write_date,
+  task_name), ...]`(write_date 오름차순 정렬, write_date/task_name 둘 다
+  있는 행만).
+- `_split_by_name_history(task_name, start, end, name_to_code,
+  code_history)` — 핵심 로직. 참여 종료일 이후에 생긴 개명은 무관하므로
+  제외하고, "참여 시작 시점에 이미 있던 가장 최근 이름"부터 시작해서
+  그 이후 각 write_date를 구간 경계로 삼아 쪼갠다(경계 사이는 "다음
+  경계 write_date - 1일"까지). 시작 시점보다 이전 이력이 아예 없으면
+  그 구간(시작일 ~ 첫 기록 직전)은 원본 task_name으로 채운다(사용자 확정
+  폴백 규칙을 부분 구간에도 적용 — 명시적으로 물어보진 않았지만 "모르면
+  원본 그대로"의 자연스러운 연장으로 판단, 다르게 원하시면 이 함수의
+  `start_name` 계산부만 고치면 됨).
+- `_apply_name_history(df)` — tasks.csv의 각 행을 위 함수로 쪼개
+  `task_code`/`the_task_name` 컬럼이 추가된(그리고 개명 이력이 있으면
+  행 수가 늘어난) 새 DataFrame을 만든다. `researcher_id`/`task_name`
+  (원본)/`input_rate`는 쪼개진 모든 구간에 그대로 복제.
+- `process()`에 이 단계를 연결하고, 행 수가 늘어나면 로그로 알림.
+
+**반영 3곳**(전부 `the_task_name`이 있으면 그걸, 없으면(구버전 CSV/매핑
+실패) 원본 `task_name`으로 폴백):
+- `components/timeline_data.py`의 `task_points()`(타임라인 스파인 막대).
+- `components/profile_sections.py`의 `tasks_block()`(과제 이력 표) — 이
+  참에 재사용을 위해 `_clean_grade()`(평가 셀 NaN 정리용으로 이전에
+  만든 헬퍼)를 `_clean_str()`로 이름만 일반화(동작 변경 없음, 4곳 모두
+  치환).
+- `services/researcher_profile_export.py`의 `_col_tasks()`(엑셀 과제수행이력).
+
+검증: `_split_by_name_history()`를 사용자 예시 그대로 호출해 3구간
+경계(2020-05-31/2020-06-01, 2022-12-31/2023-01-01 등 하루 단위 경계)가
+정확히 일치하는지 확인. 추가로 5가지 경계 케이스(참여 시작이 전체 이력보다
+이름/진행중(end 없음)/개명 없음(단일 구간)/task_name 매핑 실패/start_date
+자체 없음)를 직접 호출해 전부 기대한 폴백대로 동작하는지 확인.
+`_apply_name_history()`를 2명(한 명은 개명 있음 → 3행, 한 명은 개명
+없음 → 1행) 목 DataFrame으로 확인. `process()` 전체를 raw 소스 +
+`tasks_information.csv` 둘 다 목 데이터로 몬키패치해 실행 → 저장된
+tasks.csv가 정확히 3행으로 쪼개지는지 확인. `tasks_information.csv`가
+아예 없는 상태로도 `process()`를 실행해 에러 없이 `the_task_name=
+task_name` 그대로(행 수 안 늘어남) 폴백하는지 확인. 쪼개진 3행짜리
+결과를 `task_points()`/`tasks_block()`/`_col_tasks()` 세 곳 모두에
+직접 통과시켜 GROTH/GRAPH/2DM이 각자의 기간으로 정확히 나오는지, 옛날
+형식(the_task_name 컬럼 자체가 없는) 데이터도 원본 task_name으로
+문제없이 표시되는지 확인. 이번 세션 컨테이너엔 실제 원본 데이터가 없어
+`python pipeline/process_tasks.py`(tasks_information.csv가 먼저 있어야
+함) 실제 재실행·브라우저 확인은 못 했다.
+
+## 완료(1단계: 데이터 레이어): 전량 덮어쓰기 → 업서트(upsert) 전환 + data/updates 폴더 신설 + researchers.csv 시점(valid_year/valid_month)·is_current·researchers_history.csv
+
+지금까지 파이프라인은 매 실행마다 `data/processed/*.csv`를 통째로 새로
+써서, 예를 들어 이번 달 `인력현황.xlsx`에 없는 사람(다른 사업부로 전배 등)은
+다음 실행부터 그냥 사라졌다. 실 데이터 운영(주기적 파일 교체/적재)을
+시작하는 시점이라, "같은 사람은 최신 값으로 교체하되, 이번 파일에 없는
+사람은 삭제하지 않고 보존"하는 업서트 방식으로 데이터 레이어 전체를
+바꿨다. 두 가지 요청을 하나의 설계로 묶어 처리했다:
+
+1. **데이터 적재를 업서트로 전환** — `data/raw/`는 그대로 두고, 별도
+   `data/updates/` 폴더에 최신 파일(raw와 동일 파일명)을 넣으면 그 파일이
+   가진 사람/이벤트만 기존 `data/processed/*.csv`에 업서트되고, 나머지는
+   보존된다. 이력형(1인 N행) 테이블은 자연키(natural key) 추천을 요청받아
+   테이블별로 정했다(아래 "자연키 등록부" 참고).
+2. **`researchers.csv`에 시점(연/월) 도입** — `인력현황.xlsx`의
+   `인원실적년도`/`인원실적월`을 `valid_year`(YYYY)/`valid_month`(MM)로
+   저장하고, `(researcher_id, valid_year, valid_month)`가 같으면 교체,
+   다르면 누적하는 히스토리를 별도로 쌓는다. 전배로 최신 파일에서 빠진
+   사람은 "최신월과 다른 시점에 머물러 있음"으로 자동 판별한다
+   (`is_current`).
+
+설계 갈림길: `researchers.csv` 자체를 다건화(1인 N행, 이력 전체)할지,
+아니면 "현재상태"와 "이력"을 분리할지 상의했고, **분리하는 쪽으로
+확정**했다 — `researchers.csv`를 읽는 화면(연구원 명단/보유 전문성
+조직도/JOB Market/유사 매칭/AI 검색/엑셀 다운로드/전문성 분석 파이프라인
+전부)이 여전히 "1인 1행"을 가정하고 있어, 다건화하면 그 전부를 고쳐야
+하기 때문. 대신:
+
+- **`researchers.csv`(기존 유지, 1인 1행 "현재상태")** — `researcher_id`
+  키로 업서트: 새 파일에 있으면 행 전체 교체, 없으면 이전 행 그대로 보존.
+  병합 뒤 파일 전체에서 `(valid_year, valid_month)`의 최댓값(=가장 최근
+  인원실적월)을 구해 각 행에 `is_current`(Y/N)를 다시 계산해 채운다 — 그
+  행이 최신월과 같으면 `Y`(현재 소속), 다르면(더 과거에 머물러 있으면)
+  `N`(현재 미소속 — 전배·퇴사를 구분하진 못하지만 "지금 우리 조직 소속이
+  아님"은 알 수 있다). valid_year/valid_month가 비어있는 행(구버전 데이터,
+  또는 원본에 해당 컬럼이 없는 경우)은 판단 근거가 없어 항상 `Y`.
+- **`researchers_history.csv`(신규)** — `(researcher_id, valid_year,
+  valid_month)` 키로 계속 누적(같은 키는 교체, 다른 키는 새 행, 절대
+  삭제 없음). "누적기준"(한 번이라도 등록된 적 있는 전체 인원, 월별
+  스냅샷) 검색 전용이며, 이 파일이 생겨도 기존 화면은 전혀 영향받지
+  않는다.
+
+**`pipeline/merge_utils.py`(신규)** — 공용 업서트 유틸리티.
+- `upsert_merge(existing, new, keys)`: keys가 일치하는 행은 new 값으로
+  완전 교체, existing에만 있는 키는 보존, new에만 있는 키는 추가. new
+  안에서 키가 중복되면 마지막 행 채택. new가 0행이면 existing을
+  보존하되(진짜 없는 게 없으면), existing마저 없으면(최초 실행) new의
+  컬럼 구조라도 살려 반환 — 안 그러면 헤더 없는 빈 CSV가 만들어지는
+  버그가 있었다(초기 구현에서 발견해 수정, 아래 검증 참고).
+- `group_replace_merge(existing, new, group_keys)`: group_keys가 일치하는
+  기존 행들을 통째로 지우고 new로 교체 — 행 안에 개별 식별자가 없는
+  테이블(평가자 1인 1행인 `leadership_comments.csv`) 전용.
+- `write_merged(out_path, new, keys, group_replace=False)`: 기존 CSV
+  읽기 → 병합 → 저장까지 한 번에 처리하는 편의 함수. 각 `process_*.py`의
+  `result.to_csv(...)` 한 줄을 이걸로 바꾸면 된다.
+- `TABLE_KEYS`/`GROUP_REPLACE_KEYS`: 테이블별 자연키 등록부(한 곳에서
+  관리, 아래 표).
+
+**자연키 등록부(`TABLE_KEYS`)**:
+
+| 테이블 | 자연키 | 비고 |
+|---|---|---|
+| researchers | researcher_id | 1인 1행 "현재상태" |
+| researchers_history | researcher_id, valid_year, valid_month | 신규, 월별 스냅샷 누적 |
+| evaluations / tech_ownership / job_profile / work_objective | researcher_id | 1인 1행(wide) |
+| hr_orders | researcher_id, order_date, order_name | |
+| tasks | researcher_id, task_name, start_date | the_task_name 분리 후에도 구간별 start_date가 달라 키 유지됨 |
+| patents | application_id, researcher_id | 특허 1건에 발명자 여러 명 = 여러 행 |
+| publications | researcher_id, title, pub_date | |
+| awards | researcher_id, award_date, award_name | |
+| nurturing | researcher_id, start_date, category | |
+| core_technology | researcher_id, tech_field, tech_name | 1인당 여러 핵심기술 가능(1인1행 아님, 코드로 확인) |
+| education | researcher_id, degree | 학사/석사/박사 각 1건 |
+| incentive_selection | researcher_id, year | |
+| leadership | researcher_id, year, evaluator_group | |
+| comments | researcher_id, year, commenter_type | |
+| tasks_information | task_name | 기존 `_dedupe_by_name()`과 동일 기준 |
+| project_confl_address | dep_name, project_name | |
+| technology_transfer / transfers / certifications / succession | (raw 컬럼 기준 추정 키) | 전용 처리기 없이 `_raw` 폴백만 지원 — 아래 참고 |
+| leadership_comments | researcher_id, year, evaluator_group (그룹 단위 교체) | 평가자 개별 식별자가 없어 GROUP_REPLACE_KEYS 사용 |
+
+**수정한 처리기(17개, 전부 동일 패턴)**: `process()`에 `raw_dir: str =
+RAW_DIR` 매개변수를 추가(기본은 기존과 동일한 `data/raw`, `data/updates`를
+넘기면 그 폴더만 읽음)하고, 마지막 `result.to_csv(out_path, ...)`를
+`merge_utils.write_merged(out_path, result, TABLE_KEYS['테이블명'])`로
+교체했다 — `process_researchers`, `process_tp_evaluation`(evaluations),
+`process_patents`, `process_personnel_orders`(hr_orders),
+`process_nurturing`, `process_task_information`(tasks_information),
+`process_awards`, `process_education`, `process_leadership`(leadership +
+leadership_comments, 후자는 group_replace), `process_incentive`
+(incentive_selection), `process_tech_ownership`, `process_job_profile`,
+`process_work_objective`, `process_publications`, `process_tasks`,
+`process_comments`(comments), `process_project_confl`
+(project_confl_address). `SOURCE`/`OUTPUT`처럼 모듈 로드 시점에 `RAW_DIR`을
+써서 경로를 고정해버리던 3개 파일(`process_publications`/`process_tasks`
+는 `SOURCE_FILE` 상수 + 함수 안에서 `os.path.join(raw_dir, ...)`으로,
+`process_work_objective`는 `_read_year_file()`에 `raw_dir` 인자를 추가로
+전달하도록)도 함께 고쳤다. 더 이상 안 쓰는 `import csv`(각자 자기 CSV를
+직접 쓰던 줄이 `write_merged` 호출로 바뀌며 필요 없어짐)도 제거.
+
+**`pipeline/run_pipeline.py`**: `_run_with_fallback()`(전용 처리기 실패 시
+`{table}_raw` 폴백)와 맨 끝 `TABLES` 루프(전용 처리기 자체가 없는
+technology_transfer/transfers/certifications/succession, raw 컬럼을
+그대로 쓰는 4개)도 `TABLE_KEYS`에 키가 등록돼 있고 실제 컬럼에 그 키가
+있으면 업서트, 없으면(raw 스키마가 예상과 다르면) 기존처럼 전체 교체로
+안전하게 폴백하도록 고쳤다. 이 4개는 전용 컬럼 매핑이 없어 raw 파일
+컬럼명이 곧 출력 컬럼명이라는 전제로 키를 추정해뒀다(실제 raw 파일이
+준비되면 확인 필요).
+
+**`pipeline/process_researchers.py`**: 위 공통 패턴에 더해 valid_year/
+valid_month 추출(`COL_VALID_YEAR='인원실적년도'`, `COL_VALID_MONTH=
+'인원실적월'`, 각각 4자리/2자리 문자열로 정규화), `_compute_is_current()`
+(병합된 전체 파일에서 최신 (valid_year, valid_month)를 구해 `is_current`
+재계산), `researchers_history.csv` 누적 저장(같은 `process()` 호출
+안에서 researchers.csv 저장 직후 이어서 실행)을 추가했다.
+
+**`pipeline/paths.py`**: `UPDATES_DIR = data/updates` 신규.
+
+**`pipeline/run_update.py`(신규)**: `data/updates/`에 있는 파일명을 보고
+해당하는 처리기만 `raw_dir=UPDATES_DIR`로 실행하는 진입점. `data/raw/`는
+전혀 읽지도 쓰지도 않는다. 폴더가 비어있거나 예상 파일명과 다르면 안내만
+출력하고 끝난다(부분 업데이트 지원 — 이번엔 인력현황만 왔으면 그 파일
+하나만 넣고 돌리면 됨).
+
+**검증**: `merge_utils.upsert_merge`/`group_replace_merge`를 목
+DataFrame으로 직접 호출해 교체/보존/추가/그룹교체 동작 확인. 실제 xlsx
+2개(2026-06 스냅샷 3명, 2026-07 스냅샷에서 1명 전배로 빠지고 1명 CL
+변경·1명 신규입사)를 만들어 `process_researchers.process()`를
+`data/raw` 대신 임시 폴더로 연달아 실행 — 전배자가 `researchers.csv`에
+`is_current='N'`으로 마지막 상태 그대로 남고(삭제 안 됨), 나머지는
+`Y`로 정확히 갈리는지, `researchers_history.csv`가 두 시점 스냅샷을
+누락 없이 누적하는지(이영희의 CL4→CL5 두 행 모두 보존), 같은 파일을
+다시 실행해도 히스토리가 중복 누적되지 않는지(멱등성) 확인. 수정한 17개
+처리기 전부 `py_compile` 통과 + 존재하지 않는 폴더로 `process(raw_dir=...)`
+직접 호출해 예외 없이 `[SKIP]`으로 정상 종료하는지 일괄 확인.
+`run_pipeline.py`/`run_update.py`를 실제로 실행해(원본 파일 없는 이
+컨테이너 환경 기준) 에러 없이 끝까지 도는지 확인하던 중, `new`가 0행이지만
+컬럼은 있는 경우(예: comments_raw.xlsx도 없고 leadership_comments.csv도
+없어 `process_comments`의 `out_df`가 0행인 상황) `upsert_merge`가
+`existing`(파일이 아예 없으면 컬럼도 없는 빈 DataFrame)을 그대로
+반환해버려 헤더 없는 빈 CSV가 만들어지는 버그를 실제로 재현·확인하고
+수정(`len(new) == 0`일 때 `existing`이 비어있으면 `new`를 반환하도록)
+— 수정 후 재실행해 `comments.csv`가 정상 헤더로 저장되는지 재확인.
+이번 세션 컨테이너에는 실제 원본 xlsx가 없어(`data/raw/`가 통째로
+없음), 위 검증은 모두 임시로 만든 목/합성 데이터 기준이다.
+
+**아직 안 한 것(2단계, 다음 작업)**: 연구원 프로필/명단/보유 전문성
+조직도/AI 유사 연구원 매칭/AI 검색 5개 화면에 "현재기준 ↔ 누적기준"
+토글을 화면별로 독립 배치(사용자 확정)하는 UI 작업 — JOB Market은
+후보군 계산을 항상 현재기준으로 고정하고 토글 자체를 넣지 않기로
+확정했다. 보유 전문성 조직도는 누적기준일 때 조직도 트리 탐색 대신
+이름/사번 검색만 허용하기로 확정. 이 화면 작업은 아직 시작 전이다.
+
+## 2026-08-13: 보유 전문성 요약카드 정리 / 전문성 MAP 숨김 / 연구원 명단 필터 모달화
+
+사용자가 "보유 전문성" 탭(연구원/연구원↔연구원) 요약 카드 스크린샷을 보내며
+5가지를 요청: ① 요약카드를 "마지막 갱신" 1개만 남기기(긴 직사각형으로) ②
+"전문성 MAP" 탭 숨김(보여주기엔 좋으나 기능상 의미 없음) ③ 연구원 명단
+메인 화면 필터를 부서/과제만 남기고 나머지는 별도 모달로 분리 ④
+"학력(최종)"을 "학력"으로 표기 변경 ⑤ "연구원"/"연구원 ↔ 연구원" 리포트의
+프로필 아이콘 클릭 시 새 창으로도 열 수 있게.
+
+**① 요약카드 축소(`pipeline/process_researcher_expertise.py`,
+`pipeline/process_researcher_similarity.py`)**: 두 파일의 `stat_row_html([...])`
+호출을 각각 `mmd.coverage_stat(...)`/`(resp_count, ...)`/`(domain_skill_count, ...)`
+등 3~4개 항목에서 `mmd.generated_at_stat()` 1개만 남기도록 축소. `.stat-row`가
+`grid-template-columns: repeat(auto-fit, minmax(150px,1fr))`라 카드가 1개면
+자동으로 전체 폭을 채워 "긴 직사각형"이 되므로 CSS 변경은 불필요했다(Playwright로
+독립 HTML 프리뷰 렌더링해 확인). 더 이상 쓰이지 않게 된 `total`/`high_conf`/
+`flagged`/`resp_count`/`domain_skill_count` 지역변수도 함께 제거.
+`mmd.coverage_stat()` 함수 자체는 다른 리포트(`process_project_expertise.py`
+등)가 쓸 수 있어 그대로 둠.
+
+**② 전문성 MAP 탭 숨김(`pages/researcher_similarity_map.py`)**:
+`pages/org_comparison.py`/`pages/jd_reconciliation.py`와 동일한
+`_FEATURE_HIDDEN` 관례를 이 페이지의 탭 단위로 적용 — `_MAP_TAB_HIDDEN = True`
+플래그를 추가해 `layout()`의 `dbc.Tabs` children에서 '전문성 MAP' 탭을
+제외하고, `highlight_researcher` URL 쿼리로 진입해도(옛 '📍 전문성 MAP'
+아이콘이 쓰던 경로) 더 이상 `map` 탭으로 랜딩하지 않고 '연구원' 탭 기본
+진입으로 처리. `_map_tab_content()`/`_umap_subview_content()` 등 실제
+구현 코드는 전부 남겨둬 재오픈 시 플래그만 `False`로 바꾸면 된다.
+
+같이 처리해야 했던 부분: "연구원"/"연구원 ↔ 연구원" 리포트 카드 우측 상단의
+'📍 전문성 MAP' 아이콘(`pipeline/rd_specialist_markdown.py`의
+`map_link_html()`)이 숨겨진 탭으로 이어지는 죽은 링크가 되므로,
+`process_researcher_expertise.py`/`process_researcher_similarity.py`의
+`card-icons`에서 `mmd.map_link_html(rid)` 호출을 제거(프로필 아이콘만 남김).
+`map_link_html()` 함수 자체는 나중에 재오픈할 경우를 위해 그대로 둠.
+`pipeline/process_project_expertise.py`가 쓰는 `_personnel_html()`의 유사한
+배지 링크는 그 리포트(`project_expertise_analysis.html`) 자체가 어느
+`pages/*.py`에서도 임베드되지 않는(앱에서 도달 불가능한) 산출물이라 이번
+작업 범위에서 제외 — 그대로 둠.
+
+**③ 연구원 명단 필터 모달화(`pages/researcher_list.py`)**: 메인 화면
+드롭다운 행에는 부서/과제만 남기고, 직급/학력/인센티브 드롭다운을 제거한
+뒤 그 자리에 '필터' 버튼(`open-filter-btn`)을 추가. 버튼을 누르면 여는
+`dbc.Modal`(`filter-modal`)에 직급/직책/성별/학력/전공/재직상태 6개
+드롭다운을 배치(`필터 초기화`/`적용` 버튼 포함). 재직상태는
+`_build_summary_df()`에 새 컬럼(`researchers.csv`의 `employment_status`
+그대로)을 추가해야 필터 대상이 됐다. 직책 드롭다운(`filter-title`)도
+새로 추가(기존엔 표에만 표시되고 필터는 없었음).
+
+판단해서 명확히 표시해 둘 부분 두 가지(사용자 지시 원문에 모호함이
+있어 임의로 정한 것):
+- 사용자가 나열한 모달 필터 목록에 "과제"가 포함돼 있었지만, 같은 문장에서
+  "부서, 과제를 남겨두고"라고도 했다 — 과제를 메인 화면과 모달에 중복
+  배치하지 않고 메인 화면에만 남겼다(모달에는 과제 없음).
+- "인센티브"는 메인 화면 제외 대상으로만 언급됐고, 모달의 필터 목록
+  7종(과제/직급/직책/성별/학력/전공/재직상태)에도 포함되지 않아 문자
+  그대로는 인센티브 필터 자체가 없어진다 — 그대로 따라 인센티브 필터를
+  완전히 제거했다. 되살리고 싶다면 모달에 `filter-incentive` 드롭다운을
+  다시 추가하면 된다(엑셀 다운로드의 "인센티브" 관련 데이터 자체는
+  안 건드림 — `_build_summary_df()`의 `인센티브` 컬럼은 표에 그대로
+  남아있고 표 자체 네이티브 필터로는 여전히 걸러진다).
+
+**필터링에 안 걸리는 나머지 컬럼(사용자 요청 "나머지 컬럼이 뭐가 있는지
+확인" 답변)**: `_build_summary_df()`가 만드는 컬럼 중 부서/과제(메인) +
+직급/직책/성별/학력/전공/재직상태(모달) 8개를 뺀 나머지 — `이름`(식별자,
+필터 대상이 아님), 평가등급 열(`'24평가`/`'25평가`/`'26평가` 등 연도별,
+`_EVAL_GRADE_COLUMNS`), `인센티브`(위 사유로 필터는 제거, 컬럼은 유지),
+`논문(전체)`/`논문(3년)`/`평균IF`, `특허(출원)`/`특허(등록)`, `수상`. 이
+컬럼들은 드롭다운 필터는 없지만 `dash_table`의 네이티브 컬럼 필터 행으로는
+계속 걸러진다.
+
+**④ 학력(최종) → 학력**: `pages/researcher_list.py` 전체(행 딕셔너리 키,
+`_filter_options()` 호출, 모달 라벨, `update_table()` 필터링 로직)에서
+`'학력(최종)'`을 `'학력'`으로 일괄 변경. 다른 파일에는 이 문자열이 코드로
+쓰인 곳이 없었다(grep 확인).
+
+**⑤ 프로필 아이콘 새 창 열기(`pipeline/rd_specialist_markdown.py`)**:
+`profile_link_html()`(카드 상단, 텍스트 있는 버전)과
+`profile_icon_link_html()`(유사 연구원 표 행, 아이콘만) 둘 다 기존
+`target="_top"`(iframe 밖 최상위 대시보드로 이동) 링크에 더해
+`target="_blank"`(새 창/탭으로 프로필만 열기) 링크(↗)를 나란히 추가.
+`.map-link`/`.row-icon-link`는 이미 여러 개 아이콘이 자연스럽게 나란히
+붙는 CSS라 추가 스타일 변경 없이 바로 적용됨.
+
+**검증**: `py_compile`로 수정한 5개 파일 전부 문법 확인. 이 컨테이너에는
+`data/raw`/실제 인력현황 데이터가 없어(`researchers.csv`조차 없음)
+파이프라인을 실제로 재실행해 정적 리포트를 새로 만들 수는 없었다 — 대신
+(1) `mmd.stat_row_html([mmd.generated_at_stat()])` + `mmd.profile_link_html()`
+를 실제 `CONSOLE_STYLE`과 함께 독립 HTML로 렌더링해 Playwright 스크린샷으로
+"긴 직사각형" 카드와 프로필/새창 아이콘 두 개가 나란히 보이는지 직접 확인,
+(2) `python3 app.py`를 백그라운드로 띄우고 Playwright로 `/researcher-list`
+(필터 버튼 클릭 → 모달에 직급/직책/성별/학력/전공/재직상태 6개 드롭다운 확인 →
+적용 버튼으로 모달 닫힘 확인, 메인 화면엔 부서/과제만 남고 '학력(최종)' 문자열
+없음 확인)와 `/researcher-similarity-map`(`#expertise-tabs`에 '연구원'/
+'연구원 ↔ 연구원' 2개만 남고 '전문성 MAP' 없음 확인)을 직접 조작해 확인했다.
+이 환경은 `dbc.themes.BOOTSTRAP` CDN을 못 받아와(네트워크 제한) 스크린샷의
+시각 스타일 자체는 깨져 보이지만(Bootstrap CSS 미적용), DOM 구조·라벨·
+필터 필드·탭 구성 등 기능적 정확성은 위 방법으로 모두 확인됨.
+
+## 2026-08-13 (2): 보유 전문성 정적 리포트 다크모드 제거
+
+사용자 보고: "보유 전문성" 탭의 연구원/연구원↔연구원(조직도 사이드바 +
+연구원 전문성 카드)이 다크모드에 가깝게 어둡게 보임 — 항상 밝게 고정해
+달라는 요청.
+
+원인: `pipeline/rd_specialist_markdown.py`의 `CONSOLE_STYLE`(정적 리포트
+공용 CSS)에 `@media (prefers-color-scheme: dark)` 분기가 있어, 사용자의
+OS/브라우저가 다크모드면 리포트 색상 토큰이 자동으로 어둡게 바뀌었다.
+정작 이 리포트를 iframe으로 담는 대시보드 셸(`app.py`,
+`dbc.themes.BOOTSTRAP`)은 다크모드를 지원하지 않고 항상 밝은 테마라,
+시스템이 다크모드인 사용자만 리포트가 나머지 화면과 어긋나 어둡게 보이는
+불일치였다.
+
+수정: `CONSOLE_STYLE`에서 `@media (prefers-color-scheme: dark) { :root {...} }`
+블록 전체를 삭제 — `:root`의 라이트 토큰만 남아 시스템 설정과 무관하게
+항상 밝게 렌더링된다. "연구원 보유 전문성 분석.html"/"researcher_similarity.html"
+등 이 스타일을 공유하는 모든 리포트에 함께 적용됨(별도 CSS 없음).
+
+검증: Playwright 브라우저를 `color_scheme='dark'`로 에뮬레이트하고 사이드바
+조직도 + 카드가 포함된 독립 HTML을 렌더링해 스크린샷 — 다크 에뮬레이션
+상태에서도 배경/카드/조직도가 모두 밝게 유지되는 것을 확인.

@@ -18,6 +18,30 @@ app = dash.Dash(
 
 app.server.secret_key = os.getenv('FLASK_SECRET_KEY', secrets.token_hex(32))
 
+# pages/*.py 콜백은 use_pages=True 스캔 과정에서 자동 등록되지만, 이 모듈들은
+# 페이지가 아니라 전 탭 공용 컴포넌트라 Dash 인스턴스 생성 이후 직접
+# import해서 module-level @callback들을 등록해야 한다(생성 전에 import하면
+# 아직 앱이 없어 콜백이 등록되지 않는다).
+from components import feedback_modal, nl_query_bar  # noqa: E402
+
+app.index_string = '''<!DOCTYPE html>
+<html>
+    <head>
+        {%metas%}
+        <title>{%title%}</title>
+        {%favicon%}
+        {%css%}
+    </head>
+    <body>
+        {%app_entry%}
+        <footer>
+            {%config%}
+            {%scripts%}
+            {%renderer%}
+        </footer>
+    </body>
+</html>'''
+
 _IMG_EXTS = ('png', 'jpg', 'jpeg')
 
 
@@ -40,6 +64,21 @@ def serve_photo(rid):
             if dot and stem.lower() in candidates and fext.lower() in _IMG_EXTS:
                 return flask.send_file(os.path.join(RAW_DIR, fname))
     flask.abort(404)
+
+
+_RAW_IMAGE_ALLOWLIST = {'등급 개요.png', 'lv 개요.png'}
+
+
+@app.server.route('/raw-image/<path:filename>')
+def serve_raw_image(filename):
+    """data/raw/ 아래 안내용 이미지(등급/Lv 개요 등)를 서빙. 허용 목록에 있는
+    파일명만 응답해 임의 경로 접근을 막는다."""
+    if filename not in _RAW_IMAGE_ALLOWLIST:
+        flask.abort(404)
+    path = os.path.join(RAW_DIR, filename)
+    if not os.path.isfile(path):
+        flask.abort(404)
+    return flask.send_file(path)
 
 
 # ── HTML 템플릿 (로그인 / 초기 설정 공통 골격) ─────────────────────────────
@@ -227,13 +266,14 @@ navbar = dbc.Navbar(
                 [
                     dbc.Col(
                         html.I(className='bi bi-bar-chart-fill me-2',
-                               style={'fontSize': '1.4rem', 'color': '#7eb8f7'}),
+                               style={'fontSize': '1.4rem', 'color': '#0071e3'}),
                         width='auto',
                     ),
                     dbc.Col(
                         dbc.NavbarBrand('연구원 대시보드', className='fw-bold fs-5 mb-0'),
                         width='auto',
                     ),
+                    dbc.Col(feedback_modal.render(), width='auto'),
                 ],
                 align='center',
                 className='g-0',
@@ -245,13 +285,24 @@ navbar = dbc.Navbar(
                         href='/', active='exact', className='text-white',
                     )),
                     dbc.NavItem(dbc.NavLink(
+                        [html.I(className='bi bi-share-fill me-1'), '보유 전문성'],
+                        href='/researcher-similarity-map', active='exact', className='text-white',
+                    )),
+                    dbc.NavItem(dbc.NavLink(
+                        [html.I(className='bi bi-table me-1'), '연구원 명단'],
+                        href='/researcher-list', active='exact', className='text-white',
+                    )),
+                    dbc.NavItem(dbc.NavLink(
                         [html.I(className='bi bi-people-fill me-1'), '조직별 비교'],
                         href='/org-comparison', active='exact', className='text-white',
                     )),
                     dbc.NavItem(dbc.NavLink(
-                        [html.I(className='bi bi-table me-1'), '연구원 목록'],
-                        href='/researcher-list', active='exact', className='text-white',
+                        [html.I(className='bi bi-signpost-split me-1'), 'JOB Market'],
+                        href='/job-market', active='exact', className='text-white',
                     )),
+                    # '과제 직무/대상자 검증' NavLink는 pages/jd_reconciliation.py의
+                    # _FEATURE_HIDDEN(기능 준비 중) 동안 제거됨(data/processed/
+                    # CLAUDE.md에 재오픈 방법 기록).
                     # 관리자 메뉴 + 사용자 정보 (콜백으로 갱신)
                     html.Div(id='_navbar-user', className='d-flex align-items-center ms-3'),
                 ],
@@ -261,18 +312,29 @@ navbar = dbc.Navbar(
         ],
         fluid=True,
     ),
-    color='#1e3a5f',
+    color='#1d1d1f',
     dark=True,
     sticky='top',
-    className='shadow-sm',
+    className='app-navbar',
 )
 
 app.layout = html.Div(
     [
         navbar,
-        dbc.Container(dash.page_container, fluid=True, className='px-4 py-3'),
+        dbc.Container(
+            [
+                # 전 탭 공용 자연어 질문 바 — 어느 탭에 있든 항상 보이도록
+                # 네비게이션 바로 아래, 페이지 콘텐츠 위에 고정 배치한다
+                # (구 "연구원 목록" 탭 전용 AI 검색을 대체).
+                nl_query_bar.render(),
+                html.Hr(className='mt-1 mb-3'),
+                dash.page_container,
+            ],
+            fluid=True,
+            className='px-4 py-3',
+        ),
     ],
-    style={'minHeight': '100vh', 'backgroundColor': '#f0f2f5'},
+    style={'minHeight': '100vh', 'backgroundColor': '#f5f5f7'},
 )
 
 
@@ -308,4 +370,8 @@ server = app.server
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', '8501'))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    # threaded=True: 기본 Werkzeug 개발 서버는 싱글 스레드라 요청 하나(UMAP 계산,
+    # LLM 호출 등 오래 걸리는 작업)가 서버 전체를 붙잡아 다른 사용자의 요청이
+    # 밀리거나 타임아웃으로 "연결 끊김"처럼 보이는 문제가 있었다 — 개인 데스크탑에서
+    # 소수 인원 베타테스트하는 용도로는 이 정도로 충분(별도 의존성/OS 제약 없음).
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)

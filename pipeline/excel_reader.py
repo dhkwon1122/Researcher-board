@@ -18,7 +18,7 @@ def norm_id(val) -> str:
     Excel이 숫자로 읽은 12345.0 → '00012345'
     """
     s = str(val).strip()
-    if s in ('', 'nan', 'None', 'NaT'):
+    if is_blank(s):
         return ''
     try:
         return str(int(float(s))).zfill(8)
@@ -35,7 +35,84 @@ def norm_researcher_id_col(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def read_xlsx(file_path: str, sheet: int | str = 0, header_row: int = 0) -> pd.DataFrame:
+_BLANK_STRINGS = ('nan', 'none', 'nat', '<na>')
+
+
+def is_blank(val) -> bool:
+    """엑셀 셀 값이 사실상 비어 있는지 판정(None/빈 문자열/nan·None·NaT류 문자열,
+    대소문자 무관)."""
+    if val is None:
+        return True
+    return str(val).strip().lower() in ('',) + _BLANK_STRINGS
+
+
+def clean_str(val) -> str:
+    """엑셀 셀 값을 정리된 문자열로 변환. 비어 있으면(is_blank) 빈 문자열,
+    아니면 앞뒤 공백만 제거한 원본 문자열(대소문자는 유지)."""
+    if val is None:
+        return ''
+    s = str(val).strip()
+    return '' if s.lower() in _BLANK_STRINGS else s
+
+
+def parse_yyyymmdd(val) -> str:
+    """YYYYMMDD(숫자 또는 문자열) 또는 이미 YYYY-MM-DD 형식인 값 → 'YYYY-MM-DD'.
+    변환 불가/빈 값이면 빈 문자열. (실수형으로 읽힌 20230101.0 도 처리)"""
+    if val is None:
+        return ''
+    s = str(val).strip().split('.')[0]
+    if is_blank(s):
+        return ''
+    if len(s) == 8 and s.isdigit():
+        return f'{s[:4]}-{s[4:6]}-{s[6:]}'
+    if len(s) >= 10 and s[4] == '-':
+        return s[:10]
+    return s
+
+
+def parse_flexible_date(val) -> str:
+    """다양한 날짜 표기(YYYYMMDD, YYYY-MM-DD, YYYY/MM/DD 등)를 pandas가 인식하는
+    한 자유롭게 파싱해 'YYYY-MM-DD'로 반환. 빈 값이면 빈 문자열, 파싱 실패 시
+    원본 문자열(strip만 적용)을 그대로 반환."""
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return ''
+    s = str(val).strip()
+    if is_blank(s):
+        return ''
+    try:
+        return pd.to_datetime(s).strftime('%Y-%m-%d')
+    except Exception:
+        return s
+
+
+_FORMULA_TRIGGER_CHARS = ('=', '+', '-', '@', '\t', '\r')
+
+
+def excel_safe_text(val) -> str:
+    """CSV 텍스트가 '-', '=', '+', '@'로 시작하면 Excel이 수식으로 오인해
+    #NAME? 등의 오류를 낸다(예: '- 대사공학 역량...' → #NAME?). 이런 값 앞에
+    작은따옴표(')를 붙여 Excel이 텍스트로 인식하게 한다 — Excel은 화면에는
+    이 작은따옴표를 표시하지 않는다.
+    """
+    s = str(val) if val is not None else ''
+    if s and s[0] in _FORMULA_TRIGGER_CHARS:
+        return "'" + s
+    return s
+
+
+def _is_blank_cell(value) -> bool:
+    return is_blank(value)
+
+
+def _first_nonblank_row(rows: list[list]) -> int:
+    """행 리스트(list of list) 중 하나라도 값이 있는 첫 행의 인덱스. 못 찾으면 0."""
+    for i, row in enumerate(rows):
+        if any(not _is_blank_cell(cell) for cell in row):
+            return i
+    return 0
+
+
+def read_xlsx(file_path: str, sheet: int | str = 0, header_row: int | str = 0) -> pd.DataFrame:
     """
     xlwings를 사용하여 xlsx 파일을 DataFrame으로 읽습니다.
 
@@ -47,6 +124,8 @@ def read_xlsx(file_path: str, sheet: int | str = 0, header_row: int = 0) -> pd.D
         file_path: xlsx 파일 경로
         sheet: 시트 인덱스(0-based int) 또는 시트 이름(str)
         header_row: 헤더 행 인덱스(0-based). 기본값 0 = 첫 번째 행.
+                    'auto' 를 넘기면 앞쪽 공란 행을 건너뛰고 실제 값이 있는
+                    첫 행을 헤더로 자동 인식합니다 (엑셀 절대 행 기준).
 
     Returns:
         pandas DataFrame
@@ -67,7 +146,13 @@ def read_xlsx(file_path: str, sheet: int | str = 0, header_row: int = 0) -> pd.D
         else:
             ws = wb.sheets[sheet]
 
-        data = ws.used_range.value
+        # xlwings는 used_range가 실제로는 여러 열이어도 시트 상태에 따라 1행/1열로
+        # 판단되면 .value가 중첩 리스트가 아닌 평평한(flat) 1차원 리스트를 반환한다.
+        # 이 경우 아래의 "행 하나로 감싸기" 처리가 열 전체를 하나의 헤더/행으로
+        # 잘못 취급해, 모든 데이터가 첫 번째 컬럼에 뭉쳐 들어가는 원인이 된다.
+        # options(ndim=2)로 항상 중첩 리스트(2차원)를 강제해 이 문제를 근본적으로
+        # 없앤다.
+        data = ws.used_range.options(ndim=2).value
 
         if not data:
             return pd.DataFrame()
@@ -75,8 +160,10 @@ def read_xlsx(file_path: str, sheet: int | str = 0, header_row: int = 0) -> pd.D
         if not isinstance(data[0], list):
             data = [data]
 
-        headers = data[header_row]
-        rows = data[header_row + 1:]
+        resolved_header_row = _first_nonblank_row(data) if header_row == 'auto' else header_row
+
+        headers = data[resolved_header_row]
+        rows = data[resolved_header_row + 1:]
 
         # 헤더 셀이 비어 있어도(None) 그 컬럼의 데이터는 버리지 않고 보존한다.
         # (엑셀에서 헤더 없이 값만 채워진 컬럼이 있을 수 있음 — "전체 컬럼 보존"이 목표)
@@ -105,16 +192,22 @@ def read_xlsx(file_path: str, sheet: int | str = 0, header_row: int = 0) -> pd.D
                 pass
 
 
-def _read_with_pandas(file_path: str, sheet: int | str = 0, header_row: int = 0) -> pd.DataFrame:
+def _read_with_pandas(file_path: str, sheet: int | str = 0, header_row: int | str = 0) -> pd.DataFrame:
     """xlwings 없이 pandas로 읽는 폴백. xlsb는 pyxlsb 엔진 사용."""
-    if str(file_path).lower().endswith('.xlsb'):
-        try:
-            df = pd.read_excel(file_path, sheet_name=sheet, header=header_row, engine='pyxlsb')
-        except Exception:
+    engine = 'pyxlsb' if str(file_path).lower().endswith('.xlsb') else None
+    try:
+        if header_row == 'auto':
+            raw = pd.read_excel(file_path, sheet_name=sheet, header=None, engine=engine)
+            rows = raw.values.tolist()
+            resolved_header_row = _first_nonblank_row(rows)
+            df = pd.read_excel(file_path, sheet_name=sheet, header=resolved_header_row, engine=engine)
+        else:
+            df = pd.read_excel(file_path, sheet_name=sheet, header=header_row, engine=engine)
+    except Exception:
+        if engine == 'pyxlsb':
             raise ImportError(
                 '.xlsb 파일 읽기에 pyxlsb 패키지가 필요합니다: pip install pyxlsb'
             )
-    else:
-        df = pd.read_excel(file_path, sheet_name=sheet, header=header_row)
+        raise
     df.columns = [str(c).strip() for c in df.columns]
     return df

@@ -1,3 +1,4 @@
+import json
 import os
 
 import pandas as pd
@@ -48,6 +49,56 @@ def read_processed(name: str, *, dtype: dict | str | None = None) -> pd.DataFram
     return df
 
 
+def read_expertise_profiles() -> dict[str, dict]:
+    """researcher_id -> 연구원 보유 전문성 분석.json 항목(dict) 매핑. 파일이
+    없으면(파이프라인 미실행) 빈 dict — 호출부가 '분석 데이터 없음'으로 처리한다."""
+    path = os.path.join(DATA_DIR, '연구원 보유 전문성 분석.json')
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding='utf-8') as f:
+        profiles = json.load(f)
+    return {p.get('researcher_id', ''): p for p in profiles}
+
+
+def read_similar_researchers() -> dict[str, dict]:
+    """researcher_id -> researcher_similarity.json 항목(dict, 'similar' 리스트
+    포함) 매핑. 파일이 없으면(process_researcher_similarity.py 미실행) 빈 dict."""
+    path = os.path.join(DATA_DIR, 'researcher_similarity.json')
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding='utf-8') as f:
+        results = json.load(f)
+    return {item.get('researcher_id', ''): item for item in results}
+
+
+def read_strength_taxonomy() -> dict:
+    """strength_taxonomy.json(build_strength_taxonomy.py의 2단계 확정 표준
+    목록) 그대로 반환. 파일이 없으면(아직 build_strength_taxonomy.py를
+    실행/검토하지 않았으면) 빈 dict — 호출부는 표준 목록 없이 원문 매칭만
+    수행하는 것으로 폴백해야 한다."""
+    path = os.path.join(DATA_DIR, 'strength_taxonomy.json')
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding='utf-8') as f:
+        return json.load(f)
+
+
+def filter_current(df: pd.DataFrame, current_only: bool = True) -> pd.DataFrame:
+    """researchers.csv(또는 이를 기반으로 만든 DataFrame)에서 "현재 소속자만"
+    볼지 "누적(한 번이라도 등록된 적 있는 전체 인원)"으로 볼지를 결정한다.
+
+    researchers.csv는 업서트로 적재되어(pipeline/process_researchers.py)
+    전배·퇴사 등으로 최신 원본 파일에서 빠진 사람도 삭제되지 않고 남아있다
+    — is_current 컬럼이 그 사람이 가장 최근 인원실적월 기준으로도 소속돼
+    있었는지(Y) 아닌지(N)를 나타낸다. current_only=True면 is_current=='Y'
+    행만, False면 전체(과거에 한 번이라도 있었던 사람 포함)를 반환한다.
+    is_current 컬럼이 없으면(구버전 데이터/원본에 인원실적년월 컬럼이 없는
+    경우) 판단 근거가 없으므로 필터 없이 그대로 반환한다."""
+    if not current_only or 'is_current' not in df.columns or df.empty:
+        return df
+    return df[df['is_current'] != 'N'].reset_index(drop=True)
+
+
 def read_profile_tables() -> dict[str, pd.DataFrame]:
     names = [
         'researchers',
@@ -57,11 +108,16 @@ def read_profile_tables() -> dict[str, pd.DataFrame]:
         'leadership',
         'transfers',
         'tasks',
+        'tasks_information',
         'nurturing',
         'awards',
         'comments',
         'publications',
         'patents',
         'technology_transfer',
+        'hr_orders',
+        'core_technology',
+        'tech_ownership',
+        'job_profile',
     ]
     return {name: read_processed(name) for name in names}

@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>보유 전문성 개발 경과 보고</title>
+<style>
+  :root {
+    --bg: #f3f4f7; --panel: #ffffff; --line: #e2e4ea;
+    --ink: #1a1d29; --ink-soft: #6b7080;
+    --accent: #4453d6; --accent-weak: rgba(68,83,214,0.08);
+    --good: #1f8a5f; --good-weak: rgba(31,138,95,0.1);
+    --warn: #a3720a; --warn-weak: rgba(163,114,10,0.1);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101218; --panel: #171a22; --line: #272b36;
+      --ink: #e7e8ee; --ink-soft: #8b8fa3;
+      --accent: #8b97f5; --accent-weak: rgba(139,151,245,0.12);
+      --good: #5fbf90; --good-weak: rgba(95,191,144,0.12);
+      --warn: #d1a444; --warn-weak: rgba(209,164,68,0.12);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--ink); margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    line-height: 1.6;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 48px 24px 100px; }
+
+  .cover {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 32px 32px 24px; margin-bottom: 40px;
+  }
+  .cover .kicker {
+    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 8px;
+  }
+  .cover h1 { font-size: 1.55rem; font-weight: 800; letter-spacing: -0.01em; margin: 0 0 10px; }
+  .cover .subtitle { color: var(--ink-soft); font-size: 0.92rem; margin: 0 0 20px; }
+  .meta-row { display: flex; flex-wrap: wrap; gap: 24px; border-top: 1px solid var(--line); padding-top: 16px; }
+  .meta-item { font-size: 0.8rem; }
+  .meta-item .label { color: var(--ink-soft); margin-right: 6px; }
+  .meta-item .fill { display: inline-block; min-width: 110px; border-bottom: 1px dashed var(--ink-soft); }
+
+  h2 {
+    font-size: 1.08rem; font-weight: 800; margin: 44px 0 16px; padding-bottom: 10px;
+    border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px;
+  }
+  h2 .num {
+    display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px;
+    border-radius: 50%; background: var(--accent); color: #fff; font-size: 0.72rem; font-weight: 800;
+    flex-shrink: 0;
+  }
+  h3 { font-size: 0.92rem; font-weight: 700; margin: 22px 0 8px; }
+  p { margin: 0 0 12px; }
+
+  .summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 8px; }
+  @media (max-width: 700px) { .summary-grid { grid-template-columns: 1fr; } }
+  .summary-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+  .summary-card .n { font-size: 1.5rem; font-weight: 800; color: var(--accent); }
+  .summary-card .l { font-size: 0.78rem; color: var(--ink-soft); margin-top: 2px; }
+
+  .tab-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px,1fr)); gap: 14px; }
+  .tab-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; }
+  .tab-card .badge {
+    display: inline-block; font-size: 0.68rem; font-weight: 700; color: var(--accent);
+    background: var(--accent-weak); border-radius: 999px; padding: 3px 10px; margin-bottom: 10px;
+  }
+  .tab-card h3 { margin: 0 0 8px; font-size: 1rem; }
+  .tab-card p { font-size: 0.85rem; color: var(--ink-soft); margin: 0; }
+  .doc-link {
+    display: inline-flex; align-items: center; gap: 6px; margin-top: 16px; font-size: 0.84rem;
+    color: var(--accent); text-decoration: none; border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px 14px; background: var(--accent-weak);
+  }
+
+  .flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; margin: 18px 0; }
+  .flow-step {
+    flex: 1 1 150px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px; font-size: 0.82rem;
+  }
+  .flow-step .step-no {
+    display: inline-block; width: 20px; height: 20px; line-height: 20px; text-align: center;
+    border-radius: 50%; background: var(--accent); color: #fff; font-size: 0.7rem; font-weight: 700;
+    margin-bottom: 8px;
+  }
+  .flow-step b { display: block; margin-bottom: 4px; }
+  .flow-step span { color: var(--ink-soft); }
+  .flow-arrow { display: flex; align-items: center; justify-content: center; color: var(--ink-soft); font-size: 1.1rem; flex: 0 0 auto; }
+  @media (max-width: 760px) { .flow-arrow { display: none; } }
+
+  .good-note {
+    display: flex; gap: 10px; background: var(--good-weak); border: 1px solid var(--good);
+    border-radius: 10px; padding: 12px 16px; font-size: 0.86rem; margin: 14px 0;
+  }
+  .good-note b { color: var(--good); }
+  .note {
+    display: flex; gap: 10px; background: var(--warn-weak); border: 1px solid var(--warn);
+    border-radius: 10px; padding: 12px 16px; font-size: 0.86rem; margin: 14px 0;
+  }
+  .note b { color: var(--warn); }
+
+  .timeline { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0 20px; }
+  .timeline-item {
+    flex: 1 1 200px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .timeline-item .when {
+    font-size: 0.68rem; font-weight: 700; color: var(--accent); text-transform: uppercase;
+    letter-spacing: 0.06em; margin-bottom: 6px;
+  }
+  .timeline-item p { font-size: 0.84rem; margin: 0; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.84rem; margin: 10px 0 24px; }
+  caption {
+    text-align: left; font-size: 0.86rem; font-weight: 700; margin-bottom: 8px; caption-side: top;
+  }
+  th {
+    text-align: left; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--ink-soft); font-weight: 700; padding: 8px 10px; border-bottom: 1px solid var(--line);
+    background: var(--panel);
+  }
+  td { padding: 10px; border-bottom: 1px solid var(--line); vertical-align: top; background: var(--panel); }
+  tr:last-child td { border-bottom: none; }
+  .checklist-table td.fillcell, .checklist-table th.fillcell { text-align: center; width: 70px; }
+  .checklist-table td.namecell { width: 160px; color: var(--ink-soft); }
+  .checkbox {
+    display: inline-block; width: 18px; height: 18px; border: 1.5px solid var(--ink-soft);
+    border-radius: 4px; vertical-align: middle;
+  }
+  .blank-line { display: inline-block; border-bottom: 1px dashed var(--ink-soft); min-width: 90%; height: 1.2em; }
+
+  .checklist-wrap {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px;
+    margin-bottom: 18px;
+  }
+  .checklist-wrap .ct-label {
+    display: inline-block; font-size: 0.68rem; font-weight: 700; color: var(--accent);
+    background: var(--accent-weak); border-radius: 999px; padding: 3px 10px; margin-bottom: 10px;
+  }
+  .checklist-wrap h3 { margin: 0 0 6px; }
+  .checklist-wrap .instructions { font-size: 0.82rem; color: var(--ink-soft); margin-bottom: 14px; }
+
+  code {
+    background: var(--accent-weak); color: var(--accent); padding: 1px 6px; border-radius: 4px;
+    font-size: 0.82em; font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  }
+  .toc { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+  .toc a {
+    font-size: 0.8rem; color: var(--ink-soft); text-decoration: none; border: 1px solid var(--line);
+    border-radius: 999px; padding: 5px 12px;
+  }
+  .toc a:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-weak); }
+  ul { margin: 0 0 12px; padding-left: 20px; }
+  li { margin: 4px 0; }
+  footer { margin-top: 60px; color: var(--ink-soft); font-size: 0.78rem; border-top: 1px solid var(--line); padding-top: 16px; }
+
+  @media print {
+    body { background: #fff; }
+    .toc { display: none; }
+    h2 { break-after: avoid; }
+    .checklist-wrap { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="cover">
+    <div class="kicker">개발 경과 보고</div>
+    <h1>"보유 전문성" 기능 개발 경과 및 검증 계획</h1>
+    <p class="subtitle">연구원 전문성 데이터를 사내 LLM과 임베딩으로 분석해, 유사 인력·적합 과제를 찾아주는
+      기능의 현재까지 진행 상황과 다음 단계(파일럿 검증) 계획을 보고합니다.</p>
+    <div class="meta-row">
+      <div class="meta-item"><span class="label">작성일</span><span class="fill">&nbsp;</span></div>
+      <div class="meta-item"><span class="label">작성자</span><span class="fill">&nbsp;</span></div>
+      <div class="meta-item"><span class="label">보고 대상</span><span class="fill">&nbsp;</span></div>
+    </div>
+  </div>
+
+  <div class="toc">
+    <a href="#summary">요약</a>
+    <a href="#built">① 지금까지 만든 것</a>
+    <a href="#how">② 어떻게 동작하는가</a>
+    <a href="#next">③ 다음 단계: 파일럿 검증</a>
+    <a href="#checklist">④ 검증 체크리스트 템플릿</a>
+  </div>
+
+  <h2 id="summary"><span class="num">•</span>요약</h2>
+  <div class="summary-grid">
+    <div class="summary-card"><div class="n">4</div><div class="l">완성된 화면(탭)</div></div>
+    <div class="summary-card"><div class="n">2단계</div><div class="l">임베딩 + LLM 정성 판정 구조 구축 완료</div></div>
+    <div class="summary-card"><div class="n">1개 부서</div><div class="l">다음 단계 — 파일럿 검증 예정</div></div>
+  </div>
+  <p>연구원 개개인의 실제 전문성을 데이터로 정리하고, 서로 비슷한 전문성을 가진 사람과 적합한 과제를
+     찾아주는 "보유 전문성" 화면을 구축했습니다. 임베딩만으로는 표면적 어휘 일치와 실질적 업무 일치를
+     구분할 수 없다는 한계를 보완하기 위해, 근거를 직접 확인하는 LLM 정성 판정 단계를 추가해
+     신뢰도를 높였습니다. 다음 단계로는 실제 연구원을 대상으로 한 소규모 파일럿 검증을 제안합니다.</p>
+
+  <h2 id="built"><span class="num">①</span>지금까지 만든 것</h2>
+  <p>대시보드에 "보유 전문성" 화면을 추가했고, 아래 4개 탭으로 구성됩니다.</p>
+
+  <div class="tab-grid">
+    <div class="tab-card">
+      <span class="badge">연구원</span>
+      <h3>연구원별 보유 전문성 카드</h3>
+      <p>학력·과제 이력·직무 이력·핵심기술·보유기술·논문·특허를 종합해, 연구원 한 명 한 명의
+         강점 분야/키워드/Hard Skills/Domain Knowledge를 카드로 정리해 보여줍니다.</p>
+    </div>
+    <div class="tab-card">
+      <span class="badge">연구원 ↔ 연구원</span>
+      <h3>전문성이 비슷한 사람 찾기</h3>
+      <p>과제가 완전히 달라도 실제 보유 전문성이 겹치는 연구원을 찾아 보여줍니다. 시니어를 먼저,
+         그다음 주니어 순으로 표시하며, 근거 없이 점수만 높은 매칭은 제외합니다.</p>
+    </div>
+    <div class="tab-card">
+      <span class="badge">연구원 ↔ 과제</span>
+      <h3>과제·직무와 연구원 매칭</h3>
+      <p>"과제 기준"(이 직무에 맞는 사람은 누구인지), "인별 기준"(이 사람에게 맞는 과제는 무엇인지),
+         "과제 전문성"(과제별 필요 전문성 딥다이브)을 한 화면에서 확인할 수 있습니다.</p>
+    </div>
+    <div class="tab-card">
+      <span class="badge">전문성 MAP</span>
+      <h3>전사 전문성 지도(산점도)</h3>
+      <p>모든 연구원의 전문성을 2차원 지도 위에 점으로 뿌려, 가까이 모인 점일수록 실제로 비슷한 일을
+         하는 사람들임을 한눈에 보여줍니다.</p>
+    </div>
+  </div>
+
+  <a class="doc-link" href="보유_전문성_가이드.html">📄 화면 구성·참조 파일 상세 안내 문서 함께 보기 (보유_전문성_가이드.html)</a>
+
+  <h2 id="how"><span class="num">②</span>어떻게 동작하는가 — 왜 신뢰할 수 있는가</h2>
+  <p>모든 결과는 아래 5단계를 거쳐 만들어지며, 특히 3 → 4단계로 넘어가는 부분이 이 기능의 신뢰도를
+     결정하는 핵심입니다.</p>
+
+  <div class="flow">
+    <div class="flow-step"><span class="step-no">1</span><b>원본 정리</b><span>인사·과제·조직도 데이터를 표준 형식으로 정리</span></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step"><span class="step-no">2</span><b>전문성 추출(LLM)</b><span>연구원·과제 이력을 사내 LLM이 분석해 핵심 분야/키워드 도출</span></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step"><span class="step-no">3</span><b>임베딩</b><span>전문성 설명을 벡터화 — 의미가 비슷하면 벡터도 가까워짐 (저비용 1차 후보 추리기)</span></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step"><span class="step-no">4</span><b>정성 판정(LLM)</b><span>후보에 대해서만 LLM이 실제 근거를 대며 한 번 더 확인 — 근거 없으면 제외</span></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step"><span class="step-no">5</span><b>화면 표시</b><span>근거·신뢰도와 함께 리포트로 표시</span></div>
+  </div>
+
+  <div class="good-note">
+    <b>✓ 신뢰도 확보 포인트</b>
+    <div>임베딩(3단계)은 "단어가 비슷한지"만 볼 수 있어, 둘 다 "AI"를 언급해도 실제로는 신호처리 vs
+    자연어처리처럼 완전히 다른 업무일 수 있습니다. 그래서 후보로 추려진 사람에 대해서만 LLM이
+    실제 근거(개조식 문장)를 직접 제시하며 재확인하고, <b>근거를 대지 못하는 매칭은 애초에 화면에
+    나타나지 않도록</b> 걸러냅니다. "유사도 점수가 높다"만으로는 화면에 노출되지 않는다는 뜻입니다.</div>
+  </div>
+  <div class="note">
+    <b>⚠ 아직 검증되지 않은 부분</b>
+    <div>위 구조는 설계상의 신뢰도 확보 장치이며, 실제 정확도를 사람이 측정한 적은 아직 없습니다.
+    다음 단계로 제안하는 파일럿 검증은 바로 이 부분 — "실제로 얼마나 정확한가"를 소규모로나마
+    확인하기 위한 절차입니다.</div>
+  </div>
+
+  <h2 id="next"><span class="num">③</span>다음 단계: 파일럿 검증 계획</h2>
+  <p>전사 확대에 앞서, 부서 1곳을 대상으로 한 소규모 파일럿 검증을 다음 단계로 제안합니다.
+     정식 설문 도구 없이 아래 체크리스트만으로 진행할 수 있는 가벼운 방식입니다.</p>
+
+  <div class="timeline">
+    <div class="timeline-item">
+      <div class="when">Step 1 · 대상 선정</div>
+      <p>파일럿 부서 1곳 선정, 소속 연구원 5~10명 + 부서장 1명 참여</p>
+    </div>
+    <div class="timeline-item">
+      <div class="when">Step 2 · 개인별 확인</div>
+      <p>본인 프로필 정확도(체크리스트 A) + 유사 인물 추천 타당성(체크리스트 B) 확인</p>
+    </div>
+    <div class="timeline-item">
+      <div class="when">Step 3 · 부서장 확인</div>
+      <p>과제-인력 배치 추천이 실제 배치 감각과 맞는지 확인(체크리스트 C)</p>
+    </div>
+    <div class="timeline-item">
+      <div class="when">Step 4 · 결과 집계</div>
+      <p>체크리스트 결과를 취합해 정확도(%)로 요약, 개선점 도출</p>
+    </div>
+  </div>
+
+  <h3>검증 항목 상세</h3>
+  <ul>
+    <li><b>(a) 본인 프로필 확인</b> — "연구원" 탭의 본인 카드를 보여주고, 강점 분야/키워드/Hard
+      Skills/Domain Knowledge가 실제 본인 전문성을 정확히 나타내는지 확인</li>
+    <li><b>(b) 유사 인물 추천 타당성 확인</b> — "연구원 ↔ 연구원" 탭에서 나온 추천 목록(근거 포함)을
+      보여주고, 실제로 비슷한 일을 하는 사람이 맞는지 + 제시된 근거가 타당한지 확인</li>
+    <li><b>(c) 과제-인력 배치 감각 확인</b> — 부서장에게 "연구원 ↔ 과제" 탭의 "과제 기준" 추천을
+      보여주고, 실제 인력 배치 판단과 얼마나 맞는지 정성적으로 확인</li>
+  </ul>
+
+  <h2 id="checklist"><span class="num">④</span>검증 체크리스트 템플릿</h2>
+  <p>아래 세 템플릿을 인쇄하거나 스프레드시트로 옮겨서 그대로 사용할 수 있습니다.</p>
+
+  <div class="checklist-wrap">
+    <span class="ct-label">템플릿 A</span>
+    <h3>본인 전문성 프로필 확인 (연구원 개인별 작성)</h3>
+    <p class="instructions">"연구원" 탭에서 본인 카드를 확인한 뒤 작성해 주세요.</p>
+    <table class="checklist-table">
+      <thead><tr>
+        <th>확인 항목</th><th class="fillcell">그렇다</th><th class="fillcell">아니다</th><th>코멘트(다르다면 어떤 부분이 다른지)</th>
+      </tr></thead>
+      <tbody>
+        <tr><td>강점 분야가 실제 담당 업무를 정확히 나타낸다</td><td class="fillcell"><span class="checkbox"></span></td><td class="fillcell"><span class="checkbox"></span></td><td><span class="blank-line"></span></td></tr>
+        <tr><td>강점 키워드가 실제 사용 기술/지식과 일치한다</td><td class="fillcell"><span class="checkbox"></span></td><td class="fillcell"><span class="checkbox"></span></td><td><span class="blank-line"></span></td></tr>
+        <tr><td>Hard Skills 항목이 정확하다</td><td class="fillcell"><span class="checkbox"></span></td><td class="fillcell"><span class="checkbox"></span></td><td><span class="blank-line"></span></td></tr>
+        <tr><td>Domain Knowledge 항목이 정확하다</td><td class="fillcell"><span class="checkbox"></span></td><td class="fillcell"><span class="checkbox"></span></td><td><span class="blank-line"></span></td></tr>
+        <tr><td>빠졌지만 있어야 할 전문성이 있다면 무엇인가</td><td colspan="2"></td><td><span class="blank-line"></span></td></tr>
+      </tbody>
+    </table>
+    <table>
+      <tbody>
+        <tr><td class="namecell">응답자 성명 / 사번</td><td><span class="blank-line"></span></td></tr>
+        <tr><td class="namecell">소속 부서/팀</td><td><span class="blank-line"></span></td></tr>
+        <tr><td class="namecell">작성일</td><td><span class="blank-line"></span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="checklist-wrap">
+    <span class="ct-label">템플릿 B</span>
+    <h3>유사 연구원 추천 타당성 확인 (연구원 개인별 작성)</h3>
+    <p class="instructions">"연구원 ↔ 연구원" 탭에서 본인에게 추천된 유사 인물 목록(근거 포함)을 보고
+      항목별로 작성해 주세요. 추천된 인원 수만큼 행을 추가하면 됩니다.</p>
+    <table class="checklist-table">
+      <thead><tr>
+        <th>추천된 연구원</th><th>제시된 근거</th><th class="fillcell">타당함</th><th class="fillcell">타당하지 않음</th><th>코멘트</th>
+      </tr></thead>
+      <tbody>
+        <tr><td><span class="blank-line"></span></td><td><span class="blank-line"></span></td><td class="fillcell"><span class="checkbox"></span></td><td class="fillcell"><span class="checkbox"></span></td><td><span class="blank-line"></span></td></tr>
+        <tr><td><span class="blank-line"></span></td><td><span class="blank-line"></span></td><td class="fillcell"><span class="checkbox"></span></td><td class="fillcell"><span class="checkbox"></span></td><td><span class="blank-line"></span></td></tr>
+        <tr><td><span class="blank-line"></span></td><td><span class="blank-line"></span></td><td class="fillcell"><span class="checkbox"></span></td><td class="fillcell"><span class="checkbox"></span></td><td><span class="blank-line"></span></td></tr>
+        <tr><td><span class="blank-line"></span></td><td><span class="blank-line"></span></td><td class="fillcell"><span class="checkbox"></span></td><td class="fillcell"><span class="checkbox"></span></td><td><span class="blank-line"></span></td></tr>
+        <tr><td><span class="blank-line"></span></td><td><span class="blank-line"></span></td><td class="fillcell"><span class="checkbox"></span></td><td class="fillcell"><span class="checkbox"></span></td><td><span class="blank-line"></span></td></tr>
+      </tbody>
+    </table>
+    <table>
+      <tbody>
+        <tr><td class="namecell">응답자 성명 / 사번</td><td><span class="blank-line"></span></td></tr>
+        <tr><td class="namecell">작성일</td><td><span class="blank-line"></span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="checklist-wrap">
+    <span class="ct-label">템플릿 C</span>
+    <h3>과제-인력 배치 적합도 확인 (부서장 작성)</h3>
+    <p class="instructions">"연구원 ↔ 과제" 탭의 "과제 기준" 추천 목록을 보고, 담당 부서의 과제/직무
+      기준으로 작성해 주세요.</p>
+    <table class="checklist-table">
+      <thead><tr>
+        <th>과제 / 직무</th><th>추천된 연구원(적합도 순)</th><th class="fillcell">배치 감각과 일치</th><th class="fillcell">불일치</th><th>코멘트</th>
+      </tr></thead>
+      <tbody>
+        <tr><td><span class="blank-line"></span></td><td><span class="blank-line"></span></td><td class="fillcell"><span class="checkbox"></span></td><td class="fillcell"><span class="checkbox"></span></td><td><span class="blank-line"></span></td></tr>
+        <tr><td><span class="blank-line"></span></td><td><span class="blank-line"></span></td><td class="fillcell"><span class="checkbox"></span></td><td class="fillcell"><span class="checkbox"></span></td><td><span class="blank-line"></span></td></tr>
+        <tr><td><span class="blank-line"></span></td><td><span class="blank-line"></span></td><td class="fillcell"><span class="checkbox"></span></td><td class="fillcell"><span class="checkbox"></span></td><td><span class="blank-line"></span></td></tr>
+        <tr><td><span class="blank-line"></span></td><td><span class="blank-line"></span></td><td class="fillcell"><span class="checkbox"></span></td><td class="fillcell"><span class="checkbox"></span></td><td><span class="blank-line"></span></td></tr>
+      </tbody>
+    </table>
+    <table>
+      <tbody>
+        <tr><td class="namecell">응답자 성명 / 직책</td><td><span class="blank-line"></span></td></tr>
+        <tr><td class="namecell">소속 부서/팀</td><td><span class="blank-line"></span></td></tr>
+        <tr><td class="namecell">작성일</td><td><span class="blank-line"></span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="checklist-wrap">
+    <span class="ct-label">결과 집계용</span>
+    <h3>파일럿 결과 요약 (검증 진행 후 취합)</h3>
+    <table>
+      <thead><tr><th>구분</th><th>확인 건수</th><th>긍정 응답 수</th><th>정확도(%)</th></tr></thead>
+      <tbody>
+        <tr><td>A. 본인 프로필 정확도</td><td><span class="blank-line"></span></td><td><span class="blank-line"></span></td><td><span class="blank-line"></span></td></tr>
+        <tr><td>B. 유사 인물 추천 타당성</td><td><span class="blank-line"></span></td><td><span class="blank-line"></span></td><td><span class="blank-line"></span></td></tr>
+        <tr><td>C. 과제-인력 배치 적합도</td><td><span class="blank-line"></span></td><td><span class="blank-line"></span></td><td><span class="blank-line"></span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <footer>
+    이 문서는 docs/보유_전문성_가이드.html(기능 상세 설명)과 함께 저장소에 보관되며, 파일럿 검증
+    결과가 나오면 이어서 업데이트합니다.
+  </footer>
+
+</div>
+</body>
+</html>
