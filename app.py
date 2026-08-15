@@ -1,3 +1,4 @@
+import html
 import os
 import secrets
 
@@ -112,6 +113,16 @@ def serve_raw_image(filename):
     return flask.send_file(path)
 
 
+def _safe_next_url(raw: str) -> str:
+    """로그인 후 이동할 경로를 검증한다. '/'로 시작하되 '//'나 '/\\'로 시작하면
+    브라우저가 스킴 상대(protocol-relative) URL로 해석해 외부 사이트로 열린
+    리다이렉트(open redirect)가 될 수 있어 함께 거른다."""
+    raw = (raw or '').strip()
+    if raw.startswith('/') and not raw.startswith(('//', '/\\')):
+        return raw
+    return '/'
+
+
 # ── HTML 템플릿 (로그인 / 초기 설정 공통 골격) ─────────────────────────────
 def _html_page(title: str, body: str) -> str:
     return f"""<!DOCTYPE html>
@@ -157,7 +168,7 @@ def login_page():
         return flask.redirect('/setup')
 
     error = flask.request.args.get('error', '')
-    next_url = flask.request.args.get('next', '/')
+    next_url = _safe_next_url(flask.request.args.get('next', '/'))
     setup_ok = flask.request.args.get('setup', '')
 
     alert = ''
@@ -168,7 +179,7 @@ def login_page():
 
     body = f"""{alert}
     <form method="POST" action="/auth/login">
-      <input type="hidden" name="next" value="{next_url}">
+      <input type="hidden" name="next" value="{html.escape(next_url)}">
       <div class="mb-3">
         <label class="form-label small fw-semibold">아이디</label>
         <div class="input-group">
@@ -194,15 +205,17 @@ def login_page():
 
 @app.server.route('/auth/login', methods=['POST'])
 def auth_login():
+    from urllib.parse import quote
+
     from services.auth import authenticate, set_session
     username = flask.request.form.get('username', '').strip()
     password = flask.request.form.get('password', '')
-    next_url = flask.request.form.get('next', '/')
+    next_url = _safe_next_url(flask.request.form.get('next', '/'))
     user = authenticate(username, password)
     if not user:
-        return flask.redirect(f'/login?error=invalid&next={next_url}')
+        return flask.redirect(f'/login?error=invalid&next={quote(next_url)}')
     set_session(user)
-    return flask.redirect(next_url if next_url.startswith('/') else '/')
+    return flask.redirect(next_url)
 
 
 # ── 초기 설정 (첫 관리자 계정 생성) ──────────────────────────────────────────
@@ -235,7 +248,7 @@ def setup_page():
             except Exception as exc:
                 error = str(exc)
 
-    alert = f'<div class="alert alert-danger py-2 small mb-3">{error}</div>' if error else ''
+    alert = f'<div class="alert alert-danger py-2 small mb-3">{html.escape(error)}</div>' if error else ''
     body = f"""<p class="text-center text-muted small mb-3">
         첫 실행입니다. 관리자 계정을 만드세요.
       </p>

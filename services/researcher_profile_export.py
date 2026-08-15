@@ -19,7 +19,7 @@ from openpyxl.styles import Alignment, Border, Font, Side
 from openpyxl.utils import get_column_letter
 
 from components.timeline_data import dedupe_patents, job_points
-from services import data_store, evaluations
+from services import auth, data_store, evaluations
 
 _FONT_NAME = '바탕체'
 _FONT_SIZE = 11
@@ -178,7 +178,13 @@ def _col_evaluation(_rid, rows):
     둘째 줄의 각 항목은 evaluations.format_half_display()로 만드는데, 그 해
     연봉등급이 있으면 있는 반기만 보여주고(예: 상반기 없음/하반기만 있음 →
     "EM"만, "-/EM"처럼 빈 자리를 표시하지 않음 — 사용자 확정), 연봉등급
-    자체가 없으면 기존대로 반기 두 자리를 항상 표시한다(빈 자리는 '-')."""
+    자체가 없으면 기존대로 반기 두 자리를 항상 표시한다(빈 자리는 '-').
+
+    화면(pages/*.py)이 view_evaluation 권한 없는 역할에는 평가등급을 아예
+    안 보여주는 것과 동일한 기준을 여기 엑셀 다운로드에도 적용한다 — 권한
+    없으면 평가 데이터를 셀에 채우지 않는다."""
+    if not auth.can('view_evaluation'):
+        return '-'
     eva_rows = rows['evaluations']
     eva = eva_rows[0] if eva_rows else {}
     salary_line = '/'.join(_s(eva.get(evaluations.salary_grade_column(y))) or '-' for y in _EVAL_SALARY_YEARS)
@@ -238,6 +244,10 @@ def _col_nurturing(_rid, rows):
 
 
 def _col_incentive(_rid, rows):
+    """핵심이력 — incentive_selection.csv 기반. 화면이 view_incentive 권한
+    없는 역할에는 이 데이터를 안 보여주는 것과 동일하게 여기서도 가린다."""
+    if not auth.can('view_incentive'):
+        return '-'
     items = [i for i in rows['incentive_selection'] if _s(i.get('selected')).lower() in ('true', '1')]
     items.sort(key=lambda i: _s(i.get('year')))
     lines = [f"{_yy(i.get('year'))} : {_or_dash(i.get('category'))}" for i in items]
