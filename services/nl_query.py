@@ -473,8 +473,10 @@ def find_researchers_by_criteria(age_min: int | None = None, age_max: int | None
         # 화면 UI(pages/*.py)가 view_evaluation 권한 없는 역할에는 평가등급을
         # 아예 안 보여주는 것과 동일한 기준 — 여기서도 evaluations.csv를 조건으로
         # 걸기 전에 확인해, 권한 없는 역할이 자연어 질문으로 평가등급 조건 검색을
-        # 우회하지 못하게 한다.
-        if not auth.can('view_evaluation'):
+        # 우회하지 못하게 한다. 권한 이름을 직접 하드코딩하지 않고
+        # auth.can_table()로 TABLE_PERMISSIONS(config/auth_config.py)을 거쳐
+        # 조회 — open_data_query.py의 filter_permitted_tables()와 같은 매핑을 쓴다.
+        if not auth.can_table('evaluations'):
             return _empty_table_result(
                 'find_researchers_by_criteria',
                 '평가등급 조건으로 검색할 권한이 없습니다.')

@@ -182,8 +182,9 @@ def _col_evaluation(_rid, rows):
 
     화면(pages/*.py)이 view_evaluation 권한 없는 역할에는 평가등급을 아예
     안 보여주는 것과 동일한 기준을 여기 엑셀 다운로드에도 적용한다 — 권한
-    없으면 평가 데이터를 셀에 채우지 않는다."""
-    if not auth.can('view_evaluation'):
+    없으면 평가 데이터를 셀에 채우지 않는다(권한은 build_profile_workbook()이
+    행마다 다시 확인하지 않도록 rows['permissions']로 한 번만 계산해 전달)."""
+    if not rows['permissions']['view_evaluation']:
         return '-'
     eva_rows = rows['evaluations']
     eva = eva_rows[0] if eva_rows else {}
@@ -245,8 +246,9 @@ def _col_nurturing(_rid, rows):
 
 def _col_incentive(_rid, rows):
     """핵심이력 — incentive_selection.csv 기반. 화면이 view_incentive 권한
-    없는 역할에는 이 데이터를 안 보여주는 것과 동일하게 여기서도 가린다."""
-    if not auth.can('view_incentive'):
+    없는 역할에는 이 데이터를 안 보여주는 것과 동일하게 여기서도 가린다
+    (권한은 rows['permissions']로 한 번만 계산해 전달받음 — _col_evaluation 참고)."""
+    if not rows['permissions']['view_incentive']:
         return '-'
     items = [i for i in rows['incentive_selection'] if _s(i.get('selected')).lower() in ('true', '1')]
     items.sort(key=lambda i: _s(i.get('year')))
@@ -407,7 +409,7 @@ _COLUMNS = [
 ]
 
 
-def _researcher_row_context(researcher_id: str, tables: dict) -> dict:
+def _researcher_row_context(researcher_id: str, tables: dict, permissions: dict) -> dict:
     researcher_rows = _rows_for(tables['researchers'], researcher_id)
     return {
         'researcher': researcher_rows[0] if researcher_rows else None,
@@ -422,6 +424,10 @@ def _researcher_row_context(researcher_id: str, tables: dict) -> dict:
         'publications': _rows_for(tables['publications'], researcher_id),
         'job_profile_df': _df_for(tables['job_profile'], researcher_id),
         'expertise_profile': tables['expertise_profiles'].get(researcher_id),
+        # 요청(로그인 사용자) 단위로 한 번만 계산해 매 행마다 auth.can()을
+        # 다시 호출하지 않도록 build_profile_workbook()에서 전달받는다
+        # (_col_evaluation/_col_incentive 참고).
+        'permissions': permissions,
     }
 
 
@@ -539,6 +545,9 @@ def build_profile_workbook(
     추가한다 — 전부 기본값은 False(다운로드 화면 체크박스 기본 해제)이고,
     켜져도 _COLUMNS 자체는 건드리지 않고 이 함수 안에서만 로컬 사본에 덧붙인다."""
     tables = _load_tables()
+    # 로그인 사용자당 한 번만 계산 — _col_evaluation/_col_incentive가 매 행마다
+    # auth.can()을 다시 호출하지 않도록 _researcher_row_context()에 실어 보낸다.
+    permissions = {'view_evaluation': auth.can('view_evaluation'), 'view_incentive': auth.can('view_incentive')}
 
     columns = list(_COLUMNS)
     widths = list(_COLUMN_WIDTHS)
@@ -580,7 +589,7 @@ def build_profile_workbook(
         cell.alignment = wrap_center
 
     for row_idx, rid in enumerate(researcher_ids, start=2):
-        ctx = _researcher_row_context(rid, tables)
+        ctx = _researcher_row_context(rid, tables, permissions)
         for col_idx, (_header, fn) in enumerate(columns, start=1):
             value = fn(rid, ctx)
             cell = ws.cell(row=row_idx, column=col_idx, value=value)

@@ -1,6 +1,6 @@
-import html
 import os
 import secrets
+from html import escape
 
 import dash
 import dash_bootstrap_components as dbc
@@ -179,7 +179,7 @@ def login_page():
 
     body = f"""{alert}
     <form method="POST" action="/auth/login">
-      <input type="hidden" name="next" value="{html.escape(next_url)}">
+      <input type="hidden" name="next" value="{escape(next_url)}">
       <div class="mb-3">
         <label class="form-label small fw-semibold">아이디</label>
         <div class="input-group">
@@ -248,7 +248,7 @@ def setup_page():
             except Exception as exc:
                 error = str(exc)
 
-    alert = f'<div class="alert alert-danger py-2 small mb-3">{html.escape(error)}</div>' if error else ''
+    alert = f'<div class="alert alert-danger py-2 small mb-3">{escape(error)}</div>' if error else ''
     body = f"""<p class="text-center text-muted small mb-3">
         첫 실행입니다. 관리자 계정을 만드세요.
       </p>
