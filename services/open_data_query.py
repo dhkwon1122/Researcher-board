@@ -48,6 +48,7 @@ sys.path.insert(0, os.path.abspath(_PIPELINE_DIR))
 
 import llm_client  # noqa: E402
 import researcher_fit as fit  # noqa: E402
+from services import auth  # noqa: E402
 from services import data_labels  # noqa: E402
 from services import data_store  # noqa: E402
 from services import query_settings  # noqa: E402
@@ -338,6 +339,11 @@ def answer(question: str, current_only: bool = True) -> dict:
 
     tables = _discover_csv_tables()
     tables.update(_discover_json_tables())
+    # 화면 UI(pages/*.py)가 역할별로 가리는 평가등급/인센티브/코멘트/리더십·
+    # 승계 데이터를, 이 개방형 SQL 질의로 우회 조회하지 못하도록 현재 사용자
+    # 권한에 없는 테이블은 아예 스키마/조회 대상에서 제외한다 — LLM은 이
+    # 테이블이 있다는 것 자체를 모르게 된다.
+    tables = auth.filter_permitted_tables(tables)
     if not tables:
         return {'intent': 'open_data_query', 'columns': [], 'rows': [],
                 'note': '조회할 데이터가 없습니다(data/processed/에 CSV가 없음).'}
@@ -352,7 +358,14 @@ def answer(question: str, current_only: bool = True) -> dict:
 
     import duckdb
 
-    con = duckdb.connect(':memory:')
+    # enable_external_access=False: text2sql.sanitize_sql()은 PostgreSQL 방언
+    # 기준으로 만들어져 read_csv/read_parquet/glob/ATTACH/PRAGMA/INSTALL 같은
+    # DuckDB 전용 파일시스템·네트워크 접근 함수를 막지 못한다(예:
+    # "SELECT * FROM read_csv('/etc/passwd')"가 그대로 통과함) — LLM이 생성한
+    # SQL을 그대로 실행하는 구조라, 질문(프롬프트 인젝션 포함)을 통해 이 함수들이
+    # 유도될 경우 임의 로컬 파일 읽기로 이어질 수 있어 DuckDB 레벨에서 외부
+    # 접근 자체를 차단한다.
+    con = duckdb.connect(':memory:', config={'enable_external_access': False})
     try:
         for name, df in tables.items():
             con.register(name, df)

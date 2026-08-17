@@ -105,3 +105,23 @@ ROLE_PERMISSIONS: dict[str, dict[str, bool]] = {
         'view_grade':      False,
     },
 }
+
+# services/open_data_query.py(개방형 자연어 질의)와
+# services/nl_query.py(find_researchers_by_criteria의 평가등급 조건)가 공유하는
+# "테이블(원천 CSV/DB 테이블명) → 필요 권한" 매핑. 화면 UI(pages/*.py)는 이미
+# ROLE_PERMISSIONS로 평가등급/인센티브/코멘트/리더십·승계 데이터를 역할별로
+# 가려서 보여주는데, AI 자연어 검색은 그 데이터가 담긴 원천 테이블을 그대로
+# SQL/필터로 조회할 수 있어 같은 제약이 없으면 권한 우회 통로가 된다 — 여기
+# 매핑에 있는 테이블은 해당 권한이 없는 사용자에게는 아예 조회 대상에서
+# 제외한다(services.auth.filter_permitted_tables 참고).
+# view_grade는 화면 UI 어디에서도 아직 실사용되지 않는 미확정 권한이라(위 주석
+# 참고), 여기서는 조직 내부에서 평가등급과 비슷하게 민감한 인사 판단 정보로
+# 취급되는 리더십 진단/승계 후보 데이터에 잠정 매핑해 둔다 — 실제 운영 기준과
+# 다르면 조정할 것.
+TABLE_PERMISSIONS: dict[str, str] = {
+    'evaluations':         'view_evaluation',
+    'incentive_selection': 'view_incentive',
+    'comments':            'view_comments',
+    'leadership':          'view_grade',
+    'succession':          'view_grade',
+}

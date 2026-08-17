@@ -19,7 +19,7 @@ from services import user_store
 
 try:
     from config.auth_config import (
-        DEFAULT_ROLE, ROLE_LABELS, ROLE_PERMISSIONS, SESSION_LIFETIME_HOURS,
+        DEFAULT_ROLE, ROLE_LABELS, ROLE_PERMISSIONS, SESSION_LIFETIME_HOURS, TABLE_PERMISSIONS,
     )
 except ImportError:
     DEFAULT_ROLE = 'talent_dev'
@@ -38,6 +38,7 @@ except ImportError:
         },
     }
     SESSION_LIFETIME_HOURS = 8
+    TABLE_PERMISSIONS: dict[str, str] = {}
 
 _USERS_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -239,6 +240,27 @@ def can(permission: str) -> bool:
         return user.get('is_admin', False)
     role = user.get('role', DEFAULT_ROLE)
     return ROLE_PERMISSIONS.get(role, {}).get(permission, False)
+
+
+def can_table(table_name: str) -> bool:
+    """table_name이 TABLE_PERMISSIONS에 등록돼 있으면 그 권한을, 없으면(민감정보로
+    분류되지 않은 테이블) 항상 True를 반환한다. TABLE_PERMISSIONS 쪽만 보고
+    판단하므로, 어떤 테이블이 어떤 권한에 걸리는지는 이 함수를 호출하는 쪽이
+    권한 이름을 직접 하드코딩하지 않아도 된다(config/auth_config.py의
+    TABLE_PERMISSIONS만 고치면 모든 호출부에 자동 반영)."""
+    permission = TABLE_PERMISSIONS.get(table_name)
+    return permission is None or can(permission)
+
+
+def filter_permitted_tables(tables: dict) -> dict:
+    """{테이블명: ...} 딕셔너리에서 TABLE_PERMISSIONS에 등록된 테이블 중
+    현재 로그인 사용자에게 필요 권한이 없는 것을 제외하고 반환한다.
+    TABLE_PERMISSIONS에 없는 테이블(민감정보로 분류되지 않은 것)은 그대로 둔다.
+    AI 자연어 검색(services/nl_query.py, services/open_data_query.py)이 화면
+    UI(pages/*.py)와 같은 권한 기준으로 평가등급/인센티브/코멘트/리더십·승계
+    데이터를 가리는 데 쓴다 — 화면에서 못 보게 막아둔 데이터를 자연어 질문으로
+    우회 조회하지 못하게 하는 것이 목적."""
+    return {name: df for name, df in tables.items() if can_table(name)}
 
 
 def set_session(user: dict) -> None:
