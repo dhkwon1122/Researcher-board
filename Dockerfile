@@ -36,7 +36,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# ── 1) 사내 CA 인증서 등록 + 개발 편의 도구(vim, zsh) 설치 ──
+# ── 1) 사내 CA 인증서 등록 + 개발 편의 도구(vim) 설치 ──
+# (zsh/oh-my-zsh 설치는 빌드 환경에서 오류가 나 제외 — 필요해지면 재검토)
 # certs/ 에 아래 중 하나(또는 둘 다)를 둘 수 있다:
 #   (a) 개별 사내 CA:  certs/corp-root-ca.crt  → update-ca-certificates 로 등록
 #   (b) 전체 CA 번들:  certs/ca-bundle.crt     → 시스템 번들을 통째로 교체
@@ -45,7 +46,7 @@ WORKDIR /app
 COPY certs/ /tmp/corp-certs/
 RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
     apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates vim zsh git curl \
+    && apt-get install -y --no-install-recommends ca-certificates vim git curl \
     && for f in /tmp/corp-certs/*.crt; do \
          [ -e "$f" ] || continue; \
          case "$f" in */ca-bundle.crt) continue ;; esac; \
@@ -58,25 +59,8 @@ RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
        fi \
     && rm -rf /var/lib/apt/lists/* /tmp/corp-certs
 
-# zsh 를 root 의 기본 로그인 셸로 지정.
-# (주의: 여기서 SHELL 지시어를 zsh 로 바꾸면 이후 pip RUN 의 ${VAR:+...} 단어분리가
-#  깨지므로, 빌드 셸은 기본(sh)으로 두고 로그인 셸만 chsh 로 바꾼다.)
-RUN chsh -s /bin/zsh root
-
-# oh-my-zsh 설치 (github.com clone → 사내 프록시 경유, 시스템 CA 사용).
-# 자주 쓰는 외부 플러그인(zsh-autosuggestions, zsh-syntax-highlighting)도 함께 설치.
-RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
-    git clone --depth=1 https://github.com/ohmyzsh/ohmyzsh.git /root/.oh-my-zsh \
-  && http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
-    git clone --depth=1 https://github.com/zsh-users/zsh-autosuggestions \
-      /root/.oh-my-zsh/custom/plugins/zsh-autosuggestions \
-  && http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
-    git clone --depth=1 https://github.com/zsh-users/zsh-syntax-highlighting \
-      /root/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting
-
-# zsh/vim 설정을 이미지에 굽는다. dotfiles/ 의 내용을 본인 설정으로 교체 후
+# vim 설정을 이미지에 굽는다. dotfiles/ 의 내용을 본인 설정으로 교체 후
 # 리빌드하면 반영된다.
-COPY dotfiles/zshrc /root/.zshrc
 COPY dotfiles/vimrc /root/.vimrc
 
 # 런타임 파이썬(requests/psycopg2 등)이 사내 CA 를 신뢰하도록 시스템 번들 지정
