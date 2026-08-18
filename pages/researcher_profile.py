@@ -6,9 +6,10 @@ from datetime import date, datetime
 
 import dash
 import dash_bootstrap_components as dbc
+import pandas as pd
 from dash import Input, Output, State, callback, clientside_callback, dcc, html, no_update
 
-from components.detail_tabs import llm_summary_block, owned_expertise_block, patents_tab, publications_tab
+from components.detail_tabs import llm_summary_block, owned_expertise_block
 from components.profile_sections import (
     avatar,
     award_block,
@@ -21,7 +22,14 @@ from components.profile_sections import (
     photo_block,
     tasks_block,
 )
-from components.timeline_data import task_points
+from components.timeline_data import (
+    count_true,
+    count_us_registered,
+    dedupe_patents,
+    is_registered,
+    share_sum,
+    task_points,
+)
 from components.timeline_view import filter_hr_rows, timeline_view
 from services.comments import upsert_comment
 from services.data_store import (
@@ -399,6 +407,7 @@ def _empty_profile_output():
 
 
 _PRINT_BOX_BORDER = '1px solid #1d1d1f'
+_RECENT_LIMIT = 5  # 과제 수행/인사 발령 이력 인쇄본에 보여줄 최신 건수
 
 
 def _print_box(title, children, *, breakable: bool = False):
@@ -456,12 +465,18 @@ def _tenure_label(hire_date_str: str) -> str:
     return f'근속 {tenure}년 (입사일 {hd.isoformat()})'
 
 
-def _print_hr_orders_table(hr_df, rid):
+def _print_hr_orders_table(hr_df, rid, *, limit: int | None = None):
     """인사 발령 이력 — components/timeline_view.py의 filter_hr_rows()로 동일하게
-    필터링(order_date가 '→'인 연속 표시용 특수행 제외, 최신순)한 뒤 표로 나열."""
+    필터링(order_date가 '→'인 연속 표시용 특수행 제외, 최신순)한 뒤 표로 나열.
+    limit이 주어지면 최신순 상위 limit건만 표에 담고, 잘린 나머지 건수를 표 아래
+    한 줄로 안내한다."""
     rows = filter_hr_rows(hr_df, rid)
     if rows.empty:
         return html.Div('인사 발령 이력 없음', className='text-muted small')
+
+    total = len(rows)
+    if limit:
+        rows = rows.head(limit)
 
     def _c(v):
         s = str(v).strip() if v is not None else ''
@@ -477,7 +492,7 @@ def _print_hr_orders_table(hr_df, rid):
         ])
         for _, row in rows.iterrows()
     ]
-    return dbc.Table([
+    table = dbc.Table([
         html.Thead(html.Tr([
             html.Th('발령일', style={'fontSize': '0.72rem', 'width': '16%'}),
             html.Th('발령명', style={'fontSize': '0.72rem', 'width': '26%'}),
@@ -487,6 +502,44 @@ def _print_hr_orders_table(hr_df, rid):
         ]), className='table-light'),
         html.Tbody(table_rows),
     ], bordered=False, hover=True, size='sm', className='mb-0', style={'tableLayout': 'fixed', 'width': '100%'})
+
+    if limit and total > limit:
+        return html.Div([table, html.Div(f'외 {total - limit}건 더', className='text-muted small mt-1')])
+    return table
+
+
+def _print_publication_summary(pub_df, rid):
+    """논문 실적 요약 — components/detail_tabs.py의 publications_tab()과 같은
+    집계(총 논문 수/교신저자 수)만 한 줄로 보여주고, 개별 논문 목록(제목/게재처
+    등 세부 내역)은 인쇄본에서는 생략한다."""
+    pub = pub_df[pub_df['researcher_id'] == rid] if not pub_df.empty else pub_df
+    if pub is None or pub.empty:
+        return html.Div('논문 실적 없음', className='text-muted')
+    total = len(pub)
+    corr = int(pub.get('is_corresponding', pd.Series(dtype=str)).astype(str).str.lower()
+               .isin(['true', '1', 'y', 'yes']).sum())
+    return html.Div(f'총 {total}건 (교신저자 {corr}건)')
+
+
+def _print_patent_summary(pat_df, rid):
+    """특허 실적 요약 — components/detail_tabs.py의 patents_tab()과 같은
+    집계(전체/등록/대표발명/전략출원/미국등록/지분율합계)만 한 줄로 보여주고,
+    개별 특허 목록(발명 명칭 등 세부 내역)은 인쇄본에서는 생략한다."""
+    pat = pat_df[pat_df['researcher_id'] == rid] if not pat_df.empty else pat_df
+    if pat is None or pat.empty:
+        return html.Div('특허 실적 없음', className='text-muted')
+    pat_dedup = dedupe_patents(pat)
+    total_cnt = len(pat_dedup)
+    reg_cnt = int(pat_dedup['status'].apply(is_registered).sum()) if 'status' in pat_dedup.columns else 0
+    lead_cnt = count_true(pat_dedup, 'is_lead_inventor')
+    strat_cnt = int((pat_dedup.get('patent_grade_a_sub', pd.Series(dtype=str)).astype(str).str.strip()
+                     == '전략출원').sum())
+    us_reg_cnt = count_us_registered(pat_dedup)
+    share_sum_val = share_sum(pat_dedup)
+    return html.Div(
+        f'총 {total_cnt}건 (등록 {reg_cnt} · 출원중 {total_cnt - reg_cnt}) · '
+        f'대표발명 {lead_cnt}건 · 전략출원 {strat_cnt}건 · 미국등록 {us_reg_cnt}건 · 지분율 합계 {share_sum_val}'
+    )
 
 
 def _print_profile_content(rid, researcher, tables, profile, similar, name_map,
@@ -552,22 +605,27 @@ def _print_profile_content(rid, researcher, tables, profile, similar, name_map,
         (2, owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid)),
         (1, html.Div([
             html.Div('전문성 요약(LLM)', className='small fw-semibold text-muted mb-1'),
-            llm_summary_block(profile, similar, name_map),
+            # llm_summary_block()은 데이터가 있으면 컴포넌트 "리스트"를 그대로
+            # 반환한다(화면에서는 Output.children으로 바로 받아 문제 없음) —
+            # 여기서는 그 리스트를 다른 리스트([...]) 안에 그대로 끼워 넣으면
+            # 중첩 리스트가 되어 Dash가 이 서브트리를 통째로 빈 화면으로
+            # 렌더링해버린다. html.Div로 한 번 더 감싸 평평하게 만든다.
+            html.Div(llm_summary_block(profile, similar, name_map)),
         ])),
     ]))
 
     pub_patent_box = _print_box('논문 / 특허', html.Div([
         html.Div('논문 실적', className='small fw-semibold text-muted mb-1'),
-        publications_tab(tables['publications'], rid),
+        _print_publication_summary(tables['publications'], rid),
         html.Div('특허 실적', className='small fw-semibold text-muted mt-3 mb-1'),
-        patents_tab(tables['patents'], rid),
+        _print_patent_summary(tables['patents'], rid),
     ]))
 
     task_hr_box = _print_box('과제 수행 / 인사 발령 이력', html.Div([
-        html.Div('과제 수행 이력', className='small fw-semibold text-muted mb-1'),
-        tasks_block(tables['tasks'], rid),
-        html.Div('인사 발령 이력', className='small fw-semibold text-muted mt-3 mb-1'),
-        _print_hr_orders_table(tables['hr_orders'], rid),
+        html.Div('과제 수행 이력 (최근 5건)', className='small fw-semibold text-muted mb-1'),
+        tasks_block(tables['tasks'], rid, limit=_RECENT_LIMIT),
+        html.Div('인사 발령 이력 (최근 5건)', className='small fw-semibold text-muted mt-3 mb-1'),
+        _print_hr_orders_table(tables['hr_orders'], rid, limit=_RECENT_LIMIT),
     ]), breakable=True)
 
     return html.Div([
