@@ -363,6 +363,67 @@ h1, h2, h3, h4, h5, h6 {
   }
 }
 
+/* ════════════════════════════════════════════════
+   A4 인쇄 (portrait) — 연구원 개별 프로필 화면
+   화면에는 숨겨두고(.profile-print-only) 인쇄할 때만 보인다. 용지 크기(A4)는
+   여기서 @page로 고정하지 않는다 — 위 A3 landscape 규칙과 이름 없는(unnamed)
+   @page를 공유하는 상태에서 named page(page: 속성)로 분리해봤더니 크로미움이
+   인쇄 콘텐츠 뒤에 A3 크기의 빈 페이지를 한 장 더 붙이는 버그가 있어(named
+   page 컨텍스트에서 기본 컨텍스트로 돌아올 때 발생) 포기했다. 대신
+   pages/researcher_profile.py의 인쇄 버튼 콜백이 클릭 시점에 unnamed @page를
+   A4로 임시 오버라이드하는 <style> 태그를 head에 주입했다가(같은 무명 페이지를
+   더 나중 소스 순서로 덮어써 A3보다 우선), afterprint에서 제거한다 — 다른
+   화면(조직별 비교, A3)의 인쇄에는 영향 없음.
+   ════════════════════════════════════════════════ */
+.profile-print-only {
+  display: none;
+}
+
+@media print {
+  .profile-print-only {
+    display: block;
+  }
+
+  .profile-print-only .print-section {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* 보유 전문성(핵심기술/보유기술) 좌우 2단이 위 A3 인쇄 규칙의
+     .col-md-6 강제 25% 오버라이드에 덮이지 않도록 이 화면 안에서만 되돌린다. */
+  .profile-print-only .col-md-6 {
+    flex: 0 0 50% !important;
+    max-width: 50% !important;
+  }
+
+  /* 위 A3 인쇄 규칙의 ".row { display:flex !important }"가 .no-print와 동일한
+     specificity(단일 클래스)라 소스 순서상 뒤에 오는 쪽이 이겨, dbc.Row에 준
+     no-print(예: 화면 제목/버튼 줄, 이 화면의 대시보드 전체)가 인쇄 시 실제로는
+     안 감춰지던 문제가 있었다 — 이 규칙을 그 뒤(이 파일의 더 아래)에 다시 선언해
+     항상 이기도록 한다(전 화면 공통 .no-print 동작 자체를 고치는 것이라 A3/A4
+     인쇄 모두에 적용됨). */
+  .no-print {
+    display: none !important;
+  }
+
+  /* app.py의 index_string이 Dash 요구사항({%config%}{%scripts%}{%renderer%})
+     때문에 <footer>를 #react-entry-point 밖의 형제로 둔다 — 화면 콘텐츠가 전혀
+     아니라 .no-print로도 못 가리는데, 기본 block 요소라 인쇄 시 빈 페이지가 한
+     장 더 붙는 원인이 된다(스크립트 실행에는 display만으로 영향 없음). */
+  footer {
+    display: none !important;
+  }
+
+  /* app.py의 app.layout 최상위 Div(style="min-height:100vh")는 named page가
+     아닌 기본(무명) 페이지 컨텍스트에 속해, 실제 인쇄 콘텐츠(.profile-print-only
+     등 named page 콘텐츠)가 다 끝난 뒤에도 100vh만큼 배경을 더 채우려다 무명
+     @page(A3 landscape) 크기의 빈 페이지가 한 장 더 붙는다. 인쇄 중엔 필요
+     없는 높이라 0으로 되돌린다. */
+  #react-entry-point > div {
+    min-height: 0 !important;
+  }
+}
+
 /* 드래그 앤 드롭 업로드 영역 */
 .jd-upload-dropzone {
   transition: background-color 0.15s ease, border-color 0.15s ease;
