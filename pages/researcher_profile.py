@@ -542,7 +542,7 @@ def _print_patent_summary(pat_df, rid):
     )
 
 
-def _print_profile_content(rid, researcher, tables, profile, similar, name_map,
+def _print_profile_content(rid, researcher, tables, profile, name_map,
                             eval_content, comments_content, current_status):
     """A4 인쇄 전용 콘텐츠 — 화면의 카드형 대시보드(고정 높이 + 내부 스크롤)는
     인쇄에 부적합해(넘치는 내용이 잘림) 재사용하지 않고, 같은 데이터/블록 함수를
@@ -601,16 +601,21 @@ def _print_profile_content(rid, researcher, tables, profile, similar, name_map,
         html.Div(tenure_box, style={'flex': '1 1 0', 'minWidth': '0'}),
     ], style={'display': 'flex', 'alignItems': 'flex-start', 'marginBottom': '10px'})
 
+    # 핵심기술/보유기술은 좌우 대신 세로로 쌓고(stacked=True), 그만큼 넓어진
+    # 여유를 전문성 요약(LLM) 쪽에 몰아준다 — 비율을 1:2로 줘서 핵심기술/보유기술
+    # 열보다 전문성 요약 열이 2배 넓어지게 한다. 전문성 요약은 지면이 좁은
+    # 인쇄본 특성상 주요 역할·책임/유사 연구원은 빼고(강점 분야·키워드·전문지식
+    # 및 역량만) 보여준다.
     capability_box = _print_box('보유 전문성 · 보유 기술 · 전문성 요약(LLM)', _print_box_cols([
-        (2, owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid)),
-        (1, html.Div([
+        (1, owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid, stacked=True)),
+        (2, html.Div([
             html.Div('전문성 요약(LLM)', className='small fw-semibold text-muted mb-1'),
             # llm_summary_block()은 데이터가 있으면 컴포넌트 "리스트"를 그대로
             # 반환한다(화면에서는 Output.children으로 바로 받아 문제 없음) —
             # 여기서는 그 리스트를 다른 리스트([...]) 안에 그대로 끼워 넣으면
             # 중첩 리스트가 되어 Dash가 이 서브트리를 통째로 빈 화면으로
             # 렌더링해버린다. html.Div로 한 번 더 감싸 평평하게 만든다.
-            html.Div(llm_summary_block(profile, similar, name_map)),
+            html.Div(llm_summary_block(profile, name_map=name_map, include_responsibilities=False)),
         ])),
     ]))
 
@@ -821,7 +826,7 @@ def update_profile(rid):
                           tables['patents'], tables['job_profile'], tables['tasks_information'], rid),
             owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid),
             current_status,
-            _print_profile_content(rid, researcher, tables, profile, similar, name_map,
+            _print_profile_content(rid, researcher, tables, profile, name_map,
                                     eval_content, comments_content, current_status),
         )
     except Exception as exc:

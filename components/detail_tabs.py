@@ -152,14 +152,17 @@ _PANEL_TITLE_STYLE = {'fontSize': '0.85rem', 'fontWeight': 600, 'color': '#1d1d1
 _GRADE_PILL_COLOR = '#3f8f57'
 _E_SUPPORT_COLOR = '#0071e3'
 
-def llm_summary_block(profile: dict | None, similar: list | None = None, name_map: dict | None = None):
+def llm_summary_block(profile: dict | None, similar: list | None = None, name_map: dict | None = None,
+                       *, include_responsibilities: bool = True):
     """전문성 요약(LLM) — 연구원 보유 전문성 분석.json의 핵심 분야(strength_fields)/
     키워드(strength_keywords)를 배지로, 주요 역할·책임(key_responsibilities)/
     전문지식 및 역량(domain_knowledge_skill)을 불릿 목록으로 보여준다.
     similar(researcher_similarity.json의 해당 연구원 항목 중 'similar' 리스트,
     시니어 우선으로 이미 정렬돼 있음)가 주어지면 시니어 3명·주니어 3명을 유사
-    연구원 배지로 덧붙인다. 해당 연구원이 분석 대상이 아니거나 아직 파이프라인을
-    실행하지 않아 데이터가 없으면 안내 문구만 표시한다."""
+    연구원 배지로 덧붙인다(생략하면 유사 연구원 섹션 자체를 건너뜀 — A4 인쇄
+    요약처럼 지면이 좁을 때 사용). include_responsibilities=False면 주요 역할·
+    책임 목록을 뺀다(같은 이유). 해당 연구원이 분석 대상이 아니거나 아직
+    파이프라인을 실행하지 않아 데이터가 없으면 안내 문구만 표시한다."""
     if not profile:
         return html.Div('분석 데이터 없음', className='text-muted small p-1')
 
@@ -179,7 +182,7 @@ def llm_summary_block(profile: dict | None, similar: list | None = None, name_ma
         children.append(html.Div(
             [dbc.Badge(k, color='secondary', className='me-1 mb-1') for k in keywords],
         ))
-    if responsibilities:
+    if responsibilities and include_responsibilities:
         children.append(html.Div('주요 역할·책임', className='small text-muted fw-semibold mt-2 mb-1'))
         children.append(html.Ul([html.Li(r, className='small') for r in responsibilities], className='mb-0 ps-3'))
     if domain_skill:
@@ -322,10 +325,11 @@ def _tech_ownership_table(tech_row):
        style={'tableLayout': 'fixed', 'width': '100%'})
 
 
-def owned_expertise_block(core_df, tech_df, rid):
+def owned_expertise_block(core_df, tech_df, rid, *, stacked: bool = False):
     """보유 전문성 — 핵심기술(core_technology.csv) / 보유기술(tech_ownership.csv)을
-    좌우로 나눠 표시. 좌: 기술분야·핵심기술(등급 배지). 우: 전문분야별 Lv·보유율,
-    상단에 E/R 직군 배지."""
+    기본은 좌우로 나눠 표시(좌: 기술분야·핵심기술(등급 배지), 우: 전문분야별
+    Lv·보유율, 상단에 E/R 직군 배지). stacked=True면 좌우 대신 핵심기술 아래에
+    보유기술을 세로로 쌓는다(A4 인쇄처럼 가로 폭이 좁아 2단이 부담스러울 때)."""
     core = core_df[core_df['researcher_id'] == rid] if not core_df.empty else pd.DataFrame()
     tech = tech_df[tech_df['researcher_id'] == rid] if not tech_df.empty else pd.DataFrame()
     tech_row = tech.iloc[0] if not tech.empty else None
@@ -349,6 +353,9 @@ def owned_expertise_block(core_df, tech_df, rid):
         _tech_ownership_table(tech_row),
         _info_hover('lv-info-icon', 'Lv 개요', 'lv 개요.png'),
     ])
+
+    if stacked:
+        return html.Div([left, html.Div(right, className='mt-3 pt-3', style={'borderTop': '1px solid #e8e8ed'})])
 
     return dbc.Row([
         dbc.Col(left, md=6, className='pe-3'),
