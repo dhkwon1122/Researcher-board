@@ -331,22 +331,28 @@ def _tech_ownership_table(tech_row, *, show_index: bool = True):
        style={'tableLayout': 'fixed', 'width': '100%'})
 
 
-def owned_expertise_block(core_df, tech_df, rid, *, stacked: bool = False, show_tech_index: bool = True):
+def owned_expertise_block(core_df, tech_df, rid, *, stacked: bool = False, show_tech_index: bool = True,
+                           show_info_hover: bool = True):
     """보유 전문성 — 핵심기술(core_technology.csv) / 보유기술(tech_ownership.csv)을
     기본은 좌우로 나눠 표시(좌: 기술분야·핵심기술(등급 배지), 우: 전문분야별
     Lv·보유율, 상단에 E/R 직군 배지). stacked=True면 좌우 대신 핵심기술 아래에
     보유기술을 세로로 쌓는다(A4 인쇄처럼 가로 폭이 좁아 2단이 부담스러울 때).
-    show_tech_index=False면 보유기술 표의 "구분"(1~5 순번) 열을 뺀다."""
+    show_tech_index=False면 보유기술 표의 "구분"(1~5 순번) 열을 뺀다.
+    show_info_hover=False면 "등급 개요"/"Lv 개요" 마우스 오버 안내(_info_hover())를
+    아예 뺀다 — 종이 인쇄본에는 호버가 없어 의미가 없고, 이 함수가 화면·인쇄본
+    양쪽에서 호출되면 같은 id를 가진 요소가 DOM에 중복되는 문제도 같이 없앤다."""
     core = core_df[core_df['researcher_id'] == rid] if not core_df.empty else pd.DataFrame()
     tech = tech_df[tech_df['researcher_id'] == rid] if not tech_df.empty else pd.DataFrame()
     tech_row = tech.iloc[0] if not tech.empty else None
     e_support = tech_row.get('E_support') if tech_row is not None else None
 
-    left = html.Div([
+    left_children = [
         html.P('핵심기술', style=_PANEL_TITLE_STYLE, className='mb-2'),
         _core_technology_table(core),
-        _info_hover('grade-info-icon', '등급 개요', '등급 개요.png'),
-    ])
+    ]
+    if show_info_hover:
+        left_children.append(_info_hover('grade-info-icon', '등급 개요', '등급 개요.png'))
+    left = html.Div(left_children)
 
     right_title_children = [
         html.Span('보유기술', style=_PANEL_TITLE_STYLE),
@@ -355,11 +361,13 @@ def owned_expertise_block(core_df, tech_df, rid, *, stacked: bool = False, show_
     if e_support is not None:
         right_title_children.append(html.Div(_e_support_pill(e_support), className='ms-auto'))
 
-    right = html.Div([
+    right_children = [
         html.Div(right_title_children, className='d-flex align-items-center mb-2'),
         _tech_ownership_table(tech_row, show_index=show_tech_index),
-        _info_hover('lv-info-icon', 'Lv 개요', 'lv 개요.png'),
-    ])
+    ]
+    if show_info_hover:
+        right_children.append(_info_hover('lv-info-icon', 'Lv 개요', 'lv 개요.png'))
+    right = html.Div(right_children)
 
     if stacked:
         return html.Div([left, html.Div(right, className='mt-3 pt-3', style={'borderTop': '1px solid #e8e8ed'})])

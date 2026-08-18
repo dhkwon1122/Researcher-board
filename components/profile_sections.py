@@ -71,7 +71,12 @@ def avatar(name: str, size: int = 88):
     )
 
 
-def photo_block(rid: str, name: str, row=None, current_year: int = 2026):
+def photo_block(rid: str, name: str, row=None, current_year: int = 2026, *,
+                 hide_normal_employment_status: bool = False):
+    """hide_normal_employment_status=True면 재직상태가 "재직"(정상 재직 중,
+    별도로 알릴 필요 없는 기본값)일 때는 "재직상태 : 재직" 줄 자체를 생략한다
+    (휴직/퇴직 등 그 외 값은 그대로 표시) — A4 인쇄본처럼 지면이 좁을 때
+    사용(기본값 False는 화면과 동일하게 항상 표시)."""
     photo_el = None
     IMG_STYLE = {'width': 'auto', 'maxWidth': '100%', 'height': 'auto', 'maxHeight': '200px',
                  'objectFit': 'contain', 'borderRadius': '8px', 'display': 'block'}
@@ -134,7 +139,7 @@ def photo_block(rid: str, name: str, row=None, current_year: int = 2026):
         ]
 
         employment_status = str(row.get('employment_status', '') or '').strip()
-        if employment_status:
+        if employment_status and not (hide_normal_employment_status and employment_status == '재직'):
             sub_lines.append(html.P(
                 f'재직상태 : {employment_status}', className='text-muted text-center mb-0',
                 style={'fontSize': '0.78rem'},
