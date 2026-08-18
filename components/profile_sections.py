@@ -387,9 +387,11 @@ def _fmt_period(start_raw, end_raw) -> str:
     return '-'
 
 
-def tasks_block(task_df, rid: str):
+def tasks_block(task_df, rid: str, *, limit: int | None = None):
     """과제 수행 이력 테이블 (tasks.csv 기반). 투입률 0도 포함하고, 참여기간
-    (종료일-시작일)이 30일 이하인 과제만 제외한다(타임라인 스파인과 동일 기준)."""
+    (종료일-시작일)이 30일 이하인 과제만 제외한다(타임라인 스파인과 동일 기준).
+    limit이 주어지면(예: A4 인쇄 요약) 최신순 상위 limit건만 표에 담고, 잘린
+    나머지 건수를 표 아래 한 줄로 안내한다 — 기본값 None은 화면 그대로 전체 표시."""
     rows = (task_df[task_df['researcher_id'] == rid]
             .sort_values('start_date', ascending=False)
             if not task_df.empty else pd.DataFrame())
@@ -397,6 +399,10 @@ def tasks_block(task_df, rid: str):
         rows = rows[rows.apply(lambda r: _has_min_duration(r.get('start_date'), r.get('end_date')), axis=1)]
     if rows.empty:
         return html.Div('과제 수행 이력 없음', className='text-muted small')
+
+    total = len(rows)
+    if limit:
+        rows = rows.head(limit)
 
     table_rows = []
     for _, row in rows.iterrows():
@@ -412,7 +418,7 @@ def tasks_block(task_df, rid: str):
             html.Td(rate, className='small text-center', style={'wordBreak': 'break-word'}),
         ]))
 
-    return dbc.Table([
+    table = dbc.Table([
         html.Thead(html.Tr([
             html.Th('과제명',  style={'fontSize': '0.72rem', 'width': '50%'}),
             html.Th('기간',    style={'fontSize': '0.72rem', 'width': '35%'}),
@@ -421,6 +427,10 @@ def tasks_block(task_df, rid: str):
         html.Tbody(table_rows),
     ], bordered=False, hover=True, size='sm', className='mb-0',
        style={'tableLayout': 'fixed', 'width': '100%'})
+
+    if limit and total > limit:
+        return html.Div([table, html.Div(f'외 {total - limit}건 더', className='text-muted small mt-1')])
+    return table
 
 
 def transfer_block(tra_df, rid: str):
