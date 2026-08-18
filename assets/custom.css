@@ -439,6 +439,9 @@ h1, h2, h3, h4, h5, h6 {
   .profile-print-only .print-title {
     font-size: 30px !important;
   }
+  .profile-print-only .print-page2-title {
+    font-size: 16px !important;
+  }
 }
 
 /* 드래그 앤 드롭 업로드 영역 */

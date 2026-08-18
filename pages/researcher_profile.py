@@ -23,6 +23,7 @@ from components.profile_sections import (
     photo_block,
 )
 from components.timeline_data import (
+    cell,
     count_true,
     count_us_registered,
     dedupe_patents,
@@ -606,6 +607,110 @@ def _print_patent_summary(pat_df, rid):
     )
 
 
+_PRINT_TABLE_TH_STYLE = {'padding': '3px 6px', 'borderBottom': f'1px solid {_PRINT_BOX_BORDER.split()[-1]}',
+                          'textAlign': 'left', 'fontWeight': '600', 'whiteSpace': 'nowrap'}
+_PRINT_TABLE_TD_STYLE = {'padding': '3px 6px', 'borderBottom': '1px solid #d2d2d7', 'verticalAlign': 'top'}
+
+
+def _print_publication_detail_table(pub_df, rid):
+    """논문 실적 상세 목록(2페이지) — components/detail_tabs.py의
+    publications_tab()과 같은 컬럼을 최근순(발표일 내림차순)으로 나열한다.
+    요약 카드는 1페이지의 _print_publication_summary가 이미 보여주므로
+    여기서는 목록만 다룬다."""
+    pub = pub_df[pub_df['researcher_id'] == rid].copy() if not pub_df.empty else pd.DataFrame()
+    if pub.empty:
+        return html.Div('논문 실적 없음', className='small text-muted')
+    sort_col = 'pub_date' if 'pub_date' in pub.columns else 'pub_year'
+    pub = pub.sort_values(sort_col, ascending=False)
+
+    rows = []
+    for _, row in pub.iterrows():
+        is_corr = str(row.get('is_corresponding', '')).lower() in ('true', '1', 'y', 'yes')
+        contrib = str(row.get('contribution', '')).strip()
+        contrib_label = f'{contrib}%' if contrib and contrib not in ('nan', '') else '-'
+        r = str(row.get('author_rank', '')).strip()
+        t = str(row.get('total_authors', '')).strip()
+        rank_total = f'{r}/{t}' if r and t and r not in ('nan', '') and t not in ('nan', '') else '-'
+        date_label = str(row.get('pub_year', '') or str(row.get('pub_date', ''))[:4] or '-')
+        rows.append(html.Tr([
+            html.Td(date_label, style={**_PRINT_TABLE_TD_STYLE, 'whiteSpace': 'nowrap'}),
+            html.Td(cell(row, 'title'), style=_PRINT_TABLE_TD_STYLE),
+            html.Td(cell(row, 'journal'), style=_PRINT_TABLE_TD_STYLE),
+            html.Td(rank_total, style={**_PRINT_TABLE_TD_STYLE, 'textAlign': 'center', 'whiteSpace': 'nowrap'}),
+            html.Td('교신' if is_corr else '-',
+                    style={**_PRINT_TABLE_TD_STYLE, 'textAlign': 'center', 'whiteSpace': 'nowrap'}),
+            html.Td(contrib_label, style={**_PRINT_TABLE_TD_STYLE, 'textAlign': 'center', 'whiteSpace': 'nowrap'}),
+        ]))
+
+    return html.Table([
+        html.Thead(html.Tr([
+            html.Th('연도', style=_PRINT_TABLE_TH_STYLE),
+            html.Th('제목', style=_PRINT_TABLE_TH_STYLE),
+            html.Th('게재처', style=_PRINT_TABLE_TH_STYLE),
+            html.Th('순위/총수', style={**_PRINT_TABLE_TH_STYLE, 'textAlign': 'center'}),
+            html.Th('교신', style={**_PRINT_TABLE_TH_STYLE, 'textAlign': 'center'}),
+            html.Th('기여도', style={**_PRINT_TABLE_TH_STYLE, 'textAlign': 'center'}),
+        ])),
+        html.Tbody(rows),
+    ], style={'width': '100%', 'borderCollapse': 'collapse'})
+
+
+def _print_patent_detail_table(pat_df, rid):
+    """특허 실적 상세 목록(2페이지) — components/detail_tabs.py의 patents_tab()과
+    같은 컬럼(중복 발명자 등록 dedupe_patents()로 제거)을 최근순(출원일
+    내림차순)으로 나열한다."""
+    pat = pat_df[pat_df['researcher_id'] == rid].copy() if not pat_df.empty else pd.DataFrame()
+    if pat.empty:
+        return html.Div('특허 실적 없음', className='small text-muted')
+    pat_dedup = dedupe_patents(pat)
+    sort_col = 'application_date' if 'application_date' in pat_dedup.columns else pat_dedup.columns[0]
+    pat_dedup = pat_dedup.sort_values(sort_col, ascending=False)
+
+    rows = []
+    for _, row in pat_dedup.iterrows():
+        status_val = str(row.get('status', ''))
+        status_label = '등록' if is_registered(status_val) else (status_val or '출원')
+        lead = str(row.get('is_lead_inventor', ''))
+        lead_label = '대표' if lead in ('Y', 'y', '1', 'True', 'true') else '-'
+        share_val = row.get('share_ratio', '')
+        share_str = f'{share_val}%' if str(share_val).replace('.', '').isdigit() else '-'
+        date_label = cell(row, 'application_date')[:7]
+        rows.append(html.Tr([
+            html.Td(date_label, style={**_PRINT_TABLE_TD_STYLE, 'whiteSpace': 'nowrap'}),
+            html.Td(cell(row, 'title', 'title_ko'), style=_PRINT_TABLE_TD_STYLE),
+            html.Td(status_label, style={**_PRINT_TABLE_TD_STYLE, 'textAlign': 'center', 'whiteSpace': 'nowrap'}),
+            html.Td(lead_label, style={**_PRINT_TABLE_TD_STYLE, 'textAlign': 'center', 'whiteSpace': 'nowrap'}),
+            html.Td(share_str, style={**_PRINT_TABLE_TD_STYLE, 'textAlign': 'center', 'whiteSpace': 'nowrap'}),
+            html.Td(cell(row, 'country'), style={**_PRINT_TABLE_TD_STYLE, 'whiteSpace': 'nowrap'}),
+        ]))
+
+    return html.Table([
+        html.Thead(html.Tr([
+            html.Th('출원일', style=_PRINT_TABLE_TH_STYLE),
+            html.Th('발명 명칭', style=_PRINT_TABLE_TH_STYLE),
+            html.Th('상태', style={**_PRINT_TABLE_TH_STYLE, 'textAlign': 'center'}),
+            html.Th('대표발명', style={**_PRINT_TABLE_TH_STYLE, 'textAlign': 'center'}),
+            html.Th('지분율', style={**_PRINT_TABLE_TH_STYLE, 'textAlign': 'center'}),
+            html.Th('출원국가', style=_PRINT_TABLE_TH_STYLE),
+        ])),
+        html.Tbody(rows),
+    ], style={'width': '100%', 'borderCollapse': 'collapse'})
+
+
+def _print_pub_patent_detail_page(name, rid, tables):
+    """2페이지: 논문·특허 실적 상세(최근순). breakBefore:page로 1페이지와
+    분리한다 — 여러 명을 이어붙이는 일괄 인쇄에서도 이 페이지가 누구
+    것인지 알 수 있도록 이름/사번을 다시 적어둔다."""
+    return html.Div([
+        html.Div(f'{name}({rid}) — 논문 · 특허 실적 상세', className='print-page2-title',
+                 style={'fontSize': '16px', 'fontWeight': 700, 'marginBottom': '10px'}),
+        _print_box('논문 실적 (최근순)', _print_publication_detail_table(tables['publications'], rid),
+                   breakable=True),
+        _print_box('특허 실적 (최근순)', _print_patent_detail_table(tables['patents'], rid),
+                   breakable=True),
+    ], style={'breakBefore': 'page'})
+
+
 def _print_profile_content(rid, researcher, tables, profile, name_map,
                             print_eval_content, comments_content, current_status):
     """A4 인쇄 전용 콘텐츠 — 화면의 카드형 대시보드(고정 높이 + 내부 스크롤)는
@@ -733,6 +838,7 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
         task_hr_box,
         _print_box('인물 코멘트', comments_content, breakable=True),
         html.Div(f'출력일 {datetime.now():%Y-%m-%d}', className='text-muted small text-end mt-2'),
+        _print_pub_patent_detail_page(name, rid, tables),
     ])
 
 
