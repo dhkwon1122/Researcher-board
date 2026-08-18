@@ -588,18 +588,20 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
         for label, value in info_rows
     ]))
 
-    # 평가·인센티브 이력은 이 박스에서 빼서 학력과 나란히 배치한다(아래
-    # edu_eval_row) — 양성/시상 이력만 남는다.
+    # 평가·인센티브·양성·시상 이력을 한 박스에 그대로 담는다(화면과 같은
+    # 묶음) — 이 박스는 header_row가 아니라 아래 edu_support_row에서 학력과
+    # 나란히 배치된다.
     support_box = _print_box(None, html.Div([
-        html.Div('양성 이력', className='small fw-semibold text-muted mb-1'),
+        print_eval_content,
+        html.Div('양성 이력', className='small fw-semibold text-muted mt-2 mb-1'),
         nurturing_block(tables['nurturing'], rid),
         html.Div('시상 이력', className='small fw-semibold text-muted mt-2 mb-1'),
         award_block(tables['awards'], rid, limit=3, single_line=True),
     ]))
 
     # display:flex를 인라인 style로 직접 준다(.d-flex 유틸리티 클래스 대신) —
-    # 사진 오른쪽에 기본정보/근속 박스가 나란히 붙어야 하는 핵심 레이아웃이라,
-    # 외부 CDN(부트스트랩)이 느리거나 막혀 있어도 항상 가로 배치되게 한다.
+    # 사진 오른쪽에 기본정보가 나란히 붙어야 하는 핵심 레이아웃이라, 외부
+    # CDN(부트스트랩)이 느리거나 막혀 있어도 항상 가로 배치되게 한다.
     header_row = html.Div([
         html.Div(photo_block(rid, name, researcher, CURRENT_YEAR, hide_normal_employment_status=True),
                  className='print-section',
@@ -607,17 +609,14 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
                         'width': '120px', 'flex': '0 0 120px', 'border': _PRINT_BOX_BORDER,
                         'borderRadius': '6px', 'padding': '8px'}),
         html.Div([info_table, current_status], style={'flex': '1 1 0', 'paddingLeft': '12px', 'minWidth': '0'}),
-        html.Div(support_box, style={'flex': '1 1 0', 'minWidth': '0'}),
     ], style={'display': 'flex', 'alignItems': 'flex-start', 'marginBottom': '10px'})
 
-    # 학력(2) : 평가·인센티브 이력(1) 비율로 나란히 배치 — 평가·인센티브는
-    # print_eval_content가 이미 자체 제목("평가 · 인센티브 이력 ('24~'26)")을
-    # 담고 있어 박스 제목은 따로 안 준다.
+    # 학력(2) : 평가·인센티브·양성·시상 이력 박스(1) 비율로 나란히 배치 —
+    # 학력 폭을 줄여 옆에 붙는 게 목적이라, 학력을 좁혀서 병렬 배치한다.
     edu_eval_row = html.Div([
         html.Div(_print_box('학력', education_block(tables['education'], rid)),
                  style={'flex': '2 2 0', 'minWidth': '0'}),
-        html.Div(_print_box(None, print_eval_content),
-                 style={'flex': '1 1 0', 'minWidth': '0', 'marginLeft': '10px'}),
+        html.Div(support_box, style={'flex': '1 1 0', 'minWidth': '0', 'marginLeft': '10px'}),
     ], style={'display': 'flex', 'alignItems': 'stretch'})
 
     # 핵심기술/보유기술은 좌우 대신 세로로 쌓고(stacked=True), 그만큼 넓어진
