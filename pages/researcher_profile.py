@@ -2,7 +2,7 @@
 화면 2: 연구원 개별 프로필
 """
 
-from datetime import datetime
+from datetime import date, datetime
 
 import dash
 import dash_bootstrap_components as dbc
@@ -21,7 +21,8 @@ from components.profile_sections import (
     photo_block,
     tasks_block,
 )
-from components.timeline_view import timeline_view
+from components.timeline_data import task_points
+from components.timeline_view import filter_hr_rows, timeline_view
 from services.comments import upsert_comment
 from services.data_store import (
     filter_current,
@@ -31,6 +32,7 @@ from services.data_store import (
     read_similar_researchers,
 )
 from services.evaluations import evaluation_years
+from services.researcher_profile_export import position_years
 
 dash.register_page(
     __name__,
@@ -396,63 +398,179 @@ def _empty_profile_output():
     )
 
 
-def _print_section(title: str, content):
-    """A4 인쇄용 프로필의 섹션 하나 — 소제목 + 내용, break-inside: avoid로 섹션
-    도중에 페이지가 갈라지지 않게 한다(assets/custom.css의 .print-section 규칙)."""
-    return html.Div([
-        html.P(title, className='section-label mb-2 pb-1',
-               style={'borderBottom': '1px solid #d2d2d7'}),
-        content,
-    ], className='print-section mb-3')
+_PRINT_BOX_BORDER = '1px solid #1d1d1f'
+
+
+def _print_box(title, children, *, breakable: bool = False):
+    """A4 인쇄용 프로필의 테두리 박스 하나(피플팀이 준 손그림 양식 참고) — 왼쪽
+    위에 굵은 제목, 그 아래 내용. breakable=False(기본)면 박스 도중에 페이지가
+    갈라지지 않게 하고(assets/custom.css의 .print-section), 과제수행/인사발령
+    이력처럼 길어질 수 있는 박스는 breakable=True로 페이지 경계에서 자연스럽게
+    이어지게 한다."""
+    body = [html.Div(title, className='fw-bold mb-2', style={'fontSize': '0.82rem'})] if title else []
+    body.append(children)
+    cls = 'print-box' + ('' if breakable else ' print-section')
+    return html.Div(body, className=cls, style={'border': _PRINT_BOX_BORDER, 'borderRadius': '6px',
+                                                  'padding': '10px 12px', 'marginBottom': '10px'})
+
+
+def _print_box_cols(items):
+    """_print_box 안에서 세로 구분선으로 나뉜 가로 단(예: 핵심기술 | 보유기술 |
+    전문성 요약)을 만든다. items: [(flex_ratio, content), ...]."""
+    cols = []
+    for i, (ratio, content) in enumerate(items):
+        style = {'flex': f'{ratio} {ratio} 0'}
+        if i > 0:
+            style.update({'borderLeft': '1px solid #d2d2d7', 'marginLeft': '10px', 'paddingLeft': '10px'})
+        cols.append(html.Div(content, style=style))
+    return html.Div(cols, className='d-flex align-items-stretch')
+
+
+def _current_task_label(task_df, rid) -> str:
+    """헤더의 "과제" 필드 — 진행중(종료일 없음)인 과제 중 가장 최근 시작 건을
+    우선, 없으면 가장 최근에 시작한 과제명을 보여준다(components.timeline_data.
+    task_points()가 이미 30일 이하 단기 참여 제외 등 화면 타임라인과 동일한
+    필터를 적용해준다)."""
+    filtered = task_df[task_df['researcher_id'] == rid] if not task_df.empty else task_df
+    points = task_points(filtered) if filtered is not None else []
+    if not points:
+        return '-'
+    ongoing = [p for p in points if p['end_label'] == '진행중']
+    chosen = ongoing[-1] if ongoing else points[-1]
+    return chosen['task_name'] or '-'
+
+
+def _tenure_label(hire_date_str: str) -> str:
+    """"근속: X.X년(입사일 YYYY-MM-DD)" — components/profile_sections.py의
+    photo_block()과 동일한 근속연수 계산(오늘 - 입사일)/365, 소수 첫째자리)."""
+    s = str(hire_date_str or '').strip()
+    if not s or s.lower() in ('nan', 'none', 'nat'):
+        return '근속 정보 없음'
+    try:
+        hd = date.fromisoformat(s[:10])
+    except ValueError:
+        return '근속 정보 없음'
+    tenure = round((date.today() - hd).days / 365, 1)
+    return f'근속 {tenure}년 (입사일 {hd.isoformat()})'
+
+
+def _print_hr_orders_table(hr_df, rid):
+    """인사 발령 이력 — components/timeline_view.py의 filter_hr_rows()로 동일하게
+    필터링(order_date가 '→'인 연속 표시용 특수행 제외, 최신순)한 뒤 표로 나열."""
+    rows = filter_hr_rows(hr_df, rid)
+    if rows.empty:
+        return html.Div('인사 발령 이력 없음', className='text-muted small')
+
+    def _c(v):
+        s = str(v).strip() if v is not None else ''
+        return s if s and s.lower() not in ('nan', 'none', 'nat') else '-'
+
+    table_rows = [
+        html.Tr([
+            html.Td(_c(row.get('order_date')), className='small text-muted', style={'wordBreak': 'break-word'}),
+            html.Td(_c(row.get('order_name')), className='small', style={'wordBreak': 'break-word'}),
+            html.Td(_c(row.get('order_dep')), className='small text-muted', style={'wordBreak': 'break-word'}),
+            html.Td(_c(row.get('order_cl')), className='small', style={'wordBreak': 'break-word'}),
+            html.Td(_c(row.get('order_assignment')), className='small text-muted', style={'wordBreak': 'break-word'}),
+        ])
+        for _, row in rows.iterrows()
+    ]
+    return dbc.Table([
+        html.Thead(html.Tr([
+            html.Th('발령일', style={'fontSize': '0.72rem', 'width': '16%'}),
+            html.Th('발령명', style={'fontSize': '0.72rem', 'width': '26%'}),
+            html.Th('부서', style={'fontSize': '0.72rem', 'width': '22%'}),
+            html.Th('직급명', style={'fontSize': '0.72rem', 'width': '18%'}),
+            html.Th('직책명', style={'fontSize': '0.72rem', 'width': '18%'}),
+        ]), className='table-light'),
+        html.Tbody(table_rows),
+    ], bordered=False, hover=True, size='sm', className='mb-0', style={'tableLayout': 'fixed', 'width': '100%'})
 
 
 def _print_profile_content(rid, researcher, tables, profile, similar, name_map,
                             eval_content, comments_content, current_status):
     """A4 인쇄 전용 콘텐츠 — 화면의 카드형 대시보드(고정 높이 + 내부 스크롤)는
     인쇄에 부적합해(넘치는 내용이 잘림) 재사용하지 않고, 같은 데이터/블록 함수를
-    세로 한 단으로 다시 배치한다. 좌우 2단 대시보드 전용인 타임라인 차트 대신
-    과제 수행 이력은 표(tasks_block)로 대체. eval_content/comments_content는
-    update_profile()이 권한(view_evaluation/view_comments)까지 반영해 이미
-    만들어둔 것(_locked_block() 포함)을 그대로 받아써 권한 판정을 중복하지 않는다."""
+    피플팀이 준 손그림 양식(사진+기본정보 / 근속·평가·양성·시상 / 보유역량 3단 /
+    논문·특허 / 과제수행·인사발령)에 맞춰 테두리 박스로 재배치한다.
+    eval_content/comments_content는 update_profile()이 권한(view_evaluation/
+    view_comments)까지 반영해 이미 만들어둔 것(_locked_block() 포함)을 그대로
+    받아써 권한 판정을 중복하지 않는다."""
     name = str(researcher.get('name', '') or '')
     dept = str(researcher.get('department', '') or '-')
     org = str(researcher.get('org_code', '') or '')
     dept_label = f'{dept} ({org})' if org else dept
     position = str(researcher.get('position', '') or '-')
     knox_id = str(researcher.get('knox_id', '') or '-')
+    gender = str(researcher.get('gender', '') or '-')
+    birth_year = str(researcher.get('birth_year', '') or '').strip()
+    age = f'{CURRENT_YEAR - int(birth_year)}세' if birth_year.isdigit() else '-'
+    birth_label = f'{birth_year}년생' if birth_year.isdigit() else '-'
+    years = position_years(researcher.get('promotion_date'))
+    position_year = f'{position}-{years}년차' if years is not None else position
+    current_task = _current_task_label(tables['tasks'], rid)
 
-    header = html.Div([
+    info_rows = [
+        ('사번', rid), ('성명', name or '-'), ('소속부서', dept_label), ('과제', current_task),
+        ('직급-년차', position_year), ('성별/나이', f'{gender}/{age}'), ('생년월일', birth_label),
+        ('Knox ID', knox_id),
+    ]
+    info_table = html.Table(html.Tbody([
+        html.Tr([
+            html.Td(label, className='text-muted small pe-3',
+                    style={'whiteSpace': 'nowrap', 'verticalAlign': 'top'}),
+            html.Td(value, className='small', style={'wordBreak': 'break-word'}),
+        ])
+        for label, value in info_rows
+    ]))
+
+    tenure_box = _print_box(_tenure_label(researcher.get('hire_date')), html.Div([
+        html.Div('평가 · 인센티브 이력', className='small fw-semibold text-muted mt-1 mb-1'),
+        eval_content,
+        html.Div('양성 이력', className='small fw-semibold text-muted mt-2 mb-1'),
+        nurturing_block(tables['nurturing'], rid),
+        html.Div('시상 이력', className='small fw-semibold text-muted mt-2 mb-1'),
+        award_block(tables['awards'], rid),
+    ]))
+
+    header_row = html.Div([
         html.Div(photo_block(rid, name, researcher, CURRENT_YEAR),
-                 className='d-flex flex-column align-items-center',
-                 style={'width': '120px', 'flex': '0 0 auto'}),
-        html.Div([
-            html.H4(name, className='fw-bold mb-2'),
-            html.Table(html.Tbody([
-                html.Tr([
-                    html.Td(label, className='text-muted small pe-3',
-                            style={'whiteSpace': 'nowrap', 'verticalAlign': 'top'}),
-                    html.Td(value, className='small'),
-                ])
-                for label, value in [
-                    ('사번', rid), ('부서', dept_label), ('직급', position), ('Knox ID', knox_id),
-                ]
-            ])),
-            current_status,
-        ], className='ms-3'),
-    ], className='d-flex align-items-start mb-3 pb-2', style={'borderBottom': '2px solid #1e3a5f'})
+                 className='d-flex flex-column align-items-center print-section',
+                 style={'width': '120px', 'flex': '0 0 auto', 'border': _PRINT_BOX_BORDER,
+                        'borderRadius': '6px', 'padding': '8px'}),
+        html.Div([info_table, current_status], className='px-3', style={'flex': '1 1 0'}),
+        html.Div(tenure_box, style={'flex': '1 1 0'}),
+    ], className='d-flex align-items-start mb-3')
+
+    capability_box = _print_box('보유 전문성 · 보유 기술 · 전문성 요약(LLM)', _print_box_cols([
+        (2, owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid)),
+        (1, html.Div([
+            html.Div('전문성 요약(LLM)', className='small fw-semibold text-muted mb-1'),
+            llm_summary_block(profile, similar, name_map),
+        ])),
+    ]))
+
+    pub_patent_box = _print_box('논문 / 특허', html.Div([
+        html.Div('논문 실적', className='small fw-semibold text-muted mb-1'),
+        publications_tab(tables['publications'], rid),
+        html.Div('특허 실적', className='small fw-semibold text-muted mt-3 mb-1'),
+        patents_tab(tables['patents'], rid),
+    ]))
+
+    task_hr_box = _print_box('과제 수행 / 인사 발령 이력', html.Div([
+        html.Div('과제 수행 이력', className='small fw-semibold text-muted mb-1'),
+        tasks_block(tables['tasks'], rid),
+        html.Div('인사 발령 이력', className='small fw-semibold text-muted mt-3 mb-1'),
+        _print_hr_orders_table(tables['hr_orders'], rid),
+    ]), breakable=True)
 
     return html.Div([
-        header,
-        _print_section('학력', education_block(tables['education'], rid)),
-        _print_section('평가 / 인센티브 이력', eval_content),
-        _print_section('보유 전문성', owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid)),
-        _print_section('전문성 요약 (LLM)', llm_summary_block(profile, similar, name_map)),
-        _print_section('과제 수행 이력', tasks_block(tables['tasks'], rid)),
-        _print_section('양성 이력', nurturing_block(tables['nurturing'], rid)),
-        _print_section('시상 이력', award_block(tables['awards'], rid)),
-        _print_section('특허 실적', patents_tab(tables['patents'], rid)),
-        _print_section('논문 실적', publications_tab(tables['publications'], rid)),
-        _print_section('인물 코멘트', comments_content),
+        header_row,
+        _print_box('학력', education_block(tables['education'], rid)),
+        capability_box,
+        pub_patent_box,
+        task_hr_box,
+        _print_box('인물 코멘트', comments_content, breakable=True),
         html.Div(f'출력일 {datetime.now():%Y-%m-%d}', className='text-muted small text-end mt-2'),
     ])
 
