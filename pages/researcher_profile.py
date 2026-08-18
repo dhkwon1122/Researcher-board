@@ -611,17 +611,54 @@ _PRINT_TABLE_TH_STYLE = {'padding': '3px 6px', 'borderBottom': f'1px solid {_PRI
                           'textAlign': 'left', 'fontWeight': '600', 'whiteSpace': 'nowrap'}
 _PRINT_TABLE_TD_STYLE = {'padding': '3px 6px', 'borderBottom': '1px solid #d2d2d7', 'verticalAlign': 'top'}
 
+# 논문/특허 모두 한 페이지를 넘지 않도록 상세 목록에 상한을 둔다(넘치면
+# "외 N건 더"로 안내). A4 한 페이지(margin 14mm/16mm 제외 실사용 영역)에
+# 제목 줄이 길어져도 안전하게 들어가는 선으로 잡은 값.
+_PUB_DETAIL_LIMIT = 15
+_PAT_DETAIL_LIMIT = 15
+
+
+def _year_label(row, year_col='pub_year', date_col='pub_date'):
+    """연도를 "2025.0" 같은 소수점 없이 "2025"로 표시한다 — CSV 값이 실수
+    (float64)로 읽혀도(결측 섞인 컬럼이 pandas에서 float로 캐스팅되는 흔한
+    사례) int로 정리해 텍스트로 보여준다."""
+    y = row.get(year_col, '')
+    try:
+        if y not in (None, '') and not (isinstance(y, float) and pd.isna(y)):
+            return str(int(float(y)))
+    except (TypeError, ValueError):
+        pass
+    d = str(row.get(date_col, '') or '')[:4]
+    return d if d.isdigit() else '-'
+
+
+def _publication_priority_key(row):
+    """1저자(순위 1) 또는 교신저자를 우선(0), 그다음 impact factor 내림차순 —
+    실적이 많을 때 "최근순"이 아니라 대표 실적 위주로 추리기 위한 정렬 키."""
+    r = str(row.get('author_rank', '')).strip()
+    is_first_author = r not in ('', 'nan') and r == '1'
+    is_corr = str(row.get('is_corresponding', '')).lower() in ('true', '1', 'y', 'yes')
+    tier = 0 if (is_first_author or is_corr) else 1
+    try:
+        impact_factor = float(row.get('impact_factor', 0) or 0)
+    except (TypeError, ValueError):
+        impact_factor = 0.0
+    return (tier, -impact_factor)
+
 
 def _print_publication_detail_table(pub_df, rid):
     """논문 실적 상세 목록(2페이지) — components/detail_tabs.py의
-    publications_tab()과 같은 컬럼을 최근순(발표일 내림차순)으로 나열한다.
-    요약 카드는 1페이지의 _print_publication_summary가 이미 보여주므로
-    여기서는 목록만 다룬다."""
+    publications_tab()과 같은 컬럼에 IF를 더해 보여준다. 실적이 많으면
+    1저자/교신저자 및 impact factor가 큰 논문 위주로 추려 한 페이지 안에
+    들어가게 하므로(최근순이 아닐 수 있음), 발표일 대신 이 우선순위로
+    정렬·상한(_PUB_DETAIL_LIMIT)한다."""
     pub = pub_df[pub_df['researcher_id'] == rid].copy() if not pub_df.empty else pd.DataFrame()
     if pub.empty:
         return html.Div('논문 실적 없음', className='small text-muted')
-    sort_col = 'pub_date' if 'pub_date' in pub.columns else 'pub_year'
-    pub = pub.sort_values(sort_col, ascending=False)
+    pub['_priority'] = pub.apply(_publication_priority_key, axis=1)
+    pub = pub.sort_values('_priority')
+    total = len(pub)
+    pub = pub.head(_PUB_DETAIL_LIMIT)
 
     rows = []
     for _, row in pub.iterrows():
@@ -631,45 +668,77 @@ def _print_publication_detail_table(pub_df, rid):
         r = str(row.get('author_rank', '')).strip()
         t = str(row.get('total_authors', '')).strip()
         rank_total = f'{r}/{t}' if r and t and r not in ('nan', '') and t not in ('nan', '') else '-'
-        date_label = str(row.get('pub_year', '') or str(row.get('pub_date', ''))[:4] or '-')
+        try:
+            impact_factor = float(row.get('impact_factor', '') or '')
+            if_label = f'{impact_factor:.1f}'
+        except (TypeError, ValueError):
+            if_label = '-'
         rows.append(html.Tr([
-            html.Td(date_label, style={**_PRINT_TABLE_TD_STYLE, 'whiteSpace': 'nowrap'}),
+            html.Td(_year_label(row), style={**_PRINT_TABLE_TD_STYLE, 'whiteSpace': 'nowrap'}),
             html.Td(cell(row, 'title'), style=_PRINT_TABLE_TD_STYLE),
             html.Td(cell(row, 'journal'), style=_PRINT_TABLE_TD_STYLE),
+            html.Td(if_label, style={**_PRINT_TABLE_TD_STYLE, 'textAlign': 'center', 'whiteSpace': 'nowrap'}),
             html.Td(rank_total, style={**_PRINT_TABLE_TD_STYLE, 'textAlign': 'center', 'whiteSpace': 'nowrap'}),
             html.Td('교신' if is_corr else '-',
                     style={**_PRINT_TABLE_TD_STYLE, 'textAlign': 'center', 'whiteSpace': 'nowrap'}),
             html.Td(contrib_label, style={**_PRINT_TABLE_TD_STYLE, 'textAlign': 'center', 'whiteSpace': 'nowrap'}),
         ]))
 
-    return html.Table([
+    table = html.Table([
         html.Thead(html.Tr([
             html.Th('연도', style=_PRINT_TABLE_TH_STYLE),
             html.Th('제목', style=_PRINT_TABLE_TH_STYLE),
             html.Th('게재처', style=_PRINT_TABLE_TH_STYLE),
+            html.Th('IF', style={**_PRINT_TABLE_TH_STYLE, 'textAlign': 'center'}),
             html.Th('순위/총수', style={**_PRINT_TABLE_TH_STYLE, 'textAlign': 'center'}),
             html.Th('교신', style={**_PRINT_TABLE_TH_STYLE, 'textAlign': 'center'}),
             html.Th('기여도', style={**_PRINT_TABLE_TH_STYLE, 'textAlign': 'center'}),
         ])),
         html.Tbody(rows),
     ], style={'width': '100%', 'borderCollapse': 'collapse'})
+    if total > _PUB_DETAIL_LIMIT:
+        return html.Div([table, html.Div(f'외 {total - _PUB_DETAIL_LIMIT}건 더', className='text-muted small mt-1')])
+    return table
+
+
+def _patent_priority_key(row):
+    """전략출원 > 등록 > 출원 순으로 우선하고, 그 안에서는 대표발명(리드
+    인벤터)을 우선, 그다음 지분율 내림차순 — 실적이 많을 때 "최근순"이
+    아니라 기여도가 높은 특허 위주로 추리기 위한 정렬 키."""
+    grade_a = str(row.get('patent_grade_a_sub', '')).strip()
+    is_strategic = grade_a == '전략출원'
+    status_val = str(row.get('status', ''))
+    is_reg = is_registered(status_val)
+    tier = 0 if is_strategic else (1 if is_reg else 2)
+    lead = str(row.get('is_lead_inventor', '')).strip().lower() in ('y', '1', 'true', 'yes')
+    try:
+        share = float(row.get('share_ratio', 0) or 0)
+    except (TypeError, ValueError):
+        share = 0.0
+    return (tier, 0 if lead else 1, -share)
 
 
 def _print_patent_detail_table(pat_df, rid):
     """특허 실적 상세 목록(2페이지) — components/detail_tabs.py의 patents_tab()과
-    같은 컬럼(중복 발명자 등록 dedupe_patents()로 제거)을 최근순(출원일
-    내림차순)으로 나열한다."""
+    같은 컬럼(중복 발명자 등록 dedupe_patents()로 제거)을 보여준다. 실적이
+    많으면 전략출원 > 등록 > 출원 순, 그 안에서는 대표발명·지분율이 높은
+    특허 위주로 추려 한 페이지 안에 들어가게 한다(_PAT_DETAIL_LIMIT)."""
     pat = pat_df[pat_df['researcher_id'] == rid].copy() if not pat_df.empty else pd.DataFrame()
     if pat.empty:
         return html.Div('특허 실적 없음', className='small text-muted')
     pat_dedup = dedupe_patents(pat)
-    sort_col = 'application_date' if 'application_date' in pat_dedup.columns else pat_dedup.columns[0]
-    pat_dedup = pat_dedup.sort_values(sort_col, ascending=False)
+    pat_dedup['_priority'] = pat_dedup.apply(_patent_priority_key, axis=1)
+    pat_dedup = pat_dedup.sort_values('_priority')
+    total = len(pat_dedup)
+    pat_dedup = pat_dedup.head(_PAT_DETAIL_LIMIT)
 
     rows = []
     for _, row in pat_dedup.iterrows():
         status_val = str(row.get('status', ''))
         status_label = '등록' if is_registered(status_val) else (status_val or '출원')
+        grade_a = str(row.get('patent_grade_a_sub', '')).strip()
+        if grade_a == '전략출원':
+            status_label += '(전략)'
         lead = str(row.get('is_lead_inventor', ''))
         lead_label = '대표' if lead in ('Y', 'y', '1', 'True', 'true') else '-'
         share_val = row.get('share_ratio', '')
@@ -684,7 +753,7 @@ def _print_patent_detail_table(pat_df, rid):
             html.Td(cell(row, 'country'), style={**_PRINT_TABLE_TD_STYLE, 'whiteSpace': 'nowrap'}),
         ]))
 
-    return html.Table([
+    table = html.Table([
         html.Thead(html.Tr([
             html.Th('출원일', style=_PRINT_TABLE_TH_STYLE),
             html.Th('발명 명칭', style=_PRINT_TABLE_TH_STYLE),
@@ -695,19 +764,25 @@ def _print_patent_detail_table(pat_df, rid):
         ])),
         html.Tbody(rows),
     ], style={'width': '100%', 'borderCollapse': 'collapse'})
+    if total > _PAT_DETAIL_LIMIT:
+        return html.Div([table, html.Div(f'외 {total - _PAT_DETAIL_LIMIT}건 더', className='text-muted small mt-1')])
+    return table
 
 
 def _print_pub_patent_detail_page(name, rid, tables):
-    """2페이지: 논문·특허 실적 상세(최근순). breakBefore:page로 1페이지와
-    분리한다 — 여러 명을 이어붙이는 일괄 인쇄에서도 이 페이지가 누구
-    것인지 알 수 있도록 이름/사번을 다시 적어둔다."""
+    """2페이지: 논문·특허 실적 상세. 각각 한 페이지를 넘지 않도록 상한을 두고
+    (_PUB_DETAIL_LIMIT/_PAT_DETAIL_LIMIT), breakable=False(기본)로 박스 도중에
+    페이지가 갈라지지 않게 한다 — 페이지 안에 안 들어가면 박스째로 다음
+    페이지로 넘어간다. breakBefore:page로 1페이지와 분리하고, 여러 명을
+    이어붙이는 일괄 인쇄에서도 이 페이지가 누구 것인지 알 수 있도록 이름/
+    사번을 다시 적어둔다."""
     return html.Div([
         html.Div(f'{name}({rid}) — 논문 · 특허 실적 상세', className='print-page2-title',
                  style={'fontSize': '16px', 'fontWeight': 700, 'marginBottom': '10px'}),
-        _print_box('논문 실적 (최근순)', _print_publication_detail_table(tables['publications'], rid),
-                   breakable=True),
-        _print_box('특허 실적 (최근순)', _print_patent_detail_table(tables['patents'], rid),
-                   breakable=True),
+        _print_box('논문 실적 (주요 실적 우선 — 1저자·교신저자, IF 우선)',
+                   _print_publication_detail_table(tables['publications'], rid)),
+        _print_box('특허 실적 (전략출원 > 등록 > 출원, 대표발명·지분율 우선)',
+                   _print_patent_detail_table(tables['patents'], rid)),
     ], style={'breakBefore': 'page'})
 
 
