@@ -406,8 +406,7 @@ def _empty_profile_output():
 
 
 _PRINT_BOX_BORDER = '1px solid #1d1d1f'
-_TASK_RECENT_LIMIT = 5    # 과제 수행 이력 인쇄본에 보여줄 최신 건수
-_HR_RECENT_LIMIT = 10     # 인사 발령 이력 인쇄본에 보여줄 최신 건수
+_TASK_HR_RECENT_LIMIT = 10  # 과제 수행 + 인사 발령 합쳐서 인쇄본에 보여줄 최신 건수
 
 
 def _print_box(title, children, *, breakable: bool = False):
@@ -466,25 +465,15 @@ def _tenure_value(hire_date_str: str) -> str:
     return f'{tenure}년 ({hd.year}년 {hd.month:02d}월 {hd.day:02d}일 입사)'
 
 
-def _print_task_hr_timeline(task_df, hr_df, rid, *, task_limit: int | None = None, hr_limit: int | None = None):
+def _print_task_hr_timeline(task_df, hr_df, rid, *, limit: int | None = None):
     """과제 수행 이력과 인사 발령 이력을 표/섹션으로 나누지 않고 하나의 시계열
     목록으로 합쳐 날짜 내림차순으로 보여준다(각 줄 앞의 "과제 ·"/"인사발령 ·"는
     구분용 열이 아니라 그 줄 자체가 어떤 이력인지 알아보기 위한 표시일 뿐).
-    task_limit/hr_limit는 각각 과제/인사발령을 최신순으로 먼저 잘라낸 뒤 합치는
-    상한(둘의 기준 건수가 달라도 되게) — 합친 다음 자르는 게 아니라 종류별로
-    자른 뒤 합치므로, 인사발령 상한을 넉넉히 주면 과제가 최근에 몰려 있어도
-    인사발령이 밀려나지 않는다."""
+    limit이 주어지면 둘을 합친 목록 기준으로 최신 limit건만 담고, 잘린 나머지
+    건수를 안내한다."""
     filtered_task = task_df[task_df['researcher_id'] == rid] if not task_df.empty else task_df
     task_entries = task_points(filtered_task) if filtered_task is not None else []
-    task_entries = sorted(task_entries, key=lambda t: t['start'], reverse=True)
-    task_total = len(task_entries)
-    if task_limit:
-        task_entries = task_entries[:task_limit]
-
     hr_rows = filter_hr_rows(hr_df, rid)  # 이미 order_date 내림차순
-    hr_total = len(hr_rows)
-    if hr_limit:
-        hr_rows = hr_rows.head(hr_limit)
 
     def _c(v):
         s = str(v).strip() if v is not None else ''
@@ -509,14 +498,16 @@ def _print_task_hr_timeline(task_df, hr_df, rid, *, task_limit: int | None = Non
         entries.append({'date': d, 'text': text})
 
     entries.sort(key=lambda e: e['date'], reverse=True)
+    total = len(entries)
+    if limit:
+        entries = entries[:limit]
 
     if not entries:
         return html.Div('과제 수행 / 인사 발령 이력 없음', className='text-muted small')
 
     result = html.Ul([html.Li(e['text'], className='small') for e in entries], className='ps-3 mb-0')
-    dropped = (task_total - len(task_entries)) + (hr_total - len(hr_rows))
-    if dropped > 0:
-        return html.Div([result, html.Div(f'외 {dropped}건 더', className='text-muted small mt-1')])
+    if limit and total > limit:
+        return html.Div([result, html.Div(f'외 {total - limit}건 더', className='text-muted small mt-1')])
     return result
 
 
@@ -647,9 +638,8 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     ]))
 
     task_hr_box = _print_box(
-        '과제 수행 (최근 5건) / 인사 발령 (최근 10건) 이력, 시계열순',
-        _print_task_hr_timeline(tables['tasks'], tables['hr_orders'], rid,
-                                 task_limit=_TASK_RECENT_LIMIT, hr_limit=_HR_RECENT_LIMIT),
+        '과제 수행 / 인사 발령 이력 (합쳐서 최근 10건, 시계열순)',
+        _print_task_hr_timeline(tables['tasks'], tables['hr_orders'], rid, limit=_TASK_HR_RECENT_LIMIT),
         breakable=True,
     )
 
