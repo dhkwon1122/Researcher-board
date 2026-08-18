@@ -21,7 +21,6 @@ from components.profile_sections import (
     leadership_year_options,
     nurturing_block,
     photo_block,
-    tasks_block,
 )
 from components.timeline_data import (
     count_true,
@@ -466,47 +465,50 @@ def _tenure_value(hire_date_str: str) -> str:
     return f'{tenure}년 ({hd.year}년 {hd.month:02d}월 {hd.day:02d}일 입사)'
 
 
-def _print_hr_orders_table(hr_df, rid, *, limit: int | None = None):
-    """인사 발령 이력 — components/timeline_view.py의 filter_hr_rows()로 동일하게
-    필터링(order_date가 '→'인 연속 표시용 특수행 제외, 최신순)한 뒤 표로 나열.
-    limit이 주어지면 최신순 상위 limit건만 표에 담고, 잘린 나머지 건수를 표 아래
-    한 줄로 안내한다."""
-    rows = filter_hr_rows(hr_df, rid)
-    if rows.empty:
-        return html.Div('인사 발령 이력 없음', className='text-muted small')
-
-    total = len(rows)
-    if limit:
-        rows = rows.head(limit)
+def _print_task_hr_timeline(task_df, hr_df, rid, *, limit: int | None = None):
+    """과제 수행 이력과 인사 발령 이력을 표/섹션으로 나누지 않고 하나의 시계열
+    목록으로 합쳐 날짜 내림차순으로 보여준다(각 줄 앞의 "과제 ·"/"인사발령 ·"는
+    구분용 열이 아니라 그 줄 자체가 어떤 이력인지 알아보기 위한 표시일 뿐).
+    limit이 주어지면 합친 목록 기준 최신 limit건만 담고, 잘린 나머지 건수를
+    안내한다."""
+    filtered_task = task_df[task_df['researcher_id'] == rid] if not task_df.empty else task_df
+    task_entries = task_points(filtered_task) if filtered_task is not None else []
+    hr_rows = filter_hr_rows(hr_df, rid)
 
     def _c(v):
         s = str(v).strip() if v is not None else ''
-        return s if s and s.lower() not in ('nan', 'none', 'nat') else '-'
+        return s if s and s.lower() not in ('nan', 'none', 'nat', '-') else ''
 
-    table_rows = [
-        html.Tr([
-            html.Td(_c(row.get('order_date')), className='small text-muted', style={'wordBreak': 'break-word'}),
-            html.Td(_c(row.get('order_name')), className='small', style={'wordBreak': 'break-word'}),
-            html.Td(_c(row.get('order_dep')), className='small text-muted', style={'wordBreak': 'break-word'}),
-            html.Td(_c(row.get('order_cl')), className='small', style={'wordBreak': 'break-word'}),
-            html.Td(_c(row.get('order_assignment')), className='small text-muted', style={'wordBreak': 'break-word'}),
-        ])
-        for _, row in rows.iterrows()
-    ]
-    table = dbc.Table([
-        html.Thead(html.Tr([
-            html.Th('발령일', style={'fontSize': '0.72rem', 'width': '16%'}),
-            html.Th('발령명', style={'fontSize': '0.72rem', 'width': '26%'}),
-            html.Th('부서', style={'fontSize': '0.72rem', 'width': '22%'}),
-            html.Th('직급명', style={'fontSize': '0.72rem', 'width': '18%'}),
-            html.Th('직책명', style={'fontSize': '0.72rem', 'width': '18%'}),
-        ]), className='table-light'),
-        html.Tbody(table_rows),
-    ], bordered=False, hover=True, size='sm', className='mb-0', style={'tableLayout': 'fixed', 'width': '100%'})
+    entries = []
+    for t in task_entries:
+        end = t['end_label'] if t['end_label'] == '진행중' else t['end_label'][:7]
+        entries.append({
+            'date': t['start'],
+            'text': f"{t['start_label'][:7]} ~ {end}  과제 · {t['task_name']}",
+        })
+    for _, row in hr_rows.iterrows():
+        d = pd.to_datetime(row.get('order_date'), errors='coerce')
+        if pd.isna(d):
+            continue
+        detail = ' / '.join(p for p in (_c(row.get('order_dep')), _c(row.get('order_cl')),
+                                         _c(row.get('order_assignment'))) if p)
+        text = f"{d.date().isoformat()}  인사발령 · {_c(row.get('order_name')) or '-'}"
+        if detail:
+            text += f" ({detail})"
+        entries.append({'date': d, 'text': text})
 
+    entries.sort(key=lambda e: e['date'], reverse=True)
+    total = len(entries)
+    if limit:
+        entries = entries[:limit]
+
+    if not entries:
+        return html.Div('과제 수행 / 인사 발령 이력 없음', className='text-muted small')
+
+    result = html.Ul([html.Li(e['text'], className='small') for e in entries], className='ps-3 mb-0')
     if limit and total > limit:
-        return html.Div([table, html.Div(f'외 {total - limit}건 더', className='text-muted small mt-1')])
-    return table
+        return html.Div([result, html.Div(f'외 {total - limit}건 더', className='text-muted small mt-1')])
+    return result
 
 
 def _print_publication_summary(pub_df, rid):
@@ -560,10 +562,17 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     dept = str(researcher.get('department', '') or '-')
     knox_id = str(researcher.get('knox_id', '') or '-')
     nationality = str(researcher.get('nationality', '') or '').strip() or '-'
-    # researchers.csv는 생년월일을 연도까지만 저장해(원본 "법적생년월일성별"에서
-    # 연 단위만 추출) 월/일은 표시할 데이터가 없다 — 그대로 "YYYY년생"으로 표기.
-    birth_year = str(researcher.get('birth_year', '') or '').strip()
-    birth_label = f'{birth_year}년생' if birth_year.isdigit() else '-'
+    # birth_date(YYYY-MM-DD, pipeline/process_researchers.py가 법적생년월일성별
+    # 6자리(YYMMDD)에서 파싱)가 있으면 "YYYY년 M월 D일"로, 그 전에 처리된 옛
+    # 데이터라 birth_date가 없으면(파이프라인 재실행 전) birth_year만으로
+    # "YYYY년생"으로 폴백.
+    birth_date_str = str(researcher.get('birth_date', '') or '').strip()
+    if birth_date_str and birth_date_str.lower() not in ('nan', 'none', 'nat'):
+        bd = date.fromisoformat(birth_date_str[:10])
+        birth_label = f'{bd.year}년 {bd.month}월 {bd.day}일'
+    else:
+        birth_year = str(researcher.get('birth_year', '') or '').strip()
+        birth_label = f'{birth_year}년생' if birth_year.isdigit() else '-'
     current_task = _current_task_label(tables['tasks'], rid)
 
     info_rows = [
@@ -628,12 +637,11 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
         _print_patent_summary(tables['patents'], rid),
     ]))
 
-    task_hr_box = _print_box('과제 수행 / 인사 발령 이력', html.Div([
-        html.Div('과제 수행 이력 (최근 5건)', className='small fw-semibold text-muted mb-1'),
-        tasks_block(tables['tasks'], rid, limit=_RECENT_LIMIT),
-        html.Div('인사 발령 이력 (최근 5건)', className='small fw-semibold text-muted mt-3 mb-1'),
-        _print_hr_orders_table(tables['hr_orders'], rid, limit=_RECENT_LIMIT),
-    ]), breakable=True)
+    task_hr_box = _print_box(
+        '과제 수행 / 인사 발령 이력 (최근 5건, 시계열순)',
+        _print_task_hr_timeline(tables['tasks'], tables['hr_orders'], rid, limit=_RECENT_LIMIT),
+        breakable=True,
+    )
 
     return html.Div([
         header_row,

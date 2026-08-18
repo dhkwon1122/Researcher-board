@@ -14,7 +14,8 @@
   승격산정기준일자, Knox ID, 인원실적년도, 인원실적월, 재직상태명
 
 계산 항목:
-  birth_year    : 법적생년월일성별 앞 4자리
+  birth_date    : 법적생년월일성별 앞 6자리(YYMMDD) → YYYY-MM-DD로 변환
+  birth_year    : birth_date의 연도(파싱 실패 시 빈 값)
   age           : 올해연도 - birth_year  (표시 전용, CSV에는 저장 안 함)
   hire_date     : 근속 기준일_그룹입사일 (원본 YYYYMMDD → YYYY-MM-DD로 변환)
   tenure        : (오늘 - hire_date).days / 365, 소수 첫째자리 (표시 전용)
@@ -123,6 +124,23 @@ def _date_str(d: date | None) -> str:
     return d.strftime('%Y-%m-%d') if d else ''
 
 
+def _parse_birth_date(birth_sex: str) -> date | None:
+    """법적생년월일성별 앞 6자리(YYMMDD)를 생년월일로 변환한다(원본 확인 결과
+    6자리 전체가 생년월일 — 성별은 뒤에 붙는 게 아니라 COL_GENDER 원본 컬럼을
+    따로 읽는다). 연도는 birth_year와 같은 규칙(26 이상 → 1900+, 미만 →
+    2000+). 6자리 숫자가 아니거나 실제 날짜로 성립하지 않으면(예: 13월,
+    32일) None."""
+    s = str(birth_sex or '').strip()
+    if len(s) < 6 or not s[:6].isdigit():
+        return None
+    yy, mm, dd = int(s[0:2]), int(s[2:4]), int(s[4:6])
+    year = (1900 + yy) if yy >= 26 else (2000 + yy)
+    try:
+        return date(year, mm, dd)
+    except ValueError:
+        return None
+
+
 def _valid_year_str(val) -> str:
     s = str(val).strip()
     if is_blank(s) or s.lower() == 'nan':
@@ -211,15 +229,11 @@ def process(raw_dir: str = RAW_DIR) -> bool:
         if not rid:
             continue
 
-        # 생년 & 성별: 앞 두 자리가 연도 (26 이상 → 1900+, 26 미만 → 2000+)
+        # 생년월일: 법적생년월일성별 앞 6자리(YYMMDD) 전체를 파싱(_parse_birth_date
+        # 참고) — 실패하면(형식이 다르거나 날짜가 아니면) birth_year도 함께 빈 값.
         birth_sex = str(row.get(COL_BIRTH_SEX, '')).strip()
-        birth_year = ''
-        if len(birth_sex) >= 2:
-            try:
-                yy = int(birth_sex[:2])
-                birth_year = (1900 + yy) if yy >= 26 else (2000 + yy)
-            except ValueError:
-                pass
+        birth_dt = _parse_birth_date(birth_sex)
+        birth_year = birth_dt.year if birth_dt else ''
 
         # 입사일 (근속기준일)
         hire_dt = _parse_date(row.get(COL_HIRE_DATE))
@@ -239,6 +253,7 @@ def process(raw_dir: str = RAW_DIR) -> bool:
             'nationality':     str(row.get(COL_NATION, '')).strip(),
             'gender':          str(row.get(COL_GENDER, '')).strip(),
             'birth_year':      birth_year,
+            'birth_date':      _date_str(birth_dt),
             'hire_date':       _date_str(hire_dt),
             'promotion_date':  _date_str(promo_dt),
             'knox_id':         str(row.get(COL_KNOX, '')).strip(),
