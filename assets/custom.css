@@ -422,6 +422,20 @@ h1, h2, h3, h4, h5, h6 {
   #react-entry-point > div {
     min-height: 0 !important;
   }
+
+  /* 인쇄 콘텐츠는 화면 컴포넌트를 그대로 재사용해 표 헤더(0.72rem)/카드 제목
+     (0.85rem)/뱃지(0.7em)/본문(small≈0.875em) 등 크기가 제각각이다 — 인쇄본
+     안에서는 이 전부를 한 크기로 강제 통일하고(글꼴 굵기로만 위계를 준다),
+     제목(_print_box의 fw-bold, 연구원 성명 h4)만 살짝 키워 구분한다. */
+  .profile-print-only,
+  .profile-print-only * {
+    font-size: 10.5px !important;
+    line-height: 1.45 !important;
+  }
+  .profile-print-only h4,
+  .profile-print-only .fw-bold {
+    font-size: 12px !important;
+  }
 }
 
 /* 드래그 앤 드롭 업로드 영역 */
