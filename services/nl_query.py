@@ -38,8 +38,9 @@ Source:
   data/processed/embedding_cache.json               (BGE-M3 임베딩 캐시, researcher_fit.cached_embed 재사용)
   data/processed/*.csv 전체                          (open_data_query intent, services.open_data_query 참고)
 
-동시성: 이 모듈의 실시간 LLM 호출(질의 변환)은 llm_config.LLM2_QUERY_MAX_WAIT_SECONDS
-(기본 15초) 안에 동시 호출 슬롯을 못 얻으면 빈 응답으로 빠르게 실패한다 —
+동시성: 이 모듈의 실시간 LLM 호출(질의 변환)은 llm_client.query_max_wait()
+(환경변수 LLM2_QUERY_MAX_WAIT_SECONDS, 기본 15초) 안에 동시 호출 슬롯을 못
+얻으면 빈 응답으로 빠르게 실패한다 —
 배치 파이프라인이 슬롯을 다 쓰고 있어도 사용자가 화면에서 무한정 기다리지
 않게 하기 위함(llm_client.call_llm의 max_wait 파라미터, 세마포어는 배치와
 공유 — 전체 동시 호출 수는 항상 LLM2_MAX_CONCURRENT를 넘지 않는다).
@@ -66,11 +67,6 @@ from services import open_data_query  # noqa: E402
 from services import query_settings  # noqa: E402
 from services.evaluations import evaluation_years, salary_grade_column  # noqa: E402
 from services.researcher_profile_export import highest_degree_row  # noqa: E402
-
-try:
-    import llm_config as _llm_cfg
-except ModuleNotFoundError:
-    _llm_cfg = None
 
 MAX_TOP_K = 20
 DEFAULT_TOP_K = 5
@@ -544,7 +540,7 @@ def parse_question(question: str) -> dict:
     if not question:
         return {'intent': 'unsupported', 'reason_if_unsupported': '빈 질문입니다.'}
 
-    max_wait = getattr(_llm_cfg, 'LLM2_QUERY_MAX_WAIT_SECONDS', 15) if _llm_cfg else 15
+    max_wait = llm_client.query_max_wait()
     system_prompt = query_settings.apply(QUERY_SYSTEM_PROMPT)
     raw = llm_client.call_llm(question, system_prompt, temperature=0.0, max_tokens=400, max_wait=max_wait)
     if not raw:
@@ -683,7 +679,7 @@ def _generate_answer_summary(question: str, result: dict) -> str:
     자체는 그대로 보여준다."""
     if not result.get('rows'):
         return ''
-    max_wait = getattr(_llm_cfg, 'LLM2_QUERY_MAX_WAIT_SECONDS', 15) if _llm_cfg else 15
+    max_wait = llm_client.query_max_wait()
     prompt = _answer_prompt(question, result)
     raw = llm_client.call_llm(prompt, _ANSWER_SYSTEM_PROMPT, temperature=0.2, max_tokens=500, max_wait=max_wait)
     return raw.strip() if raw else ''

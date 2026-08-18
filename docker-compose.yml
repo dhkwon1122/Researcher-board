@@ -48,6 +48,20 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}          # 무인증이면 공란
       LLM_TIMEOUT: ${LLM_TIMEOUT:-180}        # reasoning 모델은 느릴 수 있어 넉넉히
       LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-2048} # 사고+SQL 여유(잘리면 빈 응답)
+      # LLM2: 배치 파이프라인 + AI 자연어 검색 전용 사내 LLM(thinkingcap, pipeline/
+      # llm_client.py). 예전에는 pipeline/llm_config.py 를 컨테이너에 별도로 볼륨
+      # 마운트해서 읽었지만, .env 하나로 합쳤으므로 나머지 LLM_* 설정과 동일하게
+      # 여기서 환경변수로 전달한다(.env.example의 "LLM2" 섹션 참고).
+      LLM2_API_URL: ${LLM2_API_URL:-http://75.12.15.121:8000/v1/chat/completions}
+      LLM2_MODEL: ${LLM2_MODEL:-thinkingcap}
+      LLM2_TIMEOUT: ${LLM2_TIMEOUT:-300}
+      LLM2_MAX_TOKENS_MULTIPLIER: ${LLM2_MAX_TOKENS_MULTIPLIER:-3}
+      LLM2_MAX_CONCURRENT: ${LLM2_MAX_CONCURRENT:-8}
+      LLM2_QUERY_MAX_WAIT_SECONDS: ${LLM2_QUERY_MAX_WAIT_SECONDS:-15}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-5}
+      LLM_RETRY_BACKOFF: ${LLM_RETRY_BACKOFF:-5.0}
+      # 사내 Confluence PAT — 미설정이면 confl_address 과제는 PDF 폴백 없이 건너뛰어짐.
+      CONFLUENCE_TOKEN: ${CONFLUENCE_TOKEN:-}
       # 런타임 프록시가 있어도 내부 대상(vllm 75.12.15.121, DB, ollama 등)은 프록시 우회.
       NO_PROXY: "localhost,127.0.0.1,::1,host.docker.internal,ollama,db,75.12.15.121,samsungds.net,*.samsungds.net,*.samsung.net,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
       no_proxy: "localhost,127.0.0.1,::1,host.docker.internal,ollama,db,75.12.15.121,samsungds.net,*.samsungds.net,*.samsung.net,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
@@ -60,14 +74,6 @@ services:
     volumes:
       # 데이터는 이미지에 굽지 않고 호스트에서 마운트 (수정·교체 용이)
       - ./data:/app/data
-      # pipeline/llm_config.py 는 .dockerignore 로 이미지에서 제외되므로(비밀을
-      # 이미지에 굽지 않기 위함) 여기서 마운트해야 컨테이너에서 실제로 보인다 —
-      # 마운트가 없으면 llm_client.py의 `import llm_config`가 항상 실패해
-      # "[LLM 오류] llm_config.py 가 없어 API 호출을 건너뜁니다"만 뜬다.
-      # 먼저 호스트에서 pipeline/llm_config.example.py 를 pipeline/llm_config.py 로
-      # 복사해 값을 채워둔 뒤 컨테이너를 띄워야 한다(파일이 없으면 docker가 그
-      # 자리에 빈 디렉터리를 만들어버리므로 반드시 먼저 파일을 만들 것).
-      - ./pipeline/llm_config.py:/app/pipeline/llm_config.py:ro
 
   # 로컬 LLM (AI 검색용). 기본으로는 뜨지 않는다(profile llm).
   # 사용:  docker compose --profile llm up -d

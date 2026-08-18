@@ -15,12 +15,17 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENV_PATH = os.path.join(BASE_DIR, '.env')
 
 
-def _load_env_file():
+def load_env_file():
     """
-    프로젝트 루트의 .env 를 환경변수로 로드한다.
+    프로젝트 루트의 .env 를 환경변수로 로드한다. DATABASE_URL 뿐 아니라
+    LLM2_*/CONFLUENCE_TOKEN 등(원래 pipeline/llm_config.py라는 별도 파일에
+    있던 설정)도 이제 전부 .env 하나로 모여 있어, pipeline/llm_client.py·
+    pipeline/confluence_client.py·pipeline/run_ready.py도 이 함수를 그대로
+    재사용한다.
     - python-dotenv 가 있으면 그것으로 로드(경로 명시 → 실행 위치 무관).
-    - 없으면 최소 파서로 직접 읽어, 패키지 미설치여도 동작하게 한다.
-    이미 OS 환경변수로 설정된 값은 덮어쓰지 않는다.
+    - 그와 별개로 최소 파서로도 한 번 더 읽어(패키지 미설치여도 동작하게).
+    이미 OS 환경변수로 설정된 값은 덮어쓰지 않는다. 여러 번 호출해도
+    안전하다(이미 설정된 키는 다시 안 건드림).
     """
     # 1) python-dotenv 우선
     try:
@@ -32,9 +37,8 @@ def _load_env_file():
     except Exception:
         pass
 
-    # 2) DATABASE_URL 이 아직 비어 있으면 .env 수동 파싱 (dotenv 미설치 대비)
-    if os.environ.get('DATABASE_URL', '').strip():
-        return
+    # 2) .env 수동 파싱 (dotenv 미설치 대비 — 이미 설정된 키는 건드리지
+    #    않으므로 위 dotenv 로드와 중복 실행해도 안전하다)
     if not os.path.exists(ENV_PATH):
         return
     try:
@@ -52,7 +56,7 @@ def _load_env_file():
         pass
 
 
-_load_env_file()
+load_env_file()
 
 try:
     from sqlalchemy import create_engine

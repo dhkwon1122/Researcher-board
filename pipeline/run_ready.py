@@ -7,7 +7,7 @@ run_analysis.py 체인은 사내 LLM 호출이 많아 전체 실행에 수십 �
 (LLM 분석 자체는 호출하지 않음 — 연결 확인용 최소 요청만 보낸다).
 
 점검 항목:
-  1) pipeline/llm_config.py 존재 + 필수 값(LLM2_API_URL, LLM2_MODEL) 설정 여부
+  1) .env(환경변수)에 필수 값(LLM2_API_URL, LLM2_MODEL) 설정 여부
   2) 사내 LLM(LLM2, thinkingcap) 엔드포인트 연결 확인
   3) 사내 Confluence 토큰 설정 + (project_confl_address.csv가 있으면) 실제 접속 확인
   4) BGE-M3 임베딩 서버 기동 확인 — 응답 없으면 자동 기동 후 준비될 때까지 대기
@@ -26,8 +26,10 @@ run_analysis.py 체인은 사내 LLM 호출이 많아 전체 실행에 수십 �
 import os
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 프로젝트 루트 (services.db용)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import OUT_DIR  # noqa: E402
+from services.db import load_env_file  # noqa: E402
 
 _PLACEHOLDER_TOKEN = 'your-confluence-personal-access-token'
 
@@ -39,45 +41,46 @@ class Check:
         self.message = message
 
 
-def _check_llm_config_file() -> tuple:
-    """llm_config.py를 임포트해서 반환한다. 없으면 (None, Check)."""
-    try:
-        import llm_config as cfg
-    except ModuleNotFoundError:
-        return None, Check(
-            'llm_config.py', 'fail',
-            'pipeline/llm_config.py가 없습니다. '
-            'cp pipeline/llm_config.example.py pipeline/llm_config.py 로 만든 뒤 값을 채우세요.',
-        )
-    return cfg, Check('llm_config.py', 'ok', '존재함')
+def _check_env_file() -> Check:
+    from services.db import ENV_PATH
+    if os.path.exists(ENV_PATH):
+        return Check('.env', 'ok', f'존재함 ({ENV_PATH})')
+    return Check(
+        '.env', 'warn',
+        f'{ENV_PATH}가 없습니다 — 환경변수를 셸/컨테이너에서 직접 주입하지 않는다면 '
+        'cp .env.example .env 로 만든 뒤 값을 채우세요.',
+    )
 
 
-def _check_llm2_fields(cfg) -> Check:
-    if not getattr(cfg, 'LLM2_API_URL', ''):
-        return Check('LLM2 설정', 'fail', 'llm_config.py에 LLM2_API_URL이 설정되어 있지 않습니다.')
-    if not getattr(cfg, 'LLM2_MODEL', ''):
-        return Check('LLM2 설정', 'fail', 'llm_config.py에 LLM2_MODEL이 설정되어 있지 않습니다.')
-    return Check('LLM2 설정', 'ok', f'{cfg.LLM2_API_URL} (model={cfg.LLM2_MODEL})')
+def _check_llm2_fields() -> Check:
+    api_url = os.environ.get('LLM2_API_URL', '').strip()
+    model = os.environ.get('LLM2_MODEL', '').strip()
+    if not api_url:
+        return Check('LLM2 설정', 'fail', '.env(또는 환경변수)에 LLM2_API_URL이 설정되어 있지 않습니다.')
+    if not model:
+        return Check('LLM2 설정', 'fail', '.env(또는 환경변수)에 LLM2_MODEL이 설정되어 있지 않습니다.')
+    return Check('LLM2 설정', 'ok', f'{api_url} (model={model})')
 
 
-def _check_llm2_endpoint(cfg, timeout: float = 15.0) -> Check:
+def _check_llm2_endpoint(timeout: float = 15.0) -> Check:
     """call_llm()의 재시도/큰 max_tokens 없이, 연결 여부만 빠르게 확인하는
     최소 요청 — 실패해도 몇 초~timeout초 안에 끝나야 이 스크립트의 존재
     의미(끊기기 전에 빨리 확인)가 있다."""
     import requests
 
+    api_url = os.environ['LLM2_API_URL']
     payload = {
-        'model': cfg.LLM2_MODEL,
+        'model': os.environ['LLM2_MODEL'],
         'messages': [{'role': 'user', 'content': 'ping'}],
         'max_tokens': 4,
     }
     try:
         resp = requests.post(
-            cfg.LLM2_API_URL, json=payload,
+            api_url, json=payload,
             headers={'Content-Type': 'application/json'}, timeout=timeout,
         )
     except requests.exceptions.ConnectionError:
-        return Check('LLM2 연결', 'fail', f'{cfg.LLM2_API_URL}에 연결할 수 없습니다 (서버 미기동/네트워크 확인).')
+        return Check('LLM2 연결', 'fail', f'{api_url}에 연결할 수 없습니다 (서버 미기동/네트워크 확인).')
     except requests.exceptions.Timeout:
         return Check('LLM2 연결', 'fail', f'{timeout:.0f}초 내에 응답이 없습니다.')
     except Exception as exc:  # noqa: BLE001
@@ -88,9 +91,9 @@ def _check_llm2_endpoint(cfg, timeout: float = 15.0) -> Check:
     return Check('LLM2 연결', 'ok', '정상 응답')
 
 
-def _check_confluence(cfg) -> list:
+def _check_confluence() -> list:
     checks = []
-    token = getattr(cfg, 'CONFLUENCE_TOKEN', '') if cfg else ''
+    token = os.environ.get('CONFLUENCE_TOKEN', '')
     if not token or token == _PLACEHOLDER_TOKEN:
         checks.append(Check(
             'Confluence 토큰', 'warn',
@@ -148,15 +151,14 @@ def _check_packages() -> list:
 
 def run(skip_bge: bool = False) -> bool:
     """모든 점검을 실행하고 결과를 출력한다. FAIL이 하나도 없으면 True."""
+    load_env_file()
     results: list = []
 
-    cfg, file_check = _check_llm_config_file()
-    results.append(file_check)
-    if cfg is not None:
-        results.append(_check_llm2_fields(cfg))
-        if getattr(cfg, 'LLM2_API_URL', ''):
-            results.append(_check_llm2_endpoint(cfg))
-        results.extend(_check_confluence(cfg))
+    results.append(_check_env_file())
+    results.append(_check_llm2_fields())
+    if os.environ.get('LLM2_API_URL', '').strip():
+        results.append(_check_llm2_endpoint())
+    results.extend(_check_confluence())
 
     if skip_bge:
         results.append(Check('BGE-M3 임베딩 서버', 'warn', '건너뜀(--skip-bge)'))

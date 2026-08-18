@@ -123,8 +123,8 @@
     → data/processed/project_searched_list.csv
       (컨플루언스 페이지를 사내 LLM으로 요약 후, "R&D Enterprise & Academia
        Discovery Agent" 역할로 유사 기업/스타트업/대학연구실을 탐색)
-    ※ Confluence 접속: pipeline/llm_config.py의 CONFLUENCE_TOKEN(PAT) 필요
-       (llm_config.example.py 참고). atlassian-python-api 패키지 설치 필요.
+    ※ Confluence 접속: .env의 CONFLUENCE_TOKEN(PAT) 필요
+       (.env.example 참고). atlassian-python-api 패키지 설치 필요.
 
 [과제 전문성 분석 → 연구원 전문성 분석 → 연구원 매칭] ★ 사내 Confluence +
   사내 LLM 필요, 비용이 커서 run_pipeline.py 자동 실행에는 포함하지 않음.
@@ -175,8 +175,8 @@
     ※ 2)는 process_project_search.py(선택, 유사 기업/학계 탐색)와 project_summary.py의
        컨플루언스 원문 캐시(data/processed/project_page_cache.json)를 공유하므로,
        같은 과제를 두 번 조회하지 않는다.
-    ※ Confluence 접속: pipeline/llm_config.py의 CONFLUENCE_TOKEN(PAT) 필요
-       (llm_config.example.py 참고). atlassian-python-api 패키지 설치 필요.
+    ※ Confluence 접속: .env의 CONFLUENCE_TOKEN(PAT) 필요
+       (.env.example 참고). atlassian-python-api 패키지 설치 필요.
 
 출력 위치: data/processed/
 """

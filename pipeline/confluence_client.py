@@ -5,16 +5,21 @@ data/processed/project_confl_address.csv의 confl_address(컨플루언스 페이
 에서 base URL과 페이지 ID를 그때그때 추출해 페이지 본문을 가져온다. 별도의
 고정 CONFLUENCE_BASE_URL 설정 없이, 각 행의 실제 URL을 그대로 사용한다.
 
-인증: pipeline/llm_config.py의 CONFLUENCE_TOKEN(개인 액세스 토큰, PAT) 사용.
+인증: .env의 CONFLUENCE_TOKEN(개인 액세스 토큰, PAT) 사용.
 """
 
+import os
 import re
+import sys
 from urllib.parse import urlparse
 
-try:
-    import llm_config as _cfg
-except ModuleNotFoundError:
-    _cfg = None
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+from services.db import load_env_file  # noqa: E402
+
+load_env_file()
 
 _client_cache: dict = {}
 
@@ -69,7 +74,7 @@ def _get_client(base_url: str):
     client = _client_cache.get(base_url)
     if client is None:
         from atlassian import Confluence
-        client = Confluence(url=base_url, token=_cfg.CONFLUENCE_TOKEN)
+        client = Confluence(url=base_url, token=os.environ.get('CONFLUENCE_TOKEN', ''))
         _client_cache[base_url] = client
     return client
 
@@ -78,10 +83,10 @@ def fetch_page_text(confl_address: str) -> str:
     """confl_address 페이지의 제목+본문을 텍스트로 반환. 실패 시 ConfluenceError."""
     if not confl_address:
         raise ConfluenceError('컨플루언스 주소가 비어 있습니다.')
-    if _cfg is None or not getattr(_cfg, 'CONFLUENCE_TOKEN', ''):
+    if not os.environ.get('CONFLUENCE_TOKEN', '').strip():
         raise ConfluenceError(
-            'pipeline/llm_config.py에 CONFLUENCE_TOKEN이 설정되어 있지 않습니다. '
-            'llm_config.example.py를 참고해 설정하세요.'
+            '.env에 CONFLUENCE_TOKEN이 설정되어 있지 않습니다. '
+            '.env.example을 참고해 설정하세요.'
         )
 
     client = _get_client(_base_url(confl_address))

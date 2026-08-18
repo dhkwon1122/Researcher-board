@@ -56,11 +56,6 @@ from services import researcher_profile_export as rpe  # noqa: E402
 from services import text2sql  # noqa: E402
 from services.llm import LLMError  # noqa: E402
 
-try:
-    import llm_config as _llm_cfg
-except ModuleNotFoundError:
-    _llm_cfg = None
-
 DISPLAY_LIMIT = 1000
 _EMBEDDING_MATCH_THRESHOLD = 0.75
 _DISTINCT_VALUES_CAP = 2000
@@ -349,7 +344,7 @@ def answer(question: str, current_only: bool = True) -> dict:
                 'note': '조회할 데이터가 없습니다(data/processed/에 CSV가 없음).'}
 
     schema = _schema_prompt(tables)
-    max_wait = getattr(_llm_cfg, 'LLM2_QUERY_MAX_WAIT_SECONDS', 15) if _llm_cfg else 15
+    max_wait = llm_client.query_max_wait()
     gen = _generate_sql(question, schema, max_wait, current_only=current_only)
     if gen is None:
         return {'intent': 'open_data_query', 'columns': [], 'rows': [],

@@ -3,7 +3,6 @@ __pycache__/
 *.pyc
 *.pyo
 .env
-pipeline/llm_config.py
 data/raw/
 data/raw_csv/
 data/processed/*
