@@ -16,6 +16,7 @@ from components.profile_sections import (
     comments_block,
     education_block,
     evaluation_incentive_block,
+    evaluation_incentive_summary_text,
     leadership_figure,
     leadership_year_options,
     nurturing_block,
@@ -543,18 +544,16 @@ def _print_patent_summary(pat_df, rid):
 
 
 def _print_profile_content(rid, researcher, tables, profile, name_map,
-                            eval_content, comments_content, current_status):
+                            print_eval_content, comments_content, current_status):
     """A4 인쇄 전용 콘텐츠 — 화면의 카드형 대시보드(고정 높이 + 내부 스크롤)는
     인쇄에 부적합해(넘치는 내용이 잘림) 재사용하지 않고, 같은 데이터/블록 함수를
     피플팀이 준 손그림 양식(사진+기본정보 / 근속·평가·양성·시상 / 보유역량 3단 /
     논문·특허 / 과제수행·인사발령)에 맞춰 테두리 박스로 재배치한다.
-    eval_content/comments_content는 update_profile()이 권한(view_evaluation/
+    print_eval_content/comments_content는 update_profile()이 권한(view_evaluation/
     view_comments)까지 반영해 이미 만들어둔 것(_locked_block() 포함)을 그대로
     받아써 권한 판정을 중복하지 않는다."""
     name = str(researcher.get('name', '') or '')
     dept = str(researcher.get('department', '') or '-')
-    org = str(researcher.get('org_code', '') or '')
-    dept_label = f'{dept} ({org})' if org else dept
     position = str(researcher.get('position', '') or '-')
     knox_id = str(researcher.get('knox_id', '') or '-')
     gender = str(researcher.get('gender', '') or '-')
@@ -566,7 +565,7 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     current_task = _current_task_label(tables['tasks'], rid)
 
     info_rows = [
-        ('사번', rid), ('성명', name or '-'), ('소속부서', dept_label), ('과제', current_task),
+        ('사번', rid), ('성명', name or '-'), ('소속부서', dept), ('과제', current_task),
         ('직급-년차', position_year), ('성별/나이', f'{gender}/{age}'), ('생년월일', birth_label),
         ('Knox ID', knox_id),
     ]
@@ -580,8 +579,7 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     ]))
 
     tenure_box = _print_box(_tenure_label(researcher.get('hire_date')), html.Div([
-        html.Div('평가 · 인센티브 이력', className='small fw-semibold text-muted mt-1 mb-1'),
-        eval_content,
+        print_eval_content,
         html.Div('양성 이력', className='small fw-semibold text-muted mt-2 mb-1'),
         nurturing_block(tables['nurturing'], rid),
         html.Div('시상 이력', className='small fw-semibold text-muted mt-2 mb-1'),
@@ -804,6 +802,11 @@ def update_profile(rid):
             if show_eval
             else _locked_block()
         )
+        print_eval_content = (
+            evaluation_incentive_summary_text(tables['evaluations'], tables['incentive_selection'], rid, years)
+            if show_eval
+            else _locked_block('평가 · 인센티브 이력')
+        )
         comments_content = (
             comments_block(tables['comments'], rid)
             if show_comments
@@ -827,7 +830,7 @@ def update_profile(rid):
             owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid),
             current_status,
             _print_profile_content(rid, researcher, tables, profile, name_map,
-                                    eval_content, comments_content, current_status),
+                                    print_eval_content, comments_content, current_status),
         )
     except Exception as exc:
         import traceback

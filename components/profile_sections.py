@@ -208,37 +208,50 @@ def _clean_str(val) -> str:
     return '' if s.lower() in ('', 'nan', 'none', 'nat') else s
 
 
+def _inc_label(inc: pd.DataFrame, year) -> str:
+    """한 해의 인센티브 선정 구분 문자열('-'면 미선정). evaluation_incentive_block()
+    (표 형식)과 evaluation_incentive_summary_text()(글자 형식)가 공유한다."""
+    if inc.empty:
+        return '-'
+    row = inc[inc['year'].astype(str) == str(year)]
+    if row.empty:
+        return '-'
+    selected = str(row.iloc[0].get('selected', '')).lower()
+    if selected in ('true', '1', 'yes'):
+        category = str(row.iloc[0].get('category', '선정'))
+        return '최우수' if '최우수' in category else ('우수' if '우수' in category else category[:4])
+    return '-'
+
+
+def _eval_cell(eva, year) -> tuple[str, str]:
+    """(색상 기준 연봉등급, 화면 표시 문자열 예: "다(EM/EM)") 튜플. eva가 없으면
+    둘 다 '-'. evaluation_incentive_block()/evaluation_incentive_summary_text()
+    가 공유한다."""
+    if eva is None:
+        return '-', '-'
+    salary = _clean_str(eva.get(salary_grade_column(year)))
+    first_half = _clean_str(eva.get(first_half_column(year - 1)))
+    second_half = _clean_str(eva.get(second_half_column(year - 1)))
+    display = format_evaluation_cell(salary, first_half, second_half)
+    return salary, display
+
+
+def _eval_incentive_rows(eva_df, inc_df, rid: str):
+    """evaluation_incentive_block()/evaluation_incentive_summary_text() 공용
+    준비 단계 — 해당 연구원의 인센티브 행과 평가 행(evaluations.csv는
+    researcher_id당 1행뿐이라 eva는 있으면 1행)을 걸러 반환한다."""
+    inc = inc_df[inc_df['researcher_id'] == rid] if not inc_df.empty else pd.DataFrame()
+    eva_rows = eva_df[eva_df['researcher_id'] == rid] if not eva_df.empty else pd.DataFrame()
+    eva = eva_rows.iloc[0] if not eva_rows.empty else None
+    return inc, eva
+
+
 def evaluation_incentive_block(eva_df, inc_df, rid: str, years: list[int]):
     """years: 연봉등급 연도 리스트(오름차순, 예: [2024,2025,2026]) — 각 연도
     열은 그 해 연봉등급과, 대응하는 전년도(연도-1) 상/하반기업적을 합쳐
     services.evaluations.format_evaluation_cell()로 한 셀에 표시한다(예:
-    "다(EM/EM)"). evaluations.csv가 researcher_id당 1행(wide)이라 eva는
-    최대 1행."""
-    inc = inc_df[inc_df['researcher_id'] == rid] if not inc_df.empty else pd.DataFrame()
-    eva_rows = eva_df[eva_df['researcher_id'] == rid] if not eva_df.empty else pd.DataFrame()
-    eva = eva_rows.iloc[0] if not eva_rows.empty else None
-
-    def _inc_label(year):
-        if inc.empty:
-            return '-'
-        row = inc[inc['year'].astype(str) == str(year)]
-        if row.empty:
-            return '-'
-        selected = str(row.iloc[0].get('selected', '')).lower()
-        if selected in ('true', '1', 'yes'):
-            category = str(row.iloc[0].get('category', '선정'))
-            return '최우수' if '최우수' in category else ('우수' if '우수' in category else category[:4])
-        return '-'
-
-    def _eval_cell(year):
-        """(색상 기준 연봉등급, 화면 표시 문자열) 튜플. eva가 없으면 둘 다 '-'."""
-        if eva is None:
-            return '-', '-'
-        salary = _clean_str(eva.get(salary_grade_column(year)))
-        first_half = _clean_str(eva.get(first_half_column(year - 1)))
-        second_half = _clean_str(eva.get(second_half_column(year - 1)))
-        display = format_evaluation_cell(salary, first_half, second_half)
-        return salary, display
+    "다(EM/EM)")."""
+    inc, eva = _eval_incentive_rows(eva_df, inc_df, rid)
 
     def _grade_td(salary_grade, display):
         color = GRADE_COLOR.get(salary_grade, '#aaa')
@@ -262,16 +275,35 @@ def evaluation_incentive_block(eva_df, inc_df, rid: str, years: list[int]):
             html.Tr(
                 [html.Td('인센티브', className='small text-muted text-center',
                          style={'whiteSpace': 'nowrap', 'fontSize': '0.75rem', 'verticalAlign': 'middle'})] +
-                [html.Td(_inc_label(year), className='text-center small',
+                [html.Td(_inc_label(inc, year), className='text-center small',
                          style={'verticalAlign': 'middle'}) for year in years]
             ),
             html.Tr(
                 [html.Td('평가등급', className='small text-muted text-center',
                          style={'whiteSpace': 'nowrap', 'fontSize': '0.75rem', 'verticalAlign': 'middle'})] +
-                [_grade_td(*_eval_cell(year)) for year in years]
+                [_grade_td(*_eval_cell(eva, year)) for year in years]
             ),
         ]),
     ], bordered=True, size='sm', className='mb-0 eval-incentive-table', style={'fontSize': '0.8rem'})
+
+
+def evaluation_incentive_summary_text(eva_df, inc_df, rid: str, years: list[int]):
+    """평가/인센티브 이력을 표 대신 글자 두 줄로 — A4 인쇄처럼 지면이 좁아 표
+    형식이 부담스러운 곳에서 쓴다(연도·값 계산은 evaluation_incentive_block()과
+    동일 로직 공유, 표시 형식만 다름). 예:
+      평가 · 인센티브 이력 ('24~'26)
+      인센티브   -/우수/최우수
+      평가   나(ES)/가(EM)/다(MT)"""
+    inc, eva = _eval_incentive_rows(eva_df, inc_df, rid)
+    year_range = f"'{str(years[0])[-2:]}~'{str(years[-1])[-2:]}"
+    inc_line = '/'.join(_inc_label(inc, y) for y in years)
+    eval_line = '/'.join(_eval_cell(eva, y)[1] for y in years)
+
+    return html.Div([
+        html.Div(f"평가 · 인센티브 이력 ({year_range})", className='small fw-semibold text-muted mb-1'),
+        html.Div(f'인센티브   {inc_line}', className='small'),
+        html.Div(f'평가   {eval_line}', className='small'),
+    ])
 
 
 def nurturing_block(nur_df, rid: str, *, limit: int | None = None):
