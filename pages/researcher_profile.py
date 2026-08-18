@@ -764,18 +764,20 @@ def _print_patent_detail_table(pat_df, rid):
                                       style={'display': 'none'})])
 
 
-def _print_detail_page(name, rid, title_suffix, box_title, table):
-    """논문/특허 실적 상세 전용 페이지 하나. 각자 자기 페이지를 통째로 쓰게
-    (breakBefore:page) 분리해, 클라이언트사이드 오토핏 로직(아래 print
-    콜백)이 이 페이지 하나 몫의 높이 예산을 온전히 갖고 판단할 수 있게 한다
-    — 제목이 길어 두 표를 한 페이지에 같이 두면 판단이 서로 얽히기 때문.
-    .print-page-block 마커를 기준으로 오토핏이 동작한다. 여러 명을
-    이어붙이는 일괄 인쇄에서도 이 페이지가 누구 것인지 알 수 있도록 이름/
-    사번을 다시 적어둔다."""
+def _print_pub_patent_detail_page(name, rid, tables):
+    """2페이지: 논문·특허 실적 상세를 합쳐서 한 페이지 안에 담는다(제한
+    사항). 두 표 모두 .print-autofit-table 마커를 달아 같은 .print-page-block
+    안에 두면, 클라이언트사이드 오토핏 로직(아래 print 콜백)이 이 블록
+    전체(논문+특허 합계) 높이를 기준으로 판단해 두 표에서 균형 있게 행을
+    줄여 한 페이지에 맞춘다. 여러 명을 이어붙이는 일괄 인쇄에서도 이
+    페이지가 누구 것인지 알 수 있도록 이름/사번을 다시 적어둔다."""
     return html.Div([
-        html.Div(f'{name}({rid}) — {title_suffix}', className='print-page2-title',
+        html.Div(f'{name}({rid}) — 논문 · 특허 실적 상세', className='print-page2-title',
                  style={'fontSize': '16px', 'fontWeight': 700, 'marginBottom': '10px'}),
-        _print_box(box_title, table),
+        _print_box('논문 실적 (주요 실적 우선 — 1저자·교신저자, IF 우선)',
+                   _print_publication_detail_table(tables['publications'], rid)),
+        _print_box('특허 실적 (전략출원 > 등록 > 출원, 대표발명·지분율 우선)',
+                   _print_patent_detail_table(tables['patents'], rid)),
     ], className='print-page-block', style={'breakBefore': 'page'})
 
 
@@ -906,12 +908,7 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
         task_hr_box,
         _print_box('인물 코멘트', comments_content, breakable=True),
         html.Div(f'출력일 {datetime.now():%Y-%m-%d}', className='text-muted small text-end mt-2'),
-        _print_detail_page(name, rid, '논문 실적 상세',
-                            '논문 실적 (주요 실적 우선 — 1저자·교신저자, IF 우선)',
-                            _print_publication_detail_table(tables['publications'], rid)),
-        _print_detail_page(name, rid, '특허 실적 상세',
-                            '특허 실적 (전략출원 > 등록 > 출원, 대표발명·지분율 우선)',
-                            _print_patent_detail_table(tables['patents'], rid)),
+        _print_pub_patent_detail_page(name, rid, tables),
     ])
 
 
@@ -1236,7 +1233,13 @@ clientside_callback(
             var container = document.getElementById('profile-print-content');
             if (container) {
                 var PAGE_CONTENT_WIDTH_PX = (210 - 16 * 2) * 96 / 25.4;
-                var PAGE_HEIGHT_PX = (297 - 14 * 2) * 96 / 25.4;
+                // 화면 밖에 임시로 렌더링해 재는 높이가 실제 인쇄 결과보다
+                // 살짝(실측 30~50px 안팎) 작게 나오는 오차가 있어(오프스크린
+                // 렌더링과 실제 인쇄 파이프라인의 미세한 레이아웃 차이로
+                // 추정), 안전 여백을 넉넉히 빼서 경계선에서 한 페이지를
+                // 넘기지 않게 한다.
+                var PAGE_HEIGHT_SAFETY_MARGIN_PX = 80;
+                var PAGE_HEIGHT_PX = (297 - 14 * 2) * 96 / 25.4 - PAGE_HEIGHT_SAFETY_MARGIN_PX;
 
                 var MEASURE_STYLE_ID = 'profile-print-measure-style';
                 var existingMeasureStyle = document.getElementById(MEASURE_STYLE_ID);
@@ -1254,25 +1257,41 @@ clientside_callback(
                 container.classList.add('__pp-measuring');
 
                 document.querySelectorAll('.print-page-block').forEach(function(block) {
-                    var table = block.querySelector('.print-autofit-table');
-                    if (!table) { return; }
-                    var tbody = table.querySelector('.print-autofit-body');
-                    var note = block.querySelector('.print-autofit-note');
-                    if (!tbody) { return; }
-                    var rows = tbody.rows;
-                    for (var i = 0; i < rows.length; i++) { rows[i].style.display = ''; }
-                    if (note) { note.style.display = 'none'; note.textContent = ''; }
+                    // 논문·특허 표가 한 블록(페이지)을 같이 쓰므로(제한 사항:
+                    // 합쳐서 1페이지), 표별로 각자 맞추는 게 아니라 블록
+                    // 전체(둘 합계) 높이가 예산을 넘지 않을 때까지, 그 순간
+                    // 행이 더 많이 남은 표에서 한 줄씩 줄여 균형 있게 맞춘다.
+                    var entries = [];
+                    block.querySelectorAll('.print-autofit-table').forEach(function(table) {
+                        var tbody = table.querySelector('.print-autofit-body');
+                        var note = table.parentElement ? table.parentElement.querySelector('.print-autofit-note') : null;
+                        if (!tbody) { return; }
+                        var rows = tbody.rows;
+                        for (var i = 0; i < rows.length; i++) { rows[i].style.display = ''; }
+                        if (note) { note.style.display = 'none'; note.textContent = ''; }
+                        entries.push({rows: rows, visible: rows.length, note: note});
+                    });
+                    if (!entries.length) { return; }
 
-                    var visibleCount = rows.length;
-                    while (visibleCount > 1 && block.getBoundingClientRect().height > PAGE_HEIGHT_PX) {
-                        rows[visibleCount - 1].style.display = 'none';
-                        visibleCount--;
+                    while (block.getBoundingClientRect().height > PAGE_HEIGHT_PX) {
+                        var target = null;
+                        for (var e = 0; e < entries.length; e++) {
+                            if (entries[e].visible > 1 && (!target || entries[e].visible > target.visible)) {
+                                target = entries[e];
+                            }
+                        }
+                        if (!target) { break; }
+                        target.rows[target.visible - 1].style.display = 'none';
+                        target.visible--;
                     }
-                    var removedCount = rows.length - visibleCount;
-                    if (removedCount > 0 && note) {
-                        note.textContent = '외 ' + removedCount + '건 더';
-                        note.style.display = '';
-                    }
+
+                    entries.forEach(function(entry) {
+                        var removedCount = entry.rows.length - entry.visible;
+                        if (removedCount > 0 && entry.note) {
+                            entry.note.textContent = '외 ' + removedCount + '건 더';
+                            entry.note.style.display = '';
+                        }
+                    });
                 });
 
                 container.classList.remove('__pp-measuring');
