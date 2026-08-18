@@ -115,7 +115,10 @@ def _load_selector_data(current_only: bool = True):
         return [], [], {}
 
 
-def layout(id=None, **_kwargs):
+def layout(id=None, ids=None, **_kwargs):
+    if ids:
+        return _bulk_layout(ids)
+
     from services.auth import can
     show_eval = can('view_evaluation')
     show_comments = can('view_comments')
@@ -170,6 +173,63 @@ def layout(id=None, **_kwargs):
                 _right_column(),
             ], className='g-3 mb-3'),
         ], className='no-print'),
+        html.Div(id='profile-print-content', className='profile-print-only'),
+    ])
+
+
+def _bulk_layout(ids_param):
+    """연구원 명단 화면(과제/부서로 필터한 결과 전체, 또는 체크박스로 고른
+    임의의 인원 풀)에서 "/?ids=00000001,00000002,..." 형태로 넘어온 다인
+    일괄 인쇄 화면. 단일 프로필 화면과 달리 조회용 대시보드는 보여주지
+    않고, 각자의 인쇄 콘텐츠(_build_print_block)를 인원 수만큼 이어붙여
+    한 사람당 A4 1장씩 인쇄되게 한다(마지막 사람 뒤에는 break를 넣지
+    않아 끝에 빈 페이지가 붙지 않는다)."""
+    rid_list = []
+    seen = set()
+    for token in str(ids_param).split(','):
+        token = token.strip()
+        if not token:
+            continue
+        rid = token.zfill(8)
+        if rid not in seen:
+            seen.add(rid)
+            rid_list.append(rid)
+
+    researchers = read_processed('researchers')
+    labels = []
+    for rid in rid_list:
+        match = researchers[researchers['researcher_id'] == rid] if not researchers.empty else pd.DataFrame()
+        name = str(match.iloc[0].get('name', '')) if not match.empty else ''
+        labels.append(f'{name}({rid})' if name else rid)
+
+    return html.Div([
+        dbc.Row([
+            dbc.Col(
+                html.H5(
+                    [html.I(className='bi bi-people-fill me-2 text-primary'),
+                     f'연구원 프로필 일괄 인쇄 ({len(rid_list)}명)'],
+                    className='fw-bold mb-0 mt-1',
+                ),
+            ),
+            dbc.Col(
+                html.Button(
+                    [html.I(className='bi bi-printer me-1'), '프로필 인쇄 (A4)'],
+                    id='profile-print-btn', n_clicks=0,
+                    className='btn btn-outline-secondary btn-sm',
+                ),
+                width='auto', className='d-flex align-items-center',
+            ),
+        ], justify='between', align='center', className='mb-3 no-print'),
+        html.Div(id='profile-print-dummy', style={'display': 'none'}),
+        html.Div([
+            dbc.Alert([
+                html.Div(f'{len(rid_list)}명의 프로필을 한 번에 인쇄합니다 (1인당 A4 1페이지, 사람마다 페이지가 나뉩니다).'),
+                html.Div(', '.join(labels), className='small text-muted mt-1'),
+            ], color='info', className='mb-3'),
+            dcc.Link([html.I(className='bi bi-arrow-left me-1'), '연구원 명단으로 돌아가기'],
+                     href='/researcher-list', className='small'),
+        ], className='no-print'),
+        dcc.Store(id='bulk-print-ids', data=rid_list),
         html.Div(id='profile-print-content', className='profile-print-only'),
     ])
 
@@ -781,6 +841,35 @@ def _select_from_history(n_clicks_list, ids):
     return (dept or None), rid
 
 
+def _build_print_block(rid, tables, researchers, name_map, show_eval, show_comments):
+    """한 연구원의 인쇄용 콘텐츠(_print_profile_content) 하나를 만든다.
+    update_profile()(단일 조회)과 build_bulk_print_content()(명단 화면에서
+    넘어온 여러 명 일괄 인쇄)가 permission 판정(print_eval_content/
+    comments_content 계산 포함)을 중복 없이 공유하기 위한 헬퍼."""
+    rows = researchers[researchers['researcher_id'] == rid]
+    if rows.empty:
+        return None
+    researcher = rows.iloc[0]
+    profile = read_expertise_profiles().get(rid)
+    salary_years, _half_years = evaluation_years()
+    years = sorted(salary_years)
+
+    print_eval_content = (
+        evaluation_incentive_summary_text(tables['evaluations'], tables['incentive_selection'], rid, years)
+        if show_eval
+        else _locked_block('평가 · 인센티브 이력')
+    )
+    comments_content = (
+        comments_block(tables['comments'], rid)
+        if show_comments
+        else _locked_block()
+    )
+    current_status = _current_status_badge(researcher)
+
+    return _print_profile_content(rid, researcher, tables, profile, name_map,
+                                   print_eval_content, comments_content, current_status)
+
+
 @callback(
     Output('photo-block', 'children'),
     Output('education-block', 'children'),
@@ -836,11 +925,6 @@ def update_profile(rid):
             if show_eval
             else _locked_block()
         )
-        print_eval_content = (
-            evaluation_incentive_summary_text(tables['evaluations'], tables['incentive_selection'], rid, years)
-            if show_eval
-            else _locked_block('평가 · 인센티브 이력')
-        )
         comments_content = (
             comments_block(tables['comments'], rid)
             if show_comments
@@ -863,8 +947,7 @@ def update_profile(rid):
                           tables['patents'], tables['job_profile'], tables['tasks_information'], rid),
             owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid),
             current_status,
-            _print_profile_content(rid, researcher, tables, profile, name_map,
-                                    print_eval_content, comments_content, current_status),
+            _build_print_block(rid, tables, researchers, name_map, show_eval, show_comments),
         )
     except Exception as exc:
         import traceback
@@ -878,6 +961,45 @@ def update_profile(rid):
             avatar('?'), err_div, html.Div(), html.Div(), html.Div(),
             [], None, html.Div(), err_div, err_div, err_div, html.Div(), html.Div(),
         )
+
+
+@callback(
+    Output('profile-print-content', 'children', allow_duplicate=True),
+    Input('bulk-print-ids', 'data'),
+    prevent_initial_call='initial_duplicate',
+)
+def build_bulk_print_content(rid_list):
+    import sys
+    import traceback
+    from services.auth import can, get_current_user
+
+    if not rid_list or get_current_user() is None:
+        return no_update
+
+    show_eval = can('view_evaluation')
+    show_comments = can('view_comments')
+
+    try:
+        tables = read_profile_tables()
+        researchers = tables['researchers']
+        if researchers.empty:
+            return html.Div('연구원 정보를 찾을 수 없습니다.', className='text-muted p-3')
+        name_map = researchers.set_index('researcher_id')['name'].to_dict()
+
+        blocks = []
+        for i, rid in enumerate(rid_list):
+            block = _build_print_block(rid, tables, researchers, name_map, show_eval, show_comments)
+            if block is None:
+                continue
+            # 마지막 사람 뒤에는 break를 넣지 않아야 끝에 빈 페이지가 안 붙는다
+            # (assets/custom.css의 unnamed @page A4 오버라이드와 같은 이유).
+            style = {} if i == len(rid_list) - 1 else {'breakAfter': 'page'}
+            blocks.append(html.Div(block, style=style))
+        return html.Div(blocks) if blocks else html.Div('선택한 연구원 정보를 찾을 수 없습니다.', className='text-muted p-3')
+    except Exception as exc:
+        print('[build_bulk_print_content] ERROR:', file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        return html.Div(f'오류 발생: {exc}', className='text-danger small p-2')
 
 
 @callback(

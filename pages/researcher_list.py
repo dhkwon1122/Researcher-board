@@ -296,6 +296,9 @@ def layout():
                                        color='primary', title='검색(필터 적용)'),
                             dbc.Button(html.I(className='bi bi-file-earmark-excel'), id='list-excel-btn',
                                        color='success', title='엑셀 다운로드(현재 화면에 보이는 대상)'),
+                            dbc.Button(html.I(className='bi bi-printer'), id='list-bulk-print-btn',
+                                       color='info',
+                                       title='프로필 일괄 인쇄(체크한 사람, 없으면 현재 화면에 보이는 전체)'),
                         ], className='w-100'),
                         dbc.Checklist(
                             id='list-excel-options-check',
@@ -309,6 +312,12 @@ def layout():
                             ],
                             value=[], switch=True,
                             className='small mt-1',
+                        ),
+                        html.Div(
+                            '프로필 인쇄: 표에서 원하는 행을 체크하면 그 인원만, '
+                            '체크가 없으면 현재 필터·검색 결과 전체를 인쇄합니다(과제/부서로 '
+                            '필터해두면 그 풀 전체를 한 번에 인쇄할 수 있습니다).',
+                            className='text-muted mt-1', style={'fontSize': '0.72rem'},
                         ),
                     ], md=3),
                 ], className='g-3'),
@@ -376,6 +385,9 @@ def layout():
                     filter_action='native',
                     sort_action='native',
                     sort_mode='multi',
+                    # 행 체크박스(프로필 일괄 인쇄용 — 없으면 화면에 보이는 전체를 인쇄)
+                    row_selectable='multi',
+                    selected_rows=[],
                     # 페이지
                     page_action='native',
                     page_size=30,
@@ -471,6 +483,7 @@ def toggle_org_filters(mode):
     Output('researcher-table', 'data'),
     Output('researcher-table', 'columns'),
     Output('researcher-table', 'tooltip_header'),
+    Output('researcher-table', 'selected_rows'),
     Input('list-search-btn',   'n_clicks'),
     Input('filter-modal-apply-btn', 'n_clicks'),
     Input('clear-filters-btn', 'n_clicks'),
@@ -497,13 +510,13 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, dept, proje
     columns = _build_columns(display_df)
     tooltip_header = {c['id']: c['id'] for c in columns}
     if display_df.empty:
-        return [], columns, tooltip_header
+        return [], columns, tooltip_header, []
 
     triggered = dash.ctx.triggered_id
     # 모드 전환 자체가 트리거면(부서/과제/직급/직책 필터가 비활성화·초기화되는
     # 시점과 겹칠 수 있어) 조직 필터는 적용하지 않고 전체(해당 모드) 목록을 보여준다.
     if triggered in ('clear-filters-btn', 'list-search-mode'):
-        return display_df.to_dict('records'), columns, tooltip_header
+        return display_df.to_dict('records'), columns, tooltip_header, []
 
     if dept and current_only:
         display_df = display_df[display_df['부서'].isin(dept)]
@@ -521,7 +534,7 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, dept, proje
         display_df = display_df[display_df['전공'].isin(major)]
     if employment:
         display_df = display_df[display_df['재직상태'].isin(employment)]
-    return display_df.to_dict('records'), columns, tooltip_header
+    return display_df.to_dict('records'), columns, tooltip_header, []
 
 
 # ── 콜백 3: 필터 초기화 버튼 → 드롭다운 값 비우기(메인 화면 + 필터 모달) ─────
@@ -599,3 +612,28 @@ def navigate_to_profile(active_cell, virtual_data):
     if not rid:
         return no_update
     return f'/?id={rid}'
+
+
+# ── 콜백 6: 프로필 일괄 인쇄 버튼 → 여러 명 인쇄 화면으로 이동 ────────────────
+# 체크한 행이 있으면 그 사람들만, 없으면 지금 화면에 보이는(검색 필터 +
+# 표 자체 열별 필터/정렬까지 반영된, 엑셀 다운로드와 동일한 기준) 전체를
+# 대상으로 삼는다 — 과제/부서로 필터해두고 그냥 누르면 그 풀 전체가,
+# 체크박스로 일부만 고르면 그 인원만 인쇄 화면(/?ids=...)으로 넘어간다.
+@callback(
+    Output('list-url', 'href', allow_duplicate=True),
+    Input('list-bulk-print-btn', 'n_clicks'),
+    State('researcher-table', 'derived_virtual_data'),
+    State('researcher-table', 'selected_rows'),
+    prevent_initial_call=True,
+)
+def bulk_print_navigate(n_clicks, virtual_data, selected_rows):
+    if not n_clicks or not virtual_data:
+        return no_update
+    if selected_rows:
+        rows = [virtual_data[i] for i in selected_rows if i < len(virtual_data)]
+    else:
+        rows = virtual_data
+    researcher_ids = [row['researcher_id'] for row in rows if row.get('researcher_id')]
+    if not researcher_ids:
+        return no_update
+    return '/?ids=' + ','.join(researcher_ids)
