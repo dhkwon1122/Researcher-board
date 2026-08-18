@@ -5,7 +5,7 @@ DATABASE_URL 환경변수(또는 프로젝트 루트의 .env 파일)가 설정�
 SQLAlchemy Engine을 만들어 반환하고, 없으면 None을 반환한다.
 호출부(data_store, comments)는 None이면 CSV로 폴백한다.
 
-예) DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/researcher_board
+예) DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5433/researcher_board
 """
 
 import os

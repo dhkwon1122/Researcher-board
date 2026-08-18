@@ -7,7 +7,7 @@
 스키마 드리프트 걱정 없이 반복 실행 가능).
 
 사용법:
-  export DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/researcher_board
+  export DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5433/researcher_board
   python pipeline/load_raw_to_db.py
 
 DATABASE_URL 미설정 시 아무 것도 하지 않고 안내만 출력한다 — 이 경우
