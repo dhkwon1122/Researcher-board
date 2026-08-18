@@ -6,9 +6,9 @@ from datetime import datetime
 
 import dash
 import dash_bootstrap_components as dbc
-from dash import Input, Output, State, callback, dcc, html, no_update
+from dash import Input, Output, State, callback, clientside_callback, dcc, html, no_update
 
-from components.detail_tabs import llm_summary_block, owned_expertise_block
+from components.detail_tabs import llm_summary_block, owned_expertise_block, patents_tab, publications_tab
 from components.profile_sections import (
     avatar,
     award_block,
@@ -19,6 +19,7 @@ from components.profile_sections import (
     leadership_year_options,
     nurturing_block,
     photo_block,
+    tasks_block,
 )
 from components.timeline_view import timeline_view
 from services.comments import upsert_comment
@@ -136,15 +137,31 @@ def layout(id=None, **_kwargs):
                 pass
 
     return html.Div([
-        html.H5(
-            [html.I(className='bi bi-person-badge-fill me-2 text-primary'), '연구원 개별 프로필'],
-            className='fw-bold mb-3 mt-1',
-        ),
-        _selector_card(dept_opts, res_opts, default_dept, default_rid, default_mode),
         dbc.Row([
-            _left_stack_col(show_eval, show_comments),
-            _right_column(),
-        ], className='g-3 mb-3'),
+            dbc.Col(
+                html.H5(
+                    [html.I(className='bi bi-person-badge-fill me-2 text-primary'), '연구원 개별 프로필'],
+                    className='fw-bold mb-0 mt-1',
+                ),
+            ),
+            dbc.Col(
+                html.Button(
+                    [html.I(className='bi bi-printer me-1'), '프로필 인쇄 (A4)'],
+                    id='profile-print-btn', n_clicks=0,
+                    className='btn btn-outline-secondary btn-sm',
+                ),
+                width='auto', className='d-flex align-items-center',
+            ),
+        ], justify='between', align='center', className='mb-3 no-print'),
+        html.Div(id='profile-print-dummy', style={'display': 'none'}),
+        html.Div([
+            _selector_card(dept_opts, res_opts, default_dept, default_rid, default_mode),
+            dbc.Row([
+                _left_stack_col(show_eval, show_comments),
+                _right_column(),
+            ], className='g-3 mb-3'),
+        ], className='no-print'),
+        html.Div(id='profile-print-content', className='profile-print-only'),
     ])
 
 
@@ -375,8 +392,69 @@ def _empty_profile_output():
     prompt = html.Div('연구원을 선택하세요.', className='text-muted p-3')
     return (
         avatar('?'), html.Div(), html.Div(), html.Div(), html.Div(),
-        [], None, html.Div(), prompt, prompt, prompt, html.Div(),
+        [], None, html.Div(), prompt, prompt, prompt, html.Div(), html.Div(),
     )
+
+
+def _print_section(title: str, content):
+    """A4 인쇄용 프로필의 섹션 하나 — 소제목 + 내용, break-inside: avoid로 섹션
+    도중에 페이지가 갈라지지 않게 한다(assets/custom.css의 .print-section 규칙)."""
+    return html.Div([
+        html.P(title, className='section-label mb-2 pb-1',
+               style={'borderBottom': '1px solid #d2d2d7'}),
+        content,
+    ], className='print-section mb-3')
+
+
+def _print_profile_content(rid, researcher, tables, profile, similar, name_map,
+                            eval_content, comments_content, current_status):
+    """A4 인쇄 전용 콘텐츠 — 화면의 카드형 대시보드(고정 높이 + 내부 스크롤)는
+    인쇄에 부적합해(넘치는 내용이 잘림) 재사용하지 않고, 같은 데이터/블록 함수를
+    세로 한 단으로 다시 배치한다. 좌우 2단 대시보드 전용인 타임라인 차트 대신
+    과제 수행 이력은 표(tasks_block)로 대체. eval_content/comments_content는
+    update_profile()이 권한(view_evaluation/view_comments)까지 반영해 이미
+    만들어둔 것(_locked_block() 포함)을 그대로 받아써 권한 판정을 중복하지 않는다."""
+    name = str(researcher.get('name', '') or '')
+    dept = str(researcher.get('department', '') or '-')
+    org = str(researcher.get('org_code', '') or '')
+    dept_label = f'{dept} ({org})' if org else dept
+    position = str(researcher.get('position', '') or '-')
+    knox_id = str(researcher.get('knox_id', '') or '-')
+
+    header = html.Div([
+        html.Div(photo_block(rid, name, researcher, CURRENT_YEAR),
+                 className='d-flex flex-column align-items-center',
+                 style={'width': '120px', 'flex': '0 0 auto'}),
+        html.Div([
+            html.H4(name, className='fw-bold mb-2'),
+            html.Table(html.Tbody([
+                html.Tr([
+                    html.Td(label, className='text-muted small pe-3',
+                            style={'whiteSpace': 'nowrap', 'verticalAlign': 'top'}),
+                    html.Td(value, className='small'),
+                ])
+                for label, value in [
+                    ('사번', rid), ('부서', dept_label), ('직급', position), ('Knox ID', knox_id),
+                ]
+            ])),
+            current_status,
+        ], className='ms-3'),
+    ], className='d-flex align-items-start mb-3 pb-2', style={'borderBottom': '2px solid #1e3a5f'})
+
+    return html.Div([
+        header,
+        _print_section('학력', education_block(tables['education'], rid)),
+        _print_section('평가 / 인센티브 이력', eval_content),
+        _print_section('보유 전문성', owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid)),
+        _print_section('전문성 요약 (LLM)', llm_summary_block(profile, similar, name_map)),
+        _print_section('과제 수행 이력', tasks_block(tables['tasks'], rid)),
+        _print_section('양성 이력', nurturing_block(tables['nurturing'], rid)),
+        _print_section('시상 이력', award_block(tables['awards'], rid)),
+        _print_section('특허 실적', patents_tab(tables['patents'], rid)),
+        _print_section('논문 실적', publications_tab(tables['publications'], rid)),
+        _print_section('인물 코멘트', comments_content),
+        html.Div(f'출력일 {datetime.now():%Y-%m-%d}', className='text-muted small text-end mt-2'),
+    ])
 
 
 def _current_status_badge(researcher):
@@ -497,6 +575,7 @@ def _select_from_history(n_clicks_list, ids):
     Output('tab-timeline', 'children'),
     Output('tab-expertise', 'children'),
     Output('profile-current-status', 'children'),
+    Output('profile-print-content', 'children'),
     Input('researcher-select', 'value'),
 )
 def update_profile(rid):
@@ -544,6 +623,8 @@ def update_profile(rid):
             else _locked_block()
         )
 
+        current_status = _current_status_badge(researcher)
+
         return (
             photo_block(rid, str(researcher.get('name', '')), researcher, CURRENT_YEAR),
             education_block(tables['education'], rid),
@@ -557,7 +638,9 @@ def update_profile(rid):
             timeline_view(tables['tasks'], tables['hr_orders'], tables['publications'],
                           tables['patents'], tables['job_profile'], tables['tasks_information'], rid),
             owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid),
-            _current_status_badge(researcher),
+            current_status,
+            _print_profile_content(rid, researcher, tables, profile, similar, name_map,
+                                    eval_content, comments_content, current_status),
         )
     except Exception as exc:
         import traceback
@@ -569,7 +652,7 @@ def update_profile(rid):
         )
         return (
             avatar('?'), err_div, html.Div(), html.Div(), html.Div(),
-            [], None, html.Div(), err_div, err_div, err_div, html.Div(),
+            [], None, html.Div(), err_div, err_div, err_div, html.Div(), html.Div(),
         )
 
 
@@ -581,6 +664,42 @@ def update_profile(rid):
 def update_leadership(rid, year):
     rid = str(rid).zfill(8) if rid else rid
     return leadership_figure(read_processed('leadership'), rid, year)
+
+
+clientside_callback(
+    """
+    function(n) {
+        if (n > 0) {
+            // assets/custom.css의 이름 없는(unnamed) @page는 조직별 비교(A3
+            // landscape) 화면 전용이라, 이 페이지를 인쇄하는 동안만 <style>을
+            // head 맨 뒤에 추가해 같은 unnamed @page를 A4로 임시 덮어쓴다
+            // (소스 순서상 나중 규칙이 이겨 A3보다 우선 적용됨). 인쇄 대화상자가
+            // 닫히면(취소 포함) afterprint에서 제거해 다른 화면 인쇄에 영향이
+            // 남지 않게 한다.
+            var STYLE_ID = 'profile-print-a4-page-size';
+            var existing = document.getElementById(STYLE_ID);
+            if (existing) { existing.remove(); }
+            var style = document.createElement('style');
+            style.id = STYLE_ID;
+            style.textContent = '@media print { @page { size: A4 portrait; margin: 14mm 16mm; } }';
+            document.head.appendChild(style);
+
+            var cleanup = function() {
+                var el = document.getElementById(STYLE_ID);
+                if (el) { el.remove(); }
+                window.removeEventListener('afterprint', cleanup);
+            };
+            window.addEventListener('afterprint', cleanup);
+
+            window.print();
+        }
+        return '';
+    }
+    """,
+    Output('profile-print-dummy', 'children'),
+    Input('profile-print-btn', 'n_clicks'),
+    prevent_initial_call=True,
+)
 
 
 @callback(

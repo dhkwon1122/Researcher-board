@@ -449,9 +449,10 @@ app.layout = html.Div(
             [
                 # 전 탭 공용 자연어 질문 바 — 어느 탭에 있든 항상 보이도록
                 # 네비게이션 바로 아래, 페이지 콘텐츠 위에 고정 배치한다
-                # (구 "연구원 목록" 탭 전용 AI 검색을 대체).
-                nl_query_bar.render(),
-                html.Hr(className='mt-1 mb-3'),
+                # (구 "연구원 목록" 탭 전용 AI 검색을 대체). 인쇄 화면(예: 연구원
+                # 개별 프로필의 A4 인쇄)에는 필요 없어 no-print로 감춘다.
+                html.Div(nl_query_bar.render(), className='no-print'),
+                html.Hr(className='mt-1 mb-3 no-print'),
                 dash.page_container,
             ],
             fluid=True,
