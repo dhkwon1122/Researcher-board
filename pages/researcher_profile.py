@@ -602,14 +602,18 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     # display:flex를 인라인 style로 직접 준다(.d-flex 유틸리티 클래스 대신) —
     # 사진 오른쪽에 기본정보 박스가 나란히 붙어야 하는 핵심 레이아웃이라,
     # 외부 CDN(부트스트랩)이 느리거나 막혀 있어도 항상 가로 배치되게 한다.
+    # 사진 박스가 기본정보(사번~Knox ID) 영역과 높이가 맞도록 alignItems를
+    # stretch로 줘 옆의 정보 영역 높이만큼 늘어나게 하고, 사진 박스 안에서는
+    # justifyContent:center로 내용을 세로 중앙에 둬 위(그리고 아래)에 여백이
+    # 자연스럽게 생기게 한다.
     photo_info_row = html.Div([
         html.Div(photo_block(rid, name, researcher, CURRENT_YEAR, hide_normal_employment_status=True),
                  className='print-section',
                  style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center',
-                        'width': '120px', 'flex': '0 0 120px', 'border': _PRINT_BOX_BORDER,
-                        'borderRadius': '6px', 'padding': '8px'}),
+                        'justifyContent': 'center', 'width': '120px', 'flex': '0 0 120px',
+                        'border': _PRINT_BOX_BORDER, 'borderRadius': '6px', 'padding': '8px'}),
         html.Div([info_table, current_status], style={'flex': '1 1 0', 'paddingLeft': '12px', 'minWidth': '0'}),
-    ], style={'display': 'flex', 'alignItems': 'flex-start'})
+    ], style={'display': 'flex', 'alignItems': 'stretch'})
 
     # 학력은 사진+기본정보를 합친 폭(좌측 열 전체)만큼 아래에 붙이고, 그
     # 옆(우측 열)에 평가·인센티브(+양성/시상) 박스를 최상단부터 배치한다 —
@@ -617,7 +621,8 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     # 자연스럽게 나란히(병렬로) 배치된다.
     left_col = html.Div([
         photo_info_row,
-        html.Div(_print_box('학력', education_block(tables['education'], rid)), style={'marginTop': '8px'}),
+        html.Div(_print_box('학력', education_block(tables['education'], rid, plain_degree=True)),
+                 style={'marginTop': '8px'}),
     ], style={'flex': '2 1 0', 'minWidth': '0'})
 
     header_row = html.Div([
@@ -659,6 +664,7 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     )
 
     return html.Div([
+        html.Div('연구원 프로필', style={'fontSize': '15px', 'fontWeight': 700, 'marginBottom': '8px'}),
         header_row,
         capability_box,
         pub_patent_box,
@@ -900,9 +906,17 @@ clientside_callback(
             style.textContent = '@media print { @page { size: A4 portrait; margin: 14mm 16mm; } }';
             document.head.appendChild(style);
 
+            // 버튼 클릭 직후 Dash가 콜백 처리 중 표시하는 "Updating..."
+            // 문서 제목이 브라우저 인쇄 머리글에 그대로 찍히는 문제가
+            // 있어, 인쇄 직전에 제목을 고정해두고 인쇄 후 원래 제목으로
+            // 되돌린다.
+            var originalTitle = document.title;
+            document.title = '연구원 프로필';
+
             var cleanup = function() {
                 var el = document.getElementById(STYLE_ID);
                 if (el) { el.remove(); }
+                document.title = originalTitle;
                 window.removeEventListener('afterprint', cleanup);
             };
             window.addEventListener('afterprint', cleanup);
