@@ -646,9 +646,16 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
         breakable=True,
     )
 
+    # 학력은 내용이 짧아 전체 폭을 다 쓸 필요가 없다는 피드백으로 2/3 폭만
+    # 차지하게 좁힌다(옆에 짝지을 박스가 마땅치 않아 나머지 1/3은 빈 여백으로
+    # 남는다 — 우측 최상단처럼 다른 박스가 있어야 할 자리를 비우는 게 아니라
+    # 원래 없던 여백이라 문제되지 않는다).
+    edu_box = html.Div(_print_box('학력', education_block(tables['education'], rid)),
+                        style={'width': '66%'})
+
     return html.Div([
         header_row,
-        _print_box('학력', education_block(tables['education'], rid)),
+        edu_box,
         capability_box,
         pub_patent_box,
         task_hr_box,
