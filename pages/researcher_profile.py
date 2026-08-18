@@ -611,12 +611,6 @@ _PRINT_TABLE_TH_STYLE = {'padding': '3px 6px', 'borderBottom': f'1px solid {_PRI
                           'textAlign': 'left', 'fontWeight': '600', 'whiteSpace': 'nowrap'}
 _PRINT_TABLE_TD_STYLE = {'padding': '3px 6px', 'borderBottom': '1px solid #d2d2d7', 'verticalAlign': 'top'}
 
-# 논문/특허 모두 한 페이지를 넘지 않도록 상세 목록에 상한을 둔다(넘치면
-# "외 N건 더"로 안내). A4 한 페이지(margin 14mm/16mm 제외 실사용 영역)에
-# 제목 줄이 길어져도 안전하게 들어가는 선으로 잡은 값.
-_PUB_DETAIL_LIMIT = 15
-_PAT_DETAIL_LIMIT = 15
-
 
 def _year_label(row, year_col='pub_year', date_col='pub_date'):
     """연도를 "2025.0" 같은 소수점 없이 "2025"로 표시한다 — CSV 값이 실수
@@ -647,18 +641,19 @@ def _publication_priority_key(row):
 
 
 def _print_publication_detail_table(pub_df, rid):
-    """논문 실적 상세 목록(2페이지) — components/detail_tabs.py의
-    publications_tab()과 같은 컬럼에 IF를 더해 보여준다. 실적이 많으면
-    1저자/교신저자 및 impact factor가 큰 논문 위주로 추려 한 페이지 안에
-    들어가게 하므로(최근순이 아닐 수 있음), 발표일 대신 이 우선순위로
-    정렬·상한(_PUB_DETAIL_LIMIT)한다."""
+    """논문 실적 상세 목록 — components/detail_tabs.py의 publications_tab()과
+    같은 컬럼에 IF를 더해 보여준다. 실적이 많으면 1저자/교신저자 및 impact
+    factor가 큰 논문 위주로 우선순위를 매겨 정렬한다(최근순이 아닐 수 있음).
+    행 수는 여기서 자르지 않고 전부 렌더링한다 — 실제로 몇 건이 한 페이지에
+    들어가는지는 제목 줄바꿈 등 실제 렌더링 결과에 달려 있어 서버 쪽에서
+    미리 정확히 알 수 없다. 대신 .print-autofit-table 마커를 달아, 인쇄
+    버튼을 누를 때(클라이언트사이드 콜백) 실제 렌더링된 높이를 재서 한
+    페이지에 안 들어가는 뒤쪽 행을 동적으로 숨기고 "외 N건 더"를 채운다."""
     pub = pub_df[pub_df['researcher_id'] == rid].copy() if not pub_df.empty else pd.DataFrame()
     if pub.empty:
         return html.Div('논문 실적 없음', className='small text-muted')
     pub['_priority'] = pub.apply(_publication_priority_key, axis=1)
     pub = pub.sort_values('_priority')
-    total = len(pub)
-    pub = pub.head(_PUB_DETAIL_LIMIT)
 
     rows = []
     for _, row in pub.iterrows():
@@ -694,11 +689,10 @@ def _print_publication_detail_table(pub_df, rid):
             html.Th('교신', style={**_PRINT_TABLE_TH_STYLE, 'textAlign': 'center'}),
             html.Th('기여도', style={**_PRINT_TABLE_TH_STYLE, 'textAlign': 'center'}),
         ])),
-        html.Tbody(rows),
-    ], style={'width': '100%', 'borderCollapse': 'collapse'})
-    if total > _PUB_DETAIL_LIMIT:
-        return html.Div([table, html.Div(f'외 {total - _PUB_DETAIL_LIMIT}건 더', className='text-muted small mt-1')])
-    return table
+        html.Tbody(rows, className='print-autofit-body'),
+    ], className='print-autofit-table', style={'width': '100%', 'borderCollapse': 'collapse'})
+    return html.Div([table, html.Div('', className='print-autofit-note text-muted small mt-1',
+                                      style={'display': 'none'})])
 
 
 def _patent_priority_key(row):
@@ -719,18 +713,20 @@ def _patent_priority_key(row):
 
 
 def _print_patent_detail_table(pat_df, rid):
-    """특허 실적 상세 목록(2페이지) — components/detail_tabs.py의 patents_tab()과
-    같은 컬럼(중복 발명자 등록 dedupe_patents()로 제거)을 보여준다. 실적이
-    많으면 전략출원 > 등록 > 출원 순, 그 안에서는 대표발명·지분율이 높은
-    특허 위주로 추려 한 페이지 안에 들어가게 한다(_PAT_DETAIL_LIMIT)."""
+    """특허 실적 상세 목록 — components/detail_tabs.py의 patents_tab()과 같은
+    컬럼(중복 발명자 등록 dedupe_patents()로 제거)을 보여준다. 실적이 많으면
+    전략출원 > 등록 > 출원 순, 그 안에서는 대표발명·지분율이 높은 특허
+    위주로 우선순위를 매겨 정렬한다. 행 수는 여기서 자르지 않고 전부
+    렌더링한다 — _print_publication_detail_table과 마찬가지로
+    .print-autofit-table 마커를 달아 인쇄 시점에 실제 렌더링 높이 기준으로
+    동적으로 자른다(발명 명칭 길이에 따라 몇 건이 들어갈지 서버에서는 정확히
+    알 수 없음)."""
     pat = pat_df[pat_df['researcher_id'] == rid].copy() if not pat_df.empty else pd.DataFrame()
     if pat.empty:
         return html.Div('특허 실적 없음', className='small text-muted')
     pat_dedup = dedupe_patents(pat)
     pat_dedup['_priority'] = pat_dedup.apply(_patent_priority_key, axis=1)
     pat_dedup = pat_dedup.sort_values('_priority')
-    total = len(pat_dedup)
-    pat_dedup = pat_dedup.head(_PAT_DETAIL_LIMIT)
 
     rows = []
     for _, row in pat_dedup.iterrows():
@@ -762,20 +758,19 @@ def _print_patent_detail_table(pat_df, rid):
             html.Th('지분율', style={**_PRINT_TABLE_TH_STYLE, 'textAlign': 'center'}),
             html.Th('출원국가', style=_PRINT_TABLE_TH_STYLE),
         ])),
-        html.Tbody(rows),
-    ], style={'width': '100%', 'borderCollapse': 'collapse'})
-    if total > _PAT_DETAIL_LIMIT:
-        return html.Div([table, html.Div(f'외 {total - _PAT_DETAIL_LIMIT}건 더', className='text-muted small mt-1')])
-    return table
+        html.Tbody(rows, className='print-autofit-body'),
+    ], className='print-autofit-table', style={'width': '100%', 'borderCollapse': 'collapse'})
+    return html.Div([table, html.Div('', className='print-autofit-note text-muted small mt-1',
+                                      style={'display': 'none'})])
 
 
 def _print_pub_patent_detail_page(name, rid, tables):
-    """2페이지: 논문·특허 실적 상세. 각각 한 페이지를 넘지 않도록 상한을 두고
-    (_PUB_DETAIL_LIMIT/_PAT_DETAIL_LIMIT), breakable=False(기본)로 박스 도중에
-    페이지가 갈라지지 않게 한다 — 페이지 안에 안 들어가면 박스째로 다음
-    페이지로 넘어간다. breakBefore:page로 1페이지와 분리하고, 여러 명을
-    이어붙이는 일괄 인쇄에서도 이 페이지가 누구 것인지 알 수 있도록 이름/
-    사번을 다시 적어둔다."""
+    """2페이지: 논문·특허 실적 상세를 합쳐서 한 페이지 안에 담는다(제한
+    사항). 두 표 모두 .print-autofit-table 마커를 달아 같은 .print-page-block
+    안에 두면, 클라이언트사이드 오토핏 로직(아래 print 콜백)이 이 블록
+    전체(논문+특허 합계) 높이를 기준으로 판단해 두 표에서 균형 있게 행을
+    줄여 한 페이지에 맞춘다. 여러 명을 이어붙이는 일괄 인쇄에서도 이
+    페이지가 누구 것인지 알 수 있도록 이름/사번을 다시 적어둔다."""
     return html.Div([
         html.Div(f'{name}({rid}) — 논문 · 특허 실적 상세', className='print-page2-title',
                  style={'fontSize': '16px', 'fontWeight': 700, 'marginBottom': '10px'}),
@@ -783,7 +778,7 @@ def _print_pub_patent_detail_page(name, rid, tables):
                    _print_publication_detail_table(tables['publications'], rid)),
         _print_box('특허 실적 (전략출원 > 등록 > 출원, 대표발명·지분율 우선)',
                    _print_patent_detail_table(tables['patents'], rid)),
-    ], style={'breakBefore': 'page'})
+    ], className='print-page-block', style={'breakBefore': 'page'})
 
 
 def _print_profile_content(rid, researcher, tables, profile, name_map,
@@ -1217,6 +1212,91 @@ clientside_callback(
             // 되돌린다.
             var originalTitle = document.title;
             document.title = '연구원 프로필';
+
+            // 논문/특허 실적 상세(제목이 길면 줄바꿈되는 표)가 한 페이지를
+            // 넘지 않도록, 인쇄 직전에 각 .print-page-block의 실제 렌더링
+            // 높이를 재서 페이지 예산을 넘으면 표 뒤쪽 행부터 순서대로
+            // 숨기고 "외 N건 더"를 채운다. 서버(파이썬)에서는 제목 줄바꿈
+            // 등을 미리 정확히 알 수 없어 행 수를 고정으로 자르지 않고,
+            // 이렇게 실측 기반으로 동적으로 결정한다.
+            //
+            // .profile-print-only는 화면에서 display:none이라 평소에는
+            // 실제 렌더링 높이를 잴 수 없고, beforeprint 시점에도(적어도
+            // 헤드리스 크로미움에서는 실측 결과 0으로 확인됨) 인쇄 레이아웃이
+            // 아직 적용되지 않는다. 그래서 인쇄용 폰트 크기(10.5px 등,
+            // assets/custom.css @media print 규칙과 동일)를 흉내낸 임시
+            // <style>을 붙이고, 컨테이너를 화면 밖(왼쪽 -99999px)에 실제
+            // 페이지 폭으로 잠깐 표시해 진짜 레이아웃으로 측정한 뒤 원래
+            // 상태로 되돌린다 — 화면에는 전혀 보이지 않는다. 재인쇄해도 항상
+            // 전체 행을 먼저 다시 보이는 상태로 되돌린 뒤 다시 계산해(멱등)
+            // 반복 클릭에 따라 누적으로 더 잘려나가지 않게 한다.
+            var container = document.getElementById('profile-print-content');
+            if (container) {
+                var PAGE_CONTENT_WIDTH_PX = (210 - 16 * 2) * 96 / 25.4;
+                // 화면 밖에 임시로 렌더링해 재는 높이가 실제 인쇄 결과보다
+                // 살짝(실측 30~50px 안팎) 작게 나오는 오차가 있어(오프스크린
+                // 렌더링과 실제 인쇄 파이프라인의 미세한 레이아웃 차이로
+                // 추정), 안전 여백을 넉넉히 빼서 경계선에서 한 페이지를
+                // 넘기지 않게 한다.
+                var PAGE_HEIGHT_SAFETY_MARGIN_PX = 80;
+                var PAGE_HEIGHT_PX = (297 - 14 * 2) * 96 / 25.4 - PAGE_HEIGHT_SAFETY_MARGIN_PX;
+
+                var MEASURE_STYLE_ID = 'profile-print-measure-style';
+                var existingMeasureStyle = document.getElementById(MEASURE_STYLE_ID);
+                if (existingMeasureStyle) { existingMeasureStyle.remove(); }
+                var measureStyle = document.createElement('style');
+                measureStyle.id = MEASURE_STYLE_ID;
+                measureStyle.textContent =
+                    '#profile-print-content.__pp-measuring, #profile-print-content.__pp-measuring * {' +
+                    'font-size:10.5px !important; line-height:1.45 !important;}' +
+                    '#profile-print-content.__pp-measuring .print-title{font-size:30px !important;}' +
+                    '#profile-print-content.__pp-measuring .print-page2-title{font-size:16px !important;}' +
+                    '#profile-print-content.__pp-measuring{display:block !important; position:fixed !important;' +
+                    'left:-99999px !important; top:0 !important; width:' + PAGE_CONTENT_WIDTH_PX + 'px !important;}';
+                document.head.appendChild(measureStyle);
+                container.classList.add('__pp-measuring');
+
+                document.querySelectorAll('.print-page-block').forEach(function(block) {
+                    // 논문·특허 표가 한 블록(페이지)을 같이 쓰므로(제한 사항:
+                    // 합쳐서 1페이지), 표별로 각자 맞추는 게 아니라 블록
+                    // 전체(둘 합계) 높이가 예산을 넘지 않을 때까지, 그 순간
+                    // 행이 더 많이 남은 표에서 한 줄씩 줄여 균형 있게 맞춘다.
+                    var entries = [];
+                    block.querySelectorAll('.print-autofit-table').forEach(function(table) {
+                        var tbody = table.querySelector('.print-autofit-body');
+                        var note = table.parentElement ? table.parentElement.querySelector('.print-autofit-note') : null;
+                        if (!tbody) { return; }
+                        var rows = tbody.rows;
+                        for (var i = 0; i < rows.length; i++) { rows[i].style.display = ''; }
+                        if (note) { note.style.display = 'none'; note.textContent = ''; }
+                        entries.push({rows: rows, visible: rows.length, note: note});
+                    });
+                    if (!entries.length) { return; }
+
+                    while (block.getBoundingClientRect().height > PAGE_HEIGHT_PX) {
+                        var target = null;
+                        for (var e = 0; e < entries.length; e++) {
+                            if (entries[e].visible > 1 && (!target || entries[e].visible > target.visible)) {
+                                target = entries[e];
+                            }
+                        }
+                        if (!target) { break; }
+                        target.rows[target.visible - 1].style.display = 'none';
+                        target.visible--;
+                    }
+
+                    entries.forEach(function(entry) {
+                        var removedCount = entry.rows.length - entry.visible;
+                        if (removedCount > 0 && entry.note) {
+                            entry.note.textContent = '외 ' + removedCount + '건 더';
+                            entry.note.style.display = '';
+                        }
+                    });
+                });
+
+                container.classList.remove('__pp-measuring');
+                measureStyle.remove();
+            }
 
             var cleanup = function() {
                 var el = document.getElementById(STYLE_ID);
