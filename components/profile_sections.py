@@ -182,7 +182,10 @@ def basic_info_block(row, current_year: int):
     )
 
 
-def education_block(edu_df: pd.DataFrame, rid: str):
+def education_block(edu_df: pd.DataFrame, rid: str, *, plain_degree: bool = False):
+    """plain_degree=True면 학위(박사/석사/학사 등)를 필(pill) 형태의 dbc.Badge
+    대신 일반 굵은 글자로 표시한다 — 인쇄본에서는 색이 있는 뱃지가 아이콘처럼
+    보인다는 피드백에 따른 옵션(화면 기본값은 기존 뱃지 유지)."""
     edu_rows = edu_df[edu_df['researcher_id'] == rid] if not edu_df.empty else pd.DataFrame()
     color_map = {'박사': 'primary', '석사': 'secondary', '학사': 'light',
                  '전문대': 'light', '고교': 'light'}
@@ -198,13 +201,24 @@ def education_block(edu_df: pd.DataFrame, rid: str):
             grad_year = int(edu['graduation_year'])
         except (TypeError, ValueError):
             grad_year = edu.get('graduation_year', '-')
+        if plain_degree:
+            # 외부 CDN(부트스트랩) 유틸리티 클래스(me-1/d-flex 등)가 늦게 로드되면
+            # 뱃지 대신 쓰는 이 일반 텍스트가 간격 없이 붙어 보일 수 있어(뱃지는
+            # assets/custom.css 자체 padding으로 CDN과 무관하게 간격이 생김),
+            # 인라인 style로 직접 여백/가로배치를 준다.
+            degree_el = html.Span(degree, style={'fontWeight': 700, 'marginRight': '6px',
+                                                  'flexShrink': '0'})
+            row_style = {'display': 'flex', 'alignItems': 'center', 'marginBottom': '4px'}
+        else:
+            degree_el = dbc.Badge(degree, color=color_map.get(degree, 'light'),
+                                   text_color=text_map.get(degree, 'dark'),
+                                   className='me-1 flex-shrink-0')
+            row_style = None
         items.append(html.Div([
-            dbc.Badge(degree, color=color_map.get(degree, 'light'),
-                      text_color=text_map.get(degree, 'dark'),
-                      className='me-1 flex-shrink-0'),
+            degree_el,
             html.Span(f"{edu.get('school', '')}  {edu.get('major', '')} ({grad_year})",
                       className='small'),
-        ], className='d-flex align-items-center mb-1'))
+        ], className=None if plain_degree else 'd-flex align-items-center mb-1', style=row_style))
     return html.Div(items) if items else html.Div('학력 정보 없음', className='text-muted small')
 
 
