@@ -466,11 +466,10 @@ def _tenure_value(hire_date_str: str) -> str:
 
 
 def _print_task_hr_timeline(task_df, hr_df, rid, *, limit: int | None = None):
-    """과제 수행 이력과 인사 발령 이력을 표/섹션으로 나누지 않고 하나의 시계열
-    목록으로 합쳐 날짜 내림차순으로 보여준다(각 줄 앞의 "과제 ·"/"인사발령 ·"는
-    구분용 열이 아니라 그 줄 자체가 어떤 이력인지 알아보기 위한 표시일 뿐).
-    limit이 주어지면 둘을 합친 목록 기준으로 최신 limit건만 담고, 잘린 나머지
-    건수를 안내한다."""
+    """과제 수행 이력과 인사 발령 이력을 표/섹션은 물론 "과제"/"인사발령" 같은
+    구분자도 없이 하나의 시계열 목록으로 합쳐 날짜 내림차순으로 보여준다(각
+    줄의 내용 자체로 무엇인지 알아볼 수 있다는 전제). limit이 주어지면 둘을
+    합친 목록 기준으로 최신 limit건만 담고, 잘린 나머지 건수를 안내한다."""
     filtered_task = task_df[task_df['researcher_id'] == rid] if not task_df.empty else task_df
     task_entries = task_points(filtered_task) if filtered_task is not None else []
     hr_rows = filter_hr_rows(hr_df, rid)  # 이미 order_date 내림차순
@@ -484,7 +483,7 @@ def _print_task_hr_timeline(task_df, hr_df, rid, *, limit: int | None = None):
         end = t['end_label'] if t['end_label'] == '진행중' else t['end_label'][:7]
         entries.append({
             'date': t['start'],
-            'text': f"{t['start_label'][:7]} ~ {end}  과제 · {t['task_name']}",
+            'text': f"{t['start_label'][:7]} ~ {end}  {t['task_name']}",
         })
     for _, row in hr_rows.iterrows():
         d = pd.to_datetime(row.get('order_date'), errors='coerce')
@@ -492,7 +491,7 @@ def _print_task_hr_timeline(task_df, hr_df, rid, *, limit: int | None = None):
             continue
         detail = ' / '.join(p for p in (_c(row.get('order_dep')), _c(row.get('order_cl')),
                                          _c(row.get('order_assignment'))) if p)
-        text = f"{d.date().isoformat()}  인사발령 · {_c(row.get('order_name')) or '-'}"
+        text = f"{d.date().isoformat()}  {_c(row.get('order_name')) or '-'}"
         if detail:
             text += f" ({detail})"
         entries.append({'date': d, 'text': text})
@@ -589,9 +588,10 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
         for label, value in info_rows
     ]))
 
-    tenure_box = _print_box(None, html.Div([
-        print_eval_content,
-        html.Div('양성 이력', className='small fw-semibold text-muted mt-2 mb-1'),
+    # 평가·인센티브 이력은 이 박스에서 빼서 학력과 나란히 배치한다(아래
+    # edu_eval_row) — 양성/시상 이력만 남는다.
+    support_box = _print_box(None, html.Div([
+        html.Div('양성 이력', className='small fw-semibold text-muted mb-1'),
         nurturing_block(tables['nurturing'], rid),
         html.Div('시상 이력', className='small fw-semibold text-muted mt-2 mb-1'),
         award_block(tables['awards'], rid, limit=3, single_line=True),
@@ -607,8 +607,18 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
                         'width': '120px', 'flex': '0 0 120px', 'border': _PRINT_BOX_BORDER,
                         'borderRadius': '6px', 'padding': '8px'}),
         html.Div([info_table, current_status], style={'flex': '1 1 0', 'paddingLeft': '12px', 'minWidth': '0'}),
-        html.Div(tenure_box, style={'flex': '1 1 0', 'minWidth': '0'}),
+        html.Div(support_box, style={'flex': '1 1 0', 'minWidth': '0'}),
     ], style={'display': 'flex', 'alignItems': 'flex-start', 'marginBottom': '10px'})
+
+    # 학력(2) : 평가·인센티브 이력(1) 비율로 나란히 배치 — 평가·인센티브는
+    # print_eval_content가 이미 자체 제목("평가 · 인센티브 이력 ('24~'26)")을
+    # 담고 있어 박스 제목은 따로 안 준다.
+    edu_eval_row = html.Div([
+        html.Div(_print_box('학력', education_block(tables['education'], rid)),
+                 style={'flex': '2 2 0', 'minWidth': '0'}),
+        html.Div(_print_box(None, print_eval_content),
+                 style={'flex': '1 1 0', 'minWidth': '0', 'marginLeft': '10px'}),
+    ], style={'display': 'flex', 'alignItems': 'stretch'})
 
     # 핵심기술/보유기술은 좌우 대신 세로로 쌓고(stacked=True), 그만큼 넓어진
     # 여유를 전문성 요약(LLM) 쪽에 몰아준다 — 비율을 1:2로 줘서 핵심기술/보유기술
@@ -645,7 +655,7 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
 
     return html.Div([
         header_row,
-        _print_box('학력', education_block(tables['education'], rid)),
+        edu_eval_row,
         capability_box,
         pub_patent_box,
         task_hr_box,
