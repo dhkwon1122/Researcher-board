@@ -21,6 +21,5 @@ docs/
 *.md
 .vscode/
 .idea/
-pipeline/llm_config.py
 
 # certs/ 는 제외하지 않는다 (Dockerfile 이 사내 CA 를 복사해야 함)

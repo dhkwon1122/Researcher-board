@@ -1,13 +1,16 @@
 """
 사내 LLM 호출 공용 유틸리티
 
-pipeline/llm_config.py 설정(LLM2_*, thinkingcap 물리 엔드포인트 — 전용 vLLM
-서버)을 사용해 사내 LLM API를 호출한다.
+프로젝트 루트의 .env(또는 환경변수)에 있는 LLM2_* 설정(thinkingcap 물리
+엔드포인트 — 전용 vLLM 서버)을 사용해 사내 LLM API를 호출한다. 예전에는
+이 설정이 pipeline/llm_config.py라는 별도 파일(.env와 따로 관리)에 있었지만,
+비밀값을 관리하는 파일이 두 개로 나뉠 이유가 없어 .env 하나로 합쳤다
+(services.db.load_env_file() 재사용 — DATABASE_URL을 읽던 것과 동일한 로더).
 
 vLLM은 여러 요청을 continuous batching으로 동시에 처리하도록 설계되어 있어,
 요청을 순차로 띄엄띄엄 보내는 것보다 여러 요청을 동시에 보내고 서버가 배치로
 처리하게 하는 편이 훨씬 효율적이다. call_llm()은 "동시 요청 수 제한(세마포어)"
-으로 부하를 조절한다. 동시 허용 개수는 llm_config.LLM2_MAX_CONCURRENT(기본 8)
+으로 부하를 조절한다. 동시 허용 개수는 환경변수 LLM2_MAX_CONCURRENT(기본 8)
 로 조정한다 — 전용 GPU의 VRAM 여유, 모델 크기/양자화에 맞춰 값을 올리거나
 낮출 수 있다. run_concurrent()를 쓰면 호출부가 여러 건을 한꺼번에 스레드풀로
 넘기고, 이 세마포어가 실제 동시 요청 수를 안전하게 제한해 준다.
@@ -24,17 +27,39 @@ ReadTimeout/연결 오류는 일시적인 경우가 많아 LLM_MAX_RETRIES회까
   별개로, 그 바깥에서 발생하는 예상 못한 예외에 대한 안전망).
   max_concurrency() — 설정된 동시 호출 허용치를 반환한다. 호출부가 스레드풀
   크기를 이 값에 맞춰 잡을 때 사용한다.
+  query_max_wait() — 화면에서 실시간으로 응답을 기다리는 호출부(services/
+  nl_query.py, services/open_data_query.py)가 공유하는 LLM2_QUERY_MAX_WAIT_SECONDS
+  기본값(15초) 조회 헬퍼 — 세 곳에서 각자 os.environ을 읽던 것을 여기 하나로 모음.
 """
 
 import concurrent.futures
+import os
 import re
+import sys
 import threading
 import time
 
-try:
-    import llm_config as _cfg
-except ModuleNotFoundError:
-    _cfg = None  # type: ignore
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+from services.db import load_env_file  # noqa: E402
+
+load_env_file()
+
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
 
 _semaphore_lock = threading.Lock()
 _semaphore: threading.Semaphore | None = None
@@ -69,9 +94,18 @@ def _record_truncation():
 def max_concurrency() -> int:
     """설정된 동시 호출 허용치. run_concurrent()로 여러 건을 한꺼번에 넘길 때
     스레드풀 크기를 이 값에 맞추면 된다(세마포어 자체는 call_llm() 내부에서
-    이 값과 무관하게 항상 강제 적용됨). llm_config.LLM2_MAX_CONCURRENT(기본 8)
+    이 값과 무관하게 항상 강제 적용됨). 환경변수 LLM2_MAX_CONCURRENT(기본 8)
     로 조정한다."""
-    return max(1, getattr(_cfg, 'LLM2_MAX_CONCURRENT', 8) if _cfg else 8)
+    return max(1, _int_env('LLM2_MAX_CONCURRENT', 8))
+
+
+def query_max_wait() -> float:
+    """화면에서 실시간으로 응답을 기다리는 호출부가 공유하는 기본 대기 한도(초).
+    배치 파이프라인이 동시 호출 슬롯을 다 쓰고 있어도 화면이 무한정 멈추지
+    않도록, 이 시간 안에 슬롯을 못 얻으면 call_llm(..., max_wait=이 값)이
+    빈 문자열로 빠르게 실패 처리한다. 환경변수 LLM2_QUERY_MAX_WAIT_SECONDS로
+    조정한다(기본 15초)."""
+    return _float_env('LLM2_QUERY_MAX_WAIT_SECONDS', 15)
 
 
 def _get_semaphore() -> threading.Semaphore:
@@ -133,23 +167,21 @@ def call_llm(prompt: str, system_prompt: str, *, temperature: float = 0.2, max_t
     대시보드 등 사용자가 응답을 실시간으로 기다리는 호출부는 값을 지정해,
     배치 작업이 슬롯을 다 쓰고 있을 때 무한정 멈춰 있지 않고 빈 문자열로
     빠르게 실패해 "지금은 바쁘다"는 안내를 보여줄 수 있게 한다."""
-    if _cfg is None:
-        print('  [LLM 오류] llm_config.py 가 없어 API 호출을 건너뜁니다.')
-        return ''
-    if not hasattr(_cfg, 'LLM2_API_URL'):
-        print('  [LLM 오류] llm_config.py에 LLM2_API_URL이 설정되지 않았습니다.')
+    url = os.environ.get('LLM2_API_URL', '').strip()
+    if not url:
+        print('  [LLM 오류] LLM2_API_URL이 설정되지 않아 API 호출을 건너뜁니다 '
+              '(.env 확인 — .env.example 참고).')
         return ''
 
     import requests
 
-    url = _cfg.LLM2_API_URL
-    model = _cfg.LLM2_MODEL
+    model = os.environ.get('LLM2_MODEL', '')
     headers = {'Content-Type': 'application/json'}
-    timeout = getattr(_cfg, 'LLM2_TIMEOUT', 300)
+    timeout = _float_env('LLM2_TIMEOUT', 300)
 
     # 추론형 모델은 최종 답변 전에 사고 과정에도 토큰을 쓰므로 요청 시
     # max_tokens를 배수 적용해 여유를 준다(기본 3배, LLM2_MAX_TOKENS_MULTIPLIER로 조정 가능).
-    max_tokens = max_tokens * getattr(_cfg, 'LLM2_MAX_TOKENS_MULTIPLIER', 3)
+    max_tokens = max_tokens * _int_env('LLM2_MAX_TOKENS_MULTIPLIER', 3)
 
     payload = {
         'model': model,
@@ -161,8 +193,8 @@ def call_llm(prompt: str, system_prompt: str, *, temperature: float = 0.2, max_t
         'max_tokens':  max_tokens,
     }
 
-    max_retries = getattr(_cfg, 'LLM_MAX_RETRIES', 5)
-    retry_backoff = getattr(_cfg, 'LLM_RETRY_BACKOFF', 5.0)
+    max_retries = _int_env('LLM_MAX_RETRIES', 5)
+    retry_backoff = _float_env('LLM_RETRY_BACKOFF', 5.0)
     semaphore = _get_semaphore()
 
     resp = None
