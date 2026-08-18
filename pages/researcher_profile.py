@@ -416,14 +416,16 @@ def _print_box(title, children, *, breakable: bool = False):
 
 def _print_box_cols(items):
     """_print_box 안에서 세로 구분선으로 나뉜 가로 단(예: 핵심기술 | 보유기술 |
-    전문성 요약)을 만든다. items: [(flex_ratio, content), ...]."""
+    전문성 요약)을 만든다. items: [(flex_ratio, content), ...]. display:flex를
+    Bootstrap의 .d-flex 유틸리티 클래스가 아니라 인라인 style로 직접 줘서,
+    외부 CDN(부트스트랩) 로드 여부와 무관하게 항상 가로로 배치되게 한다."""
     cols = []
     for i, (ratio, content) in enumerate(items):
-        style = {'flex': f'{ratio} {ratio} 0'}
+        style = {'flex': f'{ratio} {ratio} 0', 'minWidth': '0'}
         if i > 0:
             style.update({'borderLeft': '1px solid #d2d2d7', 'marginLeft': '10px', 'paddingLeft': '10px'})
         cols.append(html.Div(content, style=style))
-    return html.Div(cols, className='d-flex align-items-stretch')
+    return html.Div(cols, style={'display': 'flex', 'alignItems': 'stretch'})
 
 
 def _current_task_label(task_df, rid) -> str:
@@ -533,14 +535,18 @@ def _print_profile_content(rid, researcher, tables, profile, similar, name_map,
         award_block(tables['awards'], rid),
     ]))
 
+    # display:flex를 인라인 style로 직접 준다(.d-flex 유틸리티 클래스 대신) —
+    # 사진 오른쪽에 기본정보/근속 박스가 나란히 붙어야 하는 핵심 레이아웃이라,
+    # 외부 CDN(부트스트랩)이 느리거나 막혀 있어도 항상 가로 배치되게 한다.
     header_row = html.Div([
         html.Div(photo_block(rid, name, researcher, CURRENT_YEAR),
-                 className='d-flex flex-column align-items-center print-section',
-                 style={'width': '120px', 'flex': '0 0 auto', 'border': _PRINT_BOX_BORDER,
+                 className='print-section',
+                 style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center',
+                        'width': '120px', 'flex': '0 0 120px', 'border': _PRINT_BOX_BORDER,
                         'borderRadius': '6px', 'padding': '8px'}),
-        html.Div([info_table, current_status], className='px-3', style={'flex': '1 1 0'}),
-        html.Div(tenure_box, style={'flex': '1 1 0'}),
-    ], className='d-flex align-items-start mb-3')
+        html.Div([info_table, current_status], style={'flex': '1 1 0', 'paddingLeft': '12px', 'minWidth': '0'}),
+        html.Div(tenure_box, style={'flex': '1 1 0', 'minWidth': '0'}),
+    ], style={'display': 'flex', 'alignItems': 'flex-start', 'marginBottom': '10px'})
 
     capability_box = _print_box('보유 전문성 · 보유 기술 · 전문성 요약(LLM)', _print_box_cols([
         (2, owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid)),
