@@ -451,18 +451,19 @@ def _current_task_label(task_df, rid) -> str:
     return chosen['task_name'] or '-'
 
 
-def _tenure_label(hire_date_str: str) -> str:
-    """"근속: X.X년(입사일 YYYY-MM-DD)" — components/profile_sections.py의
-    photo_block()과 동일한 근속연수 계산(오늘 - 입사일)/365, 소수 첫째자리)."""
+def _tenure_value(hire_date_str: str) -> str:
+    """"X.X년 (YYYY년 MM월 DD일 입사)" — components/profile_sections.py의
+    photo_block()과 동일한 근속연수 계산((오늘 - 입사일)/365, 소수 첫째자리).
+    기본정보 표의 "근속" 행 값으로 쓴다(레이블은 표에서 따로 붙는다)."""
     s = str(hire_date_str or '').strip()
     if not s or s.lower() in ('nan', 'none', 'nat'):
-        return '근속 정보 없음'
+        return '정보 없음'
     try:
         hd = date.fromisoformat(s[:10])
     except ValueError:
-        return '근속 정보 없음'
+        return '정보 없음'
     tenure = round((date.today() - hd).days / 365, 1)
-    return f'근속 {tenure}년 (입사일 {hd.isoformat()})'
+    return f'{tenure}년 ({hd.year}년 {hd.month:02d}월 {hd.day:02d}일 입사)'
 
 
 def _print_hr_orders_table(hr_df, rid, *, limit: int | None = None):
@@ -558,13 +559,17 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     name = str(researcher.get('name', '') or '')
     dept = str(researcher.get('department', '') or '-')
     knox_id = str(researcher.get('knox_id', '') or '-')
+    nationality = str(researcher.get('nationality', '') or '').strip() or '-'
+    # researchers.csv는 생년월일을 연도까지만 저장해(원본 "법적생년월일성별"에서
+    # 연 단위만 추출) 월/일은 표시할 데이터가 없다 — 그대로 "YYYY년생"으로 표기.
     birth_year = str(researcher.get('birth_year', '') or '').strip()
     birth_label = f'{birth_year}년생' if birth_year.isdigit() else '-'
     current_task = _current_task_label(tables['tasks'], rid)
 
     info_rows = [
         ('사번', rid), ('성명', name or '-'), ('소속부서', dept), ('과제', current_task),
-        ('생년월일', birth_label), ('Knox ID', knox_id),
+        ('근속', _tenure_value(researcher.get('hire_date'))),
+        ('생년월일', birth_label), ('국적', nationality), ('Knox ID', knox_id),
     ]
     info_table = html.Table(html.Tbody([
         html.Tr([
@@ -575,7 +580,7 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
         for label, value in info_rows
     ]))
 
-    tenure_box = _print_box(_tenure_label(researcher.get('hire_date')), html.Div([
+    tenure_box = _print_box(None, html.Div([
         print_eval_content,
         html.Div('양성 이력', className='small fw-semibold text-muted mt-2 mb-1'),
         nurturing_block(tables['nurturing'], rid),
@@ -587,7 +592,7 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     # 사진 오른쪽에 기본정보/근속 박스가 나란히 붙어야 하는 핵심 레이아웃이라,
     # 외부 CDN(부트스트랩)이 느리거나 막혀 있어도 항상 가로 배치되게 한다.
     header_row = html.Div([
-        html.Div(photo_block(rid, name, researcher, CURRENT_YEAR),
+        html.Div(photo_block(rid, name, researcher, CURRENT_YEAR, hide_normal_employment_status=True),
                  className='print-section',
                  style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center',
                         'width': '120px', 'flex': '0 0 120px', 'border': _PRINT_BOX_BORDER,
@@ -603,7 +608,7 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     # 및 역량만) 보여준다.
     capability_box = _print_box('보유 전문성 · 보유 기술 · 전문성 요약(LLM)', _print_box_cols([
         (1, owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid,
-                                   stacked=True, show_tech_index=False)),
+                                   stacked=True, show_tech_index=False, show_info_hover=False)),
         (2, html.Div([
             html.Div('전문성 요약(LLM)', className='small fw-semibold text-muted mb-1'),
             # llm_summary_block()은 데이터가 있으면 컴포넌트 "리스트"를 그대로
