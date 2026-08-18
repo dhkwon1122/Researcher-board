@@ -337,7 +337,11 @@ def nurturing_block(nur_df, rid: str, *, limit: int | None = None):
 AWARD_TYPES = {'그룹표창', '대표이사표창', '대표이사표창(시상금미포함)', '부문표창'}
 
 
-def award_block(awd_df, rid: str):
+def award_block(awd_df, rid: str, *, limit: int | None = None, single_line: bool = False):
+    """limit이 주어지면 최신순 상위 limit건만 보여준다(A4 인쇄처럼 지면이 좁을
+    때). single_line=True면 각 항목을 한 줄로 강제하고 넘치는 글자는 '...'로
+    잘라 보여준다(CSS text-overflow: ellipsis — 실제 폭에 맞춰 잘리므로 글자수를
+    직접 셀 필요가 없다). 둘 다 기본값은 화면과 동일한 기존 동작(전체/여러 줄)."""
     if awd_df.empty:
         return html.Div('시상 이력 없음', className='text-muted small')
     rows = awd_df[awd_df['researcher_id'] == rid].copy()
@@ -347,7 +351,10 @@ def award_block(awd_df, rid: str):
 
     sort_col = 'year' if 'year' in rows.columns else ('award_date' if 'award_date' in rows.columns else rows.columns[0])
     rows = rows.sort_values(sort_col, ascending=False)
+    if limit:
+        rows = rows.head(limit)
 
+    item_style = {'whiteSpace': 'nowrap', 'overflow': 'hidden', 'textOverflow': 'ellipsis'} if single_line else {}
     items = []
     for _, row in rows.iterrows():
         yr = str(row.get('year', str(row.get('award_date', ''))[:4])).strip()
@@ -355,7 +362,7 @@ def award_block(awd_df, rid: str):
         aname = str(row.get('award_name', '')).strip()
         desc  = str(row.get('description', '')).strip()
         parts = [p for p in [yr_label, aname, desc] if p and p not in ('nan',)]
-        items.append(html.Li(' / '.join(parts) if parts else '-', className='small'))
+        items.append(html.Li(' / '.join(parts) if parts else '-', className='small', style=item_style))
     return html.Ul(items, className='ps-3 mb-0 small')
 
 

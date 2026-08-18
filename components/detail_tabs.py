@@ -292,7 +292,9 @@ def _is_registered(value):
     return not any(neg in s for neg in _NOT_REGISTERED_KEYWORDS)
 
 
-def _tech_ownership_table(tech_row):
+def _tech_ownership_table(tech_row, *, show_index: bool = True):
+    """show_index=False면 맨 앞 "구분"(1~5 순번) 열을 뺀다 — A4 인쇄처럼 지면이
+    좁아 순번 자체가 별 정보가 안 될 때 사용(화면은 기본값 True로 그대로)."""
     if tech_row is None:
         return html.Div('보유기술 데이터 없음', className='text-muted small')
 
@@ -303,33 +305,38 @@ def _tech_ownership_table(tech_row):
             continue
         lv = _clean_num_str(tech_row.get(f'lv_{i}', ''))
         portion = _clean_num_str(tech_row.get(f'portion_{i}', ''))
-        rows.append(html.Tr([
-            html.Td(str(i), className='small text-center'),
+        cells = [html.Td(str(i), className='small text-center')] if show_index else []
+        cells += [
             html.Td(name, className='small', style={'wordBreak': 'break-word'}),
             html.Td(lv or '-', className='small text-center'),
             html.Td(f'{portion}%' if portion else '-', className='small text-center'),
-        ]))
+        ]
+        rows.append(html.Tr(cells))
 
     if not rows:
         return html.Div('보유기술 데이터 없음', className='text-muted small')
 
+    headers = [html.Th('구분', className='text-center', style={'fontSize': '0.72rem', 'width': '15%'})] \
+        if show_index else []
+    headers += [
+        html.Th('전문분야', style={'fontSize': '0.72rem', 'width': '45%' if show_index else '55%'}),
+        html.Th('Lv', className='text-center', style={'fontSize': '0.72rem', 'width': '15%'}),
+        html.Th('보유율', className='text-center', style={'fontSize': '0.72rem', 'width': '25%'}),
+    ]
+
     return dbc.Table([
-        html.Thead(html.Tr([
-            html.Th('구분', className='text-center', style={'fontSize': '0.72rem', 'width': '15%'}),
-            html.Th('전문분야', style={'fontSize': '0.72rem', 'width': '45%'}),
-            html.Th('Lv', className='text-center', style={'fontSize': '0.72rem', 'width': '15%'}),
-            html.Th('보유율', className='text-center', style={'fontSize': '0.72rem', 'width': '25%'}),
-        ]), className='table-light'),
+        html.Thead(html.Tr(headers), className='table-light'),
         html.Tbody(rows),
     ], bordered=False, hover=True, size='sm', className='mb-0',
        style={'tableLayout': 'fixed', 'width': '100%'})
 
 
-def owned_expertise_block(core_df, tech_df, rid, *, stacked: bool = False):
+def owned_expertise_block(core_df, tech_df, rid, *, stacked: bool = False, show_tech_index: bool = True):
     """보유 전문성 — 핵심기술(core_technology.csv) / 보유기술(tech_ownership.csv)을
     기본은 좌우로 나눠 표시(좌: 기술분야·핵심기술(등급 배지), 우: 전문분야별
     Lv·보유율, 상단에 E/R 직군 배지). stacked=True면 좌우 대신 핵심기술 아래에
-    보유기술을 세로로 쌓는다(A4 인쇄처럼 가로 폭이 좁아 2단이 부담스러울 때)."""
+    보유기술을 세로로 쌓는다(A4 인쇄처럼 가로 폭이 좁아 2단이 부담스러울 때).
+    show_tech_index=False면 보유기술 표의 "구분"(1~5 순번) 열을 뺀다."""
     core = core_df[core_df['researcher_id'] == rid] if not core_df.empty else pd.DataFrame()
     tech = tech_df[tech_df['researcher_id'] == rid] if not tech_df.empty else pd.DataFrame()
     tech_row = tech.iloc[0] if not tech.empty else None
@@ -350,7 +357,7 @@ def owned_expertise_block(core_df, tech_df, rid, *, stacked: bool = False):
 
     right = html.Div([
         html.Div(right_title_children, className='d-flex align-items-center mb-2'),
-        _tech_ownership_table(tech_row),
+        _tech_ownership_table(tech_row, show_index=show_tech_index),
         _info_hover('lv-info-icon', 'Lv 개요', 'lv 개요.png'),
     ])
 

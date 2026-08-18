@@ -41,7 +41,6 @@ from services.data_store import (
     read_similar_researchers,
 )
 from services.evaluations import evaluation_years
-from services.researcher_profile_export import position_years
 
 dash.register_page(
     __name__,
@@ -511,24 +510,25 @@ def _print_hr_orders_table(hr_df, rid, *, limit: int | None = None):
 
 def _print_publication_summary(pub_df, rid):
     """논문 실적 요약 — components/detail_tabs.py의 publications_tab()과 같은
-    집계(총 논문 수/교신저자 수)만 한 줄로 보여주고, 개별 논문 목록(제목/게재처
-    등 세부 내역)은 인쇄본에서는 생략한다."""
+    집계(총 논문 수/교신저자 수)만 "논문 실적 ~건" 한 줄로 보여주고, 개별 논문
+    목록(제목/게재처 등 세부 내역)과 별도 소제목은 인쇄본에서는 생략한다."""
     pub = pub_df[pub_df['researcher_id'] == rid] if not pub_df.empty else pub_df
     if pub is None or pub.empty:
-        return html.Div('논문 실적 없음', className='text-muted')
+        return html.Div('논문 실적 없음', className='small')
     total = len(pub)
     corr = int(pub.get('is_corresponding', pd.Series(dtype=str)).astype(str).str.lower()
                .isin(['true', '1', 'y', 'yes']).sum())
-    return html.Div(f'총 {total}건 (교신저자 {corr}건)')
+    return html.Div(f'논문 실적 {total}건 (교신저자 {corr}건)', className='small')
 
 
 def _print_patent_summary(pat_df, rid):
     """특허 실적 요약 — components/detail_tabs.py의 patents_tab()과 같은
-    집계(전체/등록/대표발명/전략출원/미국등록/지분율합계)만 한 줄로 보여주고,
-    개별 특허 목록(발명 명칭 등 세부 내역)은 인쇄본에서는 생략한다."""
+    집계(전체/등록/대표발명/전략출원/미국등록/지분율합계)만 "특허 실적 ~건" 한
+    줄로 보여주고, 개별 특허 목록(발명 명칭 등 세부 내역)과 별도 소제목은
+    인쇄본에서는 생략한다."""
     pat = pat_df[pat_df['researcher_id'] == rid] if not pat_df.empty else pat_df
     if pat is None or pat.empty:
-        return html.Div('특허 실적 없음', className='text-muted')
+        return html.Div('특허 실적 없음', className='small')
     pat_dedup = dedupe_patents(pat)
     total_cnt = len(pat_dedup)
     reg_cnt = int(pat_dedup['status'].apply(is_registered).sum()) if 'status' in pat_dedup.columns else 0
@@ -538,8 +538,9 @@ def _print_patent_summary(pat_df, rid):
     us_reg_cnt = count_us_registered(pat_dedup)
     share_sum_val = share_sum(pat_dedup)
     return html.Div(
-        f'총 {total_cnt}건 (등록 {reg_cnt} · 출원중 {total_cnt - reg_cnt}) · '
-        f'대표발명 {lead_cnt}건 · 전략출원 {strat_cnt}건 · 미국등록 {us_reg_cnt}건 · 지분율 합계 {share_sum_val}'
+        f'특허 실적 {total_cnt}건 (등록 {reg_cnt} · 출원중 {total_cnt - reg_cnt}) · '
+        f'대표발명 {lead_cnt}건 · 전략출원 {strat_cnt}건 · 미국등록 {us_reg_cnt}건 · 지분율 합계 {share_sum_val}',
+        className='small',
     )
 
 
@@ -552,22 +553,18 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     print_eval_content/comments_content는 update_profile()이 권한(view_evaluation/
     view_comments)까지 반영해 이미 만들어둔 것(_locked_block() 포함)을 그대로
     받아써 권한 판정을 중복하지 않는다."""
+    # 성별/나이·직급-년차는 사진 아래 캡션(photo_block())에 이미 나오므로
+    # 기본정보 표에서는 중복 표시하지 않는다.
     name = str(researcher.get('name', '') or '')
     dept = str(researcher.get('department', '') or '-')
-    position = str(researcher.get('position', '') or '-')
     knox_id = str(researcher.get('knox_id', '') or '-')
-    gender = str(researcher.get('gender', '') or '-')
     birth_year = str(researcher.get('birth_year', '') or '').strip()
-    age = f'{CURRENT_YEAR - int(birth_year)}세' if birth_year.isdigit() else '-'
     birth_label = f'{birth_year}년생' if birth_year.isdigit() else '-'
-    years = position_years(researcher.get('promotion_date'))
-    position_year = f'{position}-{years}년차' if years is not None else position
     current_task = _current_task_label(tables['tasks'], rid)
 
     info_rows = [
         ('사번', rid), ('성명', name or '-'), ('소속부서', dept), ('과제', current_task),
-        ('직급-년차', position_year), ('성별/나이', f'{gender}/{age}'), ('생년월일', birth_label),
-        ('Knox ID', knox_id),
+        ('생년월일', birth_label), ('Knox ID', knox_id),
     ]
     info_table = html.Table(html.Tbody([
         html.Tr([
@@ -583,7 +580,7 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
         html.Div('양성 이력', className='small fw-semibold text-muted mt-2 mb-1'),
         nurturing_block(tables['nurturing'], rid),
         html.Div('시상 이력', className='small fw-semibold text-muted mt-2 mb-1'),
-        award_block(tables['awards'], rid),
+        award_block(tables['awards'], rid, limit=3, single_line=True),
     ]))
 
     # display:flex를 인라인 style로 직접 준다(.d-flex 유틸리티 클래스 대신) —
@@ -605,7 +602,8 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     # 인쇄본 특성상 주요 역할·책임/유사 연구원은 빼고(강점 분야·키워드·전문지식
     # 및 역량만) 보여준다.
     capability_box = _print_box('보유 전문성 · 보유 기술 · 전문성 요약(LLM)', _print_box_cols([
-        (1, owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid, stacked=True)),
+        (1, owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid,
+                                   stacked=True, show_tech_index=False)),
         (2, html.Div([
             html.Div('전문성 요약(LLM)', className='small fw-semibold text-muted mb-1'),
             # llm_summary_block()은 데이터가 있으면 컴포넌트 "리스트"를 그대로
@@ -617,10 +615,11 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
         ])),
     ]))
 
-    pub_patent_box = _print_box('논문 / 특허', html.Div([
-        html.Div('논문 실적', className='small fw-semibold text-muted mb-1'),
+    # 박스 제목("논문 / 특허") 없이 "논문 실적 ~건"/"특허 실적 ~건" 두 줄만
+    # 바로 보여준다(_print_publication_summary/_print_patent_summary가 각자
+    # 라벨을 포함해서 반환).
+    pub_patent_box = _print_box(None, html.Div([
         _print_publication_summary(tables['publications'], rid),
-        html.Div('특허 실적', className='small fw-semibold text-muted mt-3 mb-1'),
         _print_patent_summary(tables['patents'], rid),
     ]))
 
