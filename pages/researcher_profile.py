@@ -599,16 +599,23 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
         award_block(tables['awards'], rid, limit=3, single_line=True),
     ]))
 
+    # 학력은 사진 바로 아래 붙여 좁은 좌측 열(사진과 같은 폭)에 세로로
+    # 쌓는다 — 그 결과 우측의 평가·인센티브(+양성/시상) 박스가 최상단부터
+    # 시작해 좌측 사진+학력 열과 자연스럽게 나란히(병렬로) 배치된다.
+    left_col = html.Div([
+        html.Div(photo_block(rid, name, researcher, CURRENT_YEAR, hide_normal_employment_status=True),
+                 className='print-section',
+                 style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center',
+                        'border': _PRINT_BOX_BORDER, 'borderRadius': '6px', 'padding': '8px'}),
+        html.Div(_print_box('학력', education_block(tables['education'], rid)), style={'marginTop': '8px'}),
+    ], style={'width': '120px', 'flex': '0 0 120px'})
+
     # display:flex를 인라인 style로 직접 준다(.d-flex 유틸리티 클래스 대신) —
     # 사진 오른쪽에 기본정보/평가이력 박스가 나란히 붙어야 하는 핵심
     # 레이아웃이라, 외부 CDN(부트스트랩)이 느리거나 막혀 있어도 항상 가로
     # 배치되게 한다.
     header_row = html.Div([
-        html.Div(photo_block(rid, name, researcher, CURRENT_YEAR, hide_normal_employment_status=True),
-                 className='print-section',
-                 style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center',
-                        'width': '120px', 'flex': '0 0 120px', 'border': _PRINT_BOX_BORDER,
-                        'borderRadius': '6px', 'padding': '8px'}),
+        left_col,
         html.Div([info_table, current_status], style={'flex': '1 1 0', 'paddingLeft': '12px', 'minWidth': '0'}),
         html.Div(support_box, style={'flex': '1 1 0', 'minWidth': '0'}),
     ], style={'display': 'flex', 'alignItems': 'flex-start', 'marginBottom': '10px'})
@@ -646,16 +653,8 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
         breakable=True,
     )
 
-    # 학력은 내용이 짧아 전체 폭을 다 쓸 필요가 없다는 피드백으로 2/3 폭만
-    # 차지하게 좁힌다(옆에 짝지을 박스가 마땅치 않아 나머지 1/3은 빈 여백으로
-    # 남는다 — 우측 최상단처럼 다른 박스가 있어야 할 자리를 비우는 게 아니라
-    # 원래 없던 여백이라 문제되지 않는다).
-    edu_box = html.Div(_print_box('학력', education_block(tables['education'], rid)),
-                        style={'width': '66%'})
-
     return html.Div([
         header_row,
-        edu_box,
         capability_box,
         pub_patent_box,
         task_hr_box,
