@@ -664,7 +664,9 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     )
 
     return html.Div([
-        html.Div('연구원 프로필', style={'fontSize': '15px', 'fontWeight': 700, 'marginBottom': '8px'}),
+        html.Div('연구원 프로필', className='print-title',
+                 style={'fontSize': '30px', 'fontWeight': 700,
+                        'textAlign': 'center', 'marginBottom': '8px'}),
         header_row,
         capability_box,
         pub_patent_box,
