@@ -502,7 +502,7 @@ def _match_row_html(s: dict, name_map: dict, dept_map: dict, org_map: dict) -> s
 </tr>'''
 
 
-def _build_html(results: list, researchers_df: pd.DataFrame, profile_by_id: dict) -> str:
+def build_html(results: list, researchers_df: pd.DataFrame, profile_by_id: dict) -> str:
     """researchers.csv의 department('플랫폼/팀')·org_code('과제/파트')로 좌측
     사이드바 내비게이션과 본문 섹션을 그룹핑하고, 각 카드는 본인의 강점 분야/
     키워드를 칩으로 보여준 뒤 유사 연구원 목록을 표로 보여준다."""
@@ -676,12 +676,13 @@ def process(top_k: int = DEFAULT_TOP_K, refresh_judgments: bool = False) -> bool
     print(f'[OK]   researcher_similarity.json 저장 ({len(results)}명)')
     result_archive.archive_copy('04. 연구원_연구원_유사도_매칭', '연구원_연구원_유사도_분석', 'json', json_text)
 
+    # 화면은 이제 이 HTML을 파일로 읽지 않고 build_html()을 그때그때 호출해
+    # 직접 렌더링한다(pages/researcher_similarity_map.py) — data/processed에
+    # 누구나 열어볼 수 있는 완성된 리포트 사본을 남기지 않기 위해서다. 다만
+    # 실행 이력 아카이브(data/processed/result/, 권한은 scripts/
+    # secure_data_permissions.sh로 잠금)에는 계속 스냅샷을 남긴다.
     profile_by_id = {p['researcher_id']: p for p in profiles}
-    html_out = _build_html(results, researchers_df, profile_by_id)
-    html_path = os.path.join(OUT_DIR, 'researcher_similarity.html')
-    with open(html_path, 'w', encoding='utf-8') as f:
-        f.write(html_out)
-    print('[OK]   researcher_similarity.html 저장')
+    html_out = build_html(results, researchers_df, profile_by_id)
     result_archive.archive_copy('04. 연구원_연구원_유사도_매칭', '연구원_연구원_유사도_분석', 'html', html_out)
 
     truncation_count = fit.get_truncation_count()

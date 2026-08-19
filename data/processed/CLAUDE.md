@@ -22,14 +22,20 @@
    DB가 붙어 있는지는 세션마다 확인 필요.
 
 2. **LLM 파생 분석 산출물** (JSON/HTML, `pipeline/process_*.py`가 사내 LLM 프롬프트로
-   생성 — 원본 데이터를 요약/판단/구조화한 결과): `연구원 보유 전문성 분석.json/.html`,
+   생성 — 원본 데이터를 요약/판단/구조화한 결과): `연구원 보유 전문성 분석.json`,
    `project_expertise_analysis.json/.html`, `project_fit_by_project.json`,
    `project_fit_by_researcher.json`, `project_researcher_fit.html`,
-   `researcher_similarity.json/.html`, `researcher_pair_judgment.json`(쌍 판정 캐시),
+   `researcher_similarity.json`, `researcher_pair_judgment.json`(쌍 판정 캐시),
    `journal_authority.json`(캐시), `strength_taxonomy*.json`(표준화 작업, 아래 참고),
    `embedding_cache.json`(BGE-M3 벡터 캐시, 텍스트 해시 키). 전체 LLM 프롬프트
    목록·원문은 세션 산출물로 사용자에게 전달된 `LLM_프롬프트_전체_목록.md` 참고
    (이 파일 자체는 저장소에 커밋돼 있지 않음 — 필요하면 재생성 가능).
+   **"연구원 보유 전문성 분석.html"/"researcher_similarity.html"는 더 이상 이
+   디렉터리에 "현재본"으로 저장되지 않는다** — `pages/researcher_similarity_map.py`가
+   `pipeline/process_researcher_expertise.py`·`process_researcher_similarity.py`의
+   `build_html()`을 화면 진입 시 그때그때 호출해 렌더링하고, 실행 시각이 찍힌
+   스냅샷만 `data/processed/result/`(권한 잠금 대상)에 남는다. 아래 "2026-08-19"
+   항목 참고.
 
 ## 핵심 설계 원칙 (지금까지 지켜온 것)
 
@@ -2748,3 +2754,48 @@ OS/브라우저가 다크모드면 리포트 색상 토큰이 자동으로 어�
 검증: Playwright 브라우저를 `color_scheme='dark'`로 에뮬레이트하고 사이드바
 조직도 + 카드가 포함된 독립 HTML을 렌더링해 스크린샷 — 다크 에뮬레이션
 상태에서도 배경/카드/조직도가 모두 밝게 유지되는 것을 확인.
+
+## 2026-08-19: "보유 전문성" 정적 HTML 리포트를 온디맨드 렌더링으로 전환
+
+사용자 문제 제기: "연구원 보유 전문성 분석.html"/"researcher_similarity.html"이
+`data/processed/`(운영 서버)에 완성된 리포트 그대로 저장돼 있으면, 화면에만
+적용되는 역할 기반 접근 제어(`services/auth.py`)를 거치지 않고 서버 계정을 가진
+누구나 파일을 직접 열어 원데이터를 볼 수 있는 구멍이 된다 — DB 이관을 마친 지금
+이 두 파일도 "필요할 때만 뽑아내는" 방식으로 바꾸는 게 안전하지 않겠냐는 질문.
+
+검토: `pipeline/process_researcher_expertise.py`/`process_researcher_similarity.py`의
+`_build_html()`이 순수 함수(파일 I/O 없음, `results`/`researchers_df`(+similarity는
+`profile_by_id`)만으로 HTML 문자열을 만듦)임을 확인 — 파일을 안 거치고 화면에서
+직접 호출해도 되는 구조였다. 캐싱이 꼭 필요한지 사용자가 "속도상 유리하면 잠긴
+캐싱 폴더도 고려" 조건부로 확인해줘서, 별도 벤치마크 스크립트로 실제 조직 규모보다
+넉넉한 1500명(유사도는 인당 10건 매칭) 합성 데이터를 만들어 `build_html()` 호출
+시간을 측정: 연구원 리포트 평균 32ms, 연구원↔연구원 리포트 평균 185~225ms(둘 다
+탭을 열 때 1회만 계산됨). 캐싱 없이도 충분히 빨라 별도 잠금 캐싱 폴더는 만들지
+않기로 함.
+
+수정:
+- `_build_html()` → `build_html()`로 공개(두 파일 모두 내부 호출부 1곳씩이라
+  이름 변경만으로 안전하게 공개 가능했음).
+- 두 파이프라인 스크립트 모두 `data/processed/{파일명}.html`(현재본)을 더 이상
+  쓰지 않음 — `result_archive.archive_copy()`로 실행 시각이 찍힌 스냅샷만
+  `data/processed/result/`(기존 권한 잠금 대상, `scripts/secure_data_permissions.sh`)에
+  남긴다. `process_researcher_expertise.py`의 `_write_html()`은 `_archive_html()`로
+  이름을 바꿔 이 역할만 하도록 정리(`render_html()`/`--html-only` CLI는 그대로 두되,
+  이제는 "화면 갱신"이 아니라 "아카이브 스냅샷 재생성" 용도임을 docstring에 명시).
+- `pages/researcher_similarity_map.py`: `_iframe_tab()`이 더 이상
+  `data/processed/*.html` 파일을 읽지 않고, 새 `_render_report_html()`이
+  `services/data_store.read_expertise_profiles()`/`read_similar_researchers()`/
+  `read_processed('researchers')`(DB 우선/파일 폴백, 이미 있던 패턴)로 읽은 데이터를
+  `pipeline.process_researcher_expertise.build_html()`/
+  `pipeline.process_researcher_similarity.build_html()`에 바로 넘겨 렌더링한다.
+  데이터가 없으면(파이프라인 미실행) 기존과 동일하게 안내 Alert. `_REPORT_FILES`
+  (report_key → 파일명 dict)는 `_REPORT_TABS`(탭 키 튜플)로 대체 — 이제 파일명이
+  필요 없어졌기 때문.
+
+검증: 이 환경에 실제 인력현황 데이터가 없어(`researchers.csv`조차 없음) 5명 규모
+합성 픽스처(researchers.csv + 두 JSON)를 `data/processed/`에 임시로 써넣고
+`pages.researcher_similarity_map._render_report_html()`을 더미 `dash.Dash` 앱
+컨텍스트에서 직접 호출 — 연구원/연구원↔연구원 두 리포트 모두 정상 렌더링되고
+합성 데이터의 이름 문자열이 결과 HTML에 포함되는지 확인 후 픽스처 삭제(둘 다
+`.gitignore`의 `data/processed/*` 대상이라 커밋되지도 않음). 벤치마크 스크립트는
+저장소 밖 스크래치 경로에서 실행.

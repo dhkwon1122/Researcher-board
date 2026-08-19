@@ -401,7 +401,7 @@ def _researcher_card_html(item: dict, name_map: dict, anchor: str) -> str:
 </div>'''
 
 
-def _build_html(results: list, researchers_df: pd.DataFrame) -> str:
+def build_html(results: list, researchers_df: pd.DataFrame) -> str:
     """연구원 보유 전문성 분석.json → 사람이 보는 콘솔형 HTML 리포트.
 
     researchers.csv의 department(현소속부서명) → '플랫폼/팀', org_code(비공식
@@ -466,19 +466,22 @@ def _build_html(results: list, researchers_df: pd.DataFrame) -> str:
     return mmd.console_page('연구원 보유 전문성 분석', sidebar, stats + ''.join(sections), detail_view=True)
 
 
-def _write_html(results: list, researchers_df: pd.DataFrame):
-    html_out = _build_html(results, researchers_df)
-    html_path = os.path.join(OUT_DIR, '연구원 보유 전문성 분석.html')
-    with open(html_path, 'w', encoding='utf-8') as f:
-        f.write(html_out)
-    print(f'[OK]   연구원 보유 전문성 분석.html 저장 ({len(results)}명)')
+def _archive_html(results: list, researchers_df: pd.DataFrame):
+    """화면은 이제 이 HTML을 파일로 읽지 않고 build_html()을 그때그때 호출해
+    직접 렌더링한다(pages/researcher_similarity_map.py) — data/processed에
+    누구나 열어볼 수 있는 완성된 리포트 사본을 남기지 않기 위해서다. 다만
+    실행 이력 아카이브(data/processed/result/, 파일 권한은 scripts/
+    secure_data_permissions.sh로 잠금)에는 계속 스냅샷을 남긴다."""
+    html_out = build_html(results, researchers_df)
     result_archive.archive_copy('02. 연구원분석', '연구원 보유 전문성 분석', 'html', html_out)
 
 
 def render_html() -> bool:
-    """이미 저장된 연구원 보유 전문성 분석.json을 읽어 .html만 다시 만든다(LLM
-    재호출 없음). 새로 분석하지 않고 기존 JSON을 리포트로 보고 싶을 때
-    'python pipeline/process_researcher_expertise.py --html-only'로 실행한다."""
+    """이미 저장된 연구원 보유 전문성 분석.json을 읽어 아카이브용 .html 스냅샷만
+    다시 만든다(LLM 재호출 없음). 새로 분석하지 않고 기존 JSON으로 스냅샷을
+    남기고 싶을 때 'python pipeline/process_researcher_expertise.py --html-only'로
+    실행한다 — 화면에 쓰이는 리포트는 항상 build_html()로 그때그때 렌더링되므로
+    이 스냅샷을 갱신하지 않아도 화면 표시에는 영향이 없다."""
     json_path = os.path.join(OUT_DIR, '연구원 보유 전문성 분석.json')
     if not os.path.exists(json_path):
         print('[process_researcher_expertise] 연구원 보유 전문성 분석.json 없음 — 종료 '
@@ -489,7 +492,7 @@ def render_html() -> bool:
         results = json.load(f)
 
     researchers = _filter_eligible_researchers(_read_csv('researchers'))
-    _write_html(results, researchers)
+    _archive_html(results, researchers)
     return True
 
 
@@ -677,7 +680,7 @@ def process(refresh_journals: bool = False) -> bool:
               f'횟수: {truncation_count}회 — 잦으면 max_tokens를 더 늘려야 할 수 있습니다.')
     result_archive.archive_copy('02. 연구원분석', '연구원 보유 전문성 분석', 'json', json_text)
 
-    _write_html(results, researchers)
+    _archive_html(results, researchers)
     return True
 
 
