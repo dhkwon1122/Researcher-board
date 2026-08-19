@@ -19,11 +19,21 @@
 
 ### 방법 A — Docker Compose (권장)
 ```bash
-docker compose up -d        # postgres:16 컨테이너 기동 (DB: researcher_board, 포트 5432)
+docker compose --profile bundled-db up -d   # postgres:16 컨테이너 기동 (DB: researcher_board, 호스트 포트 5433)
 ```
+호스트 포트를 5432가 아닌 5433으로 노출한다(`docker-compose.yml`의 `db` 서비스
+`ports` 참고) — 운영 서버에 이미 5432로 떠 있는 기존 PostgreSQL(아래 방법 B,
+손대지 않음)과 충돌하지 않기 위함이다.
+
+비밀번호는 기본값이 `postgres`다(개발용) — 실제로 쓸 때는 `.env`(2번 참고)에
+`POSTGRES_PASSWORD=원하는_비밀번호`를 채운 뒤 위 명령을 실행할 것. 이 값이
+컨테이너의 실제 슈퍼유저 비밀번호가 되므로, 아래 `DATABASE_URL`의 비밀번호도
+반드시 똑같이 맞춰야 한다.
 
 ### 방법 B — 기존/사내 PostgreSQL 사용
-이미 운영 중인 인스턴스가 있으면 DB만 하나 생성한다.
+이미 운영 중인 인스턴스가 있으면 DB만 하나 생성한다. (이 프로젝트는 운영
+서버의 기존 PostgreSQL을 그대로 쓰지 않고 방법 A/C로 별도 5433 포트 인스턴스를
+띄우는 것을 기본으로 한다 — 기존 DB를 건드리기 어려운 경우를 위한 참고용.)
 ```sql
 CREATE DATABASE researcher_board;
 ```
@@ -37,7 +47,8 @@ CREATE DATABASE researcher_board;
    - **Components**: PostgreSQL Server, **Command Line Tools**(psql), pgAdmin 4 체크.
      Stack Builder는 해제 가능.
    - **Password**: `postgres` 슈퍼유저 비밀번호 설정 → 꼭 기억 (예: `postgres`).
-   - **Port**: 기본 `5432` 유지.
+   - **Port**: `5433` 으로 변경(기본 `5432`가 아님) — 같은 서버에 이미 떠 있는
+     기존 PostgreSQL(손대지 않음)과 충돌하지 않기 위함.
    - **Locale**: 기본값.
 3. 설치 후 PostgreSQL이 Windows 서비스로 자동 등록·실행된다(재부팅 시 자동 시작).
 4. **DB 생성** — 함께 설치된 **SQL Shell (psql)** 실행 → 접속 프롬프트는
@@ -64,9 +75,9 @@ cp .env.example .env
 # 필요 시 사용자/비밀번호/호스트 수정
 ```
 
-`.env` 내용 (docker-compose 기본값과 일치):
+`.env` 내용 (docker-compose 기본값과 일치, 포트 5433 — 위 1번 참고):
 ```
-DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/researcher_board
+DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5433/researcher_board
 ```
 
 > `.env` 는 `.gitignore` 에 포함돼 커밋되지 않는다.

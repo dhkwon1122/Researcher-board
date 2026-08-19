@@ -8,10 +8,17 @@ services:
     profiles: ["bundled-db"]
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      # 기본값 "postgres"는 개발용 임시값 — 운영/외부 노출 환경에서는 반드시
+      # .env 에 POSTGRES_PASSWORD 를 직접 채워 넣을 것(하드코딩된 기본 비밀번호를
+      # 그대로 쓰면 5433 포트에 접근 가능한 누구나 로그인할 수 있어 보안 위험).
+      # DATABASE_URL(.env, 아래 app 참고)의 비밀번호도 반드시 같은 값으로 맞춰야 한다.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: researcher_board
     ports:
-      - "5432:5432"
+      # 호스트 포트만 5433 — 운영 서버에 이미 5432로 떠 있는(손대지 않을) 기존
+      # PostgreSQL과 충돌하지 않기 위함. 컨테이너 내부 포트는 그대로 5432(postgres
+      # 기본값)라 컨테이너 안/도커 네트워크(db:5432, 아래 app 참고)에는 영향 없음.
+      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -37,10 +44,14 @@ services:
         NO_PROXY: "localhost,127.0.0.1,db,::1,samsungds.net,*.samsungds.net,*.samsung.net,12.0.0.0/8,10.0.0.0/8,192.0.0.0/8,172.0.0.0/8"
     container_name: researcher_board_app
     # DATABASE_URL 은 .env 에서 지정(비밀번호 등). 미설정 시 Windows 호스트의
-    # PostgreSQL(host.docker.internal:5432)을 기본값으로 시도한다.
-    # 번들 DB(--profile bundled-db)로 쓸 땐 .env 에서 @db:5432 로 바꾼다.
+    # PostgreSQL(host.docker.internal:5433)을 기본값으로 시도한다 — 운영 서버에
+    # 이미 떠 있는(손대지 않을) 5432 포트 PostgreSQL과 구분되는, 이 앱 전용 DB
+    # 포트다(Windows 쪽 PostgreSQL도 5433으로 리스닝하도록 맞춰야 함).
+    # 번들 DB(--profile bundled-db)로 쓸 땐 .env 에서 @db:5432 로 바꾼다 — 이건
+    # 도커 네트워크 안에서 컨테이너끼리 통신하는 내부 포트라 위 5433(호스트 노출
+    # 포트)과는 별개이며 그대로 5432를 쓴다(db 서비스의 ports 설명 참고).
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://postgres:postgres@host.docker.internal:5432/researcher_board}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://postgres:postgres@host.docker.internal:5433/researcher_board}
       PORT: "8501"
       # LLM(OpenAI 호환). 사내 온프레미스 vllm. (포트 8000 가정 — 다르면 .env 로 덮어씀)
       LLM_BASE_URL: ${LLM_BASE_URL:-http://75.12.15.121:8000/v1}

@@ -2,7 +2,7 @@
 data/processed/*.csv → PostgreSQL 적재 스크립트.
 
 사용법:
-  export DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/researcher_board
+  export DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5433/researcher_board
   python pipeline/load_to_db.py
 
 동작:
