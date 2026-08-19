@@ -256,7 +256,13 @@ def email_report(recipients: list[str]) -> bool:
     """이미 저장된 project_expertise_analysis(DB 우선/JSON 폴백)로 리포트를
     다시 만들어 메일로만 보낸다(Confluence/LLM 재분석 없음, 파일로 남기지
     않음) — 앱 밖으로 공유해야 할 때
-    'python pipeline/process_project_expertise.py --email=a@x.com,b@y.com'로 실행."""
+    'python pipeline/process_project_expertise.py --email=a@x.com,b@y.com'로 실행하거나
+    관리자 화면(/admin)의 "리포트 메일 발송" 카드에서 실행한다.
+
+    분석 데이터가 아직 없으면 False를 반환한다(호출부가 "먼저 파이프라인을
+    실행하세요" 안내로 구분해 처리하도록). 메일 발송 자체가 실패하면
+    MailError를 그대로 전파한다 — pages/admin.py는 이걸 잡아 실패 사유를
+    화면에 보여주고, CLI(__main__)는 잡아서 한 줄로 출력한다."""
     results = read_project_expertise_analysis()
     if not results:
         print('[process_project_expertise] project_expertise_analysis 데이터 없음 — 종료 '
@@ -265,11 +271,7 @@ def email_report(recipients: list[str]) -> bool:
 
     total_projects = len(_read_projects()) or len(results)
     html_out = build_html(results, total_projects)
-    try:
-        send_html_email(recipients, '과제 전문성 분석 리포트', html_out)
-    except MailError as exc:
-        print(f'[process_project_expertise] 메일 발송 실패: {exc}')
-        return False
+    send_html_email(recipients, '과제 전문성 분석 리포트', html_out)
     print(f'[OK]   과제 전문성 분석 리포트 메일 발송 ({len(recipients)}명)')
     return True
 
@@ -277,6 +279,9 @@ def email_report(recipients: list[str]) -> bool:
 if __name__ == '__main__':
     _email_arg = next((a for a in sys.argv if a.startswith('--email=')), None)
     if _email_arg:
-        email_report(_email_arg.split('=', 1)[1].split(','))
+        try:
+            email_report(_email_arg.split('=', 1)[1].split(','))
+        except MailError as exc:
+            print(f'[process_project_expertise] 메일 발송 실패: {exc}')
     else:
         process(force='--refresh' in sys.argv)

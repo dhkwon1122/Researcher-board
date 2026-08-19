@@ -118,6 +118,44 @@ def _user_modal():
     ], id='user-modal', is_open=False, backdrop='static')
 
 
+def _mail_report_card():
+    """"과제 전문성 분석" 리포트는 앱 화면이 아니라 앱 밖(다른 부서 등)으로
+    공유해야 할 때가 있는데, data/processed에 완성된 HTML 파일로 남기지
+    않고(서버 파일시스템에 접근 가능한 누구나 열어볼 수 있는 사본이 되므로)
+    그때그때 다시 만들어 메일로만 보낸다(pipeline/process_project_expertise.py의
+    email_report(), pipeline/mailer.py). 사용자 관리와 마찬가지로 관리자만
+    접근 가능."""
+    return dbc.Card([
+        dbc.CardHeader(
+            html.Span([html.I(className='bi bi-envelope me-2'), '과제 전문성 분석 리포트 메일 발송']),
+        ),
+        dbc.CardBody([
+            html.P(
+                '이 리포트는 화면에 저장되지 않습니다 — 발송할 때마다 최신 분석 결과로 '
+                '새로 만들어 메일로만 보냅니다.',
+                className='small text-muted mb-2',
+            ),
+            dbc.Row([
+                dbc.Col(
+                    dbc.Input(
+                        id='mail-report-recipients', size='sm',
+                        placeholder='수신자 이메일(콤마로 구분, 예: a@samsung.com,b@samsung.com)',
+                    ),
+                    md=9,
+                ),
+                dbc.Col(
+                    dbc.Button(
+                        [html.I(className='bi bi-send me-1'), '발송'],
+                        id='btn-mail-report', color='primary', size='sm', className='w-100',
+                    ),
+                    md=3,
+                ),
+            ], className='g-2'),
+            html.Div(id='mail-report-alert', className='mt-2'),
+        ]),
+    ], className='shadow-sm mt-3')
+
+
 def _delete_modal():
     return dbc.Modal([
         dbc.ModalHeader(dbc.ModalTitle('사용자 삭제')),
@@ -192,6 +230,8 @@ def layout():
         ], className='shadow-sm'),
 
         html.Div(id='admin-page-alert', className='mt-3'),
+
+        _mail_report_card(),
 
         _user_modal(),
         _delete_modal(),
@@ -426,6 +466,41 @@ def confirm_delete(_, user_id, counter):
 )
 def cancel_delete(_):
     return False
+
+
+# ── 콜백: 과제 전문성 분석 리포트 메일 발송 ──────────────────────────────────
+
+@callback(
+    Output('mail-report-alert', 'children'),
+    Input('btn-mail-report', 'n_clicks'),
+    State('mail-report-recipients', 'value'),
+    prevent_initial_call=True,
+)
+def send_mail_report(_, recipients_raw):
+    from services.auth import can
+    if not can('manage_users'):
+        return _alert('권한이 없습니다.', 'danger')
+
+    recipients = [addr.strip() for addr in (recipients_raw or '').split(',') if addr.strip()]
+    if not recipients:
+        return _alert('수신자 이메일을 입력하세요.', 'warning')
+
+    # process_project_expertise.py는 pipeline/ 디렉터리를 sys.path에 얹어
+    # bare `from mailer import MailError`로 읽으므로, 여기서 `pipeline.mailer`
+    # (dotted 경로)로 따로 import하면 이름은 같아도 다른 클래스 객체가 돼
+    # except가 안 걸린다 — 반드시 이 모듈이 실제로 쓰는 것과 동일한 참조를
+    # process_project_expertise 쪽에서 그대로 가져와야 한다.
+    from pipeline.process_project_expertise import MailError, email_report
+    try:
+        sent = email_report(recipients)
+    except MailError as exc:
+        return _alert(f'메일 발송 실패: {exc}', 'danger')
+    if not sent:
+        return _alert(
+            '분석 데이터가 없습니다. 먼저 python pipeline/process_project_expertise.py를 실행하세요.',
+            'warning',
+        )
+    return _alert(f'{len(recipients)}명에게 리포트를 발송했습니다.', 'success')
 
 
 # ── 헬퍼 ─────────────────────────────────────────────────────────────────────
