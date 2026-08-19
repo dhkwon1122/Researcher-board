@@ -13,7 +13,10 @@ data/processed/project_confl_address.csv의 각 과제에 대해:
      판별한다. 후보가 없거나 판별이 안 되면 매칭하지 않고 원문 이름만
      남긴다(추측해서 잘못 배정하지 않기 위해).
   3) 콘솔형 리포트(rd_specialist_markdown.console_page, 외부 CDN 없이
-     독립적인 정적 페이지)로 project_expertise_analysis.html을 생성한다.
+     독립적인 정적 페이지)를 그때그때 만든다 — 앱 화면에서는 이 리포트를
+     읽지 않고, 앱 밖으로 공유해야 할 때만(--email) 메일로 보낸다. 서버
+     파일시스템에 완성된 사본을 남기지 않기 위해 data/processed/에 "현재본"
+     .html 파일로는 저장하지 않는다(실행 이력 아카이브 스냅샷은 계속 남김).
 
 ※ 예전에는 이 단계 뒤에 "R&D Project Specialist Agent"가 과제별 필요 직무를
   딥다이브 매핑하고, 그 결과를 process_project_researcher_fit.py(과제↔연구원
@@ -27,9 +30,10 @@ Source:
   data/processed/researchers.csv           (personnel 이름 → researcher_id 매핑, org_code 기준)
 
 Output:
-  data/processed/project_expertise_analysis.json / .html
+  data/processed/project_expertise_analysis.json
   data/processed/project_personnel.csv (researcher_id/name/name_suffix/project_name/
     dep_name/role_description — process_researcher_expertise.py가 신규 근거로 읽음)
+  (HTML 리포트는 파일로 저장하지 않음 — 아래 --email 참고)
 
 사용법:
   python pipeline/process_project_expertise.py
@@ -40,6 +44,11 @@ _SUMMARY_SYSTEM_PROMPT(project_summary.py)가 바뀌어 이미 쌓인 요약 캐
   python pipeline/process_project_expertise.py --refresh
 (원문 캐시 project_page_cache.json은 그대로 재사용한다 — Confluence/PDF를
 다시 조회하지 않는다.)
+
+이 리포트를 앱 밖(다른 부서 등)으로 공유해야 할 때는, 이미 저장된 분석
+결과(재분석 없음)로 리포트를 다시 만들어 메일로만 보낸다(파일로 남기지
+않음). .env에 SMTP_* 설정이 필요하다(.env.example 참고):
+  python pipeline/process_project_expertise.py --email=a@x.com,b@y.com
 """
 
 import csv
@@ -50,12 +59,17 @@ import sys
 
 import pandas as pd
 
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import OUT_DIR  # noqa: E402
 import rd_specialist_markdown as mmd  # noqa: E402
 import project_summary  # noqa: E402
 import researcher_fit as fit  # noqa: E402
 import result_archive  # noqa: E402
+from mailer import MailError, send_html_email  # noqa: E402
+from services.data_store import read_project_expertise_analysis  # noqa: E402
 
 
 def _read_projects() -> pd.DataFrame:
@@ -120,7 +134,7 @@ def _write_personnel_csv(rows: list):
           f'{sum(1 for r in rows if r["researcher_id"])}건 매칭)')
 
 
-def _build_html(items: list, total_projects: int) -> str:
+def build_html(items: list, total_projects: int) -> str:
     """과제(project_confl_address.csv의 '소속' → dep_name)를 '플랫폼/팀'으로
     라벨링해 좌측 사이드바와 본문을 그룹핑해 보여준다."""
     anchor_of = {it['project_name']: f'p-{i}' for i, it in enumerate(items, start=1)}
@@ -230,14 +244,39 @@ def process(force: bool = False) -> bool:
 
     _write_personnel_csv(personnel_rows)
 
-    html_out = _build_html(results, len(projects))
-    html_path = os.path.join(OUT_DIR, 'project_expertise_analysis.html')
-    with open(html_path, 'w', encoding='utf-8') as f:
-        f.write(html_out)
-    print('[OK]   project_expertise_analysis.html 저장')
+    # 화면은 이 HTML을 파일로 읽지 않는다(앱 밖 공유가 필요하면 --email로
+    # 그때그때 메일 발송). 다만 실행 이력 아카이브(data/processed/result/,
+    # 권한은 scripts/secure_data_permissions.sh로 잠금)에는 계속 스냅샷을 남긴다.
+    html_out = build_html(results, len(projects))
     result_archive.archive_copy('01. 과제분석', '과제 전문성 분석', 'html', html_out)
     return True
 
 
+def email_report(recipients: list[str]) -> bool:
+    """이미 저장된 project_expertise_analysis(DB 우선/JSON 폴백)로 리포트를
+    다시 만들어 메일로만 보낸다(Confluence/LLM 재분석 없음, 파일로 남기지
+    않음) — 앱 밖으로 공유해야 할 때
+    'python pipeline/process_project_expertise.py --email=a@x.com,b@y.com'로 실행."""
+    results = read_project_expertise_analysis()
+    if not results:
+        print('[process_project_expertise] project_expertise_analysis 데이터 없음 — 종료 '
+              '(먼저 python pipeline/process_project_expertise.py 실행)')
+        return False
+
+    total_projects = len(_read_projects()) or len(results)
+    html_out = build_html(results, total_projects)
+    try:
+        send_html_email(recipients, '과제 전문성 분석 리포트', html_out)
+    except MailError as exc:
+        print(f'[process_project_expertise] 메일 발송 실패: {exc}')
+        return False
+    print(f'[OK]   과제 전문성 분석 리포트 메일 발송 ({len(recipients)}명)')
+    return True
+
+
 if __name__ == '__main__':
-    process(force='--refresh' in sys.argv)
+    _email_arg = next((a for a in sys.argv if a.startswith('--email=')), None)
+    if _email_arg:
+        email_report(_email_arg.split('=', 1)[1].split(','))
+    else:
+        process(force='--refresh' in sys.argv)

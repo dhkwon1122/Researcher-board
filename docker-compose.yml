@@ -68,6 +68,16 @@ services:
       LLM_RETRY_BACKOFF: ${LLM_RETRY_BACKOFF:-5.0}
       # 사내 Confluence PAT — 미설정이면 confl_address 과제는 PDF 폴백 없이 건너뛰어짐.
       CONFLUENCE_TOKEN: ${CONFLUENCE_TOKEN:-}
+      # 사내 SMTP — 컨테이너 안에서 `docker compose exec app python
+      # pipeline/process_project_expertise.py --email=...`로 리포트를 메일
+      # 발송할 때 사용(pipeline/mailer.py, .env.example의 "SMTP" 섹션 참고).
+      # 미설정이면 --email 실행 시 에러만 내고 앱 자체 동작에는 영향 없음.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_USE_TLS: ${SMTP_USE_TLS:-true}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       # 런타임 프록시가 있어도 내부 대상(vllm 75.12.15.121, DB, ollama 등)은 프록시 우회.
       NO_PROXY: "localhost,127.0.0.1,::1,host.docker.internal,ollama,db,75.12.15.121,samsungds.net,*.samsungds.net,*.samsung.net,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
       no_proxy: "localhost,127.0.0.1,::1,host.docker.internal,ollama,db,75.12.15.121,samsungds.net,*.samsungds.net,*.samsung.net,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
