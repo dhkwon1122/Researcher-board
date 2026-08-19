@@ -110,6 +110,17 @@ def load():
         print(f'[load_to_db] {name}: {len(df)}행 적재 ({len(df.columns)}컬럼)')
         loaded += 1
 
+        # 이 데이터가 DB에도 안전하게 들어갔으니, 서버에 계정이 있는 다른
+        # 사람이 파일을 그냥 열어보지 못하도록 소유자 전용으로 권한을
+        # 좁힌다(역할별 접근 제어는 화면을 거칠 때만 적용되는 애플리케이션
+        # 레벨이라 파일 자체는 보호하지 않음 — scripts/secure_data_permissions.sh
+        # 참고). pandas to_csv()의 기본 umask 권한(보통 644)을 여기서 즉시
+        # 덮어써 배포 스크립트 실행을 깜빡해도 최소한의 보호가 남게 한다.
+        try:
+            os.chmod(path, 0o600)
+        except OSError as exc:
+            print(f'[load_to_db] 권한 변경 실패(무시하고 계속) {name}: {exc}')
+
     _apply_post_load_ddl(engine)
     print(f'[load_to_db] 완료 — {loaded}개 테이블 적재')
 

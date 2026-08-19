@@ -163,3 +163,32 @@ python app.py        # http://<사내IP>:8050
 unset DATABASE_URL
 python app.py
 ```
+
+---
+
+## 7. 운영 서버 배포 시 — 원천/가공 CSV·JSON 파일 권한
+
+화면(`pages/*.py`)의 역할별 접근 제어(`services/auth.py`의 `ROLE_PERMISSIONS`)는
+Dash/Flask 화면을 거칠 때만 적용되는 **애플리케이션 레벨** 제어다. `data/raw*`,
+`data/raw_csv/*.csv`, `data/processed/*.csv`(및 LLM 파생 JSON)는 서버
+파일시스템에 그대로 남아 있고, `pandas.to_csv()`가 만드는 파일은 보통 서버
+기본 umask(흔히 644 — 소유자 외에도 읽기 가능)로 생성되므로, **서버에 셸
+계정이 있는 사람이면 화면의 권한 설정과 무관하게 파일을 그냥 열어볼 수
+있다.** 개발/CSV 전용 환경에서는 크게 문제되지 않지만, 운영 서버에 올릴
+때는 반드시 잠가야 한다.
+
+- `pipeline/load_to_db.py`는 각 CSV를 DB에 성공적으로 적재한 직후 그 파일을
+  `chmod 600`(소유자만 읽기/쓰기)으로 자동으로 좁힌다 — 배포 스크립트
+  실행을 깜빡해도 최소한의 보호가 남는다.
+- 그와 별개로, `data/` 디렉터리 전체(raw/raw_csv/processed, 파이프라인이 아직
+  건드리지 않은 파일 포함)를 한 번에 잠그려면:
+  ```bash
+  scripts/secure_data_permissions.sh          # 기본: <저장소>/data
+  scripts/secure_data_permissions.sh /path/to/data   # 경로 직접 지정
+  ```
+  배포 때마다(또는 파이프라인 실행 후) 다시 실행하는 것을 권장한다 — 소유권
+  (chown)은 배포 환경마다 실행 계정이 달라 이 스크립트가 바꾸지 않으므로,
+  `data/`가 앱을 구동하는 계정 소유인지는 별도로 확인할 것.
+- **DB 자체 접근도 같은 기준으로 좁혀야 의미가 있다** — CSV를 다 잠가도
+  `psql` 접속 계정을 아무나 쓸 수 있거나 DB 포트(5433)가 불필요하게 넓은
+  네트워크에 노출돼 있으면, 구멍이 파일에서 DB 크리덴셜로 옮겨갈 뿐이다.
