@@ -31,9 +31,9 @@ CSV(및 LLM 파생 JSON 산출물)를 그 자리에서 SQL로 조회한다 — �
      한글 라벨을 붙여 함께 반환한다('columns'는 원본명 유지 — 정렬/필터용,
      'labels'는 화면 표시용).
 
-동시성: SQL 생성 호출은 services.llm.chat()이 아니라 pipeline/llm_client.call_llm()
-을 max_wait과 함께 사용해, nl_query.py의 나머지 intent와 동일하게 동시 호출
-슬롯을 못 얻으면 무한 대기 대신 빠르게 실패한다(text2sql.py에는 이 보호가 없음).
+동시성: SQL 생성 호출은 pipeline/llm_client.call_llm()을 max_wait과 함께
+사용해, nl_query.py의 나머지 intent와 동일하게 동시 호출 슬롯을 못 얻으면
+무한 대기 대신 빠르게 실패한다(text2sql.py에는 이 보호가 없음).
 """
 
 import json

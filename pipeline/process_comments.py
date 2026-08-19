@@ -21,9 +21,10 @@ import sys
 
 import pandas as pd
 
-# pipeline 디렉터리 + 프로젝트 루트를 path 에 추가 (services.llm 임포트용)
+# pipeline 디렉터리 + 프로젝트 루트를 path 에 추가 (llm_client/services 임포트용)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import llm_client  # noqa: E402
 from paths import RAW_DIR as DATA_RAW, OUT_DIR as DATA_OUT  # noqa: E402
 from excel_reader import is_blank, read_xlsx, norm_researcher_id_col
 from merge_utils import TABLE_KEYS, write_merged
@@ -36,30 +37,13 @@ _SYSTEM_PROMPT = '당신은 HR 전문 요약 어시스턴트입니다. 요청한
 
 
 def _call_llm(prompt: str) -> str:
-    """로컬/온프레미스 LLM(OpenAI 호환) 호출 → 응답 텍스트. 실패 시 빈 문자열.
+    """사내 LLM(OpenAI 호환) 호출 → 응답 텍스트. 실패 시 빈 문자열.
 
-    services/llm.py 의 chat() 을 재사용한다. 설정은 환경변수:
-      LLM_BASE_URL (예: http://<vllm서버>:8000/v1), LLM_MODEL, (선택)LLM_API_KEY.
+    pipeline/llm_client.py 의 call_llm() 을 재사용한다 — 배치 파이프라인
+    나머지(process_researcher_expertise.py 등)와 동일하게 동시 호출 제한
+    (세마포어)/재시도가 적용된다. 설정은 .env의 LLM2_*(.env.example 참고).
     """
-    from services.llm import chat, LLMError
-
-    messages = [
-        {'role': 'system', 'content': _SYSTEM_PROMPT},
-        {'role': 'user',   'content': prompt},
-    ]
-    try:
-        return chat(messages, temperature=0.2, max_tokens=1200)
-    except LLMError as exc:
-        print(f'  [LLM 오류] {exc}')
-        return ''
-
-
-def extract_json(text: str) -> str:
-    """응답 텍스트에서 첫 번째 JSON 객체 블록만 추출."""
-    import re
-    text = re.sub(r'```(?:json)?', '', text).replace('```', '').strip()
-    m = re.search(r'\{[\s\S]*\}', text)
-    return m.group(0) if m else text
+    return llm_client.call_llm(prompt, _SYSTEM_PROMPT, temperature=0.2, max_tokens=1200)
 
 
 def summarize_with_llm(comment_raw: str) -> dict:
@@ -88,7 +72,7 @@ def summarize_with_llm(comment_raw: str) -> dict:
             'strengths': '', 'improvements': '',
         }
     try:
-        result = json.loads(extract_json(raw))
+        result = json.loads(llm_client.extract_json(raw))
         return {
             'comment_summary': result.get('comment_summary', ''),
             'strengths':       result.get('strengths', ''),
@@ -148,7 +132,7 @@ def summarize_researcher(rid: str, rows: pd.DataFrame) -> dict | None:
     if not raw:
         return None
     try:
-        result = json.loads(extract_json(raw))
+        result = json.loads(llm_client.extract_json(raw))
         # year는 가장 최근 연도 사용
         try:
             latest_year = int(rows['year'].dropna().astype(str).str.extract(r'(\d{4})')[0].max())
