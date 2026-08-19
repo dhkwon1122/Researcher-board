@@ -141,8 +141,9 @@
        → data/processed/project_confl_address.csv (소속/과제명/컨플 주소)
 
     2) python pipeline/process_project_expertise.py   (컨플 문서 상세 분석)
-       → data/processed/project_expertise_analysis.json / .html,
-         project_personnel.csv
+       → data/processed/project_expertise_analysis.json, project_personnel.csv
+         (HTML 리포트는 파일로 저장하지 않음 — 앱 밖 공유가 필요하면
+          python pipeline/process_project_expertise.py --email=a@x.com로 발송)
          (컨플루언스 페이지를 사내 LLM으로 상세 분석 — 핵심기술/산출물/난제/
           배경/추진일정/기대효과/키워드에 더해, 문서에 언급된 인력과 담당
           업무를 뽑아 researchers.csv의 org_code로 대조·매핑한다. 그 매핑
