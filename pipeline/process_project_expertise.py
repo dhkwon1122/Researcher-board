@@ -47,7 +47,7 @@ _SUMMARY_SYSTEM_PROMPT(project_summary.py)가 바뀌어 이미 쌓인 요약 캐
 
 이 리포트를 앱 밖(다른 부서 등)으로 공유해야 할 때는, 이미 저장된 분석
 결과(재분석 없음)로 리포트를 다시 만들어 메일로만 보낸다(파일로 남기지
-않음). .env에 SMTP_* 설정이 필요하다(.env.example 참고):
+않음). .env에 MAIL_* 설정이 필요하다(.env.example 참고):
   python pipeline/process_project_expertise.py --email=a@x.com,b@y.com
 """
 

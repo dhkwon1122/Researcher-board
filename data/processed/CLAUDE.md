@@ -2822,11 +2822,22 @@ JSON만 읽어 화면을 그려서, 애초에 HTML을 거친 적이 없었다. �
 형식으로 하고, 파일로 남기지는 않는 게 좋겠어."
 
 수정:
-- `pipeline/mailer.py`(신규): 표준 라이브러리 `smtplib`만 사용하는 사내 SMTP
-  발송 유틸리티. `.env`의 `SMTP_HOST`/`SMTP_FROM`(필수) +
-  `SMTP_PORT`/`SMTP_USE_TLS`/`SMTP_USER`/`SMTP_PASSWORD`(선택, 인증 없는
-  사내 릴레이 전제)로 `send_html_email(to, subject, html_body)` 제공.
-  미설정/발송 실패는 `MailError`.
+- `pipeline/mailer.py`(신규): SMTP가 아니라 사내 메일 발송 REST API를
+  호출한다(사용자가 실제 사내 API 호출부 예시를 직접 제공 —
+  `requests.post(url, headers=header, data=json.dumps(payload),
+  proxies=proxy, verify=false)`, URL에 `?userId=` 쿼리 파라미터 필요).
+  `.env`의 `MAIL_API_URL`/`MAIL_TOKEN`/`MAIL_SYSTEM_ID`/`MAIL_FROM`(전부
+  필수) + `MAIL_USER_ID`(기본값 `people.sait`, `.env`에 있으면 덮어씀)로
+  `send_html_email(to, subject, html_body)` 제공. payload는
+  `{subject, contents, contentType:"html", docSecuType:"PERSONAL",
+  sender:{emailAddress}, recipients:[{emailAddress, recipientType:"TO"}]}`,
+  headers는 `Authorization: Bearer {MAIL_TOKEN}` + `System-ID` + JSON
+  Content-Type(전부 사용자가 지정한 실제 스키마 그대로). `verify=False`와
+  프록시 미사용(`{"http": None, "https": None}`)은 이 API 전용으로 코드에
+  고정 — 사내 루트 CA가 공인 신뢰 체인에 없어 검증이 실패하기 때문(사용자가
+  "이 API만 verify=False로, 제공한 코드 그대로"라고 명시적으로 확인—
+  다른 외부 호출(LLM2/Confluence 등)에는 영향 없음). 미설정/발송 실패는
+  `MailError`.
 - `pipeline/process_project_expertise.py`: `_build_html()` → `build_html()`
   공개(다른 두 리포트와 동일 패턴). `process()`는 더 이상
   `project_expertise_analysis.html`을 파일로 저장하지 않고(JSON/
@@ -2835,14 +2846,18 @@ JSON만 읽어 화면을 그려서, 애초에 HTML을 거친 적이 없었다. �
   결과(DB 우선/파일 폴백, `data_store.read_project_expertise_analysis()`)로
   Confluence/LLM 재분석 없이 리포트를 다시 만들어 메일만 보낸다 — CLI는
   `python pipeline/process_project_expertise.py --email=a@x.com,b@y.com`.
-- `.env.example`에 `SMTP_*` 섹션 추가. `pipeline/run_pipeline.py`의 출력
-  설명도 함께 갱신.
+- `.env.example`/`docker-compose.yml`에 `MAIL_*` 섹션 추가.
+  `pipeline/run_pipeline.py`의 출력 설명도 함께 갱신.
 
-검증: `pipeline/mailer.py`를 `smtplib.SMTP`를 페이크 클래스로 몽키패치해
-실제 네트워크 호출 없이 (1) `SMTP_HOST`/`SMTP_FROM` 미설정 시 `MailError`
-발생, (2) 정상 설정 시 발신자/수신자/HTML 본문이 그대로 전달되는지 확인.
+검증: `requests.post`를 페이크 함수로 몽키패치해 실제 네트워크 호출 없이
+(1) `MAIL_API_URL`/`MAIL_TOKEN`/`MAIL_SYSTEM_ID`/`MAIL_FROM` 미설정 시
+`MailError` 발생, (2) 정상 설정 시 요청 URL·쿼리(`userId`)·헤더
+(`Authorization`/`System-ID`)·payload(제목/본문/발신자/수신자 목록)·
+`proxies`/`verify`가 사용자가 지정한 스키마와 정확히 일치하는지, (3)
+`MAIL_USER_ID`를 `.env`로 덮어쓸 수 있는지 확인.
 `process_project_expertise.email_report()`는 (1) 데이터 없을 때 안내 후
 `False` 반환, (2) 5건 규모 합성 픽스처(project_expertise_analysis.json +
-project_confl_address.csv)를 `data/processed/`에 임시로 써넣고 실행해 이메일
-본문(MIME 디코딩 후)에 과제명/인력 이름이 실제로 포함되는지 확인 후 픽스처
-삭제(둘 다 `.gitignore`의 `data/processed/*` 대상이라 커밋 대상 아님).
+project_confl_address.csv)를 `data/processed/`에 임시로 써넣고 실행해
+전송될 payload의 `contents`(HTML)에 과제명/인력 이름이 실제로 포함되는지
+확인 후 픽스처 삭제(둘 다 `.gitignore`의 `data/processed/*` 대상이라 커밋
+대상 아님).
