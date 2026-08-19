@@ -49,26 +49,62 @@ def read_processed(name: str, *, dtype: dict | str | None = None) -> pd.DataFram
     return df
 
 
-def read_expertise_profiles() -> dict[str, dict]:
-    """researcher_id -> 연구원 보유 전문성 분석.json 항목(dict) 매핑. 파일이
-    없으면(파이프라인 미실행) 빈 dict — 호출부가 '분석 데이터 없음'으로 처리한다."""
-    path = os.path.join(DATA_DIR, '연구원 보유 전문성 분석.json')
+def _read_json_table_from_db(table: str) -> list[dict] | None:
+    """DB가 설정돼 있으면 pipeline/load_to_db.py의 JSON_TABLES가 만든
+    (키 TEXT, data JSONB) 테이블에서 data 컬럼 전체를 리스트로 반환.
+    미설정·오류·테이블 없음이면 None(→ JSON 파일 폴백) — _read_from_db()와
+    동일한 CSV/DB 폴백 원칙을 JSON 파생 테이블에도 그대로 적용한다."""
+    from services.db import get_engine
+
+    engine = get_engine()
+    if engine is None:
+        return None
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            rows = conn.execute(text(f'SELECT data FROM {table}')).fetchall()
+        return [r[0] for r in rows]
+    except Exception:
+        return None
+
+
+def _read_json_records(table: str, filename: str) -> list:
+    """table(DB, JSON_TABLES 산출물) 우선, 없으면 data/processed/filename
+    (JSON 배열)을 읽어 항목 리스트로 반환. 둘 다 없으면 빈 리스트."""
+    items = _read_json_table_from_db(table)
+    if items is not None:
+        return items
+    path = os.path.join(DATA_DIR, filename)
     if not os.path.exists(path):
-        return {}
+        return []
     with open(path, encoding='utf-8') as f:
-        profiles = json.load(f)
+        return json.load(f)
+
+
+def read_expertise_profiles() -> dict[str, dict]:
+    """researcher_id -> 연구원 보유 전문성 분석 항목(dict) 매핑. DB(테이블
+    expertise_profiles)가 있으면 그걸, 없으면 연구원 보유 전문성 분석.json을
+    읽는다. 둘 다 없으면(파이프라인 미실행) 빈 dict — 호출부가 '분석 데이터
+    없음'으로 처리한다."""
+    profiles = _read_json_records('expertise_profiles', '연구원 보유 전문성 분석.json')
     return {p.get('researcher_id', ''): p for p in profiles}
 
 
 def read_similar_researchers() -> dict[str, dict]:
-    """researcher_id -> researcher_similarity.json 항목(dict, 'similar' 리스트
-    포함) 매핑. 파일이 없으면(process_researcher_similarity.py 미실행) 빈 dict."""
-    path = os.path.join(DATA_DIR, 'researcher_similarity.json')
-    if not os.path.exists(path):
-        return {}
-    with open(path, encoding='utf-8') as f:
-        results = json.load(f)
+    """researcher_id -> researcher_similarity 항목(dict, 'similar' 리스트
+    포함) 매핑. DB(테이블 researcher_similarity)가 있으면 그걸, 없으면
+    researcher_similarity.json을 읽는다. 둘 다 없으면(process_researcher_
+    similarity.py 미실행) 빈 dict."""
+    results = _read_json_records('researcher_similarity', 'researcher_similarity.json')
     return {item.get('researcher_id', ''): item for item in results}
+
+
+def read_project_expertise_analysis() -> list[dict]:
+    """과제별 컨플루언스 분석 항목 리스트(project_name 키). DB(테이블
+    project_expertise_analysis)가 있으면 그걸, 없으면 project_expertise_
+    analysis.json을 읽는다. services.jd_reconciliation.read_confluence_
+    summary()가 project_name으로 조회할 때 재사용."""
+    return _read_json_records('project_expertise_analysis', 'project_expertise_analysis.json')
 
 
 def read_strength_taxonomy() -> dict:

@@ -29,3 +29,13 @@ CREATE INDEX IF NOT EXISTS idx_patents_id        ON patents (researcher_id);
 CREATE INDEX IF NOT EXISTS idx_techtransfer_id   ON technology_transfer (researcher_id);
 CREATE INDEX IF NOT EXISTS idx_certifications_id ON certifications (researcher_id);
 CREATE INDEX IF NOT EXISTS idx_succession_id     ON succession (researcher_id);
+
+-- 전문성 관련 JSON 파생 테이블(pipeline/load_to_db.py의 JSON_TABLES) — 각각
+-- 항목당 키가 유일해야 정상이라 유니크로 걸어, 원본 JSON에 중복 키가 있으면
+-- (드문 데이터 문제) 여기서 걸러진다(실패해도 load_to_db가 경고만 남기고 계속).
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_expertise_profiles_id
+    ON expertise_profiles (researcher_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_researcher_similarity_id
+    ON researcher_similarity (researcher_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_project_expertise_analysis_name
+    ON project_expertise_analysis (project_name);

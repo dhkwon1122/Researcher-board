@@ -58,7 +58,6 @@ sys.path.insert(0, os.path.abspath(_PIPELINE_DIR))
 import llm_client  # noqa: E402
 import pdf_reader  # noqa: E402
 import researcher_fit as fit  # noqa: E402
-from paths import OUT_DIR  # noqa: E402
 from services import data_store  # noqa: E402
 
 HISTORY_DIR = os.path.join(data_store.DATA_DIR, 'jd_reconciliation')
@@ -107,18 +106,13 @@ def get_project_members(project_name: str) -> list:
 
 
 def read_confluence_summary(project_name: str) -> dict | None:
-    """process_project_expertise.py가 만든 project_expertise_analysis.json에서
-    이 과제의 컨플루언스 분석 항목을 찾는다. 파일이 없거나(파이프라인 미실행)
-    이 과제명이 없으면 None — 호출부는 이를 "컨플루언스 맥락 없이 직무기술서
-    내용만으로 설명"으로 처리한다."""
-    path = os.path.join(OUT_DIR, 'project_expertise_analysis.json')
-    if not os.path.isfile(path):
-        return None
-    try:
-        with open(path, encoding='utf-8') as f:
-            items = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return None
+    """process_project_expertise.py가 만든 과제별 컨플루언스 분석에서 이
+    과제의 항목을 찾는다(data_store.read_project_expertise_analysis() —
+    DB 테이블 project_expertise_analysis가 있으면 그걸, 없으면
+    project_expertise_analysis.json을 읽음). 데이터가 없거나(파이프라인
+    미실행) 이 과제명이 없으면 None — 호출부는 이를 "컨플루언스 맥락 없이
+    직무기술서 내용만으로 설명"으로 처리한다."""
+    items = data_store.read_project_expertise_analysis()
     target = str(project_name or '').strip()
     for it in items:
         if str(it.get('project_name') or '').strip() == target:
