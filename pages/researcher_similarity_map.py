@@ -1,17 +1,21 @@
 """화면: 보유 전문성 (연구원/연구원↔연구원/전문성 MAP 3개 탭)
 
-연구원/연구원↔연구원 2개 탭은 pipeline이 생성한 정적 콘솔 스타일 HTML
-리포트를 그대로 iframe(srcDoc)으로 띄운다 — 별도 Dash 컴포넌트로 재구현하지
-않고 기존 리포트 렌더링을 재사용하기 위함. 전문성 MAP 탭은 UMAP 산점도와
-관계 그래프(옵시디언 방식 노드-링크, dash_cytoscape) 두 서브뷰를 버튼으로
-전환할 수 있다 — 둘 다 무거운 계산(UMAP은 numba JIT, 관계 그래프도 데이터
-로딩)이 있어 실제 선택된 서브뷰만 계산하도록 지연 렌더링한다.
+연구원/연구원↔연구원 2개 탭은 pipeline의 콘솔 스타일 HTML 리포트 렌더러
+(build_html())를 DB/CSV에서 읽은 데이터로 그때그때 호출해 iframe(srcDoc)으로
+띄운다 — data/processed에 누구나 열어볼 수 있는 완성된 리포트 사본을 미리
+만들어두지 않기 위함(역할별 접근 제어는 이 화면을 거칠 때만 적용되는
+애플리케이션 레벨이라, 파일로 저장해두면 그 보호를 우회해 원본을 그대로 볼
+수 있었다). 1500명 규모 벤치마크에서 렌더링이 각각 수십~수백 ms로 충분히
+빨라(탭을 열 때만 1회 계산되므로) 별도 캐싱은 두지 않았다 — 자세한 배경은
+pipeline/process_researcher_expertise.py의 build_html()/_archive_html() 주석
+참고. 전문성 MAP 탭은 UMAP 산점도와 관계 그래프(옵시디언 방식 노드-링크,
+dash_cytoscape) 두 서브뷰를 버튼으로 전환할 수 있다 — 둘 다 무거운 계산
+(UMAP은 numba JIT, 관계 그래프도 데이터 로딩)이 있어 실제 선택된 서브뷰만
+계산하도록 지연 렌더링한다.
 
 (예전에는 "연구원↔과제" 탭도 있었지만, 그 기반이 되던 과제↔연구원 매칭
 기능 자체가 제거되면서 함께 삭제됐다 — data/processed/CLAUDE.md 참고.)
 """
-
-import os
 
 import numpy as np
 import dash
@@ -22,8 +26,10 @@ import plotly.graph_objects as go
 from dash import Input, Output, Patch, State, callback, dcc, html
 
 from components.detail_tabs import llm_summary_block
+from pipeline.process_researcher_expertise import build_html as _build_researcher_html
+from pipeline.process_researcher_similarity import build_html as _build_similarity_html
 from services.data_store import (
-    DATA_DIR, filter_current, read_expertise_profiles, read_processed, read_similar_researchers,
+    filter_current, read_expertise_profiles, read_processed, read_similar_researchers,
 )
 from services.similarity_map import (
     build_expertise_similarity_workbook, build_similarity_graph_elements,
@@ -44,10 +50,7 @@ dash.register_page(__name__, path='/researcher-similarity-map', name='보유 전
 # 참고)로 진입해도 더 이상 map 탭으로 랜딩하지 않는다.
 _MAP_TAB_HIDDEN = True
 
-_REPORT_FILES = {
-    'researcher': '연구원 보유 전문성 분석.html',
-    'similarity': 'researcher_similarity.html',
-}
+_REPORT_TABS = ('researcher', 'similarity')
 
 
 def _missing_data_alert() -> dbc.Alert:
@@ -170,21 +173,34 @@ def _add_cluster_overlays(fig, df):
             fig.add_trace(t)
 
 
+def _render_report_html(report_key: str) -> str | None:
+    """DB(우선)/JSON 파일에서 읽은 데이터로 콘솔형 HTML 리포트를 그때그때
+    렌더링한다. 데이터가 없으면(해당 파이프라인 스크립트 미실행) None."""
+    researchers_df = read_processed('researchers')
+    if report_key == 'researcher':
+        profiles = list(read_expertise_profiles().values())
+        if not profiles:
+            return None
+        return _build_researcher_html(profiles, researchers_df)
+    profile_by_id = read_expertise_profiles()
+    similar = list(read_similar_researchers().values())
+    if not similar:
+        return None
+    return _build_similarity_html(similar, researchers_df, profile_by_id)
+
+
 def _iframe_tab(report_key: str, scroll_to: str | None = None):
-    """지정된 리포트 파일(data/processed 아래 정적 HTML)을 srcDoc으로 그대로 임베드.
-    파일이 없으면(해당 파이프라인 스크립트 미실행) 안내 Alert만 보여준다.
+    """지정된 리포트를 build_html()로 렌더링해 srcDoc으로 그대로 임베드.
+    데이터가 없으면(해당 파이프라인 스크립트 미실행) 안내 Alert만 보여준다.
     scroll_to가 주어지면(예: 전문성 유사맵에서 점을 클릭해 이 탭으로 넘어온 경우)
     로드 직후 해당 id 카드로 자동 스크롤하는 스크립트를 붙인다 — srcDoc은 URL이
     아니라 인라인 문서라 #fragment로는 스크롤을 지정할 수 없어 스크립트로 처리."""
-    filename = _REPORT_FILES[report_key]
-    path = os.path.join(DATA_DIR, filename)
-    if not os.path.exists(path):
+    content = _render_report_html(report_key)
+    if content is None:
         return dbc.Alert(
-            f'"{filename}" 리포트가 없습니다. 관련 pipeline 스크립트를 먼저 실행하세요.',
+            '분석 리포트가 없습니다. 관련 pipeline 스크립트를 먼저 실행하세요.',
             color='warning', className='mt-3',
         )
-    with open(path, encoding='utf-8') as f:
-        content = f.read()
     if scroll_to:
         import json as _json
         # detail-view 리포트(연구원/연구원↔연구원 — rd_specialist_markdown.py의
@@ -702,7 +718,7 @@ def _render_expertise_tab(active_tab, mode, pending_highlight, scroll_target):
     않고 이후 탭/모드 클릭에만 반응한다."""
     if active_tab == 'map':
         return _map_tab_content(highlighted_rid=pending_highlight), dash.no_update
-    if active_tab in _REPORT_FILES:
+    if active_tab in _REPORT_TABS:
         if mode == 'all':
             return _cumulative_search_panel(active_tab), dash.no_update
         content = _iframe_tab(active_tab, scroll_to=scroll_target if active_tab == 'researcher' else None)
@@ -720,7 +736,7 @@ def _render_expertise_tab(active_tab, mode, pending_highlight, scroll_target):
 def _toggle_download_panel(active_tab):
     """다운로드 패널·검색기준 토글은 "연구원"/"연구원 ↔ 연구원" 탭에서만
     의미가 있어(요청 범위) 전문성 MAP 탭에서는 숨긴다."""
-    style = {'display': 'block'} if active_tab in _REPORT_FILES else {'display': 'none'}
+    style = {'display': 'block'} if active_tab in _REPORT_TABS else {'display': 'none'}
     return style, style
 
 
