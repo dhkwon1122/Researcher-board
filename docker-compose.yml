@@ -8,7 +8,11 @@ services:
     profiles: ["bundled-db"]
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      # 기본값 "postgres"는 개발용 임시값 — 운영/외부 노출 환경에서는 반드시
+      # .env 에 POSTGRES_PASSWORD 를 직접 채워 넣을 것(하드코딩된 기본 비밀번호를
+      # 그대로 쓰면 5433 포트에 접근 가능한 누구나 로그인할 수 있어 보안 위험).
+      # DATABASE_URL(.env, 아래 app 참고)의 비밀번호도 반드시 같은 값으로 맞춰야 한다.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: researcher_board
     ports:
       # 호스트 포트만 5433 — 운영 서버에 이미 5432로 떠 있는(손대지 않을) 기존

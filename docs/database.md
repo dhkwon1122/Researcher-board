@@ -25,6 +25,11 @@ docker compose --profile bundled-db up -d   # postgres:16 컨테이너 기동 (D
 `ports` 참고) — 운영 서버에 이미 5432로 떠 있는 기존 PostgreSQL(아래 방법 B,
 손대지 않음)과 충돌하지 않기 위함이다.
 
+비밀번호는 기본값이 `postgres`다(개발용) — 실제로 쓸 때는 `.env`(2번 참고)에
+`POSTGRES_PASSWORD=원하는_비밀번호`를 채운 뒤 위 명령을 실행할 것. 이 값이
+컨테이너의 실제 슈퍼유저 비밀번호가 되므로, 아래 `DATABASE_URL`의 비밀번호도
+반드시 똑같이 맞춰야 한다.
+
 ### 방법 B — 기존/사내 PostgreSQL 사용
 이미 운영 중인 인스턴스가 있으면 DB만 하나 생성한다. (이 프로젝트는 운영
 서버의 기존 PostgreSQL을 그대로 쓰지 않고 방법 A/C로 별도 5433 포트 인스턴스를
