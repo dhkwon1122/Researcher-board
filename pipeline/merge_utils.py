@@ -47,7 +47,11 @@ TABLE_KEYS: dict[str, list[str]] = {
 # 평가자 1인 1행이라 행 단위 자연키가 없는 테이블 — group_keys가 일치하는
 # 그룹 전체를 새 값으로 교체(그룹 내 개별 행은 통째로 다시 쓴다).
 GROUP_REPLACE_KEYS: dict[str, list[str]] = {
-    'leadership_comments': ['researcher_id', 'year', 'evaluator_group'],
+    # process_leadership.py가 만드는 leadership_comments.csv는 evaluator_group이
+    # 아니라 commenter_type('리더십_<평가자그룹>' 형식) 컬럼을 쓴다 — 이 목록은
+    # write_merged()에 그대로 전달돼 new DataFrame에서 이 컬럼명을 찾으므로
+    # 실제 컬럼명과 반드시 일치해야 한다.
+    'leadership_comments': ['researcher_id', 'year', 'commenter_type'],
 }
 
 

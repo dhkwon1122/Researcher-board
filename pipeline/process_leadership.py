@@ -30,6 +30,14 @@ leadership_comments.csv 컬럼:
     각 행으로 보존됩니다. 화면에서는 그룹별로 묶어 표시하면 됩니다.
 
 컬럼명이 다를 경우 파일 상단의 COL_* 상수를 수정하세요.
+
+※ COL_ID(진단대상자ID)는 사번이 아니라 Knox ID다 — 다른 원천 파일들과
+  달리 이 파일만 그렇다. 그래서 사번 8자리 zero-padding용 norm_id() 대신,
+  이미 처리된 data/processed/researchers.csv의 knox_id 컬럼을 조회해
+  researcher_id로 변환한다(_knox_id_map() 참고) — run_pipeline.py에서
+  process_researchers가 process_leadership보다 먼저 실행되므로 이 파일이
+  항상 먼저 존재한다. researchers.csv가 없거나 매칭되지 않는 Knox ID는
+  경고를 남기고 제외한다.
 """
 
 import os
@@ -63,9 +71,26 @@ OTHERS_GROUPS = {'동료', '상사', '부서원'}
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
-from excel_reader import clean_str, is_blank, read_xlsx, norm_id
+from excel_reader import clean_str, is_blank, read_xlsx
 from merge_utils import GROUP_REPLACE_KEYS, TABLE_KEYS, write_merged
 from source_reader import read_source
+
+
+def _knox_id_map() -> dict:
+    """researchers.csv의 knox_id → researcher_id 매핑(대소문자 무시,
+    앞뒤 공백 제거해서 비교). researchers.csv가 없거나 knox_id 컬럼이
+    없으면 빈 dict — 호출부가 그 경우를 에러로 처리한다."""
+    path = os.path.join(OUT_DIR, 'researchers.csv')
+    if not os.path.exists(path):
+        return {}
+    r = pd.read_csv(path, encoding='utf-8-sig', dtype=str).fillna('')
+    if 'knox_id' not in r.columns or 'researcher_id' not in r.columns:
+        return {}
+    return {
+        str(knox).strip().lower(): str(rid).strip().zfill(8)
+        for knox, rid in zip(r['knox_id'], r['researcher_id'])
+        if str(knox).strip()
+    }
 
 
 def process(raw_dir: str = RAW_DIR) -> bool:
@@ -112,7 +137,20 @@ def process(raw_dir: str = RAW_DIR) -> bool:
             )
             return False
 
-    df['researcher_id'] = df[COL_ID].apply(norm_id)
+    knox_map = _knox_id_map()
+    if not knox_map:
+        print(
+            '[ERROR] data/processed/researchers.csv에서 knox_id 매핑을 찾을 수 없습니다.\n'
+            '  process_researchers를 먼저 실행하세요(run_pipeline.py는 순서를 자동으로 맞춤).'
+        )
+        return False
+
+    df['researcher_id'] = df[COL_ID].apply(lambda v: knox_map.get(str(v).strip().lower(), ''))
+    unmatched = sorted({str(v).strip() for v in df.loc[df['researcher_id'] == '', COL_ID] if str(v).strip()})
+    if unmatched:
+        shown = unmatched[:20]
+        more = f' 외 {len(unmatched) - 20}건' if len(unmatched) > 20 else ''
+        print(f'[WARN] Knox ID 매칭 실패 {len(unmatched)}건(제외): {shown}{more}')
     df = df[df['researcher_id'] != ''].copy()
 
     # 연도
