@@ -7,7 +7,7 @@
 #   - NVIDIA GPU + 드라이버
 #   - nvidia-container-toolkit 설치 (Docker 가 GPU 를 컨테이너에 노출)
 #   - WSL 이면 Windows 쪽 NVIDIA 드라이버 + WSL GPU 패스스루 활성화
-#   - 큰 모델 사용 권장:  .env 에서 LLM_MODEL=qwen3-coder:30b (또는 qwen3.5:27b 등)
+#   - 큰 모델 사용 권장:  .env 에서 LLM2_MODEL=qwen3-coder:30b (또는 qwen3.5:27b 등)
 services:
   ollama:
     deploy:
