@@ -3125,3 +3125,25 @@ repository.samsungds.net과는 다른 별도 외부 호스트)를 막고 있을 
 문법(RUN 안 셸 `||` 체인)만 직접 검토. 데몬 접근이 되면
 `docker compose build --progress=plain`으로 실제 실패 로그를 받아 근본
 원인(프록시 차단/apt 문제 등)을 추가로 진단하기로 함.
+
+## 2026-08-20 (7): Playwright 브라우저 설치 시 Node.js TLS 인증서 오류 수정
+
+사용자 보고: "Error: unable to verify the first certificate; if the root
+CA is installed locally, try running Node.js with --use-system-ca" —
+`playwright install --with-deps chromium`이 빌드를 막지는 않게 됐지만
+(위 (6) 항목), 실제 실패 원인이 드러남.
+
+원인: `playwright install`은 내부적으로 Node.js로 브라우저 바이너리를
+내려받는데, Node는 Python `requests`(REQUESTS_CA_BUNDLE 환경변수로 이미
+사내 루트 CA를 신뢰하도록 설정돼 있음)와 달리 OS 인증서 저장소를 자동으로
+쓰지 않는다. 사내망 프록시가 TLS를 가로채는(MITM) 환경이라 Node가 그
+프록시의 인증서 체인을 검증하지 못해 실패했다.
+
+수정: `playwright install` 실행 시 `NODE_EXTRA_CA_CERTS=/etc/ssl/certs/
+ca-certificates.crt`(Dockerfile이 이미 만들어 둔, 사내 루트 CA가 병합된
+동일한 시스템 번들)를 함께 넘겨 Node도 그 인증서를 신뢰하도록 했다. 그래도
+실패하면(네트워크 자체가 막혀 있는 경우) 여전히 `|| echo`로 전체 빌드는
+계속된다.
+
+검증: 이 샌드박스에는 docker 데몬이 없어 실제 빌드 재현은 불가 —
+Dockerfile 문법만 검토. 사용자 환경에서 재빌드로 확인 필요.

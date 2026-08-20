@@ -89,11 +89,21 @@ RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
 # 설치한다. 이미지가 커지고(+300MB 안팎) 브라우저 바이너리를 Microsoft
 # CDN에서 내려받아야 하는데, 이 호스트는 사내 pip 프록시 허용 목록에는
 # 없을 수 있어(pip은 repository.samsungds.net만 거치면 되지만 이건 별도
-# 외부 호스트) 사내망에서 막혀 있을 가능성이 높다. 그 경우 이 단계만
+# 외부 호스트) 사내망에서 막혀 있을 가능성이 높다.
+#
+# playwright install은 내부적으로 Node.js로 다운로드를 받는데, Node는
+# Python의 requests(REQUESTS_CA_BUNDLE)와 달리 OS 인증서 저장소를 자동으로
+# 쓰지 않아, 사내망 프록시가 TLS를 가로채는(MITM) 환경에서는 위에서 이미
+# 시스템에 등록한 사내 루트 CA를 Node에게 따로 알려줘야 한다
+# ("unable to verify the first certificate" 에러) — NODE_EXTRA_CA_CERTS로
+# 같은 인증서 번들을 지정해 해결한다.
+#
+# 그래도 실패하면(사내망 자체가 이 호스트를 막아둔 경우) 이 단계만
 # 실패해도(|| true) 전체 빌드는 계속되고 나머지 기능은 정상 배포되며,
 # PDF 첨부 메일만 "PDF 생성 실패" 에러로 비활성 상태가 된다 — 사내 미러가
 # 있다면 PLAYWRIGHT_DOWNLOAD_HOST로 지정해 재시도할 것.
 RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
+    NODE_EXTRA_CA_CERTS="/etc/ssl/certs/ca-certificates.crt" \
     playwright install --with-deps chromium \
     || echo "[build] Playwright 브라우저 설치 실패 — PDF 첨부 메일 기능은 비활성화된 채로 나머지는 정상 빌드합니다. 원인은 보통 사내망에서 Chromium 다운로드 호스트가 막혀 있는 경우입니다."
 
