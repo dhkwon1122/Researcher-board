@@ -421,11 +421,16 @@ def layout():
                         {'if': {'column_id': '부서'}, 'textAlign': 'left', 'minWidth': '100px'},
                         {'if': {'column_id': '과제'}, 'textAlign': 'left', 'minWidth': '100px'},
                     ],
-                    style_data_conditional=grade_styles + [
+                    # 순서 중요: style_data_conditional은 뒤에 오는 규칙이 같은 셀의
+                    # 같은 속성을 덮어쓴다(나중에 매치되는 규칙이 우선) — 홀수행
+                    # 줄무늬(row_index: 'odd')가 열 지정 없이 모든 셀에 적용되므로,
+                    # grade_styles(평가등급 색상, 특정 열만 대상)보다 먼저 와야
+                    # 홀수행에서도 등급 색이 줄무늬 배경에 덮이지 않고 살아남는다.
+                    style_data_conditional=[
                         {'if': {'row_index': 'odd'}, 'backgroundColor': '#f9fbfd'},
                         {'if': {'state': 'active'}, 'backgroundColor': '#dbeafe',
                          'border': '1px solid #3b82f6'},
-                    ],
+                    ] + grade_styles,
                     tooltip_header={col['id']: col['id'] for col in columns},
                     tooltip_delay=0,
                     tooltip_duration=None,
