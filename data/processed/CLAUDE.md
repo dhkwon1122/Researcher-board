@@ -2965,3 +2965,30 @@ HTML(연구원/연구원↔연구원 둘 다)에 `mail_rid=` 링크와 수정된
 모킹한 성공 경로 5가지 모두 확인 (5) 누적기준 카드에 올바른 rid를 담은
 패턴매칭 버튼이 포함되는지 확인. 픽스처는 모두 `.gitignore`의
 `data/processed/*` 대상이라 커밋되지 않음.
+
+## 2026-08-20 (2): 수신자 미입력 시 본인에게 발송 + MAIL_TIMEOUT 설정 가능
+
+사용자 요청: "메일 발송할 때 메일 주소를 입력 없이 발송하면 로그인한
+본인에게 발송되도록 해줘. 수신인 주소를 로그인 ID@samsung.com 으로
+설정하도록 하면 돼." (겸사겸사 실제 발송 테스트 중 timeout error 보고.)
+
+수정:
+- `services/auth.py`: `current_user_mail_default()` 신규 —
+  `get_current_user()['user_id']` + `@samsung.com`(로그인 세션 없으면 빈
+  문자열). 리포트 메일(`pages/admin.py`)과 개별 연구원 메일
+  (`pages/researcher_similarity_map.py`) 양쪽 발송 콜백이 공유.
+- 두 발송 콜백 모두: 수신자 입력이 비어 있으면 이 기본값을 쓰고, 로그인
+  세션조차 없으면(이론상 발생 안 함 — 두 화면 다 로그인 필요) 기존처럼
+  "수신자 이메일을 입력하세요" 경고로 폴백. 입력 placeholder와 발송 성공
+  알림(실제 수신자 주소 표시)도 함께 갱신.
+- `pipeline/mailer.py`: `MAIL_TIMEOUT`(초, 기본 30) 환경변수 추가 — 하드코딩된
+  `timeout=30`을 대체. 타임아웃 보고에 대해 사내망 API 응답이 느릴 가능성을
+  감안해 값을 조정할 수 있게 함(이 세션 자체는 사내망 밖이라 원인을 직접
+  재현/진단할 수 없어, 조정 가능한 손잡이만 제공). `.env.example`/
+  `docker-compose.yml`에도 반영.
+
+검증: Flask 세션을 `test_request_context()`로 실제 로그인 상태를 흉내 내
+(1) 두 발송 콜백 모두 수신자 공백 시 `{user_id}@samsung.com`으로 실제
+발송되는지(payload의 recipients 확인) (2) 세션 없을 때 기존 경고로
+폴백하는지 확인. `MAIL_TIMEOUT` 환경변수가 `requests.post()`에 실제로
+전달되는지 몽키패치로 확인.

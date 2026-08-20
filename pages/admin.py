@@ -139,7 +139,7 @@ def _mail_report_card():
                 dbc.Col(
                     dbc.Input(
                         id='mail-report-recipients', size='sm',
-                        placeholder='수신자 이메일(콤마로 구분, 예: a@samsung.com,b@samsung.com)',
+                        placeholder='수신자 이메일(콤마로 구분, 비워두면 본인에게 발송)',
                     ),
                     md=9,
                 ),
@@ -477,13 +477,17 @@ def cancel_delete(_):
     prevent_initial_call=True,
 )
 def send_mail_report(_, recipients_raw):
-    from services.auth import can
+    from services.auth import can, current_user_mail_default
     if not can('manage_users'):
         return _alert('권한이 없습니다.', 'danger')
 
     recipients = [addr.strip() for addr in (recipients_raw or '').split(',') if addr.strip()]
     if not recipients:
-        return _alert('수신자 이메일을 입력하세요.', 'warning')
+        # 수신자를 비워두면 로그인한 본인(로그인 ID@samsung.com)에게 보낸다.
+        self_mail = current_user_mail_default()
+        if not self_mail:
+            return _alert('수신자 이메일을 입력하세요.', 'warning')
+        recipients = [self_mail]
 
     # process_project_expertise.py는 pipeline/ 디렉터리를 sys.path에 얹어
     # bare `from mailer import MailError`로 읽으므로, 여기서 `pipeline.mailer`
@@ -500,7 +504,7 @@ def send_mail_report(_, recipients_raw):
             '분석 데이터가 없습니다. 먼저 python pipeline/process_project_expertise.py를 실행하세요.',
             'warning',
         )
-    return _alert(f'{len(recipients)}명에게 리포트를 발송했습니다.', 'success')
+    return _alert(f"리포트를 발송했습니다 ({', '.join(recipients)})", 'success')
 
 
 # ── 헬퍼 ─────────────────────────────────────────────────────────────────────

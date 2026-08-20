@@ -622,7 +622,7 @@ def _mail_researcher_modal(mail_rid: str | None = None, mail_rid_name: str = '')
             ),
             dbc.Input(
                 id='mail-researcher-recipients', size='sm',
-                placeholder='수신자 이메일(콤마로 구분, 예: a@samsung.com,b@samsung.com)',
+                placeholder='수신자 이메일(콤마로 구분, 비워두면 본인에게 발송)',
             ),
             html.Div(id='mail-researcher-alert', className='mt-2'),
         ]),
@@ -1024,8 +1024,13 @@ def _send_researcher_mail(_, rid, recipients_raw):
                          dismissable=True, className='py-2 small mb-0')
     recipients = [addr.strip() for addr in (recipients_raw or '').split(',') if addr.strip()]
     if not recipients:
-        return dbc.Alert('수신자 이메일을 입력하세요.', color='warning',
-                         dismissable=True, className='py-2 small mb-0')
+        # 수신자를 비워두면 로그인한 본인(로그인 ID@samsung.com)에게 보낸다.
+        from services.auth import current_user_mail_default
+        self_mail = current_user_mail_default()
+        if not self_mail:
+            return dbc.Alert('수신자 이메일을 입력하세요.', color='warning',
+                             dismissable=True, className='py-2 small mb-0')
+        recipients = [self_mail]
 
     from services.similarity_map import build_researcher_mail_html
     html_out = build_researcher_mail_html(rid)
@@ -1048,5 +1053,5 @@ def _send_researcher_mail(_, rid, recipients_raw):
     except MailError as exc:
         return dbc.Alert(f'메일 발송 실패: {exc}', color='danger',
                          dismissable=True, className='py-2 small mb-0')
-    return dbc.Alert(f'{len(recipients)}명에게 발송했습니다.', color='success',
+    return dbc.Alert(f"발송했습니다 ({', '.join(recipients)})", color='success',
                      dismissable=True, className='py-2 small mb-0')

@@ -9,7 +9,8 @@
 적용되는 애플리케이션 레벨이라 파일 자체는 보호하지 않는다).
 
 인증/설정: .env의 MAIL_API_URL/MAIL_TOKEN/MAIL_SYSTEM_ID/MAIL_FROM(전부
-필수), MAIL_USER_ID(기본값 people.sait — .env에 값이 있으면 그걸로 덮어씀).
+필수), MAIL_USER_ID(기본값 people.sait — .env에 값이 있으면 그걸로 덮어씀),
+MAIL_TIMEOUT(초, 기본 30 — API 응답이 느려 타임아웃이 자주 나면 늘릴 것).
 verify=False는 이 사내 전용 API에 한해 의도적으로 유지한다(사내 루트 CA가
 공인 신뢰 체인에 없어 검증이 실패하기 때문 — 사용자 확인됨). 다른 외부
 호출(LLM2/Confluence 등)에는 영향 없다.
@@ -85,6 +86,7 @@ def send_html_email(to: list[str], subject: str, html_body: str) -> None:
     # 한다(사용자 확인). quote()로 값만 안전하게 인코딩해 직접 이어붙인다.
     full_url = f'{url}?userId={quote(user_id, safe="")}'
 
+    timeout = float(os.environ.get('MAIL_TIMEOUT', '30') or '30')
     try:
         resp = requests.post(
             full_url,
@@ -92,7 +94,7 @@ def send_html_email(to: list[str], subject: str, html_body: str) -> None:
             data=json.dumps(payload),
             proxies=proxies,
             verify=False,
-            timeout=30,
+            timeout=timeout,
         )
         resp.raise_for_status()
     except requests.exceptions.RequestException as exc:
