@@ -50,11 +50,11 @@ def _get_or_create_secret_key() -> str:
 
 app.server.secret_key = _get_or_create_secret_key()
 
-# pages/*.py 콜백은 use_pages=True 스캔 과정에서 자동 등록되지만, 이 모듈들은
+# pages/*.py 콜백은 use_pages=True 스캔 과정에서 자동 등록되지만, 이 모듈은
 # 페이지가 아니라 전 탭 공용 컴포넌트라 Dash 인스턴스 생성 이후 직접
 # import해서 module-level @callback들을 등록해야 한다(생성 전에 import하면
 # 아직 앱이 없어 콜백이 등록되지 않는다).
-from components import feedback_modal, nl_query_bar  # noqa: E402
+from components import feedback_modal  # noqa: E402
 
 app.index_string = '''<!DOCTYPE html>
 <html>
@@ -445,17 +445,6 @@ app.layout = html.Div(
         navbar,
         dbc.Container(
             [
-                # 자연어 질문 바(AI 검색) — 연구원 명단 화면에서만 보인다
-                # (_toggle_nl_query_bar 콜백이 pathname에 따라 표시 여부 결정).
-                # page_container 밖(네비게이션 바로 아래, 페이지 콘텐츠 위)에
-                # 고정 배치하는 구조는 유지하되, 다른 화면에서는 숨긴다.
-                html.Div(
-                    [
-                        html.Div(nl_query_bar.render(), className='no-print'),
-                        html.Hr(className='mt-1 mb-3 no-print'),
-                    ],
-                    id='nl-query-bar-wrapper',
-                ),
                 dash.page_container,
             ],
             fluid=True,
@@ -464,14 +453,6 @@ app.layout = html.Div(
     ],
     style={'minHeight': '100vh', 'backgroundColor': '#f5f5f7'},
 )
-
-
-@callback(
-    Output('nl-query-bar-wrapper', 'style'),
-    Input('_pages_location', 'pathname'),
-)
-def _toggle_nl_query_bar(pathname):
-    return {} if pathname == '/researcher-list' else {'display': 'none'}
 
 
 @callback(

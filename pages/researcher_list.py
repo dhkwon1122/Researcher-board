@@ -10,6 +10,7 @@ import dash_bootstrap_components as dbc
 import pandas as pd
 from dash import Input, Output, State, callback, dash_table, dcc, html, no_update
 
+from components import nl_query_bar
 from components.timeline_data import dedupe_patents
 from services import researcher_profile_export
 from services.data_store import filter_current, read_processed
@@ -133,6 +134,7 @@ def _build_summary_df(current_only: bool = True) -> pd.DataFrame:
             '직책':           str(title_by_id.get(rid, '') or '').strip() or '-',
             '성별':           str(r.get('gender', '')),
             '재직상태':       str(r.get('employment_status', '') or '').strip() or '-',
+            'Knox ID':        str(r.get('knox_id', '') or '').strip() or '-',
             '학력':           highest,
             '전공':           major,
             **grades,
@@ -203,13 +205,106 @@ _GRADE_STYLES = [
 ]
 
 
-def _build_columns(df: pd.DataFrame) -> list:
-    return [
-        {'name': col, 'id': col,
-         'type': 'numeric' if col in ('논문(전체)', '논문(3년)', '특허(출원)', '특허(등록)', '수상') else 'text'}
-        for col in df.columns if col != 'researcher_id'
+# ── 필수 컬럼(사용자 확정) — AI 검색 없이도 항상 노출된다. 사번(researcher_id)은
+# 라벨만 "사번"으로 보여주고 내부 데이터 키는 그대로 둔다 — 행 클릭 프로필
+# 이동/엑셀 다운로드/일괄 인쇄가 전부 이 키로 연구원을 식별하기 때문.
+# 나머지(평가등급/인센티브/논문/특허/수상/성별/학력/전공)는 기본적으로
+# 숨기고, 상세 필터로 값을 고르거나 AI 검색 결과에 나올 때만 컬럼을
+# 노출한다(사용자 요청: "AI검색과 아래 명단이 겹쳐 보인다 — 필수 컬럼을
+# 줄이고 AI검색 결과에 따라 동적으로 추가 컬럼이 구성되게").
+_ESSENTIAL_COLUMNS = [
+    ('researcher_id', '사번'),
+    ('이름', '이름'),
+    ('부서', '부서'),
+    ('과제', '과제'),
+    ('직급', '직급'),
+    ('직책', '직책'),
+    ('재직상태', '재직상태'),
+    ('Knox ID', 'Knox ID'),
+]
+_ESSENTIAL_IDS = {col_id for col_id, _ in _ESSENTIAL_COLUMNS}
+
+# 상세 필터 모달에서 값을 고르면(=그 기준으로 비교하고 싶다는 뜻으로 보고)
+# 그 컬럼도 함께 보여준다. 직급/직책/재직상태는 이미 필수 컬럼이라 제외.
+_OPTIONAL_FILTER_COLUMNS = ['성별', '학력', '전공']
+
+_NUMERIC_COLUMNS = {'논문(전체)', '논문(3년)', '특허(출원)', '특허(등록)', '수상'}
+
+
+def _build_columns(df: pd.DataFrame, optional_ids: list | None = None,
+                    extra_ids: list | None = None, extra_labels: list | None = None) -> list:
+    """필수 컬럼 → (상세 필터로 선택돼 함께 보여줄) 선택 컬럼 → AI 검색이
+    돌려준 추가 컬럼 순서로 구성한다. df에 실제로 존재하는 컬럼만 포함한다
+    (권한 필터로 평가/인센티브가 빠졌을 수 있어서)."""
+    cols = [
+        {'name': label, 'id': col_id, 'type': 'text'}
+        for col_id, label in _ESSENTIAL_COLUMNS if col_id in df.columns
     ]
-    # 평균IF도 혼합값(숫자/'-')이 있어 text로 유지
+    seen = set(_ESSENTIAL_IDS)
+    for col_id in (optional_ids or []):
+        if col_id in df.columns and col_id not in seen:
+            seen.add(col_id)
+            cols.append({'name': col_id, 'id': col_id, 'type': 'text'})
+    extra_ids = extra_ids or []
+    extra_labels = extra_labels or extra_ids
+    for col_id, label in zip(extra_ids, extra_labels):
+        if col_id in seen:
+            continue
+        seen.add(col_id)
+        cols.append({'name': label, 'id': col_id,
+                     'type': 'numeric' if col_id in _NUMERIC_COLUMNS else 'text'})
+    return cols
+    # 평균IF는 혼합값(숫자/'-')이 있어 numeric으로 분류하지 않고 text로 유지
+
+
+# AI 검색 결과 중 명단에 다시 노출하지 않을 컬럼 — 이름/부서는 필수 컬럼과
+# 100% 같은 값이라 중복이지만, 그 밖의 open_data_query 결과 컬럼(예:
+# org_code/degree_major/age)은 그 질문에 대한 근거로 AI가 일부러 보여주는
+# 값일 수 있어 그대로 둔다.
+_AI_SKIP_COLUMNS = {'researcher_id', 'name', 'department'}
+
+
+def _merge_ai_result(base_df: pd.DataFrame, ai_result: dict):
+    """AI 검색 결과(columns/labels/rows, researcher_id 포함)를 명단 기본
+    정보(base_df — 필수 컬럼 값의 출처)와 합친다. 반환: (merged_df,
+    extra_col_ids, extra_col_labels). researcher_id가 없는 결과(합계/통계성
+    답변 등이라 표로 보여줄 사람이 없는 경우)면 빈 DataFrame을 반환한다 —
+    이 경우 명단은 비우고 nl_query_bar의 AI 답변 문장만으로 안내한다."""
+    columns = ai_result.get('columns') or []
+    if 'researcher_id' not in columns or base_df.empty:
+        return base_df.iloc[0:0], [], []
+
+    labels = ai_result.get('labels') or columns
+    rows = ai_result.get('rows') or []
+    rid_idx = columns.index('researcher_id')
+    extra_pairs = [(c, lbl) for c, lbl in zip(columns, labels) if c not in _AI_SKIP_COLUMNS]
+
+    # 같은 연구원이 여러 행(과제/논문별 등)으로 나올 수 있어 처음 나온 값만 쓴다.
+    by_rid, order = {}, []
+    for row in rows:
+        if rid_idx >= len(row):
+            continue
+        rid = str(row[rid_idx] or '').strip().zfill(8)
+        if not rid or rid in by_rid:
+            continue
+        by_rid[rid] = row
+        order.append(rid)
+
+    base_indexed = base_df.set_index('researcher_id')
+    merged_rows = []
+    for rid in order:
+        if rid not in base_indexed.index:
+            continue  # 권한 필터/현재 소속 기준 등으로 기본 명단에 없는 사람은 제외
+        record = base_indexed.loc[rid].to_dict()
+        record['researcher_id'] = rid
+        ai_row = by_rid[rid]
+        for col, _label in extra_pairs:
+            idx = columns.index(col)
+            record[col] = ai_row[idx] if idx < len(ai_row) else ''
+        merged_rows.append(record)
+
+    merged_df = pd.DataFrame(merged_rows) if merged_rows else base_df.iloc[0:0]
+    return merged_df, [c for c, _ in extra_pairs], [lbl for _, lbl in extra_pairs]
 
 
 def layout():
@@ -248,6 +343,10 @@ def layout():
                 className='d-flex align-items-center justify-content-end',
             ),
         ], className='mb-3'),
+
+        # ── AI 검색 — 질문하면 아래 명단 자체가 그 결과로 바뀐다(사용자 요청:
+        # 별도 결과창이 명단과 겹쳐 헷갈리던 것을 하나로 통합). ───────────────
+        nl_query_bar.render(),
 
         # ── 상단 드롭다운 필터 ─────────────────────────────────────────────
         # 드롭다운 선택 자체는 바로 반영되지 않고, 검색 아이콘(또는 상세 필터
@@ -493,6 +592,7 @@ def toggle_org_filters(mode):
     Input('filter-modal-apply-btn', 'n_clicks'),
     Input('clear-filters-btn', 'n_clicks'),
     Input('list-search-mode',  'value'),
+    Input('nl-query-full-result', 'data'),
     State('filter-dept',       'value'),
     State('filter-project',    'value'),
     State('filter-pos',        'value'),
@@ -503,7 +603,7 @@ def toggle_org_filters(mode):
     State('filter-employment', 'value'),
     prevent_initial_call=True,
 )
-def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, dept, project, pos, title,
+def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, dept, project, pos, title,
                   gender, degree, major, employment):
     from services.auth import can
     show_eval = can('view_evaluation')
@@ -512,12 +612,31 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, dept, proje
     current_only = (mode != 'all')
     df = _build_summary_df(current_only=current_only)
     display_df = _apply_permission_filter(df, show_eval, show_incentive)
-    columns = _build_columns(display_df)
+
+    triggered = dash.ctx.triggered_id
+
+    # AI 검색 결과가 있으면 명단 자체를 그 결과로 바꾼다(사용자 요청: 완전
+    # 통합) — 기존 부서/과제/직급/직책/성별/학력/전공/재직상태 필터는 이때
+    # 적용하지 않는다(AI 검색 질문 자체가 이미 그 필터 역할을 한다).
+    if triggered == 'nl-query-full-result':
+        if not ai_result or not ai_result.get('rows'):
+            # 질문 없음/초기화/결과 없음 → 필수 컬럼만으로 전체 목록 복귀
+            columns = _build_columns(display_df)
+            tooltip_header = {c['id']: c['id'] for c in columns}
+            return display_df.to_dict('records'), columns, tooltip_header, []
+        merged_df, extra_ids, extra_labels = _merge_ai_result(display_df, ai_result)
+        columns = _build_columns(merged_df, extra_ids=extra_ids, extra_labels=extra_labels)
+        tooltip_header = {c['id']: c['id'] for c in columns}
+        return merged_df.to_dict('records'), columns, tooltip_header, []
+
+    # 상세 필터(성별/학력/전공)로 값을 고르면 그 컬럼도 함께 보여준다.
+    optional_values = dict(zip(_OPTIONAL_FILTER_COLUMNS, (gender, degree, major)))
+    optional_ids = [col for col in _OPTIONAL_FILTER_COLUMNS if optional_values[col]]
+    columns = _build_columns(display_df, optional_ids=optional_ids)
     tooltip_header = {c['id']: c['id'] for c in columns}
     if display_df.empty:
         return [], columns, tooltip_header, []
 
-    triggered = dash.ctx.triggered_id
     # 모드 전환 자체가 트리거면(부서/과제/직급/직책 필터가 비활성화·초기화되는
     # 시점과 겹칠 수 있어) 조직 필터는 적용하지 않고 전체(해당 모드) 목록을 보여준다.
     if triggered in ('clear-filters-btn', 'list-search-mode'):
