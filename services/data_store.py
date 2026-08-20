@@ -7,6 +7,10 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, 'data', 'processed')
 RAW_DIR = os.path.join(BASE_DIR, 'data', 'raw')
 ASSETS_DIR = os.path.join(BASE_DIR, 'assets')
+# 연구원 사진 원본 전용 폴더 — 용량이 커서(다운로드받은 원본을 그대로 저장)
+# data/raw(원천 엑셀/CSV)와 분리해 여기 둔다. components/profile_sections.py의
+# load_photo_src()/app.py의 serve_photo()가 여기부터 찾는다.
+PHOTO_DIR = os.path.join(BASE_DIR, 'data', 'photo')
 
 
 def processed_path(name: str) -> str:

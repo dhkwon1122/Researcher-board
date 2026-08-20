@@ -262,12 +262,18 @@ def _core_technology_table(core_df):
         name = str(row.get('tech_name', '')).strip()
         grade = _clean_num_str(row.get('tech_grade', '')) or '-'
         grade_disp = f'{grade}급' if grade != '-' else '-'
+        # 등급 배지(B급/A급 등) + 기술명을 flex 대신 hanging indent(CSS
+        # text-indent 음수값)로 배치한다 — 기술명이 길어 줄바꿈되면, 이어지는
+        # 줄이 배지 자리(B급 등)까지 다시 밀고 올라오지 않고 기술명 시작
+        # 위치에 맞춰 들여써진다(사용자 요청: 줄바꿈된 다음 줄은 배지 아래를
+        # 비워 보여달라는 것).
         rows.append(html.Tr([
             html.Td(field, className='small', style={'wordBreak': 'break-word'}),
             html.Td(html.Div([
                 _pill(grade_disp, _GRADE_PILL_COLOR),
-                html.Span(name, className='small ms-2'),
-            ], className='d-flex align-items-center'), style={'wordBreak': 'break-word'}),
+                html.Span(name, className='small', style={'marginLeft': '6px'}),
+            ], style={'paddingLeft': '44px', 'textIndent': '-44px'}),
+                style={'wordBreak': 'break-word'}),
         ]))
 
     return dbc.Table([
@@ -308,8 +314,8 @@ def _tech_ownership_table(tech_row, *, show_index: bool = True):
         cells = [html.Td(str(i), className='small text-center')] if show_index else []
         cells += [
             html.Td(name, className='small', style={'wordBreak': 'break-word'}),
-            html.Td(lv or '-', className='small text-center'),
-            html.Td(f'{portion}%' if portion else '-', className='small text-center'),
+            html.Td(lv or '-', className='small text-center', style={'textAlign': 'center'}),
+            html.Td(f'{portion}%' if portion else '-', className='small text-center', style={'textAlign': 'center'}),
         ]
         rows.append(html.Tr(cells))
 
@@ -320,8 +326,8 @@ def _tech_ownership_table(tech_row, *, show_index: bool = True):
         if show_index else []
     headers += [
         html.Th('전문분야', style={'fontSize': '0.72rem', 'width': '45%' if show_index else '55%'}),
-        html.Th('Lv', className='text-center', style={'fontSize': '0.72rem', 'width': '15%'}),
-        html.Th('보유율', className='text-center', style={'fontSize': '0.72rem', 'width': '25%'}),
+        html.Th('Lv', className='text-center', style={'fontSize': '0.72rem', 'width': '15%', 'textAlign': 'center'}),
+        html.Th('보유율', className='text-center', style={'fontSize': '0.72rem', 'width': '25%', 'textAlign': 'center'}),
     ]
 
     return dbc.Table([

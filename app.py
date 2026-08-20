@@ -7,7 +7,7 @@ import dash_bootstrap_components as dbc
 import flask
 from dash import Input, Output, callback, dcc, html, no_update
 
-from services.data_store import ASSETS_DIR, RAW_DIR
+from services.data_store import ASSETS_DIR, PHOTO_DIR, RAW_DIR
 
 app = dash.Dash(
     __name__,
@@ -85,11 +85,12 @@ def serve_photo(rid):
         flask.abort(404)
     rid_plain = str(int(rid8))
     candidates = {rid8.lower(), rid_plain.lower()}
-    for r in (rid8, rid_plain):
-        for ext in _IMG_EXTS:
-            path = os.path.join(ASSETS_DIR, 'photos', f'{r}.{ext}')
-            if os.path.isfile(path):
-                return flask.send_file(path)
+    for base_dir in (PHOTO_DIR, os.path.join(ASSETS_DIR, 'photos')):
+        for r in (rid8, rid_plain):
+            for ext in _IMG_EXTS:
+                path = os.path.join(base_dir, f'{r}.{ext}')
+                if os.path.isfile(path):
+                    return flask.send_file(path)
     if os.path.isdir(RAW_DIR):
         for fname in os.listdir(RAW_DIR):
             stem, dot, fext = fname.rpartition('.')

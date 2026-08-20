@@ -866,9 +866,9 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     support_box = _print_box(None, html.Div([
         print_eval_content,
         html.Div('양성 이력', className='small fw-semibold text-muted mt-2 mb-1'),
-        nurturing_block(tables['nurturing'], rid),
+        nurturing_block(tables['nurturing'], rid, show_empty_message=False),
         html.Div('시상 이력', className='small fw-semibold text-muted mt-2 mb-1'),
-        award_block(tables['awards'], rid, limit=3, single_line=True),
+        award_block(tables['awards'], rid, limit=3, single_line=True, show_empty_message=False),
     ]))
 
     # display:flex를 인라인 style로 직접 준다(.d-flex 유틸리티 클래스 대신) —
@@ -907,7 +907,7 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     # 열보다 전문성 요약 열이 2배 넓어지게 한다. 전문성 요약은 지면이 좁은
     # 인쇄본 특성상 주요 역할·책임/유사 연구원은 빼고(강점 분야·키워드·전문지식
     # 및 역량만) 보여준다.
-    capability_box = _print_box('보유 전문성 · 보유 기술 · 전문성 요약(LLM)', _print_box_cols([
+    capability_box = _print_box(None, _print_box_cols([
         (1, owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid,
                                    stacked=True, show_tech_index=False, show_info_hover=False)),
         (2, html.Div([
@@ -930,7 +930,7 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     ]))
 
     task_hr_box = _print_box(
-        '과제 수행 / 인사 발령 이력 (합쳐서 최근 10건, 시계열순)',
+        '과제 수행 / 인사 발령 이력(최근 10건)',
         _print_task_hr_timeline(tables['tasks'], tables['hr_orders'], rid, limit=_TASK_HR_RECENT_LIMIT),
         breakable=True,
     )

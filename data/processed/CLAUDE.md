@@ -3168,3 +3168,66 @@ NODE_EXTRA_CA_CERTS가 가리키는 번들에도 사내 루트 CA가 없어 그�
 
 검증: 이 세션에는 docker 데몬이 없어 실제 재빌드는 사용자 환경에서 확인
 필요.
+
+## 2026-08-20 (9): 연구원 프로필 카드(A4 인쇄/PDF) UI 폭 6건 수정
+
+Docker 빌드 성공 확인 후 사용자가 연구원 프로필 카드 화면을 보고 6가지를
+요청: (1) "보유 전문성 · 보유 기술 · 전문성 요약(LLM)" 박스 제목 제거,
+(2) "과제 수행 / 인사 발령 이력" 박스 제목을 "과제 수행 / 인사 발령
+이력(최근 10건)"으로 단순화, (3) 양성이력·시상이력이 없을 때 "없음"
+문구 대신 빈 칸으로, (4) 보유기술 표의 Lv·보유율 열 가운데 정렬,
+(5) 핵심기술 이름이 길어 줄바꿈될 때 이어지는 줄이 등급 배지(B급/A급)
+아래로 오지 않고 기술명 시작 위치에 맞춰 들여써지게, (6) 사진을
+`data/photo/` 폴더(원본 다운로드 전용, 용량이 커서 `data/raw`와 분리)에서도
+읽어오게.
+
+수정 — 모두 pages/researcher_profile.py의 인쇄/PDF 경로(_print_profile_
+content)와 그 하위 컴포넌트에 한정, 화면(라이브) 쪽은 그대로 둠(사용자
+요청이 "인쇄되는 내용"인 프로필 카드에 한정됐다고 판단):
+- `_print_box(None, ...)`로 (1) 제목 생략(_print_box는 title이 falsy면
+  제목 div 자체를 안 만듦), (2) 제목 문자열만 교체.
+- `components/profile_sections.py`의 `nurturing_block()`/`award_block()`에
+  `show_empty_message: bool = True` 파라미터 추가 — False면 빈 이력일 때
+  "양성 이력 없음"/"시상 이력 없음" div 대신 None을 반환(→ 렌더 안 됨).
+  화면 쪽 호출부(update_profile 콜백)는 그대로 True(기존 동작 유지),
+  인쇄 쪽만 False로 호출.
+- `components/detail_tabs.py`의 `_tech_ownership_table()` Lv/보유율
+  `<Td>`·`<Th>`에 Bootstrap `.text-center` 클래스와 별개로 인라인
+  `style={'textAlign': 'center'}`도 함께 줌 — 이 세션에서 반복 확인된
+  대로(부트스트랩 CDN이 이 샌드박스에서 막혀 있던 것과 같은 이유로 사내
+  운영 컨테이너/헤드리스 PDF 캡처 환경에서도 CDN을 못 받아올 가능성을
+  배제 못해, 인쇄/PDF에 중요한 스타일은 유틸리티 클래스만 믿지 않고
+  인라인 style로 이중 보장).
+- `_core_technology_table()`의 등급 배지+기술명 칸을 flex 레이아웃
+  (`d-flex align-items-center`) 대신 CSS hanging indent로 교체:
+  `style={'paddingLeft': '44px', 'textIndent': '-44px'}`인 컨테이너 안에
+  배지(pill)와 `marginLeft: 6px`인 기술명 span을 나란히 둠. text-indent
+  음수값은 첫 줄만 왼쪽으로 당기고(배지가 들어갈 자리), 줄바꿈된 이후
+  줄들은 padding-left(44px)를 그대로 받아 기술명 시작 위치에 맞춰
+  들여써진다 — 사용자가 그림으로 보여준 "B급 무슨무슨 / (들여쓰기)무슨
+  기술" 형태.
+- `services/data_store.py`에 `PHOTO_DIR = data/photo` 상수 추가.
+  `components/profile_sections.py`의 `load_photo_src()` 탐색 순서를
+  `(PHOTO_DIR, assets/photos, RAW_DIR)`로, `app.py`의 `/photo/<rid>`
+  라우트(serve_photo)도 동일하게 PHOTO_DIR을 assets/photos보다 먼저
+  찾도록 수정 — 둘 다 같은 순서를 유지해야 load_photo_src()가 반환한
+  URL이 실제로 서빙된다. `.gitignore`에 `data/photo/`를 `data/raw/`와
+  같은 방식으로 추가(원본 사진 파일이 형상관리에 절대 올라가지 않게).
+
+검증: `pipeline/generate_sample_data.py`로 실제 샘플 데이터(연구원 50명)
+생성 후 실제 서버 기동 + 실제 로그인(세션 쿠키 획득) + 실제 Playwright
+헤드리스로 프로필 인쇄 화면 렌더 확인.
+- (1)(2): 렌더된 HTML에 옛 제목 문자열이 없고 새 제목만 있음을 문자열
+  검사로 확인.
+- (3): awards.csv가 샘플 데이터에서 빈 데이터(0행)로 생성된 것을 이용,
+  렌더된 HTML에 "시상 이력 없음" 문자열이 없음을 확인.
+- (4): 렌더된 HTML에 Lv/보유율 `<td>`가 `text-align: center` 인라인
+  style을 실제로 갖고 있음을 확인.
+- (5): core_technology.csv에 두 줄로 줄바꿈될 만큼 긴 핵심기술명을 넣어
+  실제로 렌더 후 스크린샷으로 육안 확인 — 줄바꿈된 두 번째 줄이 "B급"
+  배지 아래가 아니라 기술명 시작 위치에 맞춰 들여써짐을 확인.
+- (6): `data/photo/00000001.png` 테스트 파일을 두고 `/photo/00000001`
+  라우트를 직접 호출해 정확히 그 파일이 그대로 서빙됨을 바이트 단위로
+  확인(cmp 일치).
+- 테스트에 쓴 샘플 데이터·테스트 사진·테스트 계정은 모두 삭제해 원상
+  복구(`data/processed/CLAUDE.md`는 보존).
