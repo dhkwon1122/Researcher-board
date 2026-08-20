@@ -502,6 +502,46 @@ def _match_row_html(s: dict, name_map: dict, dept_map: dict, org_map: dict) -> s
 </tr>'''
 
 
+def researcher_match_card_html(item: dict, name_map: dict, dept_map: dict, org_map: dict,
+                                profile_by_id: dict, anchor: str = '') -> str:
+    """연구원 한 명의 유사 연구원 매칭 카드(강점 칩 + 매칭 표). build_html()의
+    조직도 카드 나열뿐 아니라, 개별 연구원 메일 발송(services/similarity_map.py의
+    build_researcher_mail_html())에서도 그대로 재사용한다 — anchor가 빈
+    문자열이면(메일 등 fragment 링크가 필요 없는 컨텍스트) id 속성 없이 렌더링."""
+    rid = item['researcher_id']
+    name = html.escape(name_map.get(rid, rid))
+    tenure_badge = _tenure_badge_html(item.get('tenure_level', ''))
+    if item['similar']:
+        # 표시 개수(3/5/10) 토글이 "그룹당" 개수를 뜻하므로, Senior/Junior(및
+        # 근속 미상 폴백)를 별도 <tbody>로 나눠 렌더링한다 — :nth-child 기반
+        # CSS 토글이 각 tbody 안에서 독립적으로 행 위치를 세기 때문에, 이렇게만
+        # 나누면 별도 CSS 없이 그룹별 3/5/10 표시가 그대로 적용된다.
+        groups = [
+            [s for s in item['similar'] if s.get('tenure_level') == 'Senior'],
+            [s for s in item['similar'] if s.get('tenure_level') == 'Junior'],
+            [s for s in item['similar'] if s.get('tenure_level') not in ('Senior', 'Junior')],
+        ]
+        tbodies = ''.join(
+            f'<tbody>{"".join(_match_row_html(s, name_map, dept_map, org_map) for s in g)}</tbody>'
+            for g in groups if g
+        )
+        table = (
+            '<div class="table-wrap"><table class="match-table">'
+            '<thead><tr><th>유사 연구원</th><th>판정</th><th>근거</th><th>유사도</th></tr></thead>'
+            f'{tbodies}</table></div>'
+        )
+    else:
+        table = '<p class="empty">비교할 다른 연구원 데이터 없음</p>'
+    id_attr = f' id="{anchor}"' if anchor else ''
+    return f'''<div class="card"{id_attr}>
+  <div class="card-top"><h3>{name}</h3>{tenure_badge}
+    <div class="card-icons">{mmd.profile_link_html(rid)}{mmd.mail_link_html(rid)}</div>
+  </div>
+  {_chip_row_html(profile_by_id.get(rid, {}))}
+  {table}
+</div>'''
+
+
 def build_html(results: list, researchers_df: pd.DataFrame, profile_by_id: dict) -> str:
     """researchers.csv의 department('플랫폼/팀')·org_code('과제/파트')로 좌측
     사이드바 내비게이션과 본문 섹션을 그룹핑하고, 각 카드는 본인의 강점 분야/
@@ -551,36 +591,9 @@ def build_html(results: list, researchers_df: pd.DataFrame, profile_by_id: dict)
                 sections.append(f'<div class="org-heading">{html.escape(org)}</div>')
             for item in org_items:
                 rid = item['researcher_id']
-                name = html.escape(name_map.get(rid, rid))
-                tenure_badge = _tenure_badge_html(item.get('tenure_level', ''))
-                if item['similar']:
-                    # 표시 개수(3/5/10) 토글이 "그룹당" 개수를 뜻하므로, Senior/Junior(및
-                    # 근속 미상 폴백)를 별도 <tbody>로 나눠 렌더링한다 — :nth-child 기반
-                    # CSS 토글이 각 tbody 안에서 독립적으로 행 위치를 세기 때문에, 이렇게만
-                    # 나누면 별도 CSS 없이 그룹별 3/5/10 표시가 그대로 적용된다.
-                    groups = [
-                        [s for s in item['similar'] if s.get('tenure_level') == 'Senior'],
-                        [s for s in item['similar'] if s.get('tenure_level') == 'Junior'],
-                        [s for s in item['similar'] if s.get('tenure_level') not in ('Senior', 'Junior')],
-                    ]
-                    tbodies = ''.join(
-                        f'<tbody>{"".join(_match_row_html(s, name_map, dept_map, org_map) for s in g)}</tbody>'
-                        for g in groups if g
-                    )
-                    table = (
-                        '<div class="table-wrap"><table class="match-table">'
-                        '<thead><tr><th>유사 연구원</th><th>판정</th><th>근거</th><th>유사도</th></tr></thead>'
-                        f'{tbodies}</table></div>'
-                    )
-                else:
-                    table = '<p class="empty">비교할 다른 연구원 데이터 없음</p>'
-                sections.append(f'''<div class="card" id="{anchor_of[rid]}">
-  <div class="card-top"><h3>{name}</h3>{tenure_badge}
-    <div class="card-icons">{mmd.profile_link_html(rid)}</div>
-  </div>
-  {_chip_row_html(profile_by_id.get(rid, {}))}
-  {table}
-</div>''')
+                sections.append(researcher_match_card_html(
+                    item, name_map, dept_map, org_map, profile_by_id, anchor_of[rid],
+                ))
 
     sidebar = (
         '<h1>유사도 콘솔</h1>'

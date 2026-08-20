@@ -310,11 +310,18 @@ def _render_cumulative_result(rid: str | None):
         dbc.CardBody([
             html.Div(header, className='mb-2'),
             html.Div(llm_summary_block(profile, similar, name_map)),
-            dbc.Button(
-                [html.I(className='bi bi-person-badge-fill me-1'), '개별 프로필 열기'],
-                href=f'/researcher-profile?id={rid}', target='_top',
-                color='primary', outline=True, size='sm', className='mt-3',
-            ),
+            html.Div([
+                dbc.Button(
+                    [html.I(className='bi bi-person-badge-fill me-1'), '개별 프로필 열기'],
+                    href=f'/?id={rid}', target='_top',
+                    color='primary', outline=True, size='sm', className='mt-3 me-2',
+                ),
+                dbc.Button(
+                    [html.I(className='bi bi-envelope me-1'), '메일로 보내기'],
+                    id={'type': 'mail-open-btn', 'rid': rid},
+                    color='secondary', outline=True, size='sm', className='mt-3',
+                ),
+            ]),
         ]),
         className='shadow-sm',
     )
@@ -599,6 +606,36 @@ def _go_to_researcher_card_from_graph(node_data):
     return 'researcher', f"r-{node_data['id']}"
 
 
+def _mail_researcher_modal(mail_rid: str | None = None, mail_rid_name: str = ''):
+    """연구원 개별 카드(정적 리포트 안 ✉ 아이콘, target="_top" 이동으로
+    ?mail_rid=... 진입 / 누적기준 카드의 '메일로 보내기' 버튼) 양쪽에서
+    쓰는 공용 발송 모달. 이 화면을 열 수 있는 사람 누구나 사용 가능(별도
+    권한 게이트 없음 — 이미 이 화면에서 조회 가능한 정보이므로)."""
+    title = f'{mail_rid_name} ({mail_rid}) — 메일로 보내기' if mail_rid else '메일로 보내기'
+    return dbc.Modal([
+        dbc.ModalHeader(dbc.ModalTitle(title, id='mail-researcher-modal-title')),
+        dbc.ModalBody([
+            html.P(
+                '이 연구원의 보유 전문성과 유사 연구원 매칭 결과를 메일로 보냅니다. '
+                '화면에 저장되지 않고, 발송할 때마다 최신 데이터로 새로 만듭니다.',
+                className='small text-muted mb-2',
+            ),
+            dbc.Input(
+                id='mail-researcher-recipients', size='sm',
+                placeholder='수신자 이메일(콤마로 구분, 예: a@samsung.com,b@samsung.com)',
+            ),
+            html.Div(id='mail-researcher-alert', className='mt-2'),
+        ]),
+        dbc.ModalFooter([
+            dbc.Button('닫기', id='mail-researcher-cancel', color='secondary', size='sm'),
+            dbc.Button(
+                [html.I(className='bi bi-send me-1'), '발송'],
+                id='mail-researcher-send', color='primary', size='sm',
+            ),
+        ]),
+    ], id='mail-researcher-modal', is_open=bool(mail_rid))
+
+
 def _download_panel():
     """"연구원"/"연구원 ↔ 연구원" 탭 아래(전문성 MAP 탭에서는 숨김)에 붙는
     보유 전문성·유사 연구원 명단 엑셀 다운로드 패널. 개인별 검색 또는
@@ -652,15 +689,26 @@ def _download_panel():
     ], id='expertise-download-panel')
 
 
-def layout(highlight_researcher=None, **_kwargs):
+def layout(highlight_researcher=None, mail_rid=None, **_kwargs):
     """기본 진입 탭은 '연구원'. 다만 highlight_researcher가 있으면(URL 쿼리
     파라미터, 예: /researcher-similarity-map?highlight_researcher=00000001)
     그 연구원을 별 마커로 강조·확대해 보여줘야 하므로 예외적으로 '전문성 MAP'
     탭에 바로 랜딩한다 — 단, _MAP_TAB_HIDDEN이면 그 탭 자체가 없으므로
-    항상 '연구원' 탭으로 진입한다."""
+    항상 '연구원' 탭으로 진입한다.
+
+    mail_rid가 있으면(정적 리포트 카드의 ✉ 아이콘이 target="_top"으로 전달한
+    쿼리 파라미터, 예: ?mail_rid=00000001) 그 연구원의 메일 발송 모달을
+    처음부터 열어 둔 채로 진입한다."""
     if _MAP_TAB_HIDDEN:
         highlight_researcher = None
     default_tab = 'map' if highlight_researcher else 'researcher'
+    mail_rid_name = ''
+    if mail_rid:
+        researchers_df = read_processed('researchers')
+        if not researchers_df.empty:
+            match = researchers_df[researchers_df['researcher_id'] == mail_rid]
+            if not match.empty:
+                mail_rid_name = str(match.iloc[0].get('name', ''))
     initial_content = (
         _map_tab_content(highlighted_rid=highlight_researcher)
         if default_tab == 'map' else _iframe_tab('researcher')
@@ -699,6 +747,8 @@ def layout(highlight_researcher=None, **_kwargs):
         _download_panel(),
         dcc.Store(id='expertise-pending-highlight', data=highlight_researcher),
         dcc.Store(id='expertise-scroll-target'),
+        dcc.Store(id='mail-researcher-target-rid', data=mail_rid),
+        _mail_researcher_modal(mail_rid, mail_rid_name),
     ])
 
 
@@ -921,3 +971,82 @@ def _blink_highlight(n_intervals):
     patch = Patch()
     patch['data'][-1]['marker']['opacity'] = _BLINK_OPACITY[n_intervals % 2]
     return patch
+
+
+# ── 콜백: 개별 연구원 메일 발송 모달 ─────────────────────────────────────────
+
+@callback(
+    Output('mail-researcher-modal', 'is_open', allow_duplicate=True),
+    Output('mail-researcher-target-rid', 'data', allow_duplicate=True),
+    Output('mail-researcher-modal-title', 'children', allow_duplicate=True),
+    Output('mail-researcher-alert', 'children', allow_duplicate=True),
+    Input({'type': 'mail-open-btn', 'rid': dash.ALL}, 'n_clicks'),
+    prevent_initial_call=True,
+)
+def _open_mail_modal_from_card(n_clicks_list):
+    """누적기준 검색 결과 카드의 '메일로 보내기' 버튼 — 정적 리포트 카드의
+    ✉ 아이콘(target="_top" 페이지 이동)과 달리 이쪽은 이미 Dash 컴포넌트
+    트리 안이라 콜백으로 곧바로 모달을 연다."""
+    if not any(n for n in n_clicks_list if n):
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update
+    triggered = dash.ctx.triggered_id
+    if not triggered:
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update
+    rid = triggered['rid']
+    name = ''
+    researchers_df = read_processed('researchers')
+    if not researchers_df.empty:
+        match = researchers_df[researchers_df['researcher_id'] == rid]
+        if not match.empty:
+            name = str(match.iloc[0].get('name', ''))
+    return True, rid, f'{name} ({rid}) — 메일로 보내기', []
+
+
+@callback(
+    Output('mail-researcher-modal', 'is_open', allow_duplicate=True),
+    Input('mail-researcher-cancel', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def _close_mail_modal(_):
+    return False
+
+
+@callback(
+    Output('mail-researcher-alert', 'children', allow_duplicate=True),
+    Input('mail-researcher-send', 'n_clicks'),
+    State('mail-researcher-target-rid', 'data'),
+    State('mail-researcher-recipients', 'value'),
+    prevent_initial_call=True,
+)
+def _send_researcher_mail(_, rid, recipients_raw):
+    if not rid:
+        return dbc.Alert('대상 연구원을 확인할 수 없습니다.', color='danger',
+                         dismissable=True, className='py-2 small mb-0')
+    recipients = [addr.strip() for addr in (recipients_raw or '').split(',') if addr.strip()]
+    if not recipients:
+        return dbc.Alert('수신자 이메일을 입력하세요.', color='warning',
+                         dismissable=True, className='py-2 small mb-0')
+
+    from services.similarity_map import build_researcher_mail_html
+    html_out = build_researcher_mail_html(rid)
+    if html_out is None:
+        return dbc.Alert(
+            '이 연구원의 보유 전문성 데이터가 없습니다. 먼저 파이프라인을 실행하세요.',
+            color='warning', dismissable=True, className='py-2 small mb-0',
+        )
+
+    name = rid
+    researchers_df = read_processed('researchers')
+    if not researchers_df.empty:
+        match = researchers_df[researchers_df['researcher_id'] == rid]
+        if not match.empty:
+            name = str(match.iloc[0].get('name', '')) or rid
+
+    from pipeline.mailer import MailError, send_html_email
+    try:
+        send_html_email(recipients, f'{name}({rid}) 보유 전문성', html_out)
+    except MailError as exc:
+        return dbc.Alert(f'메일 발송 실패: {exc}', color='danger',
+                         dismissable=True, className='py-2 small mb-0')
+    return dbc.Alert(f'{len(recipients)}명에게 발송했습니다.', color='success',
+                     dismissable=True, className='py-2 small mb-0')

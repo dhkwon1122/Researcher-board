@@ -2908,3 +2908,60 @@ HTML로 저장됐으므로 문제가 없었지만, 이제는 실행 중인 앱 �
 으로 `pages.researcher_similarity_map._render_report_html('researcher')`를
 직접 호출해 두 경로 모두 결과 HTML에 `org-tree` 클래스와 실제 조직명
 ("과제1팀")이 포함되는지(평면 폴백이 아닌지) 확인.
+
+## 2026-08-20: 개별 연구원 전문성 메일 발송 + 프로필 링크 404 수정
+
+**프로필 링크 404**: 사용자 보고 — "보유 전문성 화면에서 프로필 버튼 클릭하면
+404 error가 떠". 원인: `pages/researcher_profile.py`의 `dash.register_page()`
+경로가 과거 어느 시점에 `/researcher-profile` → `/`로 바뀌었는데(git log로
+확인), `pipeline/rd_specialist_markdown.py`의 `profile_link_html()`/
+`profile_icon_link_html()`과 `pages/researcher_similarity_map.py`의 누적기준
+카드 3곳이 옛 경로(`/researcher-profile?id=...`)를 그대로 쓰고 있었다 —
+모두 `/?id=...`로 수정(쿼리 파라미터 이름 `id`는 그대로, 경로만 교정).
+
+**개별 연구원 전문성 메일 발송**: 사용자 요청 — "과제 전문성 분석 리포트
+보다는 개별 연구원 전문성에 대해 조회된 내용을 메일로 보내는 기능을
+만들어줘." 확인 질문으로 범위 확정: (1) 위치 = "보유 전문성" 탭의 개별
+카드마다, (2) 권한 = 그 프로필을 조회할 수 있는 사람 누구나(admin 게이트
+없음 — 이미 화면에서 조회 가능한 정보라서), (3) 내용 = 보유 전문성 +
+유사 연구원 매칭 결과 둘 다.
+
+수정:
+- `pipeline/process_researcher_expertise.py`: `_researcher_card_html()` →
+  `researcher_card_html()` 공개(anchor 기본값 ''), card-icons에
+  `mmd.mail_link_html(rid)` 추가.
+- `pipeline/process_researcher_similarity.py`: 카드 렌더링 로직을
+  `researcher_match_card_html()`로 추출·공개(기존 build_html() 루프는 이제
+  이 함수를 호출), card-icons에 `mmd.mail_link_html(rid)` 추가.
+- `pipeline/rd_specialist_markdown.py`: `mail_link_html(researcher_id)`
+  신규(정적 리포트는 iframe 안이라 콜백을 못 붙이므로, profile_link_html()과
+  동일하게 target="_top" 이동 — `/researcher-similarity-map?mail_rid=...`로
+  최상위 대시보드를 이동시키면 그 화면이 메일 발송 모달을 연다).
+  `mail_page(title, body_html)` 신규 — console_page()와 같은 CONSOLE_STYLE을
+  재사용하되 조직도 사이드바·JS 없는 단순 셸(이메일 본문용).
+- `services/similarity_map.py`: `build_researcher_mail_html(rid)` 신규 —
+  `read_expertise_profiles()`/`read_similar_researchers()`(DB 우선/파일
+  폴백)로 한 사람의 보유 전문성 카드 + 유사 연구원 매칭 카드 2장만 뽑아
+  `mail_page()`로 감싼다. 데이터 없으면 None.
+- `pages/researcher_similarity_map.py`: `layout()`에 `mail_rid` URL 쿼리
+  파라미터 추가(있으면 발송 모달을 처음부터 연 채로 진입). 신규
+  `_mail_researcher_modal()`(수신자 입력 + 발송 버튼, 권한 게이트 없음).
+  "누적기준" 검색 결과 카드(`_render_cumulative_result()`)에도 같은 모달을
+  여는 '메일로 보내기' 버튼 추가(이쪽은 이미 Dash 컴포넌트 트리 안이라
+  패턴매칭 콜백으로 곧바로 모달을 염 — target="_top" 이동 불필요). 발송
+  콜백은 `pipeline.mailer.send_html_email()`을 직접 호출(과제 전문성 리포트
+  메일 기능과 달리 `process_project_expertise.py`를 거치지 않으므로, 그
+  파일의 bare-import MailError와 dotted-import MailError가 서로 다른
+  클래스가 되는 문제(위 8/19 항목 참고)는 여기선 애초에 해당 없음 — 항상
+  `pipeline.mailer`에서 `MailError`와 `send_html_email`을 같이 가져옴).
+
+검증: 5명 미만 규모 합성 픽스처(researchers.csv + 두 JSON)로 (1)
+`build_researcher_mail_html()`이 대상자 이름/유사 연구원 이름을 포함한
+HTML을 만드는지, 데이터 없는 사번엔 None을 반환하는지 (2) 정적 리포트
+HTML(연구원/연구원↔연구원 둘 다)에 `mail_rid=` 링크와 수정된 `/?id=`
+프로필 링크가 포함되는지 (3) `layout(mail_rid=...)`가 모달을 열어 둔 채로
+반환되는지 (4) 발송 콜백을 직접 호출해 수신자 미입력/대상자 없음/데이터
+없음/실제(모킹 아닌) 메일 API 미설정 시 `MailError`/`requests.post`만
+모킹한 성공 경로 5가지 모두 확인 (5) 누적기준 카드에 올바른 rid를 담은
+패턴매칭 버튼이 포함되는지 확인. 픽스처는 모두 `.gitignore`의
+`data/processed/*` 대상이라 커밋되지 않음.

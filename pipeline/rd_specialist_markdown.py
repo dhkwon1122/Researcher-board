@@ -208,7 +208,7 @@ def profile_link_html(researcher_id: str) -> str:
     ?id=researcher_id를 그대로 받아 그 사람으로 선택해 보여준다. 기본 아이콘은
     iframe 밖(최상위 대시보드)에서 그대로 이동해야 하므로 target="_top", 새 창
     아이콘은 현재 화면을 유지한 채 프로필만 별도 창/탭으로 열도록 target="_blank"."""
-    href = f'/researcher-profile?id={researcher_id}'
+    href = f'/?id={researcher_id}'
     return (
         f'<a class="map-link" href="{href}" target="_top" title="연구원 프로필로 이동">'
         f'👤 프로필</a>'
@@ -221,11 +221,21 @@ def profile_icon_link_html(researcher_id: str) -> str:
     """유사 연구원 표처럼 좁은 공간(테이블 행)에 붙이는 아이콘 전용(텍스트
     없는) 프로필 이동 링크 — profile_link_html의 소형 버전. 이동(target="_top")
     아이콘과 새 창으로 열기(target="_blank") 아이콘을 나란히 붙인다."""
-    href = f'/researcher-profile?id={researcher_id}'
+    href = f'/?id={researcher_id}'
     return (
         f'<a class="row-icon-link" href="{href}" target="_top" title="연구원 프로필로 이동">👤</a>'
         f'<a class="row-icon-link" href="{href}" target="_blank" title="연구원 프로필을 새 창으로 열기">↗</a>'
     )
+
+
+def mail_link_html(researcher_id: str) -> str:
+    """연구원 카드 우측 상단에 붙는 '메일로 보내기' 아이콘. 정적 리포트는
+    iframe(srcDoc) 안이라 Dash 콜백을 직접 붙일 수 없으므로, profile_link_html()과
+    동일한 패턴으로 target="_top" 이동을 쓴다 — 최상위 대시보드가
+    /researcher-similarity-map?mail_rid=researcher_id로 이동하면
+    pages/researcher_similarity_map.py가 그 연구원의 메일 발송 모달을 연다."""
+    href = f'/researcher-similarity-map?mail_rid={researcher_id}'
+    return f'<a class="map-link" href="{href}" target="_top" title="이 연구원 정보를 메일로 보내기">✉ 메일</a>'
 
 
 def strength_section_html(fields: list, keywords: list) -> str:
@@ -651,6 +661,29 @@ def console_page(title: str, sidebar_html: str, body_html: str, detail_view: boo
 <main><div class="content">{placeholder}{body_html}</div></main>
 <button id="back-to-top" class="back-to-top" title="맨 위로" aria-label="맨 위로">↑</button>
 <script>{_CONSOLE_SCRIPT}</script>
+</body>
+</html>'''
+
+
+def mail_page(title: str, body_html: str) -> str:
+    """개별 연구원 정보를 메일로 보낼 때 쓰는, 사이드바 없는 단순 리포트 셸.
+    console_page()와 같은 CONSOLE_STYLE을 그대로 재사용해 카드/칩/표 시각
+    스타일은 동일하게 유지하되, 조직도 사이드바·드래그 리사이즈·클릭 확장
+    스크립트는 이메일 본문에 필요 없어(또는 메일 클라이언트가 <script>를
+    거의 항상 제거해) 뺐다(services/similarity_map.py의
+    build_researcher_mail_html()이 사용)."""
+    return f'''<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>{title}</title>
+<style>{CONSOLE_STYLE}</style>
+</head>
+<body>
+<main><div class="content" style="max-width:900px;margin:0 auto;padding:24px;">
+<h1 style="margin-top:0;">{html.escape(title)}</h1>
+{body_html}
+</div></main>
 </body>
 </html>'''
 
