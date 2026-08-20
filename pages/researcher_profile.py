@@ -116,6 +116,36 @@ def _load_selector_data(current_only: bool = True):
         return [], [], {}
 
 
+def _mail_profile_modal():
+    """"프로필 인쇄 (A4)"가 화면에 만드는 것과 동일한 콘텐츠를 헤드리스
+    브라우저(Playwright, services/profile_pdf.py)로 PDF 캡처해 메일에
+    첨부한다. 별도 권한 게이트 없음(이미 이 화면에서 조회 가능한 정보라서
+    — 다른 메일 발송 기능들과 동일한 원칙)."""
+    return dbc.Modal([
+        dbc.ModalHeader(dbc.ModalTitle('메일로 보내기 (PDF 첨부)')),
+        dbc.ModalBody([
+            html.P(
+                '현재 조회 중인 연구원의 "프로필 인쇄 (A4)" 내용을 PDF로 만들어 '
+                '메일에 첨부해 보냅니다. 화면에 저장되지 않고, 발송할 때마다 '
+                '최신 데이터로 새로 만듭니다.',
+                className='small text-muted mb-2',
+            ),
+            dbc.Input(
+                id='profile-mail-recipients', size='sm',
+                placeholder='수신자 이메일(콤마로 구분, 비워두면 본인에게 발송)',
+            ),
+            html.Div(id='profile-mail-alert', className='mt-2'),
+        ]),
+        dbc.ModalFooter([
+            dbc.Button('닫기', id='profile-mail-cancel', color='secondary', size='sm'),
+            dbc.Button(
+                [html.I(className='bi bi-send me-1'), '발송'],
+                id='profile-mail-send', color='primary', size='sm',
+            ),
+        ]),
+    ], id='profile-mail-modal', is_open=False)
+
+
 def layout(id=None, ids=None, **_kwargs):
     if ids:
         return _bulk_layout(ids)
@@ -158,11 +188,17 @@ def layout(id=None, ids=None, **_kwargs):
                 ),
             ),
             dbc.Col(
-                html.Button(
-                    [html.I(className='bi bi-printer me-1'), '프로필 인쇄 (A4)'],
-                    id='profile-print-btn', n_clicks=0,
-                    className='btn btn-outline-secondary btn-sm',
-                ),
+                html.Div([
+                    html.Button(
+                        [html.I(className='bi bi-printer me-1'), '프로필 인쇄 (A4)'],
+                        id='profile-print-btn', n_clicks=0,
+                        className='btn btn-outline-secondary btn-sm me-2',
+                    ),
+                    dbc.Button(
+                        [html.I(className='bi bi-envelope me-1'), '메일로 보내기 (PDF 첨부)'],
+                        id='profile-mail-btn', color='secondary', outline=True, size='sm',
+                    ),
+                ]),
                 width='auto', className='d-flex align-items-center',
             ),
         ], justify='between', align='center', className='mb-3 no-print'),
@@ -175,6 +211,7 @@ def layout(id=None, ids=None, **_kwargs):
             ], className='g-3 mb-3'),
         ], className='no-print'),
         html.Div(id='profile-print-content', className='profile-print-only'),
+        _mail_profile_modal(),
     ])
 
 
@@ -1192,19 +1229,11 @@ clientside_callback(
     """
     function(n) {
         if (n > 0) {
-            // assets/custom.css의 이름 없는(unnamed) @page는 조직별 비교(A3
-            // landscape) 화면 전용이라, 이 페이지를 인쇄하는 동안만 <style>을
-            // head 맨 뒤에 추가해 같은 unnamed @page를 A4로 임시 덮어쓴다
-            // (소스 순서상 나중 규칙이 이겨 A3보다 우선 적용됨). 인쇄 대화상자가
-            // 닫히면(취소 포함) afterprint에서 제거해 다른 화면 인쇄에 영향이
-            // 남지 않게 한다.
-            var STYLE_ID = 'profile-print-a4-page-size';
-            var existing = document.getElementById(STYLE_ID);
-            if (existing) { existing.remove(); }
-            var style = document.createElement('style');
-            style.id = STYLE_ID;
-            style.textContent = '@media print { @page { size: A4 portrait; margin: 14mm 16mm; } }';
-            document.head.appendChild(style);
+            // 인쇄 준비(A4 @page 오버라이드 + 논문·특허 표 실측 기반 자르기)는
+            // assets/profile_print.js의 window.__prepareProfilePrint()로
+            // 옮겨 서버사이드 PDF 첨부 발송(services/profile_pdf.py, 헤드리스
+            // 브라우저가 같은 함수를 호출)과 공유한다.
+            window.__prepareProfilePrint();
 
             // 버튼 클릭 직후 Dash가 콜백 처리 중 표시하는 "Updating..."
             // 문서 제목이 브라우저 인쇄 머리글에 그대로 찍히는 문제가
@@ -1213,93 +1242,8 @@ clientside_callback(
             var originalTitle = document.title;
             document.title = '연구원 프로필';
 
-            // 논문/특허 실적 상세(제목이 길면 줄바꿈되는 표)가 한 페이지를
-            // 넘지 않도록, 인쇄 직전에 각 .print-page-block의 실제 렌더링
-            // 높이를 재서 페이지 예산을 넘으면 표 뒤쪽 행부터 순서대로
-            // 숨기고 "외 N건 더"를 채운다. 서버(파이썬)에서는 제목 줄바꿈
-            // 등을 미리 정확히 알 수 없어 행 수를 고정으로 자르지 않고,
-            // 이렇게 실측 기반으로 동적으로 결정한다.
-            //
-            // .profile-print-only는 화면에서 display:none이라 평소에는
-            // 실제 렌더링 높이를 잴 수 없고, beforeprint 시점에도(적어도
-            // 헤드리스 크로미움에서는 실측 결과 0으로 확인됨) 인쇄 레이아웃이
-            // 아직 적용되지 않는다. 그래서 인쇄용 폰트 크기(10.5px 등,
-            // assets/custom.css @media print 규칙과 동일)를 흉내낸 임시
-            // <style>을 붙이고, 컨테이너를 화면 밖(왼쪽 -99999px)에 실제
-            // 페이지 폭으로 잠깐 표시해 진짜 레이아웃으로 측정한 뒤 원래
-            // 상태로 되돌린다 — 화면에는 전혀 보이지 않는다. 재인쇄해도 항상
-            // 전체 행을 먼저 다시 보이는 상태로 되돌린 뒤 다시 계산해(멱등)
-            // 반복 클릭에 따라 누적으로 더 잘려나가지 않게 한다.
-            var container = document.getElementById('profile-print-content');
-            if (container) {
-                var PAGE_CONTENT_WIDTH_PX = (210 - 16 * 2) * 96 / 25.4;
-                // 화면 밖에 임시로 렌더링해 재는 높이가 실제 인쇄 결과보다
-                // 살짝(실측 30~50px 안팎) 작게 나오는 오차가 있어(오프스크린
-                // 렌더링과 실제 인쇄 파이프라인의 미세한 레이아웃 차이로
-                // 추정), 안전 여백을 넉넉히 빼서 경계선에서 한 페이지를
-                // 넘기지 않게 한다.
-                var PAGE_HEIGHT_SAFETY_MARGIN_PX = 80;
-                var PAGE_HEIGHT_PX = (297 - 14 * 2) * 96 / 25.4 - PAGE_HEIGHT_SAFETY_MARGIN_PX;
-
-                var MEASURE_STYLE_ID = 'profile-print-measure-style';
-                var existingMeasureStyle = document.getElementById(MEASURE_STYLE_ID);
-                if (existingMeasureStyle) { existingMeasureStyle.remove(); }
-                var measureStyle = document.createElement('style');
-                measureStyle.id = MEASURE_STYLE_ID;
-                measureStyle.textContent =
-                    '#profile-print-content.__pp-measuring, #profile-print-content.__pp-measuring * {' +
-                    'font-size:10.5px !important; line-height:1.45 !important;}' +
-                    '#profile-print-content.__pp-measuring .print-title{font-size:30px !important;}' +
-                    '#profile-print-content.__pp-measuring .print-page2-title{font-size:16px !important;}' +
-                    '#profile-print-content.__pp-measuring{display:block !important; position:fixed !important;' +
-                    'left:-99999px !important; top:0 !important; width:' + PAGE_CONTENT_WIDTH_PX + 'px !important;}';
-                document.head.appendChild(measureStyle);
-                container.classList.add('__pp-measuring');
-
-                document.querySelectorAll('.print-page-block').forEach(function(block) {
-                    // 논문·특허 표가 한 블록(페이지)을 같이 쓰므로(제한 사항:
-                    // 합쳐서 1페이지), 표별로 각자 맞추는 게 아니라 블록
-                    // 전체(둘 합계) 높이가 예산을 넘지 않을 때까지, 그 순간
-                    // 행이 더 많이 남은 표에서 한 줄씩 줄여 균형 있게 맞춘다.
-                    var entries = [];
-                    block.querySelectorAll('.print-autofit-table').forEach(function(table) {
-                        var tbody = table.querySelector('.print-autofit-body');
-                        var note = table.parentElement ? table.parentElement.querySelector('.print-autofit-note') : null;
-                        if (!tbody) { return; }
-                        var rows = tbody.rows;
-                        for (var i = 0; i < rows.length; i++) { rows[i].style.display = ''; }
-                        if (note) { note.style.display = 'none'; note.textContent = ''; }
-                        entries.push({rows: rows, visible: rows.length, note: note});
-                    });
-                    if (!entries.length) { return; }
-
-                    while (block.getBoundingClientRect().height > PAGE_HEIGHT_PX) {
-                        var target = null;
-                        for (var e = 0; e < entries.length; e++) {
-                            if (entries[e].visible > 1 && (!target || entries[e].visible > target.visible)) {
-                                target = entries[e];
-                            }
-                        }
-                        if (!target) { break; }
-                        target.rows[target.visible - 1].style.display = 'none';
-                        target.visible--;
-                    }
-
-                    entries.forEach(function(entry) {
-                        var removedCount = entry.rows.length - entry.visible;
-                        if (removedCount > 0 && entry.note) {
-                            entry.note.textContent = '외 ' + removedCount + '건 더';
-                            entry.note.style.display = '';
-                        }
-                    });
-                });
-
-                container.classList.remove('__pp-measuring');
-                measureStyle.remove();
-            }
-
             var cleanup = function() {
-                var el = document.getElementById(STYLE_ID);
+                var el = document.getElementById('profile-print-a4-page-size');
                 if (el) { el.remove(); }
                 document.title = originalTitle;
                 window.removeEventListener('afterprint', cleanup);
@@ -1339,3 +1283,79 @@ def save_comment(n_clicks, rid, year, author_type, text):
         return dbc.Alert('저장 완료', color='success', className='py-1 px-2 mb-0')
     except Exception as exc:
         return dbc.Alert(f'저장 실패: {exc}', color='danger', className='py-1 px-2 mb-0')
+
+
+# ── 콜백: 프로필 메일 발송(PDF 첨부) 모달 ─────────────────────────────────────
+
+@callback(
+    Output('profile-mail-modal', 'is_open', allow_duplicate=True),
+    Output('profile-mail-alert', 'children', allow_duplicate=True),
+    Input('profile-mail-btn', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def _open_profile_mail_modal(n_clicks):
+    if not n_clicks:
+        return no_update, no_update
+    return True, []
+
+
+@callback(
+    Output('profile-mail-modal', 'is_open', allow_duplicate=True),
+    Input('profile-mail-cancel', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def _close_profile_mail_modal(_):
+    return False
+
+
+@callback(
+    Output('profile-mail-alert', 'children', allow_duplicate=True),
+    Input('profile-mail-send', 'n_clicks'),
+    State('researcher-select', 'value'),
+    State('profile-mail-recipients', 'value'),
+    prevent_initial_call=True,
+)
+def _send_profile_mail(_, rid, recipients_raw):
+    if not rid:
+        return dbc.Alert('대상 연구원을 확인할 수 없습니다.', color='danger',
+                         dismissable=True, className='py-2 small mb-0')
+
+    recipients = [addr.strip() for addr in (recipients_raw or '').split(',') if addr.strip()]
+    if not recipients:
+        # 수신자를 비워두면 로그인한 본인(로그인 ID@samsung.com)에게 보낸다.
+        from services.auth import current_user_mail_default
+        self_mail = current_user_mail_default()
+        if not self_mail:
+            return dbc.Alert('수신자 이메일을 입력하세요.', color='warning',
+                             dismissable=True, className='py-2 small mb-0')
+        recipients = [self_mail]
+
+    import flask
+    session_cookie = flask.request.cookies.get('session', '')
+
+    from services.profile_pdf import ProfilePdfError, render_profile_pdf
+    try:
+        pdf_bytes = render_profile_pdf(rid, session_cookie)
+    except ProfilePdfError as exc:
+        return dbc.Alert(f'PDF 생성 실패: {exc}', color='danger',
+                         dismissable=True, className='py-2 small mb-0')
+
+    researchers_df = read_processed('researchers')
+    name = rid
+    if not researchers_df.empty:
+        match = researchers_df[researchers_df['researcher_id'] == rid]
+        if not match.empty:
+            name = str(match.iloc[0].get('name', '')) or rid
+
+    from pipeline.mailer import MailError, send_html_email
+    body_html = f'<p>{name}({rid})님의 프로필을 PDF로 첨부합니다.</p>'
+    try:
+        send_html_email(
+            recipients, f'{name}({rid}) 프로필', body_html,
+            attachments=[(f'{name}({rid})_프로필.pdf', pdf_bytes)],
+        )
+    except MailError as exc:
+        return dbc.Alert(f'메일 발송 실패: {exc}', color='danger',
+                         dismissable=True, className='py-2 small mb-0')
+    return dbc.Alert(f"발송했습니다 ({', '.join(recipients)})", color='success',
+                     dismissable=True, className='py-2 small mb-0')

@@ -82,6 +82,18 @@ RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
       ${PIP_CERT:+--cert "$PIP_CERT"} \
       -r requirements.txt gunicorn
 
+# ── 2.5) Playwright 헤드리스 브라우저 설치 (개별 프로필 PDF 메일 첨부용) ──
+# services/profile_pdf.py가 "프로필 인쇄 (A4)" 화면을 헤드리스 브라우저로
+# 그대로 렌더링해 PDF로 캡처한다(pipeline/mailer.py의 첨부파일 발송과 함께
+# 씀). --with-deps가 Chromium 실행에 필요한 시스템 라이브러리까지 apt로
+# 설치한다. 이미지가 커지고(+300MB 안팎) 브라우저 바이너리를 프록시로
+# 내려받아야 하므로, 이 다운로드가 사내망에서 막혀 있으면 이 단계에서
+# 빌드가 실패할 수 있다 — 그 경우 사내 미러가 있다면
+# PLAYWRIGHT_DOWNLOAD_HOST로 지정하거나, 이 레이어를 잠시 건너뛰고 PDF
+# 첨부 메일 기능만 비활성 상태로 배포할 것(다른 기능에는 영향 없음).
+RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
+    playwright install --with-deps chromium
+
 # ── 3) 앱 소스 복사 ──
 # data/ 와 .env 는 .dockerignore 로 제외 → 컨테이너에는 볼륨/시크릿으로 주입.
 COPY . .

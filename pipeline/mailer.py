@@ -45,12 +45,20 @@ class MailError(RuntimeError):
     """메일 API 미설정 또는 발송 실패를 알리는 예외."""
 
 
-def send_html_email(to: list[str], subject: str, html_body: str) -> None:
+def send_html_email(to: list[str], subject: str, html_body: str,
+                     attachments: list[tuple[str, bytes]] | None = None) -> None:
     """to(수신자 이메일 주소 목록)에게 html_body를 HTML 본문으로 발송한다.
     MAIL_API_URL은 base URL만 넣으면 된다(예: https://mail.internal.example.com)
     — 실제 호출은 이 함수가 뒤에 /mails/send?userId=...를 이어붙인 주소로
     나간다. MAIL_API_URL/MAIL_TOKEN/MAIL_SYSTEM_ID/MAIL_FROM 미설정이거나
-    발송 자체가 실패하면 MailError."""
+    발송 자체가 실패하면 MailError.
+
+    attachments를 주면(예: [('홍길동(00000001)_프로필.pdf', pdf_bytes)])
+    JSON 단일 바디 대신 멀티파트로 보낸다 — 이 API는 첨부파일이 있을 때
+    'mail' 필드(JSON 문자열, 파일명 없는 폼 필드)와 'attachments' 필드
+    (파일마다 하나씩, 같은 필드명 반복)로 받는다(사용자가 실제 호출 코드로
+    확인: requests.post(url, data=[('mail', (None, json.dumps(payload)))],
+    files=[('attachments', fileobj), ...])). 이 형태를 그대로 재현한다."""
     base_url = os.environ.get('MAIL_API_URL', '').strip()
     token = os.environ.get('MAIL_TOKEN', '').strip()
     system_id = os.environ.get('MAIL_SYSTEM_ID', '').strip()
@@ -94,14 +102,31 @@ def send_html_email(to: list[str], subject: str, html_body: str) -> None:
 
     timeout = float(os.environ.get('MAIL_TIMEOUT', '30') or '30')
     try:
-        resp = requests.post(
-            full_url,
-            headers=headers,
-            data=json.dumps(payload),
-            proxies=proxies,
-            verify=False,
-            timeout=timeout,
-        )
+        if attachments:
+            # 멀티파트 요청은 requests가 Content-Type: multipart/form-data;
+            # boundary=...를 스스로 정해야 하므로, 위 headers의 고정
+            # application/json 값을 그대로 쓰면 안 된다 — Authorization/
+            # System-ID만 남긴 별도 헤더를 쓴다.
+            multipart_headers = {'Authorization': headers['Authorization'], 'System-ID': system_id}
+            files = [('attachments', (name, content)) for name, content in attachments]
+            resp = requests.post(
+                full_url,
+                headers=multipart_headers,
+                data=[('mail', (None, json.dumps(payload)))],
+                files=files,
+                proxies=proxies,
+                verify=False,
+                timeout=timeout,
+            )
+        else:
+            resp = requests.post(
+                full_url,
+                headers=headers,
+                data=json.dumps(payload),
+                proxies=proxies,
+                verify=False,
+                timeout=timeout,
+            )
         resp.raise_for_status()
     except requests.exceptions.RequestException as exc:
         raise MailError(f'메일 발송 실패: {exc}') from exc
