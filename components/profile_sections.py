@@ -8,7 +8,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from dash import html
 
-from services.data_store import ASSETS_DIR, RAW_DIR
+from services.data_store import ASSETS_DIR, PHOTO_DIR, RAW_DIR
 from services.evaluations import first_half_column, format_evaluation_cell, salary_grade_column, second_half_column
 
 DEGREE_ORDER = ['박사', '석사', '학사', '전문대', '고교']
@@ -32,14 +32,15 @@ LEADERSHIP_DIMS = ['미래통찰', '성과창출', '몰입촉진', '인재육성
 def load_photo_src(rid: str) -> str | None:
     """사진 URL 반환. 없으면 None.
     파일이 존재하면 Flask 라우트 URL(/photo/<rid8>) 반환 — base64 인코딩 없이 HTTP 서빙.
-    탐색 순서: assets/photos/ → data/raw/ (파일명·확장자 대소문자 무관).
+    탐색 순서: data/photo/(원본 사진 전용 폴더) → assets/photos/ → data/raw/
+    (파일명·확장자 대소문자 무관).
     """
     rid8 = str(rid).zfill(8)
     rid_plain = str(int(rid8)) if rid8.isdigit() else rid8
     candidates = {rid8.lower(), rid_plain.lower()}
     _EXTS = {'png', 'jpg', 'jpeg'}
 
-    for base_dir in (os.path.join(ASSETS_DIR, 'photos'), RAW_DIR):
+    for base_dir in (PHOTO_DIR, os.path.join(ASSETS_DIR, 'photos'), RAW_DIR):
         if not os.path.isdir(base_dir):
             print(f'[photo] 디렉토리 없음: {base_dir}', file=sys.stderr)
             continue
@@ -325,7 +326,7 @@ def evaluation_incentive_summary_text(eva_df, inc_df, rid: str, years: list[int]
     ])
 
 
-def nurturing_block(nur_df, rid: str, *, limit: int | None = None):
+def nurturing_block(nur_df, rid: str, *, limit: int | None = None, show_empty_message: bool = True):
     rows = nur_df[nur_df['researcher_id'] == rid].copy() if not nur_df.empty else pd.DataFrame()
     if not rows.empty:
         sort_col = 'start_date' if 'start_date' in rows.columns else (
@@ -350,23 +351,28 @@ def nurturing_block(nur_df, rid: str, *, limit: int | None = None):
         parts = [p for p in [year_label, str(row.get('subcategory', '')).strip(), loc]
                  if p and p not in ('nan',)]
         items.append(html.Li(' / '.join(parts) if parts else '-', className='small'))
-    return html.Ul(items, className='ps-3 mb-0 small') if items else html.Div('양성 이력 없음', className='text-muted small')
+    if items:
+        return html.Ul(items, className='ps-3 mb-0 small')
+    return html.Div('양성 이력 없음', className='text-muted small') if show_empty_message else None
 
 
 AWARD_TYPES = {'그룹표창', '대표이사표창', '대표이사표창(시상금미포함)', '부문표창'}
 
 
-def award_block(awd_df, rid: str, *, limit: int | None = None, single_line: bool = False):
+def award_block(awd_df, rid: str, *, limit: int | None = None, single_line: bool = False,
+                 show_empty_message: bool = True):
     """limit이 주어지면 최신순 상위 limit건만 보여준다(A4 인쇄처럼 지면이 좁을
     때). single_line=True면 각 항목을 한 줄로 강제하고 넘치는 글자는 '...'로
     잘라 보여준다(CSS text-overflow: ellipsis — 실제 폭에 맞춰 잘리므로 글자수를
-    직접 셀 필요가 없다). 둘 다 기본값은 화면과 동일한 기존 동작(전체/여러 줄)."""
+    직접 셀 필요가 없다). show_empty_message=False면 이력이 없을 때 "시상 이력
+    없음" 문구 대신 빈 칸으로 둔다(A4 인쇄용). 나머지 기본값은 화면과 동일한
+    기존 동작(전체/여러 줄, 문구 표시)."""
     if awd_df.empty:
-        return html.Div('시상 이력 없음', className='text-muted small')
+        return html.Div('시상 이력 없음', className='text-muted small') if show_empty_message else None
     rows = awd_df[awd_df['researcher_id'] == rid].copy()
     rows = rows[rows['award_type'].isin(AWARD_TYPES)] if 'award_type' in rows.columns else rows
     if rows.empty:
-        return html.Div('시상 이력 없음', className='text-muted small')
+        return html.Div('시상 이력 없음', className='text-muted small') if show_empty_message else None
 
     sort_col = 'year' if 'year' in rows.columns else ('award_date' if 'award_date' in rows.columns else rows.columns[0])
     rows = rows.sort_values(sort_col, ascending=False)
