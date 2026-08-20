@@ -229,6 +229,17 @@ def get_current_user() -> dict | None:
     }
 
 
+def current_user_mail_default() -> str:
+    """현재 로그인 계정의 사내 메일 주소 추정값(로그인 ID@samsung.com).
+    메일 발송 화면(pages/admin.py, pages/researcher_similarity_map.py)에서
+    수신자를 비워두면 본인에게 보내는 기본값으로 쓴다. 로그인 세션이 없으면
+    빈 문자열."""
+    user = get_current_user()
+    if not user:
+        return ''
+    return f"{user['user_id']}@samsung.com"
+
+
 def can(permission: str) -> bool:
     """권한 확인. manage_users(사용자 관리 페이지)는 역할이 아니라 계정별
     is_admin 플래그로만 판단한다 — ROLE_PERMISSIONS에는 이 키를 두지 않는다

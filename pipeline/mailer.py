@@ -8,8 +8,11 @@
 사본을 남기지 않기 위해서다(역할 기반 접근 제어는 화면을 거칠 때만
 적용되는 애플리케이션 레벨이라 파일 자체는 보호하지 않는다).
 
-인증/설정: .env의 MAIL_API_URL/MAIL_TOKEN/MAIL_SYSTEM_ID/MAIL_FROM(전부
-필수), MAIL_USER_ID(기본값 people.sait — .env에 값이 있으면 그걸로 덮어씀).
+인증/설정: .env의 MAIL_API_URL(base URL — 이 모듈이 /mails/send?userId=...를
+직접 이어붙인다. 끝에 /가 있어도 없어도 됨)/MAIL_TOKEN/MAIL_SYSTEM_ID/
+MAIL_FROM(전부 필수), MAIL_USER_ID(기본값 people.sait — .env에 값이 있으면
+그걸로 덮어씀), MAIL_TIMEOUT(초, 기본 30 — API 응답이 느려 타임아웃이 자주
+나면 늘릴 것).
 verify=False는 이 사내 전용 API에 한해 의도적으로 유지한다(사내 루트 CA가
 공인 신뢰 체인에 없어 검증이 실패하기 때문 — 사용자 확인됨). 다른 외부
 호출(LLM2/Confluence 등)에는 영향 없다.
@@ -44,13 +47,15 @@ class MailError(RuntimeError):
 
 def send_html_email(to: list[str], subject: str, html_body: str) -> None:
     """to(수신자 이메일 주소 목록)에게 html_body를 HTML 본문으로 발송한다.
-    MAIL_API_URL/MAIL_TOKEN/MAIL_SYSTEM_ID/MAIL_FROM 미설정이거나 발송
-    자체가 실패하면 MailError."""
-    url = os.environ.get('MAIL_API_URL', '').strip()
+    MAIL_API_URL은 base URL만 넣으면 된다(예: https://mail.internal.example.com)
+    — 실제 호출은 이 함수가 뒤에 /mails/send?userId=...를 이어붙인 주소로
+    나간다. MAIL_API_URL/MAIL_TOKEN/MAIL_SYSTEM_ID/MAIL_FROM 미설정이거나
+    발송 자체가 실패하면 MailError."""
+    base_url = os.environ.get('MAIL_API_URL', '').strip()
     token = os.environ.get('MAIL_TOKEN', '').strip()
     system_id = os.environ.get('MAIL_SYSTEM_ID', '').strip()
     sender = os.environ.get('MAIL_FROM', '').strip()
-    if not url or not token or not system_id or not sender:
+    if not base_url or not token or not system_id or not sender:
         raise MailError(
             'MAIL_API_URL/MAIL_TOKEN/MAIL_SYSTEM_ID/MAIL_FROM이 설정되지 않았습니다 — '
             '.env에 사내 메일 API 정보를 추가하세요(.env.example의 MAIL_* 참고).'
@@ -83,8 +88,11 @@ def send_html_email(to: list[str], subject: str, html_body: str) -> None:
     # 이 API는 params=(요청 바디와 별개로 requests가 인코딩해 붙이는 쿼리
     # 스트링)를 받아들이지 않는다 — URL 뒤에 문자 그대로 ?userId=...를 붙여야
     # 한다(사용자 확인). quote()로 값만 안전하게 인코딩해 직접 이어붙인다.
-    full_url = f'{url}?userId={quote(user_id, safe="")}'
+    # MAIL_API_URL은 base URL만 받아 여기서 /mails/send 경로를 붙인다
+    # (사용자 확인 — 끝에 /가 있어도 없어도 되도록 rstrip으로 정규화).
+    full_url = f'{base_url.rstrip("/")}/mails/send?userId={quote(user_id, safe="")}'
 
+    timeout = float(os.environ.get('MAIL_TIMEOUT', '30') or '30')
     try:
         resp = requests.post(
             full_url,
@@ -92,7 +100,7 @@ def send_html_email(to: list[str], subject: str, html_body: str) -> None:
             data=json.dumps(payload),
             proxies=proxies,
             verify=False,
-            timeout=30,
+            timeout=timeout,
         )
         resp.raise_for_status()
     except requests.exceptions.RequestException as exc:
