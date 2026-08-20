@@ -456,8 +456,10 @@ def build_researcher_mail_html(rid: str) -> str | None:
     만든다(pages/researcher_similarity_map.py의 메일 발송 모달이 사용).
     build_html()이 만드는 조직도 리포트 전체가 아니라, 이 사람 카드 2장만
     뽑아 사이드바 없는 단순 페이지(mail_page())로 감싼다 — 앱 밖으로 나가는
-    메일이니만큼 다른 사람 정보는 섞이지 않도록. 보유 전문성 데이터 자체가
-    없으면(파이프라인 미실행/분석 대상 아님) None."""
+    메일이니만큼 다른 사람 정보는 섞이지 않도록. 프로필/메일 링크(target="_top"
+    상대경로라 앱 밖 메일 본문에서는 깨짐 — 사용자 확인)는 include_links=False로
+    빼고 렌더링한다. 보유 전문성 데이터 자체가 없으면(파이프라인 미실행/
+    분석 대상 아님) None."""
     from pipeline.process_researcher_expertise import researcher_card_html
     from pipeline.process_researcher_similarity import researcher_match_card_html
     from pipeline.rd_specialist_markdown import mail_page
@@ -477,7 +479,7 @@ def build_researcher_mail_html(rid: str) -> str | None:
 
     sections = [
         '<h2>보유 전문성</h2>',
-        researcher_card_html(profile, name_map),
+        researcher_card_html(profile, name_map, include_links=False),
     ]
 
     similarity_item = read_similar_researchers().get(rid)
@@ -485,7 +487,7 @@ def build_researcher_mail_html(rid: str) -> str | None:
         profile_by_id = read_expertise_profiles()
         sections.append('<h2>유사 연구원 매칭</h2>')
         sections.append(researcher_match_card_html(
-            similarity_item, name_map, dept_map, org_map, profile_by_id,
+            similarity_item, name_map, dept_map, org_map, profile_by_id, include_links=False,
         ))
 
     return mail_page(f'{name}({rid}) 보유 전문성', ''.join(sections))
