@@ -146,6 +146,35 @@ def _mail_profile_modal():
     ], id='profile-mail-modal', is_open=False)
 
 
+def _print_progress_overlay():
+    """일괄 인쇄(연구원 명단에서 여러 명을 골라 /?ids=...로 넘어온 화면)처럼
+    인원이 많으면 인쇄 준비(자동 페이지 맞춤, assets/profile_print.js의
+    window.__prepareProfilePrint())가 몇 초씩 걸릴 수 있어, 그동안 진행률을
+    보여준다 — 안 그러면 브라우저가 멈춘 것처럼 보여 "타임아웃"으로
+    오인하기 쉽다(사용자 리포트). 단일 프로필 인쇄는 블록이 1개뿐이라
+    거의 즉시 끝나므로, 이 오버레이는 잠깐 보였다 바로 사라진다. Bootstrap
+    유틸리티 클래스 대신 인라인 style을 쓴 이유는 프로필 인쇄 화면의 다른
+    요소들과 같은 이유(CDN 로드 실패 시에도 항상 동작해야 함)."""
+    return html.Div([
+        html.Div(id='print-progress-text', className='small fw-semibold mb-2', children='인쇄 준비 중…'),
+        html.Div(
+            html.Div(id='print-progress-fill', style={
+                'height': '100%', 'width': '0%', 'backgroundColor': '#0071e3',
+                'borderRadius': '999px', 'transition': 'width 0.15s ease',
+            }),
+            style={
+                'width': '260px', 'height': '8px', 'backgroundColor': '#e5e5ea',
+                'borderRadius': '999px', 'overflow': 'hidden',
+            },
+        ),
+    ], id='print-progress-overlay', className='no-print', style={
+        'display': 'none', 'position': 'fixed', 'top': '16px', 'right': '16px',
+        'backgroundColor': 'white', 'padding': '14px 18px', 'borderRadius': '10px',
+        'boxShadow': '0 2px 16px rgba(0,0,0,0.18)', 'border': '1px solid #e5e5ea',
+        'zIndex': 2000,
+    })
+
+
 def layout(id=None, ids=None, **_kwargs):
     if ids:
         return _bulk_layout(ids)
@@ -203,6 +232,7 @@ def layout(id=None, ids=None, **_kwargs):
             ),
         ], justify='between', align='center', className='mb-3 no-print'),
         html.Div(id='profile-print-dummy', style={'display': 'none'}),
+        _print_progress_overlay(),
         html.Div([
             _selector_card(dept_opts, res_opts, default_dept, default_rid, default_mode),
             dbc.Row([
@@ -259,6 +289,7 @@ def _bulk_layout(ids_param):
             ),
         ], justify='between', align='center', className='mb-3 no-print'),
         html.Div(id='profile-print-dummy', style={'display': 'none'}),
+        _print_progress_overlay(),
         html.Div([
             dbc.Alert([
                 html.Div(f'{len(rid_list)}명의 프로필을 한 번에 인쇄합니다 (1인당 A4 1페이지, 사람마다 페이지가 나뉩니다).'),
@@ -1227,13 +1258,38 @@ def update_leadership(rid, year):
 
 clientside_callback(
     """
-    function(n) {
+    async function(n) {
         if (n > 0) {
+            // Dash가 클릭 한 번에 이 콜백을 두 번 발생시키는 경우가 있어(이
+            // 프로젝트에서 기존부터 있던 동작 — 이전 동기 버전에서는 두
+            // 번째 호출이 첫 번째와 똑같은 결과를 다시 계산하고
+            // window.print()를 한 번 더 부르는 정도라 눈에 안 띄었지만,
+            // 지금처럼 진행률을 화면에 보여주면 진행 중이던 표시가 처음부터
+            // 다시 시작하는 것처럼 보인다) 이미 준비 중이면 재진입을 막는다.
+            if (window.__profilePrintInProgress) { return ''; }
+            window.__profilePrintInProgress = true;
+
             // 인쇄 준비(A4 @page 오버라이드 + 논문·특허 표 실측 기반 자르기)는
             // assets/profile_print.js의 window.__prepareProfilePrint()로
             // 옮겨 서버사이드 PDF 첨부 발송(services/profile_pdf.py, 헤드리스
-            // 브라우저가 같은 함수를 호출)과 공유한다.
-            window.__prepareProfilePrint();
+            // 브라우저가 같은 함수를 호출)과 공유한다. 인원이 많은 일괄
+            // 인쇄에서는 이 준비 과정이 몇 초 걸릴 수 있어(블록마다 강제
+            // 리플로우) Promise로 바뀌었다 — 진행률을 오버레이에 보여주고,
+            // 끝날 때까지 기다린 뒤에야 실제 인쇄 대화상자를 연다(그래야
+            // 아직 자르기가 안 끝난 상태로 인쇄되는 걸 막는다).
+            var overlay = document.getElementById('print-progress-overlay');
+            var fill = document.getElementById('print-progress-fill');
+            var text = document.getElementById('print-progress-text');
+            if (overlay) { overlay.style.display = 'block'; }
+            if (fill) { fill.style.width = '0%'; }
+            if (text) { text.textContent = '인쇄 준비 중…'; }
+
+            await window.__prepareProfilePrint(function(done, total) {
+                if (fill) { fill.style.width = (total ? Math.round(done / total * 100) : 100) + '%'; }
+                if (text) { text.textContent = '인쇄 준비 중… (' + done + ' / ' + total + ')'; }
+            });
+
+            if (overlay) { overlay.style.display = 'none'; }
 
             // 버튼 클릭 직후 Dash가 콜백 처리 중 표시하는 "Updating..."
             // 문서 제목이 브라우저 인쇄 머리글에 그대로 찍히는 문제가
@@ -1246,6 +1302,7 @@ clientside_callback(
                 var el = document.getElementById('profile-print-a4-page-size');
                 if (el) { el.remove(); }
                 document.title = originalTitle;
+                window.__profilePrintInProgress = false;
                 window.removeEventListener('afterprint', cleanup);
             };
             window.addEventListener('afterprint', cleanup);
