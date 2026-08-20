@@ -270,11 +270,13 @@ def _milestones_html(milestones: list) -> str:
     return f'<div class="kv-block"><div class="kv-title">주요 추진 일정</div><ul class="kv-list">{lis}</ul></div>'
 
 
-def _personnel_html(personnel: list) -> str:
+def _personnel_html(personnel: list, include_links: bool = True) -> str:
     """process_project_expertise.py가 컨플루언스 문서에서 뽑아 researchers.csv와
     대조한 인력 목록을 카드로 렌더링. researcher_id가 매핑된 사람은 전문성
     MAP으로 바로 이동할 수 있는 링크를 붙이고, 매핑되지 않은 사람은 문서에
-    적힌 원문 이름만 "미매칭"으로 표시한다(추측해서 잘못 배정하지 않기 위해)."""
+    적힌 원문 이름만 "미매칭"으로 표시한다(추측해서 잘못 배정하지 않기 위해).
+    include_links=False면(앱 밖 메일 본문 — target="_top" 상대경로라 거기선
+    깨짐, 사용자 확인) 링크 없이 사번 텍스트만 보여준다."""
     people = personnel or []
     if not people:
         return ''
@@ -284,11 +286,13 @@ def _personnel_html(personnel: list) -> str:
         suffix = p.get('name_suffix', '')
         name_disp = f'{name}({html.escape(suffix)})' if suffix else name
         rid = p.get('researcher_id', '')
-        if rid:
+        if rid and include_links:
             badge = (
                 f'<a class="badge matched" href="/researcher-similarity-map?highlight_researcher={rid}" '
                 f'target="_top" title="전문성 MAP에서 위치 보기">{html.escape(rid)}</a>'
             )
+        elif rid:
+            badge = f'<span class="badge matched">{html.escape(rid)}</span>'
         else:
             badge = '<span class="badge unmatched">미매칭</span>'
         role = html.escape(p.get('role_description', '') or '(담당 업무 확인 불가)')
@@ -302,12 +306,13 @@ def _personnel_html(personnel: list) -> str:
     )
 
 
-def project_card_html(item: dict, anchor: str) -> str:
+def project_card_html(item: dict, anchor: str, include_links: bool = True) -> str:
     """process_project_expertise.py가 컨플루언스 문서를 상세 분석한 결과(핵심
     기술/산출물/난제/배경/추진일정/기대효과/키워드/인력) 하나를 카드로
     렌더링. 예전에는 이 카드가 "R&D Project Specialist Agent"의 직무 딥다이브
     매핑을 함께 보여줬지만, 그 기능은 제거되고 문서 분석 자체가 더 상세해지는
-    쪽으로 목적이 바뀌었다(data/processed/CLAUDE.md 참고)."""
+    쪽으로 목적이 바뀌었다(data/processed/CLAUDE.md 참고). include_links=False면
+    (앱 밖 메일 본문 — 사용자 확인) 인력 목록의 전문성 MAP 링크를 뺀다."""
     keywords = (item.get('keywords_kr') or []) + (item.get('keywords_en') or [])
     chip_row = ''.join(f'<span class="chip">{html.escape(k)}</span>' for k in keywords)
 
@@ -320,7 +325,7 @@ def project_card_html(item: dict, anchor: str) -> str:
     ])
     overview_html = f'<dl class="kv">{kv_rows}</dl>' if kv_rows else '<p class="empty">분석 데이터 없음</p>'
 
-    extra_html = _milestones_html(item.get('milestones')) + _personnel_html(item.get('personnel'))
+    extra_html = _milestones_html(item.get('milestones')) + _personnel_html(item.get('personnel'), include_links)
 
     return f'''<div class="card" id="{anchor}">
   <div class="card-top"><h3>{html.escape(item['project_name'])}</h3></div>

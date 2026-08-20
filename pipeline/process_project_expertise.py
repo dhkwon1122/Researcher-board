@@ -134,9 +134,10 @@ def _write_personnel_csv(rows: list):
           f'{sum(1 for r in rows if r["researcher_id"])}건 매칭)')
 
 
-def build_html(items: list, total_projects: int) -> str:
+def build_html(items: list, total_projects: int, include_links: bool = True) -> str:
     """과제(project_confl_address.csv의 '소속' → dep_name)를 '플랫폼/팀'으로
-    라벨링해 좌측 사이드바와 본문을 그룹핑해 보여준다."""
+    라벨링해 좌측 사이드바와 본문을 그룹핑해 보여준다. include_links=False면
+    (앱 밖 메일 본문 — 사용자 확인) 인력 목록의 전문성 MAP 링크를 뺀다."""
     anchor_of = {it['project_name']: f'p-{i}' for i, it in enumerate(items, start=1)}
 
     nav_groups = []
@@ -162,7 +163,7 @@ def build_html(items: list, total_projects: int) -> str:
     for dept, dept_items in mmd.group_ordered(items, lambda it: it.get('dep_name', '')):
         sections.append(f'<div class="dept-heading">{html.escape(dept)}</div>')
         for it in dept_items:
-            sections.append(mmd.project_card_html(it, anchor_of[it['project_name']]))
+            sections.append(mmd.project_card_html(it, anchor_of[it['project_name']], include_links))
 
     sidebar = (
         '<h1>과제 전문성 콘솔</h1>'
@@ -270,7 +271,10 @@ def email_report(recipients: list[str]) -> bool:
         return False
 
     total_projects = len(_read_projects()) or len(results)
-    html_out = build_html(results, total_projects)
+    # include_links=False — 인력 목록의 "전문성 MAP" 링크는 target="_top"
+    # 상대경로라 앱 밖 메일 본문에서는 깨진다(사용자 확인, 개별 연구원 메일의
+    # 프로필/메일 링크와 동일한 문제).
+    html_out = build_html(results, total_projects, include_links=False)
     send_html_email(recipients, '과제 전문성 분석 리포트', html_out)
     print(f'[OK]   과제 전문성 분석 리포트 메일 발송 ({len(recipients)}명)')
     return True

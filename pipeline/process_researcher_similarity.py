@@ -480,7 +480,7 @@ def _chip_row_html(profile: dict) -> str:
     return mmd.strength_section_html(fields, keywords)
 
 
-def _match_row_html(s: dict, name_map: dict, dept_map: dict, org_map: dict) -> str:
+def _match_row_html(s: dict, name_map: dict, dept_map: dict, org_map: dict, include_links: bool = True) -> str:
     rid = s['researcher_id']
     name = html.escape(name_map.get(rid, rid))
     dept = html.escape(dept_map.get(rid, ''))
@@ -491,9 +491,10 @@ def _match_row_html(s: dict, name_map: dict, dept_map: dict, org_map: dict) -> s
         f'<span class="pill {_LEVEL_CLASS.get(level, "low")}">{html.escape(level)}</span>'
         if level else ''
     )
+    profile_icon = mmd.profile_icon_link_html(rid) if include_links else ''
     return f'''<tr>
   <td>
-    <div class="m-name">{name} {tenure_badge}{mmd.profile_icon_link_html(rid)}</div>
+    <div class="m-name">{name} {tenure_badge}{profile_icon}</div>
     <div class="m-dept">{dept} · {org}</div>
   </td>
   <td>{level_pill}</td>
@@ -503,11 +504,14 @@ def _match_row_html(s: dict, name_map: dict, dept_map: dict, org_map: dict) -> s
 
 
 def researcher_match_card_html(item: dict, name_map: dict, dept_map: dict, org_map: dict,
-                                profile_by_id: dict, anchor: str = '') -> str:
+                                profile_by_id: dict, anchor: str = '', include_links: bool = True) -> str:
     """연구원 한 명의 유사 연구원 매칭 카드(강점 칩 + 매칭 표). build_html()의
     조직도 카드 나열뿐 아니라, 개별 연구원 메일 발송(services/similarity_map.py의
     build_researcher_mail_html())에서도 그대로 재사용한다 — anchor가 빈
-    문자열이면(메일 등 fragment 링크가 필요 없는 컨텍스트) id 속성 없이 렌더링."""
+    문자열이면(메일 등 fragment 링크가 필요 없는 컨텍스트) id 속성 없이 렌더링.
+    include_links=False면 프로필/메일 링크(target="_top" 상대경로라 앱 밖
+    메일 본문에서는 깨짐 — 사용자 확인)를 카드 헤더와 매칭 표 각 행에서
+    모두 뺀다."""
     rid = item['researcher_id']
     name = html.escape(name_map.get(rid, rid))
     tenure_badge = _tenure_badge_html(item.get('tenure_level', ''))
@@ -522,7 +526,7 @@ def researcher_match_card_html(item: dict, name_map: dict, dept_map: dict, org_m
             [s for s in item['similar'] if s.get('tenure_level') not in ('Senior', 'Junior')],
         ]
         tbodies = ''.join(
-            f'<tbody>{"".join(_match_row_html(s, name_map, dept_map, org_map) for s in g)}</tbody>'
+            f'<tbody>{"".join(_match_row_html(s, name_map, dept_map, org_map, include_links) for s in g)}</tbody>'
             for g in groups if g
         )
         table = (
@@ -532,10 +536,14 @@ def researcher_match_card_html(item: dict, name_map: dict, dept_map: dict, org_m
         )
     else:
         table = '<p class="empty">비교할 다른 연구원 데이터 없음</p>'
+    icons_html = (
+        f'<div class="card-icons">{mmd.profile_link_html(rid)}{mmd.mail_link_html(rid)}</div>'
+        if include_links else ''
+    )
     id_attr = f' id="{anchor}"' if anchor else ''
     return f'''<div class="card"{id_attr}>
   <div class="card-top"><h3>{name}</h3>{tenure_badge}
-    <div class="card-icons">{mmd.profile_link_html(rid)}{mmd.mail_link_html(rid)}</div>
+    {icons_html}
   </div>
   {_chip_row_html(profile_by_id.get(rid, {}))}
   {table}

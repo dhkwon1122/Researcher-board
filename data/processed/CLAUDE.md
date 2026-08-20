@@ -3008,3 +3008,36 @@ HTML(연구원/연구원↔연구원 둘 다)에 `mail_rid=` 링크와 수정된
 `{base}/mails/send?userId=...` 형태로 정확히 만들어지는지 몽키패치로
 확인. 과제 전문성 분석 리포트 메일 발송 경로 전체(email_report() →
 mailer.send_html_email())를 실행해 최종 요청 URL이 올바른지 재확인.
+
+## 2026-08-20 (4): 메일 본문에서 프로필/메일 발송 링크 제거
+
+사용자 보고: "메일이 잘 온다. 그런데 메일 내에 프로필과 메일 보내기
+링크가 포함되어 있어. 그건 빼주는 게 좋겠음."
+
+원인: 카드 렌더러(`researcher_card_html()`/`researcher_match_card_html()`/
+`project_card_html()`/`_personnel_html()`/`_match_row_html()`)가 항상
+`mmd.profile_link_html()`/`mmd.mail_link_html()`/전문성 MAP 링크를 붙였는데,
+이 링크들은 전부 `target="_top"` + 상대경로(`/?id=...`, `/researcher-
+similarity-map?...`)라 앱의 iframe/최상위 문서 안에서만 의미가 있다 —
+메일 클라이언트에서 열면 깨진 링크가 된다.
+
+수정: 위 5개 렌더러 전부에 `include_links: bool = True` 파라미터를 추가해
+false면 링크 없이(사번 텍스트만 남기거나 아이콘 자체를 생략) 렌더링하도록
+바꿨다. 메일 경로만 `include_links=False`로 호출:
+- `services/similarity_map.py`의 `build_researcher_mail_html()`(개별
+  연구원 메일)
+- `pipeline/process_project_expertise.py`의 `email_report()`(과제 전문성
+  분석 리포트 메일)
+라이브 앱이 읽는 `build_html()` 경로(iframe 리포트)는 인자를 안 넘겨
+기존처럼 링크가 그대로 나온다.
+
+검증: (1) `build_researcher_mail_html()` 결과에 실제 `<a class="map-link">`/
+`<a class="row-icon-link">` 앵커나 `href="/?id="`/`href="/researcher-
+similarity-map`가 전혀 없는지(카드 내용·이름은 그대로 남아 있는지) (2)
+`email_report()`의 전송 payload에 `highlight_researcher` 링크가 없고
+사번 텍스트만 남는지 (3) 라이브 앱의 `_render_report_html()`은 여전히
+`mail_rid=`/`/?id=` 링크를 포함하는지(회귀 아님) 확인. 첫 시도에서
+`'map-link' not in html_out` 같은 단순 문자열 검사가 실패했는데, 이는
+버그가 아니라 재사용 중인 CONSOLE_STYLE 안의 `.map-link` CSS 클래스 정의
+자체가 문자열로 걸린 것(실제 `<a>` 태그는 없음) — 검증을 `href=`/`<a
+class=` 단위로 다시 짜서 확인했다.
