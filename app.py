@@ -85,17 +85,17 @@ def serve_photo(rid):
         flask.abort(404)
     rid_plain = str(int(rid8))
     candidates = {rid8.lower(), rid_plain.lower()}
-    for base_dir in (PHOTO_DIR, os.path.join(ASSETS_DIR, 'photos')):
-        for r in (rid8, rid_plain):
-            for ext in _IMG_EXTS:
-                path = os.path.join(base_dir, f'{r}.{ext}')
-                if os.path.isfile(path):
-                    return flask.send_file(path)
-    if os.path.isdir(RAW_DIR):
-        for fname in os.listdir(RAW_DIR):
+    # 파일명·확장자 대소문자 무관하게 찾는다(예: 00000001.JPG) — 대소문자를
+    # 구분하는 리눅스 파일시스템에서 os.path.isfile('...jpg')로 직접 조회하면
+    # 실제 확장자가 대문자(.JPG)인 파일은 못 찾으므로, 디렉토리 목록을 읽어
+    # 소문자로 비교한다.
+    for base_dir in (PHOTO_DIR, os.path.join(ASSETS_DIR, 'photos'), RAW_DIR):
+        if not os.path.isdir(base_dir):
+            continue
+        for fname in os.listdir(base_dir):
             stem, dot, fext = fname.rpartition('.')
             if dot and stem.lower() in candidates and fext.lower() in _IMG_EXTS:
-                return flask.send_file(os.path.join(RAW_DIR, fname))
+                return flask.send_file(os.path.join(base_dir, fname))
     flask.abort(404)
 
 
