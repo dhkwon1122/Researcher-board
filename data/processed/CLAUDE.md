@@ -3293,3 +3293,47 @@ hanging indent 효과(줄바꿈된 다음 줄이 배지 아래가 아니라 기�
 서버 기동 + 로그인 + `/photo/00000001` 라우트를 직접 호출해 수정 전
 404였던 것이 수정 후 200(`image/jpeg`, 파일 그대로)으로 바뀜을 확인.
 테스트 데이터·서버·계정은 모두 정리.
+
+## 2026-08-20 (12): AI 검색을 연구원 명단 화면 전용으로 제한 + 조직별 비교 메뉴 숨김
+
+사용자 요청: "AI검색이 모든 메뉴에서 보이게 표시되고 있는데, 이걸 연구원
+명단 화면에서만 표시되게 해줘. 그리고 조직별 비교 라는 메뉴는 현재는
+사용하지 않을 거라 없애주었으면 해."
+
+### AI 검색(자연어 질문 바)을 연구원 명단 화면 전용으로
+
+`app.py`의 `nl_query_bar.render()`는 `dash.page_container` 밖(네비게이션
+바로 아래)에 전 화면 공통으로 고정 배치돼 있어서 모든 메뉴에서 항상
+보였다. `nl_query_bar`와 그 아래 구분선(`html.Hr`)을 `id='nl-query-bar-
+wrapper'`인 Div로 감싸고, `_pages_location.pathname`을 Input으로 받는
+콜백(`_toggle_nl_query_bar`, `_navbar-user`를 갱신하는 기존
+`refresh_navbar_user`와 같은 패턴)이 경로가 `/researcher-list`(연구원
+명단)일 때만 `style={}`(보임), 그 외에는 `{'display': 'none'}`을
+돌려주도록 했다. 컴포넌트를 아예 안 그리는 대신 CSS로 숨기는 방식이라
+다른 화면으로 옮겨도 입력하던 질문/규칙 설정 상태가 유지된다.
+
+### 조직별 비교 메뉴 숨김
+
+이 저장소에는 이미 "당장 안 쓰는 화면을 완전히 지우지 않고 숨겨두는"
+확립된 관례가 있다 — `pages/jd_reconciliation.py`의 `_FEATURE_HIDDEN`
+플래그(위쪽 커밋 로그, 재오픈 방법 기록). 동일한 패턴을
+`pages/org_comparison.py`에도 적용: `register_page()` 바로 아래에
+`_FEATURE_HIDDEN = True`를 추가하고, `layout()` 맨 앞에서 이 플래그가
+True면 실제 조직별 비교 화면 대신 `dbc.Alert('이 기능은 현재 준비
+중입니다.', ...)`만 반환하도록 했다(페이지 구현 코드 자체는 전부 그대로
+남겨둠). `app.py` 네비게이션 바에서 '조직별 비교' `dbc.NavItem`을
+제거했다(발견 경로 차단 — URL을 직접 입력해 들어가도 준비중 안내만
+보임).
+
+재오픈 방법: `pages/org_comparison.py`의 `_FEATURE_HIDDEN`을 `False`로
+바꾸고, 이 커밋에서 지운 `dbc.NavItem`(app.py, 'JOB Market' 바로 위)을
+되살리면 된다.
+
+검증: 샘플 데이터 생성 후 실제 서버 기동 + 로그인 + Playwright로
+(1) 네비게이션 바 링크 목록에 '조직별 비교'가 없음, (2) `/`(연구원
+프로필)·`/researcher-similarity-map`(보유 전문성)에서는 AI 검색
+wrapper의 `display: none`, `/researcher-list`(연구원 명단)에서는
+`display: block`, (3) `/org-comparison` URL로 직접 이동해도 "이 기능은
+현재 준비 중입니다." 안내만 보이고 기존 조직별 비교 콘텐츠("조직별 우수
+연구원 비교")는 렌더되지 않음을 각각 확인. 테스트 데이터·서버·계정은
+모두 정리.
