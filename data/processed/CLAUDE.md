@@ -3041,3 +3041,65 @@ similarity-map`가 전혀 없는지(카드 내용·이름은 그대로 남아 �
 버그가 아니라 재사용 중인 CONSOLE_STYLE 안의 `.map-link` CSS 클래스 정의
 자체가 문자열로 걸린 것(실제 `<a>` 태그는 없음) — 검증을 `href=`/`<a
 class=` 단위로 다시 짜서 확인했다.
+
+## 2026-08-20 (5): 개별 프로필 카드(A4 인쇄 내용) PDF 첨부 메일 발송
+
+사용자 요청: "개인별 프로필 카드(A4 인쇄되는 내용을 pdf로 저장)도 메일에
+첨부해 발송할 수 있는 기능을 만들어 줄 수 있어?" 확인 질문으로 두 가지
+결정: (1) 메일 API가 실제로 첨부파일을 지원하며, 사용자가 실제 호출
+코드(`requests.post(url, data=[('mail', (None, json.dumps(payload)))],
+files=[('attachments', fileobj), ...])`)를 그대로 제공 (2) PDF는 헤드리스
+브라우저(Playwright)로 화면과 100% 동일하게 만들기로 함(경량 HTML→PDF
+라이브러리 대신 — Docker 이미지가 커지는 대신 인쇄 결과와 완전히 같음).
+
+**PDF 생성**: `pages/researcher_profile.py`의 "프로필 인쇄 (A4)"는 원래
+브라우저 안에서만 동작(`window.print()` + 논문/특허 표를 실제 렌더링
+높이로 재서 페이지 예산에 맞게 자르는 동적 JS)했는데, 서버 쪽에서도 같은
+결과를 얻어야 해서:
+- 그 준비 로직(A4 `@page` 오버라이드 + 표 실측 자르기)을 `assets/
+  profile_print.js`의 `window.__prepareProfilePrint()`로 추출(Dash가
+  `assets/`의 .js를 모든 페이지에 자동으로 실어줌) — 버튼 클릭 콜백은 이
+  함수를 부른 뒤 그대로 `window.print()`까지 이어간다(동작 100% 동일,
+  단순 리팩터링).
+- `services/profile_pdf.py`(신규): 헤드리스 Chromium이 앱 자기 자신에게
+  `http://127.0.0.1:{PORT}/?id=...`로 재접속해(같은 컨테이너 안 서버사이드
+  렌더링 패턴) `window.__prepareProfilePrint()`만 호출(`window.print()`는
+  호출 안 함 — 헤드리스에서 의미 없고 afterprint 정리 타이밍과 경쟁할
+  위험만 있음)한 뒤 `page.pdf(prefer_css_page_size=True)`로 캡처. 앱이
+  로그인을 요구하므로(`app.py`의 `require_login`), 호출부(현재 로그인된
+  사용자의 Flask `session` 쿠키)가 그 쿠키 값을 그대로 넘겨 헤드리스
+  브라우저 컨텍스트에 심는다 — 서버사이드 세션 저장소 없이 서명된
+  쿠키만으로 인증하므로 같은 프로세스(같은 SECRET_KEY)가 그대로 검증.
+
+**메일 첨부**: `pipeline/mailer.py`의 `send_html_email()`에
+`attachments: list[tuple[str, bytes]] | None` 파라미터 추가 — 있으면
+JSON 단일 바디 대신 멀티파트로 전환(`data=[('mail', (None,
+json.dumps(payload)))]` + `files=[('attachments', (name, content)), ...]`,
+Content-Type 헤더는 requests가 boundary와 함께 자동 설정하도록 직접
+지정한 `application/json` 값을 빼야 함). 첨부 없을 때(기존 두 메일
+기능)는 완전히 동일하게 동작.
+
+**UI**: `pages/researcher_profile.py`의 "프로필 인쇄 (A4)" 버튼 옆에
+"메일로 보내기 (PDF 첨부)" 버튼 + 모달 추가. 수신자 비워두면 본인
+(`current_user_mail_default()`, 앞서 만든 다른 메일 기능과 동일 원칙)에게
+발송. 별도 권한 게이트 없음(이미 이 화면에서 조회 가능한 정보).
+
+**인프라**: `requirements.txt`에 `playwright` 추가, `Dockerfile`에
+`playwright install --with-deps chromium` 단계 추가(+300MB 안팎, Chromium
+바이너리를 사내 프록시로 내려받아야 해서 사내망에서 막혀 있으면 이
+단계에서 빌드가 실패할 수 있음 — 그 경우 PDF 첨부 기능만 비활성 상태로
+두고 나머지는 그대로 배포 가능, Dockerfile 주석 참고).
+
+검증: `pipeline/generate_sample_data.py`로 실제 50명 샘플 데이터를 만들고,
+`python3 app.py`로 앱을 실제로 띄운 뒤(포트 8765) HTTP 로그인으로 진짜
+세션 쿠키를 발급받아 — (1) `services/profile_pdf.render_profile_pdf()`를
+직접 호출해 2페이지짜리 실제 PDF(사진/기본정보/학력/평가/전문성 1페이지
++ 논문·특허 상세 표 2페이지)가 만들어지는지 Read 도구로 PDF 내용까지
+확인 (2) `pages.researcher_profile._send_profile_mail()` 콜백을 실제 Flask
+세션 컨텍스트(쿠키를 진짜 SECRET_KEY로 디코딩)에서 호출해 수신자
+공백→본인 발송 기본값, PDF 첨부, `requests.post`(모킹) 호출 시
+멀티파트 형태가 사용자가 준 스키마와 정확히 일치하는지 확인 (3) 실제
+Playwright 브라우저로 "메일로 보내기" 버튼을 클릭해 모달이 실제로 열리고
+입력 필드가 반응하는지 확인. 첫 시도에서 `wait_for_selector`가 기본값
+(visible)으로 대기해 `.profile-print-only`(화면에서 항상 display:none)를
+영원히 못 찾고 타임아웃난 버그를 발견해 `state='attached'`로 수정.
