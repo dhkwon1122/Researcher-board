@@ -449,3 +449,43 @@ def build_expertise_similarity_workbook(researcher_ids: list) -> bytes:
 
 def similarity_workbook_filename() -> str:
     return f"보유전문성_유사연구원_{datetime.now().strftime('%Y%m%d%H%M')}.xlsx"
+
+
+def build_researcher_mail_html(rid: str) -> str | None:
+    """연구원 한 명의 보유 전문성 + 유사 연구원 매칭 결과를 메일 발송용 HTML로
+    만든다(pages/researcher_similarity_map.py의 메일 발송 모달이 사용).
+    build_html()이 만드는 조직도 리포트 전체가 아니라, 이 사람 카드 2장만
+    뽑아 사이드바 없는 단순 페이지(mail_page())로 감싼다 — 앱 밖으로 나가는
+    메일이니만큼 다른 사람 정보는 섞이지 않도록. 보유 전문성 데이터 자체가
+    없으면(파이프라인 미실행/분석 대상 아님) None."""
+    from pipeline.process_researcher_expertise import researcher_card_html
+    from pipeline.process_researcher_similarity import researcher_match_card_html
+    from pipeline.rd_specialist_markdown import mail_page
+
+    profile = read_expertise_profiles().get(rid)
+    if not profile:
+        return None
+
+    researchers_df = read_processed('researchers')
+    name_map, dept_map, org_map = {}, {}, {}
+    if not researchers_df.empty:
+        indexed = researchers_df.set_index('researcher_id')
+        name_map = indexed['name'].to_dict()
+        dept_map = indexed['department'].to_dict()
+        org_map = indexed['org_code'].to_dict()
+    name = name_map.get(rid, rid)
+
+    sections = [
+        '<h2>보유 전문성</h2>',
+        researcher_card_html(profile, name_map),
+    ]
+
+    similarity_item = read_similar_researchers().get(rid)
+    if similarity_item and similarity_item.get('similar'):
+        profile_by_id = read_expertise_profiles()
+        sections.append('<h2>유사 연구원 매칭</h2>')
+        sections.append(researcher_match_card_html(
+            similarity_item, name_map, dept_map, org_map, profile_by_id,
+        ))
+
+    return mail_page(f'{name}({rid}) 보유 전문성', ''.join(sections))

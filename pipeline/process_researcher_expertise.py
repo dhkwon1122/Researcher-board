@@ -378,7 +378,12 @@ def _list_block_html(title: str, items: list) -> str:
     return f'<div class="kv-block"><div class="kv-title">{title}</div><ul class="kv-list">{lis}</ul></div>'
 
 
-def _researcher_card_html(item: dict, name_map: dict, anchor: str) -> str:
+def researcher_card_html(item: dict, name_map: dict, anchor: str = '') -> str:
+    """연구원 한 명의 보유 전문성 카드(강점 칩 + 주요 역할·책임/전문지식 및
+    역량). build_html()의 조직도 카드 나열뿐 아니라, 개별 연구원 메일 발송
+    (services/similarity_map.py의 build_researcher_mail_html())에서도
+    그대로 재사용한다 — anchor가 빈 문자열이면(메일 등 fragment 링크가
+    필요 없는 컨텍스트) id 속성 없이 렌더링."""
     rid = item.get('researcher_id', '')
     name = name_map.get(rid, '')
 
@@ -392,9 +397,10 @@ def _researcher_card_html(item: dict, name_map: dict, anchor: str) -> str:
     )
     body_html = f'<div class="kv-grid">{kv_blocks}</div>' if kv_blocks else '<p class="empty">세부 항목 데이터 없음</p>'
 
-    return f'''<div class="card" id="{anchor}">
+    id_attr = f' id="{anchor}"' if anchor else ''
+    return f'''<div class="card"{id_attr}>
   <div class="card-top"><h3>{html.escape(rid)} {html.escape(name)}</h3>
-    <div class="card-icons">{mmd.profile_link_html(rid)}</div>
+    <div class="card-icons">{mmd.profile_link_html(rid)}{mmd.mail_link_html(rid)}</div>
   </div>
   {chip_row}
   {body_html}
@@ -455,7 +461,7 @@ def build_html(results: list, researchers_df: pd.DataFrame) -> str:
                 sections.append(f'<div class="org-heading">{html.escape(org)}</div>')
             for item in org_items:
                 rid = item.get('researcher_id', '')
-                sections.append(_researcher_card_html(item, name_map, anchor_of[rid]))
+                sections.append(researcher_card_html(item, name_map, anchor_of[rid]))
 
     sidebar = (
         '<h1>연구원 전문성 콘솔</h1>'
