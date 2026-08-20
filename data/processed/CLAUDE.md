@@ -3267,3 +3267,29 @@ hanging indent 효과(줄바꿈된 다음 줄이 배지 아래가 아니라 기�
 인쇄/PDF 쪽(`stacked=True`) 양쪽 모두 스크린샷으로 "B급" 배지가 완전한
 채로 보이고, 줄바꿈된 둘째 줄이 기술명 시작 위치에 맞춰 들여써짐을 육안
 확인. 테스트 데이터·서버·계정은 모두 정리.
+
+## 2026-08-20 (11): 사진 확장자가 대문자(.JPG)면 서빙 안 되는 버그 수정
+
+사용자 보고: "사진 확장자가 JPG 대문자인 경우 사진을 못 띄우는 것 같아".
+
+원인: `app.py`의 `/photo/<rid>` 라우트(`serve_photo()`)가 `data/photo/`와
+`assets/photos/`를 찾을 때는 `os.path.join(base_dir, f'{r}.{ext}')` +
+`os.path.isfile()`로 소문자 확장자(`_IMG_EXTS = ('png','jpg','jpeg')`)
+경로를 직접 만들어 확인했다 — 리눅스(운영 컨테이너)는 파일시스템이
+대소문자를 구분하므로 실제 파일이 `00000001.JPG`면 `00000001.jpg` 경로는
+존재하지 않는 것으로 처리돼 404가 났다. 반면 `RAW_DIR` 폴백 분기와
+`components/profile_sections.py`의 `load_photo_src()`(사진 URL이 있는지
+먼저 판단하는 쪽)는 애초에 `os.listdir()`로 디렉토리 목록을 읽어 소문자로
+비교하는 대소문자 무관 방식이었다 — 그래서 `load_photo_src()`는 사진이
+있다고 판단해 `/photo/{rid}` URL을 내려주는데, 정작 그 URL을 실제로
+서빙하는 `serve_photo()`는 대문자 확장자를 못 찾아 404가 나는 불일치가
+있었다.
+
+수정: `serve_photo()`의 `PHOTO_DIR`/`assets/photos`/`RAW_DIR` 세 디렉토리
+모두 `os.listdir()` + 소문자 비교 방식으로 통일 — `load_photo_src()`가
+찾은 대로 실제로 서빙되도록 했다.
+
+검증: `data/photo/00000001.JPG`(대문자 확장자) 테스트 파일을 두고 실제
+서버 기동 + 로그인 + `/photo/00000001` 라우트를 직접 호출해 수정 전
+404였던 것이 수정 후 200(`image/jpeg`, 파일 그대로)으로 바뀜을 확인.
+테스트 데이터·서버·계정은 모두 정리.
