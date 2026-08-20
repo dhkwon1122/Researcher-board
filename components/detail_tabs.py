@@ -262,17 +262,23 @@ def _core_technology_table(core_df):
         name = str(row.get('tech_name', '')).strip()
         grade = _clean_num_str(row.get('tech_grade', '')) or '-'
         grade_disp = f'{grade}급' if grade != '-' else '-'
-        # 등급 배지(B급/A급 등) + 기술명을 flex 대신 hanging indent(CSS
-        # text-indent 음수값)로 배치한다 — 기술명이 길어 줄바꿈되면, 이어지는
-        # 줄이 배지 자리(B급 등)까지 다시 밀고 올라오지 않고 기술명 시작
-        # 위치에 맞춰 들여써진다(사용자 요청: 줄바꿈된 다음 줄은 배지 아래를
-        # 비워 보여달라는 것).
+        # 등급 배지(B급/A급 등) + 기술명을 display:table-cell 두 칸으로 배치한다
+        # — 기술명이 길어 줄바꿈되면, 이어지는 줄이 배지 자리(B급 등)까지 다시
+        # 밀고 올라오지 않고 기술명 시작 위치에 맞춰 들여써진다(사용자 요청:
+        # 줄바꿈된 다음 줄은 배지 아래를 비워 보여달라는 것). 이전에 CSS
+        # text-indent 음수값으로 구현했었는데, 첫 줄 맨 앞이 배지(inline-block)일
+        # 때 브라우저가 배지 자체의 렌더링 폭까지 잘라내 버려("B급" 글자가
+        # 하얗게 사라지고 초록 원만 조그맣게 남는") 버그가 있었다 —
+        # table-cell은 각 칸(배지/텍스트)이 서로 별개 박스라 이 문제가 없다.
         rows.append(html.Tr([
             html.Td(field, className='small', style={'wordBreak': 'break-word'}),
             html.Td(html.Div([
-                _pill(grade_disp, _GRADE_PILL_COLOR),
-                html.Span(name, className='small', style={'marginLeft': '6px'}),
-            ], style={'paddingLeft': '44px', 'textIndent': '-44px'}),
+                html.Div(_pill(grade_disp, _GRADE_PILL_COLOR),
+                          style={'display': 'table-cell', 'verticalAlign': 'top',
+                                 'whiteSpace': 'nowrap', 'paddingRight': '6px'}),
+                html.Div(html.Span(name, className='small'),
+                          style={'display': 'table-cell', 'verticalAlign': 'top', 'width': '100%'}),
+            ], style={'display': 'table', 'width': '100%'}),
                 style={'wordBreak': 'break-word'}),
         ]))
 
