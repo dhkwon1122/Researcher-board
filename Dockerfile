@@ -86,13 +86,16 @@ RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
 # services/profile_pdf.py가 "프로필 인쇄 (A4)" 화면을 헤드리스 브라우저로
 # 그대로 렌더링해 PDF로 캡처한다(pipeline/mailer.py의 첨부파일 발송과 함께
 # 씀). --with-deps가 Chromium 실행에 필요한 시스템 라이브러리까지 apt로
-# 설치한다. 이미지가 커지고(+300MB 안팎) 브라우저 바이너리를 프록시로
-# 내려받아야 하므로, 이 다운로드가 사내망에서 막혀 있으면 이 단계에서
-# 빌드가 실패할 수 있다 — 그 경우 사내 미러가 있다면
-# PLAYWRIGHT_DOWNLOAD_HOST로 지정하거나, 이 레이어를 잠시 건너뛰고 PDF
-# 첨부 메일 기능만 비활성 상태로 배포할 것(다른 기능에는 영향 없음).
+# 설치한다. 이미지가 커지고(+300MB 안팎) 브라우저 바이너리를 Microsoft
+# CDN에서 내려받아야 하는데, 이 호스트는 사내 pip 프록시 허용 목록에는
+# 없을 수 있어(pip은 repository.samsungds.net만 거치면 되지만 이건 별도
+# 외부 호스트) 사내망에서 막혀 있을 가능성이 높다. 그 경우 이 단계만
+# 실패해도(|| true) 전체 빌드는 계속되고 나머지 기능은 정상 배포되며,
+# PDF 첨부 메일만 "PDF 생성 실패" 에러로 비활성 상태가 된다 — 사내 미러가
+# 있다면 PLAYWRIGHT_DOWNLOAD_HOST로 지정해 재시도할 것.
 RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
-    playwright install --with-deps chromium
+    playwright install --with-deps chromium \
+    || echo "[build] Playwright 브라우저 설치 실패 — PDF 첨부 메일 기능은 비활성화된 채로 나머지는 정상 빌드합니다. 원인은 보통 사내망에서 Chromium 다운로드 호스트가 막혀 있는 경우입니다."
 
 # ── 3) 앱 소스 복사 ──
 # data/ 와 .env 는 .dockerignore 로 제외 → 컨테이너에는 볼륨/시크릿으로 주입.
