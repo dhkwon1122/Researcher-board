@@ -2861,3 +2861,50 @@ project_confl_address.csv)를 `data/processed/`에 임시로 써넣고 실행해
 전송될 payload의 `contents`(HTML)에 과제명/인력 이름이 실제로 포함되는지
 확인 후 픽스처 삭제(둘 다 `.gitignore`의 `data/processed/*` 대상이라 커밋
 대상 아님).
+
+## 2026-08-19 (3): 온디맨드 렌더링 후 조직도가 평면 부서 목록으로 퇴화하는 버그 수정
+
+사용자 보고: "보유 전문성 화면에서 왼쪽에 노출되던 화면이 부서-과제-연구원으로
+열리고 닫히는 조직도 형태로 보여졌었는데 지금은 부서 아래에 연구원 명단이
+평면으로 열거되는 형식이야." — 앞선 "온디맨드 렌더링 전환"(위 2026-08-19
+항목) 이후 생긴 회귀.
+
+원인: `pipeline/process_researcher_expertise.py`/`process_researcher_similarity.py`의
+`build_html()`은 좌측 사이드바 조직도를
+`mmd.build_org_tree(mmd.read_team_refer(OUT_DIR))`로 만드는데,
+`read_team_refer()`가 `data/processed/team_refer.csv`를 파일로만 직접
+읽었다(DB 폴백 없음) — `team_refer`는 `load_to_db.py`의 `TABLES`에 애초에
+없어서 DB로 이관된 적이 없었기 때문. 예전에는 이 리포트가 파이프라인
+CLI(데이터 파일 전체에 접근 가능한 환경)에서 한 번 만들어져 완성된 정적
+HTML로 저장됐으므로 문제가 없었지만, 이제는 실행 중인 앱 프로세스가 화면
+진입 시마다 `build_html()`을 직접 호출한다 — 앱 서버 쪽에
+`team_refer.csv`가 없으면(DB 위주로 배포된 환경이라면 있을 이유가 없음)
+`read_team_refer()`가 빈 리스트를 반환해 `org_tree`가 falsy가 되고,
+조용히 부서만 있는 평면 목록으로 폴백해버렸다(크래시 없이 그냥 다르게
+보임 — 원인 파악이 어려운 종류의 회귀).
+
+수정:
+- `pipeline/load_to_db.py`: `TABLES`에 `team_refer` 추가 — DB로도 이관되게 함.
+- `pipeline/rd_specialist_markdown.py`의 `read_team_refer()`: DB(`services.
+  data_store.read_processed('team_refer')`)를 먼저 시도하고, 실패/빈 결과일
+  때만 기존처럼 `out_dir/team_refer.csv`를 직접 읽는다.
+
+**부수 버그(수정 과정에서 발견)**: `read_processed()`는 `researcher_id`
+컬럼만 명시적으로 문자열화하고, DB 미설정 상태로 CSV를 직접 읽을 때는
+`researcher_id`가 아닌 다른 컬럼의 빈 셀을 `.fillna('')`하지 않는다 —
+즉 pandas가 빈 셀을 float NaN으로 남긴다. `team_refer.csv`는 최상위
+조직(upper_dep_id가 원래 비어 있음, 예외가 아니라 정상 케이스)이 있어
+이 NaN이 자주 나오는데, `build_org_tree()`가 `row.get('upper_dep_id')`에
+바로 `.strip()`을 호출해서(`NaN or ''` → NaN, NaN은 참으로 취급돼 `or`가
+안 걸러줌) `AttributeError: 'float' object has no attribute 'strip'`로
+크래시했다. `read_team_refer()`에서 `read_processed()` 결과에
+`.fillna('')`를 한 번 더 적용해 해결.
+
+검증: 실제 로컬 PostgreSQL 16으로 (1) CSV 전용(DB 미설정) 폴백 경로 —
+최상위 노드의 빈 upper_dep_id로 크래시 재현 후 수정 확인, (2) DB 경로 —
+`team_refer.csv`를 디스크에서 완전히 지운 뒤(배포 환경에서 이 파일이
+없는 상황 재현) DB만으로 2단 조직도(플랫폼A → 과제1팀)가 정확히
+복원되는지, (3) 파일도 DB도 없을 때 빈 리스트를 반환하는지 확인. 마지막
+으로 `pages.researcher_similarity_map._render_report_html('researcher')`를
+직접 호출해 두 경로 모두 결과 HTML에 `org-tree` 클래스와 실제 조직명
+("과제1팀")이 포함되는지(평면 폴백이 아닌지) 확인.

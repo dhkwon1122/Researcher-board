@@ -40,9 +40,32 @@ def group_ordered(items: list, key_fn) -> list:
 
 
 def read_team_refer(out_dir: str) -> list:
-    """team_refer.csv를 dict 리스트로 반환한다(build_org_tree()가 dep_id/
-    upper_dep_id로 부모-자식 관계를 판단하므로 행 순서는 무관). 파일이 없으면
-    빈 리스트(호출부가 조직도 없이 기존 방식으로 폴백할 수 있도록)."""
+    """team_refer.csv(또는 DB 테이블 team_refer)를 dict 리스트로 반환한다
+    (build_org_tree()가 dep_id/upper_dep_id로 부모-자식 관계를 판단하므로
+    행 순서는 무관). DB(DATABASE_URL)가 설정돼 있으면 services.data_store.
+    read_processed()로 DB를 우선 읽고, 없으면 out_dir/team_refer.csv를 직접
+    읽는다 — 이 함수는 파이프라인 CLI(데이터 파일에 직접 접근 가능한 환경)
+    뿐 아니라 실행 중인 앱 프로세스에서도 호출된다(pages/researcher_similarity_map.py가
+    "보유 전문성" 리포트를 화면 진입 시 build_html()로 그때그때 렌더링 —
+    data/processed/CLAUDE.md 2026-08-19 참고). 앱 서버에 team_refer.csv가
+    없어도(DB만 붙어 있어도) 조직도가 정상적으로 만들어지도록 DB를 우선
+    시도한다. 파일도 DB도 없으면 빈 리스트(호출부가 조직도 없이 기존
+    방식으로 폴백할 수 있도록)."""
+    try:
+        _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if _project_root not in sys.path:
+            sys.path.insert(0, _project_root)
+        from services.data_store import read_processed
+        df = read_processed('team_refer')
+        if not df.empty:
+            # read_processed()는 'researcher_id' 컬럼만 명시적으로 문자열화하고
+            # 나머지 컬럼의 빈 셀은 (DB 경로가 아니라 CSV 폴백 경로일 때) NaN으로
+            # 남긴다 — build_org_tree()가 upper_dep_id 등에 바로 .strip()을
+            # 호출하므로 여기서 직접 한 번 더 채워야 안전하다.
+            return df.fillna('').to_dict('records')
+    except Exception:
+        pass
+
     path = os.path.join(out_dir, 'team_refer.csv')
     if not os.path.exists(path):
         return []
