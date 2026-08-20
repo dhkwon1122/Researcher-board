@@ -2992,3 +2992,19 @@ HTML(연구원/연구원↔연구원 둘 다)에 `mail_rid=` 링크와 수정된
 발송되는지(payload의 recipients 확인) (2) 세션 없을 때 기존 경고로
 폴백하는지 확인. `MAIL_TIMEOUT` 환경변수가 `requests.post()`에 실제로
 전달되는지 몽키패치로 확인.
+
+## 2026-08-20 (3): MAIL_API_URL을 base URL로, /mails/send 경로는 코드가 붙이도록 수정
+
+사용자 확인: "보낼 때는 Base URL 뒤에 /mails/send?userId=... 이렇게 붙여야
+해." — `.env.example`에 예시로 적어 둔 `MAIL_API_URL=.../api/v1/mail/send`가
+실제 엔드포인트 경로와 달랐다(추정으로 채워 넣은 값이라 확인이 필요했음).
+
+수정: `pipeline/mailer.py`가 `MAIL_API_URL`을 base URL로 받아 그 뒤에
+`/mails/send?userId=...`를 직접 이어붙이도록 변경(`base_url.rstrip('/')`로
+끝에 슬래시가 있어도/없어도 동일하게 동작). `.env.example`의 예시값과
+설명도 base URL만 넣으면 된다는 것으로 갱신.
+
+검증: base URL에 슬래시가 있는 경우/없는 경우 둘 다
+`{base}/mails/send?userId=...` 형태로 정확히 만들어지는지 몽키패치로
+확인. 과제 전문성 분석 리포트 메일 발송 경로 전체(email_report() →
+mailer.send_html_email())를 실행해 최종 요청 URL이 올바른지 재확인.
