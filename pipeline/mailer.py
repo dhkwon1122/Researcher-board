@@ -18,6 +18,7 @@ verify=False는 이 사내 전용 API에 한해 의도적으로 유지한다(사
 import json
 import os
 import sys
+from urllib.parse import quote
 
 import requests
 import urllib3
@@ -79,11 +80,15 @@ def send_html_email(to: list[str], subject: str, html_body: str) -> None:
     # Confluence 등 다른 외부 호출용 프록시 설정과는 무관).
     proxies = {'http': None, 'https': None}
 
+    # 이 API는 params=(요청 바디와 별개로 requests가 인코딩해 붙이는 쿼리
+    # 스트링)를 받아들이지 않는다 — URL 뒤에 문자 그대로 ?userId=...를 붙여야
+    # 한다(사용자 확인). quote()로 값만 안전하게 인코딩해 직접 이어붙인다.
+    full_url = f'{url}?userId={quote(user_id, safe="")}'
+
     try:
         resp = requests.post(
-            url,
+            full_url,
             headers=headers,
-            params={'userId': user_id},
             data=json.dumps(payload),
             proxies=proxies,
             verify=False,
