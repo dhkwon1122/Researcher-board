@@ -15,6 +15,11 @@ from components.profile_sections import load_photo_src
 
 dash.register_page(__name__, path='/org-comparison', name='조직별 비교', title='조직별 우수 연구원 비교')
 
+# 당분간 사용하지 않는 화면이라 숨겨둔 상태 — 나중에 다시 쓰게 되면 이
+# 플래그를 False로 바꾸고 app.py의 '조직별 비교' NavLink를 되살리면 된다
+# (data/processed/CLAUDE.md 참고).
+_FEATURE_HIDDEN = True
+
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
 
 CURRENT_YEAR = datetime.now().year
@@ -350,6 +355,8 @@ def _dept_section(dept_name, suc_dept, res, eva, edu, awd, nur, inc,
 # ─── 레이아웃 ────────────────────────────────────────────────────────────────────
 
 def layout():
+    if _FEATURE_HIDDEN:
+        return dbc.Alert('이 기능은 현재 준비 중입니다.', color='secondary', className='mt-3')
     from services.auth import can
     show_eval = can('view_evaluation')
     show_incentive = can('view_incentive')

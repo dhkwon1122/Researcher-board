@@ -411,14 +411,11 @@ navbar = dbc.Navbar(
                         href='/researcher-list', active='exact', className='text-white',
                     )),
                     dbc.NavItem(dbc.NavLink(
-                        [html.I(className='bi bi-people-fill me-1'), '조직별 비교'],
-                        href='/org-comparison', active='exact', className='text-white',
-                    )),
-                    dbc.NavItem(dbc.NavLink(
                         [html.I(className='bi bi-signpost-split me-1'), 'JOB Market'],
                         href='/job-market', active='exact', className='text-white',
                     )),
-                    # '과제 직무/대상자 검증' NavLink는 pages/jd_reconciliation.py의
+                    # '조직별 비교'/'과제 직무/대상자 검증' NavLink는 각각
+                    # pages/org_comparison.py, pages/jd_reconciliation.py의
                     # _FEATURE_HIDDEN(기능 준비 중) 동안 제거됨(data/processed/
                     # CLAUDE.md에 재오픈 방법 기록).
                     # 관리자 메뉴 + 사용자 정보 (콜백으로 갱신)
@@ -448,12 +445,17 @@ app.layout = html.Div(
         navbar,
         dbc.Container(
             [
-                # 전 탭 공용 자연어 질문 바 — 어느 탭에 있든 항상 보이도록
-                # 네비게이션 바로 아래, 페이지 콘텐츠 위에 고정 배치한다
-                # (구 "연구원 목록" 탭 전용 AI 검색을 대체). 인쇄 화면(예: 연구원
-                # 개별 프로필의 A4 인쇄)에는 필요 없어 no-print로 감춘다.
-                html.Div(nl_query_bar.render(), className='no-print'),
-                html.Hr(className='mt-1 mb-3 no-print'),
+                # 자연어 질문 바(AI 검색) — 연구원 명단 화면에서만 보인다
+                # (_toggle_nl_query_bar 콜백이 pathname에 따라 표시 여부 결정).
+                # page_container 밖(네비게이션 바로 아래, 페이지 콘텐츠 위)에
+                # 고정 배치하는 구조는 유지하되, 다른 화면에서는 숨긴다.
+                html.Div(
+                    [
+                        html.Div(nl_query_bar.render(), className='no-print'),
+                        html.Hr(className='mt-1 mb-3 no-print'),
+                    ],
+                    id='nl-query-bar-wrapper',
+                ),
                 dash.page_container,
             ],
             fluid=True,
@@ -462,6 +464,14 @@ app.layout = html.Div(
     ],
     style={'minHeight': '100vh', 'backgroundColor': '#f5f5f7'},
 )
+
+
+@callback(
+    Output('nl-query-bar-wrapper', 'style'),
+    Input('_pages_location', 'pathname'),
+)
+def _toggle_nl_query_bar(pathname):
+    return {} if pathname == '/researcher-list' else {'display': 'none'}
 
 
 @callback(
