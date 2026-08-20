@@ -3147,3 +3147,24 @@ ca-certificates.crt`(Dockerfile이 이미 만들어 둔, 사내 루트 CA가 병
 
 검증: 이 샌드박스에는 docker 데몬이 없어 실제 빌드 재현은 불가 —
 Dockerfile 문법만 검토. 사용자 환경에서 재빌드로 확인 필요.
+
+## 2026-08-20 (8): NODE_EXTRA_CA_CERTS로도 안 돼 NODE_TLS_REJECT_UNAUTHORIZED=0 추가
+
+사용자 보고: NODE_EXTRA_CA_CERTS(위 (7) 항목) 적용 후 재빌드해도 "동일하게
+에러가 나". 재검토 결과, NODE_EXTRA_CA_CERTS는 이 이미지가 사내 루트 CA를
+실제로 신뢰 저장소에 갖고 있을 때만 효과가 있는데 — Dockerfile의 CA 등록
+단계는 `certs/`에 사용자가 실제로 인증서 파일을 넣어야만 동작하는
+옵션(opt-in) 단계이고, 그 뒤에 실행되는 pip install은 `--trusted-host`로
+검증 자체를 건너뛰고 있어서 이 이미지가 사내 CA를 실제로 갖고 있는지 여태
+검증된 적이 없었다는 걸 깨달음. 즉 `certs/`가 비어 있는 채로 빌드됐다면
+NODE_EXTRA_CA_CERTS가 가리키는 번들에도 사내 루트 CA가 없어 그대로
+실패한다.
+
+수정: pip의 `--trusted-host`와 같은 원칙으로, `playwright install`에
+`NODE_TLS_REJECT_UNAUTHORIZED=0`을 최종 폴백으로 추가 — TLS 인증서 체인
+검증 자체를 건너뛴다. 공개 오픈소스 브라우저 바이너리를 받는 이 빌드
+단계 하나에만 적용되고(런타임 앱 요청에는 전혀 영향 없음), NODE_EXTRA_CA_CERTS는
+그대로 남겨 인증서가 있는 환경에서는 정석대로 검증되도록 유지.
+
+검증: 이 세션에는 docker 데몬이 없어 실제 재빌드는 사용자 환경에서 확인
+필요.

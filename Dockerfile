@@ -93,10 +93,17 @@ RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
 #
 # playwright install은 내부적으로 Node.js로 다운로드를 받는데, Node는
 # Python의 requests(REQUESTS_CA_BUNDLE)와 달리 OS 인증서 저장소를 자동으로
-# 쓰지 않아, 사내망 프록시가 TLS를 가로채는(MITM) 환경에서는 위에서 이미
-# 시스템에 등록한 사내 루트 CA를 Node에게 따로 알려줘야 한다
-# ("unable to verify the first certificate" 에러) — NODE_EXTRA_CA_CERTS로
-# 같은 인증서 번들을 지정해 해결한다.
+# 쓰지 않아, 사내망 프록시가 TLS를 가로채는(MITM) 환경에서는 Node가 그
+# 체인을 검증하지 못해 실패한다("unable to verify the first certificate").
+# NODE_EXTRA_CA_CERTS로 시스템 CA 번들을 알려주는 것으로 충분할 수도
+# 있지만, certs/ 에 사내 루트 CA를 실제로 넣어 빌드했을 때만 그 번들에
+# 그 인증서가 들어 있다 — pip 쪽은 --trusted-host로 검증 자체를 건너뛰고
+# 있어서(위 2번 단계) 이 이미지가 사내 CA를 실제로 신뢰 저장소에 갖고
+# 있는지가 여태 검증된 적이 없었다. 그래서 NODE_EXTRA_CA_CERTS만으로도
+# 안 되면, pip과 동일한 원칙(신뢰할 수 있는 대상에 한해 이 빌드 시점
+# 다운로드만 검증을 건너뜀)으로 NODE_TLS_REJECT_UNAUTHORIZED=0을 최종
+# 폴백으로 둔다 — 공개 오픈소스 브라우저 바이너리를 받는 이 한 단계에만
+# 적용되고, 런타임에 앱이 처리하는 어떤 요청에도 영향이 없다.
 #
 # 그래도 실패하면(사내망 자체가 이 호스트를 막아둔 경우) 이 단계만
 # 실패해도(|| true) 전체 빌드는 계속되고 나머지 기능은 정상 배포되며,
@@ -104,6 +111,7 @@ RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
 # 있다면 PLAYWRIGHT_DOWNLOAD_HOST로 지정해 재시도할 것.
 RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
     NODE_EXTRA_CA_CERTS="/etc/ssl/certs/ca-certificates.crt" \
+    NODE_TLS_REJECT_UNAUTHORIZED=0 \
     playwright install --with-deps chromium \
     || echo "[build] Playwright 브라우저 설치 실패 — PDF 첨부 메일 기능은 비활성화된 채로 나머지는 정상 빌드합니다. 원인은 보통 사내망에서 Chromium 다운로드 호스트가 막혀 있는 경우입니다."
 
