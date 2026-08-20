@@ -3103,3 +3103,25 @@ Playwright 브라우저로 "메일로 보내기" 버튼을 클릭해 모달이 �
 입력 필드가 반응하는지 확인. 첫 시도에서 `wait_for_selector`가 기본값
 (visible)으로 대기해 `.profile-print-only`(화면에서 항상 display:none)를
 영원히 못 찾고 타임아웃난 버그를 발견해 `state='attached'`로 수정.
+
+## 2026-08-20 (6): Playwright 브라우저 설치 실패해도 전체 빌드는 계속되도록 수정
+
+사용자 보고: "docker compose하는 과정에서 fail이 뜨네" —
+`playwright install --with-deps chromium`(exit code 1)에서 빌드 자체가
+멈춤. 미리 안내한 그대로(위 2026-08-20 (5) 항목의 Dockerfile 주석) 사내망이
+Playwright의 Chromium 다운로드 호스트(Microsoft CDN — pip이 쓰는
+repository.samsungds.net과는 다른 별도 외부 호스트)를 막고 있을 가능성이
+높다.
+
+수정: `RUN ... playwright install --with-deps chromium` 뒤에
+`|| echo "..."`를 붙여, 이 단계가 실패해도 Dockerfile 전체가 실패하지
+않고 계속 진행되게 했다 — PDF 첨부 메일 기능만 "PDF 생성 실패"로
+비활성화된 채, 나머지 모든 기능(개별/과제 리포트 메일 발송 포함, PDF
+첨부만 못 함)은 정상 빌드·배포된다. 근본 해결(사내망에서 Chromium
+다운로드 호스트 허용, 또는 PLAYWRIGHT_DOWNLOAD_HOST로 사내 미러 지정)은
+네트워크 담당자 확인이 필요해 사용자에게 맡김.
+
+검증: 이 샌드박스에는 docker 데몬이 없어 실제 빌드 재현은 불가 — Dockerfile
+문법(RUN 안 셸 `||` 체인)만 직접 검토. 데몬 접근이 되면
+`docker compose build --progress=plain`으로 실제 실패 로그를 받아 근본
+원인(프록시 차단/apt 문제 등)을 추가로 진단하기로 함.
