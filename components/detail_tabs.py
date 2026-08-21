@@ -252,9 +252,23 @@ def _clean_num_str(val) -> str:
         return s
 
 
-def _core_technology_table(core_df):
+def _core_technology_table(core_df, *, compact: bool = False):
+    """compact=True면 표(기술분야/핵심기술 2열 + 헤더) 대신 "(등급)분야 > 기술명"
+    한 줄짜리 텍스트를 항목마다 나열한다(사용자 요청, A4 인쇄본 전용 —
+    화면 기본값 False는 기존 표 그대로)."""
     if core_df.empty:
         return html.Div('핵심기술 데이터 없음', className='text-muted small')
+
+    if compact:
+        lines = []
+        for _, row in core_df.iterrows():
+            field = str(row.get('tech_field', '')).strip()
+            name = str(row.get('tech_name', '')).strip()
+            grade = _clean_num_str(row.get('tech_grade', '')) or '-'
+            grade_disp = f'{grade}급' if grade != '-' else '-'
+            lines.append(html.Div(f'({grade_disp}){field} > {name}', className='small',
+                                   style={'wordBreak': 'break-word', 'marginBottom': '2px'}))
+        return html.Div(lines)
 
     rows = []
     for _, row in core_df.iterrows():
@@ -304,9 +318,11 @@ def _is_registered(value):
     return not any(neg in s for neg in _NOT_REGISTERED_KEYWORDS)
 
 
-def _tech_ownership_table(tech_row, *, show_index: bool = True):
+def _tech_ownership_table(tech_row, *, show_index: bool = True, no_header: bool = False):
     """show_index=False면 맨 앞 "구분"(1~5 순번) 열을 뺀다 — A4 인쇄처럼 지면이
-    좁아 순번 자체가 별 정보가 안 될 때 사용(화면은 기본값 True로 그대로)."""
+    좁아 순번 자체가 별 정보가 안 될 때 사용(화면은 기본값 True로 그대로).
+    no_header=True면 표 헤더 행(구분/전문분야/Lv/보유율)을 빼고 데이터
+    행만 바로 보여준다(사용자 요청, A4 인쇄본 전용)."""
     if tech_row is None:
         return html.Div('보유기술 데이터 없음', className='text-muted small')
 
@@ -328,23 +344,24 @@ def _tech_ownership_table(tech_row, *, show_index: bool = True):
     if not rows:
         return html.Div('보유기술 데이터 없음', className='text-muted small')
 
-    headers = [html.Th('구분', className='text-center', style={'fontSize': '0.72rem', 'width': '15%'})] \
-        if show_index else []
-    headers += [
-        html.Th('전문분야', style={'fontSize': '0.72rem', 'width': '45%' if show_index else '55%'}),
-        html.Th('Lv', className='text-center', style={'fontSize': '0.72rem', 'width': '15%', 'textAlign': 'center'}),
-        html.Th('보유율', className='text-center', style={'fontSize': '0.72rem', 'width': '25%', 'textAlign': 'center'}),
-    ]
+    table_children = []
+    if not no_header:
+        headers = [html.Th('구분', className='text-center', style={'fontSize': '0.72rem', 'width': '15%'})] \
+            if show_index else []
+        headers += [
+            html.Th('전문분야', style={'fontSize': '0.72rem', 'width': '45%' if show_index else '55%'}),
+            html.Th('Lv', className='text-center', style={'fontSize': '0.72rem', 'width': '15%', 'textAlign': 'center'}),
+            html.Th('보유율', className='text-center', style={'fontSize': '0.72rem', 'width': '25%', 'textAlign': 'center'}),
+        ]
+        table_children.append(html.Thead(html.Tr(headers), className='table-light'))
+    table_children.append(html.Tbody(rows))
 
-    return dbc.Table([
-        html.Thead(html.Tr(headers), className='table-light'),
-        html.Tbody(rows),
-    ], bordered=False, hover=True, size='sm', className='mb-0',
+    return dbc.Table(table_children, bordered=False, hover=True, size='sm', className='mb-0',
        style={'tableLayout': 'fixed', 'width': '100%'})
 
 
 def owned_expertise_block(core_df, tech_df, rid, *, stacked: bool = False, show_tech_index: bool = True,
-                           show_info_hover: bool = True):
+                           show_info_hover: bool = True, compact: bool = False):
     """보유 전문성 — 핵심기술(core_technology.csv) / 보유기술(tech_ownership.csv)을
     기본은 좌우로 나눠 표시(좌: 기술분야·핵심기술(등급 배지), 우: 전문분야별
     Lv·보유율, 상단에 E/R 직군 배지). stacked=True면 좌우 대신 핵심기술 아래에
@@ -352,7 +369,10 @@ def owned_expertise_block(core_df, tech_df, rid, *, stacked: bool = False, show_
     show_tech_index=False면 보유기술 표의 "구분"(1~5 순번) 열을 뺀다.
     show_info_hover=False면 "등급 개요"/"Lv 개요" 마우스 오버 안내(_info_hover())를
     아예 뺀다 — 종이 인쇄본에는 호버가 없어 의미가 없고, 이 함수가 화면·인쇄본
-    양쪽에서 호출되면 같은 id를 가진 요소가 DOM에 중복되는 문제도 같이 없앤다."""
+    양쪽에서 호출되면 같은 id를 가진 요소가 DOM에 중복되는 문제도 같이 없앤다.
+    compact=True면 표 헤더를 없앤다(사용자 요청, A4 인쇄본 전용) — 핵심기술은
+    표 대신 "(등급)분야 > 기술명" 텍스트 나열로, 보유기술은 헤더 없이 데이터
+    행만 바로 보여준다. "핵심기술"/"보유기술" 섹션 제목 자체는 그대로 유지."""
     core = core_df[core_df['researcher_id'] == rid] if not core_df.empty else pd.DataFrame()
     tech = tech_df[tech_df['researcher_id'] == rid] if not tech_df.empty else pd.DataFrame()
     tech_row = tech.iloc[0] if not tech.empty else None
@@ -360,7 +380,7 @@ def owned_expertise_block(core_df, tech_df, rid, *, stacked: bool = False, show_
 
     left_children = [
         html.P('핵심기술', style=_PANEL_TITLE_STYLE, className='mb-2'),
-        _core_technology_table(core),
+        _core_technology_table(core, compact=compact),
     ]
     if show_info_hover:
         left_children.append(_info_hover('grade-info-icon', '등급 개요', '등급 개요.png'))
@@ -375,7 +395,7 @@ def owned_expertise_block(core_df, tech_df, rid, *, stacked: bool = False, show_
 
     right_children = [
         html.Div(right_title_children, className='d-flex align-items-center mb-2'),
-        _tech_ownership_table(tech_row, show_index=show_tech_index),
+        _tech_ownership_table(tech_row, show_index=show_tech_index, no_header=compact),
     ]
     if show_info_hover:
         right_children.append(_info_hover('lv-info-icon', 'Lv 개요', 'lv 개요.png'))

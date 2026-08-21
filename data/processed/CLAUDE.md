@@ -3972,3 +3972,131 @@ photo_block()이 만드는 다른 줄 사이 간격(캡션끼리는 기본 줄�
 - 1페이지 높이: 681.6px(예산 약 937px) — 여유 있게 들어옴.
 - `python3 -m py_compile`로 컴파일 확인.
 - 테스트 데이터·서버·계정 모두 정리.
+
+## 2026-08-21 (23): 핵심기술/보유기술 표 헤더 제거 + 사진·기본정보·핵심기술 박스를 테두리 하나로 통합
+
+사용자 요청: "핵심기술, 보유기술 표에는 Header가 필요 없을 것 같아. 핵심기술은
+(A급)00000000 분야 > 0000000000 기술 이렇게 표현하고, 보유기술은 그냥 내용에
+해당되는 row만 바로 보이게 표시하면 되겠어. 그리고 사진 박스, 사번 박스,
+핵심기술보유기술 박스를 하나의 큰 박스 안에 넣고 사진박스와 핵심기술 박스를
+감싼 테두리는 없애줘."
+
+**1) 표 헤더 제거 + 핵심기술 표기 형식 변경** (`components/detail_tabs.py`):
+- `_core_technology_table(core_df, *, compact=False)` — `compact=True`면 2열
+  표(기술분야/핵심기술 헤더 포함) 대신 "(등급)분야 > 기술명" 한 줄짜리 텍스트를
+  항목마다 나열한다(예: "(B급)반도체 소재 > 차세대 저전력 반도체 소재 및
+  공정 최적화 기술 개발"). 등급이 없으면 "(-)"로 표시. 화면(라이브) 탭은
+  `compact` 인자를 안 넘겨 기존 표 그대로.
+- `_tech_ownership_table(tech_row, *, show_index=True, no_header=False)` —
+  `no_header=True`면 `html.Thead(...)`(구분/전문분야/Lv/보유율)를 아예 안 만들고
+  `html.Tbody(rows)`만 반환한다(표 구조·3열 정렬은 유지, 헤더 행만 제거).
+- `owned_expertise_block(..., compact: bool = False)` 신규 파라미터 — 위 두
+  함수에 각각 `compact`/`no_header`로 전달. "핵심기술"/"보유기술" 섹션 제목
+  (`_PANEL_TITLE_STYLE` 텍스트) 자체는 요청 범위 밖이라 그대로 유지 — 표
+  내부 열 헤더만 없앤 것.
+- `pages/researcher_profile.py`의 인쇄 전용 호출부만 `compact=True` 추가
+  (화면 탭은 그대로).
+
+**2) 사진·기본정보·핵심기술/보유기술 박스를 테두리 하나로 통합**
+(`pages/researcher_profile.py`의 `_print_profile_content()`): 직전까지는
+`photo_box`(자체 테두리)/`right_box`(`_print_box`로 만들어 자체 테두리)가
+각자 따로 박스였는데, 사용자 요청대로 photo_box/tech_box(옛 right_box)의
+자체 테두리(`border`/`borderRadius`)를 빼고, 그 대신 [photo_box, info_col,
+tech_box] 셋을 한 flex row로 묶은 `combined_box`에 테두리(`_PRINT_BOX_BORDER`,
+borderRadius, padding)를 딱 하나만 준다.
+
+이 변경으로 이전 (19)번 항목에서 만든 "history_box가 tech_box(구
+right_box)의 높이를 기다리지 않고 사진 박스 바로 아래에서 시작하게 하는"
+`left_column`(독립 열) 구조는 더 이상 쓰지 않는다 — 이번 요청이 photo_box/
+info_col/tech_box 3개를 명시적으로 "하나의 큰 박스"로 합치라는 것이었고
+history_box는 그 언급에서 빠져 있어서, history_box를 그 안에 끼워 넣지
+않고(요청 범위 밖) `combined_box` 바로 다음 블록으로 되돌렸다. 그 결과
+history_box의 시작 위치는 다시 `combined_box` 전체 높이(= photo+info 쪽과
+tech_box 쪽 중 더 큰 쪽) 기준으로 정해진다 — 다만 이제는 tech_box가 더
+길어도 photo_box처럼 "별도 테두리 박스가 일찍 끝나고 그 안에 어색한 빈
+공간이 남는" 시각적 문제가 없다(테두리 자체가 하나로 합쳐져 있어 빈 공간이
+아니라 "같은 박스 안에서 오른쪽 칸이 더 길다"는 자연스러운 모양이 되므로).
+`_photo_w`/`_PHOTO_BOX_WIDTH_PX` 등 폭 계산 상수·calc 식은 그대로 재사용
+(값 자체는 안 바뀜, `combined_box`/`history_box` 조립부가 참조하도록 주석·
+변수명만 정리).
+
+**검증**: 실제 서버 기동 + 로그인(team_lead) + Playwright, 이전과 동일한
+스트레스 테스트 데이터(과제 14건, 긴 부서명)로 확인.
+- `<th>` 전체 목록에서 기술분야/핵심기술/구분/전문분야/Lv/보유율이 전부
+  사라지고, 무관한 페이지2 논문 상세 표 헤더(연도/제목/게재처 등)만 남는
+  것을 확인.
+- 본문 텍스트에 정규식(`\([A-Z가-힣0-9\-]*급\).+>`)으로 "(등급)분야 >
+  기술명" 형식 줄이 실제로 존재하는지 확인.
+- 사진 `<img>`에서 조상으로 올라가며 테두리 있는 요소를 전부 수집 —
+  기존엔 photo_box 자체 테두리 1개가 먼저 걸렸을 텐데, 이번엔 정확히
+  1개(combined_box, 전체 폭 1280px)만 발견됨을 확인. "핵심기술" 텍스트
+  에서도 동일하게 조상 테두리를 수집해 역시 정확히 1개(같은 combined_box,
+  같은 top/bottom/width)만 발견 — 사진과 핵심기술이 물리적으로 동일한
+  하나의 테두리 박스 안에 있음을 좌표까지 일치시켜 확인.
+- 스크린샷으로 육안 확인: 사진·기본정보·핵심기술/보유기술이 테두리 하나
+  안에 나란히 배치되고, 핵심기술이 "(B급)반도체 소재 > 차세대 저전력
+  반도체 소재 및 공정 최적화 기술 개발" 형식으로, 보유기술이 헤더 없이
+  3개 행(반도체 소재 분석/박막 공정/품질 관리, Lv·보유율)만 표시됨을 확인.
+- 핵심기술 10건(원래 2건 + 8건 추가)으로 인위적으로 늘려 combined_box를
+  더 길게(높이 243.4px→298.8px) 만든 스트레스 테스트에서도 여전히 테두리
+  1개로 유지되고, 1페이지 높이가 749.0px(예산 약 937px)로 여유 있게
+  들어옴을 확인.
+- 무한 재렌더링 회귀 없음: `_dash-update-component` 요청 0건,
+  `#profile-print-content` 자식 수 6회 연속 측정에서 항상 1로 안정.
+- 콘솔 에러 없음.
+- `python3 -m py_compile`로 컴파일 확인.
+- 테스트 데이터(스트레스 테스트용 핵심기술 8건 추가분 포함)·서버·계정
+  모두 정리.
+
+## 2026-08-21 (24): 논문·특허 실적 박스 전체 폭으로 확대 + 박스 테두리 완화 + combined_box 내부 옅은 회색 구분선
+
+사용자 요청: "논문 특허 실적 박스는 전체 폭을 사용하도록 넓혀줘. 박스
+테두리가 너무 진하지 않게 짙은 회색 정도로 표현되게 해주고, 아까 합친
+사진, 사번, 핵심기술 박스들은 사이에 옅은 회색으로 세로 줄을 그어서 살짝
+구분감이 들게끔 보여지면 좋겠어."
+
+**`pages/researcher_profile.py`**:
+- `_PRINT_BOX_BORDER`를 `'1px solid #1d1d1f'`(거의 검정) → `'1px solid
+  #555555'`(짙은 회색)로 완화. 이 상수를 `_print_box()`/`combined_box`가
+  공유하므로 인쇄본의 모든 테두리 박스(combined_box, history_box,
+  expertise_summary_box, task_hr_box, 논문·특허 상세 페이지 박스)에 한
+  번에 반영된다.
+- 신규 상수 `_PRINT_BOX_DIVIDER = '1px solid #ddd'`(옅은 회색) — combined_box
+  내부에서 개별 테두리를 없앤 자리에 살짝 구분감만 주는 용도. `info_col`
+  (사번 박스)에 `borderLeft: _PRINT_BOX_DIVIDER` 추가(기존 `paddingLeft:
+  '12px'`는 그대로 둬 photo_box와의 간격 유지, 그 경계에 선이 그어짐).
+  `tech_box`를 감싸는 wrapper div에도 동일하게 `borderLeft:
+  _PRINT_BOX_DIVIDER` + `paddingLeft: '10px'` 추가(info_col과의 경계).
+- `history_box`(논문·특허 실적 요약 + 양성·시상 이력)의 폭을 좁게 고정하던
+  `style={'width': f'calc(100% - (100% - {_photo_w} - 12px) / 2)'}`를
+  제거 — `_print_box()`가 이미 100% 폭으로 렌더링하므로 불필요한 wrapper
+  `html.Div`(width 스타일 지정용으로만 있던 것)도 함께 없애고
+  `_print_box(...)`의 반환값을 그대로 `history_box`로 쓰도록 단순화.
+
+**검증**: 실제 서버 기동 + 로그인(team_lead) + Playwright, 이전과 동일한
+스트레스 테스트 데이터(과제 14건, 긴 부서명)로 확인.
+- `history_box`("논문 실적" 텍스트에서 조상 중 `borderTopWidth`가 있는
+  가장 가까운 요소로 탐지) 폭이 정확히 `#profile-print-content`의 전체
+  폭(1280px)과 같아짐을 확인(직전엔 폭이 좁게 제한돼 있었음).
+- `history_box`/`combined_box`(둘 다 `_print_box`/직접 스타일로 만든
+  실제 박스 테두리, `borderTopWidth`로 탐지해 `borderLeft`만 있는
+  구분선과 구분) 둘 다 테두리 색이 `rgb(85, 85, 85)`(#555555)로 바뀐
+  것을 확인 — 검증 스크립트가 처음엔 `borderWidth`(전체 축약형) 기준으로
+  탐지해 `borderLeft`만 있는 구분선을 잘못 테두리로 오탐지하는 버그가
+  있었는데, `borderTopWidth`(상단 변 기준, 구분선은 상단이 없음)로
+  좁혀서 해결.
+- `info_col`(Knox ID를 포함한 사번 박스)과 `tech_box` wrapper 둘 다에서
+  `borderLeftColor`가 `rgb(221, 221, 221)`(#dddddd, 옅은 회색), 폭
+  1px인 구분선이 실제로 존재함을 확인.
+- `combined_box`만 잘라(clip) 스크린샷으로 육안 확인 — 사진 박스와
+  사번 박스 사이, 사번 박스와 핵심기술/보유기술 박스 사이에 옅은 회색
+  세로 구분선이 선명하게 보이고, 전체 박스 테두리는 예전보다 확연히
+  옅어진 회색으로 보임을 확인.
+- 무한 재렌더링 회귀 없음: `_dash-update-component` 요청 0건,
+  `#profile-print-content` 자식 수 6회 연속 측정에서 항상 1로 안정.
+- 콘솔 에러 없음.
+- 1페이지 높이: 693.6px(예산 약 937px) — 논문·특허 실적 박스가 넓어져
+  내용 줄바꿈이 줄어든 덕에 직전(19)~(23)번 대비 오히려 여유가 비슷하거나
+  나음.
+- `python3 -m py_compile`로 컴파일 확인.
+- 테스트 데이터·서버·계정 모두 정리.

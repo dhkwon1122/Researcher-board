@@ -538,18 +538,23 @@ def _empty_profile_output():
     )
 
 
-_PRINT_BOX_BORDER = '1px solid #1d1d1f'
+_PRINT_BOX_BORDER = '1px solid #555555'  # 박스 테두리 색 — 기존 #1d1d1f(거의
+# 검정)가 너무 진하다는 사용자 요청으로 짙은 회색으로 완화. _print_box()/
+# combined_box 등 모든 인쇄 박스 테두리가 이 상수 하나를 공유한다.
+_PRINT_BOX_DIVIDER = '1px solid #ddd'  # combined_box 내부 photo/info/tech
+# 사이를 나누는 옅은 회색 세로 구분선(사용자 요청) — 위 박스 테두리보다
+# 훨씬 옅은 톤으로, "테두리"가 아니라 살짝 구분감만 주는 용도.
 _TASK_HR_RECENT_LIMIT = 6  # 과제 수행 + 인사 발령 합쳐서 인쇄본에 보여줄 최신 건수
 # (기존 10건 → 6건: 사용자 요청 "1페이지를 넘어가는 경우가 없었으면" — 다른
 # 항목(학력·부서·과제명 등)이 길어 줄바꿈되는 경우까지 감안한 안전 여백을
 # 남기려 실측 기반으로 줄임. data/processed/CLAUDE.md 참고.)
 _PHOTO_BOX_WIDTH_PX = 136  # 사진 박스(photo_box) 폭 — 190px → 160px(사진 확대
-# 요청) → 136px(이번 요청: 사진이 너무 커져서 폭·높이 모두 15% 축소,
-# 160*0.85=136). 이 값을 header_row의 폭 계산(calc)에서도 그대로
-# 재사용해야 좌우 정렬이 어긋나지 않는다 — 아래 header_row 조립부의
-# photo_box/left_column/right_box calc() 식이 전부 이 상수를 참조한다.
-# 사진 자체의 최대 높이(img_max_height)도 같은 비율로 줄인다 — 아래
-# photo_box 조립부와 assets/custom.css의 인쇄 전용 override 참고.
+# 요청) → 136px(사진이 너무 커져서 폭·높이 모두 15% 축소, 160*0.85=136).
+# 이 값을 combined_box/history_box의 폭 계산(calc)에서도 그대로 재사용해야
+# 좌우 정렬이 어긋나지 않는다 — 아래 combined_box/history_box 조립부의
+# calc() 식이 전부 이 상수를 참조한다. 사진 자체의 최대 높이
+# (img_max_height)도 같은 비율로 줄인다 — 아래 photo_box 조립부와
+# assets/custom.css의 인쇄 전용 override 참고.
 
 
 def _print_box(title, children, *, breakable: bool = False):
@@ -855,13 +860,13 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     인쇄에 부적합해(넘치는 내용이 잘림) 재사용하지 않고, 같은 데이터/블록 함수를
     피플팀이 준 손그림 양식(사진+이름+평가·인센티브 / 기본정보+학력 / 보유역량 /
     논문·특허+양성·시상 / 전문성 요약 / 과제수행·인사발령, 1페이지 안에 들어오게)에
-    맞춰 테두리 박스로 재배치한다. header_row는 [사진+기본정보+학력+논문·특허+
-    양성·시상을 한데 묶은 left_column] / [핵심기술·보유기술 right_box] 2열
-    구조다 — history_box(논문·특허+양성·시상)를 left_column 안에 두는 이유는
-    right_box(핵심기술·보유기술)가 더 길어도 그걸 기다리지 않고 사진 박스
-    바로 아래에서 시작하게 하기 위해서다(자세한 이유는 header_row 조립부
-    주석 참고). 인물 코멘트는 인쇄본에 넣지 않는다(사용자 요청 — 화면 탭에는
-    그대로 남아 있음). print_eval_content는 update_profile()이 권한
+    맞춰 테두리 박스로 재배치한다. combined_box는 사진(photo_box)·기본정보+학력
+    (info_col)·핵심기술/보유기술(tech_box) 3개를 테두리 하나로 묶은 박스다
+    (사용자 요청 — photo_box/tech_box 자체 테두리는 없앰). history_box(논문·특허
+    +양성·시상)는 combined_box 바로 아래 별도 박스로, 폭은 combined_box의
+    사진+정보 영역과 같게 맞춘다(자세한 폭 계산은 combined_box/history_box
+    조립부 주석 참고). 인물 코멘트는 인쇄본에 넣지 않는다(사용자 요청 — 화면
+    탭에는 그대로 남아 있음). print_eval_content는 update_profile()이 권한
     (view_evaluation)까지 반영해 이미 만들어둔 것(_locked_block() 포함)을
     그대로 받아써 권한 판정을 중복하지 않는다."""
     # 성별/나이·직급-년차는 사진 아래 캡션(photo_block())에 이미 나오므로
@@ -902,6 +907,13 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     # 사진과 이름 있는 박스 아래에"). display:flex를 인라인 style로 직접
     # 준다(.d-flex 유틸리티 클래스 대신) — 외부 CDN(부트스트랩)이 느리거나
     # 막혀 있어도 항상 세로 배치되게 한다.
+    # 사진 박스 — 자체 테두리는 없다(사용자 요청, 아래 combined_box가 사진·
+    # 기본정보·핵심기술/보유기술을 한 테두리로 묶는다). 이름/직급연차는
+    # photo_block()이 이미 캡션으로 넣어주고, 그 아래에 평가·인센티브
+    # 이력을 붙인다(사용자 요청: "평가 인센티브 이력은 사진과 이름 있는
+    # 박스 아래에"). display:flex를 인라인 style로 직접 준다(.d-flex
+    # 유틸리티 클래스 대신) — 외부 CDN(부트스트랩)이 느리거나 막혀 있어도
+    # 항상 세로 배치되게 한다.
     photo_box = html.Div([
         # photo_block()은 컴포넌트 "리스트"를 그대로 반환한다 — 다른 리스트
         # 안에 그대로 끼워 넣으면 중첩 리스트가 되어 Dash가 이 서브트리를
@@ -917,32 +929,60 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
         # 간격을 기존 8px에서 좁혔다(사용자 요청 — 다른 줄 간격보다 유독
         # 크게 벌어져 보였다).
         html.Div(print_eval_content, style={'marginTop': '2px', 'width': '100%'}),
-    ], className='print-section',
-        style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center',
-               'width': f'{_PHOTO_BOX_WIDTH_PX}px', 'flex': f'0 0 {_PHOTO_BOX_WIDTH_PX}px',
-               'border': _PRINT_BOX_BORDER, 'borderRadius': '6px', 'padding': '8px'})
+    ], style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center',
+              'width': f'{_PHOTO_BOX_WIDTH_PX}px', 'flex': f'0 0 {_PHOTO_BOX_WIDTH_PX}px',
+              'padding': '8px'})
 
     # 핵심기술/보유기술만 담는다 — 학력은 기본정보(사번~Knox ID) 아래로
-    # 옮겼다(사용자 요청 2).
-    right_box = _print_box(None, html.Div([
+    # 옮겼다(사용자 요청). 자체 테두리는 없다(사용자 요청, 아래 combined_box
+    # 참고). compact=True — 핵심기술은 표 대신 "(등급)분야 > 기술명" 텍스트
+    # 나열로, 보유기술은 표 헤더 없이 데이터 행만(둘 다 사용자 요청: "표에는
+    # Header가 필요 없을 것 같아").
+    tech_box = html.Div([
         owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid,
-                               stacked=True, show_tech_index=False, show_info_hover=False),
-    ]))
+                               stacked=True, show_tech_index=False, show_info_hover=False, compact=True),
+    ])
 
     # 학력을 기본정보 표(사번~Knox ID) 바로 아래에 배치한다(사용자 요청).
     # "학력"이라는 제목 글자는 빼고(사용자 요청) 내용만 보여준다 — 위
-    # 기본정보 표와 구분되도록 marginTop만 남긴다.
+    # 기본정보 표와 구분되도록 marginTop만 남긴다. borderLeft는 옅은 회색
+    # 세로 구분선(사용자 요청 — combined_box에서 개별 테두리를 없앤 대신
+    # photo/info/tech 사이를 살짝 구분해달라는 것) — 왼쪽 padding 시작
+    # 지점(=photo_box 바로 오른쪽)에 그어진다.
     info_col = html.Div([
         info_table,
         current_status,
         html.Div(education_block(tables['education'], rid, plain_degree=True),
                   style={'marginTop': '8px'}),
-    ], style={'flex': '1 1 0', 'minWidth': '0', 'paddingLeft': '12px'})
+    ], style={'flex': '1 1 0', 'minWidth': '0', 'paddingLeft': '12px',
+              'borderLeft': _PRINT_BOX_DIVIDER})
 
-    # 논문·특허 실적 요약과 양성·시상 이력을 한 박스로 합친다(사용자 요청 3).
+    # 사진 박스 · 기본정보(사번~학력) 박스 · 핵심기술/보유기술 박스를 테두리
+    # 하나로 묶는다(사용자 요청: "사진 박스, 사번 박스, 핵심기술보유기술
+    # 박스를 하나의 큰 박스 안에 넣고 사진박스와 핵심기술 박스를 감싼
+    # 테두리는 없애줘") — 위 photo_box/tech_box는 이미 자체 테두리를 뺐고,
+    # 여기서 그 둘 + info_col을 감싸는 테두리 하나만 남긴다. 개별 테두리가
+    # 없어진 자리에 옅은 회색 세로 구분선을 넣는다(사용자 요청) — info_col은
+    # 위에서 자체 borderLeft로, tech_box 쪽은 아래 wrapper의 borderLeft로.
+    _photo_w = f'{_PHOTO_BOX_WIDTH_PX}px'
+    combined_box = html.Div([
+        html.Div(photo_box, style={'flex': f'0 0 {_photo_w}'}),
+        info_col,
+        html.Div(tech_box, style={'width': f'calc((100% - {_photo_w} - 12px) / 2)', 'minWidth': '0',
+                                   'marginLeft': '12px', 'paddingLeft': '10px',
+                                   'borderLeft': _PRINT_BOX_DIVIDER}),
+    ], className='print-section',
+        style={'display': 'flex', 'alignItems': 'flex-start',
+               'border': _PRINT_BOX_BORDER, 'borderRadius': '6px', 'padding': '10px 12px',
+               'marginBottom': '10px'})
+
+    # 논문·특허 실적 요약과 양성·시상 이력을 한 박스로 합친다(사용자 요청).
     # 박스 제목("논문 / 특허") 없이 "논문 실적 ~건"/"특허 실적 ~건" 두 줄만
     # 바로 보여준다(_print_publication_summary/_print_patent_summary가 각자
-    # 라벨을 포함해서 반환).
+    # 라벨을 포함해서 반환). 전체 폭을 그대로 쓴다(사용자 요청 — 예전엔
+    # combined_box의 photo+정보 영역 폭에 맞춰 좁게 뒀었는데, 그러지 말고
+    # 넓혀 달라는 것. _print_box()가 이미 폭 100%로 렌더링하므로 별도
+    # width 스타일을 줄 필요가 없다).
     history_box = _print_box(None, html.Div([
         _print_publication_summary(tables['publications'], rid),
         _print_patent_summary(tables['patents'], rid),
@@ -951,36 +991,6 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
         html.Div('시상 이력', className='small fw-semibold text-muted mt-2 mb-1'),
         award_block(tables['awards'], rid, limit=3, single_line=True, show_empty_message=False),
     ]))
-
-    # 사진+기본정보(학력 포함) 열과 history_box를 한 세로 묶음(left_column)으로
-    # 묶어, 핵심기술·보유기술 열(right_box)과 나란한 "독립된" 열로 배치한다.
-    # 예전에는 [photo, info_col, right_box] 3열을 한 flex row(header_row)로
-    # 두고 history_box를 그 다음 블록으로 이어붙였는데, 그러면 history_box의
-    # 시작 위치가 3열 중 "가장 키가 큰 열" 기준으로 정해져서 — 핵심기술·
-    # 보유기술 표(right_box)가 사진+기본정보보다 길면 history_box가 그만큼
-    # 아래로 밀려 사진 박스 바로 아래에 안 붙어 보였다(사용자 재요청:
-    # "핵심기술 보유기술 박스가 끝나는 지점에서 시작되지 않고 사진 박스
-    # 아래에서 시작되게"). left_column으로 묶으면 history_box의 top이
-    # right_box의 높이와 무관하게 사진+기본정보 쪽 높이만으로 정해진다 —
-    # right_box가 더 길어도 기다리지 않고, history_box가 짧게 끝나면 그
-    # 옆(같은 y 범위)에서 right_box(핵심기술·보유기술)가 계속 이어질 수
-    # 있다. 폭은 전체 폭에서 right_box 폭을 뺀 나머지(= photo 열
-    # _PHOTO_BOX_WIDTH_PX + 여백 12px + info_col 너비)로, photo 열 폭이
-    # 바뀌어도 항상 같은 상수(_PHOTO_BOX_WIDTH_PX)를 참조해 어긋나지
-    # 않게 한다.
-    _photo_w = f'{_PHOTO_BOX_WIDTH_PX}px'
-    left_column = html.Div([
-        html.Div([
-            html.Div(photo_box, style={'flex': f'0 0 {_photo_w}'}),
-            info_col,
-        ], style={'display': 'flex', 'alignItems': 'flex-start', 'marginBottom': '10px'}),
-        history_box,
-    ], style={'width': f'calc(100% - (100% - {_photo_w} - 12px) / 2)', 'minWidth': '0'})
-
-    header_row = html.Div([
-        left_column,
-        html.Div(right_box, style={'width': f'calc((100% - {_photo_w} - 12px) / 2)', 'minWidth': '0'}),
-    ], style={'display': 'flex', 'alignItems': 'flex-start', 'marginBottom': '10px'})
 
     # 핵심기술/보유기술이 위 right_box로 옮겨간 만큼, 전문성 요약(LLM)은 이제
     # 전체 폭을 그대로 쓴다(사용자 요청 5). 지면이 좁은 인쇄본 특성상 주요
@@ -1005,7 +1015,8 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
         html.Div('연구원 프로필', className='print-title',
                  style={'fontSize': '30px', 'fontWeight': 700,
                         'textAlign': 'center', 'marginBottom': '8px'}),
-        header_row,
+        combined_box,
+        history_box,
         expertise_summary_box,
         task_hr_box,
         html.Div(f'출력일 {datetime.now():%Y-%m-%d}', className='text-muted small text-end mt-2'),
