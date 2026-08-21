@@ -4047,3 +4047,56 @@ tech_box 쪽 중 더 큰 쪽) 기준으로 정해진다 — 다만 이제는 tec
 - `python3 -m py_compile`로 컴파일 확인.
 - 테스트 데이터(스트레스 테스트용 핵심기술 8건 추가분 포함)·서버·계정
   모두 정리.
+
+## 2026-08-21 (24): 논문·특허 실적 박스 전체 폭으로 확대 + 박스 테두리 완화 + combined_box 내부 옅은 회색 구분선
+
+사용자 요청: "논문 특허 실적 박스는 전체 폭을 사용하도록 넓혀줘. 박스
+테두리가 너무 진하지 않게 짙은 회색 정도로 표현되게 해주고, 아까 합친
+사진, 사번, 핵심기술 박스들은 사이에 옅은 회색으로 세로 줄을 그어서 살짝
+구분감이 들게끔 보여지면 좋겠어."
+
+**`pages/researcher_profile.py`**:
+- `_PRINT_BOX_BORDER`를 `'1px solid #1d1d1f'`(거의 검정) → `'1px solid
+  #555555'`(짙은 회색)로 완화. 이 상수를 `_print_box()`/`combined_box`가
+  공유하므로 인쇄본의 모든 테두리 박스(combined_box, history_box,
+  expertise_summary_box, task_hr_box, 논문·특허 상세 페이지 박스)에 한
+  번에 반영된다.
+- 신규 상수 `_PRINT_BOX_DIVIDER = '1px solid #ddd'`(옅은 회색) — combined_box
+  내부에서 개별 테두리를 없앤 자리에 살짝 구분감만 주는 용도. `info_col`
+  (사번 박스)에 `borderLeft: _PRINT_BOX_DIVIDER` 추가(기존 `paddingLeft:
+  '12px'`는 그대로 둬 photo_box와의 간격 유지, 그 경계에 선이 그어짐).
+  `tech_box`를 감싸는 wrapper div에도 동일하게 `borderLeft:
+  _PRINT_BOX_DIVIDER` + `paddingLeft: '10px'` 추가(info_col과의 경계).
+- `history_box`(논문·특허 실적 요약 + 양성·시상 이력)의 폭을 좁게 고정하던
+  `style={'width': f'calc(100% - (100% - {_photo_w} - 12px) / 2)'}`를
+  제거 — `_print_box()`가 이미 100% 폭으로 렌더링하므로 불필요한 wrapper
+  `html.Div`(width 스타일 지정용으로만 있던 것)도 함께 없애고
+  `_print_box(...)`의 반환값을 그대로 `history_box`로 쓰도록 단순화.
+
+**검증**: 실제 서버 기동 + 로그인(team_lead) + Playwright, 이전과 동일한
+스트레스 테스트 데이터(과제 14건, 긴 부서명)로 확인.
+- `history_box`("논문 실적" 텍스트에서 조상 중 `borderTopWidth`가 있는
+  가장 가까운 요소로 탐지) 폭이 정확히 `#profile-print-content`의 전체
+  폭(1280px)과 같아짐을 확인(직전엔 폭이 좁게 제한돼 있었음).
+- `history_box`/`combined_box`(둘 다 `_print_box`/직접 스타일로 만든
+  실제 박스 테두리, `borderTopWidth`로 탐지해 `borderLeft`만 있는
+  구분선과 구분) 둘 다 테두리 색이 `rgb(85, 85, 85)`(#555555)로 바뀐
+  것을 확인 — 검증 스크립트가 처음엔 `borderWidth`(전체 축약형) 기준으로
+  탐지해 `borderLeft`만 있는 구분선을 잘못 테두리로 오탐지하는 버그가
+  있었는데, `borderTopWidth`(상단 변 기준, 구분선은 상단이 없음)로
+  좁혀서 해결.
+- `info_col`(Knox ID를 포함한 사번 박스)과 `tech_box` wrapper 둘 다에서
+  `borderLeftColor`가 `rgb(221, 221, 221)`(#dddddd, 옅은 회색), 폭
+  1px인 구분선이 실제로 존재함을 확인.
+- `combined_box`만 잘라(clip) 스크린샷으로 육안 확인 — 사진 박스와
+  사번 박스 사이, 사번 박스와 핵심기술/보유기술 박스 사이에 옅은 회색
+  세로 구분선이 선명하게 보이고, 전체 박스 테두리는 예전보다 확연히
+  옅어진 회색으로 보임을 확인.
+- 무한 재렌더링 회귀 없음: `_dash-update-component` 요청 0건,
+  `#profile-print-content` 자식 수 6회 연속 측정에서 항상 1로 안정.
+- 콘솔 에러 없음.
+- 1페이지 높이: 693.6px(예산 약 937px) — 논문·특허 실적 박스가 넓어져
+  내용 줄바꿈이 줄어든 덕에 직전(19)~(23)번 대비 오히려 여유가 비슷하거나
+  나음.
+- `python3 -m py_compile`로 컴파일 확인.
+- 테스트 데이터·서버·계정 모두 정리.

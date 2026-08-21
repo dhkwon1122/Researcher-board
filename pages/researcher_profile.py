@@ -538,7 +538,12 @@ def _empty_profile_output():
     )
 
 
-_PRINT_BOX_BORDER = '1px solid #1d1d1f'
+_PRINT_BOX_BORDER = '1px solid #555555'  # 박스 테두리 색 — 기존 #1d1d1f(거의
+# 검정)가 너무 진하다는 사용자 요청으로 짙은 회색으로 완화. _print_box()/
+# combined_box 등 모든 인쇄 박스 테두리가 이 상수 하나를 공유한다.
+_PRINT_BOX_DIVIDER = '1px solid #ddd'  # combined_box 내부 photo/info/tech
+# 사이를 나누는 옅은 회색 세로 구분선(사용자 요청) — 위 박스 테두리보다
+# 훨씬 옅은 톤으로, "테두리"가 아니라 살짝 구분감만 주는 용도.
 _TASK_HR_RECENT_LIMIT = 6  # 과제 수행 + 인사 발령 합쳐서 인쇄본에 보여줄 최신 건수
 # (기존 10건 → 6건: 사용자 요청 "1페이지를 넘어가는 경우가 없었으면" — 다른
 # 항목(학력·부서·과제명 등)이 길어 줄바꿈되는 경우까지 감안한 안전 여백을
@@ -940,25 +945,32 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
 
     # 학력을 기본정보 표(사번~Knox ID) 바로 아래에 배치한다(사용자 요청).
     # "학력"이라는 제목 글자는 빼고(사용자 요청) 내용만 보여준다 — 위
-    # 기본정보 표와 구분되도록 marginTop만 남긴다.
+    # 기본정보 표와 구분되도록 marginTop만 남긴다. borderLeft는 옅은 회색
+    # 세로 구분선(사용자 요청 — combined_box에서 개별 테두리를 없앤 대신
+    # photo/info/tech 사이를 살짝 구분해달라는 것) — 왼쪽 padding 시작
+    # 지점(=photo_box 바로 오른쪽)에 그어진다.
     info_col = html.Div([
         info_table,
         current_status,
         html.Div(education_block(tables['education'], rid, plain_degree=True),
                   style={'marginTop': '8px'}),
-    ], style={'flex': '1 1 0', 'minWidth': '0', 'paddingLeft': '12px'})
+    ], style={'flex': '1 1 0', 'minWidth': '0', 'paddingLeft': '12px',
+              'borderLeft': _PRINT_BOX_DIVIDER})
 
     # 사진 박스 · 기본정보(사번~학력) 박스 · 핵심기술/보유기술 박스를 테두리
     # 하나로 묶는다(사용자 요청: "사진 박스, 사번 박스, 핵심기술보유기술
     # 박스를 하나의 큰 박스 안에 넣고 사진박스와 핵심기술 박스를 감싼
     # 테두리는 없애줘") — 위 photo_box/tech_box는 이미 자체 테두리를 뺐고,
-    # 여기서 그 둘 + info_col을 감싸는 테두리 하나만 남긴다.
+    # 여기서 그 둘 + info_col을 감싸는 테두리 하나만 남긴다. 개별 테두리가
+    # 없어진 자리에 옅은 회색 세로 구분선을 넣는다(사용자 요청) — info_col은
+    # 위에서 자체 borderLeft로, tech_box 쪽은 아래 wrapper의 borderLeft로.
     _photo_w = f'{_PHOTO_BOX_WIDTH_PX}px'
     combined_box = html.Div([
         html.Div(photo_box, style={'flex': f'0 0 {_photo_w}'}),
         info_col,
         html.Div(tech_box, style={'width': f'calc((100% - {_photo_w} - 12px) / 2)', 'minWidth': '0',
-                                   'marginLeft': '12px'}),
+                                   'marginLeft': '12px', 'paddingLeft': '10px',
+                                   'borderLeft': _PRINT_BOX_DIVIDER}),
     ], className='print-section',
         style={'display': 'flex', 'alignItems': 'flex-start',
                'border': _PRINT_BOX_BORDER, 'borderRadius': '6px', 'padding': '10px 12px',
@@ -967,20 +979,18 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     # 논문·특허 실적 요약과 양성·시상 이력을 한 박스로 합친다(사용자 요청).
     # 박스 제목("논문 / 특허") 없이 "논문 실적 ~건"/"특허 실적 ~건" 두 줄만
     # 바로 보여준다(_print_publication_summary/_print_patent_summary가 각자
-    # 라벨을 포함해서 반환). 폭은 combined_box의 photo+정보 영역과 같은
-    # 폭(전체 폭에서 핵심기술·보유기술 영역 폭을 뺀 나머지)으로 맞춰 그
-    # 아래 왼쪽 정렬로 이어붙인다.
-    history_box = html.Div(
-        _print_box(None, html.Div([
-            _print_publication_summary(tables['publications'], rid),
-            _print_patent_summary(tables['patents'], rid),
-            html.Div('양성 이력', className='small fw-semibold text-muted mt-2 mb-1'),
-            nurturing_block(tables['nurturing'], rid, show_empty_message=False),
-            html.Div('시상 이력', className='small fw-semibold text-muted mt-2 mb-1'),
-            award_block(tables['awards'], rid, limit=3, single_line=True, show_empty_message=False),
-        ])),
-        style={'width': f'calc(100% - (100% - {_photo_w} - 12px) / 2)'},
-    )
+    # 라벨을 포함해서 반환). 전체 폭을 그대로 쓴다(사용자 요청 — 예전엔
+    # combined_box의 photo+정보 영역 폭에 맞춰 좁게 뒀었는데, 그러지 말고
+    # 넓혀 달라는 것. _print_box()가 이미 폭 100%로 렌더링하므로 별도
+    # width 스타일을 줄 필요가 없다).
+    history_box = _print_box(None, html.Div([
+        _print_publication_summary(tables['publications'], rid),
+        _print_patent_summary(tables['patents'], rid),
+        html.Div('양성 이력', className='small fw-semibold text-muted mt-2 mb-1'),
+        nurturing_block(tables['nurturing'], rid, show_empty_message=False),
+        html.Div('시상 이력', className='small fw-semibold text-muted mt-2 mb-1'),
+        award_block(tables['awards'], rid, limit=3, single_line=True, show_empty_message=False),
+    ]))
 
     # 핵심기술/보유기술이 위 right_box로 옮겨간 만큼, 전문성 요약(LLM)은 이제
     # 전체 폭을 그대로 쓴다(사용자 요청 5). 지면이 좁은 인쇄본 특성상 주요
