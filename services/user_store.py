@@ -2,10 +2,9 @@
 사용자 계정을 PostgreSQL(DATABASE_URL 설정 시)에 저장하는 저장소.
 
 services/db.py 의 엔진을 그대로 재사용한다(dhkwon1122/ai-friendly-doc의
-web/db.py와 동일한 SQLAlchemy Core 테이블 정의 방식을 따름). DB 연결이
-없거나(DATABASE_URL 미설정) 실패하면 모든 함수가 예외를 삼키고 실패를
-나타내는 값(None/False/빈 리스트)을 반환한다 — 호출부(services/auth.py)가
-그 경우 config/users.json으로 폴백한다.
+web/db.py와 동일한 SQLAlchemy Core 테이블 정의 방식을 따름). 운영 배포에서는
+scripts/migrate_users.py를 명시적으로 실행해 테이블을 준비하는 것을 권장한다.
+앱 시작 시에도 하위 호환을 위해 한 번 더 준비 상태를 확인한다.
 """
 from __future__ import annotations
 

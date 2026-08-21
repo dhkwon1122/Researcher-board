@@ -49,24 +49,20 @@ Source:
 import json
 import os
 import re
-import sys
 from datetime import datetime
 
 import pandas as pd
 
-_PIPELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'pipeline')
-sys.path.insert(0, os.path.abspath(_PIPELINE_DIR))
-
-import llm_client  # noqa: E402
-import researcher_fit as fit  # noqa: E402
-from services.llm import LLMError  # noqa: E402
-from services import auth  # noqa: E402
-from services import data_labels  # noqa: E402
-from services import data_store  # noqa: E402
-from services import open_data_query  # noqa: E402
-from services import query_settings  # noqa: E402
-from services.evaluations import evaluation_years, salary_grade_column  # noqa: E402
-from services.researcher_profile_export import highest_degree_row  # noqa: E402
+from pipeline import llm_client
+from pipeline import researcher_fit as fit
+from services import auth
+from services import data_labels
+from services import data_store
+from services import open_data_query
+from services import query_settings
+from services.evaluations import evaluation_years, salary_grade_column
+from services.llm import LLMError
+from services.researcher_profile_export import highest_degree_row
 
 MAX_TOP_K = 20
 DEFAULT_TOP_K = 5

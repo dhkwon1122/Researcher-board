@@ -39,22 +39,19 @@ CSV(및 LLM 파생 JSON 산출물)를 그 자리에서 SQL로 조회한다 — �
 import json
 import os
 import re
-import sys
 
 import pandas as pd
 
-_PIPELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'pipeline')
-sys.path.insert(0, os.path.abspath(_PIPELINE_DIR))
-
-import llm_client  # noqa: E402
-import researcher_fit as fit  # noqa: E402
-from services import auth  # noqa: E402
-from services import data_labels  # noqa: E402
-from services import data_store  # noqa: E402
-from services import query_settings  # noqa: E402
-from services import researcher_profile_export as rpe  # noqa: E402
-from services import text2sql  # noqa: E402
-from services.llm import LLMError  # noqa: E402
+from config.settings import load_settings
+from pipeline import llm_client
+from pipeline import researcher_fit as fit
+from services import auth
+from services import data_labels
+from services import data_store
+from services import query_settings
+from services import researcher_profile_export as rpe
+from services import text2sql
+from services.llm import LLMError
 
 DISPLAY_LIMIT = 1000
 _EMBEDDING_MATCH_THRESHOLD = 0.75
@@ -362,8 +359,9 @@ def answer(question: str, current_only: bool = True) -> dict:
     # 접근 자체를 차단한다.
     con = duckdb.connect(':memory:', config={'enable_external_access': False})
     try:
-        con.execute(f"SET memory_limit='{int(os.environ.get('DUCKDB_MEMORY_LIMIT_MB', '512'))}MB'")
-        con.execute(f"SET threads={int(os.environ.get('DUCKDB_THREADS', '2'))}")
+        runtime_settings = load_settings().query_runtime
+        con.execute(f"SET memory_limit='{runtime_settings.duckdb_memory_limit_mb}MB'")
+        con.execute(f"SET threads={runtime_settings.duckdb_threads}")
         for name, df in tables.items():
             con.register(name, df)
 

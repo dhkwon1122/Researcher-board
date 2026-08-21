@@ -49,16 +49,12 @@ import io
 import json
 import os
 import re
-import sys
 from datetime import datetime
 
-_PIPELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'pipeline')
-sys.path.insert(0, os.path.abspath(_PIPELINE_DIR))
-
-import llm_client  # noqa: E402
-import pdf_reader  # noqa: E402
-import researcher_fit as fit  # noqa: E402
-from services import data_store  # noqa: E402
+from pipeline import llm_client
+from pipeline import pdf_reader
+from pipeline import researcher_fit as fit
+from services import data_store
 
 HISTORY_DIR = os.path.join(data_store.DATA_DIR, 'jd_reconciliation')
 

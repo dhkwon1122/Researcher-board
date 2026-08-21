@@ -43,22 +43,18 @@ import io
 import json
 import os
 import re
-import sys
 from datetime import datetime
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, Side
 from openpyxl.utils import get_column_letter
 
-_PIPELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'pipeline')
-sys.path.insert(0, os.path.abspath(_PIPELINE_DIR))
-
-import llm_client  # noqa: E402
-import researcher_fit as fit  # noqa: E402
-from services import data_store  # noqa: E402
-from services import jd_reconciliation as jd  # noqa: E402
-from services import researcher_profile_export as export  # noqa: E402
-from services.llm import LLMError  # noqa: E402
+from pipeline import llm_client
+from pipeline import researcher_fit as fit
+from services import data_store
+from services import jd_reconciliation as jd
+from services import researcher_profile_export as export
+from services.llm import LLMError
 
 TOP_K_CANDIDATES = 8  # 임베딩으로 추려 LLM에 넘길 상위 후보 수(최종 0~3개는 LLM이 고름)
 MAX_RECOMMENDATIONS = 3
