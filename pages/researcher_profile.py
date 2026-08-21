@@ -543,6 +543,11 @@ _TASK_HR_RECENT_LIMIT = 6  # 과제 수행 + 인사 발령 합쳐서 인쇄본�
 # (기존 10건 → 6건: 사용자 요청 "1페이지를 넘어가는 경우가 없었으면" — 다른
 # 항목(학력·부서·과제명 등)이 길어 줄바꿈되는 경우까지 감안한 안전 여백을
 # 남기려 실측 기반으로 줄임. data/processed/CLAUDE.md 참고.)
+_PHOTO_BOX_WIDTH_PX = 160  # 사진 박스(photo_box) 폭 — 기존 190px에서 축소
+# (사용자 요청: 사진을 20% 정도 키우는 대신 박스 폭은 좀 더 줄여달라). 이
+# 값을 header_row의 폭 계산(calc)에서도 그대로 재사용해야 좌우 정렬이
+# 어긋나지 않는다 — 아래 header_row 조립부의 photo_box/left_column/
+# right_box calc() 식이 전부 이 상수를 참조한다.
 
 
 def _print_box(title, children, *, breakable: bool = False):
@@ -899,12 +904,17 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
         # photo_block()은 컴포넌트 "리스트"를 그대로 반환한다 — 다른 리스트
         # 안에 그대로 끼워 넣으면 중첩 리스트가 되어 Dash가 이 서브트리를
         # 통째로 빈 화면으로 렌더링해버린다(아래 llm_summary_block()과 같은
-        # 이유). html.Div로 한 번 더 감싸 평평하게 만든다.
-        html.Div(photo_block(rid, name, researcher, CURRENT_YEAR, hide_normal_employment_status=True)),
+        # 이유). html.Div로 한 번 더 감싸 평평하게 만든다. img_max_height=240
+        # (기존 200 → 20% 증가, 사용자 요청 "사진이 지금보다 20% 정도
+        # 커져서")으로 화면(라이브) 탭보다 사진을 더 크게 보여준다 — 화면 쪽
+        # 호출부(아래 update_profile())는 이 인자를 넘기지 않아 기존 크기
+        # 그대로다.
+        html.Div(photo_block(rid, name, researcher, CURRENT_YEAR,
+                              hide_normal_employment_status=True, img_max_height=240)),
         html.Div(print_eval_content, style={'marginTop': '8px', 'width': '100%'}),
     ], className='print-section',
         style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center',
-               'width': '190px', 'flex': '0 0 190px',
+               'width': f'{_PHOTO_BOX_WIDTH_PX}px', 'flex': f'0 0 {_PHOTO_BOX_WIDTH_PX}px',
                'border': _PRINT_BOX_BORDER, 'borderRadius': '6px', 'padding': '8px'})
 
     # 핵심기술/보유기술만 담는다 — 학력은 기본정보(사번~Knox ID) 아래로
@@ -914,14 +924,14 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
                                stacked=True, show_tech_index=False, show_info_hover=False),
     ]))
 
-    # 학력을 기본정보 표(사번~Knox ID) 바로 아래에 배치한다(사용자 요청 2).
+    # 학력을 기본정보 표(사번~Knox ID) 바로 아래에 배치한다(사용자 요청).
+    # "학력"이라는 제목 글자는 빼고(사용자 요청) 내용만 보여준다 — 위
+    # 기본정보 표와 구분되도록 marginTop만 남긴다.
     info_col = html.Div([
         info_table,
         current_status,
-        html.Div([
-            html.Div('학력', className='small fw-semibold text-muted mb-1 mt-2'),
-            education_block(tables['education'], rid, plain_degree=True),
-        ]),
+        html.Div(education_block(tables['education'], rid, plain_degree=True),
+                  style={'marginTop': '8px'}),
     ], style={'flex': '1 1 0', 'minWidth': '0', 'paddingLeft': '12px'})
 
     # 논문·특허 실적 요약과 양성·시상 이력을 한 박스로 합친다(사용자 요청 3).
@@ -949,20 +959,22 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     # right_box의 높이와 무관하게 사진+기본정보 쪽 높이만으로 정해진다 —
     # right_box가 더 길어도 기다리지 않고, history_box가 짧게 끝나면 그
     # 옆(같은 y 범위)에서 right_box(핵심기술·보유기술)가 계속 이어질 수
-    # 있다. 폭은 이전과 동일(전체 폭에서 right_box 폭을 뺀 나머지 = photo
-    # 190px + 여백 12px + info_col 너비)하게 유지한다 — 이번 요청은 위치만
-    # 바꾸는 것이라 폭 계산식(calc)은 손대지 않는다.
+    # 있다. 폭은 전체 폭에서 right_box 폭을 뺀 나머지(= photo 열
+    # _PHOTO_BOX_WIDTH_PX + 여백 12px + info_col 너비)로, photo 열 폭이
+    # 바뀌어도 항상 같은 상수(_PHOTO_BOX_WIDTH_PX)를 참조해 어긋나지
+    # 않게 한다.
+    _photo_w = f'{_PHOTO_BOX_WIDTH_PX}px'
     left_column = html.Div([
         html.Div([
-            html.Div(photo_box, style={'flex': '0 0 190px'}),
+            html.Div(photo_box, style={'flex': f'0 0 {_photo_w}'}),
             info_col,
         ], style={'display': 'flex', 'alignItems': 'flex-start', 'marginBottom': '10px'}),
         history_box,
-    ], style={'width': 'calc(100% - (100% - 190px - 12px) / 2)', 'minWidth': '0'})
+    ], style={'width': f'calc(100% - (100% - {_photo_w} - 12px) / 2)', 'minWidth': '0'})
 
     header_row = html.Div([
         left_column,
-        html.Div(right_box, style={'width': 'calc((100% - 190px - 12px) / 2)', 'minWidth': '0'}),
+        html.Div(right_box, style={'width': f'calc((100% - {_photo_w} - 12px) / 2)', 'minWidth': '0'}),
     ], style={'display': 'flex', 'alignItems': 'flex-start', 'marginBottom': '10px'})
 
     # 핵심기술/보유기술이 위 right_box로 옮겨간 만큼, 전문성 요약(LLM)은 이제

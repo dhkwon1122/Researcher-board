@@ -73,13 +73,18 @@ def avatar(name: str, size: int = 88):
 
 
 def photo_block(rid: str, name: str, row=None, current_year: int = 2026, *,
-                 hide_normal_employment_status: bool = False):
+                 hide_normal_employment_status: bool = False, img_max_height: int = 200):
     """hide_normal_employment_status=True면 재직상태가 "재직"(정상 재직 중,
     별도로 알릴 필요 없는 기본값)일 때는 "재직상태 : 재직" 줄 자체를 생략한다
     (휴직/퇴직 등 그 외 값은 그대로 표시) — A4 인쇄본처럼 지면이 좁을 때
-    사용(기본값 False는 화면과 동일하게 항상 표시)."""
+    사용(기본값 False는 화면과 동일하게 항상 표시). img_max_height는 사진의
+    최대 높이(px) — 기본 200은 화면과 동일, 인쇄본은 사진을 더 크게(사용자
+    요청) 보여주려는 호출부가 더 큰 값을 넘긴다. 실제 렌더 크기는 이 값과
+    부모 컨테이너 폭(maxWidth:100%) 중 더 작은 쪽으로 정해진다(objectFit:
+    contain, 원본 비율 유지) — 사진이 정사각형에 가깝고 컨테이너 폭이
+    좁아지면 높이를 키워도 폭에 먼저 걸릴 수 있다."""
     photo_el = None
-    IMG_STYLE = {'width': 'auto', 'maxWidth': '100%', 'height': 'auto', 'maxHeight': '200px',
+    IMG_STYLE = {'width': 'auto', 'maxWidth': '100%', 'height': 'auto', 'maxHeight': f'{img_max_height}px',
                  'objectFit': 'contain', 'borderRadius': '8px', 'display': 'block'}
 
     src = load_photo_src(rid)

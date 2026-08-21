@@ -339,6 +339,16 @@ h1, h2, h3, h4, h5, h6 {
     object-fit: contain;
   }
 
+  /* 연구원 개별 프로필 카드(A4 인쇄)의 사진은 위 전역 65px 제한보다 크게
+     보여준다(사용자 요청 "사진이 지금보다 20% 정도 커져서") — 실제 최대
+     높이 값은 photo_block(img_max_height=...) 호출부(pages/researcher_
+     profile.py)와 맞춰 240px로 둔다. 선택자 특이도(.profile-print-only
+     .print-section img = 2클래스+1요소)가 위 전역 img(요소 1개)보다 높아
+     둘 다 !important라도 이 규칙이 이긴다. */
+  .profile-print-only .print-section img {
+    max-height: 240px !important;
+  }
+
   /* 섹션 배경 */
   .bg-light {
     background-color: #f5f5f5 !important;
