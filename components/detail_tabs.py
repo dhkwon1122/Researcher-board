@@ -206,6 +206,25 @@ def plain_indent_list(items, *, class_name: str = 'small'):
     ])
 
 
+_AI_TAG_STYLE = {
+    'display': 'inline-flex', 'alignItems': 'center', 'gap': '3px', 'flex': '0 0 auto',
+    'backgroundColor': '#eef1fb', 'border': '1px solid #dde2f5', 'borderRadius': '9px',
+    'padding': '1px 7px', 'fontSize': '0.64rem', 'fontWeight': 600, 'color': '#5b6b8c',
+}
+
+
+def _ai_tag():
+    """"by AI" 표기를 괄호로 감싼 텍스트가 아니라 아이콘 느낌의 작은 알약
+    (pill) 배지로 보여준다(사용자 요청 — "by AI라는 글씨는 괄호에 넣지 않고
+    아이콘 느낌으로 표현해줘. AI느낌이 나는 작은 픽토그램을 같이 넣어도
+    좋아") — bootstrap-icons의 bi-stars(반짝임) 아이콘 + "by AI" 텍스트를
+    옅은 남색 계열 배지에 담는다."""
+    return html.Span([
+        html.I(className='bi bi-stars', style={'fontSize': '0.68rem'}),
+        html.Span('by AI'),
+    ], style=_AI_TAG_STYLE)
+
+
 def llm_summary_block(profile: dict | None, similar: list | None = None, name_map: dict | None = None,
                        *, include_responsibilities: bool = True, deemphasize_strength: bool = False):
     """전문성 요약(LLM) — 연구원 보유 전문성 분석.json의 핵심 분야(strength_fields)/
@@ -224,12 +243,14 @@ def llm_summary_block(profile: dict | None, similar: list | None = None, name_ma
     Keywords/전문지식 및 역량 라벨을 모두 print_sub_heading()의 네모 박스
     소제목으로 통일하고(사용자 요청 — "소제목 형태로 통일감 있게 표현해줘"),
     Strength Field/Keywords의 내용은 색깔 배지 대신 옅은 회색 콤마 나열
-    텍스트로 보여준다(이전 요청 — "너무 강조되어 보인다... 힘을 빼줘"와
+    텍스트로, marginLeft:10px로 들여써서(사용자 요청 — 전문지식 및 역량과
+    동일하게) 보여준다(이전 요청 — "너무 강조되어 보인다... 힘을 빼줘"와
     절충 — 라벨은 다른 소제목들과 통일된 박스로 존재감을 주되, 내용 자체는
     화려한 배지 대신 차분한 텍스트로 유지). Strength Field 줄 오른쪽 끝에는
-    옅은 회색으로 "(by AI)"를 붙인다(사용자 요청 — 인쇄본에서 "전문성
-    요약(LLM)" 박스 제목을 없앤 대신, 이 블록이 AI 생성 결과임을 표시할
-    자리가 필요해짐). 화면(라이브) 탭 호출부는 이 인자를 넘기지 않아 기존
+    _ai_tag()(아이콘 + "by AI" 알약 배지, 괄호 텍스트가 아님 — 사용자 요청)를
+    붙인다(인쇄본에서 "전문성 요약(LLM)" 박스 제목을 없앤 대신, 이 블록이
+    AI 생성 결과임을 표시할 자리가 필요해짐). 화면(라이브) 탭 호출부는 이
+    인자를 넘기지 않아 기존
     배지+회색 텍스트 라벨 그대로다(제목 제거·(by AI) 표기 모두 인쇄본
     전용)."""
     if not profile:
@@ -245,9 +266,10 @@ def llm_summary_block(profile: dict | None, similar: list | None = None, name_ma
         if deemphasize_strength:
             children.append(html.Div([
                 print_sub_heading('Strength Field'),
-                html.Span('(by AI)', className='text-muted', style={'fontSize': '0.68rem'}),
+                _ai_tag(),
             ], className='d-flex justify-content-between align-items-center mb-1'))
-            children.append(html.Div(', '.join(fields), className='small text-muted', style={'marginBottom': '6px'}))
+            children.append(html.Div(', '.join(fields), className='small text-muted',
+                                      style={'marginBottom': '6px', 'marginLeft': '10px'}))
         else:
             children.append(html.Div('Strength Field', className='small text-muted fw-semibold mb-1'))
             children.append(html.Div(
@@ -256,7 +278,8 @@ def llm_summary_block(profile: dict | None, similar: list | None = None, name_ma
     if keywords:
         if deemphasize_strength:
             children.append(html.Div(print_sub_heading('Strength Keywords'), className='mb-1'))
-            children.append(html.Div(', '.join(keywords), className='small text-muted', style={'marginBottom': '6px'}))
+            children.append(html.Div(', '.join(keywords), className='small text-muted',
+                                      style={'marginBottom': '6px', 'marginLeft': '10px'}))
         else:
             children.append(html.Div('Strength Keywords', className='small text-muted fw-semibold mt-2 mb-1'))
             children.append(html.Div(
