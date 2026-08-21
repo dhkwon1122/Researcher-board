@@ -346,7 +346,10 @@ def _tech_ownership_table(tech_row, *, show_index: bool = True, no_header: bool 
     요청 — "Lv0, 100% 정도의 글자만 들어갈 수 있으면 되니"), Lv·보유율 열
     폭을 그 글자 수에 맞춰 최소화해 남는 폭을 보유기술명 열에 몰아준다.
     표 헤더가 없으면 <Th> width로 열 폭을 정할 수 없어 <colgroup>을 대신
-    쓴다."""
+    쓴다. 원본 tech_ownership.csv의 레벨(N) 값 자체가 이미 "Lv3"처럼 접두사를
+    포함해서 들어오는 경우가 있어(원천 엑셀 셀 표기가 그대로 문자열로
+    보존됨), 값이 이미 "Lv"로 시작하면 접두사를 또 붙이지 않는다("LvLv3"
+    방지, 사용자 버그 리포트)."""
     if tech_row is None:
         return html.Div('보유기술 데이터 없음', className='text-muted small')
 
@@ -358,7 +361,10 @@ def _tech_ownership_table(tech_row, *, show_index: bool = True, no_header: bool 
         lv = _clean_num_str(tech_row.get(f'lv_{i}', ''))
         portion = _clean_num_str(tech_row.get(f'portion_{i}', ''))
         if lv:
-            lv_disp = f'Lv{lv}' if no_header else lv
+            if no_header:
+                lv_disp = lv if lv.upper().startswith('LV') else f'Lv{lv}'
+            else:
+                lv_disp = lv
         else:
             lv_disp = '-'
         cells = [html.Td(str(i), className='small text-center')] if show_index else []
