@@ -247,7 +247,9 @@ def layout():
     prevent_initial_call=True,
 )
 def refresh_user_table(_counter):
-    from services.auth import list_users
+    from services.auth import can, list_users
+    if not can('manage_users'):
+        return [], []
     users = list_users()
     rows = [_user_row(u, i) for i, u in enumerate(users)]
     return rows, users

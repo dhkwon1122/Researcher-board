@@ -118,7 +118,28 @@ ROLE_PERMISSIONS: dict[str, dict[str, bool]] = {
 # 참고), 여기서는 조직 내부에서 평가등급과 비슷하게 민감한 인사 판단 정보로
 # 취급되는 리더십 진단/승계 후보 데이터에 잠정 매핑해 둔다 — 실제 운영 기준과
 # 다르면 조정할 것.
-TABLE_PERMISSIONS: dict[str, str] = {
+# 자연어 검색에서 조회할 수 있는 테이블의 명시적 화이트리스트다. 값이 None이면
+# 로그인한 모든 사용자에게 허용하고, 권한 문자열이면 해당 권한이 필요하다.
+# 여기에 없는 새 CSV/DB 테이블은 자동 발견되더라도 기본 거부된다.
+TABLE_PERMISSIONS: dict[str, str | None] = {
+    'researchers':           None,
+    'education':             None,
+    'transfers':             None,
+    'tasks':                 None,
+    'tasks_information':     None,
+    'nurturing':             None,
+    'awards':                None,
+    'publications':          None,
+    'patents':               None,
+    'technology_transfer':   None,
+    'hr_orders':             None,
+    'core_technology':       None,
+    'tech_ownership':        None,
+    'job_profile':           None,
+    'team_refer':            None,
+    'project_confl_address': None,
+    'expertise_profiles':    None,
+    'researcher_similarity': None,
     'evaluations':         'view_evaluation',
     'incentive_selection': 'view_incentive',
     'comments':            'view_comments',

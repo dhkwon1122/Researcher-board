@@ -111,6 +111,10 @@ def _run_nl_query(_n_clicks, _n_submit, question, search_mode):
     """실제 LLM 호출/SQL 실행을 여기서 한 번만 하고 dcc.Store에 담아 둔다 —
     researcher_list.py의 update_table 콜백이 이 Store를 Input으로 받아
     명단 테이블의 데이터/컬럼을 그 결과로 바꾼다."""
+    from dash.exceptions import PreventUpdate
+    from services.auth import get_current_user
+    if get_current_user() is None:
+        raise PreventUpdate
     empty = {'intent': 'unsupported', 'columns': [], 'labels': [], 'rows': [], 'total_rows': 0, 'note': ''}
     if not question or not question.strip():
         return {**empty, 'note': '질문을 입력해주세요.'}
@@ -128,8 +132,11 @@ def _toggle_rules_panel(n_clicks, is_open):
     """열 때마다 디스크에서 최신 규칙을 다시 읽는다 — render()가 페이지
     진입 시점에 한 번만 호출되므로(다른 세션이 그 사이 저장한 내용을 못
     보는 문제 방지), 텍스트를 layout에 미리 심어 두지 않고 여기서 매번 갱신."""
+    from services.auth import can
     if not n_clicks:
         return dash.no_update, dash.no_update
+    if not can('manage_users'):
+        return False, ''
     next_open = not is_open
     if next_open:
         return True, query_settings.read_rules()
@@ -143,8 +150,11 @@ def _toggle_rules_panel(n_clicks, is_open):
     prevent_initial_call=True,
 )
 def _save_rules(n_clicks, text):
+    from services.auth import can
     if not n_clicks:
         return dash.no_update
+    if not can('manage_users'):
+        return html.Span('관리자만 AI 검색 규칙을 변경할 수 있습니다.', className='text-danger small')
     query_settings.write_rules(text or '')
     return html.Span([html.I(className='bi bi-check-circle-fill me-1'), '저장되었습니다.'],
                       className='text-success small')
