@@ -4714,3 +4714,82 @@ str(_PAGE1_FIT_HEIGHT_PX)})`로 속성을 붙였다.
 `getBoundingClientRect()`)이 서로 일치하더라도 실제 `page.pdf()`
 페이지 수까지 반드시 다시 확인해야 한다 — 이번처럼 두 번째 단계
 (DOM 실측 vs 실제 PDF)에서 또 다른 오차가 숨어 있을 수 있다.
+
+## 2026-08-21 (32): BGE-M3 임베딩 서버를 docker-compose 서비스로 분리 (Job Market "임베딩 서버 연결 불가" 오류 대응)
+
+배경: 지금까지는 `bge_server.py`(BGE-M3 임베딩 서버, `services/bge_server.py`)
+를 Windows 호스트에서 직접(수동 또는 `pipeline/embed_server.py`의
+`ensure_embed_server()` 자동 기동으로) 실행해왔는데, 배포 환경을 Linux
+머신으로 옮기면서 이 서버를 어디서도 실행하지 않게 됐다 — Job Market
+화면에서 "로컬 임베딩 서버에 연결할 수 없습니다" 오류가 뜨는 원인.
+`docker-compose.yml`을 확인해보니 애초에 이 서버가 컨테이너 배포
+경로에는 전혀 반영돼 있지 않았다: `app` 컨테이너(Dockerfile)는
+`requirements.txt`만 설치해 `FlagEmbedding`/`torch`가 없고, `ensure_embed_server()`
+는 오프라인 배치(`run_expertise.py`)에서만 호출돼 웹 앱 요청 경로
+(Job Market 실시간 매칭, `services/job_market.py` → `pipeline/researcher_fit.py`
+의 `cached_embed()` → `services/llm.py`의 `embed()`)에서는 아예 자동
+기동되지 않는다 — 애초에 어떤 배포 시나리오에서도 라이브 앱이 BGE
+서버를 스스로 띄워주지 않았고, Windows 호스트에서 수동으로 띄워온
+것으로 이 구멍이 가려져 있었다.
+
+**결정**: `ollama`(로컬 LLM, 기존에도 `profiles: ["llm"]`로 옵셔널
+분리)와 같은 패턴으로 BGE-M3도 별도 docker-compose 서비스로 분리하기로
+했다(사용자에게 "앱 컨테이너 안에 같이 넣기" 대안과 함께 트레이드오프
+설명 후 확정) — `torch`/`FlagEmbedding`이 무거운 ML 의존성(수 GB)이라
+앱 이미지에 얹으면 배포마다 재빌드가 커지고, 무엇보다 `gunicorn`
+재시작(배포/장애/`docker compose restart`)마다 이미 로딩해둔 BGE-M3
+모델까지 함께 죽어 재로딩(수십 초~수 분)이 필요해진다 — 별도의 오래
+사는 컨테이너로 분리하면 앱을 몇 번 재배포해도 임베딩 서버는 계속
+켜진 채로 재사용된다.
+
+**변경**:
+- 신규 `Dockerfile.embed`: `services/bge_server.py` + `requirements-embed.txt`
+  만 담은 최소 이미지. 메인 `Dockerfile`과 같은 사내 CA/프록시 패턴을
+  재사용. `EMBED_BASE_URL=http://0.0.0.0:7138`을 이미지 안에 고정해(기본값
+  `localhost`는 컨테이너 자기 자신만 접근 가능해 다른 컨테이너에서 못
+  붙는다) 어떤 배포에서도 항상 모든 인터페이스에 바인딩되게 했다.
+  `TORCH_INDEX_URL` 빌드 인자(GPU용, 기본 빈 값=CPU 빌드)를 추가 — 값이
+  있으면 `requirements-embed.txt` 설치 전에 그 인덱스에서 torch를 먼저
+  설치해 CUDA 빌드가 자리 잡게 한다(PyPI 기본 CPU 빌드가 나중에 덮어쓰지
+  않도록 순서가 중요).
+- `docker-compose.yml`: 신규 `bge-embed` 서비스(`profiles: ["embed"]`,
+  `ollama`와 동일하게 기본으로는 안 뜸). 모델 캐시용 `bge_hf_cache`
+  볼륨(`/root/.cache/huggingface`)을 붙여 재기동해도 BGE-M3를 매번 다시
+  받지 않게 했다. `app` 서비스 환경변수에 `EMBED_BASE_URL: ${EMBED_BASE_URL:-http://bge-embed:7138}`
+  (도커 네트워크 안에서 서비스명으로 접근)/`EMBED_MODEL` 추가, `NO_PROXY`/
+  `no_proxy` 목록에 `bge-embed` 추가(다른 내부 대상들과 같은 이유 — 런타임
+  프록시가 컨테이너 간 트래픽을 가로채지 않게).
+- `docker-compose.gpu.yml`: `bge-embed`에도 `ollama`와 같은 GPU 디바이스
+  예약을 추가하되, 주석으로 명확히 구분했다 — `ollama`는 자체 CUDA
+  감지 바이너리라 디바이스 노출만으로 충분하지만, `bge-embed`는 파이썬
+  torch라 디바이스 노출만으로는 부족하고 `TORCH_INDEX_URL`로 실제
+  CUDA 빌드 torch를 설치해야 GPU를 쓴다 — 오버레이에서 `build.args.TORCH_INDEX_URL`
+  을 `https://download.pytorch.org/whl/cu121`로 지정해 이 부분까지
+  실제로 동작하게 만들었다(단순히 디바이스만 노출해 놓고 "GPU 지원"이라고
+  적으면 실제로는 CPU 빌드 torch가 GPU를 안 쓰는 상태로 오해를 살 수
+  있어, 값이 없을 때의 함정을 주석에도 명시).
+- `.env.example`의 BGE-M3 섹션 갱신 — `EMBED_BASE_URL`이 "앱이 어디서
+  실행되는지"에 따라 값이 달라진다는 것(컨테이너+컨테이너 vs 로컬+컨테이너
+  vs 컨테이너+호스트 조합별 예시)과, `docker compose --profile embed up -d
+  bge-embed` 사용법을 명시.
+
+**검증**: 이 세션(샌드박스)에는 docker 데몬이 없어(`docker version`은
+클라이언트만 성공, 데몬 소켓 연결 실패) 실제 이미지 빌드/기동까지는
+못 했다 — 대신:
+- `python3 -c "import yaml; ..."`로 `docker-compose.yml`/`docker-compose.gpu.yml`
+  둘 다 YAML 문법 오류 없음을 확인.
+- `docker compose --profile embed config`로 실제 컴포즈 병합 결과를
+  렌더링해, `app`의 `EMBED_BASE_URL`이 `http://bge-embed:7138`로,
+  `bge-embed` 자신의 `EMBED_BASE_URL`이 `http://0.0.0.0:7138`로 서로
+  다르게(의도대로) 나오는 것을 확인. 포트(7138)/볼륨(`bge_hf_cache`→
+  `/root/.cache/huggingface`) 매핑도 의도대로 렌더링됨을 확인.
+- `docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile
+  embed config`로 GPU 오버레이가 `bge-embed`의 `build.args.TORCH_INDEX_URL`
+  과 `deploy.resources.reservations.devices`를 올바르게 병합하는 것을
+  확인.
+- `Dockerfile.embed`의 두 `RUN` 블록을 셸 스크립트로 추출해 `bash -n`
+  으로 문법 오류 없음을 확인(실제 `pip install`까지는 실행 안 함 —
+  torch/FlagEmbedding 다운로드는 이 세션에서는 과함).
+- **실기 빌드/기동/실제 임베딩 호출까지는 검증하지 못했다** — 사용자가
+  실제 Linux 배포 환경에서 `docker compose --profile embed up -d bge-embed`
+  로 띄운 뒤 Job Market 화면에서 직접 재현 확인이 필요하다.

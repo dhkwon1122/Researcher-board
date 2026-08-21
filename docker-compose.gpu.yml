@@ -1,7 +1,9 @@
-# GPU 오버레이 (NVIDIA). 기본 docker-compose.yml 위에 얹어 ollama 가 GPU 를 쓰게 한다.
+# GPU 오버레이 (NVIDIA). 기본 docker-compose.yml 위에 얹어 ollama/bge-embed 가
+# GPU 를 쓰게 한다.
 #
 # 사용:
 #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile llm up -d
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile embed up -d bge-embed
 #
 # 전제:
 #   - NVIDIA GPU + 드라이버
@@ -10,6 +12,24 @@
 #   - 큰 모델 사용 권장:  .env 에서 LLM2_MODEL=qwen3-coder:30b (또는 qwen3.5:27b 등)
 services:
   ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # bge-embed는 ollama와 달리 자체 CUDA 감지 바이너리가 아니라 파이썬
+  # torch라, GPU 장치를 컨테이너에 노출하는 것만으로는 부족하고 torch
+  # 자체가 CUDA 빌드여야 실제로 GPU를 쓴다(Dockerfile.embed 참고) — 빌드
+  # 시 TORCH_INDEX_URL을 CUDA 휠 인덱스로 지정해야 한다(예:
+  # https://download.pytorch.org/whl/cu121, 설치된 CUDA 드라이버 버전에
+  # 맞는 인덱스를 pytorch.org에서 확인할 것).
+  bge-embed:
+    build:
+      args:
+        TORCH_INDEX_URL: "https://download.pytorch.org/whl/cu121"
     deploy:
       resources:
         reservations:
