@@ -54,7 +54,7 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 from config.auth_config import ROLE_LABELS  # noqa: E402
-from services.auth import create_user, list_users  # noqa: E402
+from services.auth import create_user, list_users, password_validation_error  # noqa: E402
 
 _COL_ALIASES = {
     'user_id': ('아이디', 'user_id', '사번'),
@@ -97,15 +97,16 @@ def _normalize_role(raw: str) -> str | None:
 def main():
     parser = argparse.ArgumentParser(description='피플팀 계정 일괄 생성')
     parser.add_argument('input_file', help='계정 명단 CSV/xlsx 경로')
-    parser.add_argument('--temp-password', help='전 계정 공통 임시 비밀번호(8자 이상). '
+    parser.add_argument('--temp-password', help='전 계정 공통 임시 비밀번호(12자 이상, 문자 조합). '
                                                   '생략하면 안전하게 입력받는다.')
     parser.add_argument('--dry-run', action='store_true',
                         help='실제로 계정을 만들지 않고 무엇이 처리될지만 보여준다.')
     args = parser.parse_args()
 
-    temp_password = args.temp_password or getpass.getpass('임시 비밀번호(8자 이상, 전 계정 공통): ')
-    if len(temp_password) < 8:
-        print('[오류] 임시 비밀번호는 8자 이상이어야 합니다.')
+    temp_password = args.temp_password or getpass.getpass('임시 비밀번호(12자 이상, 전 계정 공통): ')
+    password_error = password_validation_error(temp_password)
+    if password_error:
+        print(f'[오류] {password_error}')
         sys.exit(1)
 
     df = _read_input(args.input_file)

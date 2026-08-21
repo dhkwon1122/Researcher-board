@@ -45,6 +45,24 @@ _USERS_FILE = os.path.join(
     'config', 'users.json',
 )
 
+MIN_PASSWORD_LENGTH = int(os.environ.get('MIN_PASSWORD_LENGTH', '12'))
+
+
+def password_validation_error(password: str) -> str | None:
+    """조직 계정에 적용할 최소 비밀번호 정책. 오류가 없으면 None."""
+    password = password or ''
+    if len(password) < MIN_PASSWORD_LENGTH:
+        return f'비밀번호는 {MIN_PASSWORD_LENGTH}자 이상이어야 합니다.'
+    classes = sum((
+        any(c.islower() for c in password),
+        any(c.isupper() for c in password),
+        any(c.isdigit() for c in password),
+        any(not c.isalnum() for c in password),
+    ))
+    if classes < 3:
+        return '비밀번호는 영문 대문자·소문자·숫자·특수문자 중 3종류 이상을 포함해야 합니다.'
+    return None
+
 
 # ── 사용자 파일 I/O (JSON 폴백) ────────────────────────────────────────────────
 

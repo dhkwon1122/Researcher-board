@@ -80,7 +80,7 @@ RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
       ${PIP_INDEX_URL:+--index-url "$PIP_INDEX_URL"} \
       ${PIP_TRUSTED_HOST:+--trusted-host "$PIP_TRUSTED_HOST"} \
       ${PIP_CERT:+--cert "$PIP_CERT"} \
-      -r requirements.txt gunicorn
+      -r requirements.txt
 
 # ── 2.5) Playwright 헤드리스 브라우저 설치 (개별 프로필 PDF 메일 첨부용) ──
 # services/profile_pdf.py가 "프로필 인쇄 (A4)" 화면을 헤드리스 브라우저로

@@ -282,7 +282,7 @@ def open_add_modal(_):
         _ROLES[0]['value'], # role default
         '',                 # email
         '', '',             # passwords
-        '비밀번호 * (8자 이상)',
+        '비밀번호 * (12자 이상, 문자 조합)',
         [],                 # is_admin: 기본 미부여
         [],
     )
@@ -352,7 +352,9 @@ def open_edit_modal(n_clicks_list, users):
 )
 def save_user(_, editing_id, user_id, display_name, role, email, password, pw_confirm,
               is_admin_value, counter):
-    from services.auth import can, change_password, create_user, get_current_user, update_user
+    from services.auth import (
+        can, change_password, create_user, get_current_user, password_validation_error, update_user,
+    )
     if not can('manage_users'):
         return _alert('권한이 없습니다.', 'danger'), no_update, no_update
 
@@ -373,8 +375,9 @@ def save_user(_, editing_id, user_id, display_name, role, email, password, pw_co
             return _alert('아이디는 필수입니다.', 'warning'), no_update, no_update
         if not password:
             return _alert('비밀번호는 필수입니다.', 'warning'), no_update, no_update
-        if len(password) < 8:
-            return _alert('비밀번호는 8자 이상이어야 합니다.', 'warning'), no_update, no_update
+        password_error = password_validation_error(password)
+        if password_error:
+            return _alert(password_error, 'warning'), no_update, no_update
         if password != pw_confirm:
             return _alert('비밀번호가 일치하지 않습니다.', 'warning'), no_update, no_update
         try:
@@ -387,8 +390,9 @@ def save_user(_, editing_id, user_id, display_name, role, email, password, pw_co
             return _alert('자기 자신의 관리자 권한은 해제할 수 없습니다. '
                           '다른 관리자가 대신 해제해야 합니다.', 'warning'), no_update, no_update
         if password:
-            if len(password) < 8:
-                return _alert('비밀번호는 8자 이상이어야 합니다.', 'warning'), no_update, no_update
+            password_error = password_validation_error(password)
+            if password_error:
+                return _alert(password_error, 'warning'), no_update, no_update
             if password != pw_confirm:
                 return _alert('비밀번호가 일치하지 않습니다.', 'warning'), no_update, no_update
             change_password(editing_id, password)
