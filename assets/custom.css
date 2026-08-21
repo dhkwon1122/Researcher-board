@@ -269,6 +269,16 @@ h1, h2, h3, h4, h5, h6 {
     color: #000;
   }
 
+  /* body의 화면용 옅은 회색 배경(--gs-bg: #f5f5f7)이 인쇄 시에도 그대로
+     찍히고 있었다(사용자 요청 — "Page 배경색으로 옅은 회색이 사용되고
+     있는데 이걸 제외하면 좋겠어"). 아래 "배경색·뱃지 컬러 인쇄 강제 적용"
+     규칙(`* { print-color-adjust: exact }`)이 원래는 뱃지 등 의도된
+     배경색을 인쇄에 살리려는 것이었는데, body의 화면 배경색까지 같이
+     살아나 버렸다 — 인쇄 페이지 자체는 흰 배경으로 되돌린다. */
+  body {
+    background-color: #fff !important;
+  }
+
   /* 인쇄 페이지 그룹 (3개 조직 묶음) */
   .print-page {
     page-break-after: always;
@@ -340,14 +350,15 @@ h1, h2, h3, h4, h5, h6 {
   }
 
   /* 연구원 개별 프로필 카드(A4 인쇄)의 사진은 위 전역 65px 제한보다 크게
-     보여준다(사용자 요청 "사진이 지금보다 20% 정도 커져서" → 이후 "사진이
-     너무 길어졌다"는 후속 요청으로 15% 축소, 240*0.85=204) — 실제 최대
-     높이 값은 photo_block(img_max_height=...) 호출부(pages/researcher_
-     profile.py)와 맞춰 204px로 둔다. 선택자 특이도(.profile-print-only
+     보여준다(사용자 요청 "사진이 지금보다 20% 정도 커져서" → "사진이 너무
+     길어졌다"로 15% 축소(240*0.85=204) → "사진 열이 combined_box 안에서
+     제일 길다"는 피드백으로 10% 추가 축소, 204*0.9=184) — 실제 최대 높이
+     값은 photo_block(img_max_height=...) 호출부(pages/researcher_
+     profile.py)와 맞춰 184px로 둔다. 선택자 특이도(.profile-print-only
      .print-section img = 2클래스+1요소)가 위 전역 img(요소 1개)보다 높아
      둘 다 !important라도 이 규칙이 이긴다. */
   .profile-print-only .print-section img {
-    max-height: 204px !important;
+    max-height: 184px !important;
   }
 
   /* 섹션 배경 */
