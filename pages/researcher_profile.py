@@ -535,7 +535,10 @@ def _empty_profile_output():
 
 
 _PRINT_BOX_BORDER = '1px solid #1d1d1f'
-_TASK_HR_RECENT_LIMIT = 10  # 과제 수행 + 인사 발령 합쳐서 인쇄본에 보여줄 최신 건수
+_TASK_HR_RECENT_LIMIT = 6  # 과제 수행 + 인사 발령 합쳐서 인쇄본에 보여줄 최신 건수
+# (기존 10건 → 6건: 사용자 요청 "1페이지를 넘어가는 경우가 없었으면" — 다른
+# 항목(학력·부서·과제명 등)이 길어 줄바꿈되는 경우까지 감안한 안전 여백을
+# 남기려 실측 기반으로 줄임. data/processed/CLAUDE.md 참고.)
 
 
 def _print_box(title, children, *, breakable: bool = False):
@@ -549,20 +552,6 @@ def _print_box(title, children, *, breakable: bool = False):
     cls = 'print-box' + ('' if breakable else ' print-section')
     return html.Div(body, className=cls, style={'border': _PRINT_BOX_BORDER, 'borderRadius': '6px',
                                                   'padding': '10px 12px', 'marginBottom': '10px'})
-
-
-def _print_box_cols(items):
-    """_print_box 안에서 세로 구분선으로 나뉜 가로 단(예: 핵심기술 | 보유기술 |
-    전문성 요약)을 만든다. items: [(flex_ratio, content), ...]. display:flex를
-    Bootstrap의 .d-flex 유틸리티 클래스가 아니라 인라인 style로 직접 줘서,
-    외부 CDN(부트스트랩) 로드 여부와 무관하게 항상 가로로 배치되게 한다."""
-    cols = []
-    for i, (ratio, content) in enumerate(items):
-        style = {'flex': f'{ratio} {ratio} 0', 'minWidth': '0'}
-        if i > 0:
-            style.update({'borderLeft': '1px solid #d2d2d7', 'marginLeft': '10px', 'paddingLeft': '10px'})
-        cols.append(html.Div(content, style=style))
-    return html.Div(cols, style={'display': 'flex', 'alignItems': 'stretch'})
 
 
 def _current_task_label(task_df, rid) -> str:
@@ -850,14 +839,15 @@ def _print_pub_patent_detail_page(name, rid, tables):
 
 
 def _print_profile_content(rid, researcher, tables, profile, name_map,
-                            print_eval_content, comments_content, current_status):
+                            print_eval_content, current_status):
     """A4 인쇄 전용 콘텐츠 — 화면의 카드형 대시보드(고정 높이 + 내부 스크롤)는
     인쇄에 부적합해(넘치는 내용이 잘림) 재사용하지 않고, 같은 데이터/블록 함수를
-    피플팀이 준 손그림 양식(사진+기본정보 / 근속·평가·양성·시상 / 보유역량 3단 /
-    논문·특허 / 과제수행·인사발령)에 맞춰 테두리 박스로 재배치한다.
-    print_eval_content/comments_content는 update_profile()이 권한(view_evaluation/
-    view_comments)까지 반영해 이미 만들어둔 것(_locked_block() 포함)을 그대로
-    받아써 권한 판정을 중복하지 않는다."""
+    피플팀이 준 손그림 양식(사진+이름+평가·인센티브 / 기본정보 / 학력+보유역량 /
+    논문·특허+양성·시상 / 전문성 요약 / 과제수행·인사발령, 1페이지 안에 들어오게)에
+    맞춰 테두리 박스로 재배치한다. 인물 코멘트는 인쇄본에 넣지 않는다(사용자
+    요청 — 화면 탭에는 그대로 남아 있음). print_eval_content는 update_profile()이
+    권한(view_evaluation)까지 반영해 이미 만들어둔 것(_locked_block() 포함)을
+    그대로 받아써 권한 판정을 중복하지 않는다."""
     # 성별/나이·직급-년차는 사진 아래 캡션(photo_block())에 이미 나오므로
     # 기본정보 표에서는 중복 표시하지 않는다.
     name = str(researcher.get('name', '') or '')
@@ -891,77 +881,70 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
         for label, value in info_rows
     ]))
 
-    # 평가·인센티브·양성·시상 이력을 한 박스에 담아 header_row 우측 최상단에
-    # 사진/기본정보와 나란히 붙인다(빈 공간이 남지 않도록 photo/info와 같은
-    # 줄에서 flex:1로 폭을 나눠 가짐).
-    support_box = _print_box(None, html.Div([
-        print_eval_content,
+    # 사진 박스 — 이름/직급연차는 photo_block()이 이미 캡션으로 넣어주고, 그
+    # 아래에 평가·인센티브 이력을 붙인다(사용자 요청: "평가 인센티브 이력은
+    # 사진과 이름 있는 박스 아래에"). display:flex를 인라인 style로 직접
+    # 준다(.d-flex 유틸리티 클래스 대신) — 외부 CDN(부트스트랩)이 느리거나
+    # 막혀 있어도 항상 세로 배치되게 한다.
+    photo_box = html.Div([
+        # photo_block()은 컴포넌트 "리스트"를 그대로 반환한다 — 다른 리스트
+        # 안에 그대로 끼워 넣으면 중첩 리스트가 되어 Dash가 이 서브트리를
+        # 통째로 빈 화면으로 렌더링해버린다(아래 llm_summary_block()과 같은
+        # 이유). html.Div로 한 번 더 감싸 평평하게 만든다.
+        html.Div(photo_block(rid, name, researcher, CURRENT_YEAR, hide_normal_employment_status=True)),
+        html.Div(print_eval_content, style={'marginTop': '8px', 'width': '100%'}),
+    ], className='print-section',
+        style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center',
+               'width': '190px', 'flex': '0 0 190px',
+               'border': _PRINT_BOX_BORDER, 'borderRadius': '6px', 'padding': '8px'})
+
+    # 학력 + 핵심기술/보유기술을 한 박스에 담아 사진 박스·기본정보 옆(우측 상단)에
+    # 배치한다(사용자 요청 4).
+    right_box = _print_box(None, html.Div([
+        html.Div('학력', className='small fw-semibold text-muted mb-1'),
+        education_block(tables['education'], rid, plain_degree=True),
+        html.Div(
+            owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid,
+                                   stacked=True, show_tech_index=False, show_info_hover=False),
+            style={'marginTop': '10px'},
+        ),
+    ]))
+
+    header_row = html.Div([
+        html.Div(photo_box, style={'flex': '0 0 190px'}),
+        html.Div([info_table, current_status],
+                  style={'flex': '1 1 0', 'minWidth': '0', 'paddingLeft': '12px'}),
+        html.Div(right_box, style={'flex': '1 1 0', 'minWidth': '0', 'marginLeft': '12px'}),
+    ], style={'display': 'flex', 'alignItems': 'flex-start', 'marginBottom': '10px'})
+
+    # 논문·특허 실적 요약과 양성·시상 이력을 한 박스로 합친다(사용자 요청 3).
+    # 박스 제목("논문 / 특허") 없이 "논문 실적 ~건"/"특허 실적 ~건" 두 줄만
+    # 바로 보여준다(_print_publication_summary/_print_patent_summary가 각자
+    # 라벨을 포함해서 반환).
+    history_box = _print_box(None, html.Div([
+        _print_publication_summary(tables['publications'], rid),
+        _print_patent_summary(tables['patents'], rid),
         html.Div('양성 이력', className='small fw-semibold text-muted mt-2 mb-1'),
         nurturing_block(tables['nurturing'], rid, show_empty_message=False),
         html.Div('시상 이력', className='small fw-semibold text-muted mt-2 mb-1'),
         award_block(tables['awards'], rid, limit=3, single_line=True, show_empty_message=False),
     ]))
 
-    # display:flex를 인라인 style로 직접 준다(.d-flex 유틸리티 클래스 대신) —
-    # 사진 오른쪽에 기본정보 박스가 나란히 붙어야 하는 핵심 레이아웃이라,
-    # 외부 CDN(부트스트랩)이 느리거나 막혀 있어도 항상 가로 배치되게 한다.
-    # 사진 박스가 기본정보(사번~Knox ID) 영역과 높이가 맞도록 alignItems를
-    # stretch로 줘 옆의 정보 영역 높이만큼 늘어나게 하고, 사진 박스 안에서는
-    # justifyContent:center로 내용을 세로 중앙에 둬 위(그리고 아래)에 여백이
-    # 자연스럽게 생기게 한다.
-    photo_info_row = html.Div([
-        html.Div(photo_block(rid, name, researcher, CURRENT_YEAR, hide_normal_employment_status=True),
-                 className='print-section',
-                 style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center',
-                        'justifyContent': 'center', 'width': '120px', 'flex': '0 0 120px',
-                        'border': _PRINT_BOX_BORDER, 'borderRadius': '6px', 'padding': '8px'}),
-        html.Div([info_table, current_status], style={'flex': '1 1 0', 'paddingLeft': '12px', 'minWidth': '0'}),
-    ], style={'display': 'flex', 'alignItems': 'stretch'})
-
-    # 학력은 사진+기본정보를 합친 폭(좌측 열 전체)만큼 아래에 붙이고, 그
-    # 옆(우측 열)에 평가·인센티브(+양성/시상) 박스를 최상단부터 배치한다 —
-    # 좌측 열(사진+정보 / 학력, 세로 스택)과 우측 열(평가·인센티브)이
-    # 자연스럽게 나란히(병렬로) 배치된다.
-    left_col = html.Div([
-        photo_info_row,
-        html.Div(_print_box('학력', education_block(tables['education'], rid, plain_degree=True)),
-                 style={'marginTop': '8px'}),
-    ], style={'flex': '2 1 0', 'minWidth': '0'})
-
-    header_row = html.Div([
-        left_col,
-        html.Div(support_box, style={'flex': '1 1 0', 'minWidth': '0', 'marginLeft': '12px'}),
-    ], style={'display': 'flex', 'alignItems': 'flex-start', 'marginBottom': '10px'})
-
-    # 핵심기술/보유기술은 좌우 대신 세로로 쌓고(stacked=True), 그만큼 넓어진
-    # 여유를 전문성 요약(LLM) 쪽에 몰아준다 — 비율을 1:2로 줘서 핵심기술/보유기술
-    # 열보다 전문성 요약 열이 2배 넓어지게 한다. 전문성 요약은 지면이 좁은
-    # 인쇄본 특성상 주요 역할·책임/유사 연구원은 빼고(강점 분야·키워드·전문지식
-    # 및 역량만) 보여준다.
-    capability_box = _print_box(None, _print_box_cols([
-        (1, owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid,
-                                   stacked=True, show_tech_index=False, show_info_hover=False)),
-        (2, html.Div([
-            html.Div('전문성 요약(LLM)', className='small fw-semibold text-muted mb-1'),
-            # llm_summary_block()은 데이터가 있으면 컴포넌트 "리스트"를 그대로
-            # 반환한다(화면에서는 Output.children으로 바로 받아 문제 없음) —
-            # 여기서는 그 리스트를 다른 리스트([...]) 안에 그대로 끼워 넣으면
-            # 중첩 리스트가 되어 Dash가 이 서브트리를 통째로 빈 화면으로
-            # 렌더링해버린다. html.Div로 한 번 더 감싸 평평하게 만든다.
-            html.Div(llm_summary_block(profile, name_map=name_map, include_responsibilities=False)),
-        ])),
-    ]))
-
-    # 박스 제목("논문 / 특허") 없이 "논문 실적 ~건"/"특허 실적 ~건" 두 줄만
-    # 바로 보여준다(_print_publication_summary/_print_patent_summary가 각자
-    # 라벨을 포함해서 반환).
-    pub_patent_box = _print_box(None, html.Div([
-        _print_publication_summary(tables['publications'], rid),
-        _print_patent_summary(tables['patents'], rid),
+    # 핵심기술/보유기술이 위 right_box로 옮겨간 만큼, 전문성 요약(LLM)은 이제
+    # 전체 폭을 그대로 쓴다(사용자 요청 5). 지면이 좁은 인쇄본 특성상 주요
+    # 역할·책임/유사 연구원은 계속 빼고(강점 분야·키워드·전문지식 및 역량만) 보여준다.
+    expertise_summary_box = _print_box(None, html.Div([
+        html.Div('전문성 요약(LLM)', className='small fw-semibold text-muted mb-1'),
+        # llm_summary_block()은 데이터가 있으면 컴포넌트 "리스트"를 그대로
+        # 반환한다(화면에서는 Output.children으로 바로 받아 문제 없음) —
+        # 여기서는 그 리스트를 다른 리스트([...]) 안에 그대로 끼워 넣으면
+        # 중첩 리스트가 되어 Dash가 이 서브트리를 통째로 빈 화면으로
+        # 렌더링해버린다. html.Div로 한 번 더 감싸 평평하게 만든다.
+        html.Div(llm_summary_block(profile, name_map=name_map, include_responsibilities=False)),
     ]))
 
     task_hr_box = _print_box(
-        '과제 수행 / 인사 발령 이력(최근 10건)',
+        f'과제 수행 / 인사 발령 이력(최근 {_TASK_HR_RECENT_LIMIT}건)',
         _print_task_hr_timeline(tables['tasks'], tables['hr_orders'], rid, limit=_TASK_HR_RECENT_LIMIT),
         breakable=True,
     )
@@ -971,10 +954,9 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
                  style={'fontSize': '30px', 'fontWeight': 700,
                         'textAlign': 'center', 'marginBottom': '8px'}),
         header_row,
-        capability_box,
-        pub_patent_box,
+        history_box,
+        expertise_summary_box,
         task_hr_box,
-        _print_box('인물 코멘트', comments_content, breakable=True),
         html.Div(f'출력일 {datetime.now():%Y-%m-%d}', className='text-muted small text-end mt-2'),
         _print_pub_patent_detail_page(name, rid, tables),
     ])
@@ -1085,11 +1067,12 @@ def _select_from_history(n_clicks_list, ids):
     return (dept or None), rid
 
 
-def _build_print_block(rid, tables, researchers, name_map, show_eval, show_comments):
+def _build_print_block(rid, tables, researchers, name_map, show_eval):
     """한 연구원의 인쇄용 콘텐츠(_print_profile_content) 하나를 만든다.
     update_profile()(단일 조회)과 build_bulk_print_content()(명단 화면에서
-    넘어온 여러 명 일괄 인쇄)가 permission 판정(print_eval_content/
-    comments_content 계산 포함)을 중복 없이 공유하기 위한 헬퍼."""
+    넘어온 여러 명 일괄 인쇄)가 permission 판정(print_eval_content 계산 포함)을
+    중복 없이 공유하기 위한 헬퍼. 인쇄본에는 인물 코멘트가 없어(사용자 요청)
+    view_comments 권한은 여기서 다루지 않는다(화면 탭에서만 쓰임)."""
     rows = researchers[researchers['researcher_id'] == rid]
     if rows.empty:
         return None
@@ -1103,15 +1086,10 @@ def _build_print_block(rid, tables, researchers, name_map, show_eval, show_comme
         if show_eval
         else _locked_block('평가 · 인센티브 이력')
     )
-    comments_content = (
-        comments_block(tables['comments'], rid)
-        if show_comments
-        else _locked_block()
-    )
     current_status = _current_status_badge(researcher)
 
     return _print_profile_content(rid, researcher, tables, profile, name_map,
-                                   print_eval_content, comments_content, current_status)
+                                   print_eval_content, current_status)
 
 
 @callback(
@@ -1191,7 +1169,7 @@ def update_profile(rid):
                           tables['patents'], tables['job_profile'], tables['tasks_information'], rid),
             owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid),
             current_status,
-            _build_print_block(rid, tables, researchers, name_map, show_eval, show_comments),
+            _build_print_block(rid, tables, researchers, name_map, show_eval),
         )
     except Exception as exc:
         import traceback
@@ -1221,7 +1199,6 @@ def build_bulk_print_content(rid_list):
         return no_update
 
     show_eval = can('view_evaluation')
-    show_comments = can('view_comments')
 
     try:
         tables = read_profile_tables()
@@ -1232,7 +1209,7 @@ def build_bulk_print_content(rid_list):
 
         blocks = []
         for i, rid in enumerate(rid_list):
-            block = _build_print_block(rid, tables, researchers, name_map, show_eval, show_comments)
+            block = _build_print_block(rid, tables, researchers, name_map, show_eval)
             if block is None:
                 continue
             # 마지막 사람 뒤에는 break를 넣지 않아야 끝에 빈 페이지가 안 붙는다
