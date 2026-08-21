@@ -89,6 +89,11 @@ RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
 # 모듈을 import하지 않는 독립 스크립트.
 COPY services/bge_server.py services/bge_server.py
 
+RUN groupadd --gid 10001 app \
+    && useradd --uid 10001 --gid app --create-home --shell /usr/sbin/nologin app \
+    && chown -R app:app /app /home/app
+USER app
+
 # EMBED_BASE_URL은 이 서버가 "어디에 바인딩할지"를 파싱하는 데 쓰인다
 # (services/bge_server.py의 __main__ 참고) — docker-compose.yml에서
 # 컨테이너 밖(다른 컨테이너/호스트)에서 붙을 수 있도록 0.0.0.0으로
