@@ -543,11 +543,13 @@ _TASK_HR_RECENT_LIMIT = 6  # 과제 수행 + 인사 발령 합쳐서 인쇄본�
 # (기존 10건 → 6건: 사용자 요청 "1페이지를 넘어가는 경우가 없었으면" — 다른
 # 항목(학력·부서·과제명 등)이 길어 줄바꿈되는 경우까지 감안한 안전 여백을
 # 남기려 실측 기반으로 줄임. data/processed/CLAUDE.md 참고.)
-_PHOTO_BOX_WIDTH_PX = 160  # 사진 박스(photo_box) 폭 — 기존 190px에서 축소
-# (사용자 요청: 사진을 20% 정도 키우는 대신 박스 폭은 좀 더 줄여달라). 이
-# 값을 header_row의 폭 계산(calc)에서도 그대로 재사용해야 좌우 정렬이
-# 어긋나지 않는다 — 아래 header_row 조립부의 photo_box/left_column/
-# right_box calc() 식이 전부 이 상수를 참조한다.
+_PHOTO_BOX_WIDTH_PX = 136  # 사진 박스(photo_box) 폭 — 190px → 160px(사진 확대
+# 요청) → 136px(이번 요청: 사진이 너무 커져서 폭·높이 모두 15% 축소,
+# 160*0.85=136). 이 값을 header_row의 폭 계산(calc)에서도 그대로
+# 재사용해야 좌우 정렬이 어긋나지 않는다 — 아래 header_row 조립부의
+# photo_box/left_column/right_box calc() 식이 전부 이 상수를 참조한다.
+# 사진 자체의 최대 높이(img_max_height)도 같은 비율로 줄인다 — 아래
+# photo_box 조립부와 assets/custom.css의 인쇄 전용 override 참고.
 
 
 def _print_box(title, children, *, breakable: bool = False):
@@ -904,13 +906,13 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
         # photo_block()은 컴포넌트 "리스트"를 그대로 반환한다 — 다른 리스트
         # 안에 그대로 끼워 넣으면 중첩 리스트가 되어 Dash가 이 서브트리를
         # 통째로 빈 화면으로 렌더링해버린다(아래 llm_summary_block()과 같은
-        # 이유). html.Div로 한 번 더 감싸 평평하게 만든다. img_max_height=240
-        # (기존 200 → 20% 증가, 사용자 요청 "사진이 지금보다 20% 정도
-        # 커져서")으로 화면(라이브) 탭보다 사진을 더 크게 보여준다 — 화면 쪽
-        # 호출부(아래 update_profile())는 이 인자를 넘기지 않아 기존 크기
-        # 그대로다.
+        # 이유). html.Div로 한 번 더 감싸 평평하게 만든다. img_max_height=204
+        # (200 → 240(20% 증가) → 204(사용자 요청: 사진이 너무 커져서 박스
+        # 폭·높이 모두 15% 축소, 240*0.85=204))로 화면(라이브) 탭보다는 여전히
+        # 조금 크게 보여준다 — 화면 쪽 호출부(아래 update_profile())는 이
+        # 인자를 넘기지 않아 기존 크기(200) 그대로다.
         html.Div(photo_block(rid, name, researcher, CURRENT_YEAR,
-                              hide_normal_employment_status=True, img_max_height=240)),
+                              hide_normal_employment_status=True, img_max_height=204)),
         html.Div(print_eval_content, style={'marginTop': '8px', 'width': '100%'}),
     ], className='print-section',
         style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center',
