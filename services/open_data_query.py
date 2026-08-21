@@ -229,18 +229,15 @@ def _generate_sql(question: str, schema: str, max_wait, current_only: bool = Tru
 
 
 def _cap_limit(sql: str, cap: int = DISPLAY_LIMIT) -> str:
-    """SQL에 LIMIT이 없으면 붙여 준다(있으면 그대로 둠 — 어차피 실행 결과는
-    아래에서 항상 DISPLAY_LIMIT으로 다시 자르므로, 여기서는 완전히 무제한인
-    조회만 막아 두는 정도의 역할)."""
-    if not re.search(r'\blimit\b', sql, re.IGNORECASE):
-        return f'{sql} LIMIT {cap}'
-    return sql
+    """LLM이 큰 LIMIT을 넣어도 결과 행 수가 cap을 넘지 않도록 바깥에서 제한."""
+    work = sql.strip().rstrip(';').strip()
+    return f'SELECT * FROM ({work}) AS _bounded_result LIMIT {int(cap)}'
 
 
 def _execute(con, sql: str, params: list | None = None) -> tuple:
     result = con.execute(sql, params) if params is not None else con.execute(sql)
     columns = [d[0] for d in result.description]
-    rows = [list(r) for r in result.fetchall()]
+    rows = [list(r) for r in result.fetchmany(DISPLAY_LIMIT + 1)]
     return columns, rows
 
 
@@ -294,6 +291,9 @@ def _embedding_match(term: str, candidates: set, threshold: float = _EMBEDDING_M
 
 def _semantic_fallback(con, table: str, column: str, term: str) -> tuple | None:
     if not (table and column and term):
+        return None
+    identifier = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+    if not identifier.fullmatch(table) or not identifier.fullmatch(column):
         return None
     try:
         _, distinct_rows = _execute(
@@ -362,6 +362,8 @@ def answer(question: str, current_only: bool = True) -> dict:
     # 접근 자체를 차단한다.
     con = duckdb.connect(':memory:', config={'enable_external_access': False})
     try:
+        con.execute(f"SET memory_limit='{int(os.environ.get('DUCKDB_MEMORY_LIMIT_MB', '512'))}MB'")
+        con.execute(f"SET threads={int(os.environ.get('DUCKDB_THREADS', '2'))}")
         for name, df in tables.items():
             con.register(name, df)
 

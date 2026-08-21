@@ -56,6 +56,11 @@ services:
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
       ENABLE_WEB_SETUP: ${ENABLE_WEB_SETUP:-false}
       MAX_CONTENT_LENGTH: ${MAX_CONTENT_LENGTH:-10485760}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-8388608}
+      MAX_PDF_PAGES: ${MAX_PDF_PAGES:-100}
+      MAX_DOCUMENT_CHARS: ${MAX_DOCUMENT_CHARS:-500000}
+      DUCKDB_MEMORY_LIMIT_MB: ${DUCKDB_MEMORY_LIMIT_MB:-512}
+      DUCKDB_THREADS: ${DUCKDB_THREADS:-2}
       # LLM2(OpenAI 호환, 사내 온프레미스 vllm thinkingcap). 배치 파이프라인 +
       # AI 자연어 검색 + 코멘트 종합요약이 전부 이 설정 하나로 통일돼 있다
       # (.env.example의 "LLM2" 섹션 참고 — 예전엔 코멘트 종합요약만 별도
@@ -71,6 +76,7 @@ services:
       LLM_RETRY_BACKOFF: ${LLM_RETRY_BACKOFF:-5.0}
       # 사내 Confluence PAT — 미설정이면 confl_address 과제는 PDF 폴백 없이 건너뛰어짐.
       CONFLUENCE_TOKEN: ${CONFLUENCE_TOKEN:-}
+      CONFLUENCE_ALLOWED_HOSTS: ${CONFLUENCE_ALLOWED_HOSTS:-samsungds.net,samsung.net}
       # BGE-M3 임베딩 서버(전문성 유사도/Job Market 매칭, services/llm.py의
       # embed()) — 아래 bge-embed 서비스를 도커 네트워크 안에서 서비스명으로
       # 가리킨다(--profile embed로 띄웠을 때만 실제로 응답함, 안 띄웠으면
@@ -92,6 +98,8 @@ services:
       MAIL_FROM: ${MAIL_FROM:-}
       MAIL_USER_ID: ${MAIL_USER_ID:-people.sait}
       MAIL_TIMEOUT: ${MAIL_TIMEOUT:-30}
+      MAIL_VERIFY_TLS: ${MAIL_VERIFY_TLS:-true}
+      MAIL_CA_BUNDLE: ${MAIL_CA_BUNDLE:-}
       # 런타임 프록시가 있어도 내부 대상(vllm 75.12.15.121, DB, ollama, bge-embed 등)은 프록시 우회.
       NO_PROXY: "localhost,127.0.0.1,::1,host.docker.internal,ollama,db,bge-embed,75.12.15.121,samsungds.net,*.samsungds.net,*.samsung.net,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
       no_proxy: "localhost,127.0.0.1,::1,host.docker.internal,ollama,db,bge-embed,75.12.15.121,samsungds.net,*.samsungds.net,*.samsung.net,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
@@ -148,6 +156,9 @@ services:
     environment:
       EMBED_MODEL: ${EMBED_MODEL:-bge-m3}
       EMBED_API_KEY: ${EMBED_API_KEY:?EMBED_API_KEY must be set in .env}
+      EMBED_MAX_ITEMS: ${EMBED_MAX_ITEMS:-64}
+      EMBED_MAX_CHARS_PER_ITEM: ${EMBED_MAX_CHARS_PER_ITEM:-8000}
+      EMBED_MAX_TOTAL_CHARS: ${EMBED_MAX_TOTAL_CHARS:-65536}
       # 컨테이너 안에서는 항상 모든 인터페이스에 바인딩(app 등 다른 컨테이너가
       # 접근해야 함) — 이미지 안에 이미 기본값으로 박혀 있지만(Dockerfile.embed)
       # .env에서 실수로 EMBED_BASE_URL을 host.docker.internal 등으로 덮어써도
