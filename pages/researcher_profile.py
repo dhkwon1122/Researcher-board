@@ -847,7 +847,8 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     """A4 인쇄 전용 콘텐츠 — 화면의 카드형 대시보드(고정 높이 + 내부 스크롤)는
     인쇄에 부적합해(넘치는 내용이 잘림) 재사용하지 않고, 같은 데이터/블록 함수를
     피플팀이 준 손그림 양식(사진+이름+평가·인센티브 / 기본정보+학력 / 보유역량 /
-    논문·특허+양성·시상(좁은 폭) / 전문성 요약 / 과제수행·인사발령, 1페이지
+    논문·특허+양성·시상(핵심기술·보유기술 박스를 뺀 나머지 폭) / 전문성 요약 /
+    과제수행·인사발령, 1페이지
     안에 들어오게)에 맞춰 테두리 박스로 재배치한다. 인물 코멘트는 인쇄본에
     넣지 않는다(사용자 요청 — 화면 탭에는 그대로 남아 있음). print_eval_content는
     update_profile()이 권한(view_evaluation)까지 반영해 이미 만들어둔 것
@@ -928,10 +929,13 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     # 논문·특허 실적 요약과 양성·시상 이력을 한 박스로 합친다(사용자 요청 3).
     # 박스 제목("논문 / 특허") 없이 "논문 실적 ~건"/"특허 실적 ~건" 두 줄만
     # 바로 보여준다(_print_publication_summary/_print_patent_summary가 각자
-    # 라벨을 포함해서 반환). 예전 학력 박스처럼(사용자 요청) 폭을 우측 상단
-    # 핵심기술·보유기술 박스(header_row의 flex:1 열)와 같은 너비로 줄여
-    # 전체 폭을 다 쓰지 않는다 — header_row와 동일하게 photo 열(190px) +
-    # 여백(12px)을 뺀 나머지를 반으로 나눈 값과 같은 너비다.
+    # 라벨을 포함해서 반환). 처음엔 우측 상단 핵심기술·보유기술 박스와 같은
+    # 폭(header_row의 flex:1 열 하나 너비)으로 줄였었는데, 그러면 폭이 너무
+    # 좁다는 후속 요청으로 "전체 폭에서 핵심기술·보유기술 박스 폭을 뺀
+    # 나머지"(= photo 열(190px) + 여백(12px) + info_col 너비, 즉 flex:1 열
+    # 하나를 뺀 나머지 전부)로 다시 넓혔다 — header_row와 동일 폭 계산에서
+    # 반대쪽을 취하는 것뿐이라 calc 식도 그 차로 구성한다. 사진 박스
+    # 바로 아래(왼쪽 정렬)에 위치하도록 header_row 다음에 그대로 이어붙인다.
     history_box = html.Div(
         _print_box(None, html.Div([
             _print_publication_summary(tables['publications'], rid),
@@ -941,7 +945,7 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
             html.Div('시상 이력', className='small fw-semibold text-muted mt-2 mb-1'),
             award_block(tables['awards'], rid, limit=3, single_line=True, show_empty_message=False),
         ])),
-        style={'width': 'calc((100% - 190px - 12px) / 2)'},
+        style={'width': 'calc(100% - (100% - 190px - 12px) / 2)'},
     )
 
     # 핵심기술/보유기술이 위 right_box로 옮겨간 만큼, 전문성 요약(LLM)은 이제
