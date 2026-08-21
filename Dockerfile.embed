@@ -1,0 +1,99 @@
+# BGE-M3 로컬 임베딩 서버 전용 이미지 (services/bge_server.py).
+#
+# 메인 앱 이미지(Dockerfile)와 분리한 이유: FlagEmbedding/torch가 무거운
+# ML 의존성(수 GB)이라 앱 이미지에 얹으면 매 배포마다 재빌드/재다운로드가
+# 커지고, 앱(gunicorn) 재시작 때마다 이미 로딩해 둔 BGE-M3 모델까지 같이
+# 죽어 재로딩(수십 초~수 분)이 필요해진다 — 별도 컨테이너로 띄우면 앱을
+# 몇 번을 재배포해도 임베딩 서버는 계속 켜진 채로 재사용된다.
+#
+# 이 이미지는 기본으로는 뜨지 않는다(docker-compose.yml의 bge-embed
+# 서비스, profile "embed"). 사용:
+#   docker compose --profile embed up -d bge-embed
+#
+# ── 빌드 예시 (사내망) ─────────────────────────────────────────────
+#   docker build -f Dockerfile.embed \
+#     --build-arg PIP_INDEX_URL=https://nexus.corp/repository/pypi/simple \
+#     --build-arg PIP_TRUSTED_HOST=nexus.corp \
+#     --build-arg HTTP_PROXY=http://proxy.corp:8080 \
+#     --build-arg HTTPS_PROXY=http://proxy.corp:8080 \
+#     -t researcher-board-embed:latest .
+#
+# ── 빌드 예시 (사외/공용 PyPI) ─────────────────────────────────────
+#   docker build -f Dockerfile.embed -t researcher-board-embed:latest .
+
+FROM python:3.11-slim
+
+ARG PIP_INDEX_URL=http://repository.samsungds.net/repository/proxy-pypi-files.pythonhosted.org/simple
+ARG PIP_TRUSTED_HOST=repository.samsungds.net
+ARG PIP_CERT=
+ARG HTTP_PROXY=http://12.26.204.100:8080
+ARG HTTPS_PROXY=http://12.26.204.100:8080
+ARG NO_PROXY=localhost,127.0.0.1,db,::1,samsungds.net,*.samsungds.net,*.samsung.net,12.0.0.0/8,10.0.0.0/8,192.0.0.0/8,172.0.0.0/8
+# GPU(CUDA) 빌드를 쓰려면 여기에 PyTorch의 CUDA 휠 인덱스를 지정한다(예:
+# https://download.pytorch.org/whl/cu121 — docker-compose.gpu.yml 오버레이와
+# 짝을 맞춰 씀). 비워두면(기본값) requirements-embed.txt가 PyPI 기본
+# CPU 빌드 torch를 설치한다 — docker-compose.gpu.yml로 GPU 장치만 컨테이너에
+# 노출해도, 이 인자 없이 CPU 빌드 torch를 쓰면 실제로는 GPU를 안 쓴다.
+ARG TORCH_INDEX_URL=
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# 메인 Dockerfile과 같은 사내 CA 등록 패턴 — huggingface.co 등 외부
+# 다운로드도 이 CA 체인을 거칠 수 있어 필요하다.
+COPY certs/ /tmp/corp-certs/
+RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
+    apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && for f in /tmp/corp-certs/*.crt; do \
+         [ -e "$f" ] || continue; \
+         case "$f" in */ca-bundle.crt) continue ;; esac; \
+         cp "$f" /usr/local/share/ca-certificates/; \
+       done \
+    && update-ca-certificates \
+    && if [ -f /tmp/corp-certs/ca-bundle.crt ]; then \
+         cp /tmp/corp-certs/ca-bundle.crt /etc/ssl/certs/ca-certificates.crt; \
+         echo '[build] 사내 CA 번들 적용: /etc/ssl/certs/ca-certificates.crt'; \
+       fi \
+    && rm -rf /var/lib/apt/lists/* /tmp/corp-certs
+
+ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+
+# TORCH_INDEX_URL이 주어지면(GPU 빌드) 그 인덱스에서 torch를 먼저 설치해
+# CUDA 빌드가 requirements-embed.txt의 FlagEmbedding이 끌어오는 PyPI 기본
+# CPU 빌드보다 먼저 자리 잡게 한다 — pip은 이미 설치된 버전 요구사항을
+# 만족하면 재설치하지 않으므로 순서가 중요하다.
+COPY requirements-embed.txt .
+RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
+    pip install --upgrade pip \
+      ${PIP_INDEX_URL:+--index-url "$PIP_INDEX_URL"} \
+      ${PIP_TRUSTED_HOST:+--trusted-host "$PIP_TRUSTED_HOST"} \
+      ${PIP_CERT:+--cert "$PIP_CERT"} \
+    && if [ -n "$TORCH_INDEX_URL" ]; then \
+         http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
+         pip install --index-url "$TORCH_INDEX_URL" torch \
+         && echo "[build] GPU(CUDA) 빌드 torch 설치: $TORCH_INDEX_URL"; \
+       fi \
+    && http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
+    pip install \
+      ${PIP_INDEX_URL:+--index-url "$PIP_INDEX_URL"} \
+      ${PIP_TRUSTED_HOST:+--trusted-host "$PIP_TRUSTED_HOST"} \
+      ${PIP_CERT:+--cert "$PIP_CERT"} \
+      -r requirements-embed.txt
+
+# 서버 스크립트만 있으면 된다 — services/bge_server.py는 다른 services/
+# 모듈을 import하지 않는 독립 스크립트.
+COPY services/bge_server.py services/bge_server.py
+
+# EMBED_BASE_URL은 이 서버가 "어디에 바인딩할지"를 파싱하는 데 쓰인다
+# (services/bge_server.py의 __main__ 참고) — docker-compose.yml에서
+# 컨테이너 밖(다른 컨테이너/호스트)에서 붙을 수 있도록 0.0.0.0으로
+# 오버라이드한다(기본값 localhost는 컨테이너 자기 자신만 접근 가능).
+ENV EMBED_BASE_URL=http://0.0.0.0:7138
+EXPOSE 7138
+
+CMD ["python", "services/bge_server.py"]

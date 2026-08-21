@@ -68,6 +68,14 @@ services:
       LLM_RETRY_BACKOFF: ${LLM_RETRY_BACKOFF:-5.0}
       # 사내 Confluence PAT — 미설정이면 confl_address 과제는 PDF 폴백 없이 건너뛰어짐.
       CONFLUENCE_TOKEN: ${CONFLUENCE_TOKEN:-}
+      # BGE-M3 임베딩 서버(전문성 유사도/Job Market 매칭, services/llm.py의
+      # embed()) — 아래 bge-embed 서비스를 도커 네트워크 안에서 서비스명으로
+      # 가리킨다(--profile embed로 띄웠을 때만 실제로 응답함, 안 띄웠으면
+      # 기존처럼 "로컬 임베딩 서버에 연결할 수 없습니다" 에러로 해당 기능만
+      # 비활성). 호스트에서 직접 띄운 bge_server.py를 쓰려면 .env에서
+      # host.docker.internal:7138로 덮어쓸 것.
+      EMBED_BASE_URL: ${EMBED_BASE_URL:-http://bge-embed:7138}
+      EMBED_MODEL: ${EMBED_MODEL:-bge-m3}
       # 사내 메일 발송 REST API — /admin의 리포트 메일 발송 카드, "보유
       # 전문성" 탭의 개별 연구원 메일 발송, `docker compose exec app python
       # pipeline/process_project_expertise.py --email=...`가 모두 이 설정을
@@ -80,9 +88,9 @@ services:
       MAIL_FROM: ${MAIL_FROM:-}
       MAIL_USER_ID: ${MAIL_USER_ID:-people.sait}
       MAIL_TIMEOUT: ${MAIL_TIMEOUT:-30}
-      # 런타임 프록시가 있어도 내부 대상(vllm 75.12.15.121, DB, ollama 등)은 프록시 우회.
-      NO_PROXY: "localhost,127.0.0.1,::1,host.docker.internal,ollama,db,75.12.15.121,samsungds.net,*.samsungds.net,*.samsung.net,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
-      no_proxy: "localhost,127.0.0.1,::1,host.docker.internal,ollama,db,75.12.15.121,samsungds.net,*.samsungds.net,*.samsung.net,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+      # 런타임 프록시가 있어도 내부 대상(vllm 75.12.15.121, DB, ollama, bge-embed 등)은 프록시 우회.
+      NO_PROXY: "localhost,127.0.0.1,::1,host.docker.internal,ollama,db,bge-embed,75.12.15.121,samsungds.net,*.samsungds.net,*.samsung.net,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+      no_proxy: "localhost,127.0.0.1,::1,host.docker.internal,ollama,db,bge-embed,75.12.15.121,samsungds.net,*.samsungds.net,*.samsung.net,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
     # WSL 컨테이너 → Windows 호스트 접근용. Docker Desktop 은 자동이지만,
     # WSL 내 네이티브 docker 에서도 되도록 host-gateway 로 명시.
     extra_hosts:
@@ -116,6 +124,44 @@ services:
     #   (+ 이 ollama를 실제로 쓰려면 .env 에서 LLM2_API_URL을 이 컨테이너로
     #      돌리고 LLM2_MODEL을 큰 코더 모델로, 예: qwen3-coder:30b)
 
+  # BGE-M3 로컬 임베딩 서버(전문성 유사도/Job Market 매칭). 기본으로는
+  # 뜨지 않는다(profile embed) — Dockerfile.embed 자체 설명 참고(왜 앱
+  # 이미지에 안 얹고 분리했는지).
+  # 사용:  docker compose --profile embed up -d bge-embed
+  bge-embed:
+    build:
+      context: .
+      dockerfile: Dockerfile.embed
+      args:
+        PIP_INDEX_URL: "http://repository.samsungds.net/repository/proxy-pypi-files.pythonhosted.org/simple"
+        PIP_TRUSTED_HOST: "repository.samsungds.net"
+        PIP_CERT: ""
+        HTTP_PROXY: "http://12.26.204.100:8080"
+        HTTPS_PROXY: "http://12.26.204.100:8080"
+        NO_PROXY: "localhost,127.0.0.1,db,::1,samsungds.net,*.samsungds.net,*.samsung.net,12.0.0.0/8,10.0.0.0/8,192.0.0.0/8,172.0.0.0/8"
+    container_name: researcher_board_bge_embed
+    profiles: ["embed"]
+    environment:
+      EMBED_MODEL: ${EMBED_MODEL:-bge-m3}
+      # 컨테이너 안에서는 항상 모든 인터페이스에 바인딩(app 등 다른 컨테이너가
+      # 접근해야 함) — 이미지 안에 이미 기본값으로 박혀 있지만(Dockerfile.embed)
+      # .env에서 실수로 EMBED_BASE_URL을 host.docker.internal 등으로 덮어써도
+      # 이 서비스 자체의 바인딩 주소는 절대 그걸 따라가면 안 되므로 여기서
+      # 다시 한번 고정한다.
+      EMBED_BASE_URL: http://0.0.0.0:7138
+      HTTP_PROXY: ${HTTP_PROXY:-http://12.26.204.100:8080}
+      HTTPS_PROXY: ${HTTPS_PROXY:-http://12.26.204.100:8080}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1,bge-embed,app,samsungds.net,*.samsungds.net}
+    ports:
+      - "7138:7138"          # 호스트에서 직접 붙을 때 (선택 — 디버그용)
+    volumes:
+      - bge_hf_cache:/root/.cache/huggingface   # 모델 캐시(재다운로드 방지)
+    # ── GPU 는 옵셔널: docker-compose.gpu.yml 오버레이로 켠다 ──
+    #   CPU(기본): docker compose --profile embed up -d bge-embed
+    #   GPU      : docker compose -f docker-compose.yml -f docker-compose.gpu.yml \
+    #                --profile embed up -d bge-embed
+
 volumes:
   pgdata:
   ollama_models:
+  bge_hf_cache:
