@@ -9,7 +9,7 @@ import dash_bootstrap_components as dbc
 import pandas as pd
 from dash import Input, Output, State, callback, clientside_callback, dcc, html, no_update
 
-from components.detail_tabs import bullet_list, llm_summary_block, owned_expertise_block, print_sub_heading
+from components.detail_tabs import llm_summary_block, owned_expertise_block, print_sub_heading
 from components.profile_sections import (
     avatar,
     award_block,
@@ -605,13 +605,16 @@ def _tenure_value(hire_date_str: str) -> str:
 
 
 def _print_task_hr_timeline(task_df, hr_df, rid, *, limit: int | None = None):
-    """과제 수행 이력과 인사 발령 이력을 표/섹션은 물론 "과제"/"인사발령" 같은
-    구분자도 없이 하나의 시계열 목록으로 합쳐 날짜 내림차순으로 보여준다(각
-    줄의 내용 자체로 무엇인지 알아볼 수 있다는 전제). limit이 주어지면 둘을
-    합친 목록 기준으로 최신 limit건만 담고, 잘린 나머지 건수를 안내한다.
-    목록은 기본 <ul> disc 마커 대신 bullet_list()(사각 마커 + hanging
-    indent)로 그린다(사용자 요청 — "disc 형태로 list가 만들어지는 건 너무
-    밋밋해")."""
+    """과제 수행 이력과 인사 발령 이력을 "과제"/"인사발령" 구분자 없이 하나의
+    표로 합쳐 날짜 내림차순으로 보여준다. 열은 기간/날짜·발령 내용·조직명
+    3개로 통일한다(사용자 요청 — "기간/날짜 | 발령 내용 | 조직명 이런
+    식으로 정리되게 해줘"). 과제 수행 이력은 발령 내용 칸에 "과제
+    Assign"(사용자가 준 문구 그대로)을 넣고, 과제명 자체는 조직명 칸에
+    넣는다 — 인사 발령의 조직명(어디에 배정됐는지)과 같은 성격이라고
+    보고 같은 칸을 재사용했다. 인사 발령 이력의 조직명 칸에는 기존처럼
+    부서/직급/직책(order_dep/order_cl/order_assignment)을 ' / '로 이어
+    붙인다. limit이 주어지면 둘을 합친 목록 기준으로 최신 limit건만 담고,
+    잘린 나머지 건수를 안내한다."""
     filtered_task = task_df[task_df['researcher_id'] == rid] if not task_df.empty else task_df
     task_entries = task_points(filtered_task) if filtered_task is not None else []
     hr_rows = filter_hr_rows(hr_df, rid)  # 이미 order_date 내림차순
@@ -625,18 +628,22 @@ def _print_task_hr_timeline(task_df, hr_df, rid, *, limit: int | None = None):
         end = t['end_label'] if t['end_label'] == '진행중' else t['end_label'][:7]
         entries.append({
             'date': t['start'],
-            'text': f"{t['start_label'][:7]} ~ {end}  {t['task_name']}",
+            'period': f"{t['start_label'][:7]} ~ {end}",
+            'action': '과제 Assign',
+            'org': t['task_name'],
         })
     for _, row in hr_rows.iterrows():
         d = pd.to_datetime(row.get('order_date'), errors='coerce')
         if pd.isna(d):
             continue
-        detail = ' / '.join(p for p in (_c(row.get('order_dep')), _c(row.get('order_cl')),
-                                         _c(row.get('order_assignment'))) if p)
-        text = f"{d.date().isoformat()}  {_c(row.get('order_name')) or '-'}"
-        if detail:
-            text += f" ({detail})"
-        entries.append({'date': d, 'text': text})
+        org = ' / '.join(p for p in (_c(row.get('order_dep')), _c(row.get('order_cl')),
+                                      _c(row.get('order_assignment'))) if p)
+        entries.append({
+            'date': d,
+            'period': d.date().isoformat(),
+            'action': _c(row.get('order_name')) or '-',
+            'org': org or '-',
+        })
 
     entries.sort(key=lambda e: e['date'], reverse=True)
     total = len(entries)
@@ -646,10 +653,32 @@ def _print_task_hr_timeline(task_df, hr_df, rid, *, limit: int | None = None):
     if not entries:
         return html.Div('과제 수행 / 인사 발령 이력 없음', className='text-muted small')
 
-    result = bullet_list([e['text'] for e in entries])
+    rows = [
+        html.Tr([
+            html.Td(e['period'], className='small text-muted', style={'whiteSpace': 'nowrap'}),
+            html.Td(e['action'], className='small'),
+            html.Td(e['org'], className='small', style={'wordBreak': 'break-word'}),
+        ])
+        for e in entries
+    ]
+    table = dbc.Table([
+        html.Colgroup([
+            html.Col(style={'width': '17%'}),
+            html.Col(style={'width': '14%'}),
+            html.Col(),
+        ]),
+        html.Thead(html.Tr([
+            html.Th('기간/날짜', style={'fontSize': '0.72rem'}),
+            html.Th('발령 내용', style={'fontSize': '0.72rem'}),
+            html.Th('조직명', style={'fontSize': '0.72rem'}),
+        ]), className='table-light'),
+        html.Tbody(rows),
+    ], bordered=False, hover=True, size='sm', className='mb-0',
+       style={'tableLayout': 'fixed', 'width': '100%'})
+
     if limit and total > limit:
-        return html.Div([result, html.Div(f'외 {total - limit}건 더', className='text-muted small mt-1')])
-    return result
+        return html.Div([table, html.Div(f'외 {total - limit}건 더', className='text-muted small mt-1')])
+    return table
 
 
 def _print_publication_summary(pub_df, rid):
@@ -1022,10 +1051,10 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     # 역할·책임/유사 연구원은 계속 빼고(강점 분야·키워드·전문지식 및 역량만) 보여준다.
     # deemphasize_strength=True — Strength Field/Keywords는 색깔 배지 대신
     # 옅은 회색 콤마 나열로(사용자 요청: "너무 강조되어 보인다... 힘을
-    # 빼줘" — 아래 소제목("전문성 요약(LLM)")이 네모 박스로 더 강조된 것과
-    # 대비를 이룬다).
+    # 빼줘"). "전문성 요약(LLM)" 박스 제목 자체는 없앴다(사용자 요청 —
+    # 대신 llm_summary_block()이 Strength Field 줄 오른쪽 끝에 옅은 회색
+    # "(by AI)"를 붙여, 이 블록이 AI 생성 결과임을 표시한다).
     expertise_summary_box = _print_box(None, html.Div([
-        html.Div(print_sub_heading('전문성 요약(LLM)'), className='mb-1'),
         # llm_summary_block()은 데이터가 있으면 컴포넌트 "리스트"를 그대로
         # 반환한다(화면에서는 Output.children으로 바로 받아 문제 없음) —
         # 여기서는 그 리스트를 다른 리스트([...]) 안에 그대로 끼워 넣으면

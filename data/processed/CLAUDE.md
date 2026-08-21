@@ -4426,3 +4426,93 @@ strength_fields/strength_keywords/domain_knowledge_skill이 모두 채워진
 - 테스트 데이터(core_technology.csv/tech_ownership.csv/hr_orders.csv
   직접 구성, tasks.csv 14건, 전문성 분석 JSON 픽스처, 계정)·서버 모두
   정리.
+
+## 2026-08-21 (29): 전문성 요약(LLM) 제목 제거 + Strength Field 줄에 "(by AI)" 표기 + 전문지식 및 역량 마커 제거 + 과제/인사발령 이력 표 형태로 개편
+
+사용자 요청 3건: "1. 전문성 요약(LLM) 이라는 제목은 없어도 되겠고, Strenth
+Field 라고 표시되는 줄의 오른쪽 끝에 (by AI)이라고 옅은 회색으로 써주면
+좋겠어. 2. 전문지식 및 역량의 내용은 목록 아이콘 없이 약간 들여쓰기만
+된 상태로 나열되게 해줘. 3. 과제 수행 / 인사발령 이력은 기간 / 날짜 |
+발령 내용 | 조직명 이런 식으로 정리되게 해줘. 과제 수행인 경우에는 발령
+내용에 과제 Assign 이라고 넣으면 될 것 같아."
+
+**1) "전문성 요약(LLM)" 제목 제거 + "(by AI)" 표기**:
+`pages/researcher_profile.py`의 `expertise_summary_box` 조립부에서
+`html.Div(print_sub_heading('전문성 요약(LLM)'), className='mb-1')` 줄을
+그냥 삭제했다. 대신 `components/detail_tabs.py`의 `llm_summary_block()`
+에서 `deemphasize_strength=True`(인쇄 전용) 분기의 "Strength Field"
+소제목 박스를 `justify-content-between`로 같은 줄 오른쪽 끝에
+`html.Span('(by AI)', className='text-muted', style={'fontSize':
+'0.68rem'})`를 배치하는 flex 행으로 바꿨다 — 제목을 없애면서도 이 블록이
+LLM(AI) 생성 결과라는 정보 자체는 잃지 않도록. 화면(라이브) 탭은
+`deemphasize_strength`를 안 넘겨 영향 없음(그쪽은 자체 "전문성
+요약(LLM)" `<P>` 제목을 따로 갖고 있음, `update_profile()` 콜백 쪽).
+
+**2) 전문지식 및 역량 마커 제거**: `components/detail_tabs.py`에 신규
+`plain_indent_list(items, *, class_name='small')` 헬퍼 추가 — (28)번의
+`bullet_list()`(사각 마커 + hanging indent)에서 마커용 `<span>`만 뺀
+버전, `marginLeft: 10px`로 살짝 들여쓰기만 한다. `llm_summary_block()`의
+전문지식 및 역량 목록을 `bullet_list(domain_skill)` →
+`plain_indent_list(domain_skill)`로 교체(화면/인쇄 양쪽 공통 — 이 목록은
+`deemphasize_strength`와 무관하게 항상 같은 구조). 주요 역할·책임
+(responsibilities) 목록은 그대로 `bullet_list()`(사각 마커) 유지 —
+이번 요청은 전문지식 및 역량만 지목했음.
+
+**3) 과제/인사발령 이력 표 형태 개편**: `pages/researcher_profile.py`의
+`_print_task_hr_timeline()`을 (27)~(28)번의 한 줄짜리 텍스트 목록에서
+3열 표(`dbc.Table`, `기간/날짜`·`발령 내용`·`조직명` 헤더, `<colgroup>`
+으로 17%/14%/나머지 폭 고정)로 바꿨다. 과제 수행 이력은 발령 내용 칸에
+"과제 Assign"(사용자가 준 문구 그대로, 번역·의역하지 않음)을 넣고,
+과제명 자체는 조직명 칸에 넣었다 — 인사 발령의 조직명(부서, "어디에
+배정됐는지")과 "무엇에 배정됐는지"라는 성격이 같다고 보고 같은 칸을
+재사용한 것(사용자가 3열만 지정했고 과제명을 따로 넣을 4번째 칸은
+없었으므로). 인사 발령 이력의 조직명 칸에는 기존처럼 부서/직급/직책
+(order_dep/order_cl/order_assignment)을 ' / '로 이어 붙인 값을 그대로
+넣었다(이전엔 발령명 뒤 괄호 안에 있던 것을 조직명 칸으로 옮긴 것뿐,
+정보 손실 없음). `bullet_list()`를 더 이상 이 함수에서 쓰지 않아
+`pages/researcher_profile.py`의 import에서 `bullet_list`를 뺐다
+(detail_tabs.py 안에서는 responsibilities 목록에 계속 쓰여 정의는
+그대로 둠).
+
+**검증**: 실제 서버 기동(`generate_sample_data.py` + core_technology.csv/
+tech_ownership.csv/hr_orders.csv 직접 구성 + tasks.csv 14건 + 전문성
+분석 JSON 픽스처, (28)번과 동일한 "실제 데이터가 꽉 찬" 스트레스
+픽스처) + 로그인(team_lead) + Playwright.
+- 배경색 `rgb(238, 240, 243)` 요소 텍스트 목록에서 `'전문성 요약(LLM)'`이
+  사라졌음을 확인(나머지 소제목은 그대로).
+- `(by AI)` 텍스트가 실제로 "Strength Field" 소제목과 같은 한 줄
+  (`parentElement.textContent === 'Strength Field(by AI)'`)에 있음을
+  확인. 색상은 `className='text-muted'`로 지정했는데, 이 샌드박스
+  환경은 `cdn.jsdelivr.net`(Bootstrap CSS가 거기서 로드됨)에 네트워크
+  접근이 안 돼 `getComputedStyle` 색상이 실제로는 검정(`rgb(0,0,0)`)으로
+  측정된다(`--bs-secondary-color` CSS 변수가 빈 문자열) — `사번` 라벨
+  등 기존에도 `text-muted`를 쓰던 다른 요소들도 이 환경에서는 전부
+  똑같이 검정으로 측정되는 것으로 재확인했으므로, 이번에 새로 생긴
+  문제가 아니라 이 테스트 환경의 네트워크 제약(운영 환경에서는 CDN이
+  정상 로드되어 문제 없음)이다. `className`이 올바르게 붙어 있는지
+  (DOM 구조·클래스명)로 검증을 대신했다.
+- `#profile-print-content`의 전문지식 및 역량 목록에서 5×5px 사각
+  마커(`<span>`)가 더 이상 하나도 없음을 확인(이전 (28)번의 15개 →
+  responsibilities는 인쇄본에 애초에 안 보이므로 0개).
+- 과제/인사발령 이력 표: `<th>` 텍스트가 정확히 `['기간/날짜', '발령
+  내용', '조직명']`이고, 실제 데이터 행이
+  `['2023-01 ~ 2023-06', '과제 Assign', '테스트과제13']`(과제)/
+  `['2019-03-01', '전배', '반도체시스템연구소']`(인사발령) 형태로
+  나오는 것을 확인. `<colgroup>` 폭이 실제 렌더링(17.0%/13.9%/68.6%,
+  1254px 표 기준 212/174/860px)에 그대로 반영됨을 `getBoundingClientRect()`
+  로 재확인.
+- 무한 재렌더링 회귀 없음(`_dash-update-component` 0건, 자식 수 안정),
+  콘솔 에러 없음.
+- 1페이지 높이: 1024.9px(예산 약 937px, 88px 초과) — (28)번 항목에 기록한
+  "실제 데이터가 꽉 찬 경우 이미 예산 초과" 사전 조건이 표 헤더 행 추가로
+  15px 더 늘었을 뿐, 근본 원인(전문성 분석 데이터 존재 시)은 동일. 헤드리스
+  PDF 페이지 수도 여전히 3페이지(`task_hr_box`가 `breakable=True`라 표
+  뒷부분이 2페이지로 자연스럽게 흘러넘침) — PDF 페이지 개수(`/Type /Page`
+  오브젝트 수)만 확인했고, 페이지 렌더링 도구가 없어 2페이지로 넘어간
+  부분에서 `<thead>`가 실제로 반복되는지는 이번엔 육안으로는 확인하지
+  못했다(표가 브라우저 기본 인쇄 동작으로 페이지에 걸쳐 나뉘어도 레이아웃
+  깨짐·겹침은 없을 것으로 예상되지만, 이 부분은 검증 안 된 채로 남겨둠).
+- `python3 -m py_compile`로 컴파일 확인.
+- 테스트 데이터(core_technology.csv/tech_ownership.csv/hr_orders.csv
+  직접 구성, tasks.csv 14건, 전문성 분석 JSON 픽스처, 계정)·서버 모두
+  정리.
