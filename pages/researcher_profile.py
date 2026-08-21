@@ -9,7 +9,7 @@ import dash_bootstrap_components as dbc
 import pandas as pd
 from dash import Input, Output, State, callback, clientside_callback, dcc, html, no_update
 
-from components.detail_tabs import llm_summary_block, owned_expertise_block
+from components.detail_tabs import llm_summary_block, owned_expertise_block, print_sub_heading
 from components.profile_sections import (
     avatar,
     award_block,
@@ -544,10 +544,13 @@ _PRINT_BOX_BORDER = '1px solid #555555'  # 박스 테두리 색 — 기존 #1d1d
 _PRINT_BOX_DIVIDER = '1px solid #ddd'  # combined_box 내부 photo/info/tech
 # 사이를 나누는 옅은 회색 세로 구분선(사용자 요청) — 위 박스 테두리보다
 # 훨씬 옅은 톤으로, "테두리"가 아니라 살짝 구분감만 주는 용도.
-_TASK_HR_RECENT_LIMIT = 6  # 과제 수행 + 인사 발령 합쳐서 인쇄본에 보여줄 최신 건수
-# (기존 10건 → 6건: 사용자 요청 "1페이지를 넘어가는 경우가 없었으면" — 다른
-# 항목(학력·부서·과제명 등)이 길어 줄바꿈되는 경우까지 감안한 안전 여백을
-# 남기려 실측 기반으로 줄임. data/processed/CLAUDE.md 참고.)
+_TASK_HR_RECENT_LIMIT = 12  # 과제 수행 + 인사 발령 합쳐서 인쇄본에 보여줄 최신 건수
+# (기존 10건 → 6건(1페이지 초과 방지) → 12건 — 그 뒤 여러 라운드의 축소
+# (사진 10% 추가 축소, 박스 통합, 표 폭 최소화, 논문·특허 박스 전체 폭화
+# 등)로 1페이지 여유 공간이 크게 늘어, "아래에 공간이 많은데 표시가 많이
+# 안 된다"는 사용자 피드백에 따라 다시 늘렸다. 실측 기반 조정이라 값을
+# 바꿀 때는 반드시 스트레스 테스트 데이터로 1페이지 예산을 재확인할 것
+# — data/processed/CLAUDE.md 참고.)
 _PHOTO_BOX_WIDTH_PX = 122  # 사진 박스(photo_box) 폭 — 190px → 160px(사진 확대
 # 요청) → 136px(15% 축소) → 122px(사진 열이 combined_box 안에서 제일 길게
 # 내려온다는 사용자 피드백으로 10% 추가 축소, 136*0.9=122.4→122). 이 값을
@@ -560,11 +563,12 @@ _PHOTO_BOX_WIDTH_PX = 122  # 사진 박스(photo_box) 폭 — 190px → 160px(�
 
 def _print_box(title, children, *, breakable: bool = False):
     """A4 인쇄용 프로필의 테두리 박스 하나(피플팀이 준 손그림 양식 참고) — 왼쪽
-    위에 굵은 제목, 그 아래 내용. breakable=False(기본)면 박스 도중에 페이지가
-    갈라지지 않게 하고(assets/custom.css의 .print-section), 과제수행/인사발령
+    위에 제목(네모 박스로 감싼 중제목, `print_sub_heading()` — 사용자 요청),
+    그 아래 내용. breakable=False(기본)면 박스 도중에 페이지가 갈라지지
+    않게 하고(assets/custom.css의 .print-section), 과제수행/인사발령
     이력처럼 길어질 수 있는 박스는 breakable=True로 페이지 경계에서 자연스럽게
     이어지게 한다."""
-    body = [html.Div(title, className='fw-bold mb-2', style={'fontSize': '0.82rem'})] if title else []
+    body = [html.Div(print_sub_heading(title), className='mb-2')] if title else []
     body.append(children)
     cls = 'print-box' + ('' if breakable else ' print-section')
     return html.Div(body, className=cls, style={'border': _PRINT_BOX_BORDER, 'borderRadius': '6px',
@@ -647,25 +651,28 @@ def _print_task_hr_timeline(task_df, hr_df, rid, *, limit: int | None = None):
 
 def _print_publication_summary(pub_df, rid):
     """논문 실적 요약 — components/detail_tabs.py의 publications_tab()과 같은
-    집계(총 논문 수/교신저자 수)만 "논문 실적 ~건" 한 줄로 보여주고, 개별 논문
-    목록(제목/게재처 등 세부 내역)과 별도 소제목은 인쇄본에서는 생략한다."""
+    집계(총 논문 수/교신저자 수)만 "~건" 한 줄로 보여주고, 개별 논문 목록
+    (제목/게재처 등 세부 내역)은 인쇄본에서는 생략한다. "논문 실적"이라는
+    라벨 자체는 이 함수가 아니라 호출부가 `print_sub_heading()`으로 별도로
+    붙인다(사용자 요청 — 다른 소제목들과 같은 네모 박스 스타일로 통일)."""
     pub = pub_df[pub_df['researcher_id'] == rid] if not pub_df.empty else pub_df
     if pub is None or pub.empty:
-        return html.Div('논문 실적 없음', className='small')
+        return html.Div('없음', className='small')
     total = len(pub)
     corr = int(pub.get('is_corresponding', pd.Series(dtype=str)).astype(str).str.lower()
                .isin(['true', '1', 'y', 'yes']).sum())
-    return html.Div(f'논문 실적 {total}건 (교신저자 {corr}건)', className='small')
+    return html.Div(f'{total}건 (교신저자 {corr}건)', className='small')
 
 
 def _print_patent_summary(pat_df, rid):
     """특허 실적 요약 — components/detail_tabs.py의 patents_tab()과 같은
-    집계(전체/등록/대표발명/전략출원/미국등록/지분율합계)만 "특허 실적 ~건" 한
-    줄로 보여주고, 개별 특허 목록(발명 명칭 등 세부 내역)과 별도 소제목은
-    인쇄본에서는 생략한다."""
+    집계(전체/등록/대표발명/전략출원/미국등록/지분율합계)만 "~건" 한 줄로
+    보여주고, 개별 특허 목록(발명 명칭 등 세부 내역)은 인쇄본에서는
+    생략한다. "특허 실적" 라벨은 `_print_publication_summary()`와 마찬가지로
+    호출부가 `print_sub_heading()`으로 붙인다."""
     pat = pat_df[pat_df['researcher_id'] == rid] if not pat_df.empty else pat_df
     if pat is None or pat.empty:
-        return html.Div('특허 실적 없음', className='small')
+        return html.Div('없음', className='small')
     pat_dedup = dedupe_patents(pat)
     total_cnt = len(pat_dedup)
     reg_cnt = int(pat_dedup['status'].apply(is_registered).sum()) if 'status' in pat_dedup.columns else 0
@@ -675,7 +682,7 @@ def _print_patent_summary(pat_df, rid):
     us_reg_cnt = count_us_registered(pat_dedup)
     share_sum_val = share_sum(pat_dedup)
     return html.Div(
-        f'특허 실적 {total_cnt}건 (등록 {reg_cnt} · 출원중 {total_cnt - reg_cnt}) · '
+        f'{total_cnt}건 (등록 {reg_cnt} · 출원중 {total_cnt - reg_cnt}) · '
         f'대표발명 {lead_cnt}건 · 전략출원 {strat_cnt}건 · 미국등록 {us_reg_cnt}건 · 지분율 합계 {share_sum_val}',
         className='small',
     )
@@ -985,32 +992,40 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
                'marginBottom': '10px'})
 
     # 논문·특허 실적 요약과 양성·시상 이력을 한 박스로 합친다(사용자 요청).
-    # 박스 제목("논문 / 특허") 없이 "논문 실적 ~건"/"특허 실적 ~건" 두 줄만
-    # 바로 보여준다(_print_publication_summary/_print_patent_summary가 각자
-    # 라벨을 포함해서 반환). 전체 폭을 그대로 쓴다(사용자 요청 — 예전엔
-    # combined_box의 photo+정보 영역 폭에 맞춰 좁게 뒀었는데, 그러지 말고
-    # 넓혀 달라는 것. _print_box()가 이미 폭 100%로 렌더링하므로 별도
-    # width 스타일을 줄 필요가 없다).
+    # 박스 제목("논문 / 특허") 없이 "~건" 한 줄만 바로 보여준다
+    # (_print_publication_summary/_print_patent_summary는 집계 수치만 반환 —
+    # "논문 실적"/"특허 실적" 라벨은 다른 소제목들과 통일된 네모 박스
+    # 스타일(`print_sub_heading()`)로 여기서 붙인다, 사용자 요청). 전체
+    # 폭을 그대로 쓴다(사용자 요청 — 예전엔 combined_box의 photo+정보 영역
+    # 폭에 맞춰 좁게 뒀었는데, 그러지 말고 넓혀 달라는 것. _print_box()가
+    # 이미 폭 100%로 렌더링하므로 별도 width 스타일을 줄 필요가 없다).
     history_box = _print_box(None, html.Div([
+        html.Div(print_sub_heading('논문 실적'), className='mb-1'),
         _print_publication_summary(tables['publications'], rid),
+        html.Div(print_sub_heading('특허 실적'), className='mt-2 mb-1'),
         _print_patent_summary(tables['patents'], rid),
-        html.Div('양성 이력', className='small fw-semibold text-muted mt-2 mb-1'),
+        html.Div(print_sub_heading('양성 이력'), className='mt-2 mb-1'),
         nurturing_block(tables['nurturing'], rid, show_empty_message=False),
-        html.Div('시상 이력', className='small fw-semibold text-muted mt-2 mb-1'),
+        html.Div(print_sub_heading('시상 이력'), className='mt-2 mb-1'),
         award_block(tables['awards'], rid, limit=3, single_line=True, show_empty_message=False),
     ]))
 
     # 핵심기술/보유기술이 위 right_box로 옮겨간 만큼, 전문성 요약(LLM)은 이제
     # 전체 폭을 그대로 쓴다(사용자 요청 5). 지면이 좁은 인쇄본 특성상 주요
     # 역할·책임/유사 연구원은 계속 빼고(강점 분야·키워드·전문지식 및 역량만) 보여준다.
+    # deemphasize_strength=True — Strength Field/Keywords는 색깔 배지 대신
+    # 옅은 회색 콤마 나열로(사용자 요청: "너무 강조되어 보인다... 힘을
+    # 빼줘" — 아래 소제목("전문성 요약(LLM)")이 네모 박스로 더 강조된 것과
+    # 대비를 이룬다).
     expertise_summary_box = _print_box(None, html.Div([
-        html.Div('전문성 요약(LLM)', className='small fw-semibold text-muted mb-1'),
+        html.Div(print_sub_heading('전문성 요약(LLM)'), className='mb-1'),
         # llm_summary_block()은 데이터가 있으면 컴포넌트 "리스트"를 그대로
         # 반환한다(화면에서는 Output.children으로 바로 받아 문제 없음) —
         # 여기서는 그 리스트를 다른 리스트([...]) 안에 그대로 끼워 넣으면
         # 중첩 리스트가 되어 Dash가 이 서브트리를 통째로 빈 화면으로
         # 렌더링해버린다. html.Div로 한 번 더 감싸 평평하게 만든다.
-        html.Div(llm_summary_block(profile, name_map=name_map, include_responsibilities=False)),
+        html.Div(llm_summary_block(profile, name_map=name_map, include_responsibilities=False,
+                                    deemphasize_strength=True)),
     ]))
 
     task_hr_box = _print_box(
