@@ -49,6 +49,13 @@ def _get_or_create_secret_key() -> str:
 
 
 app.server.secret_key = _get_or_create_secret_key()
+app.server.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SECURE=os.environ.get('SESSION_COOKIE_SECURE', 'false').lower()
+    in ('1', 'true', 'yes', 'on'),
+    MAX_CONTENT_LENGTH=int(os.environ.get('MAX_CONTENT_LENGTH', str(10 * 1024 * 1024))),
+)
 
 # pages/*.py 콜백은 use_pages=True 스캔 과정에서 자동 등록되지만, 이 모듈은
 # 페이지가 아니라 전 탭 공용 컴포넌트라 Dash 인스턴스 생성 이후 직접
@@ -223,6 +230,13 @@ def auth_login():
 @app.server.route('/setup', methods=['GET', 'POST'])
 def setup_page():
     from services.auth import create_user, has_any_user
+    # PostgreSQL을 사용하는 운영 배포에서는 DB 장애/초기화 직후 외부 사용자가
+    # 첫 관리자 계정을 선점하지 못하도록 웹 초기 설정을 기본 차단한다. 최초
+    # 계정은 scripts/bulk_create_users.py로 만들고, 정말 필요한 경우에만
+    # ENABLE_WEB_SETUP=true를 일시적으로 사용한다.
+    if os.environ.get('DATABASE_URL', '').strip() and os.environ.get(
+            'ENABLE_WEB_SETUP', 'false').lower() not in ('1', 'true', 'yes', 'on'):
+        flask.abort(403)
     if has_any_user():
         return flask.redirect('/login')
 
@@ -352,7 +366,7 @@ def change_password_page():
 
 
 # ── 인증 미들웨어 ─────────────────────────────────────────────────────────────
-_AUTH_EXEMPT_PREFIXES = ('/assets/', '/photo/', '/_dash', '/_reload')
+_AUTH_EXEMPT_PREFIXES = ('/assets/',)
 _AUTH_EXEMPT_PATHS = {'/login', '/auth/login', '/logout', '/setup'}
 _PASSWORD_CHANGE_PATH = '/change-password'
 
@@ -364,7 +378,12 @@ def require_login():
         return None
     if any(path.startswith(p) for p in _AUTH_EXEMPT_PREFIXES):
         return None
-    is_json = flask.request.content_type and 'application/json' in flask.request.content_type
+    # Dash 레이아웃/의존성/콜백 엔드포인트도 반드시 세션 인증을 통과해야 한다.
+    # 로그인 페이지는 순수 Flask HTML이므로 비로그인 상태에서 /_dash를 열어둘
+    # 이유가 없다. API 요청에는 redirect HTML 대신 명시적인 401/403을 반환한다.
+    is_json = path.startswith('/_dash') or (
+        flask.request.content_type and 'application/json' in flask.request.content_type
+    )
     if not flask.session.get('user_id'):
         if is_json:
             return flask.jsonify({'error': 'unauthorized'}), 401
