@@ -382,7 +382,11 @@ def owned_expertise_block(core_df, tech_df, rid, *, stacked: bool = False, show_
     right = html.Div(right_children)
 
     if stacked:
-        return html.Div([left, html.Div(right, className='mt-3 pt-3', style={'borderTop': '1px solid #e8e8ed'})])
+        # 핵심기술/보유기술 사이 구분선을 뺀다(사용자 요청, A4 인쇄본
+        # stacked=True 전용 — 화면(stacked=False) 좌우 배치는 border-start로
+        # 계속 구분하므로 영향 없음). 구분선이 있을 때 그 위 여백용이던
+        # pt-3도 함께 빼고 mt-3만 남긴다.
+        return html.Div([left, html.Div(right, className='mt-3')])
 
     return dbc.Row([
         dbc.Col(left, md=6, className='pe-3'),
