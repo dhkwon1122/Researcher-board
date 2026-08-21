@@ -1,11 +1,11 @@
 """
 자체 아이디/비밀번호 인증 및 Flask 세션 관리.
 
-사용자 정보는 DATABASE_URL이 설정돼 있으면 PostgreSQL(services/user_store,
-app_users 테이블 — dhkwon1122/ai-friendly-doc의 users 테이블과 동일한 SQLAlchemy
-Core 방식)에 저장하고, 없거나 DB 접근이 실패하면 config/users.json으로
-폴백한다(나머지 데이터가 DB/CSV를 오가는 것과 동일한 패턴). 비밀번호는 두
-백엔드 모두 werkzeug PBKDF2로 해싱한다.
+사용자 정보는 DATABASE_URL이 설정돼 있으면 PostgreSQL만 사용한다. DB 접근이
+실패하거나 계정이 없을 때 JSON 계정으로 폴백하지 않는다. 인증 저장소의 자동
+폴백은 삭제·비활성화된 계정이 과거 JSON 자격증명으로 다시 로그인하는 fail-open
+상태를 만들 수 있기 때문이다. DATABASE_URL이 없는 명시적 로컬 개발 환경에서만
+config/users.json을 사용한다. 비밀번호는 두 백엔드 모두 Werkzeug 해시를 쓴다.
 """
 from __future__ import annotations
 
@@ -38,12 +38,30 @@ except ImportError:
         },
     }
     SESSION_LIFETIME_HOURS = 8
-    TABLE_PERMISSIONS: dict[str, str] = {}
+    TABLE_PERMISSIONS: dict[str, str | None] = {}
 
 _USERS_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     'config', 'users.json',
 )
+
+MIN_PASSWORD_LENGTH = int(os.environ.get('MIN_PASSWORD_LENGTH', '12'))
+
+
+def password_validation_error(password: str) -> str | None:
+    """조직 계정에 적용할 최소 비밀번호 정책. 오류가 없으면 None."""
+    password = password or ''
+    if len(password) < MIN_PASSWORD_LENGTH:
+        return f'비밀번호는 {MIN_PASSWORD_LENGTH}자 이상이어야 합니다.'
+    classes = sum((
+        any(c.islower() for c in password),
+        any(c.isupper() for c in password),
+        any(c.isdigit() for c in password),
+        any(not c.isalnum() for c in password),
+    ))
+    if classes < 3:
+        return '비밀번호는 영문 대문자·소문자·숫자·특수문자 중 3종류 이상을 포함해야 합니다.'
+    return None
 
 
 # ── 사용자 파일 I/O (JSON 폴백) ────────────────────────────────────────────────
@@ -57,32 +75,38 @@ def _load_users_json() -> dict:
 
 def _save_users_json(users: dict) -> None:
     os.makedirs(os.path.dirname(_USERS_FILE), exist_ok=True)
-    with open(_USERS_FILE, 'w', encoding='utf-8') as f:
+    fd = os.open(_USERS_FILE, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
         json.dump(users, f, ensure_ascii=False, indent=2)
 
 
+def _database_configured() -> bool:
+    """DATABASE_URL이 있으면 인증은 PostgreSQL에서만 수행한다."""
+    return bool(os.environ.get('DATABASE_URL', '').strip())
+
+
 # ── 인증 ─────────────────────────────────────────────────────────────────────
-# 모든 함수는 DB(user_store, DATABASE_URL 설정 시 PostgreSQL)를 먼저 시도하고,
-# DB가 없거나 실패하면 config/users.json으로 폴백한다.
+# DATABASE_URL이 있으면 DB-only, 없으면 개발용 JSON-only로 동작한다.
 
 def authenticate(username: str, password: str) -> dict | None:
     """아이디/비밀번호 검증. 성공 시 사용자 dict, 실패 시 None."""
     if not username or not password:
         return None
 
-    if user_store.available():
+    if _database_configured():
+        if not user_store.available():
+            return None
         data = user_store.get_user(username)
-        if data is not None:
-            if not check_password_hash(data['password_hash'], password):
-                return None
-            return {
-                'user_id': username,
-                'display_name': data.get('display_name', username),
-                'email': data.get('email', ''),
-                'role': data.get('role', DEFAULT_ROLE),
-                'must_change_password': bool(data.get('must_change_password')),
-                'is_admin': bool(data.get('is_admin')),
-            }
+        if data is None or not check_password_hash(data['password_hash'], password):
+            return None
+        return {
+            'user_id': username,
+            'display_name': data.get('display_name', username),
+            'email': data.get('email', ''),
+            'role': data.get('role', DEFAULT_ROLE),
+            'must_change_password': bool(data.get('must_change_password')),
+            'is_admin': bool(data.get('is_admin')),
+        }
 
     data = _load_users_json().get(username)
     if not data:
@@ -100,15 +124,17 @@ def authenticate(username: str, password: str) -> dict | None:
 
 
 def has_any_user() -> bool:
-    if user_store.available():
-        return user_store.has_any()
+    if _database_configured():
+        return user_store.has_any() if user_store.available() else False
     return bool(_load_users_json())
 
 
 # ── 사용자 CRUD ───────────────────────────────────────────────────────────────
 
 def list_users() -> list[dict]:
-    if user_store.available():
+    if _database_configured():
+        if not user_store.available():
+            return []
         return [
             {
                 'user_id': d['user_id'],
@@ -141,13 +167,15 @@ def create_user(user_id: str, password: str, display_name: str,
     보게 된다(app.py의 require_login 참고). is_admin=True면 역할과 무관하게
     사용자 관리 페이지(manage_users)에 접근할 수 있다 — 역할별 권한이 아니라
     계정별로만 부여되는 값이다(config/auth_config.py 참고)."""
-    if user_store.available():
+    if _database_configured():
+        if not user_store.available():
+            raise RuntimeError('사용자 DB에 연결할 수 없습니다.')
         if user_store.get_user(user_id) is not None:
             raise ValueError(f'이미 존재하는 계정입니다: {user_id}')
         if user_store.create(user_id, generate_password_hash(password), display_name, role, email,
                               must_change_password=must_change_password, is_admin=is_admin):
             return
-        # DB insert 실패 시에도 계정 생성 자체는 막지 않고 JSON으로 폴백한다.
+        raise RuntimeError('사용자 DB에 계정을 저장하지 못했습니다.')
 
     users = _load_users_json()
     if user_id in users:
@@ -166,9 +194,10 @@ def create_user(user_id: str, password: str, display_name: str,
 def update_user(user_id: str, display_name: str | None = None,
                 role: str | None = None, email: str | None = None,
                 is_admin: bool | None = None) -> bool:
-    if user_store.available():
-        if user_store.get_user(user_id) is not None:
-            return user_store.update_fields(user_id, display_name, role, email, is_admin)
+    if _database_configured():
+        if not user_store.available():
+            return False
+        return user_store.update_fields(user_id, display_name, role, email, is_admin)
 
     users = _load_users_json()
     if user_id not in users:
@@ -188,9 +217,10 @@ def update_user(user_id: str, display_name: str | None = None,
 def change_password(user_id: str, new_password: str) -> bool:
     """비밀번호를 바꾼다. 임시 비밀번호로 만들어진 계정(must_change_password=True)
     이었다면 이 호출로 그 상태가 해제된다."""
-    if user_store.available():
-        if user_store.get_user(user_id) is not None:
-            return user_store.set_password_hash(user_id, generate_password_hash(new_password))
+    if _database_configured():
+        if not user_store.available():
+            return False
+        return user_store.set_password_hash(user_id, generate_password_hash(new_password))
 
     users = _load_users_json()
     if user_id not in users:
@@ -202,9 +232,10 @@ def change_password(user_id: str, new_password: str) -> bool:
 
 
 def delete_user(user_id: str) -> bool:
-    if user_store.available():
-        if user_store.get_user(user_id) is not None:
-            return user_store.delete_user(user_id)
+    if _database_configured():
+        if not user_store.available():
+            return False
+        return user_store.delete_user(user_id)
 
     users = _load_users_json()
     if user_id not in users:
@@ -254,19 +285,16 @@ def can(permission: str) -> bool:
 
 
 def can_table(table_name: str) -> bool:
-    """table_name이 TABLE_PERMISSIONS에 등록돼 있으면 그 권한을, 없으면(민감정보로
-    분류되지 않은 테이블) 항상 True를 반환한다. TABLE_PERMISSIONS 쪽만 보고
-    판단하므로, 어떤 테이블이 어떤 권한에 걸리는지는 이 함수를 호출하는 쪽이
-    권한 이름을 직접 하드코딩하지 않아도 된다(config/auth_config.py의
-    TABLE_PERMISSIONS만 고치면 모든 호출부에 자동 반영)."""
+    """자연어 검색 테이블 권한을 기본 거부 방식으로 확인한다."""
+    if get_current_user() is None or table_name not in TABLE_PERMISSIONS:
+        return False
     permission = TABLE_PERMISSIONS.get(table_name)
-    return permission is None or can(permission)
+    return True if permission is None else can(permission)
 
 
 def filter_permitted_tables(tables: dict) -> dict:
-    """{테이블명: ...} 딕셔너리에서 TABLE_PERMISSIONS에 등록된 테이블 중
-    현재 로그인 사용자에게 필요 권한이 없는 것을 제외하고 반환한다.
-    TABLE_PERMISSIONS에 없는 테이블(민감정보로 분류되지 않은 것)은 그대로 둔다.
+    """{테이블명: ...} 딕셔너리에서 명시적으로 허용된 테이블만 반환한다.
+    TABLE_PERMISSIONS에 없는 테이블은 민감도 분류 누락으로 보고 제외한다.
     AI 자연어 검색(services/nl_query.py, services/open_data_query.py)이 화면
     UI(pages/*.py)와 같은 권한 기준으로 평가등급/인센티브/코멘트/리더십·승계
     데이터를 가리는 데 쓴다 — 화면에서 못 보게 막아둔 데이터를 자연어 질문으로
@@ -276,6 +304,8 @@ def filter_permitted_tables(tables: dict) -> dict:
 
 def set_session(user: dict) -> None:
     from datetime import timedelta
+    # 기존 익명/로그인 세션 값을 모두 버린 뒤 새 인증 정보를 기록한다.
+    flask.session.clear()
     flask.session.permanent = True
     flask.session['user_id'] = user['user_id']
     flask.session['display_name'] = user['display_name']

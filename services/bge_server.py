@@ -24,6 +24,7 @@ pipeline/embed_server.py의 ensure_embed_server()가 run_expertise.py 실행 시
 """
 
 import os
+import secrets
 import sys
 from urllib.parse import urlparse
 
@@ -50,7 +51,7 @@ def _load_model():
 
 
 def create_app():
-    from fastapi import FastAPI
+    from fastapi import FastAPI, Header, HTTPException
     from pydantic import BaseModel
 
     app = FastAPI()
@@ -60,7 +61,19 @@ def create_app():
         input: list[str]
 
     @app.post('/api/embed')
-    def embed_endpoint(req: EmbedRequest):
+    def embed_endpoint(req: EmbedRequest, authorization: str | None = Header(default=None)):
+        api_key = os.environ.get('EMBED_API_KEY', '').strip()
+        if api_key:
+            supplied = (authorization or '').removeprefix('Bearer ').strip()
+            if not secrets.compare_digest(supplied, api_key):
+                raise HTTPException(status_code=401, detail='unauthorized')
+        max_items = int(os.environ.get('EMBED_MAX_ITEMS', '64'))
+        max_chars = int(os.environ.get('EMBED_MAX_CHARS_PER_ITEM', '8000'))
+        max_total = int(os.environ.get('EMBED_MAX_TOTAL_CHARS', '65536'))
+        if not req.input or len(req.input) > max_items:
+            raise HTTPException(status_code=413, detail='too many input items')
+        if any(len(text) > max_chars for text in req.input) or sum(map(len, req.input)) > max_total:
+            raise HTTPException(status_code=413, detail='embedding input too large')
         model = _load_model()
         vecs = model.encode(req.input)['dense_vecs']
         return {'data': [{'index': i, 'embedding': v.tolist()} for i, v in enumerate(vecs)]}

@@ -4,6 +4,7 @@
 """
 
 import base64
+import os
 import binascii
 
 import dash
@@ -204,7 +205,13 @@ def _run(n_clicks, project_name, contents, filename, refresh_token):
 
     try:
         _header, b64data = contents.split(',', 1)
-        file_bytes = base64.b64decode(b64data)
+        file_bytes = base64.b64decode(b64data, validate=True)
+        max_upload = int(os.environ.get('MAX_UPLOAD_BYTES', str(8 * 1024 * 1024)))
+        if len(file_bytes) > max_upload:
+            return dbc.Alert(
+                f'파일은 {max_upload // (1024 * 1024)}MB 이하만 업로드할 수 있습니다.',
+                color='warning',
+            ), dash.no_update
     except (ValueError, binascii.Error):
         return dbc.Alert('첨부파일을 읽지 못했습니다. 파일이 손상되지 않았는지 확인해주세요.', color='danger'), dash.no_update
 

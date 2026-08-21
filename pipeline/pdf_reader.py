@@ -40,7 +40,15 @@ def extract_text_from_bytes(file_bytes: bytes, label: str = 'PDF') -> str:
 
     try:
         reader = PdfReader(io.BytesIO(file_bytes))
+        max_pages = int(os.environ.get('MAX_PDF_PAGES', '100'))
+        if len(reader.pages) > max_pages:
+            raise PdfNotFoundError(f'PDF 페이지 수가 제한({max_pages}쪽)을 초과했습니다: {label}')
         pages_text = [(page.extract_text() or '') for page in reader.pages]
+        max_chars = int(os.environ.get('MAX_DOCUMENT_CHARS', '500000'))
+        if sum(len(text) for text in pages_text) > max_chars:
+            raise PdfNotFoundError(f'PDF 텍스트가 제한({max_chars}자)을 초과했습니다: {label}')
+    except PdfNotFoundError:
+        raise
     except Exception as exc:  # noqa: BLE001 — 다양한 손상/암호화 PDF에서 pypdf가 던지는 예외를 통일해 전달
         raise PdfNotFoundError(f'PDF 텍스트 추출 실패({label}): {type(exc).__name__}: {exc}') from exc
 

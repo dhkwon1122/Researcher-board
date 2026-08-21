@@ -30,6 +30,17 @@ class ConfluenceError(RuntimeError):
 
 def _base_url(confl_address: str) -> str:
     parsed = urlparse(confl_address)
+    host = (parsed.hostname or '').lower().rstrip('.')
+    allowed = [h.strip().lower().lstrip('.') for h in
+               os.environ.get('CONFLUENCE_ALLOWED_HOSTS', 'samsungds.net,samsung.net').split(',')
+               if h.strip()]
+    allow_http = os.environ.get('CONFLUENCE_ALLOW_HTTP', 'false').lower() in ('1', 'true', 'yes', 'on')
+    if parsed.scheme != 'https' and not (allow_http and parsed.scheme == 'http'):
+        raise ConfluenceError('Confluence 주소는 HTTPS만 허용됩니다.')
+    if parsed.username or parsed.password or not host:
+        raise ConfluenceError('유효하지 않은 Confluence 주소입니다.')
+    if not any(host == suffix or host.endswith('.' + suffix) for suffix in allowed):
+        raise ConfluenceError(f'허용되지 않은 Confluence 호스트입니다: {host}')
     return f'{parsed.scheme}://{parsed.netloc}'
 
 

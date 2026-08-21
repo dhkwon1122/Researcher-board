@@ -13,9 +13,9 @@
 MAIL_FROM(전부 필수), MAIL_USER_ID(기본값 people.sait — .env에 값이 있으면
 그걸로 덮어씀), MAIL_TIMEOUT(초, 기본 30 — API 응답이 느려 타임아웃이 자주
 나면 늘릴 것).
-verify=False는 이 사내 전용 API에 한해 의도적으로 유지한다(사내 루트 CA가
-공인 신뢰 체인에 없어 검증이 실패하기 때문 — 사용자 확인됨). 다른 외부
-호출(LLM2/Confluence 등)에는 영향 없다.
+TLS 인증서 검증은 기본 활성화한다. 사내 루트 CA가 필요하면 MAIL_CA_BUNDLE로
+인증서 번들을 지정한다. MAIL_VERIFY_TLS=false는 일시적인 진단 외에는 사용하지
+않는다.
 """
 
 import json
@@ -24,7 +24,6 @@ import sys
 from urllib.parse import quote
 
 import requests
-import urllib3
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
@@ -33,10 +32,6 @@ if _PROJECT_ROOT not in sys.path:
 from services.db import load_env_file  # noqa: E402
 
 load_env_file()
-
-# verify=False로 인한 InsecureRequestWarning은 이 사내 API 호출에서는
-# 의도된 것이라 로그를 채우지 않도록 끈다(다른 requests 호출에는 영향 없음).
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 _DEFAULT_USER_ID = 'people.sait'
 
@@ -101,6 +96,9 @@ def send_html_email(to: list[str], subject: str, html_body: str,
     full_url = f'{base_url.rstrip("/")}/mails/send?userId={quote(user_id, safe="")}'
 
     timeout = float(os.environ.get('MAIL_TIMEOUT', '30') or '30')
+    ca_bundle = os.environ.get('MAIL_CA_BUNDLE', '').strip()
+    verify_tls = os.environ.get('MAIL_VERIFY_TLS', 'true').lower() in ('1', 'true', 'yes', 'on')
+    verify = ca_bundle if ca_bundle else verify_tls
     try:
         if attachments:
             # 멀티파트 요청은 requests가 Content-Type: multipart/form-data;
@@ -115,7 +113,7 @@ def send_html_email(to: list[str], subject: str, html_body: str,
                 data=[('mail', (None, json.dumps(payload)))],
                 files=files,
                 proxies=proxies,
-                verify=False,
+                verify=verify,
                 timeout=timeout,
             )
         else:
@@ -124,7 +122,7 @@ def send_html_email(to: list[str], subject: str, html_body: str,
                 headers=headers,
                 data=json.dumps(payload),
                 proxies=proxies,
-                verify=False,
+                verify=verify,
                 timeout=timeout,
             )
         resp.raise_for_status()

@@ -1,5 +1,8 @@
 import os
 import secrets
+import threading
+import time
+from collections import defaultdict, deque
 from html import escape
 
 import dash
@@ -49,6 +52,69 @@ def _get_or_create_secret_key() -> str:
 
 
 app.server.secret_key = _get_or_create_secret_key()
+app.server.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SECURE=os.environ.get('SESSION_COOKIE_SECURE', 'false').lower()
+    in ('1', 'true', 'yes', 'on'),
+    MAX_CONTENT_LENGTH=int(os.environ.get('MAX_CONTENT_LENGTH', str(10 * 1024 * 1024))),
+)
+
+_LOGIN_WINDOW_SECONDS = int(os.environ.get('LOGIN_WINDOW_SECONDS', '900'))
+_LOGIN_MAX_FAILURES = int(os.environ.get('LOGIN_MAX_FAILURES', '5'))
+_login_failures: dict[str, deque] = defaultdict(deque)
+_login_lock = threading.Lock()
+
+
+def _csrf_token() -> str:
+    token = flask.session.get('_csrf_token')
+    if not token:
+        token = secrets.token_urlsafe(32)
+        flask.session['_csrf_token'] = token
+    return token
+
+
+def _require_csrf() -> None:
+    supplied = flask.request.form.get('_csrf_token', '')
+    expected = flask.session.get('_csrf_token', '')
+    if not supplied or not expected or not secrets.compare_digest(supplied, expected):
+        flask.abort(400)
+
+
+def _login_key() -> str:
+    return flask.request.remote_addr or 'unknown'
+
+
+def _is_login_blocked(key: str) -> bool:
+    cutoff = time.monotonic() - _LOGIN_WINDOW_SECONDS
+    with _login_lock:
+        failures = _login_failures[key]
+        while failures and failures[0] < cutoff:
+            failures.popleft()
+        return len(failures) >= _LOGIN_MAX_FAILURES
+
+
+def _record_login_failure(key: str) -> None:
+    with _login_lock:
+        _login_failures[key].append(time.monotonic())
+
+
+@app.server.after_request
+def add_security_headers(response):
+    response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+    response.headers.setdefault('X-Frame-Options', 'DENY')
+    response.headers.setdefault('Referrer-Policy', 'no-referrer')
+    response.headers.setdefault('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+    response.headers.setdefault(
+        'Content-Security-Policy',
+        "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; "
+        "img-src 'self' data:; font-src 'self' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "script-src 'self' 'unsafe-inline'; connect-src 'self'",
+    )
+    if flask.request.is_secure or flask.request.headers.get('X-Forwarded-Proto') == 'https':
+        response.headers.setdefault('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+    return response
 
 # pages/*.py 콜백은 use_pages=True 스캔 과정에서 자동 등록되지만, 이 모듈은
 # 페이지가 아니라 전 탭 공용 컴포넌트라 Dash 인스턴스 생성 이후 직접
@@ -180,6 +246,7 @@ def login_page():
 
     body = f"""{alert}
     <form method="POST" action="/auth/login">
+      <input type="hidden" name="_csrf_token" value="{_csrf_token()}">
       <input type="hidden" name="next" value="{escape(next_url)}">
       <div class="mb-3">
         <label class="form-label small fw-semibold">아이디</label>
@@ -209,12 +276,19 @@ def auth_login():
     from urllib.parse import quote
 
     from services.auth import authenticate, set_session
+    _require_csrf()
+    login_key = _login_key()
+    if _is_login_blocked(login_key):
+        return flask.jsonify({'error': 'too_many_login_attempts'}), 429
     username = flask.request.form.get('username', '').strip()
     password = flask.request.form.get('password', '')
     next_url = _safe_next_url(flask.request.form.get('next', '/'))
     user = authenticate(username, password)
     if not user:
+        _record_login_failure(login_key)
         return flask.redirect(f'/login?error=invalid&next={quote(next_url)}')
+    with _login_lock:
+        _login_failures.pop(login_key, None)
     set_session(user)
     return flask.redirect(next_url)
 
@@ -222,12 +296,20 @@ def auth_login():
 # ── 초기 설정 (첫 관리자 계정 생성) ──────────────────────────────────────────
 @app.server.route('/setup', methods=['GET', 'POST'])
 def setup_page():
-    from services.auth import create_user, has_any_user
+    from services.auth import create_user, has_any_user, password_validation_error
+    # PostgreSQL을 사용하는 운영 배포에서는 DB 장애/초기화 직후 외부 사용자가
+    # 첫 관리자 계정을 선점하지 못하도록 웹 초기 설정을 기본 차단한다. 최초
+    # 계정은 scripts/bulk_create_users.py로 만들고, 정말 필요한 경우에만
+    # ENABLE_WEB_SETUP=true를 일시적으로 사용한다.
+    if os.environ.get('DATABASE_URL', '').strip() and os.environ.get(
+            'ENABLE_WEB_SETUP', 'false').lower() not in ('1', 'true', 'yes', 'on'):
+        flask.abort(403)
     if has_any_user():
         return flask.redirect('/login')
 
     error = ''
     if flask.request.method == 'POST':
+        _require_csrf()
         uid = flask.request.form.get('username', '').strip()
         name = flask.request.form.get('display_name', '').strip()
         pw = flask.request.form.get('password', '')
@@ -236,8 +318,8 @@ def setup_page():
             error = '모든 항목을 입력하세요.'
         elif pw != pw2:
             error = '비밀번호가 일치하지 않습니다.'
-        elif len(pw) < 8:
-            error = '비밀번호는 8자 이상이어야 합니다.'
+        elif password_validation_error(pw):
+            error = password_validation_error(pw)
         else:
             try:
                 # manage_users는 역할이 아니라 계정별 is_admin으로만 부여되므로
@@ -255,6 +337,7 @@ def setup_page():
       </p>
       {alert}
       <form method="POST" action="/setup">
+        <input type="hidden" name="_csrf_token" value="{_csrf_token()}">
         <div class="mb-2">
           <label class="form-label small fw-semibold">아이디</label>
           <input type="text" class="form-control form-control-sm" name="username"
@@ -266,7 +349,7 @@ def setup_page():
                  placeholder="예: 홍길동" required>
         </div>
         <div class="mb-2">
-          <label class="form-label small fw-semibold">비밀번호 (8자 이상)</label>
+          <label class="form-label small fw-semibold">비밀번호 (12자 이상, 문자 조합)</label>
           <input type="password" class="form-control form-control-sm" name="password" required>
         </div>
         <div class="mb-4">
@@ -294,7 +377,7 @@ def logout():
 # 페이지로 못 가게 막는다. 여기서 새 비밀번호를 설정하면 그 상태가 풀린다.
 @app.server.route('/change-password', methods=['GET', 'POST'])
 def change_password_page():
-    from services.auth import authenticate, change_password, get_current_user
+    from services.auth import authenticate, change_password, get_current_user, password_validation_error
 
     user = get_current_user()
     if user is None:
@@ -302,6 +385,7 @@ def change_password_page():
 
     error = ''
     if flask.request.method == 'POST':
+        _require_csrf()
         current_pw = flask.request.form.get('current_password', '')
         pw = flask.request.form.get('password', '')
         pw2 = flask.request.form.get('password_confirm', '')
@@ -311,8 +395,8 @@ def change_password_page():
             error = '새 비밀번호를 입력하세요.'
         elif pw != pw2:
             error = '새 비밀번호가 일치하지 않습니다.'
-        elif len(pw) < 8:
-            error = '비밀번호는 8자 이상이어야 합니다.'
+        elif password_validation_error(pw):
+            error = password_validation_error(pw)
         elif pw == current_pw:
             error = '기존 비밀번호와 다른 비밀번호를 입력하세요.'
         else:
@@ -329,13 +413,14 @@ def change_password_page():
     alert = f'<div class="alert alert-danger py-2 small mb-3">{error}</div>' if error else notice
     body = f"""{alert}
     <form method="POST" action="/change-password">
+      <input type="hidden" name="_csrf_token" value="{_csrf_token()}">
       <div class="mb-2">
         <label class="form-label small fw-semibold">현재 비밀번호(임시 비밀번호)</label>
         <input type="password" class="form-control form-control-sm" name="current_password"
                autocomplete="current-password" required autofocus>
       </div>
       <div class="mb-2">
-        <label class="form-label small fw-semibold">새 비밀번호 (8자 이상)</label>
+        <label class="form-label small fw-semibold">새 비밀번호 (12자 이상, 문자 조합)</label>
         <input type="password" class="form-control form-control-sm" name="password"
                autocomplete="new-password" required>
       </div>
@@ -352,7 +437,7 @@ def change_password_page():
 
 
 # ── 인증 미들웨어 ─────────────────────────────────────────────────────────────
-_AUTH_EXEMPT_PREFIXES = ('/assets/', '/photo/', '/_dash', '/_reload')
+_AUTH_EXEMPT_PREFIXES = ('/assets/',)
 _AUTH_EXEMPT_PATHS = {'/login', '/auth/login', '/logout', '/setup'}
 _PASSWORD_CHANGE_PATH = '/change-password'
 
@@ -364,7 +449,12 @@ def require_login():
         return None
     if any(path.startswith(p) for p in _AUTH_EXEMPT_PREFIXES):
         return None
-    is_json = flask.request.content_type and 'application/json' in flask.request.content_type
+    # Dash 레이아웃/의존성/콜백 엔드포인트도 반드시 세션 인증을 통과해야 한다.
+    # 로그인 페이지는 순수 Flask HTML이므로 비로그인 상태에서 /_dash를 열어둘
+    # 이유가 없다. API 요청에는 redirect HTML 대신 명시적인 401/403을 반환한다.
+    is_json = path.startswith('/_dash') or (
+        flask.request.content_type and 'application/json' in flask.request.content_type
+    )
     if not flask.session.get('user_id'):
         if is_json:
             return flask.jsonify({'error': 'unauthorized'}), 401

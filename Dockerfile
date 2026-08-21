@@ -80,7 +80,7 @@ RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
       ${PIP_INDEX_URL:+--index-url "$PIP_INDEX_URL"} \
       ${PIP_TRUSTED_HOST:+--trusted-host "$PIP_TRUSTED_HOST"} \
       ${PIP_CERT:+--cert "$PIP_CERT"} \
-      -r requirements.txt gunicorn
+      -r requirements.txt
 
 # ── 2.5) Playwright 헤드리스 브라우저 설치 (개별 프로필 PDF 메일 첨부용) ──
 # services/profile_pdf.py가 "프로필 인쇄 (A4)" 화면을 헤드리스 브라우저로
@@ -101,9 +101,7 @@ RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
 # 있어서(위 2번 단계) 이 이미지가 사내 CA를 실제로 신뢰 저장소에 갖고
 # 있는지가 여태 검증된 적이 없었다. 그래서 NODE_EXTRA_CA_CERTS만으로도
 # 안 되면, pip과 동일한 원칙(신뢰할 수 있는 대상에 한해 이 빌드 시점
-# 다운로드만 검증을 건너뜀)으로 NODE_TLS_REJECT_UNAUTHORIZED=0을 최종
-# 폴백으로 둔다 — 공개 오픈소스 브라우저 바이너리를 받는 이 한 단계에만
-# 적용되고, 런타임에 앱이 처리하는 어떤 요청에도 영향이 없다.
+# 다운로드만 검증을 건너뛰는 방식은 공급망 변조를 허용하므로 사용하지 않는다.
 #
 # 그래도 실패하면(사내망 자체가 이 호스트를 막아둔 경우) 이 단계만
 # 실패해도(|| true) 전체 빌드는 계속되고 나머지 기능은 정상 배포되며,
@@ -111,13 +109,19 @@ RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
 # 있다면 PLAYWRIGHT_DOWNLOAD_HOST로 지정해 재시도할 것.
 RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
     NODE_EXTRA_CA_CERTS="/etc/ssl/certs/ca-certificates.crt" \
-    NODE_TLS_REJECT_UNAUTHORIZED=0 \
     playwright install --with-deps chromium \
     || echo "[build] Playwright 브라우저 설치 실패 — PDF 첨부 메일 기능은 비활성화된 채로 나머지는 정상 빌드합니다. 원인은 보통 사내망에서 Chromium 다운로드 호스트가 막혀 있는 경우입니다."
 
 # ── 3) 앱 소스 복사 ──
 # data/ 와 .env 는 .dockerignore 로 제외 → 컨테이너에는 볼륨/시크릿으로 주입.
 COPY . .
+
+# 애플리케이션은 root 권한이 필요하지 않다. 바인드 마운트하는 ./data도
+# 호스트에서 uid 10001이 읽고 쓸 수 있도록 소유권/ACL을 맞춘다.
+RUN groupadd --gid 10001 app \
+    && useradd --uid 10001 --gid app --create-home --shell /usr/sbin/nologin app \
+    && chown -R app:app /app
+USER app
 
 # 리슨 포트 (기본 8501). 실행 시 -e PORT=... 로 바꿀 수 있음.
 ENV PORT=8501
