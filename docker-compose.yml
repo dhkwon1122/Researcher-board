@@ -54,6 +54,9 @@ services:
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set in .env}
       PORT: "8501"
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      # 앞단에 신뢰 가능한 리버스 프록시가 있을 때만 그 홉 수로 설정한다
+      # (.env.example 참고) — 기본 0(비신뢰)이 안전한 기본값이다.
+      TRUSTED_PROXY_COUNT: ${TRUSTED_PROXY_COUNT:-0}
       ENABLE_WEB_SETUP: ${ENABLE_WEB_SETUP:-false}
       MAX_CONTENT_LENGTH: ${MAX_CONTENT_LENGTH:-10485760}
       LOGIN_WINDOW_SECONDS: ${LOGIN_WINDOW_SECONDS:-900}
