@@ -553,6 +553,34 @@ _PHOTO_BOX_WIDTH_PX = 122  # 사진 박스(photo_box) 폭 — 190px → 160px(�
 # 같은 비율로 줄인다 — 아래 photo_box 조립부와 assets/custom.css의
 # 인쇄 전용 override 참고.
 
+# 페이지1 블록(assets/profile_print.js의 오토핏 대상, 아래 page1_block
+# 참고) 전용 높이 임계값(px) — 공용 PAGE_HEIGHT_PX(297-14*2mm를 px로
+# 환산한 값에서 페이지2용 80px 안전 여백을 뺀 것, 약 936.69px)를 그대로
+# 쓰면 필요 이상으로 적게 잘린다(사용자 리포트: "아래에 공간이 있는데
+# 발령 건수가 좀 적게 들어가는 듯해").
+#
+# 처음엔 "오프스크린 측정값이 실제 DOM 높이(getBoundingClientRect(),
+# print media)보다 얼마나 큰가"만 재서(콘텐츠 양과 무관하게 45.7~
+# 60.9px 크게 나옴을 확인) 그 차이만큼 예산을 늘렸는데, 그렇게 늘린
+# 값(약 1041.69px)으로 실제 `page.pdf(prefer_css_page_size=True)`
+# 헤드리스 PDF까지 뽑아보니 3페이지로 넘쳐버렸다 — "오프스크린 측정 vs
+# DOM 실측"과 별개로 "DOM 실측(print media) vs 진짜 PDF 페이지 나눔
+# 경계"에도 추가로 설명 안 되는 차이가 있었던 것(원인 미상 — Playwright
+# page.pdf()의 페이지 분할 계산과 브라우저 print-media 레이아웃이
+# 완전히 같지는 않은 것으로 추정). 그래서 이 값은 위 간접 추론(오프스크린
+# ↔ DOM) 대신, `data-fit-height-px`를 여러 후보로 직접 바꿔가며
+# 매번 실제 page.pdf()를 뽑아 페이지 수를 세는 이분 탐색으로 구했다
+# (스크립트는 세션 스크래치패드에만 있고 저장소에는 없음) — 부서명이
+# 긴 픽스처·짧은 픽스처 둘 다 A4 전체 높이(1016.69px)에 가까운 값에서
+# 2페이지→3페이지로 넘어가는 경계를 확인했고, 그 경계보다 확실히
+# 낮은(부서명 짧은 픽스처 기준 ~17px 여유) 1000px에서 두 픽스처 모두
+# 안전하게 2페이지로 나옴을 확인했다. assets/profile_print.js의
+# fitBlock()에 data-fit-height-px 속성으로 전달된다. 이 값을 바꿀
+# 때는 반드시 이 이분 탐색 방식(여러 콘텐츠 형태로 실제 PDF 페이지
+# 수까지 확인)을 그대로 반복할 것 — DOM 높이만 예산과 비교하는 걸로는
+# 충분하지 않다(이번에 실제로 놓쳤던 부분).
+_PAGE1_FIT_HEIGHT_PX = 1000
+
 
 def _print_box(title, children, *, breakable: bool = False):
     """A4 인쇄용 프로필의 테두리 박스 하나(피플팀이 준 손그림 양식 참고) — 왼쪽
@@ -1083,6 +1111,10 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     # 페이지2(논문·특허 상세)만 이 클래스를 썼는데, 페이지1도 같은 방식
     # (자르지 않고 전부 렌더링 + 실측 오토핏)으로 바꾸면서 자연히 이
     # 클래스가 필요해졌다 — JS 쪽 코드는 전혀 안 바꿔도 된다(범용 셀렉터).
+    # data-fit-height-px=_PAGE1_FIT_HEIGHT_PX — 페이지2용 공용 임계값
+    # 대신 페이지1 전용으로 실측 보정한 값을 쓴다(위 _PAGE1_FIT_HEIGHT_PX
+    # 정의부 주석 참고, 사용자 리포트: "아래에 공간이 있는데 발령
+    # 건수가 좀 적게 들어가는 듯해").
     page1_block = html.Div([
         html.Div('연구원 프로필', className='print-title',
                  style={'fontSize': '30px', 'fontWeight': 700,
@@ -1092,7 +1124,7 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
         expertise_summary_box,
         task_hr_box,
         html.Div(f'출력일 {datetime.now():%Y-%m-%d}', className='text-muted small text-end mt-2'),
-    ], className='print-page-block')
+    ], className='print-page-block', **{'data-fit-height-px': str(_PAGE1_FIT_HEIGHT_PX)})
 
     return html.Div([page1_block, _print_pub_patent_detail_page(name, rid, tables)])
 

@@ -80,7 +80,8 @@ function __runProfilePrintFit(onProgress) {
     // 살짝(실측 30~50px 안팎) 작게 나오는 오차가 있어(오프스크린
     // 렌더링과 실제 인쇄 파이프라인의 미세한 레이아웃 차이로
     // 추정), 안전 여백을 넉넉히 빼서 경계선에서 한 페이지를
-    // 넘기지 않게 한다.
+    // 넘기지 않게 한다. 이 기본값은 페이지2(논문·특허 상세, 표 위주 —
+    // 제목이 길어 줄바꿈되는 셀이 많음)를 기준으로 잡힌 것이다.
     var PAGE_HEIGHT_SAFETY_MARGIN_PX = 80;
     var PAGE_HEIGHT_PX = (297 - 14 * 2) * 96 / 25.4 - PAGE_HEIGHT_SAFETY_MARGIN_PX;
 
@@ -107,6 +108,20 @@ function __runProfilePrintFit(onProgress) {
         // 합쳐서 1페이지), 표별로 각자 맞추는 게 아니라 블록
         // 전체(둘 합계) 높이가 예산을 넘지 않을 때까지, 그 순간
         // 행이 더 많이 남은 표에서 한 줄씩 줄여 균형 있게 맞춘다.
+        //
+        // data-fit-height-px가 있으면(현재는 페이지1 블록만 —
+        // pages/researcher_profile.py 조립부 참고) 위 공용
+        // PAGE_HEIGHT_PX 대신 이 값을 쓴다. 페이지2용 80px 안전 여백은
+        // 페이지1(사진/기본정보/핵심기술 등 flex 레이아웃 위주 —
+        // 페이지2의 표 위주 콘텐츠와 성격이 다름)에 그대로 적용하면
+        // 필요 이상으로 많이 잘라낸다(사용자 리포트: "아래에 공간이
+        // 있는데 발령 건수가 좀 적게 들어가는 듯해"로 발견). 구체적인
+        // 숫자와 산출 방식(실제 page.pdf() 페이지 수까지 뽑아 확인한
+        // 이분 탐색 결과)은 pages/researcher_profile.py의
+        // _PAGE1_FIT_HEIGHT_PX 정의부 주석 참고.
+        var override = block.getAttribute('data-fit-height-px');
+        var pageHeightPx = override ? parseFloat(override) : PAGE_HEIGHT_PX;
+
         var entries = [];
         block.querySelectorAll('.print-autofit-table').forEach(function(table) {
             var tbody = table.querySelector('.print-autofit-body');
@@ -119,7 +134,7 @@ function __runProfilePrintFit(onProgress) {
         });
         if (!entries.length) { return; }
 
-        while (block.getBoundingClientRect().height > PAGE_HEIGHT_PX) {
+        while (block.getBoundingClientRect().height > pageHeightPx) {
             var target = null;
             for (var e = 0; e < entries.length; e++) {
                 if (entries[e].visible > 1 && (!target || entries[e].visible > target.visible)) {
