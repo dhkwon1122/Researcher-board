@@ -226,6 +226,20 @@ def _e_support_pill(value):
     return _pill('E직군', _LEGEND_NEUTRAL) if v == 'E' else _pill('R직군', _E_SUPPORT_COLOR)
 
 
+def _grade_circle(grade: str, *, size: int = 18):
+    """핵심기술 등급을 색깔 있는 동그라미 + 하얀 글씨 아이콘 형태로 강조한다
+    (사용자 요청 — "기존처럼 강조될 수 있게 ... 아이콘 같은 형태로"). 기존
+    `_pill()`(둥근 사각형, "B급"처럼 여러 글자)과 달리 정사각형 박스에
+    `borderRadius: 50%`로 진짜 원을 만들고, 글자도 "급" 없이 등급 한 글자만
+    담아 작은 아이콘 크기(기본 18px)에 맞춘다."""
+    return html.Span(grade, style={
+        'display': 'inline-flex', 'alignItems': 'center', 'justifyContent': 'center',
+        'flex': f'0 0 {size}px', 'width': f'{size}px', 'height': f'{size}px',
+        'borderRadius': '50%', 'backgroundColor': _GRADE_PILL_COLOR, 'color': '#ffffff',
+        'fontSize': '0.68rem', 'fontWeight': 700, 'lineHeight': '1',
+    })
+
+
 def _info_hover(icon_id, label, image_filename):
     return html.Div([
         html.I(className='bi bi-info-circle', id=icon_id,
@@ -253,9 +267,12 @@ def _clean_num_str(val) -> str:
 
 
 def _core_technology_table(core_df, *, compact: bool = False):
-    """compact=True면 표(기술분야/핵심기술 2열 + 헤더) 대신 "(등급)분야 > 기술명"
-    한 줄짜리 텍스트를 항목마다 나열한다(사용자 요청, A4 인쇄본 전용 —
-    화면 기본값 False는 기존 표 그대로)."""
+    """compact=True면 표(기술분야/핵심기술 2열 + 헤더) 대신 "분야 > 기술명" 한
+    줄짜리 텍스트를 항목마다 나열한다(사용자 요청, A4 인쇄본 전용 — 화면
+    기본값 False는 기존 표 그대로). 등급은 텍스트 접두사가 아니라
+    `_grade_circle()`(색깔 있는 동그라미 + 하얀 글씨 아이콘)로 강조해
+    보여준다(사용자 요청 — "핵심기술 등급은 기존처럼 강조될 수 있게 ...
+    아이콘 같은 형태로")."""
     if core_df.empty:
         return html.Div('핵심기술 데이터 없음', className='text-muted small')
 
@@ -265,9 +282,11 @@ def _core_technology_table(core_df, *, compact: bool = False):
             field = str(row.get('tech_field', '')).strip()
             name = str(row.get('tech_name', '')).strip()
             grade = _clean_num_str(row.get('tech_grade', '')) or '-'
-            grade_disp = f'{grade}급' if grade != '-' else '-'
-            lines.append(html.Div(f'({grade_disp}){field} > {name}', className='small',
-                                   style={'wordBreak': 'break-word', 'marginBottom': '2px'}))
+            lines.append(html.Div([
+                _grade_circle(grade),
+                html.Span(f'{field} > {name}', className='small', style={'marginLeft': '5px'}),
+            ], style={'display': 'flex', 'alignItems': 'flex-start', 'marginBottom': '3px',
+                       'wordBreak': 'break-word'}))
         return html.Div(lines)
 
     rows = []
@@ -321,8 +340,13 @@ def _is_registered(value):
 def _tech_ownership_table(tech_row, *, show_index: bool = True, no_header: bool = False):
     """show_index=False면 맨 앞 "구분"(1~5 순번) 열을 뺀다 — A4 인쇄처럼 지면이
     좁아 순번 자체가 별 정보가 안 될 때 사용(화면은 기본값 True로 그대로).
-    no_header=True면 표 헤더 행(구분/전문분야/Lv/보유율)을 빼고 데이터
-    행만 바로 보여준다(사용자 요청, A4 인쇄본 전용)."""
+    no_header=True면 표 헤더 행(구분/전문분야/Lv/보유율)을 빼고 데이터 행만
+    바로 보여준다(사용자 요청, A4 인쇄본 전용). 헤더가 없으면 숫자만 보고는
+    Lv인지 알 수 없어 값 자체에 "Lv" 접두사를 붙이고(예: "Lv1", 사용자
+    요청 — "Lv0, 100% 정도의 글자만 들어갈 수 있으면 되니"), Lv·보유율 열
+    폭을 그 글자 수에 맞춰 최소화해 남는 폭을 보유기술명 열에 몰아준다.
+    표 헤더가 없으면 <Th> width로 열 폭을 정할 수 없어 <colgroup>을 대신
+    쓴다."""
     if tech_row is None:
         return html.Div('보유기술 데이터 없음', className='text-muted small')
 
@@ -333,10 +357,14 @@ def _tech_ownership_table(tech_row, *, show_index: bool = True, no_header: bool 
             continue
         lv = _clean_num_str(tech_row.get(f'lv_{i}', ''))
         portion = _clean_num_str(tech_row.get(f'portion_{i}', ''))
+        if lv:
+            lv_disp = f'Lv{lv}' if no_header else lv
+        else:
+            lv_disp = '-'
         cells = [html.Td(str(i), className='small text-center')] if show_index else []
         cells += [
             html.Td(name, className='small', style={'wordBreak': 'break-word'}),
-            html.Td(lv or '-', className='small text-center', style={'textAlign': 'center'}),
+            html.Td(lv_disp, className='small text-center', style={'textAlign': 'center'}),
             html.Td(f'{portion}%' if portion else '-', className='small text-center', style={'textAlign': 'center'}),
         ]
         rows.append(html.Tr(cells))
@@ -345,7 +373,15 @@ def _tech_ownership_table(tech_row, *, show_index: bool = True, no_header: bool 
         return html.Div('보유기술 데이터 없음', className='text-muted small')
 
     table_children = []
-    if not no_header:
+    if no_header:
+        cols = [html.Col(style={'width': '20px'})] if show_index else []
+        cols += [
+            html.Col(),  # 전문분야(보유기술명) — Lv·보유율이 안 쓰는 나머지 폭을 그대로 가져간다
+            html.Col(style={'width': '28px'}),
+            html.Col(style={'width': '36px'}),
+        ]
+        table_children.append(html.Colgroup(cols))
+    else:
         headers = [html.Th('구분', className='text-center', style={'fontSize': '0.72rem', 'width': '15%'})] \
             if show_index else []
         headers += [
