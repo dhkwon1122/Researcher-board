@@ -172,22 +172,49 @@ def print_sub_heading(text):
     화면(라이브) 탭에는 쓰지 않는다 — 인쇄본 전용."""
     return html.Div(text, style=_PRINT_SUB_HEADING_STYLE)
 
+
+_LIST_MARKER_COLOR = '#8e8e93'
+
+
+def bullet_list(items, *, class_name: str = 'small'):
+    """기본 <ul>의 disc 마커 대신 작은 사각 마커 + hanging indent(줄바꿈된
+    다음 줄도 마커가 아니라 텍스트 시작 위치에 맞춰 들여써짐)로 목록을
+    보여준다(사용자 요청 — "disc 형태로 list가 만들어지는 건 너무 밋밋해").
+    _core_technology_table()의 compact 모드(등급 아이콘 + flex 행)와 같은
+    구조를 재사용한다."""
+    return html.Div([
+        html.Div([
+            html.Span(style={
+                'display': 'inline-block', 'flex': '0 0 5px', 'width': '5px', 'height': '5px',
+                'borderRadius': '1px', 'backgroundColor': _LIST_MARKER_COLOR, 'marginTop': '6px',
+                'marginRight': '6px',
+            }),
+            html.Span(item, className=class_name, style={'wordBreak': 'break-word'}),
+        ], style={'display': 'flex', 'alignItems': 'flex-start', 'marginBottom': '3px'})
+        for item in items
+    ])
+
+
 def llm_summary_block(profile: dict | None, similar: list | None = None, name_map: dict | None = None,
                        *, include_responsibilities: bool = True, deemphasize_strength: bool = False):
     """전문성 요약(LLM) — 연구원 보유 전문성 분석.json의 핵심 분야(strength_fields)/
     키워드(strength_keywords)를 배지로, 주요 역할·책임(key_responsibilities)/
-    전문지식 및 역량(domain_knowledge_skill)을 불릿 목록으로 보여준다.
+    전문지식 및 역량(domain_knowledge_skill)을 불릿 목록(bullet_list(), disc
+    마커 대신 사각 마커 — 사용자 요청)으로 보여준다.
     similar(researcher_similarity.json의 해당 연구원 항목 중 'similar' 리스트,
     시니어 우선으로 이미 정렬돼 있음)가 주어지면 시니어 3명·주니어 3명을 유사
     연구원 배지로 덧붙인다(생략하면 유사 연구원 섹션 자체를 건너뜀 — A4 인쇄
     요약처럼 지면이 좁을 때 사용). include_responsibilities=False면 주요 역할·
     책임 목록을 뺀다(같은 이유). 해당 연구원이 분석 대상이 아니거나 아직
     파이프라인을 실행하지 않아 데이터가 없으면 안내 문구만 표시한다.
-    deemphasize_strength=True(A4 인쇄본 전용)면 Strength Field/Keywords를
-    색깔 배지가 아니라 옅은 회색 콤마 나열 텍스트로 바꾼다(사용자 요청 —
-    "Strength Field와 Strength Keyword가 너무 강조되어 보인다... 좀 더
-    힘을 빼줘" — 다른 섹션 제목들을 네모 박스로 더 강조한 것과 대비되게).
-    화면(라이브) 탭 호출부는 이 인자를 넘기지 않아 기존 배지 그대로다."""
+    deemphasize_strength=True(A4 인쇄본 전용)면 Strength Field/Strength
+    Keywords/전문지식 및 역량 라벨을 모두 print_sub_heading()의 네모 박스
+    소제목으로 통일하고(사용자 요청 — "소제목 형태로 통일감 있게 표현해줘"),
+    Strength Field/Keywords의 내용은 색깔 배지 대신 옅은 회색 콤마 나열
+    텍스트로 보여준다(이전 요청 — "너무 강조되어 보인다... 힘을 빼줘"와
+    절충 — 라벨은 다른 소제목들과 통일된 박스로 존재감을 주되, 내용 자체는
+    화려한 배지 대신 차분한 텍스트로 유지). 화면(라이브) 탭 호출부는 이
+    인자를 넘기지 않아 기존 배지+회색 텍스트 라벨 그대로다."""
     if not profile:
         return html.Div('분석 데이터 없음', className='text-muted small p-1')
 
@@ -199,7 +226,7 @@ def llm_summary_block(profile: dict | None, similar: list | None = None, name_ma
     children = []
     if fields:
         if deemphasize_strength:
-            children.append(html.Div('Strength Field', className='small text-muted mb-1', style={'fontSize': '0.7rem'}))
+            children.append(html.Div(print_sub_heading('Strength Field'), className='mb-1'))
             children.append(html.Div(', '.join(fields), className='small text-muted', style={'marginBottom': '6px'}))
         else:
             children.append(html.Div('Strength Field', className='small text-muted fw-semibold mb-1'))
@@ -208,7 +235,7 @@ def llm_summary_block(profile: dict | None, similar: list | None = None, name_ma
             ))
     if keywords:
         if deemphasize_strength:
-            children.append(html.Div('Strength Keywords', className='small text-muted mb-1', style={'fontSize': '0.7rem'}))
+            children.append(html.Div(print_sub_heading('Strength Keywords'), className='mb-1'))
             children.append(html.Div(', '.join(keywords), className='small text-muted', style={'marginBottom': '6px'}))
         else:
             children.append(html.Div('Strength Keywords', className='small text-muted fw-semibold mt-2 mb-1'))
@@ -217,10 +244,13 @@ def llm_summary_block(profile: dict | None, similar: list | None = None, name_ma
             ))
     if responsibilities and include_responsibilities:
         children.append(html.Div('주요 역할·책임', className='small text-muted fw-semibold mt-2 mb-1'))
-        children.append(html.Ul([html.Li(r, className='small') for r in responsibilities], className='mb-0 ps-3'))
+        children.append(bullet_list(responsibilities))
     if domain_skill:
-        children.append(html.Div('전문지식 및 역량', className='small text-muted fw-semibold mt-2 mb-1'))
-        children.append(html.Ul([html.Li(d, className='small') for d in domain_skill], className='mb-0 ps-3'))
+        if deemphasize_strength:
+            children.append(html.Div(print_sub_heading('전문지식 및 역량'), className='mb-1'))
+        else:
+            children.append(html.Div('전문지식 및 역량', className='small text-muted fw-semibold mt-2 mb-1'))
+        children.append(bullet_list(domain_skill))
 
     name_map = name_map or {}
     senior = [s for s in (similar or []) if s.get('tenure_level') == 'Senior'][:3]

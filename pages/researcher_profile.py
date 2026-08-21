@@ -9,7 +9,7 @@ import dash_bootstrap_components as dbc
 import pandas as pd
 from dash import Input, Output, State, callback, clientside_callback, dcc, html, no_update
 
-from components.detail_tabs import llm_summary_block, owned_expertise_block, print_sub_heading
+from components.detail_tabs import bullet_list, llm_summary_block, owned_expertise_block, print_sub_heading
 from components.profile_sections import (
     avatar,
     award_block,
@@ -608,7 +608,10 @@ def _print_task_hr_timeline(task_df, hr_df, rid, *, limit: int | None = None):
     """과제 수행 이력과 인사 발령 이력을 표/섹션은 물론 "과제"/"인사발령" 같은
     구분자도 없이 하나의 시계열 목록으로 합쳐 날짜 내림차순으로 보여준다(각
     줄의 내용 자체로 무엇인지 알아볼 수 있다는 전제). limit이 주어지면 둘을
-    합친 목록 기준으로 최신 limit건만 담고, 잘린 나머지 건수를 안내한다."""
+    합친 목록 기준으로 최신 limit건만 담고, 잘린 나머지 건수를 안내한다.
+    목록은 기본 <ul> disc 마커 대신 bullet_list()(사각 마커 + hanging
+    indent)로 그린다(사용자 요청 — "disc 형태로 list가 만들어지는 건 너무
+    밋밋해")."""
     filtered_task = task_df[task_df['researcher_id'] == rid] if not task_df.empty else task_df
     task_entries = task_points(filtered_task) if filtered_task is not None else []
     hr_rows = filter_hr_rows(hr_df, rid)  # 이미 order_date 내림차순
@@ -643,7 +646,7 @@ def _print_task_hr_timeline(task_df, hr_df, rid, *, limit: int | None = None):
     if not entries:
         return html.Div('과제 수행 / 인사 발령 이력 없음', className='text-muted small')
 
-    result = html.Ul([html.Li(e['text'], className='small') for e in entries], className='ps-3 mb-0')
+    result = bullet_list([e['text'] for e in entries])
     if limit and total > limit:
         return html.Div([result, html.Div(f'외 {total - limit}건 더', className='text-muted small mt-1')])
     return result
@@ -957,8 +960,12 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     # 기본정보 표와 구분되도록 marginTop만 남긴다. borderLeft는 옅은 회색
     # 세로 구분선(사용자 요청 — combined_box에서 개별 테두리를 없앤 대신
     # photo/info/tech 사이를 살짝 구분해달라는 것) — 왼쪽 padding 시작
-    # 지점(=photo_box 바로 오른쪽)에 그어진다.
+    # 지점(=photo_box 바로 오른쪽)에 그어진다. 맨 위에 "기본 인적 정보"
+    # 소제목을 단다(사용자 요청 — "사번 박스 위에도 ... 아까 만든 박스
+    # 스타일로 중제목을 달아주면 좋겠어") — tech_box 쪽 핵심기술/보유기술
+    # 소제목과 대칭을 이룬다.
     info_col = html.Div([
+        html.Div(print_sub_heading('기본 인적 정보'), className='mb-2'),
         info_table,
         current_status,
         html.Div(education_block(tables['education'], rid, plain_degree=True),

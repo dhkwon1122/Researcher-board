@@ -4307,3 +4307,122 @@ deemphasize_strength=True)`로 호출.
 - `python3 -m py_compile`로 컴파일 확인.
 - 테스트 데이터(긴 과제명 3건, 임시 전문성 분석 JSON 픽스처 포함)·
   서버·계정 모두 정리.
+
+## 2026-08-21 (28): 기본 인적 정보 소제목 추가 + Strength Field/Keyword/전문지식 및 역량 소제목 통일 + disc 목록 → 사각 마커 목록
+
+사용자 요청 3건: "1. 사번 박스 위에도 기본 인적 정보 라고 아까 만든 박스
+스타일로 중제목을 달아주면 좋겠어. 2. Strength Field, Strength Keyword도
+어느 정도는 디자인적 요소가 있으면 좋겠어. 그리고 Strength Field,
+Keyword, 전문지식 및 역량은 소제목 형태로 통일감 있게 표현해줘. 3.
+전문지식 및 역량이랑 과제 수행 / 인사 발령 이력 열거할 때 disc 형태로
+list가 만들어지는 건 너무 밋밋해."
+
+**1) "기본 인적 정보" 소제목**: `pages/researcher_profile.py`의
+`info_col`(사번~Knox ID 표 + 학력) 맨 위에
+`html.Div(print_sub_heading('기본 인적 정보'), className='mb-2')`를
+추가했다 — combined_box 안 다른 두 열(tech_box는 `owned_expertise_block`이
+이미 "핵심기술" 소제목을 달고 있음)과 대칭을 이룬다. `mb-2`는 tech_box
+쪽 `owned_expertise_block`의 `left_title`(핵심기술 제목)이 쓰는 값과
+맞춰, 정보 표 첫 행과 핵심기술 표 첫 행이 같은 높이에서 시작하도록
+했다.
+
+**2) Strength Field/Strength Keywords/전문지식 및 역량 소제목 통일**:
+`components/detail_tabs.py`의 `llm_summary_block()`에서
+`deemphasize_strength=True`(A4 인쇄 전용) 분기의 라벨 3개
+("Strength Field"/"Strength Keywords"/"전문지식 및 역량")를 전부
+기존 `print_sub_heading()`(다른 8개 섹션 제목과 같은 네모 박스 스타일)로
+바꿨다. 별도 "축소판" 스타일을 새로 만들지 않고 기존 `print_sub_heading()`
+그대로 재사용한 것은 "소제목 형태로 통일감 있게"라는 요청을 가장 직접적
+으로 만족시키는 선택이며(1번 요청도 "아까 만든 박스 스타일로"라고
+명시), 라벨 자체가 곧 사용자가 원한 "디자인적 요소"가 된다. 다만
+Strength Field/Keywords의 *내용*(값 나열)은 이전 라운드((27)번, "너무
+강조되어 보인다... 힘을 빼줘")에서 색깔 배지를 옅은 회색 콤마 텍스트로
+바꾼 상태를 그대로 유지했다 — 이번 요청은 "라벨에 디자인 요소를
+더해달라"는 것이지 값 배지를 부활시켜 달라는 것이 아니라고 판단(절충).
+전문지식 및 역량은 원래도 `deemphasize_strength`와 무관하게 항상 표시
+되던 라벨이라, 인쇄 전용(deemphasize_strength=True)일 때만
+`print_sub_heading()`으로, 화면(라이브) 탭(`deemphasize_strength=False`,
+기존 인자 없이 호출)은 기존 `text-muted fw-semibold` 스타일 그대로
+남겼다 — 화면 탭 스타일은 이번 요청 범위 밖.
+
+**3) disc 목록 → 사각 마커 목록**: `components/detail_tabs.py`에 신규
+`bullet_list(items, *, class_name='small')` 헬퍼 추가 — 기본 `<ul>`의
+브라우저 disc 마커 대신 5×5px 사각 마커(`_LIST_MARKER_COLOR = '#8e8e93'`)
++ `display:flex`/`alignItems:flex-start`로 하나하나를 행으로 그린다.
+`_core_technology_table(compact=True)`가 이미 쓰던 "아이콘 + flex 행"
+구조를 그대로 재사용한 것 — 줄바꿈된 다음 줄도 마커가 아니라 텍스트
+시작 위치에 맞춰 들여써지는(hanging indent) 효과가 덤으로 따라온다(기존
+`<ul class="ps-3">`는 이 정렬을 신경 쓰지 않았음). 적용 지점 2곳(사용자가
+지목한 바로 그 두 목록):
+- `llm_summary_block()`의 전문지식 및 역량(domain_skill) 목록 —
+  `html.Ul(...)` → `bullet_list(domain_skill)`. 화면/인쇄 양쪽 호출부
+  모두에 적용(이 목록 자체는 `deemphasize_strength`와 무관하게 항상 같은
+  구조라, 인쇄 전용으로 분기할 이유가 없음 — 오히려 화면 탭의 disc도
+  같이 개선되는 효과).
+- `pages/researcher_profile.py`의 `_print_task_hr_timeline()` — 과제
+  수행/인사 발령 이력 목록. `html.Ul(...)` → `bullet_list([e['text']
+  for e in entries])`. 인쇄 전용 함수라 여기서는 사실상 인쇄본에만
+  영향.
+- 같은 함수의 주요 역할·책임(responsibilities) 목록도 같은 헬퍼로
+  통일했다(사용자가 직접 지목하지는 않았지만, `domain_skill`과 바로
+  옆에서 같은 `<ul class="ps-3">` 패턴을 쓰던 목록이라 남겨두면 오히려
+  통일감이 깨짐 — 다만 `include_responsibilities=False`인 인쇄본에는
+  어차피 안 보이고, 화면(라이브) 탭에만 영향).
+- 양성 이력(`nurturing_block()`)의 `<ul>`은 이번 요청 대상이 아니라
+  손대지 않았다(검증 스크립트로 실제 남아 있음을 확인 — 의도적으로
+  그대로 둔 것).
+
+**검증**: 실제 서버 기동(`generate_sample_data.py`로 50명 샘플 생성 후
+core_technology.csv/tech_ownership.csv/hr_orders.csv를 직접 구성,
+tasks.csv를 14건으로 부풀리고 부서명·학교명을 길게 바꾸는 기존
+스트레스 테스트에 더해, 이번엔 `연구원 보유 전문성 분석.json`에
+strength_fields/strength_keywords/domain_knowledge_skill이 모두 채워진
+실제 프로필 픽스처와 hr_orders.csv 5건까지 같이 넣어 "실제 데이터가
+꽉 찬" 케이스로 검증) + 로그인(team_lead, `services.auth.create_user()`로
+직접 계정 생성) + Playwright.
+- 배경색 `rgb(238, 240, 243)` 요소 텍스트를 문서 순서대로 모아보니
+  `['기본 인적 정보', '핵심기술', '보유기술', '논문 실적', '특허 실적',
+  '양성 이력', '시상 이력', '전문성 요약(LLM)', 'Strength Field',
+  'Strength Keywords', '전문지식 및 역량', '과제 수행 / 인사 발령
+  이력(최근 12건)', ...(페이지2 상세 표 제목 2개)]` — 요청한 3개
+  라벨(기본 인적 정보/Strength Field/Strength Keywords/전문지식 및
+  역량, 총 4개 항목)이 모두 소제목 박스로 통일된 것을 확인.
+- `rgb(33, 37, 41)`(dark 배지)/`rgb(108, 117, 125)`(secondary 배지)
+  배경 요소 없음을 재확인(Strength Field/Keywords 값은 여전히 배지가
+  아니라 텍스트임을 유지).
+- `#profile-print-content` 안에 남은 `<ul>`이 정확히 1개(양성 이력)뿐임을
+  확인 — 전문지식 및 역량/과제 수행·인사 발령 이력의 `<ul>`은 모두
+  사라지고 5×5px 사각 마커(`width:5px;height:5px`인 `<span>`) 15개로
+  대체됨을 확인.
+- 무한 재렌더링 회귀 없음: `_dash-update-component` 요청 0건,
+  `#profile-print-content` 자식 수 6회 연속 측정에서 항상 1로 안정.
+- 콘솔 에러 없음.
+- **1페이지 높이 예산 관련 발견(이번 라운드가 만든 문제는 아님, 정직하게
+  기록)**: "실제 데이터가 꽉 찬" 위 픽스처(전문성 분석 프로필 + hr_orders
+  포함)로 측정하니 1페이지 높이 1009.9px(예산 약 937px, 73px 초과).
+  같은 픽스처로 이번 3가지 변경 *이전* 코드(git stash로 되돌려 재측정)를
+  재보니 이미 984.7px(48px 초과)였다 — 즉 (27)번 라운드가 `_TASK_HR_
+  RECENT_LIMIT=12`를 "93.5px 여유"로 검증할 때 썼던 스트레스 테스트에는
+  실제로는 `연구원 보유 전문성 분석.json`(Strength Field/Keywords/
+  전문지식 및 역량 텍스트)과 `hr_orders.csv` 데이터가 포함돼 있지
+  않았던 것으로 보인다(둘 다 없으면, 이번 픽스처에서도 870.4px로 66px
+  여유 있게 들어옴 — 직접 재확인). 이번 3가지 변경이 추가로 얹은 높이는
+  25.2px(984.7→1009.9, "기본 인적 정보" 소제목 1개 + Strength 라벨 3개
+  박스화)뿐으로, 73px 초과 중 대부분(48px)은 이번 라운드 이전부터
+  이미 있던 상태다. 실제 headless Chromium으로 PDF까지 뽑아
+  (`page.pdf()`) 페이지 수를 세어보니(PDF 내부 `/Type /Page` 오브젝트
+  개수) 3페이지로 나옴을 확인 — `task_hr_box`가 `breakable=True`(개별
+  테두리 박스가 페이지 중간에서 잘리지 않게 막는 `print-section` 클래스를
+  일부러 빼둔 상태, (18)~(19)번 이후 유지)라 내용 뒤쪽이 2페이지로
+  자연스럽게 흘러넘치고, `_print_pub_patent_detail_page()`는
+  `breakBefore:'page'`로 항상 새 페이지에서 시작하므로 상세 표는
+  3페이지에서 시작 — 레이아웃이 깨지거나(글자가 겹치거나 잘리는 등)
+  잘못 렌더링되는 것은 아니고, 원래 "1페이지 논문·특허 상세는 항상
+  2페이지"이던 것이 데이터가 아주 많은 연구원에 한해 3페이지로 늘어나는
+  정도다. 이번 요청 3건과는 무관한 사전 조건이라 `_TASK_HR_RECENT_LIMIT`
+  등은 건드리지 않았고, 다음에 페이지 수 관련 요청이 오면 이 수치(전문성
+  분석 데이터가 있는 연구원 기준 실제 여유가 음수)를 참고할 것.
+- `python3 -m py_compile`로 컴파일 확인.
+- 테스트 데이터(core_technology.csv/tech_ownership.csv/hr_orders.csv
+  직접 구성, tasks.csv 14건, 전문성 분석 JSON 픽스처, 계정)·서버 모두
+  정리.
