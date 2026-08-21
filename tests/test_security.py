@@ -1,11 +1,12 @@
 import os
+import re
 from unittest.mock import patch
 
 import pytest
 from flask import Flask, session
 
 from pipeline.confluence_client import ConfluenceError, _base_url
-from services import auth
+from services import auth, login_throttle
 from services.text2sql import Text2SQLError, sanitize_sql
 
 
@@ -73,3 +74,84 @@ def test_dash_and_photos_are_not_auth_exempt():
     response = client.get('/login')
     assert response.headers['X-Content-Type-Options'] == 'nosniff'
     assert response.headers['X-Frame-Options'] == 'DENY'
+
+
+# ── 로그인 rate limiting (services/login_throttle.py) ─────────────────────────
+
+def test_login_throttle_memory_counts_and_clears(monkeypatch):
+    """DB(DATABASE_URL)가 없는 로컬/테스트 환경에서는 메모리 카운터로 폴백한다."""
+    monkeypatch.setattr(login_throttle, 'get_engine', lambda: None)
+    key = 'test:memory-counter'
+    login_throttle.clear_failures(key)
+    assert login_throttle.count_recent_failures(key, 60) == 0
+    login_throttle.record_failure(key, 60)
+    login_throttle.record_failure(key, 60)
+    assert login_throttle.count_recent_failures(key, 60) == 2
+    login_throttle.clear_failures(key)
+    assert login_throttle.count_recent_failures(key, 60) == 0
+
+
+def test_login_throttle_memory_expires_outside_window(monkeypatch):
+    monkeypatch.setattr(login_throttle, 'get_engine', lambda: None)
+    key = 'test:memory-expiry'
+    login_throttle.clear_failures(key)
+    login_throttle.record_failure(key, 60)
+    assert login_throttle.count_recent_failures(key, 60) == 1
+    # window=0 → 방금 기록한 실패도 이미 창을 벗어난 것으로 취급되어야 한다.
+    assert login_throttle.count_recent_failures(key, 0) == 0
+    login_throttle.clear_failures(key)
+
+
+def _login_attempt(client, username, password, remote_addr):
+    """GET /login에서 CSRF 토큰을 읽어 그대로 POST /auth/login에 실어 보낸다."""
+    overrides = {'REMOTE_ADDR': remote_addr}
+    page = client.get('/login', environ_overrides=overrides)
+    token = re.search(r'name="_csrf_token" value="([^"]+)"', page.get_data(as_text=True)).group(1)
+    return client.post('/auth/login', environ_overrides=overrides, data={
+        'username': username, 'password': password, 'next': '/', '_csrf_token': token,
+    })
+
+
+def test_login_lockout_applies_per_account_across_source_addresses(monkeypatch):
+    """계정별 카운터가 있어, IP를 바꿔가며 같은 계정을 노리는 분산 시도도 막는다."""
+    from app import _LOGIN_MAX_FAILURES
+    from app import app as dash_app
+
+    monkeypatch.setattr(login_throttle, 'get_engine', lambda: None)
+    monkeypatch.setattr(auth, 'has_any_user', lambda: True)
+    username = 'lockout-target-user'
+    login_throttle.clear_failures(f'user:{username}')
+    try:
+        for i in range(_LOGIN_MAX_FAILURES):
+            client = dash_app.server.test_client()
+            resp = _login_attempt(client, username, 'wrong-password', f'203.0.113.{i}')
+            assert resp.status_code == 302
+
+        client = dash_app.server.test_client()
+        resp = _login_attempt(client, username, 'wrong-password', '203.0.113.99')
+        assert resp.status_code == 429
+    finally:
+        login_throttle.clear_failures(f'user:{username}')
+
+
+def test_login_lockout_applies_per_ip_across_accounts(monkeypatch):
+    """IP별 카운터가 있어, 계정을 바꿔가며(계정 스프레이) 시도해도 막는다."""
+    from app import _LOGIN_MAX_FAILURES
+    from app import app as dash_app
+
+    monkeypatch.setattr(login_throttle, 'get_engine', lambda: None)
+    monkeypatch.setattr(auth, 'has_any_user', lambda: True)
+    ip = '198.51.100.42'
+    login_throttle.clear_failures(f'ip:{ip}')
+    client = dash_app.server.test_client()
+    try:
+        for i in range(_LOGIN_MAX_FAILURES):
+            resp = _login_attempt(client, f'spray-user-{i}', 'wrong-password', ip)
+            assert resp.status_code == 302
+        resp = _login_attempt(client, 'spray-user-final', 'wrong-password', ip)
+        assert resp.status_code == 429
+    finally:
+        login_throttle.clear_failures(f'ip:{ip}')
+        for i in range(_LOGIN_MAX_FAILURES):
+            login_throttle.clear_failures(f'user:spray-user-{i}')
+        login_throttle.clear_failures('user:spray-user-final')

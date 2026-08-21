@@ -1,8 +1,5 @@
 import os
 import secrets
-import threading
-import time
-from collections import defaultdict, deque
 from html import escape
 
 import dash
@@ -10,6 +7,7 @@ import dash_bootstrap_components as dbc
 import flask
 from dash import Input, Output, callback, dcc, html, no_update
 
+from services import login_throttle
 from services.data_store import ASSETS_DIR, PHOTO_DIR, RAW_DIR
 
 app = dash.Dash(
@@ -52,6 +50,24 @@ def _get_or_create_secret_key() -> str:
 
 
 app.server.secret_key = _get_or_create_secret_key()
+
+# 리버스 프록시(X-Forwarded-For/-Proto) 신뢰 여부. 기본값 0(비신뢰)이면
+# request.remote_addr는 실제로 소켓을 맺은 상대(프록시 자신)의 IP가 되어
+# (docker-compose.yml에서 app은 127.0.0.1에만 바인딩하고 TLS 리버스
+# 프록시를 통해서만 외부에 공개하는 구성이라, 모든 요청이 프록시 IP로
+# 찍힌다) 아래 로그인 실패 카운터가 모든 사용자를 하나의 IP로 묶어버려
+# 한 명만 여러 번 틀려도 전원이 잠기는 문제가 생긴다. 실제로 신뢰 가능한
+# 리버스 프록시가 정확히 N홉 앞에 있을 때만 TRUSTED_PROXY_COUNT=N으로
+# 켠다 — 프록시 없이 직접 노출된 환경에서 켜면 클라이언트가 헤더를 위조해
+# rate limit/로그 IP를 속일 수 있으므로 기본은 꺼둔다.
+_TRUSTED_PROXY_COUNT = int(os.environ.get('TRUSTED_PROXY_COUNT', '0'))
+if _TRUSTED_PROXY_COUNT > 0:
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.server.wsgi_app = ProxyFix(
+        app.server.wsgi_app,
+        x_for=_TRUSTED_PROXY_COUNT, x_proto=_TRUSTED_PROXY_COUNT, x_host=_TRUSTED_PROXY_COUNT,
+    )
+
 app.server.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
@@ -62,8 +78,6 @@ app.server.config.update(
 
 _LOGIN_WINDOW_SECONDS = int(os.environ.get('LOGIN_WINDOW_SECONDS', '900'))
 _LOGIN_MAX_FAILURES = int(os.environ.get('LOGIN_MAX_FAILURES', '5'))
-_login_failures: dict[str, deque] = defaultdict(deque)
-_login_lock = threading.Lock()
 
 
 def _csrf_token() -> str:
@@ -81,22 +95,20 @@ def _require_csrf() -> None:
         flask.abort(400)
 
 
-def _login_key() -> str:
+def _client_ip() -> str:
     return flask.request.remote_addr or 'unknown'
 
 
 def _is_login_blocked(key: str) -> bool:
-    cutoff = time.monotonic() - _LOGIN_WINDOW_SECONDS
-    with _login_lock:
-        failures = _login_failures[key]
-        while failures and failures[0] < cutoff:
-            failures.popleft()
-        return len(failures) >= _LOGIN_MAX_FAILURES
+    return login_throttle.count_recent_failures(key, _LOGIN_WINDOW_SECONDS) >= _LOGIN_MAX_FAILURES
 
 
 def _record_login_failure(key: str) -> None:
-    with _login_lock:
-        _login_failures[key].append(time.monotonic())
+    login_throttle.record_failure(key, _LOGIN_WINDOW_SECONDS)
+
+
+def _clear_login_failures(key: str) -> None:
+    login_throttle.clear_failures(key)
 
 
 @app.server.after_request
@@ -277,18 +289,26 @@ def auth_login():
 
     from services.auth import authenticate, set_session
     _require_csrf()
-    login_key = _login_key()
-    if _is_login_blocked(login_key):
-        return flask.jsonify({'error': 'too_many_login_attempts'}), 429
     username = flask.request.form.get('username', '').strip()
     password = flask.request.form.get('password', '')
     next_url = _safe_next_url(flask.request.form.get('next', '/'))
+
+    # IP별로 막을 뿐 아니라 계정별로도 막는다 — IP만 보면 여러 IP로 분산된
+    # 무차별 대입이 특정 계정 하나를 계속 노려도 걸리지 않는다.
+    ip_key = f'ip:{_client_ip()}'
+    user_key = f'user:{username}' if username else None
+    if _is_login_blocked(ip_key) or (user_key and _is_login_blocked(user_key)):
+        return flask.jsonify({'error': 'too_many_login_attempts'}), 429
+
     user = authenticate(username, password)
     if not user:
-        _record_login_failure(login_key)
+        _record_login_failure(ip_key)
+        if user_key:
+            _record_login_failure(user_key)
         return flask.redirect(f'/login?error=invalid&next={quote(next_url)}')
-    with _login_lock:
-        _login_failures.pop(login_key, None)
+    _clear_login_failures(ip_key)
+    if user_key:
+        _clear_login_failures(user_key)
     set_session(user)
     return flask.redirect(next_url)
 
