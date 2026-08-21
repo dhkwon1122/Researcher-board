@@ -152,8 +152,28 @@ _PANEL_TITLE_STYLE = {'fontSize': '0.85rem', 'fontWeight': 600, 'color': '#1d1d1
 _GRADE_PILL_COLOR = '#3f8f57'
 _E_SUPPORT_COLOR = '#0071e3'
 
+_PRINT_SUB_HEADING_STYLE = {
+    'display': 'inline-block',
+    'backgroundColor': '#eef0f3',
+    'border': '1px solid #d5d8dc',
+    'borderRadius': '4px',
+    'padding': '1px 8px',
+    'fontSize': '0.78rem',
+    'fontWeight': 700,
+    'color': '#1d1d1f',
+}
+
+
+def print_sub_heading(text):
+    """A4 인쇄본 박스 안의 하위 항목(핵심기술/보유기술/논문 실적/특허 실적/
+    양성 이력/시상 이력/전문성 요약(LLM)/과제 수행·인사 발령 이력)을 네모
+    박스로 감싸 "중제목"처럼 강조한다(사용자 요청 — "이 키워드들이 네모
+    박스 같은 정도로 감싸져서 중제목 정도의 느낌으로 보여지면 좋겠어").
+    화면(라이브) 탭에는 쓰지 않는다 — 인쇄본 전용."""
+    return html.Div(text, style=_PRINT_SUB_HEADING_STYLE)
+
 def llm_summary_block(profile: dict | None, similar: list | None = None, name_map: dict | None = None,
-                       *, include_responsibilities: bool = True):
+                       *, include_responsibilities: bool = True, deemphasize_strength: bool = False):
     """전문성 요약(LLM) — 연구원 보유 전문성 분석.json의 핵심 분야(strength_fields)/
     키워드(strength_keywords)를 배지로, 주요 역할·책임(key_responsibilities)/
     전문지식 및 역량(domain_knowledge_skill)을 불릿 목록으로 보여준다.
@@ -162,7 +182,12 @@ def llm_summary_block(profile: dict | None, similar: list | None = None, name_ma
     연구원 배지로 덧붙인다(생략하면 유사 연구원 섹션 자체를 건너뜀 — A4 인쇄
     요약처럼 지면이 좁을 때 사용). include_responsibilities=False면 주요 역할·
     책임 목록을 뺀다(같은 이유). 해당 연구원이 분석 대상이 아니거나 아직
-    파이프라인을 실행하지 않아 데이터가 없으면 안내 문구만 표시한다."""
+    파이프라인을 실행하지 않아 데이터가 없으면 안내 문구만 표시한다.
+    deemphasize_strength=True(A4 인쇄본 전용)면 Strength Field/Keywords를
+    색깔 배지가 아니라 옅은 회색 콤마 나열 텍스트로 바꾼다(사용자 요청 —
+    "Strength Field와 Strength Keyword가 너무 강조되어 보인다... 좀 더
+    힘을 빼줘" — 다른 섹션 제목들을 네모 박스로 더 강조한 것과 대비되게).
+    화면(라이브) 탭 호출부는 이 인자를 넘기지 않아 기존 배지 그대로다."""
     if not profile:
         return html.Div('분석 데이터 없음', className='text-muted small p-1')
 
@@ -173,15 +198,23 @@ def llm_summary_block(profile: dict | None, similar: list | None = None, name_ma
 
     children = []
     if fields:
-        children.append(html.Div('Strength Field', className='small text-muted fw-semibold mb-1'))
-        children.append(html.Div(
-            [dbc.Badge(f, color='dark', className='me-1 mb-1') for f in fields],
-        ))
+        if deemphasize_strength:
+            children.append(html.Div('Strength Field', className='small text-muted mb-1', style={'fontSize': '0.7rem'}))
+            children.append(html.Div(', '.join(fields), className='small text-muted', style={'marginBottom': '6px'}))
+        else:
+            children.append(html.Div('Strength Field', className='small text-muted fw-semibold mb-1'))
+            children.append(html.Div(
+                [dbc.Badge(f, color='dark', className='me-1 mb-1') for f in fields],
+            ))
     if keywords:
-        children.append(html.Div('Strength Keywords', className='small text-muted fw-semibold mt-2 mb-1'))
-        children.append(html.Div(
-            [dbc.Badge(k, color='secondary', className='me-1 mb-1') for k in keywords],
-        ))
+        if deemphasize_strength:
+            children.append(html.Div('Strength Keywords', className='small text-muted mb-1', style={'fontSize': '0.7rem'}))
+            children.append(html.Div(', '.join(keywords), className='small text-muted', style={'marginBottom': '6px'}))
+        else:
+            children.append(html.Div('Strength Keywords', className='small text-muted fw-semibold mt-2 mb-1'))
+            children.append(html.Div(
+                [dbc.Badge(k, color='secondary', className='me-1 mb-1') for k in keywords],
+            ))
     if responsibilities and include_responsibilities:
         children.append(html.Div('주요 역할·책임', className='small text-muted fw-semibold mt-2 mb-1'))
         children.append(html.Ul([html.Li(r, className='small') for r in responsibilities], className='mb-0 ps-3'))
@@ -414,22 +447,26 @@ def owned_expertise_block(core_df, tech_df, rid, *, stacked: bool = False, show_
     양쪽에서 호출되면 같은 id를 가진 요소가 DOM에 중복되는 문제도 같이 없앤다.
     compact=True면 표 헤더를 없앤다(사용자 요청, A4 인쇄본 전용) — 핵심기술은
     표 대신 "(등급)분야 > 기술명" 텍스트 나열로, 보유기술은 헤더 없이 데이터
-    행만 바로 보여준다. "핵심기술"/"보유기술" 섹션 제목 자체는 그대로 유지."""
+    행만 바로 보여준다. "핵심기술"/"보유기술" 섹션 제목도 compact일 때는
+    `print_sub_heading()`(네모 박스로 감싼 중제목)으로 바뀐다(사용자 요청)."""
     core = core_df[core_df['researcher_id'] == rid] if not core_df.empty else pd.DataFrame()
     tech = tech_df[tech_df['researcher_id'] == rid] if not tech_df.empty else pd.DataFrame()
     tech_row = tech.iloc[0] if not tech.empty else None
     e_support = tech_row.get('E_support') if tech_row is not None else None
 
+    left_title = html.Div(print_sub_heading('핵심기술'), className='mb-2') if compact \
+        else html.P('핵심기술', style=_PANEL_TITLE_STYLE, className='mb-2')
     left_children = [
-        html.P('핵심기술', style=_PANEL_TITLE_STYLE, className='mb-2'),
+        left_title,
         _core_technology_table(core, compact=compact),
     ]
     if show_info_hover:
         left_children.append(_info_hover('grade-info-icon', '등급 개요', '등급 개요.png'))
     left = html.Div(left_children)
 
+    right_title_main = print_sub_heading('보유기술') if compact else html.Span('보유기술', style=_PANEL_TITLE_STYLE)
     right_title_children = [
-        html.Span('보유기술', style=_PANEL_TITLE_STYLE),
+        right_title_main,
         html.Span("('25년기준)", style={'fontSize': '0.68rem', 'color': _LEGEND_NEUTRAL, 'marginLeft': '3px'}),
     ]
     if e_support is not None:

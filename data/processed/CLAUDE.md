@@ -4224,3 +4224,86 @@ tech_box 쪽 중 더 큰 쪽) 기준으로 정해진다 — 다만 이제는 tec
 Lv3 30%"/"박막 공정 Lv2 40%"/"품질 관리 Lv3 50%"가 깨끗하게 표시됨을
 육안 확인. `python3 -m py_compile`로 컴파일 확인. 테스트 데이터(수동
 수정한 lv_1/lv_2 포함)·서버·계정 모두 정리.
+
+## 2026-08-21 (27): 과제/인사발령 이력 표시 건수 확대 + 소제목 박스 강조 + Strength Field/Keyword 힘 빼기
+
+사용자 요청 2건: "1. 과제 수행 / 인사 발령 이력은 아래에 공간이 많은데
+표시가 많이 안 되는 것 같아. 2. 전체 카드 그림 안에서 Strengh Field와
+Strength Keyword가 너무 강조되어 보이는 것 같아. 핵심기술, 보유기술,
+논문 실적, 특허 실적, 양성 이력, 시상 이력, 전문성 요약(LLM), 과제
+수행/인사 발령 이력 이 키워드들이 네모 박스 같은 정도로 감싸져서
+중제목 정도의 느낌으로 보여지면 좋겠어. Strength, Field, Strength
+Keyword는 좀 더 힘을 빼줘."
+
+**1) 과제/인사발령 이력 표시 건수 확대**: `_TASK_HR_RECENT_LIMIT`을
+6 → 12로 올렸다. 6은 원래 10이었다가 "1페이지를 넘어가지 않게"라는
+요청으로 줄인 값인데, 그 뒤 여러 라운드(사진 10% 추가 축소, photo/
+사번/핵심기술 박스 통합, 보유기술 표 Lv/% 열 최소화, 논문·특허 박스
+전체 폭화 등)를 거치며 1페이지 여유 공간이 크게 늘어, 실측해보니
+limit=6일 때 페이지 예산(약 937px) 대비 190px이나 남아 있었다(사용자가
+지적한 "공간은 많은데 표시가 적다"는 정확한 원인). limit=12로
+올려 실측한 결과 페이지 높이 843.2px, 여유 93.5px — 여전히 안전한
+버퍼를 남기면서 표시 건수를 2배로 늘렸다.
+
+**2) 소제목 박스 강조**: `components/detail_tabs.py`에 신규
+`print_sub_heading(text)` + `_PRINT_SUB_HEADING_STYLE`(옅은 회색
+배경 #eef0f3 + 옅은 테두리 #d5d8dc + 둥근 모서리 + padding, 굵은 글씨
+— "네모 박스로 감싸져 중제목 느낌") 추가, A4 인쇄본 전용(화면 탭에는
+안 씀). 적용 지점:
+- `owned_expertise_block(compact=True)`의 "핵심기술"/"보유기술" 제목
+  (`compact=True`일 때만 — 화면 stacked=False는 기존 스타일 그대로).
+- `pages/researcher_profile.py`의 `_print_box(title, ...)` — 인쇄본
+  전용 함수라 title이 있으면 무조건 `print_sub_heading()`으로 감싸도록
+  바꿨다. 이 함수를 쓰는 `task_hr_box`("과제 수행 / 인사 발령
+  이력(최근 N건)")뿐 아니라 페이지2의 논문·특허 상세 표 제목(`_print_
+  pub_patent_detail_page()`가 같은 `_print_box()`를 재사용)에도 자동
+  적용돼 일관된 스타일이 됨(부수 효과지만 요청 취지에 부합해 그대로 둠).
+- `_print_publication_summary()`/`_print_patent_summary()`: 기존엔
+  "논문 실적 12건 ..."처럼 라벨과 집계가 한 문장에 섞여 있었는데,
+  라벨("논문 실적"/"특허 실적")을 떼어내 함수는 집계 내용만("12건 ...")
+  반환하고, 호출부(history_box 조립부)에서 `print_sub_heading('논문
+  실적')`/`print_sub_heading('특허 실적')`을 앞에 붙이는 구조로 바꿨다
+  — 양성 이력/시상 이력과 같은 방식으로 통일.
+- "양성 이력"/"시상 이력"/"전문성 요약(LLM)" 라벨도 기존
+  `className='small fw-semibold text-muted ...'`(민무늬 텍스트)에서
+  `print_sub_heading()`으로 교체.
+
+**3) Strength Field/Keyword 힘 빼기**: `llm_summary_block()`에
+`deemphasize_strength: bool = False` 파라미터 추가(인쇄 전용 —
+화면 탭 호출부는 인자를 안 넘겨 기존 그대로). `True`일 때 Strength
+Field/Keywords를 `dbc.Badge`(dark/secondary 색 배지) 대신 옅은 회색
+콤마 나열 텍스트로 바꾼다 — 다른 섹션 제목이 네모 박스로 더 강조된
+것과 반대로 이쪽은 덜 튀도록. `pages/researcher_profile.py`의
+`expertise_summary_box` 조립부에서 `llm_summary_block(...,
+deemphasize_strength=True)`로 호출.
+
+**검증**: 실제 서버 기동 + 로그인(team_lead) + Playwright, 이전과
+동일한 스트레스 테스트 데이터(과제 14건, 긴 부서명)로 확인.
+- 배경색 `rgb(238, 240, 243)`(#eef0f3)을 가진 요소를 전부 찾아 텍스트를
+  모아보니 정확히 `['핵심기술', '보유기술', '논문 실적', '특허 실적',
+  '양성 이력', '시상 이력', '전문성 요약(LLM)', '과제 수행 / 인사
+  발령 이력(최근 12건)', ...(페이지2 상세 표 제목 2개)]`로 요청한
+  8개 라벨이 전부 박스로 감싸졌음을 확인.
+- `rgb(33, 37, 41)`(dark 배지)/`rgb(108, 117, 125)`(secondary 배지)
+  배경을 가진 요소가 전혀 없음을 확인(Strength Field/Keywords 배지가
+  사라졌음).
+- 별도로 `연구원 보유 전문성 분석.json`에 실제 strength_fields/
+  strength_keywords/domain_knowledge_skill이 있는 픽스처를 임시로
+  넣어(테스트 후 삭제) `전문성 요약(LLM)` 박스만 잘라 스크린샷 —
+  제목은 굵은 네모 박스, "Strength Field"/"Strength Keywords"는 얇은
+  회색 라벨+콤마 텍스트로 확연히 톤다운되고 "전문지식 및 역량"(변경
+  대상 아님)은 기존 스타일 그대로임을 육안 확인.
+- 과제/인사발령 이력: limit=12로 12건이 실제로 나열되고 "외 2건 더"
+  안내가 남는 것을 확인. 가장 오래된 표시 대상(2012년) 과제명을 일부러
+  20자 이상의 긴 이름으로 바꿔 줄바꿈 여부까지 스트레스 테스트 —
+  전체 폭 박스라 한 줄에 들어가 줄바꿈 없이 렌더링됨을 확인(페이지
+  높이 수치도 짧은 이름일 때와 완전히 동일해 줄바꿈이 없었음을
+  재확인).
+- 무한 재렌더링 회귀 없음: `_dash-update-component` 요청 0건,
+  `#profile-print-content` 자식 수 6회 연속 측정에서 항상 1로 안정.
+- 콘솔 에러 없음.
+- 1페이지 높이: 843.2px(예산 약 937px) — limit=12에 긴 과제명
+  스트레스 테스트까지 포함한 수치, 93.5px 여유.
+- `python3 -m py_compile`로 컴파일 확인.
+- 테스트 데이터(긴 과제명 3건, 임시 전문성 분석 JSON 픽스처 포함)·
+  서버·계정 모두 정리.
