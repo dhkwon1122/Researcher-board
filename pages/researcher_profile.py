@@ -913,7 +913,10 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
         # 인자를 넘기지 않아 기존 크기(200) 그대로다.
         html.Div(photo_block(rid, name, researcher, CURRENT_YEAR,
                               hide_normal_employment_status=True, img_max_height=204)),
-        html.Div(print_eval_content, style={'marginTop': '8px', 'width': '100%'}),
+        # 직급연차 줄(photo_block()의 line2, mb-0)과 평가·인센티브 줄 사이
+        # 간격을 기존 8px에서 좁혔다(사용자 요청 — 다른 줄 간격보다 유독
+        # 크게 벌어져 보였다).
+        html.Div(print_eval_content, style={'marginTop': '2px', 'width': '100%'}),
     ], className='print-section',
         style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center',
                'width': f'{_PHOTO_BOX_WIDTH_PX}px', 'flex': f'0 0 {_PHOTO_BOX_WIDTH_PX}px',
