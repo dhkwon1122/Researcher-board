@@ -3728,3 +3728,77 @@ flex:1 열 하나와 같은 폭)를
   표시됨.
 - `python3 -m py_compile`로 컴파일 확인.
 - 테스트 데이터·서버·계정 모두 정리.
+
+## 2026-08-21 (19): 논문·특허+양성·시상 박스가 핵심기술·보유기술 박스 높이를 기다리지 않고 사진 박스 바로 아래에서 시작하도록 구조 변경
+
+바로 앞 (18)번에서 폭은 고쳤지만 사용자 피드백: "여전히 사진 박스 바로
+밑에 안 붙어. 핵심기술 보유기술 박스가 끝나는 지점에서 시작되지 않고
+사진 박스 아래에서 시작되게 해줘." — 폭이 아니라 **위치**(수직 시작
+지점)가 문제였다.
+
+**원인**: `header_row`가 `[photo_box(190px), info_col, right_box]`
+3열을 한 flex row로 두고, `history_box`(논문·특허+양성·시상)를 그
+`header_row` 다음의 새 블록으로 이어붙이는 구조였다. flex row의 높이는
+"가장 키가 큰 열" 기준으로 정해지므로, `history_box`의 시작 위치도
+사진+기본정보(왼쪽)가 아니라 3열 중 가장 긴 열(핵심기술·보유기술
+표 — 항목이 많으면 꽤 길어질 수 있음) 기준으로 밀려 내려갔다. 폭은
+(18)번에서 이미 "핵심기술·보유기술 박스를 뺀 나머지"로 맞춰 놨지만,
+수직 위치는 여전히 그 박스의 높이에 종속돼 있었던 것 — 별개의
+문제였다.
+
+**수정**(`pages/researcher_profile.py`의 `_print_profile_content()`):
+`[사진+기본정보(학력 포함)]` 열과 `history_box`를 `left_column`이라는
+하나의 세로 묶음으로 감싸, `right_box`(핵심기술·보유기술)와 나란한
+**독립된 열**로 재배치했다.
+
+```python
+left_column = html.Div([
+    html.Div([
+        html.Div(photo_box, style={'flex': '0 0 190px'}),
+        info_col,
+    ], style={'display': 'flex', 'alignItems': 'flex-start', 'marginBottom': '10px'}),
+    history_box,
+], style={'width': 'calc(100% - (100% - 190px - 12px) / 2)', 'minWidth': '0'})
+
+header_row = html.Div([
+    left_column,
+    html.Div(right_box, style={'width': 'calc((100% - 190px - 12px) / 2)', 'minWidth': '0'}),
+], style={'display': 'flex', 'alignItems': 'flex-start', 'marginBottom': '10px'})
+```
+
+이제 `history_box`의 시작 y좌표는 `left_column`(사진+기본정보) 높이만의
+함수이고, `right_box`의 높이와 완전히 무관하다 — `right_box`가 더
+길어도 `history_box`는 기다리지 않고, 오히려 `right_box`가 계속
+이어지는 동안(같은 y 범위) `history_box`가 왼쪽에서 먼저 끝나는
+"마감형" 2열 레이아웃이 된다. 폭 계산식(`calc(100% - (100% - 190px -
+12px) / 2)`)은 (18)번에서 이미 확정된 값 그대로 재사용 — 이번은 위치만
+바꾸는 것이라 폭은 건드리지 않았다. `history_box` 자체는 더 이상
+`html.Div(style={'width': ...})`로 감쌀 필요가 없어져(부모
+`left_column`이 폭을 이미 정함) `_print_box(...)`를 직접 반환하도록
+단순화했고, `_print_profile_content()` docstring도 이 2열 구조를
+설명하도록 갱신했다.
+
+**검증**: 실제 서버 기동 + 로그인(team_lead) + Playwright, (18)번과
+동일한 스트레스 테스트 데이터(과제 14건, 긴 부서명/학교명)에 이번엔
+핵심기술을 10건(기존 2건 + 8건 추가, 각 항목명도 길게)으로 늘려
+`right_box`를 의도적으로 `left_column`보다 훨씬 길게 만든 뒤 확인.
+- 1차(핵심기술 2건, `right_box`가 `left_column`보다 짧음): `history_box`
+  top=290.1px, `photo_box` bottom=240.0px, `right_box` bottom=276.0px —
+  이 경우도 `history_box`가 `right_box`보다 먼저 시작함을 확인
+  (290.1 > 276.0이지만 근소, `info_col`의 학력 3줄이 `photo_box`보다
+  길어 `left_column` 높이가 이미 `right_box`와 비슷했던 경우).
+- 2차(핵심기술 10건으로 인위적으로 `right_box`를 훨씬 길게):
+  `right_box` bottom이 275.97px → 493.72px로 크게 늘었는데도
+  `history_box` top은 정확히 290.125px로 **완전히 동일**(소수점까지
+  일치) — `right_box`의 높이 변화가 `history_box` 위치에 전혀 영향을
+  주지 않음을 수치로 확인. 스크린샷으로도 핵심기술 표가 10줄로 길게
+  이어지는 동안 왼쪽의 논문·특허+양성·시상 박스는 훨씬 짧게 먼저
+  끝나 있는(전문성 요약(LLM) 박스가 그 아래, header_row 전체가 끝난
+  뒤에만 시작하는) 것을 육안 확인.
+- 무한 재렌더링 회귀 없음: `_dash-update-component` 요청 0건,
+  `#profile-print-content` 자식 수 6회 연속 측정에서 항상 1로 안정.
+- 콘솔 에러 없음.
+- 1페이지 높이: 핵심기술 10건 스트레스 테스트에서 773.3px(예산 약
+  937px) — 여전히 여유 있게 들어옴.
+- `python3 -m py_compile`로 컴파일 확인.
+- 테스트 데이터·서버·계정 모두 정리(추가했던 핵심기술 8건 포함).
