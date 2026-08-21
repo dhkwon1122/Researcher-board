@@ -310,21 +310,20 @@ def evaluation_incentive_block(eva_df, inc_df, rid: str, years: list[int]):
 def evaluation_incentive_summary_text(eva_df, inc_df, rid: str, years: list[int]):
     """평가/인센티브 이력을 표 대신 글자 두 줄로 — A4 인쇄처럼 지면이 좁아 표
     형식이 부담스러운 곳에서 쓴다(연도·값 계산은 evaluation_incentive_block()과
-    동일 로직 공유, 표시 형식만 다름). 평가 아래에 인센티브가 오도록(사용자
-    확정) 순서를 둔다. 예:
-      평가 · 인센티브 이력 ('24~'26)
-      평가   나(ES)/가(EM)/다(MT)
-      인센티브   -/우수/최우수"""
+    동일 로직 공유, 표시 형식만 다름). 제목("평가 · 인센티브 이력")과
+    "평가"/"인센티브" 구분자 없이 값만 가운데 정렬로 두 줄 보여준다(사용자
+    확정 — 어느 자리에 나오는 값인지는 문맥으로 알 수 있다는 전제). 평가
+    줄이 인센티브 줄보다 먼저 온다. 예:
+      나(ES)/가(EM)/다(MT)
+      -/우수/최우수"""
     inc, eva = _eval_incentive_rows(eva_df, inc_df, rid)
-    year_range = f"'{str(years[0])[-2:]}~'{str(years[-1])[-2:]}"
     inc_line = '/'.join(_inc_label(inc, y) for y in years)
     eval_line = '/'.join(_eval_cell(eva, y)[1] for y in years)
 
     return html.Div([
-        html.Div(f"평가 · 인센티브 이력 ({year_range})", className='small fw-semibold text-muted mb-1'),
-        html.Div(f'평가   {eval_line}', className='small'),
-        html.Div(f'인센티브   {inc_line}', className='small'),
-    ])
+        html.Div(eval_line, className='small'),
+        html.Div(inc_line, className='small'),
+    ], className='text-center', style={'textAlign': 'center'})
 
 
 def nurturing_block(nur_df, rid: str, *, limit: int | None = None, show_empty_message: bool = True):

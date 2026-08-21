@@ -65,8 +65,12 @@ TABS_CONTENT_HEIGHT = 260
 LLM_SUMMARY_HEIGHT = 150
 
 
-def _locked_block(label: str = ''):
-    """접근 권한 없음 플레이스홀더."""
+def _locked_block(label: str = '', *, icon_only: bool = False):
+    """접근 권한 없음 플레이스홀더. icon_only=True면 자물쇠 아이콘만 보여주고
+    안내 문구는 생략한다(인쇄본의 사진 박스처럼 지면이 좁아 설명 문구 없이도
+    자물쇠만으로 "권한 없음"이 전달되면 충분한 자리에서 사용 — 사용자 요청)."""
+    if icon_only:
+        return html.Div(html.I(className='bi bi-lock-fill text-secondary'), className='text-center')
     return html.Div(
         [
             html.I(className='bi bi-lock-fill me-2 text-secondary'),
@@ -842,12 +846,12 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
                             print_eval_content, current_status):
     """A4 인쇄 전용 콘텐츠 — 화면의 카드형 대시보드(고정 높이 + 내부 스크롤)는
     인쇄에 부적합해(넘치는 내용이 잘림) 재사용하지 않고, 같은 데이터/블록 함수를
-    피플팀이 준 손그림 양식(사진+이름+평가·인센티브 / 기본정보 / 학력+보유역량 /
-    논문·특허+양성·시상 / 전문성 요약 / 과제수행·인사발령, 1페이지 안에 들어오게)에
-    맞춰 테두리 박스로 재배치한다. 인물 코멘트는 인쇄본에 넣지 않는다(사용자
-    요청 — 화면 탭에는 그대로 남아 있음). print_eval_content는 update_profile()이
-    권한(view_evaluation)까지 반영해 이미 만들어둔 것(_locked_block() 포함)을
-    그대로 받아써 권한 판정을 중복하지 않는다."""
+    피플팀이 준 손그림 양식(사진+이름+평가·인센티브 / 기본정보+학력 / 보유역량 /
+    논문·특허+양성·시상(좁은 폭) / 전문성 요약 / 과제수행·인사발령, 1페이지
+    안에 들어오게)에 맞춰 테두리 박스로 재배치한다. 인물 코멘트는 인쇄본에
+    넣지 않는다(사용자 요청 — 화면 탭에는 그대로 남아 있음). print_eval_content는
+    update_profile()이 권한(view_evaluation)까지 반영해 이미 만들어둔 것
+    (_locked_block() 포함)을 그대로 받아써 권한 판정을 중복하지 않는다."""
     # 성별/나이·직급-년차는 사진 아래 캡션(photo_block())에 이미 나오므로
     # 기본정보 표에서는 중복 표시하지 않는다.
     name = str(researcher.get('name', '') or '')
@@ -898,37 +902,47 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
                'width': '190px', 'flex': '0 0 190px',
                'border': _PRINT_BOX_BORDER, 'borderRadius': '6px', 'padding': '8px'})
 
-    # 학력 + 핵심기술/보유기술을 한 박스에 담아 사진 박스·기본정보 옆(우측 상단)에
-    # 배치한다(사용자 요청 4).
+    # 핵심기술/보유기술만 담는다 — 학력은 기본정보(사번~Knox ID) 아래로
+    # 옮겼다(사용자 요청 2).
     right_box = _print_box(None, html.Div([
-        html.Div('학력', className='small fw-semibold text-muted mb-1'),
-        education_block(tables['education'], rid, plain_degree=True),
-        html.Div(
-            owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid,
-                                   stacked=True, show_tech_index=False, show_info_hover=False),
-            style={'marginTop': '10px'},
-        ),
+        owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid,
+                               stacked=True, show_tech_index=False, show_info_hover=False),
     ]))
+
+    # 학력을 기본정보 표(사번~Knox ID) 바로 아래에 배치한다(사용자 요청 2).
+    info_col = html.Div([
+        info_table,
+        current_status,
+        html.Div([
+            html.Div('학력', className='small fw-semibold text-muted mb-1 mt-2'),
+            education_block(tables['education'], rid, plain_degree=True),
+        ]),
+    ], style={'flex': '1 1 0', 'minWidth': '0', 'paddingLeft': '12px'})
 
     header_row = html.Div([
         html.Div(photo_box, style={'flex': '0 0 190px'}),
-        html.Div([info_table, current_status],
-                  style={'flex': '1 1 0', 'minWidth': '0', 'paddingLeft': '12px'}),
+        info_col,
         html.Div(right_box, style={'flex': '1 1 0', 'minWidth': '0', 'marginLeft': '12px'}),
     ], style={'display': 'flex', 'alignItems': 'flex-start', 'marginBottom': '10px'})
 
     # 논문·특허 실적 요약과 양성·시상 이력을 한 박스로 합친다(사용자 요청 3).
     # 박스 제목("논문 / 특허") 없이 "논문 실적 ~건"/"특허 실적 ~건" 두 줄만
     # 바로 보여준다(_print_publication_summary/_print_patent_summary가 각자
-    # 라벨을 포함해서 반환).
-    history_box = _print_box(None, html.Div([
-        _print_publication_summary(tables['publications'], rid),
-        _print_patent_summary(tables['patents'], rid),
-        html.Div('양성 이력', className='small fw-semibold text-muted mt-2 mb-1'),
-        nurturing_block(tables['nurturing'], rid, show_empty_message=False),
-        html.Div('시상 이력', className='small fw-semibold text-muted mt-2 mb-1'),
-        award_block(tables['awards'], rid, limit=3, single_line=True, show_empty_message=False),
-    ]))
+    # 라벨을 포함해서 반환). 예전 학력 박스처럼(사용자 요청) 폭을 우측 상단
+    # 핵심기술·보유기술 박스(header_row의 flex:1 열)와 같은 너비로 줄여
+    # 전체 폭을 다 쓰지 않는다 — header_row와 동일하게 photo 열(190px) +
+    # 여백(12px)을 뺀 나머지를 반으로 나눈 값과 같은 너비다.
+    history_box = html.Div(
+        _print_box(None, html.Div([
+            _print_publication_summary(tables['publications'], rid),
+            _print_patent_summary(tables['patents'], rid),
+            html.Div('양성 이력', className='small fw-semibold text-muted mt-2 mb-1'),
+            nurturing_block(tables['nurturing'], rid, show_empty_message=False),
+            html.Div('시상 이력', className='small fw-semibold text-muted mt-2 mb-1'),
+            award_block(tables['awards'], rid, limit=3, single_line=True, show_empty_message=False),
+        ])),
+        style={'width': 'calc((100% - 190px - 12px) / 2)'},
+    )
 
     # 핵심기술/보유기술이 위 right_box로 옮겨간 만큼, 전문성 요약(LLM)은 이제
     # 전체 폭을 그대로 쓴다(사용자 요청 5). 지면이 좁은 인쇄본 특성상 주요
@@ -1084,7 +1098,7 @@ def _build_print_block(rid, tables, researchers, name_map, show_eval):
     print_eval_content = (
         evaluation_incentive_summary_text(tables['evaluations'], tables['incentive_selection'], rid, years)
         if show_eval
-        else _locked_block('평가 · 인센티브 이력')
+        else _locked_block(icon_only=True)
     )
     current_status = _current_status_badge(researcher)
 
