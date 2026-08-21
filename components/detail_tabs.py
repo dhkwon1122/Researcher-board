@@ -195,12 +195,25 @@ def bullet_list(items, *, class_name: str = 'small'):
     ])
 
 
+def plain_indent_list(items, *, class_name: str = 'small'):
+    """마커(아이콘) 없이 살짝 들여쓰기만 된 상태로 항목을 한 줄씩 나열한다
+    (사용자 요청 — "목록 아이콘 없이 약간 들여쓰기만 된 상태로 나열되게
+    해줘"). bullet_list()와 달리 마커용 <span>이 없다."""
+    return html.Div([
+        html.Div(item, className=class_name, style={'marginLeft': '10px', 'marginBottom': '3px',
+                                                      'wordBreak': 'break-word'})
+        for item in items
+    ])
+
+
 def llm_summary_block(profile: dict | None, similar: list | None = None, name_map: dict | None = None,
                        *, include_responsibilities: bool = True, deemphasize_strength: bool = False):
     """전문성 요약(LLM) — 연구원 보유 전문성 분석.json의 핵심 분야(strength_fields)/
-    키워드(strength_keywords)를 배지로, 주요 역할·책임(key_responsibilities)/
-    전문지식 및 역량(domain_knowledge_skill)을 불릿 목록(bullet_list(), disc
-    마커 대신 사각 마커 — 사용자 요청)으로 보여준다.
+    키워드(strength_keywords)를 배지로, 주요 역할·책임(key_responsibilities)은
+    불릿 목록(bullet_list(), disc 마커 대신 사각 마커 — 사용자 요청)으로,
+    전문지식 및 역량(domain_knowledge_skill)은 마커 없이 들여쓰기만 된 목록
+    (plain_indent_list() — 사용자 요청: "목록 아이콘 없이 약간 들여쓰기만
+    된 상태로 나열되게 해줘")으로 보여준다.
     similar(researcher_similarity.json의 해당 연구원 항목 중 'similar' 리스트,
     시니어 우선으로 이미 정렬돼 있음)가 주어지면 시니어 3명·주니어 3명을 유사
     연구원 배지로 덧붙인다(생략하면 유사 연구원 섹션 자체를 건너뜀 — A4 인쇄
@@ -213,8 +226,12 @@ def llm_summary_block(profile: dict | None, similar: list | None = None, name_ma
     Strength Field/Keywords의 내용은 색깔 배지 대신 옅은 회색 콤마 나열
     텍스트로 보여준다(이전 요청 — "너무 강조되어 보인다... 힘을 빼줘"와
     절충 — 라벨은 다른 소제목들과 통일된 박스로 존재감을 주되, 내용 자체는
-    화려한 배지 대신 차분한 텍스트로 유지). 화면(라이브) 탭 호출부는 이
-    인자를 넘기지 않아 기존 배지+회색 텍스트 라벨 그대로다."""
+    화려한 배지 대신 차분한 텍스트로 유지). Strength Field 줄 오른쪽 끝에는
+    옅은 회색으로 "(by AI)"를 붙인다(사용자 요청 — 인쇄본에서 "전문성
+    요약(LLM)" 박스 제목을 없앤 대신, 이 블록이 AI 생성 결과임을 표시할
+    자리가 필요해짐). 화면(라이브) 탭 호출부는 이 인자를 넘기지 않아 기존
+    배지+회색 텍스트 라벨 그대로다(제목 제거·(by AI) 표기 모두 인쇄본
+    전용)."""
     if not profile:
         return html.Div('분석 데이터 없음', className='text-muted small p-1')
 
@@ -226,7 +243,10 @@ def llm_summary_block(profile: dict | None, similar: list | None = None, name_ma
     children = []
     if fields:
         if deemphasize_strength:
-            children.append(html.Div(print_sub_heading('Strength Field'), className='mb-1'))
+            children.append(html.Div([
+                print_sub_heading('Strength Field'),
+                html.Span('(by AI)', className='text-muted', style={'fontSize': '0.68rem'}),
+            ], className='d-flex justify-content-between align-items-center mb-1'))
             children.append(html.Div(', '.join(fields), className='small text-muted', style={'marginBottom': '6px'}))
         else:
             children.append(html.Div('Strength Field', className='small text-muted fw-semibold mb-1'))
@@ -250,7 +270,7 @@ def llm_summary_block(profile: dict | None, similar: list | None = None, name_ma
             children.append(html.Div(print_sub_heading('전문지식 및 역량'), className='mb-1'))
         else:
             children.append(html.Div('전문지식 및 역량', className='small text-muted fw-semibold mt-2 mb-1'))
-        children.append(bullet_list(domain_skill))
+        children.append(plain_indent_list(domain_skill))
 
     name_map = name_map or {}
     senior = [s for s in (similar or []) if s.get('tenure_level') == 'Senior'][:3]
