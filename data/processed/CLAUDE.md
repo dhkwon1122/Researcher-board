@@ -4516,3 +4516,129 @@ tech_ownership.csv/hr_orders.csv 직접 구성 + tasks.csv 14건 + 전문성
 - 테스트 데이터(core_technology.csv/tech_ownership.csv/hr_orders.csv
   직접 구성, tasks.csv 14건, 전문성 분석 JSON 픽스처, 계정)·서버 모두
   정리.
+
+## 2026-08-21 (30): Strength Field/Keyword + 논문·특허·양성·시상 내용 들여쓰기 통일 + 과제/인사발령 이력 1페이지 동적 오토핏 + "by AI" 아이콘 배지
+
+사용자 요청 4건: "1. Strength Field/Keyword 의 내용도 전문지식 및 역량이랑
+동이랗게 들여쓰기 해줘. 2. 논문 실적, 특허 실정, 양성이력, 시상 이력의
+내용도 동일하게 들여쓰기 해주면 돼. 3. 과제 수행, 인사 발령 이력의 내용은
+페이지가 1페이지 안에 인쇄되도록 개수를 동적으로 조정해줘. 4. by AI라는
+글씨는 괄호에 넣지 않고 아이콘 느낌으로 표현해줘. AI느낌이 나는 작은
+픽토그램을 같이 넣어도 좋아."
+
+**1)+2) 내용 들여쓰기 통일**: (29)번에서 전문지식 및 역량에 적용한
+"마커 없이 marginLeft:10px만" 스타일을 나머지 항목에도 넓혔다.
+- `llm_summary_block()`(`components/detail_tabs.py`): Strength Field/
+  Strength Keywords 콤마 나열 텍스트 div에 `'marginLeft': '10px'` 추가.
+- `_print_publication_summary()`/`_print_patent_summary()`
+  (`pages/researcher_profile.py`): 반환하는 `html.Div`에 같은
+  `marginLeft: 10px` 추가(둘 다 애초에 한 줄짜리 텍스트라 마커 자체가
+  없었음 — 들여쓰기만 더하면 됨).
+- `nurturing_block()`/`award_block()`(`components/profile_sections.py`):
+  신규 `plain_style: bool = False` 파라미터 추가 — `True`면 기존
+  `<ul class="ps-3"><li>`(브라우저 기본 disc 마커) 대신
+  `components/detail_tabs.py`의 `plain_indent_list()`와 같은 모양(마커
+  없는 `<div>`, `marginLeft: 10px`)으로 렌더링한다. 화면(라이브) 탭
+  호출부(`update_profile()`)는 이 인자를 안 넘겨 기존 그대로,
+  `history_box` 조립부(인쇄 전용)만 `plain_style=True`로 호출하도록
+  바꿨다. `award_block()`의 `single_line=True`(생략 부호 ellipsis) 옵션은
+  `plain_style=True`와 함께 써도 그대로 유지되도록 `item_style`을 두
+  분기 모두에 병합해 넣었다.
+- `nurturing_block`/`award_block`이 반환하는 `<ul>` 자체가 없어지면서,
+  `components/profile_sections.py`가 `components/detail_tabs.py`의
+  `plain_indent_list`를 새로 import한다(순환 import 없음 — `detail_tabs.py`
+  는 `profile_sections.py`를 참조하지 않음, 미리 확인).
+
+**3) 과제/인사발령 이력 1페이지 동적 오토핏**: 그동안 `_TASK_HR_RECENT_
+LIMIT`(고정 12건)으로 서버에서 미리 잘라 보여줬는데((27)~(29)번에서 실측
+기반으로 이 값을 조정해왔음에도, (28)~(29)번에서 실제 전문성 분석 데이터가
+있으면 이미 1페이지 예산을 넘긴다는 걸 확인한 바 있다), 이번엔 아예 고정
+건수 자르기를 없애고 `pages/researcher_profile.py`의
+`_print_publication_detail_table()`/`_print_patent_detail_table()`(페이지2
+상세 표)가 이미 쓰던 실측 기반 클라이언트사이드 오토핏 패턴을 그대로
+재사용했다.
+- `_print_task_hr_timeline(task_df, hr_df, rid)`에서 `limit` 파라미터를
+  없애고 항상 전체 행을 렌더링, 표에 `.print-autofit-table`/
+  `.print-autofit-body`/`.print-autofit-note` 마커를 단다(페이지2 상세
+  표와 완전히 같은 구조 — 스타일도 같은 `_PRINT_TABLE_TH_STYLE`/
+  `_PRINT_TABLE_TD_STYLE`을 재사용해 `dbc.Table` 대신 raw `html.Table`로
+  바꿈).
+- 문제는 `assets/profile_print.js`의 오토핏 로직(`__runProfilePrintFit()`)
+  이 `.print-page-block`(지금까지 페이지2 논문·특허 상세 블록에만 붙어
+  있던 클래스) 단위로만 높이를 재고 잘랐다는 것 — 페이지1 콘텐츠는 이
+  마커가 없어 오토핏 대상이 아니었다. `_print_profile_content()`가
+  반환하던 페이지1 콘텐츠(제목~과제/인사발령 이력+출력일)를
+  `page1_block = html.Div([...], className='print-page-block')`로 감싸는
+  것만으로 해결했다 — `.print-page-block` 자체엔 CSS가 전혀 없어(강제
+  페이지 나눔은 페이지2 블록의 인라인 `style={'breakBefore':'page'}`가
+  하는 것이지 이 클래스가 하는 게 아님, 확인) JS 셀렉터 표시 용도뿐이라
+  **JS 코드는 한 줄도 안 바꿔도** 범용 오토핏 로직이 페이지1의
+  `.print-autofit-table`(과제/인사발령 표)도 자동으로 집어내 실측
+  높이가 예산을 넘으면 뒤쪽(오래된) 행부터 순서대로 숨기고 "외 N건 더"를
+  채운다. `services/profile_pdf.py`의
+  `wait_for_selector('.print-page-block', state='attached')`는 "첫 매치
+  대기"라 블록이 인당 1개→2개로 늘어도 영향 없음을 확인. 일괄 인쇄
+  (`/?ids=...`)는 사람마다 이미 바깥에서 `style={'breakAfter':'page'}`로
+  구분하고 있어(`build_bulk_print_content()`), 사람당 블록 수가 늘어난
+  것과 무관하게 그대로 동작함을 실측으로 확인(아래 검증 참고).
+- `_TASK_HR_RECENT_LIMIT` 상수와 관련 주석을 통째로 삭제. `task_hr_box`
+  제목에서 고정 건수("최근 N건")도 뺐다 — 이제 몇 건이 보일지는 인쇄
+  시점마다 달라지므로, 페이지2 상세 표 제목들이 건수를 안 적는 것과
+  같은 방식(잘린 건수는 "외 N건 더"로만 안내)으로 통일.
+- `task_hr_box`를 감싸던 `_print_box(..., breakable=True)`도
+  `breakable=False`(기본값)로 되돌렸다 — 오토핏이 이제 항상 1페이지
+  안에 들어오게 보장하므로, 페이지2 상세 표들과 똑같이
+  `break-inside:avoid`(`.print-section`)로 보호해도 안전하고, 오히려
+  측정 오차로 살짝 넘칠 경우 표 중간이 아니라 박스 전체가 다음 페이지로
+  통째로 넘어가는 게 더 안전하다. `_print_box()` 자체의 `breakable`
+  파라미터는 지금은 아무도 안 쓰지만(향후 필요할 수 있어) 그대로 남겨둠.
+
+**4) "by AI" 아이콘 배지**: `components/detail_tabs.py`에 신규
+`_AI_TAG_STYLE` + `_ai_tag()` 추가 — bootstrap-icons의 `bi-stars`(반짝임)
+아이콘 + "by AI" 텍스트를 옅은 남색 계열(#eef1fb 배경/#dde2f5 테두리)
+알약(pill) 배지에 담는다. `llm_summary_block()`의 Strength Field 줄에서
+`html.Span('(by AI)', ...)`(괄호 텍스트)를 `_ai_tag()` 호출로 교체 —
+텍스트 자체에 괄호 문자가 없다.
+
+**검증**: 실제 서버 기동(`generate_sample_data.py` + core_technology.csv/
+tech_ownership.csv/hr_orders.csv 직접 구성 + tasks.csv 14건 + 전문성
+분석 JSON 픽스처 + awards.csv 2건 직접 추가 — (29)번까지는 awards.csv가
+빈 데이터라 시상 이력 들여쓰기를 육안 확인 못 했었음, 이번에 보완) +
+로그인(team_lead) + Playwright.
+- Strength Field 값/논문 실적/특허 실적/양성 이력/시상 이력 텍스트 요소를
+  각각 찾아 `getComputedStyle(...).marginLeft`가 모두 `'10px'`임을 확인.
+- `#profile-print-content` 안에 `<ul>`이 0개임을 확인(이전 (28)~(29)번의
+  양성/시상 이력 `<ul>`이 이번에 마지막으로 없어짐 — 논문 실적/특허
+  실적/전문지식 및 역량/Strength Field·Keywords는 이미 `<ul>`이 아니었음).
+- 본문 텍스트에 `(by AI)`(괄호 포함) 문자열이 없고, `by AI` 텍스트와
+  `.bi-stars` 아이콘 요소가 존재함을 확인. 다만 이 샌드박스가
+  `cdn.jsdelivr.net`(bootstrap-icons 폰트가 로드되는 곳)에 네트워크
+  접근이 안 돼(이전 (29)번에서도 같은 이유로 `text-muted` 색상을 픽셀로
+  확인 못 했던 것과 동일한 제약) 아이콘 글리프 자체가 실제로 화면에
+  그려지는지는 스크린샷으로 확인 못 했다 — `bi-stars` 클래스가 올바르게
+  붙어 있는지(DOM)로 검증을 대신했고, 운영 환경(CDN 접근 가능)에서는
+  정상 렌더링될 것으로 예상.
+- 과제/인사발령 이력 오토핏: 실제 데이터가 꽉 찬 픽스처(전문성 분석
+  프로필 있음)에서 합계 19건 중 3건만 보이고 "외 16건 더"가 표시됨을
+  확인, 보이는 3건이 정확히 최신순 상위 3건(2023/2022/2021)임을 각 행의
+  `style.display`로 재확인(오래된 행부터 숨겨짐 — 의도대로 동작).
+  전문성 분석 프로필을 뺀(더 여유 있는) 같은 픽스처로는 9건이 보임을
+  확인해, 콘텐츠 양에 따라 실제로 "동적으로" 조정됨을 실증.
+- 페이지 수: `.print-page-block` 개수가 정확히 2개(페이지1 콘텐츠 +
+  페이지2 상세)이고, 페이지2 블록의 top이 페이지1 블록의 height와
+  정확히 일치함을 확인 — (28)~(29)번에서 실제 데이터가 꽉 찬 경우 3페이지로
+  넘치던 문제가 이번 오토핏 도입으로 해결됨(더 이상 페이지1 콘텐츠
+  높이를 직접 실측해 예산과 비교할 필요 없이, 오토핏이 항상 예산
+  이하로 맞춰준다 — 실측값 882.8px < 예산 936.7px).
+  전문성 분석 프로필을 뺀 경우도 페이지1 높이 873.2px로 마찬가지 2페이지.
+- 일괄 인쇄(`/?ids=00000001,00000002,00000003`)로 3명을 한 번에 인쇄해
+  `.print-page-block`이 정확히 6개(인당 2개)이고, 각자의 페이지1
+  제목("연구원 프로필")·페이지2 제목(이름+사번)이 모두 정상 출력되며
+  콘솔 에러가 없음을 확인(뜬 에러 2건은 `net::ERR_TUNNEL_CONNECTION_
+  FAILED` — 위와 같은 CDN 네트워크 제약, 앱 자체 에러 아님).
+- 무한 재렌더링 회귀 없음(`_dash-update-component` 0건, 자식 수 안정),
+  콘솔 에러 없음(단일 인쇄 기준).
+- `python3 -m py_compile`로 컴파일 확인.
+- 테스트 데이터(core_technology.csv/tech_ownership.csv/hr_orders.csv/
+  awards.csv 직접 구성, tasks.csv 14건, 전문성 분석 JSON 픽스처, 계정)·
+  서버 모두 정리.

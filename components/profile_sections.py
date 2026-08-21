@@ -8,6 +8,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from dash import html
 
+from components.detail_tabs import plain_indent_list
 from services.data_store import ASSETS_DIR, PHOTO_DIR, RAW_DIR
 from services.evaluations import first_half_column, format_evaluation_cell, salary_grade_column, second_half_column
 
@@ -331,7 +332,13 @@ def evaluation_incentive_summary_text(eva_df, inc_df, rid: str, years: list[int]
     ], className='text-center', style={'textAlign': 'center'})
 
 
-def nurturing_block(nur_df, rid: str, *, limit: int | None = None, show_empty_message: bool = True):
+def nurturing_block(nur_df, rid: str, *, limit: int | None = None, show_empty_message: bool = True,
+                     plain_style: bool = False):
+    """plain_style=True면 기본 <ul> disc 마커 대신 마커 없이 살짝 들여쓰기만
+    된 형태(components/detail_tabs.py의 plain_indent_list()와 같은 모양)로
+    보여준다(A4 인쇄본 전용 — 사용자 요청: "논문 실적, 특허 실정, 양성이력,
+    시상 이력의 내용도 [전문지식 및 역량과] 동일하게 들여쓰기 해주면
+    돼"). 화면(라이브) 탭 호출부는 이 인자를 넘기지 않아 기존 <ul> 그대로."""
     rows = nur_df[nur_df['researcher_id'] == rid].copy() if not nur_df.empty else pd.DataFrame()
     if not rows.empty:
         sort_col = 'start_date' if 'start_date' in rows.columns else (
@@ -340,7 +347,7 @@ def nurturing_block(nur_df, rid: str, *, limit: int | None = None, show_empty_me
         if limit:
             rows = rows.head(limit)
 
-    items = []
+    texts = []
     for _, row in rows.iterrows():
         start = str(row.get('start_date', '')).strip()
         end = str(row.get('end_date', '')).strip()
@@ -355,9 +362,11 @@ def nurturing_block(nur_df, rid: str, *, limit: int | None = None, show_empty_me
         ] if p and p not in ('nan',))
         parts = [p for p in [year_label, str(row.get('subcategory', '')).strip(), loc]
                  if p and p not in ('nan',)]
-        items.append(html.Li(' / '.join(parts) if parts else '-', className='small'))
-    if items:
-        return html.Ul(items, className='ps-3 mb-0 small')
+        texts.append(' / '.join(parts) if parts else '-')
+    if texts:
+        if plain_style:
+            return plain_indent_list(texts)
+        return html.Ul([html.Li(t, className='small') for t in texts], className='ps-3 mb-0 small')
     return html.Div('양성 이력 없음', className='text-muted small') if show_empty_message else None
 
 
@@ -365,13 +374,16 @@ AWARD_TYPES = {'그룹표창', '대표이사표창', '대표이사표창(시상�
 
 
 def award_block(awd_df, rid: str, *, limit: int | None = None, single_line: bool = False,
-                 show_empty_message: bool = True):
+                 show_empty_message: bool = True, plain_style: bool = False):
     """limit이 주어지면 최신순 상위 limit건만 보여준다(A4 인쇄처럼 지면이 좁을
     때). single_line=True면 각 항목을 한 줄로 강제하고 넘치는 글자는 '...'로
     잘라 보여준다(CSS text-overflow: ellipsis — 실제 폭에 맞춰 잘리므로 글자수를
     직접 셀 필요가 없다). show_empty_message=False면 이력이 없을 때 "시상 이력
-    없음" 문구 대신 빈 칸으로 둔다(A4 인쇄용). 나머지 기본값은 화면과 동일한
-    기존 동작(전체/여러 줄, 문구 표시)."""
+    없음" 문구 대신 빈 칸으로 둔다(A4 인쇄용). plain_style=True면 기본 <ul>
+    disc 마커 대신 마커 없이 살짝 들여쓰기만 된 형태(nurturing_block()의
+    plain_style과 동일 — 사용자 요청: "논문 실적, 특허 실정, 양성이력, 시상
+    이력의 내용도 동일하게 들여쓰기 해주면 돼")로 보여준다. 나머지 기본값은
+    화면과 동일한 기존 동작(전체/여러 줄, 문구 표시)."""
     if awd_df.empty:
         return html.Div('시상 이력 없음', className='text-muted small') if show_empty_message else None
     rows = awd_df[awd_df['researcher_id'] == rid].copy()
@@ -385,15 +397,21 @@ def award_block(awd_df, rid: str, *, limit: int | None = None, single_line: bool
         rows = rows.head(limit)
 
     item_style = {'whiteSpace': 'nowrap', 'overflow': 'hidden', 'textOverflow': 'ellipsis'} if single_line else {}
-    items = []
+    texts = []
     for _, row in rows.iterrows():
         yr = str(row.get('year', str(row.get('award_date', ''))[:4])).strip()
         yr_label = f"'{yr[-2:]}" if len(yr) >= 2 else yr
         aname = str(row.get('award_name', '')).strip()
         desc  = str(row.get('description', '')).strip()
         parts = [p for p in [yr_label, aname, desc] if p and p not in ('nan',)]
-        items.append(html.Li(' / '.join(parts) if parts else '-', className='small', style=item_style))
-    return html.Ul(items, className='ps-3 mb-0 small')
+        texts.append(' / '.join(parts) if parts else '-')
+    if plain_style:
+        return html.Div([
+            html.Div(t, className='small', style={**item_style, 'marginLeft': '10px', 'marginBottom': '3px',
+                                                    'wordBreak': 'break-word'})
+            for t in texts
+        ])
+    return html.Ul([html.Li(t, className='small', style=item_style) for t in texts], className='ps-3 mb-0 small')
 
 
 _TASK_EMPTY = {'', 'nan', 'none', 'nat', 'NaN', 'None', 'NaT'}

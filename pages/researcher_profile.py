@@ -544,13 +544,6 @@ _PRINT_BOX_BORDER = '1px solid #555555'  # 박스 테두리 색 — 기존 #1d1d
 _PRINT_BOX_DIVIDER = '1px solid #ddd'  # combined_box 내부 photo/info/tech
 # 사이를 나누는 옅은 회색 세로 구분선(사용자 요청) — 위 박스 테두리보다
 # 훨씬 옅은 톤으로, "테두리"가 아니라 살짝 구분감만 주는 용도.
-_TASK_HR_RECENT_LIMIT = 12  # 과제 수행 + 인사 발령 합쳐서 인쇄본에 보여줄 최신 건수
-# (기존 10건 → 6건(1페이지 초과 방지) → 12건 — 그 뒤 여러 라운드의 축소
-# (사진 10% 추가 축소, 박스 통합, 표 폭 최소화, 논문·특허 박스 전체 폭화
-# 등)로 1페이지 여유 공간이 크게 늘어, "아래에 공간이 많은데 표시가 많이
-# 안 된다"는 사용자 피드백에 따라 다시 늘렸다. 실측 기반 조정이라 값을
-# 바꿀 때는 반드시 스트레스 테스트 데이터로 1페이지 예산을 재확인할 것
-# — data/processed/CLAUDE.md 참고.)
 _PHOTO_BOX_WIDTH_PX = 122  # 사진 박스(photo_box) 폭 — 190px → 160px(사진 확대
 # 요청) → 136px(15% 축소) → 122px(사진 열이 combined_box 안에서 제일 길게
 # 내려온다는 사용자 피드백으로 10% 추가 축소, 136*0.9=122.4→122). 이 값을
@@ -565,9 +558,11 @@ def _print_box(title, children, *, breakable: bool = False):
     """A4 인쇄용 프로필의 테두리 박스 하나(피플팀이 준 손그림 양식 참고) — 왼쪽
     위에 제목(네모 박스로 감싼 중제목, `print_sub_heading()` — 사용자 요청),
     그 아래 내용. breakable=False(기본)면 박스 도중에 페이지가 갈라지지
-    않게 하고(assets/custom.css의 .print-section), 과제수행/인사발령
-    이력처럼 길어질 수 있는 박스는 breakable=True로 페이지 경계에서 자연스럽게
-    이어지게 한다."""
+    않게 한다(assets/custom.css의 .print-section, break-inside:avoid).
+    breakable=True는 내용이 얼마나 길어질지 미리 알 수 없어 페이지 경계에서
+    자연스럽게 이어져야 하는 박스용 — 현재는 아무도 안 쓴다(과제수행/
+    인사발령 이력 박스도 (30)번부터 .print-autofit-table로 항상 1페이지
+    안에 들어오게 실측 기반으로 잘라, 더는 필요 없어짐)."""
     body = [html.Div(print_sub_heading(title), className='mb-2')] if title else []
     body.append(children)
     cls = 'print-box' + ('' if breakable else ' print-section')
@@ -604,7 +599,7 @@ def _tenure_value(hire_date_str: str) -> str:
     return f'{tenure}년 ({hd.year}년 {hd.month:02d}월 {hd.day:02d}일 입사)'
 
 
-def _print_task_hr_timeline(task_df, hr_df, rid, *, limit: int | None = None):
+def _print_task_hr_timeline(task_df, hr_df, rid):
     """과제 수행 이력과 인사 발령 이력을 "과제"/"인사발령" 구분자 없이 하나의
     표로 합쳐 날짜 내림차순으로 보여준다. 열은 기간/날짜·발령 내용·조직명
     3개로 통일한다(사용자 요청 — "기간/날짜 | 발령 내용 | 조직명 이런
@@ -613,8 +608,15 @@ def _print_task_hr_timeline(task_df, hr_df, rid, *, limit: int | None = None):
     넣는다 — 인사 발령의 조직명(어디에 배정됐는지)과 같은 성격이라고
     보고 같은 칸을 재사용했다. 인사 발령 이력의 조직명 칸에는 기존처럼
     부서/직급/직책(order_dep/order_cl/order_assignment)을 ' / '로 이어
-    붙인다. limit이 주어지면 둘을 합친 목록 기준으로 최신 limit건만 담고,
-    잘린 나머지 건수를 안내한다."""
+    붙인다. 행 수는 여기서 자르지 않고 전부 렌더링한다 —
+    _print_publication_detail_table()과 마찬가지로 .print-autofit-table
+    마커를 달아, 인쇄 시점에 실제 렌더링 높이를 기준으로 1페이지에 안
+    들어가는 뒤쪽(오래된) 행을 동적으로 숨기고 "외 N건 더"를 채운다
+    (사용자 요청 — "1페이지 안에 인쇄되도록 개수를 동적으로 조정해줘",
+    고정 건수 제한을 없앤 것). 이 표를 담는 task_hr_box가 페이지 1
+    콘텐츠를 감싸는 .print-page-block 안에 있어야 profile_print.js의
+    범용 오토핏 로직이 자동으로 집어낸다(아래 _print_profile_content()
+    조립부 참고)."""
     filtered_task = task_df[task_df['researcher_id'] == rid] if not task_df.empty else task_df
     task_entries = task_points(filtered_task) if filtered_task is not None else []
     hr_rows = filter_hr_rows(hr_df, rid)  # 이미 order_date 내림차순
@@ -646,39 +648,33 @@ def _print_task_hr_timeline(task_df, hr_df, rid, *, limit: int | None = None):
         })
 
     entries.sort(key=lambda e: e['date'], reverse=True)
-    total = len(entries)
-    if limit:
-        entries = entries[:limit]
 
     if not entries:
         return html.Div('과제 수행 / 인사 발령 이력 없음', className='text-muted small')
 
     rows = [
         html.Tr([
-            html.Td(e['period'], className='small text-muted', style={'whiteSpace': 'nowrap'}),
-            html.Td(e['action'], className='small'),
-            html.Td(e['org'], className='small', style={'wordBreak': 'break-word'}),
+            html.Td(e['period'], style={**_PRINT_TABLE_TD_STYLE, 'whiteSpace': 'nowrap'}),
+            html.Td(e['action'], style=_PRINT_TABLE_TD_STYLE),
+            html.Td(e['org'], style=_PRINT_TABLE_TD_STYLE),
         ])
         for e in entries
     ]
-    table = dbc.Table([
+    table = html.Table([
         html.Colgroup([
             html.Col(style={'width': '17%'}),
             html.Col(style={'width': '14%'}),
             html.Col(),
         ]),
         html.Thead(html.Tr([
-            html.Th('기간/날짜', style={'fontSize': '0.72rem'}),
-            html.Th('발령 내용', style={'fontSize': '0.72rem'}),
-            html.Th('조직명', style={'fontSize': '0.72rem'}),
-        ]), className='table-light'),
-        html.Tbody(rows),
-    ], bordered=False, hover=True, size='sm', className='mb-0',
-       style={'tableLayout': 'fixed', 'width': '100%'})
-
-    if limit and total > limit:
-        return html.Div([table, html.Div(f'외 {total - limit}건 더', className='text-muted small mt-1')])
-    return table
+            html.Th('기간/날짜', style=_PRINT_TABLE_TH_STYLE),
+            html.Th('발령 내용', style=_PRINT_TABLE_TH_STYLE),
+            html.Th('조직명', style=_PRINT_TABLE_TH_STYLE),
+        ])),
+        html.Tbody(rows, className='print-autofit-body'),
+    ], className='print-autofit-table', style={'width': '100%', 'borderCollapse': 'collapse'})
+    return html.Div([table, html.Div('', className='print-autofit-note text-muted small mt-1',
+                                      style={'display': 'none'})])
 
 
 def _print_publication_summary(pub_df, rid):
@@ -686,14 +682,16 @@ def _print_publication_summary(pub_df, rid):
     집계(총 논문 수/교신저자 수)만 "~건" 한 줄로 보여주고, 개별 논문 목록
     (제목/게재처 등 세부 내역)은 인쇄본에서는 생략한다. "논문 실적"이라는
     라벨 자체는 이 함수가 아니라 호출부가 `print_sub_heading()`으로 별도로
-    붙인다(사용자 요청 — 다른 소제목들과 같은 네모 박스 스타일로 통일)."""
+    붙인다(사용자 요청 — 다른 소제목들과 같은 네모 박스 스타일로 통일).
+    내용은 marginLeft:10px로 살짝 들여쓴다(사용자 요청 — 전문지식 및
+    역량과 동일하게 들여쓰기)."""
     pub = pub_df[pub_df['researcher_id'] == rid] if not pub_df.empty else pub_df
     if pub is None or pub.empty:
-        return html.Div('없음', className='small')
+        return html.Div('없음', className='small', style={'marginLeft': '10px'})
     total = len(pub)
     corr = int(pub.get('is_corresponding', pd.Series(dtype=str)).astype(str).str.lower()
                .isin(['true', '1', 'y', 'yes']).sum())
-    return html.Div(f'{total}건 (교신저자 {corr}건)', className='small')
+    return html.Div(f'{total}건 (교신저자 {corr}건)', className='small', style={'marginLeft': '10px'})
 
 
 def _print_patent_summary(pat_df, rid):
@@ -701,10 +699,11 @@ def _print_patent_summary(pat_df, rid):
     집계(전체/등록/대표발명/전략출원/미국등록/지분율합계)만 "~건" 한 줄로
     보여주고, 개별 특허 목록(발명 명칭 등 세부 내역)은 인쇄본에서는
     생략한다. "특허 실적" 라벨은 `_print_publication_summary()`와 마찬가지로
-    호출부가 `print_sub_heading()`으로 붙인다."""
+    호출부가 `print_sub_heading()`으로 붙이고, 내용도 같은 이유로
+    marginLeft:10px로 들여쓴다."""
     pat = pat_df[pat_df['researcher_id'] == rid] if not pat_df.empty else pat_df
     if pat is None or pat.empty:
-        return html.Div('없음', className='small')
+        return html.Div('없음', className='small', style={'marginLeft': '10px'})
     pat_dedup = dedupe_patents(pat)
     total_cnt = len(pat_dedup)
     reg_cnt = int(pat_dedup['status'].apply(is_registered).sum()) if 'status' in pat_dedup.columns else 0
@@ -716,7 +715,7 @@ def _print_patent_summary(pat_df, rid):
     return html.Div(
         f'{total_cnt}건 (등록 {reg_cnt} · 출원중 {total_cnt - reg_cnt}) · '
         f'대표발명 {lead_cnt}건 · 전략출원 {strat_cnt}건 · 미국등록 {us_reg_cnt}건 · 지분율 합계 {share_sum_val}',
-        className='small',
+        className='small', style={'marginLeft': '10px'},
     )
 
 
@@ -1041,9 +1040,9 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
         html.Div(print_sub_heading('특허 실적'), className='mt-2 mb-1'),
         _print_patent_summary(tables['patents'], rid),
         html.Div(print_sub_heading('양성 이력'), className='mt-2 mb-1'),
-        nurturing_block(tables['nurturing'], rid, show_empty_message=False),
+        nurturing_block(tables['nurturing'], rid, show_empty_message=False, plain_style=True),
         html.Div(print_sub_heading('시상 이력'), className='mt-2 mb-1'),
-        award_block(tables['awards'], rid, limit=3, single_line=True, show_empty_message=False),
+        award_block(tables['awards'], rid, limit=3, single_line=True, show_empty_message=False, plain_style=True),
     ]))
 
     # 핵심기술/보유기술이 위 right_box로 옮겨간 만큼, 전문성 요약(LLM)은 이제
@@ -1064,13 +1063,27 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
                                     deemphasize_strength=True)),
     ]))
 
+    # 제목에 더 이상 고정 건수("최근 12건" 등)를 적지 않는다 — 아래
+    # _print_task_hr_timeline()이 행 수를 자르지 않고 전부 넘기고,
+    # 실제로 몇 건이 보이는지는 인쇄 시점에 동적으로 정해진다(사용자
+    # 요청: "1페이지 안에 인쇄되도록 개수를 동적으로 조정해줘"). 잘린
+    # 건수는 표 자체의 "외 N건 더"(오토핏 로직이 채움)로 안내한다 —
+    # 페이지2 논문·특허 상세 표 제목이 건수를 안 적는 것과 같은 방식.
     task_hr_box = _print_box(
-        f'과제 수행 / 인사 발령 이력(최근 {_TASK_HR_RECENT_LIMIT}건)',
-        _print_task_hr_timeline(tables['tasks'], tables['hr_orders'], rid, limit=_TASK_HR_RECENT_LIMIT),
-        breakable=True,
+        '과제 수행 / 인사 발령 이력',
+        _print_task_hr_timeline(tables['tasks'], tables['hr_orders'], rid),
     )
 
-    return html.Div([
+    # 1페이지 콘텐츠(제목~과제/인사발령 이력+출력일)를 .print-page-block으로
+    # 감싼다 — 이 클래스 자체에는 CSS가 없고(페이지2 블록의 강제 페이지
+    # 나눔은 그쪽 인라인 style={'breakBefore':'page'}가 담당, 여기서는
+    # 안 씀) profile_print.js가 `.print-page-block` 안의
+    # `.print-autofit-table`(위 task_hr_box의 표)을 실측 높이 기준으로
+    # 자동으로 잘라주는 범용 오토핏 로직의 대상 표시일 뿐이다. 기존에는
+    # 페이지2(논문·특허 상세)만 이 클래스를 썼는데, 페이지1도 같은 방식
+    # (자르지 않고 전부 렌더링 + 실측 오토핏)으로 바꾸면서 자연히 이
+    # 클래스가 필요해졌다 — JS 쪽 코드는 전혀 안 바꿔도 된다(범용 셀렉터).
+    page1_block = html.Div([
         html.Div('연구원 프로필', className='print-title',
                  style={'fontSize': '30px', 'fontWeight': 700,
                         'textAlign': 'center', 'marginBottom': '8px'}),
@@ -1079,8 +1092,9 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
         expertise_summary_box,
         task_hr_box,
         html.Div(f'출력일 {datetime.now():%Y-%m-%d}', className='text-muted small text-end mt-2'),
-        _print_pub_patent_detail_page(name, rid, tables),
-    ])
+    ], className='print-page-block')
+
+    return html.Div([page1_block, _print_pub_patent_detail_page(name, rid, tables)])
 
 
 def _current_status_badge(researcher):
