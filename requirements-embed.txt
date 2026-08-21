@@ -7,6 +7,6 @@
 # GPU(CUDA) 환경이면 torch를 먼저 해당 CUDA 빌드로 설치한 뒤 이 파일을 설치하세요
 # (예: https://pytorch.org/get-started/locally/ 안내에 따른 인덱스 URL 사용).
 
-fastapi>=0.110.0
+fastapi>=0.141.1
 uvicorn>=0.29.0
 FlagEmbedding>=1.2.10
