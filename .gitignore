@@ -25,6 +25,8 @@ config/.flask_secret_key
 # 컨텍스트 문서(CLAUDE.md)는 세션 간 지식 연속성을 위해 형상관리에 포함
 !data/processed/CLAUDE.md
 
-# 사내 CA 인증서는 커밋하지 않음 (README.md / .gitkeep 은 유지)
+# 사내 CA 인증서 및 리버스 프록시용 서버 인증서/키는 커밋하지 않음
+# (README.md / .gitkeep 은 유지)
 certs/*.crt
 certs/*.pem
+certs/*.key

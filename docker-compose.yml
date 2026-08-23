@@ -119,6 +119,31 @@ services:
       # 데이터는 이미지에 굽지 않고 호스트에서 마운트 (수정·교체 용이)
       - ./data:/app/data
 
+  # TLS 리버스 프록시 — app은 127.0.0.1에만 바인딩되므로(위 app의 ports
+  # 참고) 이 컨테이너 없이는 다른 호스트에서 접속할 수 없다. 기본으로는
+  # 뜨지 않는다(profile proxy) — 인증서가 없으면 컨테이너가 바로 죽는다.
+  # 사용:
+  #   1) scripts/gen_self_signed_cert.sh [도메인]  로 certs/server.crt·
+  #      certs/server.key 생성(자체 서명 — 운영 배포에서는 사내 PKI 발급
+  #      인증서로 같은 파일명 교체)
+  #   2) docker compose --profile proxy up -d
+  # 이 nginx가 유일한 진입점이면 .env에서 TRUSTED_PROXY_COUNT=1로
+  # 맞춘다(app의 environment 설명 참고) — 사내 리버스 프록시가 이 앞에
+  # 하나 더 있다면 그만큼 늘릴 것.
+  reverse-proxy:
+    image: nginx:1.27-alpine
+    container_name: researcher_board_proxy
+    profiles: ["proxy"]
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certs/server.crt:/etc/nginx/certs/server.crt:ro
+      - ./certs/server.key:/etc/nginx/certs/server.key:ro
+
   # 로컬 LLM (AI 검색용). 기본으로는 뜨지 않는다(profile llm).
   # 사용:  docker compose --profile llm up -d
   # 모델 1회 다운로드:  docker compose exec ollama ollama pull qwen2.5-coder:3b
