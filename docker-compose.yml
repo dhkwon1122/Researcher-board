@@ -53,9 +53,14 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set in .env}
       PORT: "8501"
-      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      # 아직 TLS 리버스 프록시 없이 사내망에 평문 HTTP로 직접 노출하는
+      # 단계라 기본값 false — true인 채로 HTTPS 없이 쓰면 브라우저가 세션
+      # 쿠키를 아예 안 보내 로그인이 조용히 실패한다. TLS 앞단을 세우면
+      # (deploy/nginx.conf, --profile proxy 참고) .env에서 true로 바꿀 것.
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
       # 앞단에 신뢰 가능한 리버스 프록시가 있을 때만 그 홉 수로 설정한다
-      # (.env.example 참고) — 기본 0(비신뢰)이 안전한 기본값이다.
+      # (.env.example 참고) — 기본 0(비신뢰)이 안전한 기본값이다. TLS
+      # 리버스 프록시를 아직 안 쓰는 지금 단계에서는 0 그대로 둘 것.
       TRUSTED_PROXY_COUNT: ${TRUSTED_PROXY_COUNT:-0}
       ENABLE_WEB_SETUP: ${ENABLE_WEB_SETUP:-false}
       MAX_CONTENT_LENGTH: ${MAX_CONTENT_LENGTH:-10485760}
@@ -114,7 +119,10 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "127.0.0.1:8501:8501"   # TLS reverse proxy를 통해서만 외부 공개
+      # 운영 전환 전 단계 — 사내망에 평문 HTTP로 직접 노출(TLS 리버스
+      # 프록시 준비되면 127.0.0.1:8501:8501로 되돌리고 --profile proxy로
+      # 그 앞단을 세울 것 — deploy/nginx.conf, certs/README.md 참고).
+      - "8501:8501"
     volumes:
       # 데이터는 이미지에 굽지 않고 호스트에서 마운트 (수정·교체 용이)
       - ./data:/app/data
