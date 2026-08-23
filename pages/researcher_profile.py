@@ -294,16 +294,35 @@ def _bulk_layout(ids_param):
         ], justify='between', align='center', className='mb-3 no-print'),
         html.Div(id='profile-print-dummy', style={'display': 'none'}),
         _print_progress_overlay(),
-        html.Div([
-            dbc.Alert([
-                html.Div(f'{len(rid_list)}명의 프로필을 한 번에 인쇄합니다 (1인당 A4 1페이지, 사람마다 페이지가 나뉩니다).'),
-                html.Div(', '.join(labels), className='small text-muted mt-1'),
-            ], color='info', className='mb-3'),
-            dcc.Link([html.I(className='bi bi-arrow-left me-1'), '연구원 명단으로 돌아가기'],
-                     href='/researcher-list', className='small'),
-        ], className='no-print'),
-        dcc.Store(id='bulk-print-ids', data=rid_list),
-        html.Div(id='profile-print-content', className='profile-print-only'),
+        # "프로필 인쇄 (A4)" 버튼을 누르기 전에도, build_bulk_print_content
+        # 콜백이 인원 수만큼 각자의 인쇄 콘텐츠를 서버에서 미리 만들어 이
+        # 화면(정확히는 화면엔 안 보이는 .profile-print-only) 안에 채워
+        # 넣는다 — 이 준비가 끝나야 "프로필 인쇄" 버튼을 눌렀을 때 바로
+        # 인쇄할 수 있다. 인원이 많으면 여기서 몇 초~수십 초 걸릴 수 있는데,
+        # 콜백이 끝날 때까지 화면에 아무 표시가 없으면 멈춘 것처럼 보인다
+        # (사용자 리포트) — dcc.Loading으로 이 구간 전체를 감싸 스피너를
+        # 보여준다. window.__prepareProfilePrint()의 진행률 바(위
+        # _print_progress_overlay)와는 다른 단계임: 이건 서버가 콘텐츠를
+        # "만드는" 동안, 그건 이미 만들어진 콘텐츠를 브라우저가 인쇄용으로
+        # "자르는" 동안의 대기다.
+        dcc.Loading(
+            [
+                html.Div([
+                    dbc.Alert([
+                        html.Div(f'{len(rid_list)}명의 프로필을 한 번에 인쇄합니다 (1인당 A4 1페이지, 사람마다 페이지가 나뉩니다).'),
+                        html.Div('인원이 많으면 프로필 데이터를 불러오는 데 시간이 걸릴 수 있습니다. '
+                                 '아래 로딩 표시가 사라질 때까지 기다려주세요.',
+                                 className='small text-muted mt-1'),
+                        html.Div(', '.join(labels), className='small text-muted mt-1'),
+                    ], color='info', className='mb-3'),
+                    dcc.Link([html.I(className='bi bi-arrow-left me-1'), '연구원 명단으로 돌아가기'],
+                             href='/researcher-list', className='small'),
+                ], className='no-print'),
+                dcc.Store(id='bulk-print-ids', data=rid_list),
+                html.Div(id='profile-print-content', className='profile-print-only'),
+            ],
+            type='circle', color='#1e3a5f',
+        ),
     ])
 
 
@@ -1388,6 +1407,19 @@ def build_bulk_print_content(rid_list):
         print('[build_bulk_print_content] ERROR:', file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
         return html.Div(f'오류 발생: {exc}', className='text-danger small p-2')
+
+
+@callback(
+    Output('profile-print-btn', 'disabled'),
+    Input('profile-print-content', 'children'),
+)
+def _toggle_print_btn_ready(content):
+    """profile-print-content(단일 프로필의 update_profile, 일괄 인쇄의
+    build_bulk_print_content가 각각 채운다)가 비어 있는 동안은 "프로필 인쇄"
+    버튼을 눌러도 아직 잘라낼 콘텐츠가 없다 — 특히 일괄 인쇄는 인원이 많으면
+    이 콘텐츠가 채워지기까지 시간이 걸리므로, 그 사이 버튼을 눌러 빈/미완성
+    인쇄가 나가는 걸 막는다."""
+    return not content
 
 
 @callback(
