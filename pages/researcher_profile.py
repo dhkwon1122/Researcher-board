@@ -2,12 +2,13 @@
 화면 2: 연구원 개별 프로필
 """
 
+import time
 from datetime import date, datetime
 
 import dash
 import dash_bootstrap_components as dbc
 import pandas as pd
-from dash import Input, Output, State, callback, clientside_callback, dcc, html, no_update
+from dash import Input, Output, Patch, State, callback, clientside_callback, dcc, html, no_update
 
 from components.detail_tabs import llm_summary_block, owned_expertise_block, print_sub_heading
 from components.profile_sections import (
@@ -179,6 +180,67 @@ def _print_progress_overlay():
     })
 
 
+_BULK_BUILD_OVERLAY_BASE_STYLE = {
+    'position': 'fixed', 'top': '16px', 'right': '16px',
+    'backgroundColor': 'white', 'padding': '14px 18px', 'borderRadius': '10px',
+    'boxShadow': '0 2px 16px rgba(0,0,0,0.18)', 'border': '1px solid #e5e5ea',
+    'zIndex': 2000,
+}
+_BULK_BUILD_OVERLAY_VISIBLE_STYLE = {**_BULK_BUILD_OVERLAY_BASE_STYLE, 'display': 'block'}
+_BULK_BUILD_OVERLAY_HIDDEN_STYLE = {**_BULK_BUILD_OVERLAY_BASE_STYLE, 'display': 'none'}
+
+
+def _bulk_build_progress_overlay(total):
+    """일괄 인쇄 화면(_bulk_layout)에 들어오자마자 — "프로필 인쇄" 버튼을
+    누르기도 전에 — _append_bulk_print_block이 인원 수만큼 서버에서 인쇄
+    콘텐츠를 하나씩 만들어 채우는 동안 보여주는 진행률 표시. 위
+    _print_progress_overlay()는 그 뒤 버튼을 눌렀을 때 브라우저가 이미
+    만들어진 콘텐츠를 자르는 별개 단계용이다. 이 단계가 인원이 많으면
+    (사용자 리포트: 16명) 수 초~수십 초 걸릴 수 있는데, 표시가 없으면
+    화면이 멈춘 것처럼 보이고 브라우저가 "응답 없음"까지 띄우는 경우가
+    있어(한 번에 모든 사람의 콘텐츠를 만들어 통째로 렌더링하면 그 최종
+    DOM 반영이 크고 무거운 동기 작업이라 메인 스레드가 오래 막힘) 한
+    사람씩 나눠 만들고 그때그때 화면에 이어붙인다(Dash Patch)."""
+    return html.Div([
+        html.Div(id='bulk-build-progress-text', className='small fw-semibold mb-2',
+                  children=f'프로필 데이터 준비 중… (0 / {total})'),
+        html.Div(
+            html.Div(id='bulk-build-progress-fill', style={
+                'height': '100%', 'width': '0%', 'backgroundColor': '#0071e3',
+                'borderRadius': '999px', 'transition': 'width 0.15s ease',
+            }),
+            style={
+                'width': '260px', 'height': '8px', 'backgroundColor': '#e5e5ea',
+                'borderRadius': '999px', 'overflow': 'hidden',
+            },
+        ),
+    ], id='bulk-build-progress-overlay', className='no-print',
+       style=_BULK_BUILD_OVERLAY_VISIBLE_STYLE if total else _BULK_BUILD_OVERLAY_HIDDEN_STYLE)
+
+
+_bulk_tables_cache: dict = {}
+_BULK_TABLES_CACHE_TTL_SECONDS = 30
+
+
+def _cached_profile_tables():
+    """read_profile_tables()는 매번 18개 테이블을 CSV/DB에서 새로 읽고
+    캐시하지 않는다(services/data_store.py) — 일괄 인쇄에서 인원 수만큼(각
+    Interval 틱마다) 그대로 다시 부르면 읽기 비용이 인원 수배로 불어난다.
+    같은 일괄 인쇄가 진행되는 짧은 시간 동안 데이터가 바뀔 일은 없으므로
+    (배치 파이프라인이 갱신하는 주기에 비하면 30초는 무시할 수준) 짧게
+    캐시해 반복 호출을 재사용한다. 프로세스 전역 캐시라 동시에 다른
+    사용자가 일괄 인쇄를 시작해도 같은 캐시를 공유하지만, 어차피 같은
+    조직 전체가 보는 동일한 참조 데이터라 문제 없다."""
+    now = time.monotonic()
+    cached = _bulk_tables_cache.get('tables')
+    if cached is not None and now - _bulk_tables_cache.get('ts', 0) < _BULK_TABLES_CACHE_TTL_SECONDS:
+        return cached
+    tables = read_profile_tables()
+    _bulk_tables_cache['tables'] = tables
+    _bulk_tables_cache['ts'] = now
+    return tables
+
+
 def layout(id=None, ids=None, **_kwargs):
     if ids:
         return _bulk_layout(ids)
@@ -237,6 +299,7 @@ def layout(id=None, ids=None, **_kwargs):
         ], justify='between', align='center', className='mb-3 no-print'),
         html.Div(id='profile-print-dummy', style={'display': 'none'}),
         _print_progress_overlay(),
+        dcc.Store(id='print-ready', data=False),
         html.Div([
             _selector_card(dept_opts, res_opts, default_dept, default_rid, default_mode),
             dbc.Row([
@@ -294,35 +357,41 @@ def _bulk_layout(ids_param):
         ], justify='between', align='center', className='mb-3 no-print'),
         html.Div(id='profile-print-dummy', style={'display': 'none'}),
         _print_progress_overlay(),
-        # "프로필 인쇄 (A4)" 버튼을 누르기 전에도, build_bulk_print_content
-        # 콜백이 인원 수만큼 각자의 인쇄 콘텐츠를 서버에서 미리 만들어 이
+        # "프로필 인쇄 (A4)" 버튼을 누르기 전에도, _append_bulk_print_block이
+        # 인원 수만큼 각자의 인쇄 콘텐츠를 서버에서 한 명씩 만들어 이
         # 화면(정확히는 화면엔 안 보이는 .profile-print-only) 안에 채워
         # 넣는다 — 이 준비가 끝나야 "프로필 인쇄" 버튼을 눌렀을 때 바로
-        # 인쇄할 수 있다. 인원이 많으면 여기서 몇 초~수십 초 걸릴 수 있는데,
-        # 콜백이 끝날 때까지 화면에 아무 표시가 없으면 멈춘 것처럼 보인다
-        # (사용자 리포트) — dcc.Loading으로 이 구간 전체를 감싸 스피너를
-        # 보여준다. window.__prepareProfilePrint()의 진행률 바(위
-        # _print_progress_overlay)와는 다른 단계임: 이건 서버가 콘텐츠를
-        # "만드는" 동안, 그건 이미 만들어진 콘텐츠를 브라우저가 인쇄용으로
-        # "자르는" 동안의 대기다.
-        dcc.Loading(
-            [
-                html.Div([
-                    dbc.Alert([
-                        html.Div(f'{len(rid_list)}명의 프로필을 한 번에 인쇄합니다 (1인당 A4 1페이지, 사람마다 페이지가 나뉩니다).'),
-                        html.Div('인원이 많으면 프로필 데이터를 불러오는 데 시간이 걸릴 수 있습니다. '
-                                 '아래 로딩 표시가 사라질 때까지 기다려주세요.',
-                                 className='small text-muted mt-1'),
-                        html.Div(', '.join(labels), className='small text-muted mt-1'),
-                    ], color='info', className='mb-3'),
-                    dcc.Link([html.I(className='bi bi-arrow-left me-1'), '연구원 명단으로 돌아가기'],
-                             href='/researcher-list', className='small'),
-                ], className='no-print'),
-                dcc.Store(id='bulk-print-ids', data=rid_list),
-                html.Div(id='profile-print-content', className='profile-print-only'),
-            ],
-            type='circle', color='#1e3a5f',
-        ),
+        # 인쇄할 수 있다. 인원이 많으면(사용자 리포트: 16명) 여기서 수
+        # 초~수십 초 걸릴 수 있다. 한 번에 전원을 만들어 통째로 렌더링하면
+        # 그 최종 DOM 반영 자체가 무거운 동기 작업이라 브라우저가 "응답
+        # 없음"을 띄울 정도로 멈춘 것처럼 보였다(사용자 리포트) — 그래서
+        # 한 명씩 나눠 만들고 그때그때 Patch로 이어붙인다(아래
+        # bulk-print-build-interval + _append_bulk_print_block).
+        # dcc.Loading으로 감싸는 대신 별도 진행률 표시(_bulk_build_progress_
+        # overlay)를 쓴 이유: dcc.Loading은 로딩 중 children을 함께 가려버려
+        # 바로 아래 안내 문구(dbc.Alert)까지 안 보이게 되는 문제가 있었다
+        # (사용자 리포트).
+        _bulk_build_progress_overlay(len(rid_list)),
+        html.Div([
+            dbc.Alert([
+                html.Div(f'{len(rid_list)}명의 프로필을 한 번에 인쇄합니다 (1인당 A4 1페이지, 사람마다 페이지가 나뉩니다).'),
+                html.Div('인원이 많으면 프로필 데이터를 불러오는 데 시간이 걸릴 수 있습니다. '
+                         '오른쪽 위 진행률 표시가 다 찰 때까지 기다려주세요.',
+                         className='small text-muted mt-1'),
+                html.Div(', '.join(labels), className='small text-muted mt-1'),
+            ], color='info', className='mb-3'),
+            dcc.Link([html.I(className='bi bi-arrow-left me-1'), '연구원 명단으로 돌아가기'],
+                     href='/researcher-list', className='small'),
+        ], className='no-print'),
+        dcc.Store(id='bulk-print-ids', data=rid_list),
+        dcc.Store(id='bulk-print-progress', data=0),
+        # 만들 사람이 아예 없으면(예: 잘못된 ?ids=) 기다릴 것도 없으므로
+        # 처음부터 준비된 것으로 둔다 — 안 그러면 인터벌이 아예 안 돌아
+        # (바로 아래 disabled=not rid_list) 버튼이 영원히 비활성 상태로 남는다.
+        dcc.Store(id='print-ready', data=not rid_list),
+        dcc.Interval(id='bulk-print-build-interval', interval=200, n_intervals=0,
+                     disabled=not rid_list),
+        html.Div(id='profile-print-content', className='profile-print-only', children=[]),
     ])
 
 
@@ -554,6 +623,7 @@ def _empty_profile_output():
     return (
         avatar('?'), html.Div(), html.Div(), html.Div(), html.Div(),
         [], None, html.Div(), prompt, prompt, prompt, html.Div(), html.Div(),
+        True,  # print-ready — 인쇄할 내용은 없지만 대기할 것도 없다.
     )
 
 
@@ -1292,6 +1362,7 @@ def _build_print_block(rid, tables, researchers, name_map, show_eval):
     Output('tab-expertise', 'children'),
     Output('profile-current-status', 'children'),
     Output('profile-print-content', 'children'),
+    Output('print-ready', 'data'),
     Input('researcher-select', 'value'),
 )
 def update_profile(rid):
@@ -1356,6 +1427,7 @@ def update_profile(rid):
             owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid),
             current_status,
             _build_print_block(rid, tables, researchers, name_map, show_eval),
+            True,
         )
     except Exception as exc:
         import traceback
@@ -1368,58 +1440,89 @@ def update_profile(rid):
         return (
             avatar('?'), err_div, html.Div(), html.Div(), html.Div(),
             [], None, html.Div(), err_div, err_div, err_div, html.Div(), html.Div(),
+            True,
         )
 
 
 @callback(
     Output('profile-print-content', 'children', allow_duplicate=True),
-    Input('bulk-print-ids', 'data'),
-    prevent_initial_call='initial_duplicate',
+    Output('bulk-print-progress', 'data'),
+    Output('bulk-print-build-interval', 'disabled'),
+    Output('bulk-build-progress-text', 'children'),
+    Output('bulk-build-progress-fill', 'style'),
+    Output('bulk-build-progress-overlay', 'style'),
+    Output('print-ready', 'data', allow_duplicate=True),
+    Input('bulk-print-build-interval', 'n_intervals'),
+    State('bulk-print-ids', 'data'),
+    State('bulk-print-progress', 'data'),
+    prevent_initial_call=True,
 )
-def build_bulk_print_content(rid_list):
-    import sys
-    import traceback
+def _append_bulk_print_block(_n_intervals, rid_list, progress):
+    """일괄 인쇄 화면이 뜨자마자 bulk-print-build-interval이 주기적으로
+    틱을 보내고, 매 틱마다 딱 한 명의 인쇄 콘텐츠만 만들어 Patch로
+    이어붙인다 — build_bulk_print_content(이전 버전)처럼 인원 전체를 한
+    콜백에서 만들어 한 번에 렌더링하면, 그 최종 DOM 반영 자체가 무겁고
+    긴 동기 작업이라 브라우저가 "응답 없음"을 띄울 정도로 멈춘 것처럼
+    보였다(사용자 리포트, 16명 테스트). 한 명씩 나눠 붙이면 그 사이사이
+    브라우저가 다른 작업(그리기, 다음 요청)을 처리할 틈이 생긴다."""
     from services.auth import can, get_current_user
 
-    if not rid_list or get_current_user() is None:
-        return no_update
+    fallback = (no_update, no_update, True, no_update, no_update, _BULK_BUILD_OVERLAY_HIDDEN_STYLE)
+    if get_current_user() is None or not rid_list:
+        return (*fallback, True)
+
+    total = len(rid_list)
+    idx = progress or 0
+    if idx >= total:
+        return (*fallback, True)
 
     show_eval = can('view_evaluation')
-
+    rid = rid_list[idx]
     try:
-        tables = read_profile_tables()
+        tables = _cached_profile_tables()
         researchers = tables['researchers']
         if researchers.empty:
-            return html.Div('연구원 정보를 찾을 수 없습니다.', className='text-muted p-3')
-        name_map = researchers.set_index('researcher_id')['name'].to_dict()
-
-        blocks = []
-        for i, rid in enumerate(rid_list):
+            block = None
+        else:
+            name_map = researchers.set_index('researcher_id')['name'].to_dict()
             block = _build_print_block(rid, tables, researchers, name_map, show_eval)
-            if block is None:
-                continue
-            # 마지막 사람 뒤에는 break를 넣지 않아야 끝에 빈 페이지가 안 붙는다
-            # (assets/custom.css의 unnamed @page A4 오버라이드와 같은 이유).
-            style = {} if i == len(rid_list) - 1 else {'breakAfter': 'page'}
-            blocks.append(html.Div(block, style=style))
-        return html.Div(blocks) if blocks else html.Div('선택한 연구원 정보를 찾을 수 없습니다.', className='text-muted p-3')
     except Exception as exc:
-        print('[build_bulk_print_content] ERROR:', file=sys.stderr)
+        import sys
+        import traceback
+        print(f'[_append_bulk_print_block] ERROR for rid={rid!r}:', file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
-        return html.Div(f'오류 발생: {exc}', className='text-danger small p-2')
+        block = html.Div(f'{rid} 프로필을 만드는 중 오류가 발생했습니다: {exc}',
+                          className='text-danger small p-2')
+
+    new_idx = idx + 1
+    done = new_idx >= total
+
+    patch = Patch()
+    if block is not None:
+        # 마지막 사람 뒤에는 break를 넣지 않아야 끝에 빈 페이지가 안 붙는다
+        # (assets/custom.css의 unnamed @page A4 오버라이드와 같은 이유).
+        style = {} if done else {'breakAfter': 'page'}
+        patch.append(html.Div(block, style=style))
+
+    fill_style = {
+        'height': '100%', 'width': f'{round(new_idx / total * 100)}%',
+        'backgroundColor': '#0071e3', 'borderRadius': '999px', 'transition': 'width 0.15s ease',
+    }
+    overlay_style = _BULK_BUILD_OVERLAY_HIDDEN_STYLE if done else _BULK_BUILD_OVERLAY_VISIBLE_STYLE
+    text = f'프로필 데이터 준비 중… ({new_idx} / {total})'
+    return patch, new_idx, done, text, fill_style, overlay_style, done
 
 
 @callback(
     Output('profile-print-btn', 'disabled'),
-    Input('profile-print-content', 'children'),
+    Input('print-ready', 'data'),
 )
-def _toggle_print_btn_ready(content):
-    """profile-print-content(단일 프로필의 update_profile, 일괄 인쇄의
-    build_bulk_print_content가 각각 채운다)가 비어 있는 동안은 "프로필 인쇄"
-    버튼을 눌러도 아직 잘라낼 콘텐츠가 없다 — 특히 일괄 인쇄는 인원이 많으면
-    이 콘텐츠가 채워지기까지 시간이 걸리므로, 그 사이 버튼을 눌러 빈/미완성
-    인쇄가 나가는 걸 막는다."""
-    return not content
+def _toggle_print_btn_ready(ready):
+    """print-ready가 True가 되기 전에는 "프로필 인쇄" 버튼을 비활성화한다
+    — 단일 프로필은 update_profile이 즉시, 일괄 인쇄는
+    _append_bulk_print_block이 전원 다 만든 뒤에 True로 바꾼다. 그 사이
+    버튼을 눌러 빈/미완성 콘텐츠가 인쇄되는 걸 막는다."""
+    return not ready
 
 
 @callback(
