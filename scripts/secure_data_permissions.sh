@@ -15,7 +15,9 @@
 # 소유권(chown)은 배포 환경마다 실행 계정이 달라 이 스크립트가 임의로
 # 바꾸지 않는다 — data/ 가 이미 올바른 소유자(앱을 구동하는 계정)로 돼
 # 있다고 가정하고 권한 비트만 좁힌다. 소유자가 다르면 이 스크립트 실행
-# 전에 먼저 chown부터 맞출 것.
+# 전에 먼저 chown부터 맞출 것 — docker compose로 띄우는 경우엔
+# scripts/fix_data_ownership.sh 로 컨테이너의 non-root app 유저(uid 10001)
+# 소유로 맞춘다.
 #
 # 사용법:
 #   scripts/secure_data_permissions.sh [데이터_루트_경로]

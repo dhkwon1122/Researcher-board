@@ -116,8 +116,12 @@ RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
 # data/ 와 .env 는 .dockerignore 로 제외 → 컨테이너에는 볼륨/시크릿으로 주입.
 COPY . .
 
-# 애플리케이션은 root 권한이 필요하지 않다. 바인드 마운트하는 ./data도
-# 호스트에서 uid 10001이 읽고 쓸 수 있도록 소유권/ACL을 맞춘다.
+# 애플리케이션은 root 권한이 필요하지 않다. 바인드 마운트하는 ./data는
+# 호스트의 실제 소유권을 그대로 쓰므로(이 chown은 이미지 안 /app에만
+# 효과가 있고 바인드 마운트로 덮이는 /app/data에는 적용되지 않는다) 호스트
+# 쪽에서 uid 10001이 읽고 쓸 수 있도록 별도로 맞춰야 한다 — 처음 배포할
+# 때 scripts/fix_data_ownership.sh 를 sudo로 한 번 실행할 것(안 하면
+# "Permission denied: /app/data/processed/....json" 식으로 실패한다).
 RUN groupadd --gid 10001 app \
     && useradd --uid 10001 --gid app --create-home --shell /usr/sbin/nologin app \
     && chown -R app:app /app
