@@ -16,7 +16,10 @@ chat()/LLM_BASE_URL 설정이 있었지만, 결국 같은 사내 LLM 서버를 �
 환경변수:
   EMBED_BASE_URL  기본 http://localhost:7138 (BGE-M3 python 서버)
   EMBED_MODEL     기본 bge-m3
-  EMBED_API_KEY   기본 '' (내부 서버라 대개 인증 불필요)
+  EMBED_API_KEY   기본 '' — docker-compose의 bge-embed 서비스는 이 값을 필수로
+                  요구한다(services/bge_server.py 참고). ASCII만 가능(HTTP
+                  헤더 제약) — .env.example의 안내 placeholder를 그대로 쓰면
+                  한글이 섞여 UnicodeEncodeError가 난다.
   EMBED_TIMEOUT   기본 300 (초 — CPU 추론 시 배치당 오래 걸릴 수 있어 넉넉하게)
 """
 
@@ -53,6 +56,20 @@ def embed(texts: list[str], batch_size: int = 64) -> list[list[float]]:
     url = f'{base}/api/embed'
     headers = {'Content-Type': 'application/json'}
     if api_key:
+        try:
+            api_key.encode('latin-1')
+        except UnicodeEncodeError as exc:
+            # HTTP 헤더 값은 latin-1/ASCII만 허용된다 — EMBED_API_KEY에 한글 등이
+            # 섞여 있으면 여기서 미리 걸러야, requests가 헤더를 인코딩하다
+            # 던지는 알아보기 힘든 UnicodeEncodeError 대신 원인을 바로
+            # 알려준다(흔한 실수: .env.example의 한글 placeholder를 실제 값으로
+            # 안 바꾸고 그대로 씀 — 사용자 리포트).
+            raise LLMError(
+                'EMBED_API_KEY에 영문/숫자/기호가 아닌 문자가 포함되어 있습니다 '
+                '(HTTP 헤더는 ASCII만 허용합니다). .env의 EMBED_API_KEY가 '
+                '.env.example의 안내 문구(예: "여기_긴_랜덤값") 그대로 남아있지 '
+                '않은지 확인하고, `openssl rand -hex 32` 같은 값으로 바꾸세요.'
+            ) from exc
         headers['Authorization'] = f'Bearer {api_key}'
 
     vectors: list[list[float]] = []
