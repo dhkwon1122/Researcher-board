@@ -34,6 +34,13 @@ CSV(및 LLM 파생 JSON 산출물)를 그 자리에서 SQL로 조회한다 — �
 동시성: SQL 생성 호출은 pipeline/llm_client.call_llm()을 max_wait과 함께
 사용해, nl_query.py의 나머지 intent와 동일하게 동시 호출 슬롯을 못 얻으면
 무한 대기 대신 빠르게 실패한다(text2sql.py에는 이 보호가 없음).
+
+self-repair: 생성된 SQL이 안전 검증(sanitize_sql)에 걸리거나 DuckDB 실행
+자체가 에러(문법 오류 등)로 실패하면, 그 에러 메시지를 LLM에 다시 주고 한
+번만 재생성을 시도한다(_generate_sql_repair). 기존 "0건이면 의미 기반
+재시도"(_semantic_fallback)는 SQL 자체는 정상 실행됐지만 결과가 없는
+경우를 보완하는 것이고, 이 재시도는 SQL이 애초에 실행 불가능했던 경우를
+보완하는 것이라 서로 겹치지 않는다.
 """
 
 import json
@@ -101,6 +108,19 @@ Rules:
   differently in the data. Leave these three fields as empty strings if you
   can't think of a reasonable fallback.
 
+Examples (showing the JOIN/CAST/LIKE patterns above — table and column names
+here may not exist in the actual schema below, treat them only as pattern
+references, not as real tables to query):
+
+Q: 부서별 재직 인원수
+A: {{"sql": "SELECT department, COUNT(*) AS cnt FROM researchers WHERE is_current = 'Y' GROUP BY department", "fallback_table": "", "fallback_column": "", "fallback_term": ""}}
+
+Q: AI 관련 전문성을 가진 연구원
+A: {{"sql": "SELECT researcher_id, strength_fields FROM expertise_profiles WHERE strength_fields LIKE '%AI%'", "fallback_table": "expertise_profiles", "fallback_column": "strength_fields", "fallback_term": "인공지능"}}
+
+Q: 논문을 가장 많이 쓴 연구원 5명
+A: {{"sql": "SELECT p.researcher_id, COUNT(*) AS pub_count FROM publications p JOIN researchers r ON r.researcher_id = p.researcher_id WHERE r.is_current = 'Y' GROUP BY p.researcher_id ORDER BY pub_count DESC LIMIT 5", "fallback_table": "", "fallback_column": "", "fallback_term": ""}}
+
 Output format (JSON only):
 {{
   "sql": "SELECT ...",
@@ -112,6 +132,19 @@ Output format (JSON only):
 Schema (all columns are TEXT):
 {schema}
 """
+
+_REPAIR_SYSTEM_SUFFIX = """
+
+Your previous answer's SQL failed when run:
+Previous SQL:
+{bad_sql}
+
+Error:
+{error}
+
+Fix it and return the same JSON format as before (a corrected "sql", plus
+"fallback_table"/"fallback_column"/"fallback_term"). Output ONLY the JSON
+object, no explanation."""
 
 
 def _safe_table_name(stem: str) -> str:
@@ -207,10 +240,7 @@ _CUMULATIVE_RULE = (
 )
 
 
-def _generate_sql(question: str, schema: str, max_wait, current_only: bool = True) -> dict | None:
-    rule = _CURRENT_ONLY_RULE if current_only else _CUMULATIVE_RULE
-    system = query_settings.apply(_SQL_GEN_SYSTEM_TEMPLATE.format(schema=schema, current_only_rule=rule))
-    raw = llm_client.call_llm(question, system, temperature=0.0, max_tokens=700, max_wait=max_wait)
+def _parse_gen_response(raw: str) -> dict | None:
     if not raw:
         return None
     try:
@@ -226,6 +256,26 @@ def _generate_sql(question: str, schema: str, max_wait, current_only: bool = Tru
         'fallback_column': str(parsed.get('fallback_column') or '').strip(),
         'fallback_term': str(parsed.get('fallback_term') or '').strip(),
     }
+
+
+def _generate_sql(question: str, schema: str, max_wait, current_only: bool = True) -> dict | None:
+    rule = _CURRENT_ONLY_RULE if current_only else _CUMULATIVE_RULE
+    system = query_settings.apply(_SQL_GEN_SYSTEM_TEMPLATE.format(schema=schema, current_only_rule=rule))
+    raw = llm_client.call_llm(question, system, temperature=0.0, max_tokens=700, max_wait=max_wait)
+    return _parse_gen_response(raw)
+
+
+def _generate_sql_repair(question: str, schema: str, max_wait, current_only: bool,
+                          bad_sql: str, error: str) -> dict | None:
+    """실패한 SQL과 에러 메시지를 시스템 프롬프트 뒤에 덧붙여 한 번만 재생성
+    시도(self-repair). call_llm이 단일 system/user 메시지쌍만 지원하므로,
+    "이전 시도 → 에러" 대화를 시스템 프롬프트 안에 그대로 이어붙이는 방식으로
+    같은 효과를 낸다."""
+    rule = _CURRENT_ONLY_RULE if current_only else _CUMULATIVE_RULE
+    base = _SQL_GEN_SYSTEM_TEMPLATE.format(schema=schema, current_only_rule=rule)
+    system = query_settings.apply(base) + _REPAIR_SYSTEM_SUFFIX.format(bad_sql=bad_sql, error=error[:500])
+    raw = llm_client.call_llm(question, system, temperature=0.0, max_tokens=700, max_wait=max_wait)
+    return _parse_gen_response(raw)
 
 
 def _cap_limit(sql: str, cap: int = DISPLAY_LIMIT) -> str:
@@ -367,17 +417,34 @@ def answer(question: str, current_only: bool = True) -> dict:
         for name, df in tables.items():
             con.register(name, df)
 
-        try:
-            safe_sql = text2sql.sanitize_sql(_cap_limit(gen['sql']))
-        except text2sql.Text2SQLError as exc:
-            return {'intent': 'open_data_query', 'columns': [], 'rows': [], 'sql': gen['sql'],
-                    'note': f'생성된 조회문이 허용되지 않습니다: {exc}'}
+        columns, rows = None, None
+        safe_sql, last_error = None, None
+        for attempt in range(2):
+            try:
+                safe_sql = text2sql.sanitize_sql(_cap_limit(gen['sql']))
+            except text2sql.Text2SQLError as exc:
+                safe_sql = None
+                last_error = f'생성된 조회문이 허용되지 않습니다: {exc}'
+            else:
+                try:
+                    columns, rows = _execute(con, safe_sql)
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    last_error = f'조회 중 오류가 발생했습니다: {str(exc)[:200]}'
 
-        try:
-            columns, rows = _execute(con, safe_sql)
-        except Exception as exc:  # noqa: BLE001
-            return {'intent': 'open_data_query', 'columns': [], 'rows': [], 'sql': safe_sql,
-                    'note': f'조회 중 오류가 발생했습니다: {str(exc)[:200]}'}
+            if attempt == 1:
+                break
+            # self-repair: 실패한 SQL과 에러를 LLM에 주고 한 번만 재생성
+            repaired = _generate_sql_repair(
+                question, schema, max_wait, current_only, gen['sql'], last_error,
+            )
+            if repaired is None:
+                break
+            gen = repaired
+
+        if rows is None:
+            return {'intent': 'open_data_query', 'columns': [], 'rows': [],
+                    'sql': safe_sql or gen['sql'], 'note': last_error}
 
         used_sql, source = safe_sql, 'sql'
         if not rows:
