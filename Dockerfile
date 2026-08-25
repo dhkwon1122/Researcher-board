@@ -133,4 +133,16 @@ EXPOSE 8501
 
 # WSGI 서버로 구동 (app.py 의 server = app.server).
 # PORT 환경변수를 반영하려 shell 형식 + exec (gunicorn 이 PID 1 로 신호 수신).
-CMD exec gunicorn --bind "0.0.0.0:${PORT:-8501}" --workers 2 --timeout 120 app:server
+#
+# --timeout 기본값 300은 .env의 LLM2_TIMEOUT 기본값(300, services/llm.py·
+# pipeline/llm_client.py)과 맞춘 것 — Job Market 추천(services/job_market.py
+# recommend_for_project/recommend_for_researcher)처럼 요청 하나가 사내 LLM
+# 응답을 그대로 기다리는 동기 콜백은, 이 값이 LLM2_TIMEOUT보다 짧으면
+# gunicorn이 "정상적으로 오래 걸리는 중"인 워커를 멈춘 것으로 오판해
+# 강제 종료시킨다(로그에 [CRITICAL] WORKER TIMEOUT — error/exception/
+# traceback 문자열이 없어 놓치기 쉽다. 사용자 리포트: "쥐도새도 모르게
+# 죽는다"). LLM2_TIMEOUT을 늘렸다면 GUNICORN_TIMEOUT도 최소 그만큼은
+# 늘릴 것 — 특히 여러 인원을 한꺼번에 추천하는 과제 단위 검색은 인원
+# 수만큼(동시성 상한 LLM2_MAX_CONCURRENT 안에서) LLM 호출이 겹쳐서 더
+# 걸릴 수 있다.
+CMD exec gunicorn --bind "0.0.0.0:${PORT:-8501}" --workers 2 --timeout "${GUNICORN_TIMEOUT:-300}" app:server

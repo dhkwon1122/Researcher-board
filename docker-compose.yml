@@ -53,6 +53,11 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set in .env}
       PORT: "8501"
+      # gunicorn 워커 타임아웃(초) — Dockerfile의 CMD 참고. LLM2_TIMEOUT보다
+      # 짧으면 사내 LLM 응답을 기다리는 정상적인 요청(Job Market 추천 등)이
+      # "멈춘 워커"로 오판되어 강제 종료된다. LLM2_TIMEOUT을 늘리면 이 값도
+      # 같이 늘릴 것.
+      GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-300}
       # 아직 TLS 리버스 프록시 없이 사내망에 평문 HTTP로 직접 노출하는
       # 단계라 기본값 false — true인 채로 HTTPS 없이 쓰면 브라우저가 세션
       # 쿠키를 아예 안 보내 로그인이 조용히 실패한다. TLS 앞단을 세우면
