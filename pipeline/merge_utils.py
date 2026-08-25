@@ -42,6 +42,11 @@ TABLE_KEYS: dict[str, list[str]] = {
     'succession':           ['researcher_id', 'org_code', 'rank_type', 'nominated_year'],
     'tasks_information':    ['task_name'],
     'project_confl_address': ['dep_name', 'project_name'],
+    # 날짜 기반 누적 테이블 — dep_id별로 valid_year/month/day가 다르면 별개
+    # 행으로 계속 쌓인다(같은 날 재저장만 upsert). "현재" 상태는 dep_id별
+    # 최신 날짜 행만 골라야 하므로 process_team_refer.py 상단 docstring과
+    # rd_specialist_markdown.read_team_refer() 참고.
+    'team_refer':            ['dep_id', 'valid_year', 'valid_month', 'valid_day'],
 }
 
 # 평가자 1인 1행이라 행 단위 자연키가 없는 테이블 — group_keys가 일치하는

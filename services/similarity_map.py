@@ -283,7 +283,9 @@ def _org_tree() -> list:
 def org_tree_options() -> list:
     """부서 선택 드롭다운 옵션 — 조직도를 들여쓰기로 평탄화해 계층이 눈에
     보이도록 한다. value는 dep_id — dep_id가 없는 노드는 하위 연구원을
-    org_code로 특정할 수 없으므로 선택지에서 뺀다(자식은 계속 순회)."""
+    org_code로 특정할 수 없으므로 선택지에서 뺀다(자식은 계속 순회).
+    라벨은 pjt_part_name만 사용한다(rd_specialist_markdown.org_tree_html과
+    동일한 규칙 — dep_name은 트리 라벨에 관여하지 않는다)."""
     options = []
 
     def _walk(nodes, depth):
@@ -291,7 +293,7 @@ def org_tree_options() -> list:
             dep_id = (node.get('dep_id') or '').strip()
             if dep_id:
                 indent = '　' * depth
-                head = node.get('end_name') or node.get('project_name') or ''
+                head = node.get('pjt_part_name') or ''
                 who = ' '.join(v for v in (node.get('assignment_name'), node.get('name')) if v)
                 label = f'{indent}{head}' + (f' ({who})' if who else '')
                 options.append({'label': label, 'value': dep_id})
@@ -311,7 +313,7 @@ def _index_org_tree_by_dep_id(nodes: list, out: dict) -> dict:
 
 
 def _collect_org_codes(node: dict, include_children: bool) -> set:
-    codes = {(node.get('project_name') or '').strip()} - {''}
+    codes = {(node.get('org_name_wd') or '').strip()} - {''}
     if include_children:
         for child in node.get('children') or []:
             codes |= _collect_org_codes(child, True)
@@ -337,6 +339,56 @@ def researchers_under_departments(dep_ids: list, include_children: bool) -> list
         return []
     matched = researchers_df[researchers_df['org_code'].isin(org_codes)]
     return matched['researcher_id'].tolist()
+
+
+# ─── "연구원 명단" 화면 부서/과제·파트 검색 필터(pages/researcher_list.py) ──────
+# team_refer의 dep_name/pjt_part_name은 조직도 트리 구조(dep_id/upper_dep_id)와
+# 무관한 평면(flat) 태그다 — 옵션 목록은 team_refer 원본 행을 그대로 groupby해
+# 만들고, 실제 연구원 필터링은 항상 org_name_wd(=researchers.csv의 org_code)
+# 매칭을 거친다(라벨 문자열과 researchers.csv 값이 다를 수 있어 라벨로 직접
+# 비교하지 않는다 — pages/researcher_list.py의 기존 _project_options() 주석
+# 참고: 서로 다른 원천의 표기가 항상 일치한다는 보장이 없다).
+
+def department_filter_options() -> list:
+    """'부서' 드롭다운 옵션 — team_refer의 dep_name 고유값."""
+    names = sorted({(r.get('dep_name') or '').strip() for r in read_team_refer(DATA_DIR)} - {''})
+    return [{'label': n, 'value': n} for n in names]
+
+
+def pjt_part_filter_options(dep_names=None) -> list:
+    """'과제/파트' 드롭다운 옵션 — team_refer의 pjt_part_name 고유값.
+    dep_names를 지정하면 그 부서(dep_name)에 속한 행만 남긴다(부서 선택 시
+    캐스케이딩, pages/researcher_list.py의 update_project_options 콜백)."""
+    rows = read_team_refer(DATA_DIR)
+    if dep_names:
+        wanted = {dep_names} if isinstance(dep_names, str) else set(dep_names)
+        rows = [r for r in rows if (r.get('dep_name') or '').strip() in wanted]
+    names = sorted({(r.get('pjt_part_name') or '').strip() for r in rows} - {''})
+    return [{'label': n, 'value': n} for n in names]
+
+
+def org_codes_for_dep_names(dep_names) -> set:
+    """선택된 dep_name(들)에 해당하는 team_refer 행들의 org_name_wd 집합."""
+    if not dep_names:
+        return set()
+    wanted = {dep_names} if isinstance(dep_names, str) else set(dep_names)
+    return {
+        (r.get('org_name_wd') or '').strip()
+        for r in read_team_refer(DATA_DIR)
+        if (r.get('dep_name') or '').strip() in wanted
+    } - {''}
+
+
+def org_codes_for_pjt_part_names(pjt_part_names) -> set:
+    """선택된 pjt_part_name(들)에 해당하는 team_refer 행들의 org_name_wd 집합."""
+    if not pjt_part_names:
+        return set()
+    wanted = {pjt_part_names} if isinstance(pjt_part_names, str) else set(pjt_part_names)
+    return {
+        (r.get('org_name_wd') or '').strip()
+        for r in read_team_refer(DATA_DIR)
+        if (r.get('pjt_part_name') or '').strip() in wanted
+    } - {''}
 
 
 def individual_search_options() -> list:

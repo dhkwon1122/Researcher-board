@@ -575,7 +575,7 @@ def build_html(results: list, researchers_df: pd.DataFrame, profile_by_id: dict)
         def _leaf_researchers(node):
             items = [
                 (f'#{anchor_of[rid]}', name_map.get(rid, rid), count_of.get(rid))
-                for rid in analyzed_rids_by_org.get(node.get('project_name', ''), [])
+                for rid in analyzed_rids_by_org.get(node.get('org_name_wd', ''), [])
             ]
             return mmd.nav_items_html(items)
 

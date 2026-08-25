@@ -12,7 +12,7 @@ from dash import Input, Output, State, callback, dash_table, dcc, html, no_updat
 
 from components import nl_query_bar
 from components.timeline_data import dedupe_patents
-from services import researcher_profile_export
+from services import researcher_profile_export, similarity_map
 from services.data_store import filter_current, read_processed
 from services.evaluations import evaluation_years, salary_grade_column
 
@@ -172,21 +172,6 @@ def _filter_options(df: pd.DataFrame, col: str) -> list:
     return [{'label': v, 'value': v} for v in vals if str(v).strip()]
 
 
-def _project_options(department=None) -> list:
-    """과제(=researchers.csv의 org_code) 드롭다운 옵션. 부서를 지정하면 그
-    부서 소속 연구원들의 org_code만 남긴다 — 이 페이지 자체 데이터만으로
-    캐스케이딩을 구성한다(project_confl_address.csv의 dep_name 표기와 이
-    페이지의 '부서'(researchers.csv department) 표기가 항상 일치한다는
-    보장이 없어, 다른 화면의 과제 카탈로그와는 별도로 자기완결적으로 둔다)."""
-    researchers = read_processed('researchers')
-    if researchers.empty or 'org_code' not in researchers.columns:
-        return []
-    df = researchers
-    if department:
-        depts = {department} if isinstance(department, str) else {str(d) for d in department}
-        df = df[df['department'].astype(str).isin(depts)]
-    vals = sorted({str(v).strip() for v in df['org_code'] if str(v).strip()})
-    return [{'label': v, 'value': v} for v in vals]
 
 
 # ── 조건부 스타일 (평가등급 색상) ─────────────────────────────────────────────
@@ -315,8 +300,8 @@ def layout():
     df = _build_summary_df(current_only=True)
     display_df = _apply_permission_filter(df, show_eval, show_incentive)
 
-    dept_opts     = _filter_options(df, '부서')
-    project_opts  = _project_options()
+    dept_opts     = similarity_map.department_filter_options()
+    project_opts  = similarity_map.pjt_part_filter_options()
     pos_opts      = _filter_options(df, '직급')
     title_opts    = _filter_options(df, '직책')
     gender_opts   = _filter_options(df, '성별')
@@ -381,7 +366,7 @@ def layout():
                                      placeholder='전체', clearable=True),
                     ], md=3),
                     dbc.Col([
-                        dbc.Label('과제', className='small fw-semibold text-muted mb-1'),
+                        dbc.Label('과제/파트', className='small fw-semibold text-muted mb-1'),
                         dcc.Dropdown(id='filter-project', options=project_opts, multi=True,
                                      placeholder='전체', clearable=True),
                     ], md=3),
@@ -546,13 +531,13 @@ def layout():
     ])
 
 
-# ── 콜백 1: 부서 선택 → 과제 드롭다운 옵션 캐스케이딩 ─────────────────────────
+# ── 콜백 1: 부서 선택 → 과제/파트 드롭다운 옵션 캐스케이딩 ─────────────────────
 @callback(
     Output('filter-project', 'options'),
     Input('filter-dept', 'value'),
 )
 def update_project_options(dept):
-    return _project_options(dept)
+    return similarity_map.pjt_part_filter_options(dept)
 
 
 # ── 콜백 1-1: 검색 기준(현재/누적) → 부서·과제·직급·직책 필터 비활성화 ─────────
@@ -642,10 +627,16 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, 
     if triggered in ('clear-filters-btn', 'list-search-mode'):
         return display_df.to_dict('records'), columns, tooltip_header, []
 
+    # 부서/과제·파트 필터는 team_refer의 dep_name/pjt_part_name을 라벨로 쓰지만,
+    # 실제 매칭은 항상 org_name_wd(=이 표의 '과제' 컬럼=researchers.csv의
+    # org_code)로 한다 — 라벨 문자열이 researchers.csv 표기와 다를 수 있어
+    # 라벨로 직접 비교하지 않는다(services.similarity_map 참고).
     if dept and current_only:
-        display_df = display_df[display_df['부서'].isin(dept)]
+        org_codes = similarity_map.org_codes_for_dep_names(dept)
+        display_df = display_df[display_df['과제'].isin(org_codes)]
     if project and current_only:
-        display_df = display_df[display_df['과제'].isin(project)]
+        org_codes = similarity_map.org_codes_for_pjt_part_names(project)
+        display_df = display_df[display_df['과제'].isin(org_codes)]
     if pos and current_only:
         display_df = display_df[display_df['직급'].isin(pos)]
     if title and current_only:

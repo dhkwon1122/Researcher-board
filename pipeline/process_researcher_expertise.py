@@ -439,7 +439,7 @@ def build_html(results: list, researchers_df: pd.DataFrame) -> str:
         def _leaf_researchers(node):
             items = [
                 (f'#{anchor_of[rid]}', name_map.get(rid, rid), None)
-                for rid in analyzed_rids_by_org.get(node.get('project_name', ''), [])
+                for rid in analyzed_rids_by_org.get(node.get('org_name_wd', ''), [])
             ]
             return mmd.nav_items_html(items)
 
@@ -509,20 +509,30 @@ def render_html() -> bool:
 
 
 def _filter_eligible_researchers(researchers: pd.DataFrame) -> pd.DataFrame:
-    """analysis_dep.csv가 있으면 지정된 부서만, job_type='지원'(조직총괄/자문위원
-    예외)는 항상 제외해 분석 대상 연구원만 남긴다. process()와 render_html()이
-    같은 모수를 쓰도록 공유한다 — 커버리지 스탯(분석 완료/분석 대상)의 분모가
-    실행 경로에 따라 달라지면 안 되기 때문."""
-    analysis_dep = _read_csv('analysis_dep')
-    if not analysis_dep.empty and 'department' in analysis_dep.columns:
-        allowed_depts = set(analysis_dep['department'])
+    """team_refer(work_type=="R&D")에 매칭되는 org_code만, job_type='지원'
+    (조직총괄/자문위원 예외)는 항상 제외해 분석 대상 연구원만 남긴다.
+    process()와 render_html()이 같은 모수를 쓰도록 공유한다 — 커버리지 스탯
+    (분석 완료/분석 대상)의 분모가 실행 경로에 따라 달라지면 안 되기 때문.
+
+    예전에는 전문성 분석 부서.xlsx(process_analysis_dep.py, department 화이트
+    리스트)로 분석 대상 부서를 걸렀지만, team_refer.xlsx에 조직 단위별 R&D
+    여부(work_type)가 명시적으로 들어오면서 이 방식으로 완전히 대체됐다 —
+    org_code(team_refer의 org_name_wd)가 매핑되지 않은 연구원은 R&D 여부를
+    판단할 근거가 없어 분석 대상에서 제외된다(이전의 "매핑 실패해도 부서
+    화이트리스트만 통과하면 포함"과 달리, 이제는 team_refer 매핑이 필수)."""
+    team_refer_rows = mmd.read_team_refer(OUT_DIR)
+    if team_refer_rows:
+        rd_org_codes = {
+            (r.get('org_name_wd') or '').strip() for r in team_refer_rows
+            if str(r.get('work_type') or '').strip() == 'R&D'
+        } - {''}
         before = len(researchers)
-        researchers = researchers[researchers['department'].isin(allowed_depts)]
-        print(f'[process_researcher_expertise] 분석 대상 부서 필터 적용(analysis_dep.csv, '
-              f'{len(allowed_depts)}개 부서): {before}명 → {len(researchers)}명')
+        researchers = researchers[researchers['org_code'].isin(rd_org_codes)]
+        print(f'[process_researcher_expertise] 분석 대상 필터 적용(team_refer work_type=="R&D", '
+              f'{len(rd_org_codes)}개 조직 단위): {before}명 → {len(researchers)}명')
     else:
-        print('[process_researcher_expertise] analysis_dep.csv 없음 — 부서 필터 없이 전체 연구원 분석 '
-              '(python pipeline/process_analysis_dep.py로 생성 가능)')
+        print('[process_researcher_expertise] team_refer 데이터 없음 — 부서 필터 없이 전체 연구원 분석 '
+              '(python pipeline/process_team_refer.py로 생성 가능)')
 
     # 4직종(job_type)이 '지원'이면 분석 대상에서 제외한다. 단, 직무(job_function)가
     # '조직총괄' 또는 '자문위원'이면 지원 직종이어도 예외로 포함한다.
