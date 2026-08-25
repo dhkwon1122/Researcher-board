@@ -2,11 +2,14 @@
 관리자 페이지: 사용자 계정 관리 (추가 / 수정 / 삭제)
 manage_users 권한이 있는 계정만 접근 가능.
 """
+from datetime import date
+
 import dash
 import dash_bootstrap_components as dbc
-from dash import ALL, Input, Output, State, callback, dcc, html, no_update
+from dash import ALL, Input, Output, State, callback, dash_table, dcc, html, no_update
 
 from config.auth_config import ROLE_LABELS
+from services import team_refer_store
 
 dash.register_page(__name__, path='/admin', name='관리자', title='사용자 관리')
 
@@ -172,13 +175,10 @@ def _delete_modal():
 
 # ── 레이아웃 ──────────────────────────────────────────────────────────────────
 
-def layout():
-    from services.auth import can, list_users
-    if not can('manage_users'):
-        return _access_denied()
+def _user_management_tab() -> html.Div:
+    from services.auth import list_users
 
     users = list_users()
-
     rows = [_user_row(u, i) for i, u in enumerate(users)]
 
     table = dbc.Table(
@@ -196,19 +196,9 @@ def layout():
         bordered=True, hover=True, responsive=True, size='sm', className='mb-0',
     )
 
-    return dbc.Container([
+    return html.Div([
         dcc.Store(id='user-refresh-counter', data=0),
         dcc.Store(id='user-list-store', data=users),
-
-        dbc.Row(
-            dbc.Col([
-                html.H5(
-                    [html.I(className='bi bi-people me-2'), '사용자 관리'],
-                    className='mb-0',
-                ),
-            ]),
-            className='mb-3 align-items-center',
-        ),
 
         dbc.Card([
             dbc.CardHeader(
@@ -235,6 +225,85 @@ def layout():
 
         _user_modal(),
         _delete_modal(),
+    ], className='pt-3')
+
+
+def _team_refer_tab() -> html.Div:
+    """팀/리더 참조 웹 CRUD 탭. 컬럼은 팀참조시트.xlsx 원본 헤더명을 그대로
+    쓴다(pipeline.process_team_refer._COL_MAP 재사용, services.team_refer_store
+    참고) — 행 추가/삭제로 조직 단위를 직접 편집하고, 저장하면 지정한 날짜로
+    누적된다(같은 날 재저장은 그날 값을 덮어씀)."""
+    rows = team_refer_store.list_editable_rows()
+    loaded_dep_ids = sorted({r.get('부서ID', '') for r in rows if r.get('부서ID')})
+
+    columns = [
+        {'name': col, 'id': col, 'editable': True}
+        for col in team_refer_store.KOREAN_COLUMNS
+    ]
+
+    return html.Div([
+        dcc.Store(id='team-refer-loaded-dep-ids', data=loaded_dep_ids),
+
+        dbc.Alert(
+            [
+                html.I(className='bi bi-info-circle me-2'),
+                '조직 레벨/부서ID가 비어 있는 행은 저장되지 않습니다. 상위부서ID는 '
+                '실제 존재하는 부서ID를 가리켜야 하며, 없으면 최상위 조직으로 취급됩니다.',
+            ],
+            color='light', className='small border mb-3',
+        ),
+
+        dbc.Row([
+            dbc.Col([
+                dbc.Label('입력 날짜', className='small fw-semibold text-muted mb-1'),
+                dcc.DatePickerSingle(
+                    id='team-refer-valid-date', date=date.today().isoformat(),
+                    display_format='YYYY-MM-DD', className='d-block',
+                ),
+                html.Div(
+                    '기본값은 오늘 — 과거 데이터를 소급 입력할 때만 바꾸세요.',
+                    className='text-muted', style={'fontSize': '0.72rem'},
+                ),
+            ], md='auto'),
+            dbc.Col([
+                dbc.Label(' ', className='small d-block mb-1'),
+                dbc.ButtonGroup([
+                    dbc.Button([html.I(className='bi bi-plus-lg me-1'), '행 추가'],
+                               id='team-refer-add-row-btn', color='secondary', outline=True, size='sm'),
+                    dbc.Button([html.I(className='bi bi-save me-1'), '저장'],
+                               id='team-refer-save-btn', color='primary', size='sm'),
+                ]),
+            ], md='auto'),
+        ], className='mb-2 align-items-end'),
+
+        dash_table.DataTable(
+            id='team-refer-table',
+            columns=columns,
+            data=rows,
+            editable=True,
+            row_deletable=True,
+            style_table={'overflowX': 'auto'},
+            style_cell={'fontSize': '0.8rem', 'padding': '4px 8px', 'minWidth': '90px'},
+            style_header={'fontWeight': '600', 'backgroundColor': '#f1f3f5'},
+            page_size=50,
+        ),
+
+        html.Div(id='team-refer-save-msg', className='mt-2'),
+    ], className='pt-3')
+
+
+def layout():
+    from services.auth import can
+    if not can('manage_users'):
+        return _access_denied()
+
+    return dbc.Container([
+        dbc.Tabs([
+            dbc.Tab(_user_management_tab(), label='사용자 관리',
+                    tab_id='tab-users', label_style={'fontWeight': '600'}),
+            dbc.Tab(_team_refer_tab(), label='팀/리더 참조',
+                    tab_id='tab-team-refer', label_style={'fontWeight': '600'}),
+        ], id='admin-tabs', active_tab='tab-users'),
     ], className='py-4')
 
 
@@ -511,6 +580,85 @@ def send_mail_report(_, recipients_raw):
             'warning',
         )
     return _alert(f"리포트를 발송했습니다 ({', '.join(recipients)})", 'success')
+
+
+# ── 콜백: 팀/리더 참조 — 행 추가 ─────────────────────────────────────────────
+@callback(
+    Output('team-refer-table', 'data', allow_duplicate=True),
+    Input('team-refer-add-row-btn', 'n_clicks'),
+    State('team-refer-table', 'data'),
+    prevent_initial_call=True,
+)
+def team_refer_add_row(n_clicks, rows):
+    if not n_clicks:
+        return no_update
+    rows = list(rows or [])
+    rows.append({col: '' for col in team_refer_store.KOREAN_COLUMNS})
+    return rows
+
+
+# ── 콜백: 팀/리더 참조 — 저장 ─────────────────────────────────────────────────
+# 행 삭제(row_deletable)는 DataTable이 클라이언트에서 바로 처리하므로 별도
+# 콜백이 없다 — 저장 시점에 team-refer-loaded-dep-ids(그리드를 처음 불러올
+# 때의 부서ID 목록)와 현재 그리드의 부서ID를 비교해 사라진 것을 삭제로
+# 판단한다.
+@callback(
+    Output('team-refer-save-msg', 'children'),
+    Output('team-refer-loaded-dep-ids', 'data', allow_duplicate=True),
+    Input('team-refer-save-btn', 'n_clicks'),
+    State('team-refer-table', 'data'),
+    State('team-refer-valid-date', 'date'),
+    State('team-refer-loaded-dep-ids', 'data'),
+    prevent_initial_call=True,
+)
+def team_refer_save(n_clicks, rows, valid_date_str, loaded_dep_ids):
+    from services.auth import can
+    if not can('manage_users'):
+        return _alert('관리자만 저장할 수 있습니다.', 'danger'), no_update
+    if not n_clicks:
+        return no_update, no_update
+    if not valid_date_str:
+        return _alert('입력 날짜를 선택해주세요.', 'warning'), no_update
+
+    valid_date = date.fromisoformat(valid_date_str[:10])
+    rows = rows or []
+
+    valid_rows = [r for r in rows if str(r.get('부서ID') or '').strip()]
+    skipped = len(rows) - len(valid_rows)
+
+    current_dep_ids = {str(r.get('부서ID')).strip() for r in valid_rows}
+    deleted_dep_ids = [d for d in (loaded_dep_ids or []) if d not in current_dep_ids]
+
+    # upper_dep_id(상위부서ID) 존재성 검증 — 저장은 진행하되 경고만 표시한다
+    # (build_org_tree()는 존재하지 않는 upper_dep_id를 조용히 최상위로 취급
+    # 하므로, 오타를 그냥 두면 트리 구조가 의도와 다르게 만들어질 수 있다).
+    warnings = []
+    for r in valid_rows:
+        updep = str(r.get('상위부서ID') or '').strip()
+        if updep and updep not in current_dep_ids:
+            warnings.append(f"부서ID {r.get('부서ID')}({r.get('과제/파트', '')})의 상위부서ID "
+                             f"'{updep}'가 존재하지 않아 최상위 조직으로 취급됩니다")
+
+    result = team_refer_store.save_snapshot(valid_rows, deleted_dep_ids, valid_date)
+    team_refer_store.export_snapshot_xlsx(valid_rows, valid_date)
+
+    parts = [
+        f"저장 완료 — 이번 저장 {result['saved_rows']}행 반영"
+        + ('' if result['db_ok'] else ' (DB 미반영, CSV에는 반영됨)') + '.',
+    ]
+    if deleted_dep_ids:
+        parts.append(f'{len(deleted_dep_ids)}개 조직이 삭제 처리됐습니다.')
+    if skipped:
+        parts.append(f'부서ID가 비어 있어 {skipped}행은 저장에서 제외됐습니다.')
+
+    alert_color = 'warning' if warnings else 'success'
+    body = [html.Div(p) for p in parts]
+    if warnings:
+        body.append(html.Div('경고: ' + ' / '.join(warnings[:5])
+                              + (f' 외 {len(warnings) - 5}건' if len(warnings) > 5 else '')))
+
+    msg = dbc.Alert(body, color=alert_color, dismissable=True, className='py-2 small mb-0')
+    return msg, sorted(current_dep_ids)
 
 
 # ── 헬퍼 ─────────────────────────────────────────────────────────────────────

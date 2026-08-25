@@ -4793,3 +4793,87 @@ str(_PAGE1_FIT_HEIGHT_PX)})`로 속성을 붙였다.
 - **실기 빌드/기동/실제 임베딩 호출까지는 검증하지 못했다** — 사용자가
   실제 Linux 배포 환경에서 `docker compose --profile embed up -d bge-embed`
   로 띄운 뒤 Job Market 화면에서 직접 재현 확인이 필요하다.
+
+## 2026-08-25 (33): 팀참조시트 전처리 개편 + "팀/리더 참조" 관리자 웹 CRUD 탭 신설
+
+배경: 팀참조시트.xlsx의 컬럼 체계를 바꾸고(비공식소속부서명/구분/부서/
+과제·파트 등 신규), 지금까지 파일 전량 덮어쓰기였던 team_refer.csv를
+날짜 기반으로 누적하며, 최초 1회는 엑셀 업로드로 적재하되 이후에는
+관리자 화면에서 웹으로 개별 조직 단위를 수시 수정할 수 있게 해달라는
+요청. 기존 team_refer.csv는 실행할 때마다 전량 교체하는 구조라, 부분
+수정을 전제로 한 웹 CRUD와 근본적으로 맞지 않았다(전체 재업로드가
+아니면 "이번에 없으면 삭제"를 판단할 기준이 없음).
+
+**결정 1 — 컬럼 재매핑**(`pipeline/process_team_refer.py`): 엑셀 헤더명 →
+출력 컬럼명을 `비공식소속부서명→org_name_wd`(researchers.csv org_code
+매칭키, 구 project_name), `구분→work_type`(신규, "R&D"만 전문성 분석
+대상), `부서→dep_name`(신규, "연구원 명단" 부서 필터 표시 전용 — 조직도
+트리 구조와는 무관한 평면 태그), `과제/파트→pjt_part_name`(조직도 트리
+라벨 — 이제 이 값만 사용, 구 end_name/project_name 폴백 제거),
+`조직코드→dep_code`(구 code3)로 바꿨다.
+
+**결정 2 — 날짜 기반 누적, dep_id별 최신 판정**: 자연키를
+`(dep_id, valid_year, valid_month, valid_day)`로 바꾸고 `pipeline/merge_utils.py`의
+기존 upsert 인프라(TABLE_KEYS에 등록)로 계속 누적한다. "현재" 조직도는
+researchers.csv의 is_current처럼 파일 전체 기준 최신 날짜 하나를 쓰지
+않고, **dep_id별로 독립적으로 최신 날짜 행**을 고른다
+(`rd_specialist_markdown._latest_current_rows()`, `read_team_refer()`가
+호출부에 반환하기 전에 자동 적용) — 웹에서 조직 하나만 오늘 날짜로
+저장해도 나머지 dep_id는 각자 마지막 저장 시점 값 그대로 정상 노출되게
+하기 위함(파일 전체 기준이면 부분 수정이 나머지 전체를 "사라짐"으로
+만들어버림). 삭제는 실제로 지우지 않고 `deleted='Y'` 표시가 붙은 새
+날짜 행(톰스톤)으로 남긴다 — 이력은 보존하되 "현재" 판정에서는 제외.
+
+**결정 3 — 전문성 분석 대상 필터 교체**: `전문성 분석 부서.xlsx`
+(`process_analysis_dep.py`, department 화이트리스트)를 `work_type=="R&D"`
+게이트로 완전히 대체하고 그 파일/모듈은 삭제했다(`process_researcher_expertise.py`
+`_filter_eligible_researchers()`). org_code가 team_refer에 매핑되지 않은
+연구원은 이제 R&D 여부를 판단할 근거가 없어 분석 대상에서 제외된다(이전
+"매핑 실패해도 부서 화이트리스트만 통과하면 포함"과 달리 team_refer
+매핑이 필수가 됨 — 사용자 확정).
+
+**결정 4 — "연구원 명단" 부서/과제 필터**: 라벨은 team_refer의
+dep_name/pjt_part_name(신규 `services/similarity_map.py` 헬퍼:
+`department_filter_options`/`pjt_part_filter_options`)에서 가져오되, 실제
+연구원 필터링은 여전히 org_code 매칭(`org_codes_for_dep_names`/
+`org_codes_for_pjt_part_names`)으로 한다 — 라벨 문자열이 researchers.csv
+표기와 다를 수 있어(기존 `_project_options()`가 지적했던 이유) 라벨로
+직접 비교하지 않는다. "과제" 필터 라벨을 "과제/파트"로 변경.
+
+**결정 5 — "팀/리더 참조" 관리자 웹 CRUD**(`pages/admin.py`,
+`services/team_refer_store.py`): 관리자 화면을 `dbc.Tabs`로 재구성해
+"사용자 관리" 옆에 신설. 컬럼은 엑셀 원본 헤더명을 그대로 쓰고
+(`process_team_refer._COL_MAP` 재사용), `dash_table.DataTable`의
+`row_deletable`로 행 삭제, "행 추가" 버튼으로 빈 행 추가. 저장 시
+`dcc.DatePickerSingle`로 지정한 날짜(기본 오늘, 과거 소급 입력 가능)로
+스탬프해 `team_refer.csv`에 반영하고, `team-refer-loaded-dep-ids` Store
+(그리드를 처음 불러올 때의 부서ID 목록)와 저장 시점 그리드를 비교해
+사라진 dep_id는 톰스톤으로 처리한다. `services/team_refer_store.py`가
+CSV 반영과 함께 DB(`DATABASE_URL` 설정 시 `team_refer` 테이블, Postgres
+`ON CONFLICT` upsert, `services/user_store.py`와 동일한 패턴 — DB 없으면
+조용히 실패 반환하고 CSV 반영만으로 정상 동작)에도 반영한다. 저장할
+때마다 `data/processed/team_leader_refer/팀_리더_참조_입력날짜(YYMMDD).xlsx`
+로 그 시점 전체 스냅샷도 남긴다(파일명이 날짜까지만이라 같은 날 재저장은
+덮어써 마지막 저장이 그날의 유효값이 됨 — 사용자 확정). 상위부서ID가
+실제 존재하는 부서ID를 가리키지 않으면 저장은 진행하되 경고를 보여준다
+(`build_org_tree()`가 이런 행을 조용히 최상위 조직으로 취급하므로).
+
+**검증**:
+- `rd_specialist_markdown._latest_current_rows()`/`build_org_tree()`/
+  `org_tree_html()`에 합성 데이터로 부분수정(한 dep_id만 최신 재저장,
+  다른 dep_id는 과거 날짜 그대로 생존)·삭제(톰스톤 제외) 시나리오 통과.
+- `services/similarity_map.py`의 부서/과제·파트 옵션·매칭 헬퍼를 동일한
+  합성 데이터로 별도 검증(캐스케이딩, org_code 집합 산출).
+- `services/team_refer_store.py`의 `save_snapshot()`/`list_editable_rows()`/
+  `export_snapshot_xlsx()`를 CSV 경로로 3회 연속 저장(신규→수정→삭제)
+  시나리오로 직접 실행해, 누적 행 수·최신 판정·톰스톤·엑셀 스냅샷 파일명이
+  전부 의도대로 나오는 것을 확인(DB는 이 세션에 DATABASE_URL이 없어
+  `db_ok=False` 경로만 확인, 실제 Postgres upsert는 미검증).
+- `pages/admin.py`를 `dash.Dash(use_pages=True)` 컨텍스트에서 실제로
+  `layout()`/`_team_refer_tab()`을 렌더링해 컴포넌트 트리 구성 오류가
+  없음을 확인, `team_refer_add_row`/`team_refer_save` 콜백 함수를 직접
+  호출해(빈 부서ID 행 스킵, 로드된 dep_id 목록 갱신) 동작을 확인.
+- 변경된 모든 파일 `py_compile` 통과.
+- **미검증**: 실제 DB(Postgres) upsert 경로, 브라우저에서의 실제
+  클릭·타이핑 조작(DataTable 인라인 편집/행 삭제 UI 자체), 로그인 세션을
+  통한 관리자 권한 게이트의 실제 동작.

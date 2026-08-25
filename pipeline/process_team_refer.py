@@ -109,14 +109,40 @@ _COL_MAP = {
 
 def stamp_valid_date(df: pd.DataFrame, valid_date: date) -> pd.DataFrame:
     """valid_year/valid_month/valid_day 컬럼을 붙인다. process()(xlsx 일괄
-    업로드)와 향후 관리자 화면의 웹 CRUD 저장 경로가 공유하는 헬퍼 —
-    자연키((dep_id, valid_year, valid_month, valid_day)) 형식을 한 곳에서만
-    정의해 두 경로가 어긋나지 않게 한다."""
+    업로드)와 관리자 화면(services.team_refer_store)의 웹 CRUD 저장 경로가
+    공유하는 헬퍼 — 자연키((dep_id, valid_year, valid_month, valid_day))
+    형식을 한 곳에서만 정의해 두 경로가 어긋나지 않게 한다."""
     df = df.copy()
     df['valid_year'] = f'{valid_date.year:04d}'
     df['valid_month'] = f'{valid_date.month:02d}'
     df['valid_day'] = f'{valid_date.day:02d}'
     return df
+
+
+def build_rows_from_records(records: list) -> pd.DataFrame:
+    """레코드 리스트(엑셀 헤더명을 키로 쓰는 dict — xlsx 일괄 업로드의
+    df.to_dict('records')든, 관리자 화면 그리드의 행이든 동일한 형태)를
+    _COL_MAP 기준으로 컬럼 매핑 + 정제해 표준 스키마(영문 컬럼명)
+    DataFrame으로 변환한다. 조직 레벨(team_layer)이 없거나 dep_id가 없는
+    행은 조직도에 나타날 수 없고 누적 자연키도 만들 수 없으므로 제외한다.
+    valid_year/valid_month/valid_day/deleted는 이 함수가 붙이지 않는다 —
+    호출부가 stamp_valid_date()로 붙인다(저장 시점을 여기서 강제하지
+    않기 위함)."""
+    df = pd.DataFrame(records)
+    for col in _COL_MAP:
+        if col not in df.columns:
+            df[col] = ''
+
+    result = pd.DataFrame({
+        out_col: df[src_col].apply(_clean)
+        for src_col, out_col in _COL_MAP.items()
+    })
+    result['researcher_id'] = result['researcher_id'].apply(norm_id)
+    result['team_layer'] = df['조직 레벨'].apply(_clean_int)  # '1.0' 같은 실수형 표기 정리
+    result['dep_id'] = df['부서ID'].apply(_clean_id)
+    result['upper_dep_id'] = df['상위부서ID'].apply(_clean_id)
+
+    return result[(result['team_layer'] != '') & (result['dep_id'] != '')].reset_index(drop=True)
 
 
 def process(valid_date: date | None = None) -> bool:
@@ -139,19 +165,7 @@ def process(valid_date: date | None = None) -> bool:
         )
         return False
 
-    result = pd.DataFrame({
-        out_col: df[src_col].apply(_clean)
-        for src_col, out_col in _COL_MAP.items()
-    })
-    result['researcher_id'] = result['researcher_id'].apply(norm_id)
-    result['team_layer'] = df['조직 레벨'].apply(_clean_int)  # '1.0' 같은 실수형 표기 정리
-    result['dep_id'] = df['부서ID'].apply(_clean_id)
-    result['upper_dep_id'] = df['상위부서ID'].apply(_clean_id)
-
-    # 조직 레벨(team_layer)이 없는 행은 조직도에 나타나지 않고, dep_id가 없는
-    # 행은 누적 자연키를 만들 수 없으므로 둘 다 제외한다.
-    result = result[(result['team_layer'] != '') & (result['dep_id'] != '')].reset_index(drop=True)
-
+    result = build_rows_from_records(df.to_dict('records'))
     result = stamp_valid_date(result, valid_date or date.today())
     result['deleted'] = 'N'
 
