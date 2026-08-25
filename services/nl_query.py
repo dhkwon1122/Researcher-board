@@ -99,13 +99,17 @@ QUERY_SYSTEM_PROMPT = """# Role
 3. find_researchers_by_criteria : 연령대/최종학력/최근 N개년 평가등급 조합 중
    하나 이상을 조건으로 연구원을 찾는 질문 — 특히 평가등급 조건은 반드시 이
    intent로 분류하세요(open_data_query로 보내면 등급 순서·조합 비교를 틀리기
-   쉽습니다). 등급 체계는 가(최우수) > 나 > 다 > 라 > 마(최하)이고, "OOO 이상/
-   이하"는 여러 개년 등급을 "순서 상관없이" 종합적으로 비교하는 뜻입니다
-   (예: "나나가 이상" = 3개년 등급 중 최소 1개는 가, 나머지도 전부 나 이상이면
-   해당 — 가나나/나가나/나나가/가가나/가나가/나가가/가가가 전부 포함, 다/라/마가
-   하나라도 섞이면 제외). grade_threshold에는 등급 글자를 하나씩 리스트로
-   넣으세요(예: "나나가" → ["나","나","가"], 글자 수 = 비교할 개년 수).
-   grade_comparison은 "이상"(기본값)/"이하"/"초과"/"미만"/"동일" 중 하나.
+   쉽습니다). 등급 체계는 가(최우수)=5점 > 나=4점 > 다=3점 > 라=2점 > 마=1점
+   (최하)이고, "OOO 이상/이하"는 등급을 자리별(연도별)로 짝짓는 게 아니라
+   각 등급을 점수로 바꿔 N개년 "합계"끼리 비교하는 뜻입니다(예: "나나나 이상"
+   = 3개년 점수 합이 나나나(4+4+4=12점) 이상이면 해당 — 나나나/나나가/나가나/
+   가나나/가가나/가나가/가가가뿐 아니라, 다가 섞여도 다른 해에 가로 상쇄돼
+   합계가 12점 이상이면 포함되는 가나다(5+4+3=12점)/나다가/가다나 등도 포함,
+   합계가 12점에 못 미치는 다다다(3+3+3=9점)는 제외). grade_threshold에는
+   등급 글자를 하나씩 리스트로 넣으세요(예: "나나가" → ["나","나","가"], 글자
+   수 = 비교할 개년 수). grade_comparison은 "이상"(기본값)/"이하"/"초과"/
+   "미만"/"동일" 중 하나("동일"도 등급 조합이 완전히 같아야 하는 게 아니라
+   점수 합이 같으면 해당).
    예) "연령 30대, 최종학력 박사, 최근 3년 평가 나나가 이상 찾아줘",
    "최근 2년 평가 나나 이상인 석사 이상 연구원", "40대이면서 최근 3년 다다다 이하인 사람"
 4. open_data_query : 위 세 가지가 다루는 "이미 계산된 요약 결과"나 "연령/학력/
@@ -384,37 +388,36 @@ def find_similar_researchers(researcher_query: str, top_k: int = DEFAULT_TOP_K,
     )
 
 
-_GRADE_RANK = {'가': 1, '나': 2, '다': 3, '라': 4, '마': 5}
-
-
-def _grade_dominates(a_ranks_sorted: list, b_ranks_sorted: list) -> bool:
-    """정렬된(오름차순, 좋은 등급 먼저) 순위 리스트 a가 b와 같거나 전반적으로
-    더 우수한지 — 같은 길이의 두 리스트를 자리별로 비교해 a의 모든 자리가
-    b보다 같거나 더 좋아야(순위 숫자가 같거나 작아야) True. "OOO 이상"의
-    핵심 로직 — 등급을 원래 순서 그대로 짝짓지 않고, 각자 좋은 순서로 정렬한
-    뒤 비교하므로 "어느 해에 어떤 등급을 받았는지" 순서는 결과에 영향을
-    주지 않는다(사용자 확정: "가나나/나가나/나나가는 전부 동일 취급")."""
-    return all(a <= b for a, b in zip(a_ranks_sorted, b_ranks_sorted))
+# 등급 1개당 점수. 가(최우수)=5 ~ 마(최하)=1 — 등간(1점 간격)이라 몇 점씩
+# 주든(예: 55/65/75/85/95) N개년 합계 비교 결과는 동일하다.
+_GRADE_SCORE = {'가': 5, '나': 4, '다': 3, '라': 2, '마': 1}
 
 
 def _grade_threshold_pass(candidate_grades: list, threshold_grades: list, comparison: str) -> bool | None:
     """candidate_grades(한 사람의 N개년 등급)가 threshold_grades 기준으로
     comparison 조건을 만족하는지. 등급 글자가 가/나/다/라/마가 아니면(빈 값 등)
-    판단 불가로 None을 반환 — 호출부는 이 경우 "데이터 없음"으로 제외 처리한다."""
+    판단 불가로 None을 반환 — 호출부는 이 경우 "데이터 없음"으로 제외 처리한다.
+
+    "OOO 이상/이하"는 등급을 자리별(연도별)로 짝지어 비교하는 게 아니라,
+    등급 하나하나를 점수(_GRADE_SCORE)로 바꿔 N개년 합계끼리 비교한다
+    (사용자 확정: "나나나 이상"이면 나나나(12점)뿐 아니라 가나다(5+4+3=12점)
+    처럼 낮은 등급이 섞여도 다른 해에 더 높은 등급으로 상쇄돼 합계가 같거나
+    높으면 포함 — 등급을 원래 순서 그대로 짝짓지 않으므로 "어느 해에 어떤
+    등급을 받았는지" 순서도 결과에 영향을 주지 않는다)."""
     try:
-        cand_ranks = sorted(_GRADE_RANK[g] for g in candidate_grades)
-        thr_ranks = sorted(_GRADE_RANK[g] for g in threshold_grades)
+        cand_sum = sum(_GRADE_SCORE[g] for g in candidate_grades)
+        thr_sum = sum(_GRADE_SCORE[g] for g in threshold_grades)
     except KeyError:
         return None
     if comparison == '이하':
-        return _grade_dominates(thr_ranks, cand_ranks)
+        return cand_sum <= thr_sum
     if comparison == '초과':
-        return _grade_dominates(cand_ranks, thr_ranks) and cand_ranks != thr_ranks
+        return cand_sum > thr_sum
     if comparison == '미만':
-        return _grade_dominates(thr_ranks, cand_ranks) and cand_ranks != thr_ranks
+        return cand_sum < thr_sum
     if comparison in ('동일', '정확히'):
-        return cand_ranks == thr_ranks
-    return _grade_dominates(cand_ranks, thr_ranks)  # 기본값: 이상
+        return cand_sum == thr_sum
+    return cand_sum >= thr_sum  # 기본값: 이상
 
 
 def find_researchers_by_criteria(age_min: int | None = None, age_max: int | None = None,
