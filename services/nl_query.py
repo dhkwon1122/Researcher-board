@@ -532,6 +532,23 @@ def find_researchers_by_criteria(age_min: int | None = None, age_max: int | None
     return _build_table_result('find_researchers_by_criteria', items, column_order, ' '.join(notes))
 
 
+_GRADE_COMBO_RE = re.compile(r'([가나다라마]{2,})(?:\s*등급)?\s*(이상|이하|초과|미만|동일)')
+
+
+def _regex_grade_criteria(question: str) -> dict | None:
+    """"가가나 이상"/"나나가 이하"처럼 문법이 고정된 다개년 평가등급 조합
+    표현은 LLM 파싱에 맡기지 않고 정규식으로 직접 뽑는다. QUERY_SYSTEM_PROMPT가
+    이 표현의 의미(순서 무관 비교)를 예시까지 들어 설명해도, intent 분류나
+    등급 글자 추출을 매번 LLM에 맡기면 질문 표현에 따라 틀릴 수 있다 —
+    _grade_threshold_pass의 실제 판정 로직처럼, 문법이 고정된 부분은 파싱도
+    결정적으로 처리해 LLM이 틀릴 여지를 없앤다. 매치되면
+    {'grade_threshold': [...], 'grade_comparison': '...'}, 아니면 None."""
+    m = _GRADE_COMBO_RE.search(question)
+    if not m:
+        return None
+    return {'grade_threshold': list(m.group(1)), 'grade_comparison': m.group(2)}
+
+
 def parse_question(question: str) -> dict:
     """자연어 질문을 구조화된 쿼리 dict로 변환(사내 LLM 1회 호출). 실패
     유형별로 다른 intent('error'|'unsupported')를 돌려줘 호출부가 구분해서
@@ -540,22 +557,37 @@ def parse_question(question: str) -> dict:
     if not question:
         return {'intent': 'unsupported', 'reason_if_unsupported': '빈 질문입니다.'}
 
+    grade_override = _regex_grade_criteria(question)
+
     max_wait = llm_client.query_max_wait()
     system_prompt = query_settings.apply(QUERY_SYSTEM_PROMPT)
     raw = llm_client.call_llm(question, system_prompt, temperature=0.0, max_tokens=400, max_wait=max_wait)
     if not raw:
+        if grade_override:
+            return {'intent': 'find_researchers_by_criteria', 'question': question,
+                     'expertise_terms': [], 'researcher_query': '', 'department_filter': '',
+                     'age_min': None, 'age_max': None, 'degree': '', 'top_k': DEFAULT_TOP_K,
+                     **grade_override}
         return {'intent': 'error',
                 'message': '지금 요청이 많아 응답을 만들지 못했습니다. 잠시 후 다시 시도해주세요.'}
 
     try:
         parsed = json.loads(llm_client.extract_json(raw))
     except json.JSONDecodeError:
+        if grade_override:
+            return {'intent': 'find_researchers_by_criteria', 'question': question,
+                     'expertise_terms': [], 'researcher_query': '', 'department_filter': '',
+                     'age_min': None, 'age_max': None, 'degree': '', 'top_k': DEFAULT_TOP_K,
+                     **grade_override}
         return {'intent': 'error', 'message': '질문을 이해하지 못했습니다. 다르게 표현해 다시 질문해주세요.'}
 
     intent = parsed.get('intent')
     if intent not in _KNOWN_INTENTS:
-        return {'intent': 'unsupported', 'question': question,
-                'reason_if_unsupported': parsed.get('reason_if_unsupported', '')}
+        if grade_override:
+            intent = 'find_researchers_by_criteria'
+        else:
+            return {'intent': 'unsupported', 'question': question,
+                    'reason_if_unsupported': parsed.get('reason_if_unsupported', '')}
 
     try:
         top_k = int(parsed.get('top_k') or DEFAULT_TOP_K)
@@ -568,10 +600,20 @@ def parse_question(question: str) -> dict:
         except (TypeError, ValueError):
             return None
 
-    grade_threshold = parsed.get('grade_threshold') or []
-    if isinstance(grade_threshold, str):
-        # LLM이 리스트 대신 "나나가" 같은 문자열을 줬을 때도 안전하게 받는다.
-        grade_threshold = list(grade_threshold.strip())
+    if grade_override:
+        # 등급 조합 표현이 질문에 있으면, LLM이 intent/등급을 다르게 판단했더라도
+        # 이 두 필드는 정규식 추출 결과로 강제한다(그 외 나이/학력/부서 등은
+        # LLM 파싱 결과를 그대로 쓴다 — 그 부분은 문법이 고정돼 있지 않아서다).
+        intent = 'find_researchers_by_criteria'
+        grade_threshold = grade_override['grade_threshold']
+        grade_comparison = grade_override['grade_comparison']
+    else:
+        grade_threshold = parsed.get('grade_threshold') or []
+        if isinstance(grade_threshold, str):
+            # LLM이 리스트 대신 "나나가" 같은 문자열을 줬을 때도 안전하게 받는다.
+            grade_threshold = list(grade_threshold.strip())
+        grade_threshold = [str(g).strip() for g in grade_threshold if str(g).strip()]
+        grade_comparison = str(parsed.get('grade_comparison') or '이상').strip()
 
     return {
         'intent': intent,
@@ -582,8 +624,8 @@ def parse_question(question: str) -> dict:
         'age_min': _to_int_or_none(parsed.get('age_min')),
         'age_max': _to_int_or_none(parsed.get('age_max')),
         'degree': str(parsed.get('degree') or '').strip(),
-        'grade_threshold': [str(g).strip() for g in grade_threshold if str(g).strip()],
-        'grade_comparison': str(parsed.get('grade_comparison') or '이상').strip(),
+        'grade_threshold': grade_threshold,
+        'grade_comparison': grade_comparison,
         'top_k': top_k,
     }
 
