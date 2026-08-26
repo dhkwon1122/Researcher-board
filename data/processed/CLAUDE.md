@@ -5237,3 +5237,22 @@ build_html()(process_researcher_expertise.py/process_researcher_similarity.py)�
 반영되는 것, 브라우저에서 탭을 여러 번 열어도 값이 고정돼 보이는지.
 파이프라인을 한 번 재실행하기 전까지는 기존 JSON에 이 필드가 없어
 "알 수 없음(파이프라인 재실행 필요)"로 보일 것.
+
+## 2026-08-26 (40): run_ready.py의 Confluence 토큰 미설정 경고 문구가 실제 동작과 반대로 적혀 있던 버그 수정
+
+배경: 사용자가 로컬에서 `python pipeline/run_ready.py` 실행 시 뜨는 "confl_address가
+있는 과제는 PDF 폴백이 없으면 건너뛰어집니다"라는 문구가 실제 동작과 다른
+것 같다고 지적. `pipeline/project_summary.py._get_page_text()`를 확인한
+결과, PDF 폴백(`data/raw/conflue_MPR/{과제명}.pdf`)은 **confl_address가
+아예 없는 과제에서만** 쓰이는 완전히 별개의 분기였다 — confl_address가
+있는 과제는 Confluence만 시도하고 실패(토큰 없음 포함)하면 PDF 폴백을
+전혀 보지 않고 그대로 건너뛴다. 기존 문구는 "confl_address가 있는 과제도
+PDF 폴백이 있으면 살아남는다"는 반대 인상을 줘 사실과 어긋났다.
+
+**결정**: `pipeline/run_ready.py._check_confluence()`의 경고 문구를 실제
+동작대로 정정 — "confl_address가 있는 과제는 (PDF 폴백 여부와 무관하게)
+전부 건너뛰어집니다. confl_address가 없는 과제만
+data/raw/conflue_MPR/{과제명}.pdf 로 계속 처리됩니다."
+
+**검증**: `py_compile` 통과. `pipeline/project_summary.py`/`pipeline/pdf_reader.py`
+소스와 문구를 대조해 실제 분기 조건과 정확히 일치하는지 확인.
