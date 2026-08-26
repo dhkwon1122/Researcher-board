@@ -139,8 +139,13 @@ def _col_dept_task(_rid, rows):
     r = rows['researcher']
     if not r:
         return '-'
-    dept = _or_dash(r.get('department'))
-    org = _or_dash(r.get('org_code'))
+    org_code = str(r.get('org_code') or '').strip()
+    dep_map, pjt_map = rows.get('dep_pjt_maps') or ({}, {})
+    # 부서/과제(파트) = team_refer의 dep_name/pjt_part_name(연구원 명단 표와
+    # 동일 기준 — 사용자 확정). 매핑이 없으면 원본 department/org_code
+    # 그대로 보여준다(빈 칸이면 데이터 누락처럼 보이므로).
+    dept = _or_dash(dep_map.get(org_code) or r.get('department'))
+    org = _or_dash(pjt_map.get(org_code) or org_code)
     return f'{dept}\n({org})'
 
 
@@ -409,9 +414,11 @@ _COLUMNS = [
 ]
 
 
-def _researcher_row_context(researcher_id: str, tables: dict, permissions: dict) -> dict:
+def _researcher_row_context(researcher_id: str, tables: dict, permissions: dict,
+                             dep_pjt_maps: tuple | None = None) -> dict:
     researcher_rows = _rows_for(tables['researchers'], researcher_id)
     return {
+        'dep_pjt_maps': dep_pjt_maps,
         'researcher': researcher_rows[0] if researcher_rows else None,
         'education': _rows_for(tables['education'], researcher_id),
         'evaluations': _rows_for(tables['evaluations'], researcher_id),
@@ -548,6 +555,11 @@ def build_profile_workbook(
     # 로그인 사용자당 한 번만 계산 — _col_evaluation/_col_incentive가 매 행마다
     # auth.can()을 다시 호출하지 않도록 _researcher_row_context()에 실어 보낸다.
     permissions = {'view_evaluation': auth.can('view_evaluation'), 'view_incentive': auth.can('view_incentive')}
+    # org_code → dep_name/pjt_part_name 매핑도 배치당 한 번만 만든다(연구원
+    # 수만큼 team_refer를 반복 스캔하지 않도록) — similarity_map이 이 모듈을
+    # 임포트하므로(순환 임포트 방지) 여기서는 지연 임포트로 가져온다.
+    from services import similarity_map
+    dep_pjt_maps = similarity_map.org_code_label_maps()
 
     columns = list(_COLUMNS)
     widths = list(_COLUMN_WIDTHS)
@@ -589,7 +601,7 @@ def build_profile_workbook(
         cell.alignment = wrap_center
 
     for row_idx, rid in enumerate(researcher_ids, start=2):
-        ctx = _researcher_row_context(rid, tables, permissions)
+        ctx = _researcher_row_context(rid, tables, permissions, dep_pjt_maps)
         for col_idx, (_header, fn) in enumerate(columns, start=1):
             value = fn(rid, ctx)
             cell = ws.cell(row=row_idx, column=col_idx, value=value)

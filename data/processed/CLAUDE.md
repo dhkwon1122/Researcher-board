@@ -5115,3 +5115,80 @@ merge_utils.upsert_merge()가 "새 데이터 안에서 키 중복 시 마지막 
 `_dupe_modal_body()`와 전체 admin 레이아웃(모달 포함) 렌더링 모두 오류
 없이 되는 것을 Dash 컨텍스트에서 직접 확인. 변경 파일 `py_compile` 통과.
 **미검증**: 실제 브라우저에서 모달이 열리고 닫히는 클릭 동작.
+
+## 2026-08-26 (38): 명단/팀참조 테이블 UX 5건 — 표시 매핑, 가운데정렬+말줄임+호버, 필터 대소문자, 컬럼 리사이즈, AI검색 오류 메시지
+
+배경: 사용자가 화면을 실제로 써보면서 나온 5가지 요청을 한 번에 반영.
+
+**1) 연구원 명단 부서/과제 표시값을 team_refer 매핑으로 변경**(사용자 확정
+— 매핑 없으면 원본 값 유지, 라벨만 "과제"→"과제/파트"): 확인해보니 지금까지
+명단 표의 '부서'/'과제' 셀은 필터 드롭다운만 team_refer 기준이었고 실제
+표시값은 researchers.csv의 원본 department/org_code 그대로였다(특히
+'과제' 열은 사람이 읽는 라벨이 아니라 raw org_code 코드값이었음). 새
+`services/similarity_map.org_code_label_maps()`(team_refer 한 번 순회로
+org_code→dep_name/pjt_part_name dict 2개를 만듦 — 기존
+`dep_name_for_org_code()`는 1건씩 매번 전체 스캔이라 명단 전체에 그대로
+쓰면 느림)를 `pages/researcher_list.py._build_summary_df()`에 적용했다.
+**중요한 부수 수정**: 부서/과제 드롭다운 필터가 내부적으로 "표의 '과제'
+컬럼 값=org_code"라는 전제로 `display_df['과제'].isin(org_codes)`로
+매칭하고 있었는데, '과제' 컬럼이 이제 라벨을 담게 되면서 이 전제가
+깨진다 — 화면에는 안 보이는 내부 컬럼 `_org_code`를 새로 추가해 필터
+매칭은 계속 `_org_code` 기준으로 하도록 고쳤다(안 고쳤으면 매핑된 모든
+행이 부서/과제 필터에서 안 걸리는 회귀 버그가 났을 것). 엑셀 다운로드도
+동일 기준으로 나가야 해서(사용자 확정) `services/researcher_profile_export.py`의
+`_col_dept_task()`(엑셀의 '부서\n(과제)' 셀)도 같은 매핑을 쓰도록 고쳤다
+— `build_profile_workbook()`이 배치당 한 번만 `org_code_label_maps()`를
+호출해 `_researcher_row_context()`로 실어 보낸다(연구원 수만큼 반복 스캔
+방지). `similarity_map`이 이미 `researcher_profile_export`를 임포트하므로
+순환 임포트를 피하려고 지연 임포트로 가져왔다. AI 검색 결과에 붙는
+7개 기본 컬럼(`researcher_profile_export.PERSON_BASE_COLUMNS`, Job
+Market에서도 재사용)과 프로필 화면은 이번 범위에 포함하지 않음(사용자
+요청 범위가 "명단 표 + 그 엑셀 다운로드"였음).
+
+**2) 팀/리더 참조 + 연구원 명단 테이블 — 가운데 정렬 + 말줄임 + 호버**
+(사용자 확정 — 안 들어가면 스크롤 남는 것도 허용): `pages/admin.py`의
+team-refer-table에 없던 `textAlign: center`/`overflow: hidden`/
+`textOverflow: ellipsis`를 추가하고 폰트·여백을 줄였다. 이미 있는
+컬럼 드래그 리사이즈(`.column-header-name`의 CSS `resize`) 트릭과
+안 부딪히도록 `maxWidth`를 강제하지 않고 `overflow`/`textOverflow`만
+추가해, 사용자가 드래그로 넓힌 폭 기준으로 자연스럽게 말줄임되게 했다.
+말줄임된 셀은 마우스 오버로 전체 내용을 볼 수 있게 `tooltip_data`를
+추가했는데, 이 테이블은 행 추가/삭제/정렬/편집 콜백이 여러 개라 각자
+손보는 대신 `data`를 지켜보는 새 콜백(`team_refer_sync_tooltip`) 하나로
+어디서 바뀌든 자동으로 최신 상태를 유지하게 했다. `pages/researcher_list.py`
+쪽도 동일하게 `tooltip_data`를 추가(`_build_tooltip_data()`, `update_table`
+콜백의 5개 반환 지점 전부)했고, 컬럼 리사이즈 CSS 트릭도 그대로 이식했다.
+
+**3) 연구원 명단 필터 행 — 항상 대소문자 무시 + 아이콘 제거 + 시각적 구분**
+(사용자 확정 — 모두 반영): dash_table의 `filter_action='native'` 필터 행에
+기본으로 붙는 "Aa" 대소문자 토글 아이콘의 실제 DOM(`.dash-filter--case`,
+기본 상태가 "sensitive")을 직접 확인 후, 테이블 레벨 `filter_options=
+{'case': 'insensitive', 'placeholder_text': '🔍 검색...'}`로 기본값 자체를
+바꾸고, 그 토글 아이콘은 `css=[{'selector': '.dash-filter--case', 'rule':
+'display: none;'}]`로 숨겼다(숨겨도 무시 동작 자체는 그대로 유지).
+`style_filter`에 진한 배경(#eaf2fb)과 위/아래 테두리를 추가해 검색 가능한
+행이라는 게 눈에 띄게 했다.
+
+**4) AI 검색 LLM 오류 메시지 정확화**: `LLM2_API_URL` 미설정 시
+`services/nl_query.py`가 "지금 요청이 많아 응답을 만들지 못했습니다.
+잠시 후 다시 시도해주세요"라는, 실제로는 영구적인(재시도해도 절대 안
+풀리는) 문제를 마치 일시적인 것처럼 보여주는 오해의 소지가 있는 메시지를
+띄우고 있었다(코드 버그는 아니고 실제 원인은 환경설정 — `.env`의
+`LLM2_API_URL`/`LLM2_MODEL`을 사내 실제 LLM 엔드포인트로 채워야 함).
+`pipeline/llm_client.py`에 `is_configured()`(LLM2_API_URL 설정 여부만
+빠르게 확인, `call_llm()`의 재시도/HTTP오류 등 다른 실패 사유와는 구분)를
+추가하고, `services/nl_query.py.answer_question()`(전체 파이프라인의
+단일 진입점) 맨 앞에서 확인해 미설정이면 "AI 검색을 지금 사용할 수
+없습니다(사내 LLM 서버 설정이 필요합니다) — 관리자에게 문의해주세요"를
+즉시 보여주도록 했다. `call_llm()` 자체의 반환 계약(항상 문자열, 예외
+없음)은 그대로 둬서 다른 10여 개 호출부(배치 스크립트 등)에 영향이
+없게 했다 — `nl_query.py` 한 곳에서만 사전 체크하는 방식으로 최소
+범위로 고쳤다.
+
+**검증**: 5개 항목 모두 합성 데이터로 직접 실행 확인 — `org_code_label_maps()`
+매핑/폴백(매핑 있음/없음 각각), `_org_code` 기반 필터 매칭 유지,
+`_col_dept_task()` 엑셀 셀 값, `is_configured()` 참/거짓, `team_refer_sync_tooltip()`
+콜백 로직. `pages/admin.py`/`pages/researcher_list.py` 둘 다 Dash 컨텍스트에서
+`layout()` 전체 렌더링 재확인. 변경된 모든 파일 `py_compile` 통과.
+**미검증**: 실제 브라우저에서 CSS 리사이즈/호버 툴팁/필터 아이콘 숨김이
+의도대로 보이는지, 좁은 화면에서 실제로 좌우 스크롤이 없어지는지.

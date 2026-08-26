@@ -61,6 +61,13 @@ def _build_summary_df(current_only: bool = True) -> pd.DataFrame:
         if not team.empty and {'researcher_id', 'assignment_name'} <= set(team.columns) else {}
     )
 
+    # 부서/과제(파트) 표시값 = researchers.csv의 org_code를 team_refer의
+    # dep_name/pjt_part_name으로 매핑(검색 기준의 부서/과제 필터와 동일한
+    # 기준으로 통일 — 사용자 확정). team_refer에 매핑이 없는 org_code는
+    # 원본 department/org_code 값을 그대로 보여준다(빈 칸으로 두면 데이터
+    # 누락처럼 보이므로 — 사용자 확정).
+    dep_label_map, pjt_label_map = similarity_map.org_code_label_maps()
+
     # 숫자 변환
     for col in ['pub_year', 'impact_factor', 'citation_count', 'contribution']:
         if col in pub.columns:
@@ -125,11 +132,13 @@ def _build_summary_df(current_only: bool = True) -> pd.DataFrame:
             highest = '-'
             major = '-'
 
+        org_code = str(r.get('org_code', ''))
         row = {
             'researcher_id': rid,
+            '_org_code':      org_code,  # 화면에는 안 보임 — 부서/과제 필터가 org_code로 매칭할 때만 씀
             '이름':           str(r.get('name', '')),
-            '부서':           str(r.get('department', '')),
-            '과제':           str(r.get('org_code', '')),
+            '부서':           dep_label_map.get(org_code) or str(r.get('department', '')),
+            '과제':           pjt_label_map.get(org_code) or org_code,
             '직급':           str(r.get('position', '')),
             '직책':           str(title_by_id.get(rid, '') or '').strip() or '-',
             '성별':           str(r.get('gender', '')),
@@ -201,7 +210,7 @@ _ESSENTIAL_COLUMNS = [
     ('researcher_id', '사번'),
     ('이름', '이름'),
     ('부서', '부서'),
-    ('과제', '과제'),
+    ('과제', '과제/파트'),
     ('직급', '직급'),
     ('직책', '직책'),
     ('재직상태', '재직상태'),
@@ -240,6 +249,14 @@ def _build_columns(df: pd.DataFrame, optional_ids: list | None = None,
                      'type': 'numeric' if col_id in _NUMERIC_COLUMNS else 'text'})
     return cols
     # 평균IF는 혼합값(숫자/'-')이 있어 numeric으로 분류하지 않고 text로 유지
+
+
+def _build_tooltip_data(records: list) -> list:
+    """각 셀에 그 값 전체를 툴팁으로 붙인다 — 컬럼 너비가 좁아 말줄임(...)
+    처리된 값도 마우스를 올리면 전체를 볼 수 있게(사용자 확정: 전체 컬럼
+    대상). `_org_code`처럼 화면에 없는 내부 컬럼이 섞여 있어도 dash_table이
+    실제 렌더링 중인 컬럼id만 골라 쓰므로 문제없다."""
+    return [{k: str(v) if v is not None else '' for k, v in row.items()} for row in records]
 
 
 # AI 검색 결과 중 명단에 다시 노출하지 않을 컬럼 — 이름/부서는 필수 컬럼과
@@ -497,9 +514,13 @@ def layout():
                         'textAlign': 'center',
                         'whiteSpace': 'normal',
                     },
+                    # 검색(필터) 행이라는 게 눈에 띄도록 배경/테두리를 뚜렷하게
+                    # 준다(사용자 확정 — "검색 가능한 행이라는 걸 보여주면 좋겠다").
                     style_filter={
-                        'backgroundColor': '#f0f4f8',
+                        'backgroundColor': '#eaf2fb',
                         'fontSize': '0.75rem',
+                        'borderTop': '2px solid #1e3a5f',
+                        'borderBottom': '2px solid #cfe0f3',
                     },
                     style_cell={
                         'fontSize': '0.82rem',
@@ -527,8 +548,23 @@ def layout():
                          'border': '1px solid #3b82f6'},
                     ] + grade_styles,
                     tooltip_header={col['id']: col['id'] for col in columns},
+                    tooltip_data=_build_tooltip_data(display_df.to_dict('records') if not display_df.empty else []),
                     tooltip_delay=0,
                     tooltip_duration=None,
+                    # 대소문자 구분 없이 항상 필터(사용자 확정) + 필터 행 자체에
+                    # 브라우저 네이티브 CSS resize로 컬럼 너비 드래그 조절(admin.py
+                    # team-refer-table과 동일한 트릭).
+                    filter_options={'case': 'insensitive', 'placeholder_text': '🔍 검색...'},
+                    css=[
+                        {
+                            'selector': '.column-header-name',
+                            'rule': ('display: inline-block; resize: horizontal; overflow: auto; '
+                                     'min-width: 40px; max-width: 600px; vertical-align: bottom;'),
+                        },
+                        # 대소문자 토글 아이콘(Aa) 숨김 — filter_options.case로 이미
+                        # 항상 대소문자 무시로 고정했으니 토글 자체가 필요 없다.
+                        {'selector': '.dash-filter--case', 'rule': 'display: none;'},
+                    ],
                 ),
                 className='p-0',
             ),
@@ -583,6 +619,7 @@ def toggle_org_filters(mode):
     Output('researcher-table', 'data'),
     Output('researcher-table', 'columns'),
     Output('researcher-table', 'tooltip_header'),
+    Output('researcher-table', 'tooltip_data'),
     Output('researcher-table', 'selected_rows'),
     Input('list-search-btn',   'n_clicks'),
     Input('filter-modal-apply-btn', 'n_clicks'),
@@ -619,11 +656,13 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, 
             # 질문 없음/초기화/결과 없음 → 필수 컬럼만으로 전체 목록 복귀
             columns = _build_columns(display_df)
             tooltip_header = {c['id']: c['id'] for c in columns}
-            return display_df.to_dict('records'), columns, tooltip_header, []
+            records = display_df.to_dict('records')
+            return records, columns, tooltip_header, _build_tooltip_data(records), []
         merged_df, extra_ids, extra_labels = _merge_ai_result(display_df, ai_result)
         columns = _build_columns(merged_df, extra_ids=extra_ids, extra_labels=extra_labels)
         tooltip_header = {c['id']: c['id'] for c in columns}
-        return merged_df.to_dict('records'), columns, tooltip_header, []
+        records = merged_df.to_dict('records')
+        return records, columns, tooltip_header, _build_tooltip_data(records), []
 
     # 상세 필터(성별/학력/전공)로 값을 고르면 그 컬럼도 함께 보여준다.
     optional_values = dict(zip(_OPTIONAL_FILTER_COLUMNS, (gender, degree, major)))
@@ -631,23 +670,26 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, 
     columns = _build_columns(display_df, optional_ids=optional_ids)
     tooltip_header = {c['id']: c['id'] for c in columns}
     if display_df.empty:
-        return [], columns, tooltip_header, []
+        return [], columns, tooltip_header, [], []
 
     # 모드 전환 자체가 트리거면(부서/과제/직급/직책 필터가 비활성화·초기화되는
     # 시점과 겹칠 수 있어) 조직 필터는 적용하지 않고 전체(해당 모드) 목록을 보여준다.
     if triggered in ('clear-filters-btn', 'list-search-mode'):
-        return display_df.to_dict('records'), columns, tooltip_header, []
+        records = display_df.to_dict('records')
+        return records, columns, tooltip_header, _build_tooltip_data(records), []
 
     # 부서/과제·파트 필터는 team_refer의 dep_name/pjt_part_name을 라벨로 쓰지만,
-    # 실제 매칭은 항상 org_name_wd(=이 표의 '과제' 컬럼=researchers.csv의
-    # org_code)로 한다 — 라벨 문자열이 researchers.csv 표기와 다를 수 있어
-    # 라벨로 직접 비교하지 않는다(services.similarity_map 참고).
+    # 실제 매칭은 항상 org_name_wd(=researchers.csv의 org_code, 화면에는 안
+    # 보이는 내부 컬럼 '_org_code')로 한다 — 라벨 문자열이 researchers.csv
+    # 표기와 다를 수 있어 라벨로 직접 비교하지 않는다(services.similarity_map
+    # 참고). '과제' 컬럼 자체는 이제 표시용 pjt_part_name 라벨이라 이 매칭에
+    # 쓸 수 없다(사용자 확정 — 명단 '과제/파트' 열을 team_refer 라벨로 표시).
     if dept and current_only:
         org_codes = similarity_map.org_codes_for_dep_names(dept)
-        display_df = display_df[display_df['과제'].isin(org_codes)]
+        display_df = display_df[display_df['_org_code'].isin(org_codes)]
     if project and current_only:
         org_codes = similarity_map.org_codes_for_pjt_part_names(project)
-        display_df = display_df[display_df['과제'].isin(org_codes)]
+        display_df = display_df[display_df['_org_code'].isin(org_codes)]
     if pos and current_only:
         display_df = display_df[display_df['직급'].isin(pos)]
     if title and current_only:
@@ -660,7 +702,8 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, 
         display_df = display_df[display_df['전공'].isin(major)]
     if employment:
         display_df = display_df[display_df['재직상태'].isin(employment)]
-    return display_df.to_dict('records'), columns, tooltip_header, []
+    records = display_df.to_dict('records')
+    return records, columns, tooltip_header, _build_tooltip_data(records), []
 
 
 # ── 콜백 3: 필터 초기화 버튼 → 드롭다운 값 비우기(메인 화면 + 필터 모달) ─────

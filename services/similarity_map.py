@@ -423,6 +423,28 @@ def org_codes_for_pjt_part_names(pjt_part_names) -> set:
     } - {''}
 
 
+def org_code_label_maps() -> tuple[dict, dict]:
+    """researchers.csv의 org_code(=team_refer의 org_name_wd) 전체를 한 번에
+    dep_name/pjt_part_name으로 매핑하는 dict 2개(org_code → dep_name,
+    org_code → pjt_part_name)를 team_refer 한 번 순회로 만든다.
+    dep_name_for_org_code()처럼 한 건씩 team_refer 전체를 매번 다시 훑는
+    방식은 명단처럼 수백 행을 한꺼번에 매핑할 때(수백 × team_refer 전체
+    스캔) 느리므로, 이 dict를 한 번만 만들어 재사용하는 용도(연구원 명단
+    화면 참고). 같은 org_code가 여러 team_refer 행에 걸쳐 있으면(정상
+    데이터에서는 드묾) dep_name_for_org_code()와 동일하게 먼저 나온 값을
+    쓴다. 매핑이 없는 org_code는 두 dict 어디에도 키가 생기지 않는다 —
+    호출부가 `.get(org_code, 원본값)`으로 폴백을 직접 처리한다."""
+    dep_map: dict = {}
+    pjt_map: dict = {}
+    for r in read_team_refer(DATA_DIR):
+        org_code = (r.get('org_name_wd') or '').strip()
+        if not org_code:
+            continue
+        dep_map.setdefault(org_code, (r.get('dep_name') or '').strip())
+        pjt_map.setdefault(org_code, (r.get('pjt_part_name') or '').strip())
+    return dep_map, pjt_map
+
+
 def individual_search_options() -> list:
     """개인별 검색 드롭다운 옵션 — "이름 [부서] (사번)" 형식(동명이인 구분,
     pages/researcher_profile.py 검색 드롭다운과 동일한 표기 규칙)."""

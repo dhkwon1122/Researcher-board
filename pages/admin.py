@@ -312,9 +312,20 @@ def _team_refer_tab() -> html.Div:
             sort_action='custom',  # 헤더 클릭 정렬 — team_refer_sort 콜백이 처리(No.도 같이 갱신)
             sort_by=[],
             style_table={'overflowX': 'auto'},
-            style_cell={'fontSize': '0.8rem', 'padding': '4px 8px', 'minWidth': '90px'},
-            style_cell_conditional=[{'if': {'column_id': '_no'}, 'width': '48px', 'textAlign': 'center'}],
-            style_header={'fontWeight': '600', 'backgroundColor': '#f1f3f5'},
+            # 전체 가운데 정렬 + 좁은 폭에서도 최대한 좌우 스크롤 없이 한 화면에
+            # 들어오도록 폰트/여백을 줄이고, 그래도 안 들어가는 내용은 말줄임
+            # 처리 후 마우스 오버로 전체를 보여준다(tooltip_data, 사용자 확정
+            # — 안 들어가면 스크롤이 남는 것도 허용).
+            style_cell={
+                'fontSize': '0.72rem', 'padding': '3px 6px', 'textAlign': 'center',
+                'minWidth': '55px', 'maxWidth': '160px',
+                'overflow': 'hidden', 'textOverflow': 'ellipsis',
+            },
+            style_cell_conditional=[{'if': {'column_id': '_no'}, 'width': '40px', 'textAlign': 'center'}],
+            style_header={'fontWeight': '600', 'backgroundColor': '#f1f3f5',
+                          'textAlign': 'center', 'fontSize': '0.72rem'},
+            tooltip_delay=0,
+            tooltip_duration=None,
             # DataTable에는 컬럼 너비 드래그 조절 기능이 없어(구버전 dash_table),
             # 헤더 텍스트를 감싸는 요소에 브라우저 네이티브 CSS resize를 적용해
             # 우측 하단 모서리를 드래그해 너비를 조절할 수 있게 한다.
@@ -833,6 +844,21 @@ def team_refer_renumber_on_change(rows):
     if [r.get('_no') for r in rows] == list(range(1, len(rows) + 1)):
         return no_update
     return _renumbered(list(rows))
+
+
+# ── 콜백: 팀/리더 참조 — 셀 툴팁을 항상 최신 데이터로 유지 ─────────────────────
+# 말줄임(...) 처리된 셀도 마우스를 올리면 전체 내용을 볼 수 있게(사용자
+# 확정) — 행 추가/삭제/정렬/편집 등 data를 바꾸는 콜백이 여러 개라 그때마다
+# 각자 tooltip_data를 다시 계산하게 하는 대신, data 자체를 지켜보다가 한
+# 곳에서만 갱신한다.
+@callback(
+    Output('team-refer-table', 'tooltip_data'),
+    Input('team-refer-table', 'data'),
+)
+def team_refer_sync_tooltip(rows):
+    if not rows:
+        return []
+    return [{k: str(v) if v is not None else '' for k, v in row.items()} for row in rows]
 
 
 # ── 콜백: 팀/리더 참조 — 저장 ─────────────────────────────────────────────────

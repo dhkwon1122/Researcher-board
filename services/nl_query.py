@@ -715,7 +715,18 @@ def answer_question(question: str, current_only: bool = True) -> dict:
     """질문 → (질의 변환 → 조회 → 결과 설명) 전체 파이프라인의 단일
     진입점. 결과 설명(answer)은 error/unsupported이거나 결과가 없으면
     비워둔다. current_only=False(누적기준)면 전배·퇴사 등으로 최신
-    인력현황에 없는 사람도 조회 대상에 포함한다."""
+    인력현황에 없는 사람도 조회 대상에 포함한다.
+
+    LLM2_API_URL이 아예 설정되지 않았으면(운영 환경설정 누락) call_llm()을
+    시도해 봐야 매번 똑같이 실패하므로, 여기서 미리 걸러 정확한 안내를
+    바로 보여준다 — 이게 없으면 실제로는 "설정 안 됨"인데 사용자에게는
+    "지금 요청이 많다"는 오해의 소지가 있는 메시지가 대신 뜬다(사용자 확정
+    — data/processed/CLAUDE.md 참고)."""
+    if not llm_client.is_configured():
+        return _empty_table_result(
+            'error',
+            'AI 검색을 지금 사용할 수 없습니다(사내 LLM 서버 설정이 필요합니다) — 관리자에게 문의해주세요.',
+        )
     result = execute_query(parse_question(question), current_only=current_only)
     if result.get('intent') not in ('error', 'unsupported'):
         result['answer'] = _generate_answer_summary(question, result)
