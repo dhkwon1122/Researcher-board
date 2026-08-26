@@ -349,21 +349,39 @@ def researchers_under_departments(dep_ids: list, include_children: bool) -> list
 # 비교하지 않는다 — pages/researcher_list.py의 기존 _project_options() 주석
 # 참고: 서로 다른 원천의 표기가 항상 일치한다는 보장이 없다).
 
+def _labels_sorted_by_dep_code(rows: list, label_key: str) -> list:
+    """rows에서 label_key(dep_name 또는 pjt_part_name) 고유값을, 그 값을 가진
+    행들 중 가장 앞선(가장 작은) dep_code 기준 오름차순으로 정렬해 반환한다
+    — 같은 이름이 여러 행에 걸쳐 있어도(예: 여러 파트가 같은 dep_name을
+    공유) 조직도 상 가장 먼저 나오는 위치로 정렬 순서를 정한다."""
+    best_code: dict[str, str] = {}
+    for r in rows:
+        name = (r.get(label_key) or '').strip()
+        if not name:
+            continue
+        code = (r.get('dep_code') or '').strip()
+        if name not in best_code or code < best_code[name]:
+            best_code[name] = code
+    return sorted(best_code, key=lambda n: best_code[n])
+
+
 def department_filter_options() -> list:
-    """'부서' 드롭다운 옵션 — team_refer의 dep_name 고유값."""
-    names = sorted({(r.get('dep_name') or '').strip() for r in read_team_refer(DATA_DIR)} - {''})
+    """'부서' 드롭다운 옵션 — team_refer의 dep_name 고유값, 조직코드(dep_code)
+    오름차순 정렬(사용자 확정)."""
+    names = _labels_sorted_by_dep_code(read_team_refer(DATA_DIR), 'dep_name')
     return [{'label': n, 'value': n} for n in names]
 
 
 def pjt_part_filter_options(dep_names=None) -> list:
-    """'과제/파트' 드롭다운 옵션 — team_refer의 pjt_part_name 고유값.
-    dep_names를 지정하면 그 부서(dep_name)에 속한 행만 남긴다(부서 선택 시
-    캐스케이딩, pages/researcher_list.py의 update_project_options 콜백)."""
+    """'과제/파트' 드롭다운 옵션 — team_refer의 pjt_part_name 고유값,
+    조직코드(dep_code) 오름차순 정렬(사용자 확정). dep_names를 지정하면 그
+    부서(dep_name)에 속한 행만 남긴다(부서 선택 시 캐스케이딩,
+    pages/researcher_list.py의 update_project_options 콜백)."""
     rows = read_team_refer(DATA_DIR)
     if dep_names:
         wanted = {dep_names} if isinstance(dep_names, str) else set(dep_names)
         rows = [r for r in rows if (r.get('dep_name') or '').strip() in wanted]
-    names = sorted({(r.get('pjt_part_name') or '').strip() for r in rows} - {''})
+    names = _labels_sorted_by_dep_code(rows, 'pjt_part_name')
     return [{'label': n, 'value': n} for n in names]
 
 
@@ -377,6 +395,20 @@ def org_codes_for_dep_names(dep_names) -> set:
         for r in read_team_refer(DATA_DIR)
         if (r.get('dep_name') or '').strip() in wanted
     } - {''}
+
+
+def dep_name_for_org_code(org_code: str) -> str:
+    """researchers.csv의 org_code 하나를 받아, 그 org_code와 매칭되는
+    team_refer 행의 dep_name을 반환한다(없으면 빈 문자열) — 연구원 개별
+    프로필 화면의 '부서' 드롭다운 기본 선택값을 구할 때 쓴다(연구원 명단의
+    '부서' 필터와 동일한 team_refer 기준으로 맞추기 위함)."""
+    org_code = (org_code or '').strip()
+    if not org_code:
+        return ''
+    for r in read_team_refer(DATA_DIR):
+        if (r.get('org_name_wd') or '').strip() == org_code:
+            return (r.get('dep_name') or '').strip()
+    return ''
 
 
 def org_codes_for_pjt_part_names(pjt_part_names) -> set:

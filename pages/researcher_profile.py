@@ -42,6 +42,7 @@ from services.data_store import (
     read_similar_researchers,
 )
 from services.evaluations import evaluation_years
+from services import similarity_map
 
 dash.register_page(
     __name__,
@@ -100,22 +101,30 @@ def _opt(row):
 def _load_selector_data(current_only: bool = True):
     """current_only=True(최신기준)면 현재 소속자만, False(누적기준)면 전배·퇴사
     등으로 최신 인력현황에 없는 사람까지 전부 포함해 검색 옵션을 만든다.
-    dept_opts(조직 드롭다운)는 항상 전체(all-time) 부서 목록으로 만들어 모드가
-    바뀌어도 그 자체는 다시 계산할 필요가 없게 한다."""
+    dept_opts('부서' 드롭다운)는 항상 전체(all-time) 부서 목록으로 만들어
+    모드가 바뀌어도 그 자체는 다시 계산할 필요가 없게 한다.
+
+    부서 목록/그룹핑은 researchers.csv의 원본 department 컬럼이 아니라
+    services.similarity_map(team_refer 기반, "연구원 명단" 화면의 '부서'
+    필터와 동일한 기준)을 그대로 쓴다 — 두 화면의 '부서' 옵션·데이터가
+    항상 같은 원천을 보도록 하기 위함(사용자 확정)."""
     try:
-        full_df = read_processed('researchers').sort_values(['department', 'name'])
+        full_df = read_processed('researchers')
         if full_df.empty:
             return [], [], {}
         res_df = filter_current(full_df, current_only)
 
-        all_opts = [_opt(row) for _, row in res_df.iterrows()]
-        by_dept = {
-            dept: [_opt(row) for _, row in grp.iterrows()]
-            for dept, grp in res_df.groupby('department', sort=True)
-        }
-        dept_opts = [{'label': '전체', 'value': ''}] + [
-            {'label': d, 'value': d} for d in sorted(full_df['department'].dropna().unique()) if d
-        ]
+        all_opts = [_opt(row) for _, row in res_df.sort_values(['department', 'name']).iterrows()]
+
+        dept_opts = similarity_map.department_filter_options()
+        by_dept = {}
+        for opt in dept_opts:
+            dep_name = opt['value']
+            org_codes = similarity_map.org_codes_for_dep_names([dep_name])
+            grp = res_df[res_df['org_code'].isin(org_codes)] if 'org_code' in res_df.columns else res_df.iloc[0:0]
+            by_dept[dep_name] = [_opt(row) for _, row in grp.sort_values(['department', 'name']).iterrows()]
+        dept_opts = [{'label': '전체', 'value': ''}] + dept_opts
+
         return dept_opts, all_opts, by_dept
     except Exception:
         return [], [], {}
@@ -269,7 +278,7 @@ def layout(id=None, ids=None, **_kwargs):
                 res_df = read_processed('researchers')
                 match = res_df[res_df['researcher_id'] == id]
                 if not match.empty:
-                    default_dept = str(match.iloc[0].get('department', ''))
+                    default_dept = similarity_map.dep_name_for_org_code(str(match.iloc[0].get('org_code', '')))
                     res_opts = by_dept.get(default_dept, all_opts)
             except Exception:
                 pass
@@ -413,7 +422,7 @@ def _selector_card(dept_opts, res_opts, default_dept, default_rid, default_mode=
                     ),
                 ], width='auto'),
                 dbc.Col([
-                    dbc.Label('조직', className='fw-semibold small text-muted mb-1'),
+                    dbc.Label('부서', className='fw-semibold small text-muted mb-1'),
                     dcc.Dropdown(
                         id='dept-select',
                         options=dept_opts,
@@ -1306,7 +1315,7 @@ def _render_history_chips(history):
     prevent_initial_call=True,
 )
 def _select_from_history(n_clicks_list, ids):
-    """"최근 검색" 칩을 누르면 그 사람의 부서로 조직 드롭다운을 같이 옮겨줘야
+    """"최근 검색" 칩을 누르면 그 사람의 부서로 '부서' 드롭다운을 같이 옮겨줘야
     (layout()의 id= 딥링크와 동일한 이유로) researcher-select 옵션 목록에 그
     사람이 실제로 들어있는 상태가 된다 — 부서만 안 맞추면 필터링된 옵션에서
     빠져 있어 선택이 무시될 수 있다."""
@@ -1319,7 +1328,7 @@ def _select_from_history(n_clicks_list, ids):
     rid = triggered_id['rid']
     res_df = read_processed('researchers')
     match = res_df[res_df['researcher_id'] == rid]
-    dept = str(match.iloc[0].get('department', '') or '') if not match.empty else None
+    dept = similarity_map.dep_name_for_org_code(str(match.iloc[0].get('org_code', ''))) if not match.empty else None
     return (dept or None), rid
 
 

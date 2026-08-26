@@ -648,11 +648,32 @@ def team_refer_sort(sort_by, rows):
     return _renumbered(rows)
 
 
+# ── 콜백: 팀/리더 참조 — 행 삭제 직후 No. 즉시 재번호 ─────────────────────────
+# row_deletable(행 삭제)은 DataTable이 클라이언트에서 바로 처리해 data가
+# 곧장 줄어드는데, 그때는 team_refer_add_row/team_refer_sort 같은 명시적
+# 콜백이 안 걸린다. 그래서 data 자체를 Input으로 지켜보다가 'No.'가 현재
+# 순서(1..N)와 어긋나 있으면(=삭제로 빠짐) 바로 다시 매긴다. Output도 같은
+# data라 자기 자신을 다시 트리거하지만, 이미 맞게 매겨진 상태에서는
+# no_update를 반환해 루프가 멈춘다(idempotent) — 편집(셀 값 변경)처럼
+# 순서가 안 바뀌는 변경에서도 한 번 더 불리지만 즉시 no_update로 끝난다.
+@callback(
+    Output('team-refer-table', 'data', allow_duplicate=True),
+    Input('team-refer-table', 'data'),
+    prevent_initial_call=True,
+)
+def team_refer_renumber_on_change(rows):
+    if not rows:
+        return no_update
+    if [r.get('_no') for r in rows] == list(range(1, len(rows) + 1)):
+        return no_update
+    return _renumbered(list(rows))
+
+
 # ── 콜백: 팀/리더 참조 — 저장 ─────────────────────────────────────────────────
-# 행 삭제(row_deletable)는 DataTable이 클라이언트에서 바로 처리하므로 별도
-# 콜백이 없다 — 저장 시점에 team-refer-loaded-dep-ids(그리드를 처음 불러올
-# 때의 부서ID 목록)와 현재 그리드의 부서ID를 비교해 사라진 것을 삭제로
-# 판단한다.
+# 행 삭제(row_deletable) 자체는 DataTable이 클라이언트에서 바로 처리하므로
+# 별도 저장 로직은 없다 — 저장 시점에 team-refer-loaded-dep-ids(그리드를
+# 처음 불러올 때의 부서ID 목록)와 현재 그리드의 부서ID를 비교해 사라진
+# 것을 삭제로 판단한다.
 @callback(
     Output('team-refer-save-msg', 'children'),
     Output('team-refer-loaded-dep-ids', 'data', allow_duplicate=True),
