@@ -116,6 +116,40 @@ _BY_KEY = {item['key']: item for item in MANIFEST}
 MAX_UPLOAD_BYTES = int(os.environ.get('WEB_UPDATE_MAX_UPLOAD_BYTES', str(50 * 1024 * 1024)))  # 50MB
 
 
+# ── 사내 API 연동 확장 포인트 ─────────────────────────────────────────────────
+# 지금은 파일 업로드만 지원하지만, 최종 목표는 사내 API에서 직접 데이터를
+# 받는 것(사용자 확정) — 그때 가서 화면을 다시 만들지 않아도 되도록, 각
+# 항목에 "API에서 가져오기" 훅을 미리 심어 둔다. 지금은 전부 비어 있어
+# (register_api_fetch()가 호출된 적 없음) 화면의 API 아이콘을 눌러도
+# "아직 연동되지 않음" 결과가 실행결과 칸에 그대로 남을 뿐이고, 실제
+# 코드/데이터 흐름에는 아무 영향이 없다.
+#
+# 실제 연동 시 붙이는 방법(신규 파일, 예: services/hr_api_client.py):
+#   from services.web_pipeline_runner import register_api_fetch
+#   def _fetch_researchers(key):
+#       resp = requests.get(...)
+#       return [(filename, resp.content, None)]   # slot은 job_profile만 사용
+#   register_api_fetch('researchers', _fetch_researchers)
+# 이렇게 등록만 하면 화면 변경 없이 바로 그 항목의 API 아이콘이 동작한다
+# (run_one(..., via_api=True)가 이 훅을 호출해 파일 업로드와 완전히 같은
+# 경로 — 실행/락/로그 — 를 그대로 탄다).
+for _item in MANIFEST:
+    _item.setdefault('api_fetch', None)
+
+
+def register_api_fetch(key: str, fetch_fn) -> None:
+    """key 항목의 "API에서 가져오기" 구현을 등록한다.
+    fetch_fn(key: str) -> list[(filename: str, content: bytes, slot: str | None)]
+    실패 시 예외를 던지면 그대로 실행결과에 표시된다(run_one과 동일한 처리)."""
+    if key not in _BY_KEY:
+        raise KeyError(f'알 수 없는 항목: {key}')
+    _BY_KEY[key]['api_fetch'] = fetch_fn
+
+
+def has_api(key: str) -> bool:
+    return _BY_KEY[key].get('api_fetch') is not None
+
+
 def _key_dir(key: str) -> str:
     d = os.path.join(WEB_UPDATES_DIR, key)
     os.makedirs(d, exist_ok=True)
@@ -295,13 +329,27 @@ def _last_meaningful_line(output: str) -> str:
     return lines[-1] if lines else ''
 
 
-def run_one(key: str) -> dict:
+def run_one(key: str, via_api: bool = False) -> dict:
     """항목 하나를 실제로 처리한다 — process_*.py의 stdout/예외를 캡처해
-    실행결과 메시지를 만든다. run log에도 즉시 반영한다."""
+    실행결과 메시지를 만든다. run log에도 즉시 반영한다.
+
+    via_api=True면 파일 업로드 대신 등록된 API 훅(register_api_fetch())으로
+    먼저 데이터를 받아 그 폴더에 저장한 뒤, 이후 처리는 업로드 경로와
+    완전히 동일하다 — 아직 훅이 없으면(현재 전 항목이 그렇다) 바로
+    "미연동" 실패로 기록하고 끝난다."""
     item = _BY_KEY[key]
     raw_dir = _key_dir(key)
     buf = io.StringIO()
     try:
+        if via_api:
+            fetch_fn = item.get('api_fetch')
+            if fetch_fn is None:
+                _record_result(key, '실패', '아직 사내 API 연동이 준비되지 않았습니다 — '
+                                            '지금은 파일 업로드를 이용해주세요.')
+                return last_result(key)
+            for filename, content, slot in fetch_fn(key):
+                save_upload(key, filename, content, slot=slot)
+
         if not has_upload(key):
             _record_result(key, '실패', '업로드된 파일이 없습니다.')
             return last_result(key)
@@ -332,11 +380,11 @@ def run_one(key: str) -> dict:
     return last_result(key)
 
 
-def run_many(keys: list[str]) -> None:
+def run_many(keys: list[str], via_api: bool = False) -> None:
     """백그라운드 스레드에서 순차 실행 — 브라우저가 꺼져도 계속 진행."""
     try:
         for key in keys:
-            run_one(key)
+            run_one(key, via_api=via_api)
             _mark_progress(key)
     finally:
         release_lock()
@@ -352,6 +400,22 @@ def start_run(keys: list[str]) -> bool:
     for key in keys:
         _record_result(key, '실행중', '')
     t = threading.Thread(target=run_many, args=(keys,), daemon=True)
+    t.start()
+    return True
+
+
+def start_run_via_api(keys: list[str]) -> bool:
+    """화면의 "API로 가져오기" 아이콘용 — start_run()과 동일하지만 업로드
+    폴더 대신 register_api_fetch()로 등록된 훅을 먼저 호출한다. 훅이 없는
+    항목은 그 자리에서 "미연동" 실패로 기록된다(현재는 전부 그렇다)."""
+    keys = [k for k in keys if k in _BY_KEY]
+    if not keys:
+        return False
+    if not try_acquire_lock(keys):
+        return False
+    for key in keys:
+        _record_result(key, '실행중', '')
+    t = threading.Thread(target=run_many, args=(keys,), kwargs={'via_api': True}, daemon=True)
     t.start()
     return True
 
@@ -378,6 +442,7 @@ def snapshot() -> list[dict]:
             'hint': item['hint'],
             'mode': item['mode'],
             'has_upload': has_upload(item['key']),
+            'has_api': has_api(item['key']),
             'uploaded_at': uploaded_at(item['key']),
             'uploaded_filenames': [os.path.basename(p) for p in uploaded_files(item['key'])],
             'last_run_at': result.get('last_run_at', ''),

@@ -5051,3 +5051,32 @@ Postgres, DRM/xlwings 무관이라 리눅스 서버에서 바로 실행 가능)�
   프로세스에 걸친 실제 동시 클릭 시나리오, 실제 Postgres에 대한
   `load_to_db.load()` 실행(DATABASE_URL 없는 샌드박스라 "미설정" 분기만
   확인), 50MB에 가까운 실제 대용량 파일 업로드.
+
+## 2026-08-26 (36): "데이터 업데이트" 탭에 사내 API 연동 확장 포인트(항목별 아이콘) 선반영
+
+배경: 지금은 파일 업로드로 갱신하지만, 궁극적으로는 20개 항목 모두 사내
+API에서 직접 데이터를 받는 게 최종 목표(사용자 확정) — 그때 화면을 다시
+만들지 않고, 지금 미리 아이콘을 심어 두면 연동 시 바로 반영되게 해달라는
+요청.
+
+**결정 — `services/web_pipeline_runner.py`에 `register_api_fetch(key, fn)`
+확장 포인트 추가**: MANIFEST 각 항목에 `api_fetch`(콜러블, 기본 None) 필드를
+두고, `run_one(key, via_api=True)`가 이 훅이 있으면 먼저 호출해 받은
+(파일명, bytes, slot) 목록을 `save_upload()`로 저장한 뒤 — **그 다음부터는
+파일 업로드 실행과 완전히 동일한 경로**(같은 process_*.py 호출, 같은 락/
+로그/폴링)를 탄다. 훅이 없으면(현재 전 항목) 그 자리에서 "아직 사내 API
+연동이 준비되지 않았습니다" 실패로 기록하고 끝난다 — 화면·버튼은 이미
+동작하되 실제 데이터만 없는 상태. 실제 연동 시 각 소스별로
+`register_api_fetch('researchers', fetch_fn)` 한 줄만 호출하면(신규 모듈,
+예: `services/hr_api_client.py`) 화면 변경 없이 그 항목의 아이콘이 바로
+동작한다.
+
+**화면(`pages/admin.py`)**: 각 행의 "구분" 셀에 작은 "API로 가져오기"/
+"API 연동 예정" 버튼을 추가(`{'type':'du-api','key':...}` 패턴 매칭 id,
+`data_update_run_via_api` 콜백 → `wpr.start_run_via_api([key])`). 안내
+알림에도 이 아이콘이 아직 비활성 상태임을 명시.
+
+**검증**: `register_api_fetch()` 등록 전/후 `run_one(key, via_api=True)`를
+합성 데이터로 직접 실행 — 등록 전엔 명확한 "미연동" 실패 메시지, 등록
+후엔 실제 process_patents.py까지 정상 실행되는 것을 확인. `pages/admin.py`
+레이아웃 렌더링(아이콘 포함) 재확인. 변경 파일 `py_compile` 통과.

@@ -374,10 +374,20 @@ def _data_update_row(row: dict) -> html.Tr:
         else dbc.Badge(status or '-', color=_STATUS_COLORS.get(status, 'secondary'))
     )
 
+    api_btn = dbc.Button(
+        [html.I(className='bi bi-cloud-arrow-down me-1'),
+         'API로 가져오기' if row['has_api'] else 'API 연동 예정'],
+        id={'type': 'du-api', 'key': key},
+        color='primary' if row['has_api'] else 'secondary',
+        outline=True, size='sm', className='mt-2 py-0 px-1',
+        style={'fontSize': '0.68rem'},
+    )
+
     return html.Tr([
         html.Td(dbc.Checkbox(id={'type': 'du-check', 'key': key}, value=False), className='align-middle text-center'),
         html.Td([html.Div(row['label'], className='fw-semibold'),
-                 html.Div(row['hint'], className='text-muted', style={'fontSize': '0.72rem'})],
+                 html.Div(row['hint'], className='text-muted', style={'fontSize': '0.72rem'}),
+                 api_btn],
                 className='align-middle'),
         html.Td([upload_cell, filenames_view], className='align-middle', style={'minWidth': '220px'}),
         html.Td([
@@ -429,7 +439,9 @@ def _data_update_tab() -> html.Div:
                 html.I(className='bi bi-info-circle me-2'),
                 '원본 엑셀이 사내 DRM으로 보호돼 있다면, 업로드 전 자신의 PC에서 '
                 'Excel로 열어 "다른 이름으로 저장"으로 DRM이 풀린 사본을 만들어 '
-                '올려주세요. "전체 업데이트"는 파일이 업로드된 항목만 실행합니다.',
+                '올려주세요. "전체 업데이트"는 파일이 업로드된 항목만 실행합니다. '
+                '각 항목의 "API 연동 예정" 아이콘은 추후 사내 API 연동 시 사용할 '
+                '자리로, 현재는 눌러도 동작하지 않습니다.',
             ],
             color='light', className='small border mb-3',
         ),
@@ -945,6 +957,32 @@ def data_update_run(_all_clicks, _sel_clicks, check_values, check_ids):
         return _alert('이미 다른 작업이 실행 중입니다. 잠시 후 다시 시도해주세요.', 'warning'), False
     return (_alert(f'{len(keys)}개 항목 실행을 시작했습니다. 브라우저를 닫아도 서버에서 계속 '
                     '진행되며, 화면은 자동으로 갱신됩니다.', 'info'), False)
+
+
+# ── 콜백: 데이터 업데이트 — 항목별 "API로 가져오기" 아이콘 ─────────────────────
+# 사내 API 연동은 아직 없다(services/web_pipeline_runner.py의 register_api_fetch()
+# 참고) — 지금 눌러도 파일 업로드 실행과 완전히 같은 경로(락/로그/폴링)를 타되,
+# 실행결과 칸에 "아직 연동되지 않음"이 그대로 표시된다. 연동을 붙이는 시점에
+# register_api_fetch()만 호출하면 이 아이콘이 화면 변경 없이 바로 동작한다.
+@callback(
+    Output('data-update-status-msg', 'children', allow_duplicate=True),
+    Output('data-update-interval', 'disabled', allow_duplicate=True),
+    Input({'type': 'du-api', 'key': ALL}, 'n_clicks'),
+    prevent_initial_call=True,
+)
+def data_update_run_via_api(n_clicks_list):
+    from services.auth import can
+    if not can('manage_users'):
+        return _alert('관리자만 실행할 수 있습니다.', 'danger'), True
+
+    trig = dash.callback_context.triggered_id
+    if not trig or not any(n_clicks_list):
+        return no_update, no_update
+
+    key = trig['key']
+    if not wpr.start_run_via_api([key]):
+        return _alert('이미 다른 작업이 실행 중입니다. 잠시 후 다시 시도해주세요.', 'warning'), False
+    return _alert(f"{wpr._BY_KEY[key]['label']} 항목의 API 연동을 시도합니다.", 'info'), False
 
 
 # ── 콜백: 데이터 업데이트 — DB 반영 ────────────────────────────────────────────
