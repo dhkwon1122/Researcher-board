@@ -380,22 +380,33 @@ def layout():
                                        color='primary', title='검색(필터 적용)'),
                             dbc.Button(html.I(className='bi bi-file-earmark-excel'), id='list-excel-btn',
                                        color='success', title='엑셀 다운로드(현재 화면에 보이는 대상)'),
+                            dbc.Button(html.I(className='bi bi-sliders'), id='list-excel-options-btn',
+                                       color='secondary', outline=True,
+                                       title='추가 항목 선택(보유 전문성, 직무, 재직상태 등)'),
                             dbc.Button(html.I(className='bi bi-printer'), id='list-bulk-print-btn',
                                        color='info',
                                        title='프로필 일괄 인쇄(체크한 사람, 없으면 현재 화면에 보이는 전체)'),
                         ], className='w-100'),
-                        dbc.Checklist(
-                            id='list-excel-options-check',
-                            options=[
-                                {'label': '보유 전문성 포함', 'value': 'expertise'},
-                                {'label': '특허 포함', 'value': 'patents'},
-                                {'label': '논문 포함', 'value': 'publications'},
-                                {'label': '직무 포함', 'value': 'job_function'},
-                                {'label': '직무이력 포함', 'value': 'job_profile'},
-                                {'label': '재직상태 포함', 'value': 'employment_status'},
-                            ],
-                            value=[], switch=True,
-                            className='small mt-1',
+                        # 엑셀 다운로드에 포함할 추가 항목 — 항상 노출하지 않고
+                        # 위 아이콘(list-excel-options-btn) 클릭 시 뜨는 가벼운
+                        # 팝오버로 옮겼다(사용자 요청). trigger='click'이라 별도
+                        # 열기/닫기 콜백 없이 dbc가 알아서 토글한다.
+                        dbc.Popover(
+                            dbc.Checklist(
+                                id='list-excel-options-check',
+                                options=[
+                                    {'label': '보유 전문성 포함', 'value': 'expertise'},
+                                    {'label': '특허 포함', 'value': 'patents'},
+                                    {'label': '논문 포함', 'value': 'publications'},
+                                    {'label': '직무 포함', 'value': 'job_function'},
+                                    {'label': '직무이력 포함', 'value': 'job_profile'},
+                                    {'label': '재직상태 포함', 'value': 'employment_status'},
+                                ],
+                                value=[], switch=True,
+                                className='small',
+                            ),
+                            target='list-excel-options-btn', trigger='click',
+                            placement='bottom', body=True,
                         ),
                         html.Div(
                             '프로필 인쇄: 표에서 원하는 행을 체크하면 그 인원만, '

@@ -68,8 +68,6 @@ from services import query_settings  # noqa: E402
 from services.evaluations import evaluation_years, salary_grade_column  # noqa: E402
 from services.researcher_profile_export import highest_degree_row  # noqa: E402
 
-MAX_TOP_K = 20
-DEFAULT_TOP_K = 5
 _EMBEDDING_MATCH_THRESHOLD = 0.75
 _FIT_RANK = {'상': 0, '중': 1, '하': 2}
 
@@ -135,12 +133,11 @@ QUERY_SYSTEM_PROMPT = """# Role
   "degree": "",
   "grade_threshold": [],
   "grade_comparison": "이상",
-  "top_k": 5,
   "reason_if_unsupported": ""
 }
 ※ 해당 intent와 무관한 필드는 빈 문자열/빈 리스트/null로 두세요.
-※ department_filter/top_k는 질문에 명시적으로 언급된 경우에만 채우고, 그 외에는
-  기본값(department_filter="", top_k=5)을 유지하세요.
+※ department_filter는 질문에 명시적으로 언급된 경우에만 채우고, 그 외에는
+  기본값("")을 유지하세요.
 ※ age_min/age_max: "30대"→age_min=30,age_max=39. "40대 이상"→age_min=40,age_max=null.
   "35세 이상"→age_min=35,age_max=null.
 ※ degree는 "박사"/"석사"/"학사"/"전문대"/"고교" 중 하나(최종학력 기준)만 넣으세요.
@@ -236,7 +233,7 @@ def _build_table_result(intent: str, items: list, column_order: list, note: str 
     }
 
 
-def find_researchers_by_expertise(terms: list, department_filter: str = '', top_k: int = DEFAULT_TOP_K,
+def find_researchers_by_expertise(terms: list, department_filter: str = '',
                                    current_only: bool = True) -> dict:
     terms = [str(t).strip() for t in (terms or []) if str(t).strip()]
     if not terms:
@@ -288,7 +285,6 @@ def find_researchers_by_expertise(terms: list, department_filter: str = '', top_
             scored.append((hit_count, rid))
     scored.sort(key=lambda x: (-x[0], x[1]))
 
-    top_k = min(top_k or DEFAULT_TOP_K, MAX_TOP_K)
     items = [
         {
             'researcher_id': rid,
@@ -298,11 +294,9 @@ def find_researchers_by_expertise(terms: list, department_filter: str = '', top_
             'strength_keywords': profiles[rid].get('strength_keywords') or [],
             'matched_term_count': hit_count,
         }
-        for hit_count, rid in scored[:top_k]
+        for hit_count, rid in scored
     ]
-    note = ' '.join(notes)
-    if len(scored) > top_k:
-        note = f'{note} 조건에 맞는 {len(scored)}명 중 상위 {top_k}명을 표시합니다.'.strip()
+    note = ' '.join(notes).strip()
     return _build_table_result(
         'find_researchers_by_expertise', items,
         ['researcher_id', 'name', 'department', 'strength_fields', 'strength_keywords', 'matched_term_count'],
@@ -328,18 +322,18 @@ def _resolve_researcher(query: str, researchers_df: pd.DataFrame) -> list:
     return contains['researcher_id'].tolist()
 
 
-def find_similar_researchers(researcher_query: str, top_k: int = DEFAULT_TOP_K,
-                              current_only: bool = True) -> dict:
+def find_similar_researchers(researcher_query: str, current_only: bool = True) -> dict:
     """특정 연구원과 전문성이 유사한 다른 연구원을 찾는다. LLM 판정까지 이미
     끝난 pipeline/process_researcher_similarity.py의 배치 결과
     (researcher_similarity.json)를 그대로 조회할 뿐, 여기서 새로 유사도를
-    계산하지 않는다.
+    계산하지 않는다 — 결과 개수는 그 배치가 연구원 1명당 미리 골라둔
+    후보 수(pipeline/process_researcher_similarity.py의 top_k, 기본 5명)로
+    이미 정해져 있어, 이 함수 자체에는 별도 상한이 없다.
 
     current_only=False(누적기준)면 조회 대상(researcher_query가 가리키는
     사람)은 전배·퇴사자도 찾을 수 있다 — 다만 추천되는 유사 연구원 후보는
     실제로 협업 가능한 사람이어야 하므로 이 값과 무관하게 항상 현재
     소속자로만 제한한다(JOB Market과 같은 원칙)."""
-    top_k = min(top_k or DEFAULT_TOP_K, MAX_TOP_K)
     researchers_df = data_store.read_processed('researchers')
     resolve_pool = data_store.filter_current(researchers_df, current_only)
     candidates = _resolve_researcher(researcher_query, resolve_pool)
@@ -365,7 +359,7 @@ def find_similar_researchers(researcher_query: str, top_k: int = DEFAULT_TOP_K,
     name_map = researchers_df.set_index('researcher_id')['name'].to_dict()
     dept_map = researchers_df.set_index('researcher_id')['department'].to_dict()
     current_ids = set(data_store.filter_current(researchers_df, True)['researcher_id'])
-    similar = [s for s in (entry.get('similar') or []) if s.get('researcher_id') in current_ids][:top_k]
+    similar = [s for s in (entry.get('similar') or []) if s.get('researcher_id') in current_ids]
     items = [
         {
             'researcher_id': s.get('researcher_id', ''),
@@ -423,7 +417,7 @@ def _grade_threshold_pass(candidate_grades: list, threshold_grades: list, compar
 def find_researchers_by_criteria(age_min: int | None = None, age_max: int | None = None,
                                   degree: str = '', grade_threshold: list | None = None,
                                   grade_comparison: str = '이상', department_filter: str = '',
-                                  top_k: int = DEFAULT_TOP_K, current_only: bool = True) -> dict:
+                                  current_only: bool = True) -> dict:
     """연령대/최종학력/최근 N개년 평가등급 조합을 AND 조건으로 걸러 찾는다.
     평가등급 조건("나나가 이상"처럼 순서 무관 다개년 조합 비교)은 LLM에게 SQL로
     생성시키면(open_data_query) 등급 순서(가>나>다>라>마)와 조합 비교 규칙을
@@ -511,10 +505,6 @@ def find_researchers_by_criteria(age_min: int | None = None, age_max: int | None
         if excluded_missing:
             grade_note = f'최근 {n}개년 평가등급이 모두 확인되지 않는 {excluded_missing}명은 판단할 수 없어 제외했습니다.'
 
-    top_k = min(top_k or DEFAULT_TOP_K, MAX_TOP_K)
-    total = len(candidates)
-    candidates = candidates.head(top_k)
-
     items = []
     for _, r in candidates.iterrows():
         rid = r['researcher_id']
@@ -524,8 +514,6 @@ def find_researchers_by_criteria(age_min: int | None = None, age_max: int | None
         items.append(item)
 
     notes = []
-    if total > top_k:
-        notes.append(f'조건에 맞는 {total}명 중 상위 {top_k}명을 표시합니다.')
     if grade_note:
         notes.append(grade_note)
     if not items:
@@ -569,7 +557,7 @@ def parse_question(question: str) -> dict:
         if grade_override:
             return {'intent': 'find_researchers_by_criteria', 'question': question,
                      'expertise_terms': [], 'researcher_query': '', 'department_filter': '',
-                     'age_min': None, 'age_max': None, 'degree': '', 'top_k': DEFAULT_TOP_K,
+                     'age_min': None, 'age_max': None, 'degree': '',
                      **grade_override}
         return {'intent': 'error',
                 'message': '지금 요청이 많아 응답을 만들지 못했습니다. 잠시 후 다시 시도해주세요.'}
@@ -580,7 +568,7 @@ def parse_question(question: str) -> dict:
         if grade_override:
             return {'intent': 'find_researchers_by_criteria', 'question': question,
                      'expertise_terms': [], 'researcher_query': '', 'department_filter': '',
-                     'age_min': None, 'age_max': None, 'degree': '', 'top_k': DEFAULT_TOP_K,
+                     'age_min': None, 'age_max': None, 'degree': '',
                      **grade_override}
         return {'intent': 'error', 'message': '질문을 이해하지 못했습니다. 다르게 표현해 다시 질문해주세요.'}
 
@@ -591,11 +579,6 @@ def parse_question(question: str) -> dict:
         else:
             return {'intent': 'unsupported', 'question': question,
                     'reason_if_unsupported': parsed.get('reason_if_unsupported', '')}
-
-    try:
-        top_k = int(parsed.get('top_k') or DEFAULT_TOP_K)
-    except (TypeError, ValueError):
-        top_k = DEFAULT_TOP_K
 
     def _to_int_or_none(v):
         try:
@@ -629,7 +612,6 @@ def parse_question(question: str) -> dict:
         'degree': str(parsed.get('degree') or '').strip(),
         'grade_threshold': grade_threshold,
         'grade_comparison': grade_comparison,
-        'top_k': top_k,
     }
 
 
@@ -663,19 +645,18 @@ def execute_query(parsed: dict, current_only: bool = True) -> dict:
     if intent == 'open_data_query':
         return open_data_query.answer(parsed.get('question') or '', current_only=current_only)
 
-    top_k = parsed.get('top_k') or DEFAULT_TOP_K
     if intent == 'find_researchers_by_expertise':
         return find_researchers_by_expertise(
-            parsed.get('expertise_terms') or [], parsed.get('department_filter', ''), top_k,
+            parsed.get('expertise_terms') or [], parsed.get('department_filter', ''),
             current_only=current_only)
     if intent == 'find_similar_researchers':
-        return find_similar_researchers(parsed.get('researcher_query', ''), top_k, current_only=current_only)
+        return find_similar_researchers(parsed.get('researcher_query', ''), current_only=current_only)
     if intent == 'find_researchers_by_criteria':
         return find_researchers_by_criteria(
             age_min=parsed.get('age_min'), age_max=parsed.get('age_max'),
             degree=parsed.get('degree', ''), grade_threshold=parsed.get('grade_threshold') or [],
             grade_comparison=parsed.get('grade_comparison', '이상'),
-            department_filter=parsed.get('department_filter', ''), top_k=top_k,
+            department_filter=parsed.get('department_filter', ''),
             current_only=current_only)
 
     return _empty_table_result('unsupported', '알 수 없는 질문 유형입니다.')

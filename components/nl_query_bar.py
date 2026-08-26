@@ -82,7 +82,16 @@ def render() -> html.Div:
             dbc.Button([html.I(className='bi bi-x-circle me-1'), '초기화'],
                        id='nl-query-reset-btn', color='secondary', outline=True, n_clicks=0),
         ], className='mb-2'),
-        dcc.Loading(html.Div(id='nl-query-note')),
+        # target_components: 실제 느린 작업(LLM 호출 + SQL 실행)은 _run_nl_query
+        # 콜백이 하고 그 결과를 화면에 안 보이는 nl-query-full-result Store에
+        # 담는다 — 이 Store가 Loading의 자식이 아니라서(안 보이는 컴포넌트라
+        # 안에 둘 수 없음) 그냥 두면 스피너가 실제 대기 시간 동안 뜨지 않는다.
+        # target_components로 "이 컴포넌트의 이 prop이 갱신되는 동안 로딩
+        # 표시"를 명시적으로 지정해 해결한다.
+        dcc.Loading(
+            html.Div(id='nl-query-note'),
+            target_components={'nl-query-full-result': 'data'},
+        ),
         dcc.Store(id='nl-query-full-result'),
     ], className='mb-3')
 
