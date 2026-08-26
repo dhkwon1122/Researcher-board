@@ -63,8 +63,8 @@ from datetime import date, datetime
 
 import pandas as pd
 
-RESEARCHERS_FILE = '인력현황.xlsx'
-_RESEARCHERS_HEADER_ROW = 0  # sources.py 매니페스트 기준 (1번째 행)
+RESEARCHERS_PATTERNS = ['*That Month Headcount*.xlsx', '*End of Month Headcount*.xlsx']
+_RESEARCHERS_HEADER_ROW = 1  # sources.py 매니페스트 기준 (2번째 행)
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
 COL_ID         = '사원번호'
@@ -100,6 +100,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import is_blank, read_xlsx, norm_id  # noqa: E402
 from merge_utils import TABLE_KEYS, write_merged  # noqa: E402
+from source_files import find_latest  # noqa: E402
 from source_reader import read_source  # noqa: E402
 
 
@@ -201,12 +202,12 @@ def process(raw_dir: str = RAW_DIR) -> bool:
             print('[SKIP] researchers 원천 데이터 없음 '
                   '(DB researchers_stg 또는 data/raw_csv/researchers.csv) — researchers_raw 폴백 시도')
     else:
-        raw_path = os.path.join(raw_dir, RESEARCHERS_FILE)
-        if os.path.exists(raw_path):
+        raw_path = find_latest(raw_dir, RESEARCHERS_PATTERNS)
+        if raw_path is not None:
             df = read_xlsx(raw_path, header_row=_RESEARCHERS_HEADER_ROW)
         else:
             df = None
-            print(f'[SKIP] {RESEARCHERS_FILE} 파일 없음({raw_dir}) — researchers_raw 폴백 시도')
+            print(f'[SKIP] {RESEARCHERS_PATTERNS} 파일 없음({raw_dir}) — researchers_raw 폴백 시도')
 
     if df is None:
         return False
@@ -264,7 +265,14 @@ def process(raw_dir: str = RAW_DIR) -> bool:
 
     result = pd.DataFrame(rows)
     result = result[result['researcher_id'] != ''].reset_index(drop=True)
-    result = result.sort_values('researcher_id').reset_index(drop=True)
+    # researcher_id로만 정렬하면 안 된다 — 이제 원본이 여러 헤드카운트 다운로드
+    # 파일을 합친 것일 수 있어(예: 이번 달 + 지난 달 파일이 동시에 존재), 같은
+    # researcher_id가 valid_year/valid_month가 다른 여러 행으로 나타날 수 있다.
+    # write_merged()의 업서트가 "같은 키가 중복되면 마지막 행 채택"이므로,
+    # valid_year/valid_month를 오름차순 보조키로 둬서 각 사람의 가장 최근
+    # 기간 행이 항상 마지막에 오게 만든다(파일명이 아니라 내부 데이터 기준 —
+    # 사용자 확정, pipeline/sources.py docstring 참고).
+    result = result.sort_values(['researcher_id', 'valid_year', 'valid_month']).reset_index(drop=True)
 
     os.makedirs(OUT_DIR, exist_ok=True)
 

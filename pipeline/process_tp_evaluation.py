@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import BASE_DIR, RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import is_blank, read_xlsx, norm_id  # noqa: E402
 from merge_utils import TABLE_KEYS, write_merged  # noqa: E402
+from source_files import find_latest  # noqa: E402
 from source_reader import read_source  # noqa: E402
 
 sys.path.insert(0, BASE_DIR)
@@ -47,8 +48,8 @@ from services.evaluations import (  # noqa: E402
     first_half_column, salary_grade_column, second_half_column,
 )
 
-TP_FILE = 'T&P_기본_인사_정보.xlsx'
-_TP_HEADER_ROW = 0  # sources.py 매니페스트 기준 (1번째 행)
+TP_PATTERN = 'T&P 기본 인사 정보 *.xlsx'
+_TP_HEADER_ROW = 8  # sources.py 매니페스트 기준 (9번째 행)
 
 
 def _parse_birth_year(val) -> int | None:
@@ -86,12 +87,12 @@ def process(raw_dir: str = RAW_DIR):
             print('[SKIP] evaluations 원천 데이터 없음 '
                   '(DB evaluations_stg 또는 data/raw_csv/evaluations.csv)')
     else:
-        raw_path = os.path.join(raw_dir, TP_FILE)
-        if os.path.exists(raw_path):
+        raw_path = find_latest(raw_dir, TP_PATTERN)
+        if raw_path is not None:
             df = read_xlsx(raw_path, header_row=_TP_HEADER_ROW)
         else:
             df = None
-            print(f'[SKIP] {raw_path} 파일 없음')
+            print(f'[SKIP] {TP_PATTERN} 파일 없음({raw_dir})')
 
     if df is None:
         return False, None

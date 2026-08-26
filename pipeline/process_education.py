@@ -26,8 +26,8 @@ import sys
 
 import pandas as pd
 
-EDUCATION_FILE = '임직원_학력.xlsx'
-_EDUCATION_HEADER_ROW = 0  # sources.py 매니페스트 기준 (1번째 행)
+EDUCATION_PATTERN = '임직원 학력 *.xlsx'
+_EDUCATION_HEADER_ROW = 9  # sources.py 매니페스트 기준 (10번째 행)
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
 COL_ID        = '사번'
@@ -54,6 +54,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import clean_str, is_blank, read_xlsx, norm_id
 from merge_utils import TABLE_KEYS, write_merged
+from source_files import find_latest
 from source_reader import read_source
 
 
@@ -92,12 +93,12 @@ def process(raw_dir: str = RAW_DIR) -> bool:
             print('[SKIP] education 원천 데이터 없음 '
                   '(DB education_stg 또는 data/raw_csv/education.csv) — education_raw 폴백 시도')
     else:
-        raw_path = os.path.join(raw_dir, EDUCATION_FILE)
-        if os.path.exists(raw_path):
+        raw_path = find_latest(raw_dir, EDUCATION_PATTERN)
+        if raw_path is not None:
             df = read_xlsx(raw_path, header_row=_EDUCATION_HEADER_ROW)
         else:
             df = None
-            print(f'[SKIP] {EDUCATION_FILE} 파일 없음({raw_dir})')
+            print(f'[SKIP] {EDUCATION_PATTERN} 파일 없음({raw_dir})')
 
     if df is None:
         return False

@@ -209,6 +209,66 @@ def read_xlsx(file_path: str, sheet: int | str = 0, header_row: int | str = 0) -
                 pass
 
 
+def read_xlsx_matrix(file_path: str, sheet: int | str = 0) -> list[list]:
+    """엑셀 시트 전체를 헤더 적용 없이 원본 행렬(list of list)로 반환한다.
+    read_xlsx()와 같은 xlwings 경로/오프셋 보정(위 docstring 참고)을 쓰되,
+    특정 행을 헤더로 잘라내지 않고 물리적 A1 기준 행렬을 그대로 돌려준다.
+
+    헤더 위치를 아직 모르는 채로 원본 레이아웃(머리말 행 포함)을 보존해야
+    할 때 쓴다 — 예: merge_job_profile_source.py가 "내 리포트 *.xlsx"의
+    앞쪽 안내 행을 그대로 유지한 채 데이터만 이어붙여 저장해야 하는 경우.
+    """
+    try:
+        import xlwings as xw
+    except BaseException:
+        return _read_matrix_with_pandas(file_path, sheet)
+
+    app = None
+    wb = None
+    try:
+        app = xw.App(visible=False, add_book=False)
+        wb = app.books.open(str(file_path))
+        ws = wb.sheets[sheet]
+
+        used_range = ws.used_range
+        data = used_range.options(ndim=2).value
+        if not data:
+            return []
+        if not isinstance(data[0], list):
+            data = [data]
+
+        row_offset = used_range.row - 1
+        col_offset = used_range.column - 1
+        if row_offset or col_offset:
+            width = len(data[0]) + col_offset
+            data = [[None] * width for _ in range(row_offset)] + [
+                [None] * col_offset + list(row) for row in data
+            ]
+        return data
+
+    except Exception as exc:
+        print(f'[xlwings 실패 → pandas fallback] {file_path}: {exc}')
+        return _read_matrix_with_pandas(file_path, sheet)
+
+    finally:
+        if wb is not None:
+            try:
+                wb.close()
+            except Exception:
+                pass
+        if app is not None:
+            try:
+                app.quit()
+            except Exception:
+                pass
+
+
+def _read_matrix_with_pandas(file_path: str, sheet: int | str = 0) -> list[list]:
+    engine = 'pyxlsb' if str(file_path).lower().endswith('.xlsb') else None
+    raw = pd.read_excel(file_path, sheet_name=sheet, header=None, engine=engine)
+    return raw.values.tolist()
+
+
 def _read_with_pandas(file_path: str, sheet: int | str = 0, header_row: int | str = 0) -> pd.DataFrame:
     """xlwings 없이 pandas로 읽는 폴백. xlsb는 pyxlsb 엔진 사용."""
     engine = 'pyxlsb' if str(file_path).lower().endswith('.xlsb') else None

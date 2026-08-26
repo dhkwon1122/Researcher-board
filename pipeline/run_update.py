@@ -29,6 +29,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import UPDATES_DIR  # noqa: E402
+from source_files import find_matches, is_wildcard  # noqa: E402
 
 
 def run():
@@ -40,20 +41,26 @@ def run():
 
     ran = []
 
-    def _maybe_run(filename: str, label: str, process_fn):
-        if filename not in files_present:
+    def _has_match(pattern) -> bool:
+        """pattern이 와일드카드면 UPDATES_DIR을 스캔, 아니면 정확한 파일명 존재 여부."""
+        if is_wildcard(pattern):
+            return bool(find_matches(UPDATES_DIR, pattern))
+        return pattern in files_present
+
+    def _maybe_run(pattern, label: str, process_fn):
+        if not _has_match(pattern):
             return
-        print(f'\n── {label} ({filename}) ──')
+        print(f'\n── {label} ({pattern}) ──')
         ok = process_fn(raw_dir=UPDATES_DIR)
         if ok:
             ran.append(label)
 
-    from process_researchers import process as process_researchers
-    _maybe_run('인력현황.xlsx', 'researchers', process_researchers)
+    from process_researchers import RESEARCHERS_PATTERNS, process as process_researchers
+    _maybe_run(RESEARCHERS_PATTERNS, 'researchers', process_researchers)
 
-    from process_tp_evaluation import process as process_tp
-    if 'T&P_기본_인사_정보.xlsx' in files_present:
-        print('\n── evaluations (T&P_기본_인사_정보.xlsx) ──')
+    from process_tp_evaluation import TP_PATTERN, process as process_tp
+    if _has_match(TP_PATTERN):
+        print(f'\n── evaluations ({TP_PATTERN}) ──')
         ok, _ = process_tp(raw_dir=UPDATES_DIR)
         if ok:
             ran.append('evaluations')
@@ -61,8 +68,8 @@ def run():
     from process_patents import process as process_patents
     _maybe_run('특허 리스트.xlsx', 'patents', process_patents)
 
-    from process_personnel_orders import process as process_personnel_orders
-    _maybe_run('인사발령이력.xlsx', 'hr_orders', process_personnel_orders)
+    from process_personnel_orders import ORDERS_PATTERN, process as process_personnel_orders
+    _maybe_run(ORDERS_PATTERN, 'hr_orders', process_personnel_orders)
 
     from process_nurturing import process as process_nurturing
     _maybe_run('양성_인력_현황.xlsx', 'nurturing', process_nurturing)
@@ -70,11 +77,11 @@ def run():
     from process_task_information import process as process_task_information
     _maybe_run('과제정보.xlsx', 'tasks_information', process_task_information)
 
-    from process_awards import process as process_awards
-    _maybe_run('시상 세부사항.xlsx', 'awards', process_awards)
+    from process_awards import AWARDS_PATTERN, process as process_awards
+    _maybe_run(AWARDS_PATTERN, 'awards', process_awards)
 
-    from process_education import process as process_education
-    _maybe_run('임직원_학력.xlsx', 'education', process_education)
+    from process_education import EDUCATION_PATTERN, process as process_education
+    _maybe_run(EDUCATION_PATTERN, 'education', process_education)
 
     from process_leadership import process as process_leadership
     _maybe_run('리더십진단.xlsx', 'leadership', process_leadership)
@@ -88,8 +95,8 @@ def run():
     from process_tech_ownership import process as process_tech_ownership
     _maybe_run('보유기술.xlsx', 'tech_ownership', process_tech_ownership)
 
-    from process_job_profile import process as process_job_profile
-    _maybe_run('임직원_직무이력.xlsx', 'job_profile', process_job_profile)
+    from process_job_profile import JOB_PROFILE_PATTERN, process as process_job_profile
+    _maybe_run(JOB_PROFILE_PATTERN, 'job_profile', process_job_profile)
 
     from process_publications import process as process_publications
     _maybe_run('개인별논문현황_2016_2026.xlsx', 'publications', process_publications)

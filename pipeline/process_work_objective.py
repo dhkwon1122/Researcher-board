@@ -37,6 +37,10 @@ from merge_utils import TABLE_KEYS, write_merged
 from source_reader import read_source
 
 # 원본 컬럼 이름 (파일에 없으면 아래 값을 실제 헤더명으로 수정)
+# 업무목표24/25/26.xlsx 원본에는 부서장 사번 컬럼도 있었는데(예전엔 "사번"으로
+# 표기돼 연구원 본인 식별용 "사번"(F열)과 헷갈렸다), 소스 파일에서 그 컬럼을
+# "부서장사번"으로 이름을 바꿔 이제 "사번"은 F열(연구원 본인 식별용) 하나만
+# 가리킨다 — 그래서 아래 COL_ID는 그대로 '사번'을 쓰면 된다(사용자 확정).
 COL_ID = '사번'
 COL_NAME = '목표명'
 COL_DETAIL = '상세설명'
@@ -78,7 +82,7 @@ def _read_year_file(year: int, filename: str, raw_dir: str) -> pd.DataFrame:
             print(f'[SKIP] {path} 파일 없음')
             return empty
 
-        df = read_xlsx(path, header_row=0)
+        df = read_xlsx(path, header_row=2)  # sources.py 매니페스트 기준 (3번째 행)
         if df.empty:
             print(f'[SKIP] {filename} 읽기 결과가 비어 있습니다.')
             return empty

@@ -17,8 +17,8 @@ import sys
 
 import pandas as pd
 
-AWARDS_FILE = '시상 세부사항.xlsx'
-_AWARDS_HEADER_ROW = 0  # sources.py 매니페스트 기준 (1번째 행)
+AWARDS_PATTERN = '시상 세부사항 *.xlsx'
+_AWARDS_HEADER_ROW = 8  # sources.py 매니페스트 기준 (9번째 행)
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
 COL_ID          = '사번'
@@ -33,6 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import parse_flexible_date as _fmt_date, read_xlsx, norm_id
 from merge_utils import TABLE_KEYS, write_merged
+from source_files import find_latest
 from source_reader import read_source
 
 
@@ -43,12 +44,12 @@ def process(raw_dir: str = RAW_DIR) -> bool:
             print('[SKIP] awards 원천 데이터 없음 '
                   '(DB awards_stg 또는 data/raw_csv/awards.csv) — awards_raw 폴백 시도')
     else:
-        raw_path = os.path.join(raw_dir, AWARDS_FILE)
-        if os.path.exists(raw_path):
+        raw_path = find_latest(raw_dir, AWARDS_PATTERN)
+        if raw_path is not None:
             df = read_xlsx(raw_path, header_row=_AWARDS_HEADER_ROW)
         else:
             df = None
-            print(f'[SKIP] {AWARDS_FILE} 파일 없음({raw_dir})')
+            print(f'[SKIP] {AWARDS_PATTERN} 파일 없음({raw_dir})')
 
     if df is None:
         return False
