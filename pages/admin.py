@@ -282,10 +282,10 @@ def _team_refer_tab() -> html.Div:
             data=rows,
             editable=True,
             row_deletable=True,
+            page_action='none',  # 페이지 나누지 않고 전체 행을 한 번에 표시
             style_table={'overflowX': 'auto'},
             style_cell={'fontSize': '0.8rem', 'padding': '4px 8px', 'minWidth': '90px'},
             style_header={'fontWeight': '600', 'backgroundColor': '#f1f3f5'},
-            page_size=50,
         ),
 
         html.Div(id='team-refer-save-msg', className='mt-2'),
@@ -583,17 +583,22 @@ def send_mail_report(_, recipients_raw):
 
 
 # ── 콜백: 팀/리더 참조 — 행 추가 ─────────────────────────────────────────────
+# 클릭(선택)해둔 셀이 있으면 그 행 바로 다음에 삽입하고, 선택된 셀이 없으면
+# 맨 뒤에 추가한다(사용자 요청: 항상 맨 뒤가 아니라 원하는 위치에 끼워 넣기).
 @callback(
     Output('team-refer-table', 'data', allow_duplicate=True),
     Input('team-refer-add-row-btn', 'n_clicks'),
     State('team-refer-table', 'data'),
+    State('team-refer-table', 'active_cell'),
     prevent_initial_call=True,
 )
-def team_refer_add_row(n_clicks, rows):
+def team_refer_add_row(n_clicks, rows, active_cell):
     if not n_clicks:
         return no_update
     rows = list(rows or [])
-    rows.append({col: '' for col in team_refer_store.KOREAN_COLUMNS})
+    new_row = {col: '' for col in team_refer_store.KOREAN_COLUMNS}
+    insert_at = active_cell['row'] + 1 if active_cell else len(rows)
+    rows.insert(insert_at, new_row)
     return rows
 
 
