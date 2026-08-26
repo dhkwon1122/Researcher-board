@@ -152,13 +152,30 @@ def read_xlsx(file_path: str, sheet: int | str = 0, header_row: int | str = 0) -
         # 잘못 취급해, 모든 데이터가 첫 번째 컬럼에 뭉쳐 들어가는 원인이 된다.
         # options(ndim=2)로 항상 중첩 리스트(2차원)를 강제해 이 문제를 근본적으로
         # 없앤다.
-        data = ws.used_range.options(ndim=2).value
+        used_range = ws.used_range
+        data = used_range.options(ndim=2).value
 
         if not data:
             return pd.DataFrame()
 
         if not isinstance(data[0], list):
             data = [data]
+
+        # used_range는 시트에서 값이 있는 첫 행/열부터 시작하고, 그 시작 위치가
+        # 항상 A1(1행 1열)이라는 보장이 없다 — 예를 들어 1행이 완전히 비어 있으면
+        # used_range가 2행부터 시작해 data[0]이 물리적 2행이 된다. header_row는
+        # "엑셀 절대 행 기준"(위 docstring)으로 문서화돼 있으므로, used_range의
+        # 실제 시작 행/열(1-based)만큼 빈 행/열을 앞에 채워 data[0][0]이 항상
+        # 물리적 A1이 되도록 맞춘다 — 이 보정이 없으면 앞쪽 행/열이 비어 있는
+        # 파일에서 header_row가 가리키는 것보다 한 행(또는 그 이상) 아래를
+        # 헤더로 잘못 읽는다.
+        row_offset = used_range.row - 1
+        col_offset = used_range.column - 1
+        if row_offset or col_offset:
+            width = len(data[0]) + col_offset
+            data = [[None] * width for _ in range(row_offset)] + [
+                [None] * col_offset + list(row) for row in data
+            ]
 
         resolved_header_row = _first_nonblank_row(data) if header_row == 'auto' else header_row
 
