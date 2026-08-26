@@ -228,6 +228,26 @@ def _user_management_tab() -> html.Div:
     ], className='pt-3')
 
 
+def _sort_key(value):
+    """정렬용 키 — 숫자로 보이는 값(조직 레벨/사번/부서ID/상위부서ID 등)은
+    숫자로, 아니면 문자열로 비교한다. 빈 값은 항상 맨 뒤로 보낸다."""
+    s = str(value or '').strip()
+    if not s:
+        return (2, '')
+    try:
+        return (0, int(s))
+    except ValueError:
+        return (1, s)
+
+
+def _renumbered(rows: list) -> list:
+    """현재 순서(정렬/추가/삭제 반영 후) 그대로 1부터 번호를 다시 매긴다 —
+    '_no'는 화면 표시 전용이라 저장 대상 데이터에는 포함되지 않는다."""
+    for i, r in enumerate(rows, start=1):
+        r['_no'] = i
+    return rows
+
+
 def _team_refer_tab() -> html.Div:
     """팀/리더 참조 웹 CRUD 탭. 컬럼은 팀참조시트.xlsx 원본 헤더명을 그대로
     쓴다(pipeline.process_team_refer._COL_MAP 재사용, services.team_refer_store
@@ -235,8 +255,11 @@ def _team_refer_tab() -> html.Div:
     누적된다(같은 날 재저장은 그날 값을 덮어씀)."""
     rows = team_refer_store.list_editable_rows()
     loaded_dep_ids = sorted({r.get('부서ID', '') for r in rows if r.get('부서ID')})
+    rows = _renumbered(rows)
 
-    columns = [
+    # 'No.' 는 화면 표시 전용 — 저장 대상 컬럼(KOREAN_COLUMNS)에는 없으므로
+    # team_refer_store.save_snapshot()이 그대로 무시한다(_COL_MAP에 없는 키).
+    columns = [{'name': 'No.', 'id': '_no', 'editable': False}] + [
         {'name': col, 'id': col, 'editable': True}
         for col in team_refer_store.KOREAN_COLUMNS
     ]
@@ -283,8 +306,11 @@ def _team_refer_tab() -> html.Div:
             editable=True,
             row_deletable=True,
             page_action='none',  # 페이지 나누지 않고 전체 행을 한 번에 표시
+            sort_action='custom',  # 헤더 클릭 정렬 — team_refer_sort 콜백이 처리(No.도 같이 갱신)
+            sort_by=[],
             style_table={'overflowX': 'auto'},
             style_cell={'fontSize': '0.8rem', 'padding': '4px 8px', 'minWidth': '90px'},
+            style_cell_conditional=[{'if': {'column_id': '_no'}, 'width': '48px', 'textAlign': 'center'}],
             style_header={'fontWeight': '600', 'backgroundColor': '#f1f3f5'},
         ),
 
@@ -599,7 +625,27 @@ def team_refer_add_row(n_clicks, rows, active_cell):
     new_row = {col: '' for col in team_refer_store.KOREAN_COLUMNS}
     insert_at = active_cell['row'] + 1 if active_cell else len(rows)
     rows.insert(insert_at, new_row)
-    return rows
+    return _renumbered(rows)
+
+
+# ── 콜백: 팀/리더 참조 — 헤더 클릭 정렬(오름차순/내림차순) ────────────────────
+# sort_action='custom'이라 DataTable이 데이터를 직접 재정렬하지 않고
+# sort_by(정렬 기준)만 갱신한다 — 여기서 실제로 재정렬하고, 'No.' 열도
+# 새 순서에 맞게 다시 매긴다("정렬순에 따라 동적으로 맵핑").
+@callback(
+    Output('team-refer-table', 'data', allow_duplicate=True),
+    Input('team-refer-table', 'sort_by'),
+    State('team-refer-table', 'data'),
+    prevent_initial_call=True,
+)
+def team_refer_sort(sort_by, rows):
+    if not sort_by:
+        return no_update
+    rows = list(rows or [])
+    for spec in reversed(sort_by):
+        col = spec['column_id']
+        rows.sort(key=lambda r: _sort_key(r.get(col)), reverse=(spec['direction'] == 'desc'))
+    return _renumbered(rows)
 
 
 # ── 콜백: 팀/리더 참조 — 저장 ─────────────────────────────────────────────────
