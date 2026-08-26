@@ -73,7 +73,10 @@ app.server.config.update(
     SESSION_COOKIE_SAMESITE='Lax',
     SESSION_COOKIE_SECURE=os.environ.get('SESSION_COOKIE_SECURE', 'false').lower()
     in ('1', 'true', 'yes', 'on'),
-    MAX_CONTENT_LENGTH=int(os.environ.get('MAX_CONTENT_LENGTH', str(10 * 1024 * 1024))),
+    # 관리자 "데이터 업데이트" 탭이 원본 엑셀(최대 50MB, services/web_pipeline_runner.py
+    # MAX_UPLOAD_BYTES)을 dcc.Upload로 올린다 — base64 인코딩 오버헤드(약 1.37배)
+    # 감안해 기본 상한을 넉넉히 잡는다.
+    MAX_CONTENT_LENGTH=int(os.environ.get('MAX_CONTENT_LENGTH', str(70 * 1024 * 1024))),
 )
 
 _LOGIN_WINDOW_SECONDS = int(os.environ.get('LOGIN_WINDOW_SECONDS', '900'))

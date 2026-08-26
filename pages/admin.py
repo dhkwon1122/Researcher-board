@@ -2,6 +2,8 @@
 관리자 페이지: 사용자 계정 관리 (추가 / 수정 / 삭제)
 manage_users 권한이 있는 계정만 접근 가능.
 """
+import base64
+import os
 from datetime import date
 
 import dash
@@ -10,6 +12,7 @@ from dash import ALL, Input, Output, State, callback, dash_table, dcc, html, no_
 
 from config.auth_config import ROLE_LABELS
 from services import team_refer_store
+from services import web_pipeline_runner as wpr
 
 dash.register_page(__name__, path='/admin', name='관리자', title='사용자 관리')
 
@@ -326,6 +329,132 @@ def _team_refer_tab() -> html.Div:
     ], className='pt-3')
 
 
+_STATUS_COLORS = {'성공': 'success', '실패': 'danger', '실행중': 'info'}
+
+
+def _upload_box(key: str, slot: str, small_label: str = '') -> html.Div:
+    """단일 업로드 드롭존. slot: 'single'(대부분) | 'legacy'/'new'(직무이력 전용)."""
+    return dcc.Upload(
+        id={'type': 'du-upload', 'key': key, 'slot': slot},
+        children=html.Div([
+            html.I(className='bi bi-cloud-arrow-up me-1'),
+            small_label or '클릭 또는 드래그해 업로드',
+        ], className='small text-muted'),
+        style={
+            'padding': '4px 8px', 'border': '1px dashed #adb5bd', 'borderRadius': '4px',
+            'textAlign': 'center', 'cursor': 'pointer',
+        },
+        multiple=False,
+    )
+
+
+def _data_update_row(row: dict) -> html.Tr:
+    key = row['key']
+
+    if row['mode'] == 'dual':
+        upload_cell = html.Div([
+            html.Div('① 구버전 이력(선택, 최초 1회)', className='small text-muted mb-1'),
+            _upload_box(key, 'legacy', '업로드'),
+            html.Div('② 내 리포트(필수)', className='small text-muted mt-2 mb-1'),
+            _upload_box(key, 'new', '업로드'),
+        ])
+    else:
+        upload_cell = _upload_box(key, 'single')
+
+    filenames = row['uploaded_filenames']
+    filenames_view = (
+        html.Div([html.Div(f, className='small') for f in filenames], className='mt-1')
+        if filenames else html.Div('업로드된 파일 없음', className='small text-muted mt-1')
+    )
+
+    status = row['status']
+    status_badge = (
+        dbc.Badge([html.I(className='bi bi-arrow-repeat me-1'), '실행중'], color='info')
+        if status == '실행중'
+        else dbc.Badge(status or '-', color=_STATUS_COLORS.get(status, 'secondary'))
+    )
+
+    return html.Tr([
+        html.Td(dbc.Checkbox(id={'type': 'du-check', 'key': key}, value=False), className='align-middle text-center'),
+        html.Td([html.Div(row['label'], className='fw-semibold'),
+                 html.Div(row['hint'], className='text-muted', style={'fontSize': '0.72rem'})],
+                className='align-middle'),
+        html.Td([upload_cell, filenames_view], className='align-middle', style={'minWidth': '220px'}),
+        html.Td([
+            dbc.Button(html.I(className='bi bi-download'), id={'type': 'du-download', 'key': key},
+                       color='link', size='sm', disabled=not row['has_upload'], className='p-0'),
+            html.Div(row['uploaded_at'] or '-', className='small text-muted'),
+        ], className='align-middle text-center'),
+        html.Td(row['last_run_at'] or '-', className='align-middle small text-center'),
+        html.Td([status_badge, html.Div(row['message'], className='small text-muted mt-1',
+                                         title=row['message'])],
+                className='align-middle', style={'minWidth': '200px'}),
+    ])
+
+
+def _data_update_table() -> dbc.Table:
+    rows = wpr.snapshot()
+    header = html.Thead(html.Tr([
+        html.Th('', style={'width': '36px'}), html.Th('구분'), html.Th('업로드'),
+        html.Th('이전 Data'), html.Th('최종실행이력'), html.Th('실행결과'),
+    ]))
+    body = html.Tbody([_data_update_row(r) for r in rows])
+    return dbc.Table([header, body], bordered=True, hover=True, responsive=True, size='sm',
+                      className='align-middle mb-0')
+
+
+def _db_status_view() -> html.Span:
+    s = wpr.db_load_status()
+    if not s.get('last_run_at'):
+        return html.Span('DB 반영: 아직 실행한 적 없음', className='text-muted small')
+    color = _STATUS_COLORS.get(s['status'], 'secondary')
+    return html.Span([
+        html.Span('DB 반영 ', className='small text-muted'),
+        dbc.Badge(s['status'] or '-', color=color, className='me-2'),
+        html.Span(s['last_run_at'], className='text-muted small me-2'),
+        html.Span(s.get('message', ''), className='small'),
+    ])
+
+
+def _data_update_tab() -> html.Div:
+    """매니페스트 등록 파일 중 20개(리더십진단·comments 제외)를 웹에서 직접
+    업로드→실행할 수 있는 탭. 실제 실행/락/로그는 services/web_pipeline_runner.py.
+    전제: 업로드 전 사용자가 DRM을 해제한 사본을 올린다(사용자 확정)."""
+    return html.Div([
+        dcc.Download(id='data-update-download'),
+        dcc.Interval(id='data-update-interval', interval=3000, disabled=not wpr.any_running()),
+
+        dbc.Alert(
+            [
+                html.I(className='bi bi-info-circle me-2'),
+                '원본 엑셀이 사내 DRM으로 보호돼 있다면, 업로드 전 자신의 PC에서 '
+                'Excel로 열어 "다른 이름으로 저장"으로 DRM이 풀린 사본을 만들어 '
+                '올려주세요. "전체 업데이트"는 파일이 업로드된 항목만 실행합니다.',
+            ],
+            color='light', className='small border mb-3',
+        ),
+
+        dbc.Row([
+            dbc.Col(html.Div(id='data-update-status-msg'), md=True),
+            dbc.Col(
+                dbc.ButtonGroup([
+                    dbc.Button([html.I(className='bi bi-database-up me-1'), 'DB 반영'],
+                               id='data-update-db-btn', color='secondary', outline=True, size='sm'),
+                    dbc.Button([html.I(className='bi bi-check2-square me-1'), '선택 업데이트'],
+                               id='data-update-selected-btn', color='primary', outline=True, size='sm'),
+                    dbc.Button([html.I(className='bi bi-arrow-repeat me-1'), '전체 업데이트'],
+                               id='data-update-all-btn', color='primary', size='sm'),
+                ]),
+                md='auto',
+            ),
+        ], className='mb-2 align-items-start'),
+
+        html.Div(_db_status_view(), id='data-update-db-status', className='mb-2'),
+
+        html.Div(_data_update_table(), id='data-update-table-container'),
+    ], className='pt-3')
+
+
 def layout():
     from services.auth import can
     if not can('manage_users'):
@@ -337,6 +466,8 @@ def layout():
                     tab_id='tab-users', label_style={'fontWeight': '600'}),
             dbc.Tab(_team_refer_tab(), label='팀/리더 참조',
                     tab_id='tab-team-refer', label_style={'fontWeight': '600'}),
+            dbc.Tab(_data_update_tab(), label='데이터 업데이트',
+                    tab_id='tab-data-update', label_style={'fontWeight': '600'}),
         ], id='admin-tabs', active_tab='tab-users'),
     ], className='py-4')
 
@@ -739,6 +870,128 @@ def team_refer_save(n_clicks, rows, valid_date_str, loaded_dep_ids):
 
     msg = dbc.Alert(body, color=alert_color, dismissable=True, className='py-2 small mb-0')
     return msg, sorted(current_dep_ids)
+
+
+# ── 콜백: 데이터 업데이트 — 파일 업로드 ────────────────────────────────────────
+@callback(
+    Output('data-update-table-container', 'children', allow_duplicate=True),
+    Output('data-update-status-msg', 'children', allow_duplicate=True),
+    Input({'type': 'du-upload', 'key': ALL, 'slot': ALL}, 'contents'),
+    State({'type': 'du-upload', 'key': ALL, 'slot': ALL}, 'filename'),
+    State({'type': 'du-upload', 'key': ALL, 'slot': ALL}, 'id'),
+    prevent_initial_call=True,
+)
+def data_update_on_upload(all_contents, all_filenames, all_ids):
+    from services.auth import can
+    if not can('manage_users'):
+        return no_update, _alert('관리자만 업로드할 수 있습니다.', 'danger')
+
+    trig = dash.callback_context.triggered_id
+    if trig is None:
+        return no_update, no_update
+    idx = next((i for i, cid in enumerate(all_ids) if cid == trig), None)
+    if idx is None or not all_contents[idx]:
+        return no_update, no_update
+
+    filename = all_filenames[idx]
+    try:
+        _header, b64data = all_contents[idx].split(',', 1)
+        file_bytes = base64.b64decode(b64data, validate=True)
+    except (ValueError, TypeError):
+        return no_update, _alert(f'{filename}: 파일을 읽지 못했습니다.', 'danger')
+
+    if len(file_bytes) > wpr.MAX_UPLOAD_BYTES:
+        limit_mb = wpr.MAX_UPLOAD_BYTES // (1024 * 1024)
+        return no_update, _alert(f'{filename}: 파일이 너무 큽니다(최대 {limit_mb}MB).', 'danger')
+
+    slot = None if trig['slot'] == 'single' else trig['slot']
+    wpr.save_upload(trig['key'], filename, file_bytes, slot=slot)
+    return _data_update_table(), _alert(f'{filename} 업로드 완료.', 'success')
+
+
+# ── 콜백: 데이터 업데이트 — 전체/선택 실행 ─────────────────────────────────────
+@callback(
+    Output('data-update-status-msg', 'children', allow_duplicate=True),
+    Output('data-update-interval', 'disabled', allow_duplicate=True),
+    Input('data-update-all-btn', 'n_clicks'),
+    Input('data-update-selected-btn', 'n_clicks'),
+    State({'type': 'du-check', 'key': ALL}, 'value'),
+    State({'type': 'du-check', 'key': ALL}, 'id'),
+    prevent_initial_call=True,
+)
+def data_update_run(_all_clicks, _sel_clicks, check_values, check_ids):
+    from services.auth import can
+    if not can('manage_users'):
+        return _alert('관리자만 실행할 수 있습니다.', 'danger'), True
+
+    trig = dash.callback_context.triggered_id
+    if trig == 'data-update-all-btn':
+        keys = wpr.runnable_keys()
+        if not keys:
+            return _alert('업로드된 파일이 있는 항목이 없습니다.', 'warning'), True
+    elif trig == 'data-update-selected-btn':
+        keys = [cid['key'] for cid, v in zip(check_ids, check_values) if v]
+        if not keys:
+            return _alert('선택된 항목이 없습니다.', 'warning'), True
+        missing = [k for k in keys if not wpr.has_upload(k)]
+        if missing:
+            labels = [wpr._BY_KEY[k]['label'] for k in missing]
+            return (_alert(f"업로드되지 않은 항목이 선택됐습니다: {', '.join(labels)}"
+                            ' — 업로드 후 다시 시도해주세요.', 'warning'), True)
+    else:
+        return no_update, no_update
+
+    if not wpr.start_run(keys):
+        return _alert('이미 다른 작업이 실행 중입니다. 잠시 후 다시 시도해주세요.', 'warning'), False
+    return (_alert(f'{len(keys)}개 항목 실행을 시작했습니다. 브라우저를 닫아도 서버에서 계속 '
+                    '진행되며, 화면은 자동으로 갱신됩니다.', 'info'), False)
+
+
+# ── 콜백: 데이터 업데이트 — DB 반영 ────────────────────────────────────────────
+@callback(
+    Output('data-update-status-msg', 'children', allow_duplicate=True),
+    Output('data-update-interval', 'disabled', allow_duplicate=True),
+    Input('data-update-db-btn', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def data_update_db_load(n_clicks):
+    from services.auth import can
+    if not can('manage_users'):
+        return _alert('관리자만 실행할 수 있습니다.', 'danger'), True
+    if not n_clicks:
+        return no_update, no_update
+    if not wpr.start_db_load():
+        return _alert('이미 다른 작업이 실행 중입니다. 잠시 후 다시 시도해주세요.', 'warning'), False
+    return _alert('DB 반영을 시작했습니다. 완료되면 아래 상태가 갱신됩니다.', 'info'), False
+
+
+# ── 콜백: 데이터 업데이트 — 진행 상황 폴링(브라우저를 새로 열어도 최신 상태) ────
+@callback(
+    Output('data-update-table-container', 'children', allow_duplicate=True),
+    Output('data-update-db-status', 'children', allow_duplicate=True),
+    Output('data-update-interval', 'disabled', allow_duplicate=True),
+    Input('data-update-interval', 'n_intervals'),
+    prevent_initial_call=True,
+)
+def data_update_poll(_n):
+    return _data_update_table(), _db_status_view(), not wpr.any_running()
+
+
+# ── 콜백: 데이터 업데이트 — "이전 Data" 다운로드 ───────────────────────────────
+@callback(
+    Output('data-update-download', 'data'),
+    Input({'type': 'du-download', 'key': ALL}, 'n_clicks'),
+    prevent_initial_call=True,
+)
+def data_update_download(_n_clicks_list):
+    trig = dash.callback_context.triggered_id
+    if not trig:
+        return no_update
+    files = wpr.uploaded_files(trig['key'])
+    if not files:
+        return no_update
+    path = max(files, key=os.path.getmtime)
+    return dcc.send_file(path)
 
 
 # ── 헬퍼 ─────────────────────────────────────────────────────────────────────

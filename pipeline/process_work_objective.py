@@ -33,7 +33,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import clean_str, read_xlsx, norm_id
-from merge_utils import TABLE_KEYS, write_merged
+from merge_utils import TABLE_KEYS, read_existing, write_merged
 from source_reader import read_source
 
 # 원본 컬럼 이름 (파일에 없으면 아래 값을 실제 헤더명으로 수정)
@@ -128,16 +128,27 @@ def process(raw_dir: str = RAW_DIR) -> bool:
             continue
         merged = d if merged is None else merged.merge(d, on='researcher_id', how='outer')
 
-    for year in YEAR_FILES:
+    # 이번 실행에 파일이 없던 연도(웹 업로드처럼 연도별로 따로 갱신하는 경우
+    # 흔함 — 예: 업무목표24만 새로 올라온 경우)는 무조건 빈 값으로 채우면 안
+    # 된다 — write_merged()가 researcher_id 하나로 행 전체를 교체하므로, 이미
+    # 저장돼 있던 다른 연도 값까지 함께 지워버리는 데이터 유실 버그가 된다.
+    # 기존 work_objective.csv에서 그 연도 값을 찾아 이어붙이고(없으면 그때
+    # 처음으로 빈 값), 있던 값은 그대로 보존한다.
+    out_path = os.path.join(OUT_DIR, 'work_objective.csv')
+    existing = read_existing(out_path)
+    for year, d in zip(YEAR_FILES, year_dfs):
         col = f'work_objective{year}'
-        if col not in merged.columns:
+        if col in merged.columns:
+            continue
+        if not existing.empty and col in existing.columns:
+            merged = merged.merge(existing[['researcher_id', col]], on='researcher_id', how='left')
+        else:
             merged[col] = ''
     merged = merged.fillna('')
 
     out_cols = ['researcher_id'] + [f'work_objective{year}' for year in YEAR_FILES]
     merged = merged[out_cols].sort_values('researcher_id').reset_index(drop=True)
 
-    out_path = os.path.join(OUT_DIR, 'work_objective.csv')
     final = write_merged(out_path, merged, TABLE_KEYS['work_objective'])
     print(f'[OK]   work_objective.csv 저장 (총 {len(final)}명, 이번 파일 {len(merged)}명 반영)')
     return True
