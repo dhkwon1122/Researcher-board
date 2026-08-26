@@ -750,7 +750,16 @@ def coverage_stat(analyzed: int, total: int, label: str) -> tuple:
     return (value, label)
 
 
-def generated_at_stat() -> tuple:
-    """리포트를 실제로 생성한 시각(이 함수가 호출되는 시점) — 화면이 "언제 기준"
-    데이터인지 한눈에 보여주기 위한 스탯 카드 하나."""
-    return (datetime.now().strftime('%Y-%m-%d %H:%M'), '마지막 갱신')
+def generated_at_stat(computed_at: str | None) -> tuple:
+    """이 리포트가 근거로 삼은 LLM 분석이 실제로 마지막으로 계산·저장된
+    시각 — process_researcher_expertise.py/process_researcher_similarity.py의
+    process()가 결과 JSON을 저장할 때 각 항목에 함께 찍어 둔 computed_at
+    값을 그대로 보여준다. 화면(pages/researcher_similarity_map.py)은 탭을
+    열 때마다 build_html()을 그 자리에서 다시 렌더링하므로, 예전처럼 이
+    함수가 호출되는 시점(datetime.now())을 찍으면 탭을 열기만 해도 "방금
+    갱신됨"으로 보여 실제 분석 시점과 완전히 다른 값이 표시되는 문제가
+    있었다(사용자 지적, data/processed/CLAUDE.md 참고) — 이제는 저장된
+    값을 그대로 보여주므로 탭을 몇 번을 열어도 값이 그대로다. 예전 JSON
+    (이 필드가 생기기 전에 저장된 파일)은 값이 없으므로, 그 경우 파이프라인
+    재실행이 필요하다는 안내를 함께 보여준다."""
+    return (computed_at or '알 수 없음(파이프라인 재실행 필요)', '마지막 갱신')

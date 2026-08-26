@@ -5192,3 +5192,48 @@ team-refer-table에 없던 `textAlign: center`/`overflow: hidden`/
 `layout()` 전체 렌더링 재확인. 변경된 모든 파일 `py_compile` 통과.
 **미검증**: 실제 브라우저에서 CSS 리사이즈/호버 툴팁/필터 아이콘 숨김이
 의도대로 보이는지, 좁은 화면에서 실제로 좌우 스크롤이 없어지는지.
+
+## 2026-08-26 (39): "보유 전문성" 탭 "마지막 갱신"이 실제 분석 시점이 아니라 매번 "지금"을 보여주던 버그 수정
+
+배경: 사용자가 "보유 전문성" 탭의 갱신일자가 계속 최신화되는데
+process_researcher_expertise.py/process_researcher_similarity.py를 최근
+돌린 적이 없다고 지적. 확인해보니 `pipeline/rd_specialist_markdown.py`의
+`generated_at_stat()`이 "이 함수가 호출되는 시점"(`datetime.now()`)을
+찍고 있었는데, 2026-08-19에 보안상 이유로(정적 HTML 파일을
+data/processed/에 남기면 권한체크 없이 파일에 직접 접근 가능) "보유
+전문성" 탭을 열 때마다 `build_html()`을 그 자리에서 매번 새로 렌더링하는
+방식으로 바뀌면서, 탭을 열기만 해도(재분석 없이) "마지막 갱신"이 그
+순간으로 갱신되는 것처럼 보이는 표시 버그가 됐다. 실제로 LLM 분석을
+재실행시키는 스케줄러/크론/자동 트리거는 코드 전체에 없음을 확인(전수
+검색) — 순수 표시 문제였고 재분석이 몰래 도는 게 아니었다.
+
+**결정**: `연구원 보유 전문성 분석.json`/`researcher_similarity.json`을
+저장하는 `process()`가 이제 결과 각 항목에 `computed_at`(YYYY-MM-DD HH:MM,
+그 배치 전체가 공유하는 값 — 항목마다 새로 계산하지 않음)을 함께 찍어
+저장한다(두 파일 다 flat list of dict 구조를 유지 — pipeline/load_to_db.py
+JSON_TABLES 적재기는 dict 키 집합에 제약이 없어 그대로 통과, services/
+data_store.py의 DB-or-JSON 읽기 경로도 항목을 그대로 반환하므로 별도
+수정 불필요). `generated_at_stat()`은 이제 `datetime.now()`를 직접 찍지
+않고 호출부가 넘겨주는 `computed_at` 값을 그대로 보여준다 — 두
+build_html()(process_researcher_expertise.py/process_researcher_similarity.py)이
+각각 `results[0].get('computed_at')`을 뽑아 넘긴다. 값이 없으면(이 필드가
+생기기 전 예전 JSON) "알 수 없음(파이프라인 재실행 필요)"를 보여준다.
+
+**영향받은 다른 호출부**: `generated_at_stat()`을 인자 없이 쓰던
+`pipeline/process_project_expertise.py`(메일 전용 리포트)와
+`pipeline/build_strength_taxonomy.py`(수동 검토 리포트) — 둘 다 "생성과
+동시에 바로 소비되는" 배치 실행형 리포트라 render-time datetime.now()가
+애초에 문제가 안 되는 경우라, 동작을 그대로 보존하기 위해 그 자리에서
+`datetime.now()`를 인자로 넘기도록만 고쳤다(의미상 변화 없음, 시그니처
+변경에 맞춘 최소 수정).
+
+**검증**: `generated_at_stat(computed_at)`가 값 있음/없음 각각 올바르게
+반환하는지, save(각 항목에 computed_at 찍기) → JSON round-trip 저장/로드
+→ `data_store` 읽기 경로와 동일한 방식으로 재구성 → `generated_at_stat()`
+추출까지 합성 데이터로 end-to-end 실행해 원본 계산 시각이 그대로 보존됨을
+확인(여러 번 "읽어도"—즉 탭을 여러 번 열어도—같은 값이 나옴, 기존
+버그였던 매번 다른 값과 대조). 변경된 5개 파일 `py_compile` 통과.
+**미검증**: 실제 LLM 파이프라인을 재실행해 실제 JSON 파일에 필드가
+반영되는 것, 브라우저에서 탭을 여러 번 열어도 값이 고정돼 보이는지.
+파이프라인을 한 번 재실행하기 전까지는 기존 JSON에 이 필드가 없어
+"알 수 없음(파이프라인 재실행 필요)"로 보일 것.

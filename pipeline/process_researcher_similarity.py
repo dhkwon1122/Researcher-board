@@ -88,6 +88,7 @@ import html
 import json
 import os
 import sys
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -613,7 +614,8 @@ def build_html(results: list, researchers_df: pd.DataFrame, profile_by_id: dict)
     # 사용자 요청으로 요약 카드를 "마지막 갱신" 하나만 남긴다(긴 직사각형으로
     # 표시 — .stat-row가 grid-template-columns: repeat(auto-fit, minmax(150px,1fr))
     # 라 카드가 1개면 자동으로 전체 폭을 채운다, CSS 변경 불필요).
-    stats = mmd.stat_row_html([mmd.generated_at_stat()])
+    computed_at = results[0].get('computed_at') if results else None
+    stats = mmd.stat_row_html([mmd.generated_at_stat(computed_at)])
     # 표시 개수(3/5/10, 그룹당) 토글 — JS 없이 radio + 형제 선택자로 행을 숨김/표시.
     # Senior/Junior가 각각 별도 <tbody>이므로 CSS의 tr:nth-child가 그룹별로 독립
     # 적용된다(3명 선택 시 시니어 3 + 주니어 3, 있는 만큼만). 데이터는 이미
@@ -688,6 +690,14 @@ def process(top_k: int = DEFAULT_TOP_K, refresh_judgments: bool = False) -> bool
     results = attach_pair_judgments(results, profiles, force=refresh_judgments)
     results = _drop_empty_evidence(results, tenure_map)
     results = attach_tenure_levels(results, tenure_map)
+
+    # 화면(build_html())이 "언제 기준 데이터인지"를 보여줄 때 이 값을 그대로
+    # 쓴다(마지막 갱신 표시가 render 시점이 아니라 실제 계산 시점을 보여주도록
+    # — 사용자 지적, data/processed/CLAUDE.md 참고). 이번 배치 전체가 같은
+    # 시각을 공유하므로 항목마다 새로 계산하지 않고 한 번만 찍는다.
+    computed_at = datetime.now().strftime('%Y-%m-%d %H:%M')
+    for r in results:
+        r['computed_at'] = computed_at
 
     os.makedirs(OUT_DIR, exist_ok=True)
     out_path = os.path.join(OUT_DIR, 'researcher_similarity.json')

@@ -261,7 +261,7 @@ def build(similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD) -> bool:
         (len(field_clusters), 'strength_fields 통합 후보 그룹 수'),
         (len(keyword_values), 'strength_keywords 원문 표기 수'),
         (len(keyword_clusters), 'strength_keywords 통합 후보 그룹 수'),
-        mmd.generated_at_stat(),
+        mmd.generated_at_stat(datetime.now().strftime('%Y-%m-%d %H:%M')),
     ])
 
     sidebar = (
