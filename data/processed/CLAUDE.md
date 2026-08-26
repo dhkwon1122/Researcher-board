@@ -5080,3 +5080,38 @@ API에서 직접 데이터를 받는 게 최종 목표(사용자 확정) — 그
 합성 데이터로 직접 실행 — 등록 전엔 명확한 "미연동" 실패 메시지, 등록
 후엔 실제 process_patents.py까지 정상 실행되는 것을 확인. `pages/admin.py`
 레이아웃 렌더링(아이콘 포함) 재확인. 변경 파일 `py_compile` 통과.
+
+## 2026-08-26 (37): team_refer 부서ID(dep_id) 중복 진단 — CLI 경고 + 웹 저장 시 별도 창
+
+배경: team_refer.csv 누적 시 원본(엑셀 또는 웹 그리드)의 행 수보다 저장된
+행 수가 적은 문제를 사용자가 발견 — 원인 중 하나가 같은 부서ID가 같은
+업로드/저장 배치 안에 중복되면(자연키가 (dep_id, valid_year, valid_month,
+valid_day)라 한 번의 저장은 전부 같은 날짜라 dep_id만 같아도 충돌)
+merge_utils.upsert_merge()가 "새 데이터 안에서 키 중복 시 마지막 행만
+채택"해 조용히 사라지는 것. 사용자 요청: (1) python으로 실행할 때
+진단되게, (2) 웹 CRUD 저장 시에는 별도 창(모달)으로 보여주게.
+
+**결정 — 진단 로직을 `pipeline/process_team_refer.py`에 공용 함수로**:
+`find_duplicate_dep_ids(result)`(build_rows_from_records() 결과에서 dep_id
+기준 중복 그룹 탐지, 조직코드/과제파트/부서/상위부서ID/사번/성명까지
+같이 반환해 원본에서 바로 찾을 수 있게 함)와, CLI용 콘솔 출력 헬퍼
+`_print_duplicate_warning()`을 추가. `process()`(CLI 실행,
+`python pipeline/process_team_refer.py`)가 저장 직전에 이걸 호출해
+`[WARN]` 블록으로 어느 dep_id가 몇 번 중복됐고 각 행이 무엇인지 출력한다
+(저장 자체는 계속 진행 — 기존 동작 유지, 알림만 추가).
+
+**웹 저장 경로**: `services/team_refer_store.save_snapshot()`도 같은
+`find_duplicate_dep_ids()`를 호출해 반환값에 `duplicate_dep_ids`를
+추가했고, `pages/admin.py`의 `team_refer_save` 콜백이 이걸로 새
+`dbc.Modal`(`team-refer-dupe-modal`)을 자동으로 열어(사용자 요청 —
+"별도창") 중복된 부서ID별로 행 목록을 표로 보여준다. 인라인
+저장결과 알림에도 "N건 중복" 요약을 같이 남겨 모달을 닫아도 다시 열어볼
+필요가 있다는 걸 놓치지 않게 했다.
+
+**검증**: `find_duplicate_dep_ids()`를 합성 데이터(부서ID 중복 2행 + 부서ID
+공란 1행)로 직접 실행 — 공란 행은 기존처럼 필터링되고, 중복 행만 정확히
+잡히는 것 확인, `_print_duplicate_warning()` 콘솔 출력도 확인. `save_snapshot()`
+반환값에 `duplicate_dep_ids`가 올바르게 채워지는 것, `pages/admin.py`의
+`_dupe_modal_body()`와 전체 admin 레이아웃(모달 포함) 렌더링 모두 오류
+없이 되는 것을 Dash 컨텍스트에서 직접 확인. 변경 파일 `py_compile` 통과.
+**미검증**: 실제 브라우저에서 모달이 열리고 닫히는 클릭 동작.

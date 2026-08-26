@@ -145,6 +145,52 @@ def build_rows_from_records(records: list) -> pd.DataFrame:
     return result[(result['team_layer'] != '') & (result['dep_id'] != '')].reset_index(drop=True)
 
 
+def find_duplicate_dep_ids(result: pd.DataFrame) -> list[dict]:
+    """같은 업로드/저장 안에서 부서ID(dep_id)가 중복된 행을 찾는다.
+
+    한 번의 process()/save_snapshot() 호출은 전체를 같은 valid_date로
+    스탬프하므로, 자연키((dep_id, valid_year, valid_month, valid_day))가
+    이 배치 안에서 부서ID만 같아도 곧바로 충돌한다 — merge_utils.upsert_merge()가
+    "새 데이터 안에서 키가 중복되면 마지막 행만 채택"하기 때문에, 사용자가
+    모르는 새 앞선 행들이 조용히 사라진다(원본 행 수보다 저장된 행 수가
+    적어지는 원인 중 하나 — data/processed/CLAUDE.md 참고). 저장 전에 이걸
+    미리 알려주기 위한 진단 함수로, process()(CLI 실행)와
+    services.team_refer_store.save_snapshot()(웹 저장) 양쪽이 공유한다.
+
+    반환: [{'dep_id': ..., 'count': N, 'rows': [{...행 정보...}, ...]}, ...]
+    (dep_id 오름차순, 문자열 정렬 — 화면/콘솔 표시용이라 정확한 정렬 기준은
+    중요하지 않음)."""
+    if result.empty:
+        return []
+    dupes = result[result.duplicated('dep_id', keep=False)]
+    if dupes.empty:
+        return []
+
+    display_cols = ['dep_id', 'dep_code', 'pjt_part_name', 'dep_name',
+                     'upper_dep_id', 'researcher_id', 'name']
+    groups = []
+    for dep_id, grp in dupes.groupby('dep_id'):
+        groups.append({
+            'dep_id': dep_id,
+            'count': len(grp),
+            'rows': grp[display_cols].to_dict('records'),
+        })
+    return sorted(groups, key=lambda g: g['dep_id'])
+
+
+def _print_duplicate_warning(dupes: list[dict]) -> None:
+    if not dupes:
+        return
+    print(f'[WARN] 부서ID(dep_id) 중복 {len(dupes)}건 발견 — 업서트 시 각 부서ID당 '
+          f'마지막 행만 남고 나머지는 저장되지 않습니다:')
+    for g in dupes:
+        print(f"  · dep_id={g['dep_id']} ({g['count']}행)")
+        for i, row in enumerate(g['rows'], start=1):
+            print(f"      {i}) 조직코드={row['dep_code']} 과제/파트={row['pjt_part_name']} "
+                  f"부서={row['dep_name']} 상위부서ID={row['upper_dep_id']} "
+                  f"사번={row['researcher_id']} 성명={row['name']}")
+
+
 def process(valid_date: date | None = None) -> bool:
     """valid_date: 이번 업로드분의 유효 날짜(기본값 오늘) — 과거 데이터
     소급 입력 시 지정."""
@@ -166,6 +212,8 @@ def process(valid_date: date | None = None) -> bool:
         return False
 
     result = build_rows_from_records(df.to_dict('records'))
+    _print_duplicate_warning(find_duplicate_dep_ids(result))
+
     result = stamp_valid_date(result, valid_date or date.today())
     result['deleted'] = 'N'
 

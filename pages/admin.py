@@ -326,6 +326,21 @@ def _team_refer_tab() -> html.Div:
         ),
 
         html.Div(id='team-refer-save-msg', className='mt-2'),
+
+        # 저장한 행들 안에 부서ID(dep_id)가 중복되면(업서트 자연키 충돌로
+        # 일부 행이 조용히 사라지는 원인) 별도 창으로 바로 보여준다(사용자
+        # 요청) — data/processed/CLAUDE.md 참고.
+        dbc.Modal(
+            [
+                dbc.ModalHeader(dbc.ModalTitle([
+                    html.I(className='bi bi-exclamation-triangle-fill text-warning me-2'),
+                    '부서ID(dep_id) 중복 발견',
+                ])),
+                dbc.ModalBody(id='team-refer-dupe-modal-body'),
+                dbc.ModalFooter(dbc.Button('확인', id='team-refer-dupe-modal-close', size='sm')),
+            ],
+            id='team-refer-dupe-modal', is_open=False, size='lg',
+        ),
     ], className='pt-3')
 
 
@@ -828,6 +843,8 @@ def team_refer_renumber_on_change(rows):
 @callback(
     Output('team-refer-save-msg', 'children'),
     Output('team-refer-loaded-dep-ids', 'data', allow_duplicate=True),
+    Output('team-refer-dupe-modal', 'is_open', allow_duplicate=True),
+    Output('team-refer-dupe-modal-body', 'children'),
     Input('team-refer-save-btn', 'n_clicks'),
     State('team-refer-table', 'data'),
     State('team-refer-valid-date', 'date'),
@@ -837,11 +854,11 @@ def team_refer_renumber_on_change(rows):
 def team_refer_save(n_clicks, rows, valid_date_str, loaded_dep_ids):
     from services.auth import can
     if not can('manage_users'):
-        return _alert('관리자만 저장할 수 있습니다.', 'danger'), no_update
+        return _alert('관리자만 저장할 수 있습니다.', 'danger'), no_update, no_update, no_update
     if not n_clicks:
-        return no_update, no_update
+        return no_update, no_update, no_update, no_update
     if not valid_date_str:
-        return _alert('입력 날짜를 선택해주세요.', 'warning'), no_update
+        return _alert('입력 날짜를 선택해주세요.', 'warning'), no_update, no_update, no_update
 
     valid_date = date.fromisoformat(valid_date_str[:10])
     rows = rows or []
@@ -874,14 +891,59 @@ def team_refer_save(n_clicks, rows, valid_date_str, loaded_dep_ids):
     if skipped:
         parts.append(f'부서ID가 비어 있어 {skipped}행은 저장에서 제외됐습니다.')
 
-    alert_color = 'warning' if warnings else 'success'
+    dupes = result.get('duplicate_dep_ids') or []
+    if dupes:
+        parts.append(f'부서ID가 중복된 항목이 {len(dupes)}건 있어 일부 행이 저장되지 '
+                      '않았을 수 있습니다 — 아래 창을 확인해주세요.')
+
+    alert_color = 'warning' if (warnings or dupes) else 'success'
     body = [html.Div(p) for p in parts]
     if warnings:
         body.append(html.Div('경고: ' + ' / '.join(warnings[:5])
                               + (f' 외 {len(warnings) - 5}건' if len(warnings) > 5 else '')))
 
     msg = dbc.Alert(body, color=alert_color, dismissable=True, className='py-2 small mb-0')
-    return msg, sorted(current_dep_ids)
+    return msg, sorted(current_dep_ids), bool(dupes), _dupe_modal_body(dupes)
+
+
+def _dupe_modal_body(dupes: list[dict]):
+    """부서ID(dep_id) 중복 그룹 리스트를 별도 창(모달)에 보여줄 표로 렌더링.
+    dupes: pipeline.process_team_refer.find_duplicate_dep_ids()의 반환값."""
+    if not dupes:
+        return None
+    header = html.Thead(html.Tr([
+        html.Th('부서ID'), html.Th('조직코드'), html.Th('과제/파트'), html.Th('부서'),
+        html.Th('상위부서ID'), html.Th('사번'), html.Th('성명'),
+    ]))
+    body_rows = []
+    for g in dupes:
+        for row in g['rows']:
+            body_rows.append(html.Tr([
+                html.Td(g['dep_id'], className='fw-semibold'),
+                html.Td(row['dep_code']), html.Td(row['pjt_part_name']), html.Td(row['dep_name']),
+                html.Td(row['upper_dep_id']), html.Td(row['researcher_id']), html.Td(row['name']),
+            ]))
+    return html.Div([
+        html.Div(
+            f"같은 부서ID를 가진 행이 {len(dupes)}개 부서ID에서 발견됐습니다 — 같은 "
+            '부서ID로는 하나만 저장되고 나머지는 사라지니, 부서ID를 다르게 고쳐서 '
+            '다시 저장해주세요.',
+            className='small text-muted mb-2',
+        ),
+        dbc.Table([header, html.Tbody(body_rows)], bordered=True, hover=True, size='sm',
+                   responsive=True, className='mb-0'),
+    ])
+
+
+@callback(
+    Output('team-refer-dupe-modal', 'is_open', allow_duplicate=True),
+    Input('team-refer-dupe-modal-close', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def team_refer_close_dupe_modal(n_clicks):
+    if not n_clicks:
+        return no_update
+    return False
 
 
 # ── 콜백: 데이터 업데이트 — 파일 업로드 ────────────────────────────────────────

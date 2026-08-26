@@ -134,6 +134,8 @@ def save_snapshot(records: list[dict], deleted_dep_ids: list[str], valid_date: d
     전체가 실패하지 않는다 — db_ok로 호출부가 구분해서 안내).
     """
     result = ptr.build_rows_from_records(records)
+    duplicate_dep_ids = ptr.find_duplicate_dep_ids(result)
+
     result = ptr.stamp_valid_date(result, valid_date)
     result['deleted'] = 'N'
 
@@ -154,7 +156,10 @@ def save_snapshot(records: list[dict], deleted_dep_ids: list[str], valid_date: d
     merged = merge_utils.write_merged(out_path, result, merge_utils.TABLE_KEYS['team_refer'])
 
     db_ok = _upsert_rows_to_db(result)
-    return {'saved_rows': len(result), 'total_rows': len(merged), 'db_ok': db_ok}
+    return {
+        'saved_rows': len(result), 'total_rows': len(merged), 'db_ok': db_ok,
+        'duplicate_dep_ids': duplicate_dep_ids,
+    }
 
 
 def export_snapshot_xlsx(records: list[dict], valid_date: date) -> str:
