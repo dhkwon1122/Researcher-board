@@ -312,6 +312,14 @@ def _team_refer_tab() -> html.Div:
             style_cell={'fontSize': '0.8rem', 'padding': '4px 8px', 'minWidth': '90px'},
             style_cell_conditional=[{'if': {'column_id': '_no'}, 'width': '48px', 'textAlign': 'center'}],
             style_header={'fontWeight': '600', 'backgroundColor': '#f1f3f5'},
+            # DataTable에는 컬럼 너비 드래그 조절 기능이 없어(구버전 dash_table),
+            # 헤더 텍스트를 감싸는 요소에 브라우저 네이티브 CSS resize를 적용해
+            # 우측 하단 모서리를 드래그해 너비를 조절할 수 있게 한다.
+            css=[{
+                'selector': '.column-header-name',
+                'rule': ('display: inline-block; resize: horizontal; overflow: auto; '
+                         'min-width: 40px; max-width: 600px; vertical-align: bottom;'),
+            }],
         ),
 
         html.Div(id='team-refer-save-msg', className='mt-2'),

@@ -96,13 +96,13 @@ _COL_MAP = {
     '구분': 'work_type',
     '부서': 'dep_name',
     '과제/파트': 'pjt_part_name',
+    '조직코드': 'dep_code',
+    '부서ID': 'dep_id',
+    '상위부서ID': 'upper_dep_id',
     '조직 레벨': 'team_layer',
     '사번': 'researcher_id',
     '성명': 'name',
     '직책': 'assignment_name',
-    '조직코드': 'dep_code',
-    '부서ID': 'dep_id',
-    '상위부서ID': 'upper_dep_id',
 }
 # ─────────────────────────────────────────────────────────────────────────────
 
