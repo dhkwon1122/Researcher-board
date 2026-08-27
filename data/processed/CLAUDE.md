@@ -5357,3 +5357,31 @@ valid_dates=...)`으로 넘긴다. "API로 가져오기" 경로는 아직 API �
 그대로 반영·보호되는 것을 확인. 변경된 모든 파일 `py_compile` 통과.
 **미검증**: 실제 브라우저에서의 DatePicker 조작(샌드박스는 콜백 함수
 직접 호출로만 검증), 실제 다년치 누적 데이터에 대한 장기 운영 시나리오.
+
+## 2026-08-27 (43): `pipeline/run_update.py` 제거 — 웹 "데이터 업데이트" 탭이 대체
+
+배경: 위 (42)번 작업 중 "이 4개 항목의 valid_date가 `run_update.py`(CLI,
+`data/updates/` 폴더 기반 수시 업서트 스크립트)에도 반영되는지" 질문이
+나왔고, 확인해보니 evaluations/tech_ownership/job_profile 3개는 valid_date를
+안 넘겨 항상 오늘 날짜로 찍히고, work_objective는 애초에 `run_update.py`에
+등록조차 안 돼 있었다. 사용자가 이 상태를 보고 "웹 업데이트 기능을
+구현했으니 `run_update.py`는 앞으로 쓸 일이 없을 것 같다"고 판단 —
+2026-08-26(35)번에서 만든 관리자 "데이터 업데이트" 탭이 20개 항목 전부(업로드
+→ 실행 → 로그, 이제는 valid_date 지정까지) 이미 대체하고 있으므로 CLI
+경로를 계속 이중 유지·보수할 이유가 없다고 확인해, 스크립트 자체를
+제거했다.
+
+**결정**: `pipeline/run_update.py` 삭제. `pipeline/paths.py`의 `UPDATES_DIR`
+상수도 이 스크립트 전용이라 함께 제거(다른 모듈은 참조하지 않음 —
+`WEB_UPDATES_DIR`는 `services/web_pipeline_runner.py`가 독립적으로 정의하는
+별개 상수라 영향 없음). `process_researchers.py`/`process_comments.py`
+docstring·주석에 남아있던 `run_update.py`/`data/updates` 언급은 일반적인
+"raw_dir 오버라이드 가능" 설명으로 정리(각 process_*.py의 `raw_dir` 인자
+자체는 web_pipeline_runner가 `data/web_updates/<key>`를 넘기는 데 여전히
+쓰이므로 그대로 둠). `data/updates/` 폴더 자체(사용자가 로컬에 파일을 넣어둔
+경우)는 코드가 참조하지 않게만 됐을 뿐 건드리지 않았다.
+
+**검증**: 레포 전체에서 `run_update`/`UPDATES_DIR` 문자열 검색 — 이 문서
+(과거 이력) 외에는 참조가 전혀 남지 않은 것 확인. 배포 설정(Dockerfile/
+docker-compose/README 등)에도 원래부터 참조가 없었음(수동 CLI 실행 전용
+스크립트였음). 변경된 파일 `py_compile` 통과.

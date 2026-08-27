@@ -158,14 +158,13 @@ def process(use_llm: bool = False, raw_dir: str = DATA_RAW):
     Args:
         use_llm: True 이면 LLM API를 호출하여 연구원별 종합요약 생성.
                  False 이면 종합요약 없이 원본 코멘트만 저장.
-        raw_dir: comments_raw.xlsx를 찾을 폴더(기본 data/raw, data/updates로 갱신 가능).
+        raw_dir: comments_raw.xlsx를 찾을 폴더(기본 data/raw, 다른 폴더로 갱신 가능).
     """
     results = []
 
     # ── 부서장 코멘트 ──────────────────────────────────────────────────────
     # 기본 raw_dir(data/raw)이면 DB 스테이징/raw_csv 우선인 source_reader를
-    # 쓰고, run_update.py처럼 raw_dir이 명시적으로 오버라이드되면(예: data/
-    # updates) 그 폴더의 xlsx를 직접 읽는다.
+    # 쓰고, raw_dir이 명시적으로 오버라이드되면 그 폴더의 xlsx를 직접 읽는다.
     if raw_dir == DATA_RAW:
         df = read_source('comments')
     else:

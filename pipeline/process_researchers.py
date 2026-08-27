@@ -4,8 +4,8 @@
 원천: 기본은 source_reader.read_source('researchers')
   → DB researchers_stg 테이블 또는 data/raw_csv/researchers.csv
   (1단계 xlsx_to_raw_csv.py가 data/raw/인력현황.xlsx를 DRM 제거해 만든 사본)
-  raw_dir이 명시적으로 오버라이드되면(예: data/updates) 그 폴더의 인력현황.xlsx를
-  직접 읽는다 — 아래 참고.
+  raw_dir이 명시적으로 오버라이드되면(예: data/web_updates/<key>) 그 폴더의
+  인력현황.xlsx를 직접 읽는다 — 아래 참고.
 출력 파일: data/processed/researchers.csv, data/processed/researchers_history.csv
 
 읽는 컬럼:
@@ -51,8 +51,8 @@ researchers_history.csv는 별도로 (researcher_id, valid_year, valid_month)
 않는다.
 
 raw_dir 인자로 원본 위치를 바꿀 수 있다 — 기본은 data/raw(최초 적재),
-data/updates를 넘기면 그 폴더의 파일로 업서트만 수행한다(pipeline/run_update.py
-참고).
+그 외 폴더(예: 관리자 웹 "데이터 업데이트" 탭이 쓰는 data/web_updates/<key>)를
+넘기면 그 폴더의 파일로 업서트만 수행한다.
 """
 
 import csv
