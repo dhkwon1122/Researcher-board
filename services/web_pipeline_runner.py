@@ -42,7 +42,7 @@ import os
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import date, datetime
 
 import pandas as pd
 
@@ -69,7 +69,7 @@ MANIFEST = [
          hint='예: 202608_That Month Headcount_*.xlsx 또는 *_End of Month Headcount_*.xlsx',
          mode='wildcard'),
     dict(key='evaluations', label='T&P(평가)', module='process_tp_evaluation',
-         hint='예: T&P 기본 인사 정보 *.xlsx', mode='wildcard'),
+         hint='예: T&P 기본 인사 정보 *.xlsx', mode='wildcard', needs_valid_date=True),
     dict(key='patents', label='특허', module='process_patents',
          hint='특허 리스트.xlsx', mode='exact', dest_filename='특허 리스트.xlsx'),
     dict(key='nurturing', label='양성이력', module='process_nurturing',
@@ -90,17 +90,17 @@ MANIFEST = [
     dict(key='core_technology', label='핵심기술', module='process_core_technology',
          hint='핵심기술.xlsx', mode='exact', dest_filename='핵심기술.xlsx'),
     dict(key='tech_ownership', label='보유기술', module='process_tech_ownership',
-         hint='보유기술.xlsx', mode='exact', dest_filename='보유기술.xlsx'),
+         hint='보유기술.xlsx', mode='exact', dest_filename='보유기술.xlsx', needs_valid_date=True),
     dict(key='job_profile', label='직무이력', module='process_job_profile',
          hint=f"① {JOB_PROFILE_LEGACY_FILE}(선택 — 최초 1회만 필요) "
               "② 내 리포트 *.xlsx(필수, 매번 최신 파일)",
-         mode='dual'),
+         mode='dual', needs_valid_date=True),
     dict(key='work_objective_24', label='업무목표24', module='process_work_objective',
-         hint='업무목표24.xlsx', mode='exact', dest_filename='업무목표24.xlsx'),
+         hint='업무목표24.xlsx', mode='exact', dest_filename='업무목표24.xlsx', needs_valid_date=True),
     dict(key='work_objective_25', label='업무목표25', module='process_work_objective',
-         hint='업무목표25.xlsx', mode='exact', dest_filename='업무목표25.xlsx'),
+         hint='업무목표25.xlsx', mode='exact', dest_filename='업무목표25.xlsx', needs_valid_date=True),
     dict(key='work_objective_26', label='업무목표26', module='process_work_objective',
-         hint='업무목표26.xlsx', mode='exact', dest_filename='업무목표26.xlsx'),
+         hint='업무목표26.xlsx', mode='exact', dest_filename='업무목표26.xlsx', needs_valid_date=True),
     dict(key='tasks', label='과제참여이력', module='process_tasks',
          hint='개인별과제투입기간데이터_260114.xlsb', mode='exact',
          dest_filename='개인별과제투입기간데이터_260114.xlsb'),
@@ -135,6 +135,7 @@ MAX_UPLOAD_BYTES = int(os.environ.get('WEB_UPDATE_MAX_UPLOAD_BYTES', str(50 * 10
 # 경로 — 실행/락/로그 — 를 그대로 탄다).
 for _item in MANIFEST:
     _item.setdefault('api_fetch', None)
+    _item.setdefault('needs_valid_date', False)
 
 
 def register_api_fetch(key: str, fetch_fn) -> None:
@@ -329,14 +330,18 @@ def _last_meaningful_line(output: str) -> str:
     return lines[-1] if lines else ''
 
 
-def run_one(key: str, via_api: bool = False) -> dict:
+def run_one(key: str, via_api: bool = False, valid_date: date | None = None) -> dict:
     """항목 하나를 실제로 처리한다 — process_*.py의 stdout/예외를 캡처해
     실행결과 메시지를 만든다. run log에도 즉시 반영한다.
 
     via_api=True면 파일 업로드 대신 등록된 API 훅(register_api_fetch())으로
     먼저 데이터를 받아 그 폴더에 저장한 뒤, 이후 처리는 업로드 경로와
     완전히 동일하다 — 아직 훅이 없으면(현재 전 항목이 그렇다) 바로
-    "미연동" 실패로 기록하고 끝난다."""
+    "미연동" 실패로 기록하고 끝난다.
+
+    valid_date: needs_valid_date=True인 항목(evaluations/tech_ownership/
+    job_profile/work_objective_*)에서 이번 업로드분의 기준 연/월로 넘겨준다
+    (관리자가 화면에서 지정, 기본값은 process_*.py 쪽에서 오늘로 처리)."""
     item = _BY_KEY[key]
     raw_dir = _key_dir(key)
     buf = io.StringIO()
@@ -362,7 +367,10 @@ def run_one(key: str, via_api: bool = False) -> dict:
 
             module = importlib.import_module(item['module'])
             importlib.reload(module)
-            ok = module.process(raw_dir=raw_dir)
+            if item['needs_valid_date'] and valid_date is not None:
+                ok = module.process(raw_dir=raw_dir, valid_date=valid_date)
+            else:
+                ok = module.process(raw_dir=raw_dir)
 
         output = buf.getvalue()
         if ok:
@@ -380,18 +388,24 @@ def run_one(key: str, via_api: bool = False) -> dict:
     return last_result(key)
 
 
-def run_many(keys: list[str], via_api: bool = False) -> None:
-    """백그라운드 스레드에서 순차 실행 — 브라우저가 꺼져도 계속 진행."""
+def run_many(keys: list[str], via_api: bool = False, valid_dates: dict[str, date] | None = None) -> None:
+    """백그라운드 스레드에서 순차 실행 — 브라우저가 꺼져도 계속 진행.
+
+    valid_dates: {key: date} — needs_valid_date 항목에 대해 관리자가 지정한
+    기준 연/월. 지정 없는 키는 process_*.py 쪽 기본값(오늘)이 적용된다."""
+    valid_dates = valid_dates or {}
     try:
         for key in keys:
-            run_one(key, via_api=via_api)
+            run_one(key, via_api=via_api, valid_date=valid_dates.get(key))
             _mark_progress(key)
     finally:
         release_lock()
 
 
-def start_run(keys: list[str]) -> bool:
-    """keys를 백그라운드로 실행 시작. 이미 실행 중이면 False(시작 안 함)."""
+def start_run(keys: list[str], valid_dates: dict[str, date] | None = None) -> bool:
+    """keys를 백그라운드로 실행 시작. 이미 실행 중이면 False(시작 안 함).
+
+    valid_dates: run_many()로 그대로 전달 — needs_valid_date 항목의 기준 연/월."""
     keys = [k for k in keys if k in _BY_KEY]
     if not keys:
         return False
@@ -399,7 +413,7 @@ def start_run(keys: list[str]) -> bool:
         return False
     for key in keys:
         _record_result(key, '실행중', '')
-    t = threading.Thread(target=run_many, args=(keys,), daemon=True)
+    t = threading.Thread(target=run_many, args=(keys,), kwargs={'valid_dates': valid_dates}, daemon=True)
     t.start()
     return True
 
@@ -441,6 +455,7 @@ def snapshot() -> list[dict]:
             'label': item['label'],
             'hint': item['hint'],
             'mode': item['mode'],
+            'needs_valid_date': item['needs_valid_date'],
             'has_upload': has_upload(item['key']),
             'has_api': has_api(item['key']),
             'uploaded_at': uploaded_at(item['key']),

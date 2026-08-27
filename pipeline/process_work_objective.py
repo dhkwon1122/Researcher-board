@@ -27,13 +27,14 @@ Output 컬럼(4개): researcher_id, work_objective24, work_objective25, work_obj
 
 import os
 import sys
+from datetime import date
 
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import clean_str, read_xlsx, norm_id
-from merge_utils import TABLE_KEYS, read_existing, write_merged
+from merge_utils import TABLE_KEYS, read_existing, write_merged_with_valid_period
 from source_reader import read_source
 
 # 원본 컬럼 이름 (파일에 없으면 아래 값을 실제 헤더명으로 수정)
@@ -116,7 +117,12 @@ def _read_year_file(year: int, filename: str, raw_dir: str) -> pd.DataFrame:
     return grouped
 
 
-def process(raw_dir: str = RAW_DIR) -> bool:
+def process(raw_dir: str = RAW_DIR, valid_date: date | None = None) -> bool:
+    """valid_date: 이번 업로드분의 기준 연/월(기본값 오늘) — work_objective.csv에
+    이미 저장된 사람보다 과거 시점이면 그 사람 행은 갱신하지 않고 건너뛴다
+    (work_objective_history.csv에는 건너뛴 것 포함 전부 쌓임). 연도별 컬럼
+    보존(아래)과는 별개 안전장치 — 이건 "이 업로드 자체가 기존보다 오래된
+    스냅샷인지"를 본다."""
     year_dfs = [_read_year_file(year, filename, raw_dir) for year, filename in YEAR_FILES.items()]
     if all(d.empty for d in year_dfs):
         print('[SKIP] 업무목표 파일을 하나도 찾지 못했습니다.')
@@ -149,8 +155,21 @@ def process(raw_dir: str = RAW_DIR) -> bool:
     out_cols = ['researcher_id'] + [f'work_objective{year}' for year in YEAR_FILES]
     merged = merged[out_cols].sort_values('researcher_id').reset_index(drop=True)
 
-    final = write_merged(out_path, merged, TABLE_KEYS['work_objective'])
-    print(f'[OK]   work_objective.csv 저장 (총 {len(final)}명, 이번 파일 {len(merged)}명 반영)')
+    valid_date = valid_date or date.today()
+    merged['valid_year'] = f'{valid_date.year:04d}'
+    merged['valid_month'] = f'{valid_date.month:02d}'
+
+    hist_path = os.path.join(OUT_DIR, 'work_objective_history.csv')
+    outcome = write_merged_with_valid_period(
+        out_path, hist_path, merged, TABLE_KEYS['work_objective'], TABLE_KEYS['work_objective_history'])
+
+    print(f'[OK]   work_objective.csv 저장 (이번 파일 {len(merged)}명 중 {outcome["updated_rows"]}명 반영)')
+    if outcome['skipped']:
+        print(f'  [WARN] {len(outcome["skipped"])}명은 기존 저장된 값이 더 최신이라 건너뜀:')
+        for s in outcome['skipped'][:10]:
+            print(f'    · {s["researcher_id"]}: 기존 {s["existing_period"]} > 이번 {s["new_period"]}')
+        if len(outcome['skipped']) > 10:
+            print(f'    · 외 {len(outcome["skipped"]) - 10}명')
     return True
 
 

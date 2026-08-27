@@ -20,6 +20,7 @@ T&P 기본 인사 정보 파일에서 연봉등급/상·하반기업적(평가)�
 
 import os
 import sys
+from datetime import date
 
 import pandas as pd
 
@@ -38,7 +39,7 @@ BIRTH_COL  = '생년월일'   # YYYYMMDD, YYYY-MM-DD, datetime 모두 지원
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import BASE_DIR, RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import is_blank, read_xlsx, norm_id  # noqa: E402
-from merge_utils import TABLE_KEYS, write_merged  # noqa: E402
+from merge_utils import TABLE_KEYS, write_merged, write_merged_with_valid_period  # noqa: E402
 from source_files import find_latest  # noqa: E402
 from source_reader import read_source  # noqa: E402
 
@@ -71,10 +72,15 @@ def _parse_birth_year(val) -> int | None:
         return None
 
 
-def process(raw_dir: str = RAW_DIR):
+def process(raw_dir: str = RAW_DIR, valid_date: date | None = None):
     """
     T&P 파일을 읽어 evaluations.csv를 저장하고,
     이름·성별·생년월일 정보를 담은 DataFrame을 반환합니다.
+
+    valid_date: 이번 업로드분의 기준 연/월(기본값 오늘) — evaluations.csv에
+    이미 저장된 사람보다 과거 시점이면 그 사람 행은 갱신하지 않고 건너뛴다
+    (evaluations_history.csv에는 건너뛴 것 포함 전부 쌓임). 과거 데이터를
+    소급 반영할 때는 그 시점으로 지정해서 호출한다.
 
     Returns:
         (success: bool, researcher_updates: pd.DataFrame | None)
@@ -170,13 +176,26 @@ def process(raw_dir: str = RAW_DIR):
         print('[SKIP] 추출된 평가 데이터가 없습니다.')
         return False, res_update
 
-    out_path = os.path.join(OUT_DIR, 'evaluations.csv')
-    merged = write_merged(out_path, result, TABLE_KEYS['evaluations'])
+    valid_date = valid_date or date.today()
+    result['valid_year'] = f'{valid_date.year:04d}'
+    result['valid_month'] = f'{valid_date.month:02d}'
 
-    print(f'[OK]   evaluations.csv 저장 (총 {len(merged)}행, 이번 파일 {len(result)}행 반영, 컬럼: {", ".join(filled_cols)})')
+    out_path = os.path.join(OUT_DIR, 'evaluations.csv')
+    hist_path = os.path.join(OUT_DIR, 'evaluations_history.csv')
+    outcome = write_merged_with_valid_period(
+        out_path, hist_path, result, TABLE_KEYS['evaluations'], TABLE_KEYS['evaluations_history'])
+
+    print(f'[OK]   evaluations.csv 저장 (이번 파일 {len(result)}행 중 {outcome["updated_rows"]}행 반영, '
+          f'컬럼: {", ".join(filled_cols)})')
     for col in filled_cols:
         dist = result.loc[result[col] != '', col].value_counts().sort_index().to_dict()
         print(f'         {col} 분포(이번 파일 기준): {dist}')
+    if outcome['skipped']:
+        print(f'  [WARN] {len(outcome["skipped"])}명은 기존 저장된 값이 더 최신이라 건너뜀:')
+        for s in outcome['skipped'][:10]:
+            print(f'    · {s["researcher_id"]}: 기존 {s["existing_period"]} > 이번 {s["new_period"]}')
+        if len(outcome['skipped']) > 10:
+            print(f'    · 외 {len(outcome["skipped"]) - 10}명')
 
     return True, res_update
 

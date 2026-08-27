@@ -5293,3 +5293,67 @@ Claude가 기능을 만들 때마다(또는 아래 금요일 점검에서) 이 �
 **검증**: `pages/admin.py`를 Dash 컨텍스트에서 전체 렌더링해 새 탭 포함
 오류 없음 확인. `py_compile` 통과. 트리거 생성 결과(`persist_session: true`,
 `next_run_at`)로 이 세션에 바인딩됐음을 확인.
+
+## 2026-08-26 (42): "현재상태형" 4개 테이블(T&P평가/보유기술/직무이력/업무목표)에
+유효연월 기반 시점 보호 + 별도 이력 테이블 추가
+
+배경: "데이터 업데이트" 탭의 누적 로직을 점검하다, 매니페스트 20개 중
+자연키가 researcher_id 하나뿐인 "현재상태" 그룹(evaluations/
+tech_ownership/job_profile/work_objective — 회차·기간이 자연키에 없어
+업로드 순서만으로 덮어쓰는 구조)은 나중에 실수로 과거 파일을 다시
+올리면 최신 값을 조용히 되돌려버릴 위험이 있음을 확인. 앞으로 미래
+데이터 누적과 과거 데이터 소급 반영이 둘 다 필요해질 것을 감안해,
+이 4개 테이블에 시점 보호 장치를 추가해달라는 요청(사용자 확정 —
+추천안 그대로: 관리자가 업로드 시점에 직접 지정하는 날짜, 연/월
+단위면 충분, 4개 테이블 전부에 별도 이력 테이블도 남김).
+
+**결정 1 — 컬럼은 `valid_year`/`valid_month` 2개, 관리자 지정**:
+team_refer 탭의 "입력 날짜"(`dcc.DatePickerSingle`, 기본값 오늘)와 같은
+UX를 재사용 — 파일 자체의 날짜를 파싱하지 않고 관리자가 "이 업로드가
+어느 시점 기준 데이터인지"를 직접 고른다(연/월만, 일 단위는 불필요–
+사용자 확정).
+
+**결정 2 — `pipeline/merge_utils.py`에 `write_merged_with_valid_period()`
+신설**: 기존 `write_merged()`(자연키 upsert, 시점 개념 없음)와 별도로,
+researcher_id별 저장된 `(valid_year, valid_month)`보다 이번 업로드가
+과거면 그 사람 행만 갱신을 건너뛰고(`skipped` 목록으로 반환, 다른
+사람 행은 정상 반영), 항상 이력 테이블(`*_history.csv`, TABLE_KEYS에
+`researcher_id+valid_year+valid_month`로 등록)에는 건너뛴 것 포함
+전부 추가한다 — "현재값"은 최신만 보호하고 "이력"은 소급 여부와
+무관하게 전부 남기는 두 가지 목적을 분리했다.
+
+**결정 3 — 4개 process_*.py에 동일 패턴 적용**: `process_tp_evaluation.py`
+(→evaluations.csv/evaluations_history.csv), `process_tech_ownership.py`
+(→tech_ownership.csv/_history.csv), `process_job_profile.py`
+(→job_profile.csv/_history.csv), `process_work_objective.py`
+(→work_objective.csv/_history.csv)에 각각 `valid_date: date | None = None`
+파라미터를 추가(기본값 오늘)해 `write_merged()` 호출을
+`write_merged_with_valid_period()`로 교체하고, 건너뛴 사람이 있으면
+실행결과 메시지에 "N명은 기존 저장된 값이 더 최신이라 건너뜀" +
+사유(기존 시점 vs 이번 시점)를 함께 남긴다. `process_work_objective.py`는
+2026-08-26(35)번에서 고친 "이번 실행에 없는 연도 컬럼 보존" 로직과
+공존해야 해서, 연도별 백필은 그대로 두고 그 결과물 전체에 대해서만
+시점 보호를 추가로 씌웠다(둘 다 정상 동작함을 합성 데이터로 확인).
+
+**결정 4 — `services/web_pipeline_runner.py`/`pages/admin.py` 웹 연동**:
+MANIFEST의 해당 6개 항목(evaluations/tech_ownership/job_profile/
+work_objective_24/_25/_26)에 `needs_valid_date=True` 플래그를 추가하고,
+`run_one()`/`run_many()`/`start_run()`에 `valid_date`/`valid_dates`를
+관통시켜 process 호출에 그대로 전달한다. 화면에서는 `needs_valid_date`인
+항목의 "구분" 칸에만 "기준 연/월" DatePicker(기본값 오늘)를 추가로
+보여주고, "전체/선택 실행" 콜백이 그 값들을 모아 `start_run(keys,
+valid_dates=...)`으로 넘긴다. "API로 가져오기" 경로는 아직 API 연동
+자체가 없어(2026-08-26(36)번 확장 포인트) valid_date 없이 기본값(오늘)로
+동작 — 추후 API 연동 시점에 함께 손보면 됨(미결 항목으로 남김).
+
+**검증**: `pipeline/merge_utils.py`의 `write_merged_with_valid_period()`를
+합성 데이터로 직접 실행 — 최초 반영/더 최신 시점 재반영(정상 갱신)/더
+과거 시점 재반영(정상 건너뜀 + 정확한 경고) 3가지 경로 모두 확인,
+이력 테이블에는 매번 스냅샷이 쌓이는 것도 확인. 4개 process_*.py 전부
+동일 시나리오로 개별 실행 검증(`process_work_objective.py`는 연도별
+보존과의 공존까지 함께 확인). `services/web_pipeline_runner.py`의
+`run_one(valid_date=...)`/`start_run(valid_dates=...)`(백그라운드 스레드
+경로 포함)까지 synthetic 업로드로 end-to-end 실행해 지정한 연/월이
+그대로 반영·보호되는 것을 확인. 변경된 모든 파일 `py_compile` 통과.
+**미검증**: 실제 브라우저에서의 DatePicker 조작(샌드박스는 콜백 함수
+직접 호출로만 검증), 실제 다년치 누적 데이터에 대한 장기 운영 시나리오.

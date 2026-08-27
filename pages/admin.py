@@ -409,11 +409,26 @@ def _data_update_row(row: dict) -> html.Tr:
         style={'fontSize': '0.68rem'},
     )
 
+    # "현재상태" 성격 항목(evaluations/tech_ownership/job_profile/work_objective_*)은
+    # 이번 업로드분이 어느 시점 기준인지(연/월) 지정해야 한다 — 과거 시점으로
+    # 잘못 지정하면 process_*.py가 기존 최신 값을 보호하려고 그 사람 행을
+    # 건너뛴다(정상 동작, 실행결과 메시지로 안내). 기본값은 오늘.
+    valid_date_picker = (
+        html.Div([
+            dbc.Label('기준 연/월', className='small text-muted mb-0', style={'fontSize': '0.68rem'}),
+            dcc.DatePickerSingle(
+                id={'type': 'du-valid-date', 'key': key}, date=date.today().isoformat(),
+                display_format='YYYY-MM', className='d-block',
+            ),
+        ], className='mt-2')
+        if row['needs_valid_date'] else None
+    )
+
     return html.Tr([
         html.Td(dbc.Checkbox(id={'type': 'du-check', 'key': key}, value=False), className='align-middle text-center'),
         html.Td([html.Div(row['label'], className='fw-semibold'),
                  html.Div(row['hint'], className='text-muted', style={'fontSize': '0.72rem'}),
-                 api_btn],
+                 api_btn, valid_date_picker],
                 className='align-middle'),
         html.Td([upload_cell, filenames_view], className='align-middle', style={'minWidth': '220px'}),
         html.Td([
@@ -1051,9 +1066,11 @@ def data_update_on_upload(all_contents, all_filenames, all_ids):
     Input('data-update-selected-btn', 'n_clicks'),
     State({'type': 'du-check', 'key': ALL}, 'value'),
     State({'type': 'du-check', 'key': ALL}, 'id'),
+    State({'type': 'du-valid-date', 'key': ALL}, 'date'),
+    State({'type': 'du-valid-date', 'key': ALL}, 'id'),
     prevent_initial_call=True,
 )
-def data_update_run(_all_clicks, _sel_clicks, check_values, check_ids):
+def data_update_run(_all_clicks, _sel_clicks, check_values, check_ids, valid_dates, valid_date_ids):
     from services.auth import can
     if not can('manage_users'):
         return _alert('관리자만 실행할 수 있습니다.', 'danger'), True
@@ -1075,7 +1092,15 @@ def data_update_run(_all_clicks, _sel_clicks, check_values, check_ids):
     else:
         return no_update, no_update
 
-    if not wpr.start_run(keys):
+    # needs_valid_date 항목(evaluations/tech_ownership/job_profile/work_objective_*)만
+    # 화면에 기준 연/월 DatePicker가 렌더링되므로, id-value를 매칭해 그 항목만
+    # valid_dates 딕셔너리로 모은다. 지정 안 된 항목은 process_*.py 기본값(오늘).
+    valid_dates_by_key = {}
+    for cid, d in zip(valid_date_ids, valid_dates):
+        if d:
+            valid_dates_by_key[cid['key']] = date.fromisoformat(d)
+
+    if not wpr.start_run(keys, valid_dates=valid_dates_by_key):
         return _alert('이미 다른 작업이 실행 중입니다. 잠시 후 다시 시도해주세요.', 'warning'), False
     return (_alert(f'{len(keys)}개 항목 실행을 시작했습니다. 브라우저를 닫아도 서버에서 계속 '
                     '진행되며, 화면은 자동으로 갱신됩니다.', 'info'), False)

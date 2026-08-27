@@ -28,6 +28,7 @@
 
 import os
 import sys
+from datetime import date
 
 import pandas as pd
 
@@ -45,7 +46,7 @@ COL_END   = '종료일'
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import clean_str as _clean, read_xlsx, norm_id
-from merge_utils import TABLE_KEYS, write_merged
+from merge_utils import TABLE_KEYS, write_merged_with_valid_period
 from source_files import find_latest
 from source_reader import read_source
 
@@ -77,7 +78,10 @@ def _merge_consecutive(records):
     return merged
 
 
-def process(raw_dir: str = RAW_DIR) -> bool:
+def process(raw_dir: str = RAW_DIR, valid_date: date | None = None) -> bool:
+    """valid_date: 이번 업로드분의 기준 연/월(기본값 오늘) — job_profile.csv에
+    이미 저장된 사람보다 과거 시점이면 그 사람 행은 갱신하지 않고 건너뛴다
+    (job_profile_history.csv에는 건너뛴 것 포함 전부 쌓임)."""
     if raw_dir == RAW_DIR:
         df = read_source('job_profile')
         if df is None:
@@ -152,10 +156,23 @@ def process(raw_dir: str = RAW_DIR) -> bool:
 
     result = pd.DataFrame(rows, columns=out_cols)
 
-    out_path = os.path.join(OUT_DIR, 'job_profile.csv')
-    merged = write_merged(out_path, result, TABLE_KEYS['job_profile'])
+    valid_date = valid_date or date.today()
+    result['valid_year'] = f'{valid_date.year:04d}'
+    result['valid_month'] = f'{valid_date.month:02d}'
 
-    print(f'[OK]   job_profile.csv 저장 (총 {len(merged)}행, 이번 파일 {len(result)}행 반영, 이번 파일 최대 {max_n}개 직무 슬롯)')
+    out_path = os.path.join(OUT_DIR, 'job_profile.csv')
+    hist_path = os.path.join(OUT_DIR, 'job_profile_history.csv')
+    outcome = write_merged_with_valid_period(
+        out_path, hist_path, result, TABLE_KEYS['job_profile'], TABLE_KEYS['job_profile_history'])
+
+    print(f'[OK]   job_profile.csv 저장 (이번 파일 {len(result)}명 중 {outcome["updated_rows"]}명 반영, '
+          f'최대 {max_n}개 직무 슬롯)')
+    if outcome['skipped']:
+        print(f'  [WARN] {len(outcome["skipped"])}명은 기존 저장된 값이 더 최신이라 건너뜀:')
+        for s in outcome['skipped'][:10]:
+            print(f'    · {s["researcher_id"]}: 기존 {s["existing_period"]} > 이번 {s["new_period"]}')
+        if len(outcome['skipped']) > 10:
+            print(f'    · 외 {len(outcome["skipped"]) - 10}명')
     return True
 
 

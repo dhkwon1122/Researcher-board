@@ -47,6 +47,16 @@ TABLE_KEYS: dict[str, list[str]] = {
     # 최신 날짜 행만 골라야 하므로 process_team_refer.py 상단 docstring과
     # rd_specialist_markdown.read_team_refer() 참고.
     'team_refer':            ['dep_id', 'valid_year', 'valid_month', 'valid_day'],
+
+    # ── "현재상태"(1인 1행) 테이블 중 valid_year/valid_month로 시점을 보호하는
+    # 4개의 이력 테이블 — write_merged_with_valid_period()가 사용(researcher_id,
+    # valid_year, valid_month)가 키라 같은 사람의 같은 연/월 재저장만 그 스냅샷을
+    # 덮어쓰고, 다른 연/월은 전부 별도 행으로 계속 쌓인다(researchers_history.csv와
+    # 동일한 패턴). 자세한 배경은 write_merged_with_valid_period() docstring 참고.
+    'evaluations_history':     ['researcher_id', 'valid_year', 'valid_month'],
+    'tech_ownership_history':  ['researcher_id', 'valid_year', 'valid_month'],
+    'job_profile_history':     ['researcher_id', 'valid_year', 'valid_month'],
+    'work_objective_history':  ['researcher_id', 'valid_year', 'valid_month'],
 }
 
 # 평가자 1인 1행이라 행 단위 자연키가 없는 테이블 — group_keys가 일치하는
@@ -152,3 +162,63 @@ def write_merged(out_path: str, new: pd.DataFrame, keys: list[str], *, group_rep
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     merged.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=_csv.QUOTE_NONNUMERIC)
     return merged
+
+
+def write_merged_with_valid_period(out_path: str, hist_path: str, new: pd.DataFrame,
+                                    keys: list[str], hist_keys: list[str]) -> dict:
+    """T&P(평가)/보유기술/직무이력/업무목표처럼 "1인 1행 현재상태" 테이블에
+    시점 보호를 추가한 업서트(사용자 확정 — data/processed/CLAUDE.md 참고).
+
+    new에는 valid_year/valid_month 컬럼이 이미 있어야 한다(process_*.py가
+    관리자가 지정한 기준 연/월을 찍어서 넘김 — team_refer의 "입력 날짜"와
+    같은 방식, 기본값은 오늘). researchers.csv처럼 파일 전체 최댓값으로
+    is_current를 재계산하는 대신, 훨씬 단순하게 "그 사람의 기존 저장값보다
+    과거 시점이면 그 사람 행은 이번엔 반영하지 않고 건너뛴다"만 적용한다
+    (이 4개는 dep_id별 독립 판정 같은 복잡한 요구가 없어 team_refer 방식까지는
+    필요 없음).
+
+    이력 테이블(hist_path)에는 건너뛴 사람 포함, 이번에 들어온 데이터 전체를
+    그대로 (researcher_id, valid_year, valid_month) 키로 쌓는다 — "그 시점에
+    이런 값이 있었다"는 사실 자체는 현재값 채택 여부와 무관하게 보존한다.
+
+    반환: {'updated_rows': int, 'skipped': list[dict]} — skipped 각 항목은
+    {'researcher_id', 'existing_period', 'new_period'}로, process_*.py가
+    이 내용을 그대로 실행결과 메시지에 보여줄 수 있다.
+    """
+    new = new.copy()
+    new['valid_year'] = new['valid_year'].astype(str)
+    new['valid_month'] = new['valid_month'].astype(str)
+
+    existing = read_existing(out_path)
+    skipped = []
+    if not existing.empty and {'valid_year', 'valid_month'} <= set(existing.columns):
+        existing_period = {
+            row['researcher_id']: (str(row.get('valid_year', '')), str(row.get('valid_month', '')))
+            for _, row in existing.iterrows()
+        }
+        keep = []
+        for _, row in new.iterrows():
+            rid = row['researcher_id']
+            new_period = (row['valid_year'], row['valid_month'])
+            old_period = existing_period.get(rid)
+            if old_period and old_period[0] and new_period < old_period:
+                skipped.append({
+                    'researcher_id': rid,
+                    'existing_period': f'{old_period[0]}-{old_period[1]}',
+                    'new_period': f'{new_period[0]}-{new_period[1]}',
+                })
+                keep.append(False)
+            else:
+                keep.append(True)
+        new_to_apply = new[pd.Series(keep, index=new.index)]
+    else:
+        new_to_apply = new
+
+    if len(new_to_apply):
+        write_merged(out_path, new_to_apply, keys)
+    updated_rows = len(new_to_apply)
+
+    # 이력 테이블은 스킵 여부와 무관하게 이번 업로드 전체를 쌓는다.
+    write_merged(hist_path, new, hist_keys)
+
+    return {'updated_rows': updated_rows, 'skipped': skipped}
