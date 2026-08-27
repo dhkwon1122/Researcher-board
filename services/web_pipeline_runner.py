@@ -88,7 +88,7 @@ MANIFEST = [
     dict(key='tasks_information', label='과제정보', module='process_task_information',
          hint='과제정보.xlsx', mode='exact', dest_filename='과제정보.xlsx'),
     dict(key='core_technology', label='핵심기술', module='process_core_technology',
-         hint='핵심기술.xlsx', mode='exact', dest_filename='핵심기술.xlsx'),
+         hint='핵심기술.xlsx', mode='exact', dest_filename='핵심기술.xlsx', needs_valid_date=True),
     dict(key='tech_ownership', label='보유기술', module='process_tech_ownership',
          hint='보유기술.xlsx', mode='exact', dest_filename='보유기술.xlsx', needs_valid_date=True),
     dict(key='job_profile', label='직무이력', module='process_job_profile',

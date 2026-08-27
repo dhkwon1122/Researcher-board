@@ -5385,3 +5385,71 @@ docstring·주석에 남아있던 `run_update.py`/`data/updates` 언급은 일�
 (과거 이력) 외에는 참조가 전혀 남지 않은 것 확인. 배포 설정(Dockerfile/
 docker-compose/README 등)에도 원래부터 참조가 없었음(수동 CLI 실행 전용
 스크립트였음). 변경된 파일 `py_compile` 통과.
+
+## 2026-08-27 (44): 누적 로직 전수 점검 중 발견한 2건(researchers/core_technology)에
+유효연월 시점 보호 적용
+
+배경: (42)번에서 "현재상태형" 4개 테이블에 유효연월 보호를 넣은 뒤, 나머지
+매니페스트 항목들도 미래 누적/과거 소급 관점에서 안전한지 전수 점검했다.
+`merge_utils.py`의 `TABLE_KEYS`/실제 `process_*.py` 코드를 하나씩 대조한
+결과 두 가지를 발견:
+
+1. **researchers.csv**: `is_current` 재계산 로직은 있었지만, 그건 "전체
+   파일에서 가장 최근 (valid_year, valid_month)"만 보고 각 행에 Y/N을
+   다시 매기는 것일 뿐 — 필드 값(부서/CL/직무 등) 자체는 시점 보호 없이
+   researcher_id 하나만으로 그냥 덮어써졌다. 옛날 헤드카운트 파일을 나중에
+   실수로 재업로드하면 그 사람 행의 필드 값들이 옛날 값으로 되돌아간 채
+   `is_current='N'`으로만 표시되고, 다음 정상 업로드 전까지 오염된 상태로
+   남는 문제가 있었다. (42)번과 동일한 B그룹 취약점.
+2. **core_technology.csv**: `merge_utils.py`의 `TABLE_KEYS`에는
+   `['researcher_id', 'tech_field', 'tech_name']`가 등록돼 있어 업서트로
+   보호되는 것처럼 보였지만, **`process_core_technology.py`가 `merge_utils`를
+   아예 import하지 않고 `result.to_csv()`로 매 실행마다 파일 전체를
+   덮어쓰고 있었다** — 등록부와 실제 동작이 어긋난 버그. 부분 인원만 담긴
+   파일을 올리면 나머지 사람 데이터가 전부 사라지고, 옛날 파일을 재업로드하면
+   최신 데이터 전체가 옛날 것으로 되돌아갔다(단순 시점 문제보다 심각 —
+   "이번 파일에 없으면 보존"조차 안 되는 상태).
+
+**결정 1 — `write_merged_with_valid_period()`를 다중 컬럼 키로 일반화**:
+기존 구현은 "그 사람의 기존 저장값"을 찾을 때 `researcher_id` 컬럼을
+하드코딩해 조회했다. core_technology는 "현재상태" 판정 단위가 사람 1명이
+아니라 (사람, 기술분야, 핵심기술) 조합이라, 그대로는 재사용할 수 없었다.
+`keys` 매개변수(원래도 `write_merged()`에 넘기던 그 자연키) 자체를
+기준으로 조회 dict를 만들도록 일반화해서, 기존 4개 호출부(단일 컬럼
+`['researcher_id']`)는 동작 변화 없이 그대로 두고 core_technology
+(3컬럼 키)도 같은 함수로 처리되게 했다. 반환값의 `skipped` 항목에
+`entity`(키 컬럼 전체를 담은 dict) 필드를 추가하되 기존 `researcher_id`
+필드는 유지해 기존 4개 호출부의 경고 출력 코드는 수정 없이 그대로 동작한다.
+
+**결정 2 — researchers.csv**: `process()`는 admin이 날짜를 따로 지정할
+필요가 없다 — 원본 컬럼(인원실적년도/월)에서 이미 행마다 valid_year/
+valid_month를 추출해두므로 그 값을 그대로 시점 키로 재사용해
+`write_merged_with_valid_period()` 한 번으로 researchers.csv 업서트 +
+researchers_history.csv 저장을 함께 처리하도록 교체(기존에는 이 둘을
+각각 별도 `write_merged()` 호출로 처리했음 — 동작은 그대로, 시점 보호만
+추가됨). 저장 후 파일을 다시 읽어 기존과 동일하게 `is_current`를
+재계산한다. 웹 "데이터 업데이트" 탭에는 변경 없음(이 항목은 원래도
+`needs_valid_date` 대상이 아님 — 날짜를 admin이 지정하는 게 아니라
+데이터 자체에 있으므로).
+
+**결정 3 — core_technology.csv**: 4개 B그룹과 동일한 패턴으로 전환 —
+`valid_date` 파라미터 추가(기본값 오늘), `write_merged_with_valid_period()`
+호출, 신규 `core_technology_history.csv` + `TABLE_KEYS['core_technology_history']
+= [researcher_id, tech_field, tech_name, valid_year, valid_month]` 등록.
+`services/web_pipeline_runner.py`의 MANIFEST에 `needs_valid_date=True`
+추가 — 관리자 웹 화면에 "기준 연/월" DatePicker가 자동으로 뜬다(admin.py는
+`needs_valid_date` 플래그만 보고 렌더링하므로 화면 쪽 추가 수정 불필요).
+
+**검증**: `write_merged_with_valid_period()`를 합성 데이터로 직접 실행 —
+core_technology는 (1) 부분 인원 파일 업로드 시 기존 다른 사람 데이터가
+더 이상 삭제되지 않는 것(옛 버그 재현·수정 확인), (2) 같은 (사람,분야,
+기술) 조합에 대한 과거 시점 재업로드가 정확히 건너뛰어지는 것, (3) 더
+최근 시점 업로드는 정상 반영되는 것, (4) 이력 테이블에 건너뛴 것 포함
+모든 시점이 쌓이는 것을 확인. researchers.csv도 동일한 4가지 시나리오를
+합성 헤드카운트 파일로 확인(부서 필드가 과거 재업로드에 더 이상
+오염되지 않음, is_current 재계산은 기존과 동일하게 정상 동작).
+`services/web_pipeline_runner.py`의 `run_one()`을 통한 실제 웹 업로드
+경로로도 core_technology를 end-to-end 확인. 기존 4개(B그룹) 호출부가
+일반화된 `write_merged_with_valid_period()`로도 그대로 동작하는지
+`py_compile` + 코드 검토로 확인(반환 dict의 `researcher_id` 필드 유지로
+하위 호환). 변경된 모든 파일 `py_compile` 통과.

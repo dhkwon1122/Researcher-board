@@ -57,6 +57,12 @@ TABLE_KEYS: dict[str, list[str]] = {
     'tech_ownership_history':  ['researcher_id', 'valid_year', 'valid_month'],
     'job_profile_history':     ['researcher_id', 'valid_year', 'valid_month'],
     'work_objective_history':  ['researcher_id', 'valid_year', 'valid_month'],
+
+    # researchers는 위 TABLE_KEYS['researchers']/['researchers_history']를 그대로
+    # 재사용한다(원본에 이미 valid_year/valid_month 컬럼이 있어 새 엔트리가
+    # 필요 없음). core_technology는 "현재상태" 판정 단위가 사람 하나가 아니라
+    # (사람, 기술분야, 핵심기술) 조합이라 이력 키에도 그 3개가 모두 들어간다.
+    'core_technology_history': ['researcher_id', 'tech_field', 'tech_name', 'valid_year', 'valid_month'],
 }
 
 # 평가자 1인 1행이라 행 단위 자연키가 없는 테이블 — group_keys가 일치하는
@@ -166,44 +172,53 @@ def write_merged(out_path: str, new: pd.DataFrame, keys: list[str], *, group_rep
 
 def write_merged_with_valid_period(out_path: str, hist_path: str, new: pd.DataFrame,
                                     keys: list[str], hist_keys: list[str]) -> dict:
-    """T&P(평가)/보유기술/직무이력/업무목표처럼 "1인 1행 현재상태" 테이블에
-    시점 보호를 추가한 업서트(사용자 확정 — data/processed/CLAUDE.md 참고).
+    """T&P(평가)/보유기술/직무이력/업무목표/연구원(기본정보)/핵심기술처럼
+    "현재상태" 테이블에 시점 보호를 추가한 업서트(사용자 확정 — data/processed/
+    CLAUDE.md 참고).
 
-    new에는 valid_year/valid_month 컬럼이 이미 있어야 한다(process_*.py가
-    관리자가 지정한 기준 연/월을 찍어서 넘김 — team_refer의 "입력 날짜"와
-    같은 방식, 기본값은 오늘). researchers.csv처럼 파일 전체 최댓값으로
-    is_current를 재계산하는 대신, 훨씬 단순하게 "그 사람의 기존 저장값보다
-    과거 시점이면 그 사람 행은 이번엔 반영하지 않고 건너뛴다"만 적용한다
-    (이 4개는 dep_id별 독립 판정 같은 복잡한 요구가 없어 team_refer 방식까지는
-    필요 없음).
+    new에는 valid_year/valid_month 컬럼이 이미 있어야 한다 — 관리자가 업로드
+    시 지정한 기준 연/월(team_refer의 "입력 날짜"와 같은 방식, 기본값 오늘)이거나,
+    원본 데이터 자체에 있는 시점 컬럼(researchers.csv의 인원실적년도/월처럼)을
+    행마다 그대로 옮겨 담은 값. "현재값"을 판정하는 단위는 keys 그대로다 —
+    researcher_id 하나뿐인 테이블(평가/보유기술/직무이력/업무목표/연구원)은
+    사람 단위로, keys에 컬럼이 더 있는 테이블(핵심기술의 researcher_id+
+    tech_field+tech_name처럼 한 사람이 여러 항목을 가질 수 있는 경우)은 그
+    항목 단위로 "기존 저장값보다 과거 시점이면 건너뛴다"를 독립적으로 적용한다.
+    researchers.csv의 is_current(파일 전체 최댓값 기준 재계산)는 이 함수가 아니라
+    process_researchers.py가 저장 후 별도로 처리한다.
 
-    이력 테이블(hist_path)에는 건너뛴 사람 포함, 이번에 들어온 데이터 전체를
-    그대로 (researcher_id, valid_year, valid_month) 키로 쌓는다 — "그 시점에
-    이런 값이 있었다"는 사실 자체는 현재값 채택 여부와 무관하게 보존한다.
+    이력 테이블(hist_path)에는 건너뛴 항목 포함, 이번에 들어온 데이터 전체를
+    그대로 (keys + valid_year + valid_month) 키로 쌓는다 — "그 시점에 이런
+    값이 있었다"는 사실 자체는 현재값 채택 여부와 무관하게 보존한다.
 
     반환: {'updated_rows': int, 'skipped': list[dict]} — skipped 각 항목은
-    {'researcher_id', 'existing_period', 'new_period'}로, process_*.py가
-    이 내용을 그대로 실행결과 메시지에 보여줄 수 있다.
+    {'researcher_id', 'entity', 'existing_period', 'new_period'}로(entity는
+    keys 전체를 담은 dict), process_*.py가 이 내용을 그대로 실행결과
+    메시지에 보여줄 수 있다.
     """
     new = new.copy()
     new['valid_year'] = new['valid_year'].astype(str)
     new['valid_month'] = new['valid_month'].astype(str)
 
+    def _key_tuple(row) -> tuple:
+        return tuple(str(row.get(k, '')) for k in keys)
+
     existing = read_existing(out_path)
     skipped = []
-    if not existing.empty and {'valid_year', 'valid_month'} <= set(existing.columns):
+    if not existing.empty and {'valid_year', 'valid_month'} <= set(existing.columns) \
+            and all(k in existing.columns for k in keys):
         existing_period = {
-            row['researcher_id']: (str(row.get('valid_year', '')), str(row.get('valid_month', '')))
+            _key_tuple(row): (str(row.get('valid_year', '')), str(row.get('valid_month', '')))
             for _, row in existing.iterrows()
         }
         keep = []
         for _, row in new.iterrows():
-            rid = row['researcher_id']
             new_period = (row['valid_year'], row['valid_month'])
-            old_period = existing_period.get(rid)
+            old_period = existing_period.get(_key_tuple(row))
             if old_period and old_period[0] and new_period < old_period:
                 skipped.append({
-                    'researcher_id': rid,
+                    'researcher_id': row.get('researcher_id', ''),
+                    'entity': {k: row.get(k, '') for k in keys},
                     'existing_period': f'{old_period[0]}-{old_period[1]}',
                     'new_period': f'{new_period[0]}-{new_period[1]}',
                 })

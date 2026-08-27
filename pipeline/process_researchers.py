@@ -99,7 +99,7 @@ POSITION_LABEL_MAP = {
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import is_blank, read_xlsx, norm_id  # noqa: E402
-from merge_utils import TABLE_KEYS, write_merged  # noqa: E402
+from merge_utils import TABLE_KEYS, read_existing, write_merged_with_valid_period  # noqa: E402
 from source_files import find_latest  # noqa: E402
 from source_reader import read_source  # noqa: E402
 
@@ -276,20 +276,38 @@ def process(raw_dir: str = RAW_DIR) -> bool:
 
     os.makedirs(OUT_DIR, exist_ok=True)
 
-    # 1) researchers.csv — researcher_id 업서트(없는 사람은 보존) 후 is_current 재계산
+    # 1) researchers.csv — researcher_id 업서트 + 시점(valid_year/valid_month) 보호
+    #    (evaluations/tech_ownership/job_profile/work_objective와 동일한 이유 —
+    #    옛날 헤드카운트 파일을 나중에 실수로 재업로드해도 이미 저장된 더 최근
+    #    값이 조용히 덮어써지지 않게 한다. 이 테이블은 admin이 날짜를 따로
+    #    지정할 필요가 없다 — 원본 컬럼(인원실적년도/월)에서 행마다 이미
+    #    valid_year/valid_month를 추출해뒀으므로 그걸 그대로 시점 키로 쓴다.
+    #    write_merged_with_valid_period()가 researchers_history.csv 저장까지
+    #    함께 처리한다(건너뛴 사람 포함 전체가 이력에는 그대로 쌓임).
     out_path = os.path.join(OUT_DIR, 'researchers.csv')
-    merged = write_merged(out_path, result, TABLE_KEYS['researchers'])
+    hist_path = os.path.join(OUT_DIR, 'researchers_history.csv')
+    outcome = write_merged_with_valid_period(
+        out_path, hist_path, result, TABLE_KEYS['researchers'], TABLE_KEYS['researchers_history'])
+
+    # is_current는 "현재상태" 파일 전체를 다시 읽어 재계산(건너뛴 사람의 기존
+    # 행도 포함해 전체 최신월 기준으로 판단해야 하므로 outcome이 아니라 파일을
+    # 다시 읽는다).
+    merged = read_existing(out_path)
     merged = _compute_is_current(merged)
     merged.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
 
     n_current = (merged['is_current'] == 'Y').sum()
     n_not_current = (merged['is_current'] == 'N').sum()
-    print(f'[OK]   researchers.csv 저장 (총 {len(merged)}명, 현재 소속 {n_current}명, 미소속 {n_not_current}명)')
+    print(f'[OK]   researchers.csv 저장 (총 {len(merged)}명 중 이번 파일 {outcome["updated_rows"]}명 반영, '
+          f'현재 소속 {n_current}명, 미소속 {n_not_current}명)')
+    if outcome['skipped']:
+        print(f'  [WARN] {len(outcome["skipped"])}명은 기존 저장된 값이 더 최신이라 건너뜀:')
+        for s in outcome['skipped'][:10]:
+            print(f'    · {s["researcher_id"]}: 기존 {s["existing_period"]} > 이번 {s["new_period"]}')
+        if len(outcome['skipped']) > 10:
+            print(f'    · 외 {len(outcome["skipped"]) - 10}명')
 
-    # 2) researchers_history.csv — (researcher_id, valid_year, valid_month) 누적(삭제 없음)
-    hist_path = os.path.join(OUT_DIR, 'researchers_history.csv')
-    hist_merged = write_merged(hist_path, result, TABLE_KEYS['researchers_history'])
-    print(f'[OK]   researchers_history.csv 저장 (누적 {len(hist_merged)}행)')
+    print(f'[OK]   researchers_history.csv 저장 (누적 {len(read_existing(hist_path))}행)')
 
     return True
 
