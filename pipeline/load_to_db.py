@@ -57,6 +57,18 @@ TABLES = [
     'tech_ownership',
     'job_profile',
     'project_confl_address',
+    'work_objective',
+    'leadership_comments',
+    # "현재상태" 테이블의 시점별 스냅샷 이력(2026-08-26~27, write_merged_with_
+    # valid_period() 참고) — 지금까지는 CSV에는 쌓이는데 DB 적재 대상에서
+    # 빠져 있어 DB만 보는 경로에서는 이력을 전혀 볼 수 없었다(data/processed/
+    # CLAUDE.md 2026-08-27 데이터 관리 점검 참고).
+    'researchers_history',
+    'evaluations_history',
+    'tech_ownership_history',
+    'job_profile_history',
+    'work_objective_history',
+    'core_technology_history',
     # 원천 1:1 정제 테이블은 아니지만(조직 단위별 1행 — process_team_refer.py),
     # rd_specialist_markdown.read_team_refer()가 "보유 전문성" 리포트의 좌측
     # 조직도 트리를 만들 때 읽는다. 이 리포트가 앱 프로세스에서 그때그때

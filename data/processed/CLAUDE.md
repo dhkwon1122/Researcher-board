@@ -5453,3 +5453,52 @@ core_technology는 (1) 부분 인원 파일 업로드 시 기존 다른 사람 �
 일반화된 `write_merged_with_valid_period()`로도 그대로 동작하는지
 `py_compile` + 코드 검토로 확인(반환 dict의 `researcher_id` 필드 유지로
 하위 호환). 변경된 모든 파일 `py_compile` 통과.
+
+## 2026-08-28 (45): 데이터 관리 구조 점검 ① — 원본 파일 아카이브 + DB 이력 반영
+
+배경: "원본 → CSV → DB" 전체 흐름을 다시 점검하며 세 가지를 확인했다.
+(1) 원본 파일은 웹 업로드든 CLI(`data/raw/`)든 새 파일이 오면 이전 파일이
+그 자리에서 사라져 재처리·감사 추적이 불가능했다. (2) `load_to_db.py`는
+매번 `to_sql(if_exists='replace')`로 테이블을 통째로 지우고 다시 채우는
+"CSV의 미러"일 뿐 자체 누적이 없는데, 그마저 (42)~(44)번에서 만든 6개
+`*_history.csv`와 `work_objective.csv`/`leadership_comments.csv`가 적재
+대상 목록에서 아예 빠져 있어 CSV에 쌓인 이력이 DB에는 전혀 반영되지
+않고 있었다. (3) "누적기준" 화면 토글은 시점별 이력 조회가 아니라
+researchers.csv 안에서 과거 재직자를 안 지우고 같이 보여주는 것뿐이라,
+"그 사람이 특정 시점엔 어땠는지" 조회는 애초에 불가능했다. 사용자가
+원하는 목표 구조(원본 별도 보관 + 최신/누적 CSV + DB 반영)와 대조해
+차이를 좁히는 작업— 총 3단계 중 앞 2단계(저장 구조).
+
+**결정 1 — 원본 파일 무제한 아카이브(신규 `pipeline/raw_archive.py`)**:
+`archive_raw_file()`/`archive_raw_bytes()`가 원본을
+`data/raw_archive/<구분>/<YYYYMMDD_HHMMSS>_<원본파일명>`으로 복사한다
+(사용자 확정 — 무제한 보관, 정리 정책은 추후 판단). 웹 업로드
+(`web_pipeline_runner.save_upload()`, 기존 "덮어쓰기 전 삭제" 로직은
+그대로 두고 저장 직후 한 번 더 아카이브)와 CLI 1단계
+(`xlsx_to_raw_csv.py`, 이번 실행에 실제로 쓰인 원본을 변환 직전 아카이브)
+양쪽에서 호출한다. 아카이브 실패가 실제 업로드/변환을 막으면 안 되므로
+`OSError`는 무시하고 진행. `.gitignore`에 `data/raw_archive/` 추가.
+
+**결정 2 — DB 적재 목록에 누락된 8개 테이블 추가**: `load_to_db.py`의
+`TABLES`에 `researchers_history`/`evaluations_history`/
+`tech_ownership_history`/`job_profile_history`/`work_objective_history`/
+`core_technology_history`(6개, CSV엔 쌓이는데 DB 적재만 빠져 있었음)와
+`work_objective`/`leadership_comments`(현재값 파일조차 DB에 없었던 별개
+누락)를 추가했다. 로직 변경 없이 리스트에 8줄만 추가 — `_load_csv_tables()`
+가 이미 제너릭하게 순회하고, `services/data_store.py`의 `_read_from_db()`도
+`SELECT * FROM {name}`으로 테이블명에 구애받지 않아 추가 코드 변경이
+필요 없었다.
+
+**검증**: `archive_raw_file()`/`archive_raw_bytes()`를 합성 데이터로 직접
+호출 — 같은 초에 두 번 호출해도 파일명이 충돌하지 않고 둘 다 보존되는
+것, 원본이 없을 때 조용히 `None`을 반환하는 것 확인.
+`web_pipeline_runner.save_upload()`를 실제로 두 번 호출해
+`data/raw_archive/<key>/`에 두 버전이 모두 남는 것 확인.
+`load_to_db.py`의 `TABLES` 30개 중복 없음 확인, `py_compile` 통과,
+`DATABASE_URL` 미설정 시 기존과 동일하게 안내만 출력하고 종료하는 것
+확인(샌드박스에 실제 Postgres가 없어 실제 적재 자체는 미검증 — 로직은
+기존 20여 개 테이블과 완전히 동일한 제너릭 루프라 리스크 낮음).
+
+**다음(3단계)**: 명단/AI검색 화면에 기간(날짜 범위) 지정 조회 추가 —
+`researchers_history.csv`를 이용해 "2023-05-01~2024-03-31 사이 소속돼
+있던 사람" 같은 질의를 지원하는 작업은 별도로 진행.

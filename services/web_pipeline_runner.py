@@ -50,6 +50,7 @@ _PIPELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '
 sys.path.insert(0, os.path.abspath(_PIPELINE_DIR))
 
 from paths import BASE_DIR, OUT_DIR  # noqa: E402
+from raw_archive import archive_raw_bytes  # noqa: E402
 
 WEB_UPDATES_DIR = os.path.join(BASE_DIR, 'data', 'web_updates')
 RUN_LOG_PATH = os.path.join(OUT_DIR, 'web_pipeline_runs.csv')
@@ -194,6 +195,16 @@ def save_upload(key: str, filename: str, content_bytes: bytes, slot: str | None 
         f.write(content_bytes)
     with open(os.path.join(d, '.uploaded_at'), 'w') as f:
         f.write(datetime.now().isoformat())
+
+    # 원본을 덮어쓰기 전에 위에서 기존 파일을 지웠으므로, 여기서는 이번에
+    # 올라온 원본을 그대로 아카이브에 남긴다(무제한 보관 — 사용자 확정,
+    # data/processed/CLAUDE.md 참고). 아카이브 실패가 업로드 자체를 막으면
+    # 안 되므로 실패해도 무시하고 진행한다.
+    try:
+        archive_raw_bytes(content_bytes, filename, category=key)
+    except OSError as exc:
+        print(f'[web_pipeline_runner] 원본 아카이브 실패(무시하고 계속) {key}: {exc}')
+
     return dest
 
 

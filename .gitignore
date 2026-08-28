@@ -5,6 +5,7 @@ __pycache__/
 .env
 data/raw/
 data/raw_csv/
+data/raw_archive/
 data/photo/
 data/processed/*
 *.csv

@@ -25,6 +25,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from excel_reader import read_xlsx
+from raw_archive import archive_raw_file
 from source_files import find_matches, is_wildcard
 from sources import SOURCES
 
@@ -65,6 +66,16 @@ def run():
             print(f'  [INFO] {pattern} 후보 {len(src_paths)}개 중 최신 파일 선택: '
                   f'{os.path.basename(chosen)}')
             src_paths = [chosen]
+
+        # 이번 실행에 실제로 쓰인 원본은 변환 전에 무제한 보관 아카이브에도
+        # 남긴다(사용자 확정, data/processed/CLAUDE.md 2026-08-27 참고) —
+        # 나중에 처리 로직 버그를 발견해도 그 시점 원본으로 재처리할 수 있게.
+        # 아카이브 실패가 변환 자체를 막으면 안 되므로 실패해도 무시하고 계속.
+        for src_path in src_paths:
+            try:
+                archive_raw_file(src_path, category=name)
+            except OSError as exc:
+                print(f'  [WARN] 원본 아카이브 실패(무시하고 계속) {src_path}: {exc}')
 
         if len(src_paths) == 1:
             print(f'  [READ] {os.path.basename(src_paths[0])} (header_row={header_row})')
