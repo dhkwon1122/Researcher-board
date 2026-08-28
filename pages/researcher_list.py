@@ -2,7 +2,7 @@
 화면 3: 연구원 명단 (정량 지표 테이블)
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from urllib.parse import parse_qs
 
 import dash
@@ -35,13 +35,58 @@ _INCENTIVE_COL = '인센티브'
 _DEGREE_RANK = {'박사': 5, '석사': 4, '학사': 3, '전문대': 2, '고교': 1}
 
 
-def _build_summary_df(current_only: bool = True) -> pd.DataFrame:
+def _resolve_period_snapshot(period: tuple[date, date]) -> pd.DataFrame:
+    """researchers_history.csv에서 period=(시작일, 종료일) 구간에 속하는
+    (valid_year, valid_month) 스냅샷만 골라, researcher_id별로 그 구간 안에서
+    가장 최근 스냅샷 1행을 대표값으로 돌려준다 — "이 기간 동안 소속돼
+    있었고, 그 기간의 마지막 시점엔 이런 상태였다"는 의미(2026-08-28,
+    data/processed/CLAUDE.md 참고). 구간에 스냅샷이 하나도 없는 사람은
+    결과에서 빠진다(그 기간엔 존재를 확인할 수 없으므로).
+
+    주의: 직책(team_refer 조회)은 항상 "현재" team_refer 기준이라 과거
+    시점과 다를 수 있다 — 이 함수가 반환하는 값은 어디까지나 researchers_
+    history.csv에 있는 컬럼(부서/직급/직무/재직상태 등)에 한한다."""
+    hist = read_processed('researchers_history')
+    if hist.empty or not {'valid_year', 'valid_month'} <= set(hist.columns):
+        return pd.DataFrame()
+
+    start, end = period
+    start_key = (start.year, start.month)
+    end_key = (end.year, end.month)
+
+    def _period_key(row):
+        y, m = str(row.get('valid_year', '')), str(row.get('valid_month', ''))
+        if not y or not m:
+            return None
+        try:
+            return (int(y), int(m))
+        except ValueError:
+            return None
+
+    hist = hist.copy()
+    hist['_period_key'] = hist.apply(_period_key, axis=1)
+    in_range = hist[hist['_period_key'].apply(lambda k: k is not None and start_key <= k <= end_key)]
+    if in_range.empty:
+        return pd.DataFrame()
+
+    # researcher_id별로 구간 내 최댓값(가장 최근) 스냅샷만 남긴다.
+    in_range = in_range.sort_values(['researcher_id', '_period_key'])
+    latest = in_range.drop_duplicates(subset=['researcher_id'], keep='last')
+    return latest.drop(columns=['_period_key']).reset_index(drop=True)
+
+
+def _build_summary_df(current_only: bool = True, period: tuple[date, date] | None = None) -> pd.DataFrame:
     """CSV들을 집계하여 연구원 1인 1행의 요약 DataFrame 반환.
     current_only=False(누적기준)면 전배·퇴사 등으로 최신 인력현황에 없는
     사람도 포함하고, 그 경우에만 '현재소속' 열을 추가로 붙인다(최신기준에서는
-    전원이 '현재'라 의미가 없어 열 자체를 안 만든다)."""
+    전원이 '현재'라 의미가 없어 열 자체를 안 만든다).
+    period=(시작일, 종료일)이 함께 주어지면(누적기준에서만 의미가 있음)
+    "한 번이라도 있었던 전체 인원"이 아니라 "그 기간 동안 소속돼 있던
+    사람"만, researchers_history.csv 기준 그 기간의 마지막 상태로 보여준다
+    — 이때는 '현재소속' 대신 '조회기간 기준' 열에 그 사람 스냅샷의
+    연/월을 보여준다."""
     try:
-        res  = read_processed('researchers')
+        res  = _resolve_period_snapshot(period) if period else read_processed('researchers')
         eva  = read_processed('evaluations')
         pub  = read_processed('publications')
         pat  = read_processed('patents')
@@ -52,7 +97,8 @@ def _build_summary_df(current_only: bool = True) -> pd.DataFrame:
     except Exception:
         return pd.DataFrame()
 
-    res = filter_current(res, current_only)
+    if not period:
+        res = filter_current(res, current_only)
 
     # 직책 = team_refer.csv의 assignment_name(researcher_id 기준, 조직장급만
     # 등록돼 있어 나머지는 매핑이 없음 — 그 경우 "-").
@@ -155,7 +201,10 @@ def _build_summary_df(current_only: bool = True) -> pd.DataFrame:
             '특허(등록)':     pat_reg,
             '수상':           awd_cnt,
         }
-        if not current_only:
+        if period:
+            y, m = str(r.get('valid_year', '')).strip(), str(r.get('valid_month', '')).strip()
+            row['조회기간 기준'] = f'{y}-{m}' if y and m else '-'
+        elif not current_only:
             row['현재소속'] = '미소속' if str(r.get('is_current', 'Y')) == 'N' else '현재'
         rows.append(row)
 
@@ -215,6 +264,7 @@ _ESSENTIAL_COLUMNS = [
     ('직책', '직책'),
     ('재직상태', '재직상태'),
     ('Knox ID', 'Knox ID'),
+    ('조회기간 기준', '조회기간 기준'),
 ]
 _ESSENTIAL_IDS = {col_id for col_id, _ in _ESSENTIAL_COLUMNS}
 
@@ -375,6 +425,26 @@ def layout():
                         html.Div(
                             '누적기준: 이름/사번 검색 중심 (부서·과제·직급·직책 필터 비활성화)',
                             className='text-muted', style={'fontSize': '0.72rem'},
+                        ),
+                        # 누적기준에서 기간(시작~종료)을 지정하면, 그 기간 동안
+                        # 소속돼 있던 사람만(researchers_history.csv 기준, 그
+                        # 기간 내 가장 최근 스냅샷 값으로) 조회한다 — 이때는
+                        # 부서/과제/직급/직책도 그 시점 값이라 필터를 다시
+                        # 켠다(toggle_org_filters 콜백 참고). 기간을 비워두면
+                        # 기존과 동일하게 "한 번이라도 있었던 전체 인원"만 보임.
+                        dcc.DatePickerRange(
+                            id='list-period-range',
+                            start_date_placeholder_text='시작일',
+                            end_date_placeholder_text='종료일',
+                            display_format='YYYY-MM-DD',
+                            disabled=True,
+                            className='mt-1',
+                            style={'fontSize': '0.72rem'},
+                        ),
+                        html.Div(
+                            '기간 지정 시 그 기간 내 마지막 상태 기준으로 조회(부서·과제·직급·직책 필터 다시 사용 가능)',
+                            id='list-period-hint',
+                            className='text-muted', style={'fontSize': '0.68rem', 'display': 'none'},
                         ),
                     ], md=3),
                     dbc.Col([
@@ -591,7 +661,10 @@ def update_project_options(dept):
 # 누적기준에서는 조직 배치(부서/과제/직급/직책)가 최신 시점 기준이 아닐 수 있어
 # 혼란을 줄 수 있으므로 비활성화하고 값도 비운다 — 이름/사번(테이블 자체
 # 필터 행)으로만 찾도록 유도한다. 성별/학력/전공/재직상태는 시점에 덜
-# 민감해 그대로 둔다.
+# 민감해 그대로 둔다. 다만 누적기준에서 기간(시작~종료)까지 지정하면
+# researchers_history.csv에서 그 기간의 마지막 스냅샷을 쓰므로(사용자 요청,
+# data/processed/CLAUDE.md 2026-08-28 참고) 부서/과제/직급/직책도 그 시점
+# 기준으로 다시 의미가 있어져 필터를 도로 켠다.
 @callback(
     Output('filter-dept', 'disabled'),
     Output('filter-project', 'disabled'),
@@ -601,14 +674,23 @@ def update_project_options(dept):
     Output('filter-project', 'value', allow_duplicate=True),
     Output('filter-pos', 'value', allow_duplicate=True),
     Output('filter-title', 'value', allow_duplicate=True),
+    Output('list-period-range', 'disabled'),
+    Output('list-period-hint', 'style'),
     Input('list-search-mode', 'value'),
+    Input('list-period-range', 'start_date'),
+    Input('list-period-range', 'end_date'),
     prevent_initial_call=True,
 )
-def toggle_org_filters(mode):
+def toggle_org_filters(mode, period_start, period_end):
     is_cumulative = (mode == 'all')
+    has_period = is_cumulative and bool(period_start) and bool(period_end)
+    hint_style = {'fontSize': '0.68rem', 'display': 'block' if has_period else 'none'}
+
+    if has_period:
+        return False, False, False, False, no_update, no_update, no_update, no_update, False, hint_style
     if is_cumulative:
-        return True, True, True, True, None, None, None, None
-    return False, False, False, False, no_update, no_update, no_update, no_update
+        return True, True, True, True, None, None, None, None, False, hint_style
+    return False, False, False, False, no_update, no_update, no_update, no_update, True, hint_style
 
 
 # ── 콜백 2: 검색 버튼(필터 적용) / 필터 초기화 버튼 → 테이블 데이터 갱신 ──────
@@ -634,17 +716,25 @@ def toggle_org_filters(mode):
     State('filter-degree',     'value'),
     State('filter-major',      'value'),
     State('filter-employment', 'value'),
+    State('list-period-range', 'start_date'),
+    State('list-period-range', 'end_date'),
     prevent_initial_call=True,
 )
 def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, dept, project, pos, title,
-                  gender, degree, major, employment):
+                  gender, degree, major, employment, period_start, period_end):
     from services.auth import can
     show_eval = can('view_evaluation')
     show_incentive = can('view_incentive')
 
     current_only = (mode != 'all')
-    df = _build_summary_df(current_only=current_only)
+    period = None
+    if mode == 'all' and period_start and period_end:
+        period = (date.fromisoformat(period_start), date.fromisoformat(period_end))
+    df = _build_summary_df(current_only=current_only, period=period)
     display_df = _apply_permission_filter(df, show_eval, show_incentive)
+    # 기간을 지정했을 땐 그 시점 기준 값이 있어 부서/과제/직급/직책 필터도
+    # 다시 쓸 수 있다(toggle_org_filters 콜백과 동일한 조건).
+    filters_active = current_only or bool(period)
 
     triggered = dash.ctx.triggered_id
 
@@ -684,15 +774,15 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, 
     # 표기와 다를 수 있어 라벨로 직접 비교하지 않는다(services.similarity_map
     # 참고). '과제' 컬럼 자체는 이제 표시용 pjt_part_name 라벨이라 이 매칭에
     # 쓸 수 없다(사용자 확정 — 명단 '과제/파트' 열을 team_refer 라벨로 표시).
-    if dept and current_only:
+    if dept and filters_active:
         org_codes = similarity_map.org_codes_for_dep_names(dept)
         display_df = display_df[display_df['_org_code'].isin(org_codes)]
-    if project and current_only:
+    if project and filters_active:
         org_codes = similarity_map.org_codes_for_pjt_part_names(project)
         display_df = display_df[display_df['_org_code'].isin(org_codes)]
-    if pos and current_only:
+    if pos and filters_active:
         display_df = display_df[display_df['직급'].isin(pos)]
-    if title and current_only:
+    if title and filters_active:
         display_df = display_df[display_df['직책'].isin(title)]
     if gender:
         display_df = display_df[display_df['성별'].isin(gender)]
