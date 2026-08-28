@@ -6413,3 +6413,149 @@ pages_folder='')` 컨텍스트(이 세션 컨테이너에 `dash_cytoscape`가 �
 - 실제 원본 파일로 웹 업로드 → 명단/프로필 화면 렌더링까지 브라우저
   end-to-end 확인 필요.
 - 실제 브라우저에서의 "근무 경력 포함" 체크박스 조작.
+
+## 2026-08-29 (8): 연구원↔연구원 유사도 — 학력 하드 파티션 + 과거 시점
+온디맨드 보유 전문성 분석
+
+사용자 질문 2건에 대한 논의 끝에 확정된 두 가지 기능.
+
+### 1) 연구원 ↔ 연구원 유사도 — 최소한 동일 학위끼리만 매칭
+
+사용자 우려: "박사 리더 vs 고졸 리더가 유사하게 나오는 케이스가 있어
+신뢰성이 낮아진다." 처음엔 코사인 유사도에 동일 학력 가산점만 주는 소프트
+부스트를 검토했으나, 이미 텍스트 내용(예: "리더십/전략 업무" 표현)이
+우연히 겹쳐 유사도가 높게 나온 경우 약간의 부스트로는 순위를 못 뒤집는다고
+판단(부스트는 "순위를 밀어올리는" 효과일 뿐 "다른 학력군을 걸러내는"
+효과가 없음) — 기존 CL 시니어/주니어 그룹핑(`_tenure_level`)과 동일한
+**하드 파티션** 방식을 학력에도 적용하기로 확정.
+
+**`pipeline/researcher_fit.py`**: `read_education(out_dir)` 신규 —
+`read_researchers()`와 동일한 패턴으로 `education.csv`를 읽는다.
+
+**`pipeline/process_researcher_similarity.py`**:
+- `build_degree_map(education_df)` 신규 — `services.researcher_profile_export.
+  highest_degree_row()`(기존에 이미 있던 "최종학력 1건" 판정 헬퍼, 박사>석사>
+  학사>전문대>고교 우선순위)를 재사용해 `researcher_id -> 최종학력` 매핑을
+  `build_tenure_map()`과 동일한 발상으로 한 번만 계산한다.
+- `compute_similarity()`에 `degree_map` 매개변수 추가 — 대상 연구원의
+  최종학력을 알면, 후보를 **같은 학력인 사람으로만** 하드 필터링한 뒤(이
+  좁혀진 풀 안에서) 기존 CL 시니어/주니어 그룹별 검색을 그대로 수행한다.
+  본인 학력을 모르면(교육 이력 없음) 필터 없이 전체 후보에서 찾는다(CL
+  미분류와 동일한 하위 호환 폴백 원칙). 학력이 같은 사람이 조직에 적거나
+  없으면(전문대/고교 학력자 등) 결과가 적거나 비어 있을 수 있다 — 다른
+  학력 후보로 억지로 채우지 않는다(신뢰할 수 없는 매칭을 보여주지 않는
+  게 우선이라는 판단, 사용자 우려와 정확히 부합).
+- `process()`가 `fit.read_education(OUT_DIR)` → `build_degree_map()`을
+  거쳐 `compute_similarity(..., degree_map=degree_map)`으로 전달.
+
+검증: `compute_similarity()`를 "모든 사람의 임베딩이 완전히 동일"(리더십
+관련 표현이 우연히 겹쳐 텍스트 유사도가 높게 나오는 최악의 시나리오를
+재현)하도록 몽키패치한 뒤, 박사(시니어)/고졸(시니어)/박사(주니어)/석사
+(시니어) 4명으로 확인 — 박사(시니어) 대상자는 임베딩이 완전히 같은데도
+고졸·석사 후보는 전혀 안 나오고 박사(주니어) 1명만 매칭됨을 확인(하드
+파티션이 실제로 텍스트 유사도와 무관하게 학력 경계를 지키는지 검증).
+본인 학력을 모르는 사람은 기존처럼 전체 후보(4명 전부)에서 찾는 것도
+확인. `build_degree_map()`을 최종학력이 여러 행(박사+학사)인 합성
+education.csv로 확인해 최우선순위(박사)가 정확히 선택되는지 확인.
+
+### 2) 과거 시점 온디맨드 보유 전문성 분석
+
+사용자 확인 질문 2건에 대한 답변으로 확정된 설계: (1) 결과는 저장해서
+재사용(같은 사번+시점 재조회 시 LLM 재호출 없음), (2) 여러 사번 요청 시
+백그라운드 실행 + 진행 상황 폴링(관리자 "데이터 업데이트" 탭과 동일한
+패턴). 기본은 지금처럼 현재 재직자 전체를 배치로 자동 분석하고, 과거
+시점 분석은 "보유 전문성" 탭 하단에서 시점+사번을 입력해 필요할 때만
+요청한다.
+
+**시점 데이터 가용성 조사 결과**(구현 전 확인): `process_researcher_
+expertise.py`가 쓰는 입력 중 `job_profile`/`core_technology`/
+`tech_ownership`/`work_objective`는 이미 `<table>_history.csv`(2026-08-28
+(42)/(44) 항목)가 있어 그 시점 스냅샷을 그대로 쓸 수 있고, `tasks`/
+`publications`/`patents`는 원래 날짜 범위 데이터라 이력 테이블 없이도
+"그 시점 이전"으로 걸러낼 수 있다. `education`(학력)과
+`project_personnel`(과제 문서 인력 매칭)은 시점 개념이 아예 없어 —
+사용자 확인: 근사치(현재 값 그대로 사용)로 받아들이기로 함(학위는
+거의 안 바뀌고, 프로젝트 인력 매칭도 문서 재분석 때마다 통째로 다시
+만들어지는 성격이라 이력화 비용 대비 실익이 낮다고 판단).
+
+**신규 `services/period_snapshot.py`**: `pages/researcher_list.py`의
+`_resolve_period_snapshot()`(2026-08-28, 명단 화면 "누적기준+기간 지정"
+조회 전용으로 만들었던 것)을 그대로 옮겨 `resolve_period_snapshot()`로
+공용화 — 파이프라인 스크립트가 `pages/*.py`를 import하는 역방향 의존을
+피하기 위해서다. `pages/researcher_list.py`는 이 공용 함수를
+`_resolve_period_snapshot`이라는 별칭으로 import해 기존 호출부는 전혀
+안 건드렸다(순수 리팩터링, 동작 변화 없음).
+
+**`pipeline/process_researcher_expertise.py`**: 신규
+`analyze_researchers_as_of(researcher_ids, valid_date)` — process()의
+"현재 재직자 전체" 배치와 별개 경로. `_snapshot_rows_as_of(table, ids,
+valid_date)`(`resolve_period_snapshot((아주 이른 날짜, valid_date), ...)`
+로 "그 시점까지 최신 스냅샷"을 얻음)와 `_filter_as_of(df, date_col,
+valid_date)`(날짜 범위형 3개 테이블용, 문자열 비교로 그 시점 이전만
+필터)를 새로 추가하고, 기존 `_education_text()`/`_task_history_text()`
+등 텍스트 조립 함수들(process()와 완전히 공유)을 그대로 재사용해
+프롬프트를 만든다. process()와 달리 eligibility 필터(team_refer
+work_type=="R&D" 등 — 현재 조직 구조 기준이라 과거 시점엔 적용할 근거가
+없음)를 적용하지 않고 호출부가 넘긴 사번을 그대로 분석한다. 결과는
+파일에 저장하지 않고 그대로 반환(캐시 저장은 호출부인
+services/expertise_ondemand.py가 담당) — `{researcher_id, as_of,
+computed_at, strength_fields...}` 또는 데이터/LLM 응답이 없으면
+`{researcher_id, as_of, error}`.
+
+**신규 `services/expertise_ondemand.py`**: `services/web_pipeline_runner.py`
+와 동일한 이유(gunicorn --workers 2, 메모리 상태 비공유)로 락도 파일
+기반(`data/processed/.expertise_ondemand.lock.json`, 30분 초과 시 죽은
+락으로 간주)이다. 결과 캐시는 `data/processed/expertise_ondemand_cache.json`
+에 `"{사번}|{YYYY-MM-DD}"` 키로 영구 저장. `request_analysis(researcher_ids,
+valid_date)`가 진입점 — 이미 캐시에 다 있으면 `'ready'`(즉시 표시),
+캐시에 없는 사번이 있으면 `threading.Thread(daemon=True)`로 `analyze_
+researchers_as_of()`를 돌리고 `'started'`, 다른 분석이 이미 진행 중이면
+`'busy'`를 반환한다. `get_results(researcher_ids, valid_date)`가 캐시
+조회 전담.
+
+**`pages/researcher_similarity_map.py`**: 기존 "최신기준"/"누적기준"
+검색기준 라디오(`expertise-search-mode`)에 3번째 옵션 "과거 시점 조회
+(온디맨드 분석, 연구원 탭 전용)" 추가. "연구원 ↔ 연구원" 탭에서 이 모드를
+고르면(그 시점 기준 유사도 재계산은 훨씬 큰 범위라 이번엔 제외) 안내
+Alert만 보여준다. 신규 `_historical_search_panel()`(시점 `dcc.
+DatePickerSingle` + 사번 검색 `dcc.Dropdown(multi=True, options=
+_cumulative_person_options()`, 기존 "누적기준" 패널이 쓰던 것과 동일한
+목록 — 전배·퇴사자 포함) + "분석 요청" 버튼)과 `_render_historical_
+results()`(캐시 결과를 사번별로 Alert(에러) 또는 `pipeline.process_
+researcher_expertise.researcher_card_html()`(process()의 정적 리포트와
+동일한 카드 스타일)로 렌더링, 여러 명의 카드는 `pipeline.rd_specialist_
+markdown.mail_page()`(사이드바 없는 단순 HTML 셸, 원래 메일 발송용으로
+만들었던 것을 그대로 재사용) 하나에 모아 `html.Iframe(srcDoc=...)`로
+표시, `_iframe_tab()`과 동일한 방식)을 추가. 버튼 클릭 콜백이 `request_
+analysis()`를 호출해 `'ready'`면 바로 결과를, `'started'`면 스피너 +
+`dcc.Interval`(3초 폴링) 활성화, `'busy'`면 경고를 보여준다. 폴링
+콜백은 `expertise_ondemand.lock_status()`가 `None`이 되면(백그라운드
+스레드 완료) 결과를 렌더링하고 Interval을 끈다.
+
+검증: `pipeline.process_researcher_expertise.analyze_researchers_as_of()`
+를 합성 `<table>_history.csv`(2019/2023 두 시점 스냅샷, job_profile/
+core_technology)와 날짜가 다른 tasks/publications/patents 픽스처로 직접
+호출 — 2020-06 시점 조회 시 2019 스냅샷(과거 값)이, 2023-06 시점 조회 시
+2023 스냅샷(최신 값)이 정확히 선택되는지, tasks/publications가 그 시점
+이전 것만 남는지 확인. `_analyze_researcher()`를 몽키패치해 LLM 없이
+`analyze_researchers_as_of()` 전체 흐름(정상 분석/데이터 전혀 없는
+사번의 error 처리)을 확인. `services/expertise_ondemand.py`는
+`analyze_researchers_as_of()`를 몽키패치해 — 최초 요청 시 `'started'`
+와 함께 락이 걸리고, 그 사이 들어온 두 번째 요청은 `'busy'`, 백그라운드
+스레드 완료 후 락이 풀리고 결과가 캐시에 반영되는지, 같은 사번+시점
+재요청은 `'ready'`(재계산 없음), 일부만 캐시에 있는 혼합 요청은
+캐시에 없는 것만 다시 분석(`'started'`)하는지 전부 확인.
+`pages.researcher_similarity_map`을 실제 `dash.Dash(use_pages=True)`
+컨텍스트에서 임포트(이번엔 `dash_cytoscape`도 설치해 완전히 로드) —
+`layout()` 렌더링, "연구원"+"historical"/"연구원 ↔ 연구원"+"historical"
+디스패치 분기(각각 패널/안내 Alert), 다운로드 패널 숨김 토글, 합성
+캐시 데이터로 `_render_historical_results()`(에러 2건 + 정상 1건 혼합)가
+Alert 2개 + Iframe 1개로 정확히 렌더링되는지까지 전부 확인. 변경/신규
+파일 전부 `py_compile` 통과.
+
+**미검증**: 실제 사내 LLM을 통한 실제 온디맨드 분석 호출(이 세션에
+`llm_config.py`가 없어 재현 불가), 실제 브라우저에서의 DatePicker/
+Dropdown 조작과 백그라운드 실행 중 실제 3초 폴링 UX, gunicorn 멀티
+워커 환경에서의 실제 락 공유(파일 기반이라 이론상 안전하지만 실기
+검증은 못 함 — web_pipeline_runner.py와 동일한 인프라를 그대로
+재사용했으므로 위험도는 낮다고 판단).

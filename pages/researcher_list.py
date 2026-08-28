@@ -16,6 +16,7 @@ from components.timeline_data import dedupe_patents
 from services import researcher_profile_export, similarity_map
 from services.data_store import filter_current, read_processed
 from services.evaluations import evaluation_years, salary_grade_column
+from services.period_snapshot import resolve_period_snapshot as _resolve_period_snapshot
 
 dash.register_page(
     __name__,
@@ -52,51 +53,6 @@ def _active_period(mode: str, period_start: str | None, period_end: str | None) 
     if mode == 'all' and period_start and period_end:
         return date.fromisoformat(period_start), date.fromisoformat(period_end)
     return None
-
-
-def _resolve_period_snapshot(period: tuple[date, date], table: str = 'researchers_history') -> pd.DataFrame:
-    """<table>(기본 researchers_history.csv, researcher_id+valid_year+
-    valid_month 자연키를 가진 이력 테이블이면 재사용 가능 — evaluations_
-    history.csv 등)에서 period=(시작일, 종료일) 구간에 속하는 (valid_year,
-    valid_month) 스냅샷만 골라, researcher_id별로 그 구간 안에서 가장 최근
-    스냅샷 1행을 대표값으로 돌려준다 — "이 기간 동안 소속돼 있었고, 그
-    기간의 마지막 시점엔 이런 상태였다"는 의미(2026-08-28, data/processed/
-    CLAUDE.md 참고). 구간에 스냅샷이 하나도 없는 사람은 결과에서 빠진다
-    (그 기간엔 존재를 확인할 수 없으므로).
-
-    항상 'researcher_id' 컬럼이 있는 DataFrame을 반환한다(구간에 스냅샷이
-    하나도 없어도 0행짜리 빈 DataFrame — 완전히 빈 pd.DataFrame()을 반환하면
-    호출부의 `eva['researcher_id']`가 KeyError로 죽는다, 2026-08-29 발견·수정)."""
-    hist = read_processed(table)
-    if hist.empty or not {'valid_year', 'valid_month'} <= set(hist.columns):
-        return pd.DataFrame(columns=['researcher_id'])
-
-    start, end = period
-    start_key = (start.year, start.month)
-    end_key = (end.year, end.month)
-
-    def _period_key(row):
-        y, m = str(row.get('valid_year', '')), str(row.get('valid_month', ''))
-        if not y or not m:
-            return None
-        try:
-            return (int(y), int(m))
-        except ValueError:
-            return None
-
-    hist = hist.copy()
-    hist['_period_key'] = hist.apply(_period_key, axis=1)
-    in_range = hist[hist['_period_key'].apply(lambda k: k is not None and start_key <= k <= end_key)]
-    if in_range.empty:
-        # 구간에 스냅샷이 하나도 없어도 in_range 자체엔 이미 원본 컬럼
-        # ('researcher_id' 포함)이 있으므로 그대로 반환한다(0행) — 완전히
-        # 빈 pd.DataFrame()을 반환하면 컬럼 자체가 없어 호출부가 죽는다.
-        return in_range.drop(columns=['_period_key'])
-
-    # researcher_id별로 구간 내 최댓값(가장 최근) 스냅샷만 남긴다.
-    in_range = in_range.sort_values(['researcher_id', '_period_key'])
-    latest = in_range.drop_duplicates(subset=['researcher_id'], keep='last')
-    return latest.drop(columns=['_period_key']).reset_index(drop=True)
 
 
 def _build_summary_df(current_only: bool = True, period: tuple[date, date] | None = None) -> pd.DataFrame:

@@ -17,6 +17,8 @@ dash_cytoscape) 두 서브뷰를 버튼으로 전환할 수 있다 — 둘 다 �
 기능 자체가 제거되면서 함께 삭제됐다 — data/processed/CLAUDE.md 참고.)
 """
 
+from datetime import date
+
 import numpy as np
 import dash
 import dash_bootstrap_components as dbc
@@ -26,8 +28,13 @@ import plotly.graph_objects as go
 from dash import Input, Output, Patch, State, callback, dcc, html
 
 from components.detail_tabs import llm_summary_block
-from pipeline.process_researcher_expertise import build_html as _build_researcher_html
+from pipeline.process_researcher_expertise import (
+    build_html as _build_researcher_html,
+    researcher_card_html as _historical_card_html,
+)
 from pipeline.process_researcher_similarity import build_html as _build_similarity_html
+from pipeline.rd_specialist_markdown import mail_page as _historical_page_shell
+from services import expertise_ondemand
 from services.data_store import (
     filter_current, read_expertise_profiles, read_processed, read_similar_researchers,
 )
@@ -333,6 +340,139 @@ def _render_cumulative_result(rid: str | None):
 )
 def _update_cumulative_result(rid):
     return _render_cumulative_result(rid)
+
+
+# ── 과거 시점 온디맨드 전문성 분석(2026-08-29) ──────────────────────────────
+# 기본은 process_researcher_expertise.py의 배치(현재 재직자 전체)만 자동
+# 분석하고, 과거 시점 분석은 여기서 필요할 때만 시점+사번을 입력해 요청한다
+# (사용자 확정). "연구원" 탭 전용 — "연구원 ↔ 연구원"(유사도)은 그 시점 기준
+# 전체 후보 재계산이 필요해 범위 밖이다(_render_expertise_tab 참고).
+
+def _historical_search_panel():
+    return html.Div([
+        dbc.Alert(
+            [
+                '과거 시점 기준으로 온디맨드 전문성 분석을 요청합니다. 학력·과제 문서 인력 매칭은 '
+                '시점 이력이 없어 현재 값을 근사치로 사용하고, 나머지(직무 이력/핵심기술/보유기술/'
+                '업무목표/과제·논문·특허)는 그 시점 데이터를 그대로 사용합니다. LLM을 실시간으로 '
+                '호출하므로 사번당 수십초 정도 걸릴 수 있으며, 한 번 분석한 사번+시점은 저장되어 '
+                '다음에 다시 요청하면 즉시 표시됩니다.',
+            ],
+            color='secondary', className='small mb-3',
+        ),
+        dbc.Row([
+            dbc.Col([
+                html.Label('기준 시점', className='small text-muted mb-1 d-block'),
+                dcc.DatePickerSingle(
+                    id='expertise-historical-date',
+                    date=date.today().isoformat(),
+                    display_format='YYYY-MM-DD',
+                    max_date_allowed=date.today().isoformat(),
+                ),
+            ], md=3),
+            dbc.Col([
+                html.Label('사번(이름/사번 검색, 복수 선택 가능)', className='small text-muted mb-1 d-block'),
+                dcc.Dropdown(
+                    id='expertise-historical-researchers',
+                    options=_cumulative_person_options(),
+                    multi=True, placeholder='이름 또는 사번으로 검색',
+                ),
+            ], md=7),
+            dbc.Col([
+                html.Label(' ', className='small d-block mb-1'),
+                dbc.Button('분석 요청', id='expertise-historical-run-btn', color='primary',
+                           size='sm', n_clicks=0),
+            ], md=2),
+        ], className='g-2 mb-3 align-items-end'),
+        dcc.Store(id='expertise-historical-poll-store'),
+        dcc.Interval(id='expertise-historical-interval', interval=3000, disabled=True),
+        html.Div(id='expertise-historical-result'),
+    ])
+
+
+def _render_historical_results(researcher_ids: list, valid_date: date):
+    """expertise_ondemand 캐시에 있는 값을 카드로 렌더링. 에러/미완료 항목은
+    Dash Alert로, 정상 분석 결과는 pipeline.process_researcher_expertise.
+    researcher_card_html()(process()의 정적 리포트와 같은 카드 스타일)을
+    한 iframe에 모아서 보여준다(_iframe_tab()과 동일한 srcDoc 임베드 방식) —
+    as_of/computed_at은 둘 다 서버가 직접 만든 날짜/시각 문자열이라(사용자
+    입력이 그대로 echo되는 값이 아님) 별도 이스케이프 없이 그대로 삽입한다."""
+    results = expertise_ondemand.get_results(researcher_ids, valid_date)
+    researchers_df = read_processed('researchers')
+    name_map = researchers_df.set_index('researcher_id')['name'].to_dict() if not researchers_df.empty else {}
+
+    alerts, card_parts = [], []
+    for rid, r in zip(researcher_ids, results):
+        label = f'{name_map.get(rid, rid)} ({rid})'
+        if r is None:
+            alerts.append(dbc.Alert(f'{label}: 분석 결과를 찾을 수 없습니다 — 다시 시도해 주세요.',
+                                     color='danger', className='small mb-1'))
+        elif r.get('error'):
+            alerts.append(dbc.Alert(f"{label}: {r['error']}", color='warning', className='small mb-1'))
+        else:
+            meta = (f'<div style="color:#86868b;font-size:0.78rem;margin-bottom:4px;">'
+                    f'시점: {r.get("as_of", "")} · 분석: {r.get("computed_at", "")}</div>')
+            card_parts.append(meta + _historical_card_html(r, name_map, anchor='', include_links=True))
+
+    if not alerts and not card_parts:
+        return dbc.Alert('표시할 결과가 없습니다.', color='secondary', className='small')
+
+    children = list(alerts)
+    if card_parts:
+        doc = _historical_page_shell(f'과거 시점 온디맨드 분석 ({valid_date.isoformat()})', ''.join(card_parts))
+        children.append(html.Iframe(
+            srcDoc=doc,
+            style={'width': '100%', 'height': f'{min(340 * len(card_parts) + 40, 900)}px', 'border': 'none'},
+        ))
+    return html.Div(children)
+
+
+@callback(
+    Output('expertise-historical-result', 'children'),
+    Output('expertise-historical-interval', 'disabled'),
+    Output('expertise-historical-poll-store', 'data'),
+    Input('expertise-historical-run-btn', 'n_clicks'),
+    State('expertise-historical-date', 'date'),
+    State('expertise-historical-researchers', 'value'),
+    prevent_initial_call=True,
+)
+def _start_historical_analysis(n_clicks, date_str, researcher_ids):
+    if not n_clicks:
+        return dash.no_update, dash.no_update, dash.no_update
+    if not researcher_ids:
+        return dbc.Alert('사번을 1명 이상 선택하세요.', color='warning', className='small'), True, None
+    valid_date = date.fromisoformat(date_str)
+    status = expertise_ondemand.request_analysis(researcher_ids, valid_date)
+    if status == 'busy':
+        return (dbc.Alert('다른 과거 시점 분석이 진행 중입니다. 잠시 후 다시 시도해 주세요.',
+                           color='warning', className='small'), True, None)
+    poll_data = {'researcher_ids': researcher_ids, 'valid_date': date_str}
+    if status == 'ready':
+        return _render_historical_results(researcher_ids, valid_date), True, None
+    # 'started' — 캐시에 없는 사번이 있어 백그라운드로 분석 중.
+    return (
+        dbc.Spinner(html.Div(
+            f'{len(researcher_ids)}명 분석 중입니다(완료되면 자동으로 표시됩니다)...',
+            className='text-muted small',
+        ), size='sm', color='primary'),
+        False, poll_data,
+    )
+
+
+@callback(
+    Output('expertise-historical-result', 'children', allow_duplicate=True),
+    Output('expertise-historical-interval', 'disabled', allow_duplicate=True),
+    Input('expertise-historical-interval', 'n_intervals'),
+    State('expertise-historical-poll-store', 'data'),
+    prevent_initial_call=True,
+)
+def _poll_historical_analysis(_n_intervals, poll_data):
+    if not poll_data:
+        return dash.no_update, True
+    if expertise_ondemand.lock_status() is not None:
+        return dash.no_update, dash.no_update  # 아직 실행 중 — 계속 폴링
+    valid_date = date.fromisoformat(poll_data['valid_date'])
+    return _render_historical_results(poll_data['researcher_ids'], valid_date), True
 
 
 _SEARCH_HIGHLIGHT_NAME = '__search_highlight__'
@@ -734,6 +874,7 @@ def layout(highlight_researcher=None, mail_rid=None, **_kwargs):
                 options=[
                     {'label': '최신기준 (조직도 탐색)', 'value': 'current'},
                     {'label': '누적기준 (이름/사번 검색만)', 'value': 'all'},
+                    {'label': '과거 시점 조회 (온디맨드 분석, 연구원 탭 전용)', 'value': 'historical'},
                 ],
                 value='current', inline=True, className='small mb-2',
             ),
@@ -769,6 +910,14 @@ def _render_expertise_tab(active_tab, mode, pending_highlight, scroll_target):
     if active_tab == 'map':
         return _map_tab_content(highlighted_rid=pending_highlight), dash.no_update
     if active_tab in _REPORT_TABS:
+        if mode == 'historical':
+            if active_tab != 'researcher':
+                return (
+                    dbc.Alert('과거 시점 온디맨드 분석은 "연구원" 탭에서만 지원합니다.',
+                              color='secondary', className='mt-3'),
+                    dash.no_update,
+                )
+            return _historical_search_panel(), dash.no_update
         if mode == 'all':
             return _cumulative_search_panel(active_tab), dash.no_update
         content = _iframe_tab(active_tab, scroll_to=scroll_target if active_tab == 'researcher' else None)
@@ -782,12 +931,20 @@ def _render_expertise_tab(active_tab, mode, pending_highlight, scroll_target):
     Output('expertise-download-panel', 'style'),
     Output('expertise-search-mode-row', 'style'),
     Input('expertise-tabs', 'active_tab'),
+    Input('expertise-search-mode', 'value'),
 )
-def _toggle_download_panel(active_tab):
+def _toggle_download_panel(active_tab, mode):
     """다운로드 패널·검색기준 토글은 "연구원"/"연구원 ↔ 연구원" 탭에서만
-    의미가 있어(요청 범위) 전문성 MAP 탭에서는 숨긴다."""
-    style = {'display': 'block'} if active_tab in _REPORT_TABS else {'display': 'none'}
-    return style, style
+    의미가 있어(요청 범위) 전문성 MAP 탭에서는 숨긴다. 다운로드 패널은
+    "과거 시점 조회" 모드에서도 숨긴다 — 그 패널이 내려받는 건 현재
+    expertise_profiles/similar_researchers(배치 산출물)라 온디맨드 과거
+    시점 결과와는 무관하기 때문(혼동 방지)."""
+    show_mode_row = active_tab in _REPORT_TABS
+    show_download = active_tab in _REPORT_TABS and mode != 'historical'
+    return (
+        {'display': 'block'} if show_download else {'display': 'none'},
+        {'display': 'block'} if show_mode_row else {'display': 'none'},
+    )
 
 
 @callback(

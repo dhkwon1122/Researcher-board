@@ -66,6 +66,17 @@ def read_researchers(out_dir: str) -> pd.DataFrame:
     return df
 
 
+def read_education(out_dir: str) -> pd.DataFrame:
+    """read_researchers()와 동일한 패턴 — process_researcher_similarity.py의
+    학력 기반 하드 파티션(build_degree_map())이 사용."""
+    path = os.path.join(out_dir, 'education.csv')
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    df = pd.read_csv(path, encoding='utf-8-sig', dtype=str).fillna('')
+    df['researcher_id'] = df['researcher_id'].astype(str).str.zfill(8)
+    return df
+
+
 def researcher_profile_text(profile: dict) -> str:
     parts = []
     if profile.get('strength_fields'):

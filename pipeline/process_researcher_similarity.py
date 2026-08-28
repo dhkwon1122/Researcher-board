@@ -15,16 +15,31 @@ Knowledge)을 BGE-M3로 임베딩하고 코사인 유사도를 계산한다.
 매칭 로직(코사인 유사도, top-K 추출)은 pipeline/researcher_fit.py 공용 모듈을
 그대로 재사용한다.
 
-근속 그룹별 top-K: 대상 연구원의 CL/년차 기반 시니어·주니어 구분(Junior/Senior,
-아래 3단계 참고)을 알 수 있으면, 후보를 Junior/Senior로 나눠 그룹별로 각각
-후보 pool을 찾는다 — "이 사람과 전문성이 가장 비슷한 Senior"와 "가장 비슷한
-Junior"를 시니어 우선 순서로 함께 보여주기 위함이다(결과 리스트는 Senior
-그룹을 먼저, Junior 그룹을 나중에 이어붙인다). 후보 중 CL 표기가 없거나(임원
-등) 승격기준일이 없어 분류를 모르는 사람은 어느 그룹에도 들어가지 못하므로
-이 그룹별 검색에서는 제외된다. 대상 연구원 본인의 분류를 모르면 그룹 구분
-없이 기존처럼 전체 후보 중에서 찾는다(하위 호환 폴백). 임원(상무/사장/고문/
-부사장/Master — _EXCLUDED_POSITIONS)은 애초에 후보 자체에서 완전히
-빠진다(process()가 profiles를 걸러냄).
+학력 하드 파티션(신규, 사용자 확정 2026-08-29): 대상 연구원의 최종학력
+(education.csv, 박사/석사/학사/전문대/고교)을 알 수 있으면, 후보를 **같은
+학력인 사람으로만** 제한한다. 소프트 가산점(코사인 유사도에 약간의 보너스만
+주는 방식)은 검토했으나 채택하지 않았다 — 이미 텍스트 내용(예: "리더십/전략
+업무" 같은 표현)이 우연히 겹쳐 유사도가 높게 나온 경우, 약간의 부스트로는
+그 순위를 못 뒤집기 때문에 "박사 리더 vs 고졸 리더"처럼 학력 격차가 큰
+조합이 신뢰도 낮은 매칭으로 계속 표시되는 문제를 해결하지 못한다. 그래서
+CL 시니어/주니어 그룹핑과 동일한 하드 파티션 방식을 학력에도 적용해, 애초에
+다른 학력 조합이 후보 풀에 들어오지 못하게 막는다. 본인 학력을 모르면(교육
+이력 없음) 필터 없이 기존처럼 전체 후보에서 찾는다(CL 미분류와 동일한 하위
+호환 폴백 원칙). 학력이 같은 사람이 적거나 없으면(예: 전문대/고교 학력자가
+조직에 거의 없음) 결과가 적거나 비어 있을 수 있다 — 다른 학력 후보로 억지로
+채우지 않는다(신뢰할 수 없는 매칭을 보여주지 않는 게 우선이라는 판단).
+
+근속 그룹별 top-K: 학력 파티션으로 좁혀진 후보 풀 안에서, 대상 연구원의
+CL/년차 기반 시니어·주니어 구분(Junior/Senior, 아래 3단계 참고)을 알 수
+있으면, 후보를 Junior/Senior로 나눠 그룹별로 각각 후보 pool을 찾는다 —
+"이 사람과 전문성이 가장 비슷한 Senior"와 "가장 비슷한 Junior"를 시니어
+우선 순서로 함께 보여주기 위함이다(결과 리스트는 Senior 그룹을 먼저, Junior
+그룹을 나중에 이어붙인다). 후보 중 CL 표기가 없거나(임원 등) 승격기준일이
+없어 분류를 모르는 사람은 어느 그룹에도 들어가지 못하므로 이 그룹별 검색에서는
+제외된다. 대상 연구원 본인의 분류를 모르면 그룹 구분 없이 학력 파티션 결과
+전체 중에서 찾는다(하위 호환 폴백). 임원(상무/사장/고문/부사장/Master —
+_EXCLUDED_POSITIONS)은 애초에 후보 자체에서 완전히 빠진다(process()가
+profiles를 걸러냄).
 
 그룹별 후보 pool 크기(_CANDIDATE_POOL_K)는 화면에 실제로 표시할 그룹당 최대
 개수(MAX_DISPLAY_K, 10)보다 넉넉히 크게 잡는다 — 아래 2단계에서 근거(evidence)가
@@ -100,7 +115,7 @@ import rd_specialist_markdown as mmd  # noqa: E402
 import researcher_fit as fit  # noqa: E402
 import result_archive  # noqa: E402
 from services.llm import LLMError  # noqa: E402
-from services.researcher_profile_export import position_years  # noqa: E402
+from services.researcher_profile_export import highest_degree_row, position_years  # noqa: E402
 
 DEFAULT_TOP_K = fit.TOP_K
 
@@ -171,16 +186,25 @@ def _top_within(idx_pool: list, row, k: int) -> list:
     return fit.top_k_idx(mask, min(k, len(idx_pool)))
 
 
-def compute_similarity(profiles: list, top_k: int = DEFAULT_TOP_K, tenure_map: dict | None = None) -> list:
+def compute_similarity(profiles: list, top_k: int = DEFAULT_TOP_K, tenure_map: dict | None = None,
+                        degree_map: dict | None = None) -> list:
     """profiles: 연구원 보유 전문성 분석.json의 원소 리스트(researcher_id 포함).
-    tenure_map: researcher_id -> 'Junior'/'Senior'/''(모름). 대상 연구원의
-    근속을 알 수 있으면, 후보를 Junior/Senior로 나눠 그룹별로 각각 후보 pool을
-    찾는다(pool 크기는 top_k와 _CANDIDATE_POOL_K 중 큰 값 — 2단계 근거
-    필터링에서 일부가 탈락해도 표시 개수 토글을 채울 수 있도록 넉넉히 확보).
-    결과는 Senior 그룹을 먼저, Junior 그룹을 나중에 이어붙인다(시니어 우선
-    표시). 후보 중 근속을 모르는 사람은 어느 그룹에도 속하지 못해 이 검색에서
-    제외된다. 대상 연구원 본인의 근속을 모르면 그룹 구분 없이 기존처럼 전체
-    후보 중에서 찾는다(하위 호환 폴백).
+
+    degree_map: researcher_id -> '박사'/'석사'/'학사'/'전문대'/'고교'/''(모름).
+    대상 연구원의 최종학력을 알 수 있으면, 후보를 **같은 학력으로 하드
+    필터링**한다(사용자 확정 2026-08-29 — "박사 리더 vs 고졸 리더"처럼 학력
+    격차가 큰 조합이 표면적 텍스트 유사도만으로 매칭되는 신뢰성 문제를 막기
+    위해, 소프트 가산점이 아니라 후보 풀 자체를 제한). 본인 학력을 모르면
+    필터 없이 전체 후보에서 찾는다(하위 호환 폴백).
+
+    tenure_map: researcher_id -> 'Junior'/'Senior'/''(모름). 위 학력 필터로
+    좁혀진 풀 안에서, 대상 연구원의 근속을 알 수 있으면 후보를 Junior/Senior로
+    나눠 그룹별로 각각 후보 pool을 찾는다(pool 크기는 top_k와
+    _CANDIDATE_POOL_K 중 큰 값 — 2단계 근거 필터링에서 일부가 탈락해도 표시
+    개수 토글을 채울 수 있도록 넉넉히 확보). 결과는 Senior 그룹을 먼저, Junior
+    그룹을 나중에 이어붙인다(시니어 우선 표시). 후보 중 근속을 모르는 사람은
+    어느 그룹에도 속하지 못해 이 검색에서 제외된다. 대상 연구원 본인의 근속을
+    모르면 그룹 구분 없이 학력 필터 결과 전체 중에서 찾는다(하위 호환 폴백).
 
     반환: [{'researcher_id', 'similar': [{'researcher_id', 'score'}, ...]}, ...]
     similar은 그룹(Senior 우선) 내 유사도 내림차순. score는 코사인 유사도
@@ -188,6 +212,7 @@ def compute_similarity(profiles: list, top_k: int = DEFAULT_TOP_K, tenure_map: d
     이 시점의 similar 목록은 아직 근거 필터링 전의 "후보 pool"이며, 최종
     표시 목록은 attach_pair_judgments() 이후 _drop_empty_evidence()가 정리한다."""
     tenure_map = tenure_map or {}
+    degree_map = degree_map or {}
     researcher_ids = [p['researcher_id'] for p in profiles]
     texts = [fit.researcher_profile_text(p) for p in profiles]
 
@@ -204,13 +229,18 @@ def compute_similarity(profiles: list, top_k: int = DEFAULT_TOP_K, tenure_map: d
         row = sims[i].copy()
         row[i] = -1.0  # 자기 자신은 후보에서 제외
 
+        subject_degree = degree_map.get(researcher_ids[i], '')
+        if subject_degree:
+            degree_pool = [j for j in range(n) if j != i and degree_map.get(researcher_ids[j], '') == subject_degree]
+        else:
+            degree_pool = [j for j in range(n) if j != i]
+
         subject_level = tenure_map.get(researcher_ids[i], '')
         if not subject_level:
-            k = min(pool_k, n - 1) if n > 1 else 0
-            top_idx = fit.top_k_idx(row, k) if k > 0 else []
+            top_idx = _top_within(degree_pool, row, min(pool_k, len(degree_pool)))
         else:
-            junior_idx = [j for j in range(n) if j != i and tenure_map.get(researcher_ids[j], '') == 'Junior']
-            senior_idx = [j for j in range(n) if j != i and tenure_map.get(researcher_ids[j], '') == 'Senior']
+            junior_idx = [j for j in degree_pool if tenure_map.get(researcher_ids[j], '') == 'Junior']
+            senior_idx = [j for j in degree_pool if tenure_map.get(researcher_ids[j], '') == 'Senior']
             top_idx = _top_within(senior_idx, row, pool_k) + _top_within(junior_idx, row, pool_k)
 
         similar = [
@@ -434,6 +464,21 @@ def build_tenure_map(researchers_df: pd.DataFrame) -> dict:
     for _, row in researchers_df.iterrows():
         promo = row[promo_col] if promo_col else ''
         result[row['researcher_id']] = _tenure_level(row.get('position', ''), promo)
+    return result
+
+
+def build_degree_map(education_df: pd.DataFrame) -> dict:
+    """researcher_id -> 최종학력(박사/석사/학사/전문대/고교,
+    services.researcher_profile_export.highest_degree_row()와 동일한
+    5단계 우선순위) / ''(학력 데이터 없음 — compute_similarity()에서
+    필터 없이 취급). build_tenure_map()과 동일한 발상(한 번만 계산해
+    compute_similarity()의 하드 파티션이 재사용)."""
+    if education_df.empty or 'researcher_id' not in education_df.columns:
+        return {}
+    result = {}
+    for rid, rows in education_df.groupby('researcher_id'):
+        row = highest_degree_row(rows.to_dict('records'))
+        result[rid] = row.get('degree', '') if row else ''
     return result
 
 
@@ -679,10 +724,11 @@ def process(top_k: int = DEFAULT_TOP_K, refresh_judgments: bool = False) -> bool
         return False
 
     tenure_map = build_tenure_map(researchers_df)
+    degree_map = build_degree_map(fit.read_education(OUT_DIR))
 
     print(f'[process_researcher_similarity] 연구원 {len(profiles)}명 임베딩 계산 중...')
     try:
-        results = compute_similarity(profiles, top_k=top_k, tenure_map=tenure_map)
+        results = compute_similarity(profiles, top_k=top_k, tenure_map=tenure_map, degree_map=degree_map)
     except LLMError as exc:
         print(f'[process_researcher_similarity] 임베딩 실패 — 종료: {exc}')
         return False
