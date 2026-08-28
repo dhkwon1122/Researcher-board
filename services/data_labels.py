@@ -117,6 +117,12 @@ COLUMN_LABELS = {
     'speak_grade': '회화등급',
     'expiration_date': '만료일',
 
+    # 근무 경력 (work_experience.csv)
+    'company_name': '회사',
+    'work_start_date': '근무 시작일',
+    'work_end_date': '근무 종료일',
+    'role_name': '직무명',
+
     # 과제 수행이력 (tasks.csv)
     'task_name': '과제(수행)명',
     'task_code': '과제코드(내부)',

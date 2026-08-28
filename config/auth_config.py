@@ -159,4 +159,8 @@ TABLE_PERMISSIONS: dict[str, str | None] = {
     # 어학자격(2026-08-29) — 민감도가 낮은 원천 데이터라 다른 원천 테이블과
     # 동일하게 권한 제한 없음(사용자 확정 — AI 검색 조회 가능하게).
     'language_qualification':   None,
+
+    # 근무 경력(2026-08-29) — 어학자격과 동일하게 민감도가 낮은 원천
+    # 데이터라 권한 제한 없음(사용자 확정 — AI 검색 조회 가능하게).
+    'work_experience':          None,
 }

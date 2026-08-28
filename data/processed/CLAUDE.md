@@ -6272,3 +6272,144 @@ researcher_profile 등 관련 페이지 전체 임포트까지 재확인(무관�
 `pipeline/sources.py`의 `language_qualification` 항목 헤더 행을 모두
 0-based 값 6으로 수정. 1~6행 무시 + 7번째 행이 헤더인 합성 xlsx로
 `process()`를 재실행해 정상 추출되는 것을 확인, `py_compile` 통과.
+
+## 2026-08-29 (7): 신규 데이터 "근무 경력" 추가 — 원본 임직원 근무경력
+*.xlsx → work_experience.csv, 프로필/엑셀/관리자 3곳에 반영
+
+배경: 어학(위 (6)번)에 이어 두 번째 새 데이터 유형 추가 요청. 원본 스펙은
+사번/회사/시작일/종료일/직무명 5개 컬럼, "researcher_id 기준으로 매번
+누적, 기존 researcher_id가 있으면 덮어쓰고..."라는 설명이었는데, 이해한
+내용을 설명하고 확인 질문 8개를 먼저 보낸 뒤(가장 핵심: 한 사람이 여러
+회사 이력(여러 행)을 가질 수 있다면 "덮어쓰기" 정책이 모호해진다는 점)
+사용자 확인을 받아 구현했다.
+
+**사용자가 확정한 사항**:
+1. 한 researcher_id가 여러 행(여러 회사 경력)을 가질 수 있음 — 그래서
+   자연키 upsert 대신 `pipeline/merge_utils.group_replace_merge()`(내
+   추천안, `leadership_comments.csv`와 동일한 인프라)로 "이번 업로드에
+   그 사람 행이 있으면 그 사람의 기존 행 전체를 이번 내용으로 완전히
+   교체"한다(이번 업로드에 없는 사람은 기존 행 그대로 보존).
+2. processed 파일명 오타 수정: `work_exprience.csv` → `work_experience.csv`.
+3. 종료일이 없으면 "현재"로 채우지 않고 그냥 공란(파이프라인의
+   `parse_flexible_date()`가 이미 빈 값을 `''`로 반환해 별도 코드 없이
+   저장 단계에서 자동으로 만족됨).
+4. 인쇄 카드(A4)에는 최근 1건만.
+5. 엑셀 다운로드 체크박스는 다른 옵트인 컬럼과 동일하게 기본 해제.
+6. AI 검색(자연어 질문)에서도 조회 가능하게.
+7. CLI(`data/raw/`, DRM 제거 파이프라인) 경로도 함께 지원.
+8. 표시 예시의 "*"는 메모용 기호일 뿐 실제 출력에는 포함하지 않음
+   ("Cornell Univ.('04.02 ~ '07.12, Post Doc.)" 형태, 앞에 "*" 없음).
+9. 원본 헤더는 6번째 행(1~5행 무시, 0-based 5).
+
+**신규 `pipeline/process_work_experience.py`**: `researcher_id`/`company_name`/
+`work_start_date`(YYYY-MM-DD)/`work_end_date`(YYYY-MM-DD, 없으면 `''`)/
+`role_name` long 포맷(사람당 여러 행). 사번 없는 행 제외(사용자 확정).
+`merge_utils.write_merged(..., group_replace=True)`로 저장 — 다른 대부분
+"이번 파일에 없어도 보존"하는 업서트 테이블과 달리, 이 테이블은 매
+업로드마다 **그 사람의 경력 전체를 통째로 교체**한다(사용자 확정 1번 —
+자연키(회사명+시작일 등)로 개별 행을 upsert하면 원본에서 삭제/수정된
+경력이 옛 행으로 계속 남는 문제를 group_replace로 해결). `raw_dir`
+매개변수로 CLI(`source_reader.read_source()`)/웹 업로드(`find_latest()`
+와일드카드) 양쪽 경로 모두 지원(사용자 확정 7번).
+
+**`pipeline/merge_utils.py`**: `GROUP_REPLACE_KEYS['work_experience'] =
+['researcher_id']` 등록.
+
+**`pipeline/sources.py`**: `('work_experience', '임직원 근무경력 *.xlsx', 5)`
+등록(사용자 확정 9번, CLI 경로 — 0-based 5 = 실제 6번째 행).
+
+**신규 `services/work_experience.py`**: `read_rows()`/`format_line()`
+(`"{회사명}({시작'YY.MM} ~ {종료'YY.MM}, {직무명})"`, 종료일 없으면
+그 자리만 공란 — "현재"로 채우지 않음, 사용자 확정 3번, "*" 접두사
+없음 — 사용자 확정 8번)/`format_lines()`(전체 목록, 프로필 화면용)/
+`format_latest_line()`(가장 최근 1건, 사용자 확정 4번)/`format_block()`.
+프로필 화면·인쇄 카드·엑셀 다운로드가 공유하는 단일 표시 로직
+(services/language_qualification.py와 동일한 목적).
+
+**`components/profile_sections.py`**: 신규 `work_experience_block(we_df,
+rid, *, limit=None, single_line=False, show_empty_message=True,
+plain_style=False)` — `award_block()`과 완전히 동일한 시그니처/동작
+패턴(사용자 확정 — "시상 이력과 동일한 형태로"). 내부적으로
+`services.work_experience.format_line()`을 재사용해 표시 문구를 만든다.
+
+**`pages/researcher_profile.py`**:
+- 라이브 화면: `_photo_info_card()`의 "시상 이력" 섹션 바로 아래에
+  "근무 경력" 섹션(`html.P(section-label)` + `html.Div(id=
+  'work-experience-block')`) 추가, `update_profile()` 콜백에
+  `Output('work-experience-block', 'children')` + 반환값
+  `work_experience_block(tables['work_experience'], rid)`(전체 목록)
+  추가. `_empty_profile_output()`에도 빈 값 하나 추가.
+- 인쇄 카드: `history_box`(논문·특허+양성·시상 통합 박스) 안, 시상
+  이력 다음에 "근무 경력" 소제목 + `work_experience_block(tables[
+  'work_experience'], rid, limit=1, single_line=True, show_empty_message=
+  False, plain_style=True)`(최근 1건만, 사용자 확정 4번).
+
+**`services/data_store.py`**: `read_profile_tables()`의 테이블 목록에
+`work_experience` 추가(라이브 화면·인쇄 카드·일괄 인쇄가 공유하는
+`_cached_profile_tables()`도 이 함수를 감싸므로 자동으로 함께 반영됨).
+
+**`services/researcher_profile_export.py`**: `_col_work_experience()` +
+`_WORK_EXPERIENCE_COLUMNS`/`_WORK_EXPERIENCE_COLUMN_WIDTH` 신규,
+`_load_tables()`/`_researcher_row_context()`에 `work_experience` 테이블
+추가. `build_profile_workbook(..., include_work_experience=False)` —
+기본 해제(사용자 확정 5번), 다른 옵트인 컬럼과 동일한 방식으로 어학
+컬럼 다음(보유 전문성 앞)에 추가.
+
+**`pages/researcher_list.py`**: 엑셀 옵션 체크리스트에 "근무 경력 포함"
+(`value='work_experience'`) 추가, `download_excel()` 콜백에
+`include_work_experience='work_experience' in excel_options` 전달.
+
+**`services/web_pipeline_runner.py`**: MANIFEST에 `work_experience` 항목
+추가(`mode='wildcard'`, `needs_valid_date` 없음 — group_replace_merge라
+시점보호/백필 대상 아님). 관리자 "데이터 업데이트" 탭은 매니페스트를
+그대로 순회하는 제너릭 구조라 UI 코드 변경 불필요(어학/team_refer 추가
+때와 동일한 패턴).
+
+**`config/auth_config.py`**: `TABLE_PERMISSIONS`에 `'work_experience':
+None` 추가(사용자 확정 6번 — AI 검색에서 권한 제한 없이 조회 가능).
+`_discover_csv_tables()`가 `data/processed/*.csv`를 매 질의 시점에 자동
+스캔하므로 이 화이트리스트 등록만으로 AI 검색 대상에 포함된다(코드
+변경 불필요).
+
+**`services/data_labels.py`**: `company_name`/`work_start_date`/
+`work_end_date`/`role_name` 한글 라벨(회사/근무 시작일/근무 종료일/
+직무명) 추가.
+
+**`pipeline/load_to_db.py`**: `TABLES`에 `work_experience` 추가(DB 반영
+시에도 CSV와 동일하게 매번 전체 replace — 로직은 group_replace로 이미
+CSV에 저장된 값을 그대로 미러링).
+
+**`pipeline/run_pipeline.py`**: "9-8. 근무 경력" 단계로
+`process_work_experience()` 호출 추가(폴백 없음, 어학과 동일한 패턴).
+
+**검증**: `process_work_experience.process()`를 합성 xlsx(5행 무시 + 6번째
+행 헤더, 한 사람이 회사 2곳(하나는 종료일 없음) + 다른 사람 1곳)로
+직접 실행 — (1) 한 사람이 여러 행으로 보존되는지(자연키 upsert처럼
+1행으로 붕괴되지 않는지), (2) 종료일 없는 행이 `''`로 저장되는지("현재"
+아님), (3) 두 번째 실행(첫 사람의 회사 구성을 다른 회사로 완전히 교체)이
+group_replace_merge 의미대로 그 사람의 기존 행을 통째로 새 내용으로
+대체하고, 손대지 않은 다른 사람은 그대로 보존되는지 확인 — 3가지 모두
+통과. `services.work_experience.format_line()`/`format_lines()`/
+`format_latest_line()`을 합성 데이터로 직접 호출해 "Cornell
+Univ.('04.02 ~ '07.12, Post Doc.)"(종료일 있음)/"Samsung('08.01 ~ ,
+Researcher)"(종료일 없음, 자리만 비고 "현재" 아님) 형식이 정확히
+나오는 것, `format_latest_line()`이 가장 최근 1건만 반환하는 것 확인.
+`components.profile_sections.work_experience_block()`을 award_block()과
+동일한 옵션 조합(limit/single_line/show_empty_message/plain_style)으로
+호출해 각각 기대한 형태로 렌더링되는지 확인. `dash.Dash(use_pages=True,
+pages_folder='')` 컨텍스트(이 세션 컨테이너에 `dash_cytoscape`가 없어
+전체 `pages_folder` 스캔은 우회 — 무관한 기존 의존성 문제)에서
+`pages.researcher_profile`/`pages.researcher_list`/`pages.admin`/
+`services.researcher_profile_export`/`services.work_experience`/
+`services.data_store`/`components.profile_sections`/
+`services.web_pipeline_runner` 전부 임포트 오류 없이 로드되는 것을
+확인. 변경/신규 파일 전부 `py_compile` 통과.
+
+**미검증 / 후속 확인 필요**:
+- **A4 인쇄 카드 1페이지 높이 예산**: 근무 경력 소제목+1줄 추가가 기존에
+  정밀 조정된 페이지 예산에 미치는 실제 영향을 브라우저로 확인 못 했다
+  (어학과 마찬가지 — 근무 경력은 최근 1건만 표시하도록 이미 제한해뒀지만,
+  회사명이 매우 긴 경우 줄바꿈 등은 확인 안 됨).
+- 실제 원본 파일로 웹 업로드 → 명단/프로필 화면 렌더링까지 브라우저
+  end-to-end 확인 필요.
+- 실제 브라우저에서의 "근무 경력 포함" 체크박스 조작.

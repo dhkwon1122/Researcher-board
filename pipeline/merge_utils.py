@@ -73,6 +73,15 @@ GROUP_REPLACE_KEYS: dict[str, list[str]] = {
     # write_merged()에 그대로 전달돼 new DataFrame에서 이 컬럼명을 찾으므로
     # 실제 컬럼명과 반드시 일치해야 한다.
     'leadership_comments': ['researcher_id', 'year', 'commenter_type'],
+
+    # 근무경력(work_experience.csv, 2026-08-29) — 한 사람이 여러 회사 경력을
+    # 가질 수 있는(researcher_id당 여러 행) 이력형 테이블이지만, 개별 행을
+    # 구분할 자연키(회사명+시작일 등)로 upsert하면 원본에서 삭제/수정된
+    # 경력이 옛 행으로 계속 남는다 — 사용자 확정: "기존 researcher_id가
+    # 있으면 덮어쓰고"를 "그 사람의 경력 전체를 이번 업로드 내용으로
+    # 교체"로 해석해 researcher_id 단위 그룹 교체를 쓴다(이번 업로드에
+    # 없는 사람은 기존 행 그대로 보존).
+    'work_experience': ['researcher_id'],
 }
 
 

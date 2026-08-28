@@ -14,6 +14,7 @@ from services.evaluations import (
     competency_column, first_half_column, format_evaluation_cell, salary_grade_column, second_half_column,
 )
 from services.language_qualification import format_block as language_block_text
+from services.work_experience import format_line as _work_exp_format_line
 
 DEGREE_ORDER = ['박사', '석사', '학사', '전문대', '고교']
 GRADE_COLOR = {
@@ -421,6 +422,38 @@ def award_block(awd_df, rid: str, *, limit: int | None = None, single_line: bool
         desc  = str(row.get('description', '')).strip()
         parts = [p for p in [yr_label, aname, desc] if p and p not in ('nan',)]
         texts.append(' / '.join(parts) if parts else '-')
+    if plain_style:
+        return html.Div([
+            html.Div(t, className='small', style={**item_style, 'marginLeft': '10px', 'marginBottom': '3px',
+                                                    'wordBreak': 'break-word'})
+            for t in texts
+        ])
+    return html.Ul([html.Li(t, className='small', style=item_style) for t in texts], className='ps-3 mb-0 small')
+
+
+def work_experience_block(we_df, rid: str, *, limit: int | None = None, single_line: bool = False,
+                           show_empty_message: bool = True, plain_style: bool = False):
+    """근무 경력 표시 — award_block()과 동일한 형태/인자(limit/single_line/
+    show_empty_message/plain_style)를 공유한다(사용자 요청: "시상 이력과
+    동일한 형태로"). 표시 문구 자체("회사명(시작'YY.MM ~ 종료'YY.MM,
+    직무명)")는 services.work_experience.format_line()이 만든다 — 프로필
+    화면·인쇄 카드가 같은 표기 규칙을 공유하도록. limit이 주어지면 최신
+    시작일순 상위 limit건만(인쇄 카드는 최근 1건만, 사용자 확정
+    2026-08-29)."""
+    if we_df.empty:
+        return html.Div('근무 경력 없음', className='text-muted small') if show_empty_message else None
+    rows = we_df[we_df['researcher_id'] == rid].copy()
+    if rows.empty:
+        return html.Div('근무 경력 없음', className='text-muted small') if show_empty_message else None
+    if 'work_start_date' in rows.columns:
+        rows = rows.sort_values('work_start_date', ascending=False)
+    if limit:
+        rows = rows.head(limit)
+
+    item_style = {'whiteSpace': 'nowrap', 'overflow': 'hidden', 'textOverflow': 'ellipsis'} if single_line else {}
+    texts = [line for line in (_work_exp_format_line(row.to_dict()) for _, row in rows.iterrows()) if line]
+    if not texts:
+        return html.Div('근무 경력 없음', className='text-muted small') if show_empty_message else None
     if plain_style:
         return html.Div([
             html.Div(t, className='small', style={**item_style, 'marginLeft': '10px', 'marginBottom': '3px',

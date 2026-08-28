@@ -22,6 +22,7 @@ from components.profile_sections import (
     leadership_year_options,
     nurturing_block,
     photo_block,
+    work_experience_block,
 )
 from components.timeline_data import (
     cell,
@@ -502,6 +503,9 @@ def _photo_info_card(show_eval: bool = True):
                     html.Hr(className='my-2'),
                     html.P('시상 이력', className='section-label'),
                     html.Div(id='award-block'),
+                    html.Hr(className='my-2'),
+                    html.P('근무 경력', className='section-label'),
+                    html.Div(id='work-experience-block'),
                 ], md=8, className='p-3 border-start',
                    style={'maxHeight': f'{PHOTO_INFO_HEIGHT - 40}px', 'overflowY': 'auto'}),
             ], className='g-0 h-100'),
@@ -630,7 +634,7 @@ def _card(children, *, body_class='p-2', card_class='shadow-sm profile-card mb-2
 def _empty_profile_output():
     prompt = html.Div('연구원을 선택하세요.', className='text-muted p-3')
     return (
-        avatar('?'), html.Div(), html.Div(), html.Div(), html.Div(),
+        avatar('?'), html.Div(), html.Div(), html.Div(), html.Div(), html.Div(),
         [], None, html.Div(), prompt, prompt, prompt, html.Div(), html.Div(),
         True,  # print-ready — 인쇄할 내용은 없지만 대기할 것도 없다.
     )
@@ -1178,6 +1182,11 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
         nurturing_block(tables['nurturing'], rid, show_empty_message=False, plain_style=True),
         html.Div(print_sub_heading('시상 이력'), className='mt-2 mb-1'),
         award_block(tables['awards'], rid, limit=3, single_line=True, show_empty_message=False, plain_style=True),
+        html.Div(print_sub_heading('근무 경력'), className='mt-2 mb-1'),
+        # 인쇄 카드는 지면이 좁아 최근 1건만(사용자 확정, 2026-08-29) —
+        # 화면(라이브) 탭은 전체를 보여줌(update_profile() 콜백 쪽).
+        work_experience_block(tables['work_experience'], rid, limit=1, single_line=True,
+                               show_empty_message=False, plain_style=True),
     ]))
 
     # 핵심기술/보유기술이 위 right_box로 옮겨간 만큼, 전문성 요약(LLM)은 이제
@@ -1372,6 +1381,7 @@ def _build_print_block(rid, tables, researchers, name_map, show_eval):
     Output('eval-incentive-block', 'children'),
     Output('nurturing-block', 'children'),
     Output('award-block', 'children'),
+    Output('work-experience-block', 'children'),
     Output('leadership-year', 'options'),
     Output('leadership-year', 'value'),
     Output('comments-block', 'children'),
@@ -1436,6 +1446,7 @@ def update_profile(rid):
             eval_content,
             nurturing_block(tables['nurturing'], rid),
             award_block(tables['awards'], rid),
+            work_experience_block(tables['work_experience'], rid),
             leadership_options,
             leadership_default,
             comments_content,

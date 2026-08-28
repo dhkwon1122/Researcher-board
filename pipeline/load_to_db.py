@@ -79,6 +79,10 @@ TABLES = [
     # 전체로 통째 교체되는 테이블(pipeline/process_language_qualification.py
     # 참고)이지만, DB 반영 방식(전체 replace)은 다른 테이블과 동일하다.
     'language_qualification',
+    # 근무 경력(2026-08-29) — researcher_id 단위 그룹 교체
+    # (group_replace_merge())로 누적되는 테이블(process_work_experience.py
+    # 참고). DB 반영 방식(전체 replace)은 다른 테이블과 동일하다.
+    'work_experience',
 ]
 
 # (테이블명, data/processed/ 안의 JSON 파일명, 각 항목에서 키로 쓸 필드명).

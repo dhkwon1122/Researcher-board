@@ -559,6 +559,7 @@ def layout():
                                     {'label': '직무이력 포함', 'value': 'job_profile'},
                                     {'label': '재직상태 포함', 'value': 'employment_status'},
                                     {'label': '어학 포함', 'value': 'language'},
+                                    {'label': '근무 경력 포함', 'value': 'work_experience'},
                                 ],
                                 value=[], switch=True,
                                 className='small',
@@ -939,6 +940,7 @@ def download_excel(n_clicks, virtual_data, excel_options):
         include_job_profile='job_profile' in excel_options,
         include_employment_status='employment_status' in excel_options,
         include_language='language' in excel_options,
+        include_work_experience='work_experience' in excel_options,
     )
     return dcc.send_bytes(data, researcher_profile_export.default_filename())
 

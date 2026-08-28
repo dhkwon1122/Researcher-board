@@ -129,6 +129,12 @@ MANIFEST = [
     # "기준 연/월" 입력도, _YYYYMM 백필 업로드도 뜨지 않는다.
     dict(key='language_qualification', label='어학', module='process_language_qualification',
          hint='예: 어학자격 *.xlsx', mode='wildcard'),
+    # 근무 경력은 한 사람이 여러 회사 이력(여러 행)을 가질 수 있어, 매
+    # 업로드마다 그 사람의 기존 행 전체를 이번 내용으로 교체하는
+    # group_replace_merge()를 쓴다(사용자 확정, 2026-08-29) — 시점 보호/
+    # _YYYYMM 백필 대상이 아니라 needs_valid_date는 켜지 않는다.
+    dict(key='work_experience', label='근무 경력', module='process_work_experience',
+         hint='예: 임직원 근무경력 *.xlsx', mode='wildcard'),
 ]
 _BY_KEY = {item['key']: item for item in MANIFEST}
 

@@ -329,6 +329,12 @@ def run():
     if not process_language_qualification():
         missing.append('language_qualification (어학자격 *.xlsx)')
 
+    # ── 9-8. 근무 경력: 임직원 근무경력 *.xlsx (LLM 호출 없음, 폴백 없음,
+    # researcher_id 단위 그룹 교체로 누적 — process_work_experience.py 참고) ──
+    from process_work_experience import process as process_work_experience
+    if not process_work_experience():
+        missing.append('work_experience (임직원 근무경력 *.xlsx)')
+
     # ── 10. 나머지 테이블 (technology_transfer, transfers, certifications, succession) ──
     # 전용 처리기가 없어 _raw 파일만 지원한다. TABLE_KEYS에 등록된 키가 실제
     # 컬럼에 있으면 업서트(이번 파일에 없는 기존 행 보존), 없으면 예전처럼 전체 교체.
