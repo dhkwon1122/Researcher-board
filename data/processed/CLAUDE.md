@@ -5992,3 +5992,52 @@ DataFrame을 반환하도록 수정 — evaluations_history.csv가 아직 비어
 기간을 반영하므로, 오늘 기준으로도 남아있는 이름을 고르면 결과는 정확히
 그 시점 기준으로 나온다 — 필요하면 옵션 목록도 기간별로 동적으로 만드는
 후속 작업을 진행할 수 있다.
+
+## 2026-08-29 (3): 연구원 명단 부서/과제 드롭다운 "선택지 목록" 자체도 기간별로 동적으로
+
+바로 앞 항목에서 "의도적으로 뺀 것"으로 남겨뒀던 부분 — 부서/과제 드롭다운의
+선택지 자체(오늘 기준으로만 채워지던 것)도 기간별로 동적으로 바뀌게
+해달라는 요청.
+
+**`services/similarity_map.py`**: `department_filter_options()`/
+`pjt_part_filter_options()`에 `period: tuple | None = None` 매개변수 추가,
+`read_team_refer(DATA_DIR, period=period)`로 전달(직전 항목에서 이미
+`read_team_refer()`에 만들어둔 period 인자를 그대로 재사용 — 새 인프라
+불필요).
+
+**`pages/researcher_list.py`**:
+- 신규 `_active_period(mode, period_start, period_end)` — "누적기준
+  (`mode == 'all'`) + 시작·종료일 둘 다 지정"일 때만 기간이 있는 것으로
+  판정하는 로직을 한 곳으로 뽑았다(이전엔 `update_table` 콜백 안에만 있던
+  걸, 이번에 이 판정이 필요한 콜백이 3개로 늘면서 공용화 — `toggle_org_
+  filters`/`update_project_options`/`update_table` 셋이 공유).
+- '부서' 드롭다운의 **옵션 자체**를 `layout()` 최초 렌더링 시 한 번만
+  만들던 것에서, `toggle_org_filters` 콜백(검색 기준/기간이 바뀔 때마다
+  이미 실행되고 있었음)이 매번 `similarity_map.department_filter_options
+  (period=period)`로 다시 계산해 `Output('filter-dept', 'options')`로
+  내보내도록 확장. 옵션이 그 시점 기준으로 달라지면 이전에 골라둔
+  값이 새 목록엔 없는 옵션일 수 있어, 기간이 설정/변경될 때마다 부서·
+  과제 선택값을 함께 초기화한다(직급/직책 옵션은 team_refer가 아니라
+  researchers.csv 기준이라 이 갱신과 무관 — 값 유지).
+- '과제/파트' 드롭다운은 기존에도 '부서' 선택값이 바뀔 때 캐스케이딩되던
+  콜백(`update_project_options`)이 있었는데, 여기에도
+  `list-search-mode`/`list-period-range` 두 날짜를 Input으로 추가해
+  기간이 바뀌는 것만으로도(부서 선택을 안 건드려도) 그 시점 기준으로
+  다시 계산되도록 확장.
+- `update_table` 콜백의 기간 계산 인라인 코드를 `_active_period()` 호출로
+  교체(동작 변화 없음, 중복 제거).
+
+**검증**: 조직 개편 합성 데이터(D1: 2022년 "옛부서명" → 2026년 "새부서명"
+으로 개명, D2: 2026년 3월에 신설)로 `toggle_org_filters`/
+`update_project_options` 콜백 함수를 직접 호출해 확인 — (1) 기간 미지정
+(현재기준·누적기준 모두)에서는 오늘 기준 옵션(새부서명/신설부서)만 나옴,
+(2) 기간을 2022~2023으로 잡으면 그 구간에 존재했던 "옛부서명"만 나오고
+아직 생기지 않은 "신설부서"/"새부서명"은 안 나옴, (3) 기간을 2026 전체로
+잡으면 새부서명·신설부서 둘 다 나옴, (4) 과제/파트 옵션도 부서 선택
+여부와 무관하게 기간만으로 정확히 캐스케이딩됨을 확인. `dash.Dash
+(use_pages=True)` 컨텍스트에서 모듈 임포트 + 콜백 등록까지 오류 없이
+되는 것 확인(콜백 중복 Output 등 구조적 문제 없음). 변경된 2개 파일
+`py_compile` 통과.
+
+**미검증**: 실제 브라우저에서 부서 드롭다운을 열어 기간 변경 시 옵션
+목록이 실시간으로 바뀌는지, 선택값이 초기화되는 체감이 자연스러운지.

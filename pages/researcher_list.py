@@ -43,6 +43,17 @@ _EVAL_GRADE_PATTERN = re.compile(r"^'\d{2}평가$")
 _DEGREE_RANK = {'박사': 5, '석사': 4, '학사': 3, '전문대': 2, '고교': 1}
 
 
+def _active_period(mode: str, period_start: str | None, period_end: str | None) -> tuple[date, date] | None:
+    """검색 기준 모드 + 기간 두 날짜 문자열로부터 실제 적용할 기간을
+    계산한다 — 누적기준(mode == 'all')이고 두 날짜가 다 지정됐을 때만
+    기간이 있는 것으로 본다. toggle_org_filters/update_project_options/
+    update_table 콜백이 전부 같은 판정을 공유한다(2026-08-29 추가 —
+    이전엔 update_table 안에 이 판정이 중복돼 있었다)."""
+    if mode == 'all' and period_start and period_end:
+        return date.fromisoformat(period_start), date.fromisoformat(period_end)
+    return None
+
+
 def _resolve_period_snapshot(period: tuple[date, date], table: str = 'researchers_history') -> pd.DataFrame:
     """<table>(기본 researchers_history.csv, researcher_id+valid_year+
     valid_month 자연키를 가진 이력 테이블이면 재사용 가능 — evaluations_
@@ -698,16 +709,25 @@ def layout():
     ])
 
 
-# ── 콜백 1: 부서 선택 → 과제/파트 드롭다운 옵션 캐스케이딩 ─────────────────────
+# ── 콜백 1: 부서 선택(+ 검색 기준/기간) → 과제/파트 드롭다운 옵션 캐스케이딩 ────
+# 기간을 지정한 상태(누적기준 + 기간)면 그 기간 기준 team_refer로 옵션을
+# 만든다(2026-08-29 추가) — 부서를 먼저 바꾸든 기간을 먼저 바꾸든 둘 다
+# 이 콜백을 다시 트리거해 최종적으로는 항상 "선택된 부서 + 현재 기간"
+# 기준으로 수렴한다.
 @callback(
     Output('filter-project', 'options'),
     Input('filter-dept', 'value'),
+    Input('list-search-mode', 'value'),
+    Input('list-period-range', 'start_date'),
+    Input('list-period-range', 'end_date'),
 )
-def update_project_options(dept):
-    return similarity_map.pjt_part_filter_options(dept)
+def update_project_options(dept, mode, period_start, period_end):
+    period = _active_period(mode, period_start, period_end)
+    return similarity_map.pjt_part_filter_options(dept, period=period)
 
 
-# ── 콜백 1-1: 검색 기준(현재/누적) → 부서·과제·직급·직책 필터 비활성화 ─────────
+# ── 콜백 1-1: 검색 기준(현재/누적) → 부서·과제·직급·직책 필터 비활성화 + 부서
+# 옵션 갱신 ────────────────────────────────────────────────────────────────
 # 누적기준에서는 조직 배치(부서/과제/직급/직책)가 최신 시점 기준이 아닐 수 있어
 # 혼란을 줄 수 있으므로 비활성화하고 값도 비운다 — 이름/사번(테이블 자체
 # 필터 행)으로만 찾도록 유도한다. 성별/학력/전공/재직상태는 시점에 덜
@@ -715,11 +735,19 @@ def update_project_options(dept):
 # researchers_history.csv에서 그 기간의 마지막 스냅샷을 쓰므로(사용자 요청,
 # data/processed/CLAUDE.md 2026-08-28 참고) 부서/과제/직급/직책도 그 시점
 # 기준으로 다시 의미가 있어져 필터를 도로 켠다.
+#
+# '부서' 드롭다운 옵션 자체도 이 콜백에서 기간 기준으로 다시 계산한다
+# (2026-08-29 추가 — 이전엔 layout() 최초 렌더링 시 오늘 기준으로 한 번만
+# 만들고 끝이었다). 기간이 바뀌면(옵션 자체가 그 시점 기준으로 달라질 수
+# 있으므로) 부서/과제 선택값을 초기화한다 — 이전 기간에 고른 값이 새
+# 기간엔 없는 옵션일 수 있어서. 직급/직책 옵션은 team_refer가 아니라
+# researchers.csv 기준이라 이 갱신과 무관해 값을 그대로 둔다.
 @callback(
     Output('filter-dept', 'disabled'),
     Output('filter-project', 'disabled'),
     Output('filter-pos', 'disabled'),
     Output('filter-title', 'disabled'),
+    Output('filter-dept', 'options'),
     Output('filter-dept', 'value', allow_duplicate=True),
     Output('filter-project', 'value', allow_duplicate=True),
     Output('filter-pos', 'value', allow_duplicate=True),
@@ -732,15 +760,19 @@ def update_project_options(dept):
     prevent_initial_call=True,
 )
 def toggle_org_filters(mode, period_start, period_end):
+    period = _active_period(mode, period_start, period_end)
     is_cumulative = (mode == 'all')
-    has_period = is_cumulative and bool(period_start) and bool(period_end)
+    has_period = period is not None
     hint_style = {'fontSize': '0.68rem', 'display': 'block' if has_period else 'none'}
+    dept_options = similarity_map.department_filter_options(period=period)
 
     if has_period:
-        return False, False, False, False, no_update, no_update, no_update, no_update, False, hint_style
+        return (False, False, False, False, dept_options, None, None, no_update, no_update,
+                False, hint_style)
     if is_cumulative:
-        return True, True, True, True, None, None, None, None, False, hint_style
-    return False, False, False, False, no_update, no_update, no_update, no_update, True, hint_style
+        return True, True, True, True, dept_options, None, None, None, None, False, hint_style
+    return (False, False, False, False, dept_options, no_update, no_update, no_update, no_update,
+            True, hint_style)
 
 
 # ── 콜백 2: 검색 버튼(필터 적용) / 필터 초기화 버튼 → 테이블 데이터 갱신 ──────
@@ -778,9 +810,7 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, 
     show_incentive = can('view_incentive')
 
     current_only = (mode != 'all')
-    period = None
-    if mode == 'all' and period_start and period_end:
-        period = (date.fromisoformat(period_start), date.fromisoformat(period_end))
+    period = _active_period(mode, period_start, period_end)
     df = _build_summary_df(current_only=current_only, period=period)
     display_df = _apply_permission_filter(df, show_eval, show_incentive)
     # 기간을 지정했을 땐 그 시점 기준 값이 있어 부서/과제/직급/직책 필터도

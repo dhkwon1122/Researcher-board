@@ -365,19 +365,23 @@ def _labels_sorted_by_dep_code(rows: list, label_key: str) -> list:
     return sorted(best_code, key=lambda n: best_code[n])
 
 
-def department_filter_options() -> list:
+def department_filter_options(period: tuple | None = None) -> list:
     """'부서' 드롭다운 옵션 — team_refer의 dep_name 고유값, 조직코드(dep_code)
-    오름차순 정렬(사용자 확정)."""
-    names = _labels_sorted_by_dep_code(read_team_refer(DATA_DIR), 'dep_name')
+    오름차순 정렬(사용자 확정). period=(시작일, 종료일)을 주면 그 기간 기준
+    (그 기간 안 dep_id별 최신 스냅샷) team_refer로 옵션을 만든다(2026-08-29
+    추가, pages/researcher_list.py의 '누적기준 + 기간 지정' 조회) — 생략하면
+    기존처럼 오늘 기준."""
+    names = _labels_sorted_by_dep_code(read_team_refer(DATA_DIR, period=period), 'dep_name')
     return [{'label': n, 'value': n} for n in names]
 
 
-def pjt_part_filter_options(dep_names=None) -> list:
+def pjt_part_filter_options(dep_names=None, period: tuple | None = None) -> list:
     """'과제/파트' 드롭다운 옵션 — team_refer의 pjt_part_name 고유값,
     조직코드(dep_code) 오름차순 정렬(사용자 확정). dep_names를 지정하면 그
     부서(dep_name)에 속한 행만 남긴다(부서 선택 시 캐스케이딩,
-    pages/researcher_list.py의 update_project_options 콜백)."""
-    rows = read_team_refer(DATA_DIR)
+    pages/researcher_list.py의 update_project_options 콜백). period는
+    department_filter_options()와 동일(2026-08-29 추가)."""
+    rows = read_team_refer(DATA_DIR, period=period)
     if dep_names:
         wanted = {dep_names} if isinstance(dep_names, str) else set(dep_names)
         rows = [r for r in rows if (r.get('dep_name') or '').strip() in wanted]
