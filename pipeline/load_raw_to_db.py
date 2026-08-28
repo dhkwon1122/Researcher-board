@@ -40,7 +40,12 @@ def load():
     from sqlalchemy import Text
 
     loaded = 0
-    for name, _filename, _header_row in SOURCES:
+    # SOURCES 항목은 (이름, 파일명/패턴, 헤더 행) 3-tuple이 기본이지만 일부
+    # (예: researchers)는 4번째로 multi 플래그가 더 붙는다 — *_rest로 나머지를
+    # 흡수해야 4-tuple에서 ValueError 없이 처리된다(2026-08-29 발견·수정,
+    # DATABASE_URL이 설정된 환경에서만 실행되는 경로라 이 사이드박스에선
+    # 재현되지 않았지만 실제로 재현 확인함).
+    for name, _filename, _header_row, *_rest in SOURCES:
         path = os.path.join(RAW_CSV_DIR, f'{name}.csv')
         if not os.path.exists(path):
             print(f'[load_raw_to_db] CSV 없음, 건너뜀: {name}')

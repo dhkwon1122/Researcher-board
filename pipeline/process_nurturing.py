@@ -19,7 +19,7 @@ import sys
 import pandas as pd
 
 NURTURING_FILE = '양성_인력_현황.xlsx'
-_NURTURING_HEADER_ROW = 0  # sources.py 매니페스트 기준 (1번째 행)
+_NURTURING_HEADER_ROW = 1  # sources.py 매니페스트 기준 (2번째 행)
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
 COL_ID          = '사번'

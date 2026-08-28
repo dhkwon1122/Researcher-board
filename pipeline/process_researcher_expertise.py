@@ -50,11 +50,13 @@ import json
 import os
 import re
 import sys
+from datetime import date, datetime
 
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from paths import OUT_DIR  # noqa: E402
+from paths import BASE_DIR, OUT_DIR  # noqa: E402
+sys.path.insert(0, BASE_DIR)
 from excel_reader import clean_str as _clean  # noqa: E402
 from llm_client import (  # noqa: E402
     call_llm, extract_json, get_truncation_count, max_concurrency,
@@ -63,6 +65,7 @@ from llm_client import (  # noqa: E402
 import journal_authority  # noqa: E402
 import rd_specialist_markdown as mmd  # noqa: E402
 import result_archive  # noqa: E402
+from services.period_snapshot import resolve_period_snapshot  # noqa: E402
 
 _SYSTEM_PROMPT = """# Role
 당신은 R&D 인재 전문성 분석 전문가인 "R&D Talent Profiling Agent"입니다.
@@ -439,7 +442,7 @@ def build_html(results: list, researchers_df: pd.DataFrame) -> str:
         def _leaf_researchers(node):
             items = [
                 (f'#{anchor_of[rid]}', name_map.get(rid, rid), None)
-                for rid in analyzed_rids_by_org.get(node.get('project_name', ''), [])
+                for rid in analyzed_rids_by_org.get(node.get('org_name_wd', ''), [])
             ]
             return mmd.nav_items_html(items)
 
@@ -457,7 +460,8 @@ def build_html(results: list, researchers_df: pd.DataFrame) -> str:
     # 사용자 요청으로 요약 카드를 "마지막 갱신" 하나만 남긴다(긴 직사각형으로
     # 표시 — .stat-row가 grid-template-columns: repeat(auto-fit, minmax(150px,1fr))
     # 라 카드가 1개면 자동으로 전체 폭을 채운다, CSS 변경 불필요).
-    stats = mmd.stat_row_html([mmd.generated_at_stat()])
+    computed_at = results[0].get('computed_at') if results else None
+    stats = mmd.stat_row_html([mmd.generated_at_stat(computed_at)])
 
     sections = []
     for dept, dept_items in mmd.group_ordered(results, lambda it: dept_map.get(it.get('researcher_id', ''), '')):
@@ -509,20 +513,30 @@ def render_html() -> bool:
 
 
 def _filter_eligible_researchers(researchers: pd.DataFrame) -> pd.DataFrame:
-    """analysis_dep.csv가 있으면 지정된 부서만, job_type='지원'(조직총괄/자문위원
-    예외)는 항상 제외해 분석 대상 연구원만 남긴다. process()와 render_html()이
-    같은 모수를 쓰도록 공유한다 — 커버리지 스탯(분석 완료/분석 대상)의 분모가
-    실행 경로에 따라 달라지면 안 되기 때문."""
-    analysis_dep = _read_csv('analysis_dep')
-    if not analysis_dep.empty and 'department' in analysis_dep.columns:
-        allowed_depts = set(analysis_dep['department'])
+    """team_refer(work_type=="R&D")에 매칭되는 org_code만, job_type='지원'
+    (조직총괄/자문위원 예외)는 항상 제외해 분석 대상 연구원만 남긴다.
+    process()와 render_html()이 같은 모수를 쓰도록 공유한다 — 커버리지 스탯
+    (분석 완료/분석 대상)의 분모가 실행 경로에 따라 달라지면 안 되기 때문.
+
+    예전에는 전문성 분석 부서.xlsx(process_analysis_dep.py, department 화이트
+    리스트)로 분석 대상 부서를 걸렀지만, team_refer.xlsx에 조직 단위별 R&D
+    여부(work_type)가 명시적으로 들어오면서 이 방식으로 완전히 대체됐다 —
+    org_code(team_refer의 org_name_wd)가 매핑되지 않은 연구원은 R&D 여부를
+    판단할 근거가 없어 분석 대상에서 제외된다(이전의 "매핑 실패해도 부서
+    화이트리스트만 통과하면 포함"과 달리, 이제는 team_refer 매핑이 필수)."""
+    team_refer_rows = mmd.read_team_refer(OUT_DIR)
+    if team_refer_rows:
+        rd_org_codes = {
+            (r.get('org_name_wd') or '').strip() for r in team_refer_rows
+            if str(r.get('work_type') or '').strip() == 'R&D'
+        } - {''}
         before = len(researchers)
-        researchers = researchers[researchers['department'].isin(allowed_depts)]
-        print(f'[process_researcher_expertise] 분석 대상 부서 필터 적용(analysis_dep.csv, '
-              f'{len(allowed_depts)}개 부서): {before}명 → {len(researchers)}명')
+        researchers = researchers[researchers['org_code'].isin(rd_org_codes)]
+        print(f'[process_researcher_expertise] 분석 대상 필터 적용(team_refer work_type=="R&D", '
+              f'{len(rd_org_codes)}개 조직 단위): {before}명 → {len(researchers)}명')
     else:
-        print('[process_researcher_expertise] analysis_dep.csv 없음 — 부서 필터 없이 전체 연구원 분석 '
-              '(python pipeline/process_analysis_dep.py로 생성 가능)')
+        print('[process_researcher_expertise] team_refer 데이터 없음 — 부서 필터 없이 전체 연구원 분석 '
+              '(python pipeline/process_team_refer.py로 생성 가능)')
 
     # 4직종(job_type)이 '지원'이면 분석 대상에서 제외한다. 단, 직무(job_function)가
     # '조직총괄' 또는 '자문위원'이면 지원 직종이어도 예외로 포함한다.
@@ -537,6 +551,154 @@ def _filter_eligible_researchers(researchers: pd.DataFrame) -> pd.DataFrame:
             print(f'[process_researcher_expertise] 직종 필터 적용(job_type=지원 제외, '
                   f'조직총괄/자문위원 예외 포함): {before}명 → {len(researchers)}명 ({excluded}명 제외)')
     return researchers
+
+
+_EARLIEST_DATE = date(1900, 1, 1)
+
+
+def _snapshot_rows_as_of(table: str, researcher_ids: list, valid_date: date) -> pd.DataFrame:
+    """<table>_history.csv에서 researcher_id별로 valid_date 이전(포함) 가장
+    최근 스냅샷만 골라 반환한다 — services.period_snapshot.resolve_period_
+    snapshot()(연구원 명단의 "기간 지정" 조회와 동일 인프라)을 재사용, period
+    시작을 아주 이른 날짜로 둬서 "그 시점까지 최신"을 얻는다. 대상
+    researcher_ids로만 좁혀 반환(온디맨드 분석은 소수 사번만 다루므로)."""
+    hist = resolve_period_snapshot((_EARLIEST_DATE, valid_date), table=f'{table}_history')
+    if hist.empty:
+        return hist
+    return hist[hist['researcher_id'].isin(researcher_ids)]
+
+
+def _filter_as_of(df: pd.DataFrame, date_col: str, valid_date: date) -> pd.DataFrame:
+    """날짜 범위형 테이블(tasks/publications/patents)에서 date_col이
+    valid_date 이전(포함)인 행만 남긴다 — 이 테이블들은 원래 이력 전체를
+    쌓아두는 구조라(자연키 upsert, 삭제 없음) 별도 _history.csv 없이도
+    "그 시점까지 있었던 것"을 그대로 걸러낼 수 있다."""
+    if df.empty or date_col not in df.columns:
+        return df
+    valid_str = valid_date.isoformat()
+    return df[df[date_col].fillna('').astype(str).str[:10] <= valid_str]
+
+
+def analyze_researchers_as_of(researcher_ids: list, valid_date: date) -> list:
+    """지정한 사번들만, 지정한 과거 시점(valid_date) 기준 데이터로 온디맨드
+    전문성 분석을 수행한다 — process()의 "현재 재직자 전체" 배치 분석과는
+    별개 경로다(사용자 확정 2026-08-29: 기본은 현재 재직자만 자동 분석하고,
+    과거 시점 분석은 필요할 때 화면에서 시점+사번을 입력해 요청, 결과는
+    캐시해 재사용 — services/expertise_ondemand.py가 캐시/백그라운드 실행을
+    담당하고 이 함수는 순수 계산만 한다).
+
+    시점 스냅샷이 있는 4개 테이블(job_profile/core_technology/tech_ownership/
+    work_objective, 전부 pipeline/merge_utils.write_merged_with_valid_period()
+    로 저장돼 <table>_history.csv를 가짐)은 _snapshot_rows_as_of()로 그
+    시점까지의 최신 스냅샷을 쓰고, 날짜 범위형 테이블(tasks/publications/
+    patents)은 _filter_as_of()로 그 시점 이전 것만 남긴다.
+
+    education/project_personnel/tasks_information은 시점 개념이 없는
+    테이블이라(education은 이력 없이 업서트만, project_personnel은 과제
+    문서 재분석 때마다 통째로 새로 만들어짐) **현재 값을 그대로 근사치로
+    쓴다** — 학력·과제 문서 인력 매칭은 실질적으로 거의 바뀌지 않는다는
+    전제(정확한 소급이 아니라 근사치라는 점을 화면에 안내할 것).
+
+    process()와 달리 eligibility 필터(team_refer work_type=="R&D" 등, 현재
+    조직 구조 기준이라 과거 시점에 그대로 적용할 근거가 없음)를 적용하지
+    않고, 호출부가 넘긴 사번을 그대로 분석한다. 결과를 파일에 저장하지
+    않고 그대로 반환한다.
+
+    반환: [{'researcher_id', 'as_of', 'computed_at', strength_fields 등...}
+    또는 {'researcher_id', 'as_of', 'error'}, ...] — researcher_ids 순서 그대로."""
+    researcher_ids = [str(r).strip().zfill(8) for r in researcher_ids if str(r).strip()]
+    if not researcher_ids:
+        return []
+    valid_str = valid_date.isoformat()
+    now = datetime.now().strftime('%Y-%m-%d %H:%M')
+
+    education = _read_csv('education')
+    tasks = _filter_as_of(_read_csv('tasks'), 'start_date', valid_date)
+    tasks_info = _read_csv('tasks_information')
+    project_personnel = _read_csv('project_personnel')
+    publications = _filter_as_of(_read_csv('publications'), 'pub_date', valid_date)
+    patents = _filter_as_of(_read_csv('patents'), 'application_date', valid_date)
+
+    job_profile = _snapshot_rows_as_of('job_profile', researcher_ids, valid_date)
+    core_tech = _snapshot_rows_as_of('core_technology', researcher_ids, valid_date)
+    tech_ownership = _snapshot_rows_as_of('tech_ownership', researcher_ids, valid_date)
+    work_objective = _snapshot_rows_as_of('work_objective', researcher_ids, valid_date)
+
+    grade_info = _read_json('core_technology_grade_info')
+    lv_info = _read_json('tech_ownership_lv_info')
+    std_defs = _read_json('job_profile_info_standard')
+    sait_defs = _read_json('job_profile_info_sait')
+    grade_map = {i['grade']: i['definition'] for i in grade_info}
+    lv_map = {str(i['lv']): i['definition'] for i in lv_info}
+    std_map, sait_map = _build_job_def_maps(std_defs, sait_defs)
+
+    # 저널 권위도는 기존 캐시만 읽는다(추가 API 조회 없음 — 온디맨드 소수
+    # 인원 요청 때마다 journal_authority.update_authority()를 부르면 배치
+    # 실행분과 중복 조회가 될 수 있어, 캐시에 없는 저널은 그냥 권위도 없이
+    # 표시한다).
+    journal_cache = journal_authority.load_cache()
+
+    results = [None] * len(researcher_ids)
+    prepared = []  # [(idx, rid, prompt), ...]
+    for idx, rid in enumerate(researcher_ids):
+        edu_text = _education_text(education[education['researcher_id'] == rid]) if not education.empty else '(데이터 없음)'
+        task_text = _task_history_text(
+            tasks[tasks['researcher_id'] == rid] if not tasks.empty else pd.DataFrame(), tasks_info)
+        role_text = _project_role_text(
+            project_personnel[project_personnel['researcher_id'] == rid]
+            if not project_personnel.empty else pd.DataFrame())
+        job_row = None
+        if not job_profile.empty:
+            rows = job_profile[job_profile['researcher_id'] == rid]
+            job_row = rows.iloc[0] if not rows.empty else None
+        job_text = _job_history_text(job_row, std_map, sait_map)
+
+        core_row = None
+        if not core_tech.empty:
+            rows = core_tech[core_tech['researcher_id'] == rid]
+            core_row = rows.iloc[0] if not rows.empty else None
+        core_text = _core_technology_text(core_row, grade_map)
+
+        tech_row = None
+        if not tech_ownership.empty:
+            rows = tech_ownership[tech_ownership['researcher_id'] == rid]
+            tech_row = rows.iloc[0] if not rows.empty else None
+        tech_text = _tech_ownership_text(tech_row, lv_map)
+
+        pub_rows = publications[publications['researcher_id'] == rid] if not publications.empty else pd.DataFrame()
+        pub_text = _publications_text(pub_rows, journal_cache)
+
+        pat_rows = patents[patents['researcher_id'] == rid] if not patents.empty else pd.DataFrame()
+        pat_text = _patents_text(pat_rows)
+
+        obj_row = None
+        if not work_objective.empty:
+            rows = work_objective[work_objective['researcher_id'] == rid]
+            obj_row = rows.iloc[0] if not rows.empty else None
+        obj_text = _work_objective_text(obj_row)
+
+        if all(t == '(데이터 없음)' for t in
+               (edu_text, task_text, role_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text)):
+            results[idx] = {'researcher_id': rid, 'as_of': valid_str,
+                             'error': f'{valid_str} 시점 기준으로 분석할 데이터가 없습니다.'}
+            continue
+
+        prompt = _build_prompt(edu_text, task_text, role_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text)
+        prepared.append((idx, rid, prompt))
+
+    if prepared:
+        workers = max_concurrency()
+        tasks_ = [(lambda p=prompt: _analyze_researcher(p)) for _, _, prompt in prepared]
+        task_results = run_concurrent(tasks_, max_workers=workers)
+        for (idx, rid, _), (analysis, error) in zip(prepared, task_results):
+            if error is not None:
+                results[idx] = {'researcher_id': rid, 'as_of': valid_str, 'error': f'분석 오류: {error}'}
+            elif analysis is None:
+                results[idx] = {'researcher_id': rid, 'as_of': valid_str, 'error': '분석 실패(LLM 응답 없음/형식 오류)'}
+            else:
+                results[idx] = {'researcher_id': rid, 'as_of': valid_str, 'computed_at': now, **analysis}
+
+    return results
 
 
 def process(refresh_journals: bool = False) -> bool:
@@ -678,6 +840,14 @@ def process(refresh_journals: bool = False) -> bool:
         for (rid, _), (analysis, _error) in zip(prepared, task_results):
             if analysis is not None:
                 results.append({'researcher_id': rid, **analysis})
+
+    # 화면(build_html())이 "언제 기준 데이터인지"를 보여줄 때 이 값을 그대로
+    # 쓴다(마지막 갱신 표시가 render 시점이 아니라 실제 계산 시점을 보여주도록
+    # — 사용자 지적, data/processed/CLAUDE.md 참고). 이번 배치 전체가 같은
+    # 시각을 공유하므로 항목마다 새로 계산하지 않고 한 번만 찍는다.
+    computed_at = datetime.now().strftime('%Y-%m-%d %H:%M')
+    for r in results:
+        r['computed_at'] = computed_at
 
     os.makedirs(OUT_DIR, exist_ok=True)
     out_path = os.path.join(OUT_DIR, '연구원 보유 전문성 분석.json')

@@ -145,4 +145,22 @@ TABLE_PERMISSIONS: dict[str, str | None] = {
     'comments':            'view_comments',
     'leadership':          'view_grade',
     'succession':          'view_grade',
+
+    # "누적기준 + 기간 지정"(2026-08-28) AI 검색이 특정 과거 시점을 조회할 때
+    # 쓰는 이력 테이블 — 각 현재상태 테이블과 동일한 민감도로 취급한다.
+    # work_objective/work_objective_history는 원래 기본 테이블 자체가 이
+    # 화이트리스트에 없어(AI 검색 대상 아님) 이력도 함께 제외했다.
+    'researchers_history':      None,
+    'evaluations_history':      'view_evaluation',
+    'tech_ownership_history':   None,
+    'job_profile_history':      None,
+    'core_technology_history':  None,
+
+    # 어학자격(2026-08-29) — 민감도가 낮은 원천 데이터라 다른 원천 테이블과
+    # 동일하게 권한 제한 없음(사용자 확정 — AI 검색 조회 가능하게).
+    'language_qualification':   None,
+
+    # 근무 경력(2026-08-29) — 어학자격과 동일하게 민감도가 낮은 원천
+    # 데이터라 권한 제한 없음(사용자 확정 — AI 검색 조회 가능하게).
+    'work_experience':          None,
 }

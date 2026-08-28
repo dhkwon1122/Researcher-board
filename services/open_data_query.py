@@ -34,12 +34,20 @@ CSV(및 LLM 파생 JSON 산출물)를 그 자리에서 SQL로 조회한다 — �
 동시성: SQL 생성 호출은 pipeline/llm_client.call_llm()을 max_wait과 함께
 사용해, nl_query.py의 나머지 intent와 동일하게 동시 호출 슬롯을 못 얻으면
 무한 대기 대신 빠르게 실패한다(text2sql.py에는 이 보호가 없음).
+
+self-repair: 생성된 SQL이 안전 검증(sanitize_sql)에 걸리거나 DuckDB 실행
+자체가 에러(문법 오류 등)로 실패하면, 그 에러 메시지를 LLM에 다시 주고 한
+번만 재생성을 시도한다(_generate_sql_repair). 기존 "0건이면 의미 기반
+재시도"(_semantic_fallback)는 SQL 자체는 정상 실행됐지만 결과가 없는
+경우를 보완하는 것이고, 이 재시도는 SQL이 애초에 실행 불가능했던 경우를
+보완하는 것이라 서로 겹치지 않는다.
 """
 
 import json
 import os
 import re
 import sys
+from datetime import date
 
 import pandas as pd
 
@@ -54,6 +62,9 @@ from services import data_store  # noqa: E402
 from services import query_settings  # noqa: E402
 from services import researcher_profile_export as rpe  # noqa: E402
 from services import text2sql  # noqa: E402
+from services.evaluations import (  # noqa: E402
+    competency_column, evaluation_years, first_half_column, salary_grade_column, second_half_column,
+)
 from services.llm import LLMError  # noqa: E402
 
 DISPLAY_LIMIT = 1000
@@ -101,6 +112,19 @@ Rules:
   differently in the data. Leave these three fields as empty strings if you
   can't think of a reasonable fallback.
 
+Examples (showing the JOIN/CAST/LIKE patterns above — table and column names
+here may not exist in the actual schema below, treat them only as pattern
+references, not as real tables to query):
+
+Q: 부서별 재직 인원수
+A: {{"sql": "SELECT department, COUNT(*) AS cnt FROM researchers WHERE is_current = 'Y' GROUP BY department", "fallback_table": "", "fallback_column": "", "fallback_term": ""}}
+
+Q: AI 관련 전문성을 가진 연구원
+A: {{"sql": "SELECT researcher_id, strength_fields FROM expertise_profiles WHERE strength_fields LIKE '%AI%'", "fallback_table": "expertise_profiles", "fallback_column": "strength_fields", "fallback_term": "인공지능"}}
+
+Q: 논문을 가장 많이 쓴 연구원 5명
+A: {{"sql": "SELECT p.researcher_id, COUNT(*) AS pub_count FROM publications p JOIN researchers r ON r.researcher_id = p.researcher_id WHERE r.is_current = 'Y' GROUP BY p.researcher_id ORDER BY pub_count DESC LIMIT 5", "fallback_table": "", "fallback_column": "", "fallback_term": ""}}
+
 Output format (JSON only):
 {{
   "sql": "SELECT ...",
@@ -112,6 +136,19 @@ Output format (JSON only):
 Schema (all columns are TEXT):
 {schema}
 """
+
+_REPAIR_SYSTEM_SUFFIX = """
+
+Your previous answer's SQL failed when run:
+Previous SQL:
+{bad_sql}
+
+Error:
+{error}
+
+Fix it and return the same JSON format as before (a corrected "sql", plus
+"fallback_table"/"fallback_column"/"fallback_term"). Output ONLY the JSON
+object, no explanation."""
 
 
 def _safe_table_name(stem: str) -> str:
@@ -205,12 +242,32 @@ _CUMULATIVE_RULE = (
     "explicitly asked for cumulative/all-time results, which should include "
     "people who have since transferred out or left."
 )
+# 명단 화면의 "누적기준 + 기간 지정"(2026-08-28)과 동일한 개념을 AI 검색에도
+# 그대로 적용한다 — *_history 테이블(researcher_id, valid_year, valid_month가
+# 자연키, 한 사람당 여러 스냅샷 행)에서 지정한 기간 안의 스냅샷만 골라, 그
+# 기간 안에서 가장 최근 것 1건만 그 사람의 대표값으로 쓰라고 LLM에게 지시한다.
+_PERIOD_RULE_TEMPLATE = (
+    "- The user has specified a specific historical period: {start} to {end} "
+    "(inclusive, by year-month; format YYYY-MM). For this query, do NOT use "
+    "current-state tables (researchers, evaluations, tech_ownership, "
+    "job_profile, core_technology) or the is_current column — use their "
+    "*_history counterparts instead (e.g. researchers_history, "
+    "evaluations_history, tech_ownership_history, job_profile_history, "
+    "core_technology_history), each of which has one row per "
+    "(researcher_id, valid_year, valid_month) snapshot. First filter snapshot "
+    "rows to those whose (CAST(valid_year AS INTEGER), CAST(valid_month AS "
+    "INTEGER)) falls within the given period, then keep only each "
+    "researcher_id's single most recent snapshot inside that period — e.g. "
+    "using QUALIFY ROW_NUMBER() OVER (PARTITION BY researcher_id ORDER BY "
+    "CAST(valid_year AS INTEGER) DESC, CAST(valid_month AS INTEGER) DESC) = 1 "
+    "after the period filter, or an equivalent subquery. If a *_history table "
+    "for the needed field doesn't exist, fall back to the current-state table "
+    "for that field only, but still restrict the overall person set using a "
+    "*_history table where possible."
+)
 
 
-def _generate_sql(question: str, schema: str, max_wait, current_only: bool = True) -> dict | None:
-    rule = _CURRENT_ONLY_RULE if current_only else _CUMULATIVE_RULE
-    system = query_settings.apply(_SQL_GEN_SYSTEM_TEMPLATE.format(schema=schema, current_only_rule=rule))
-    raw = llm_client.call_llm(question, system, temperature=0.0, max_tokens=700, max_wait=max_wait)
+def _parse_gen_response(raw: str) -> dict | None:
     if not raw:
         return None
     try:
@@ -226,6 +283,70 @@ def _generate_sql(question: str, schema: str, max_wait, current_only: bool = Tru
         'fallback_column': str(parsed.get('fallback_column') or '').strip(),
         'fallback_term': str(parsed.get('fallback_term') or '').strip(),
     }
+
+
+def _evaluation_period_hint(period: tuple[str, str]) -> str:
+    """evaluations/evaluations_history의 연봉등급·상하반기업적 컬럼명은
+    회계연도(매년 3월 시작)를 그대로 담아({연도}_salary_grade 등) 만들어지므로,
+    "2023년 평가가 어땠는지" 같은 질문에 LLM이 어느 컬럼을 봐야 할지 그때그때
+    추론하게 두면 틀리기 쉽다(예: 실제로는 2023_salary_grade인데 2023년 =
+    calendar year로 착각해 다른 연도를 짚을 수 있음). period의 끝(=조회하려는
+    시점)을 기준으로 services.evaluations.evaluation_years()(process_tp_evaluation.py
+    /pages/researcher_list.py가 쓰는 것과 동일한 회계연도 계산, 2026-08-28
+    수정분과 같은 원리)로 실제 컬럼명을 미리 계산해 리터럴로 알려준다 — LLM이
+    "회계연도가 몇인지"를 스스로 추론할 필요 없이 이 목록에서 고르기만 하면
+    된다."""
+    try:
+        end_year, end_month = period[1].split('-')
+        target_date = date(int(end_year), int(end_month), 1)
+    except (ValueError, IndexError):
+        return ''
+    salary_years, half_years = evaluation_years(today=target_date)
+    salary_cols = ', '.join(f'"{salary_grade_column(y)}" (FY{y})' for y in sorted(salary_years))
+    half_cols = ', '.join(
+        f'"{first_half_column(y)}"/"{second_half_column(y)}"/"{competency_column(y)}" (FY{y})'
+        for y in sorted(half_years)
+    )
+    return (
+        "\n- If the question is about evaluations/evaluations_history for this "
+        "period, the fiscal year is computed as: fiscal_year = valid_year if "
+        "valid_month >= 3 else valid_year - 1 (fiscal year starts every March). "
+        f"For the end of the requested period ({period[1]}), the actual salary "
+        f"grade columns to use are: {salary_cols}. The half-year performance "
+        "grade columns (first_half_grade/second_half_grade) and competency "
+        f"grade columns (competency_grade) are: {half_cols} — note "
+        "competency_grade may be empty/absent for a given year (it's an "
+        "optional field), unlike the other two. Pick the exact column name "
+        "from this list that matches the year the question asks about — do "
+        "not guess a column name yourself."
+    )
+
+
+def _period_or_current_rule(current_only: bool, period: tuple[str, str] | None) -> str:
+    if period:
+        return _PERIOD_RULE_TEMPLATE.format(start=period[0], end=period[1]) + _evaluation_period_hint(period)
+    return _CURRENT_ONLY_RULE if current_only else _CUMULATIVE_RULE
+
+
+def _generate_sql(question: str, schema: str, max_wait, current_only: bool = True,
+                   period: tuple[str, str] | None = None) -> dict | None:
+    rule = _period_or_current_rule(current_only, period)
+    system = query_settings.apply(_SQL_GEN_SYSTEM_TEMPLATE.format(schema=schema, current_only_rule=rule))
+    raw = llm_client.call_llm(question, system, temperature=0.0, max_tokens=700, max_wait=max_wait)
+    return _parse_gen_response(raw)
+
+
+def _generate_sql_repair(question: str, schema: str, max_wait, current_only: bool,
+                          bad_sql: str, error: str, period: tuple[str, str] | None = None) -> dict | None:
+    """실패한 SQL과 에러 메시지를 시스템 프롬프트 뒤에 덧붙여 한 번만 재생성
+    시도(self-repair). call_llm이 단일 system/user 메시지쌍만 지원하므로,
+    "이전 시도 → 에러" 대화를 시스템 프롬프트 안에 그대로 이어붙이는 방식으로
+    같은 효과를 낸다."""
+    rule = _period_or_current_rule(current_only, period)
+    base = _SQL_GEN_SYSTEM_TEMPLATE.format(schema=schema, current_only_rule=rule)
+    system = query_settings.apply(base) + _REPAIR_SYSTEM_SUFFIX.format(bad_sql=bad_sql, error=error[:500])
+    raw = llm_client.call_llm(question, system, temperature=0.0, max_tokens=700, max_wait=max_wait)
+    return _parse_gen_response(raw)
 
 
 def _cap_limit(sql: str, cap: int = DISPLAY_LIMIT) -> str:
@@ -324,10 +445,14 @@ def _semantic_fallback(con, table: str, column: str, term: str) -> tuple | None:
     return select_sql, columns, rows
 
 
-def answer(question: str, current_only: bool = True) -> dict:
+def answer(question: str, current_only: bool = True, period: tuple[str, str] | None = None) -> dict:
     """질문 → {intent, sql, columns, rows(최대 50건), total_rows, source, note}.
     current_only=False(누적기준)면 SQL 생성 지시문에서 is_current 필터를
-    빼서 전배·퇴사 등으로 최신 인력현황에 없는 사람도 조회 대상에 포함한다."""
+    빼서 전배·퇴사 등으로 최신 인력현황에 없는 사람도 조회 대상에 포함한다.
+    period=(시작 YYYY-MM, 종료 YYYY-MM)이 주어지면(누적기준에서 기간까지
+    지정한 경우, 2026-08-28) current_only는 무시하고 *_history 테이블에서
+    그 기간 안의 마지막 스냅샷을 쓰도록 지시한다 — 명단 화면의 기간 지정
+    조회와 동일한 개념(data/processed/CLAUDE.md 참고)."""
     question = (question or '').strip()
     if not question:
         return {'intent': 'open_data_query', 'columns': [], 'rows': [], 'note': '질문을 입력해주세요.'}
@@ -345,7 +470,7 @@ def answer(question: str, current_only: bool = True) -> dict:
 
     schema = _schema_prompt(tables)
     max_wait = llm_client.query_max_wait()
-    gen = _generate_sql(question, schema, max_wait, current_only=current_only)
+    gen = _generate_sql(question, schema, max_wait, current_only=current_only, period=period)
     if gen is None:
         return {'intent': 'open_data_query', 'columns': [], 'rows': [],
                 'note': '지금 요청이 많거나 질문을 조회문으로 바꾸지 못했습니다. '
@@ -367,17 +492,34 @@ def answer(question: str, current_only: bool = True) -> dict:
         for name, df in tables.items():
             con.register(name, df)
 
-        try:
-            safe_sql = text2sql.sanitize_sql(_cap_limit(gen['sql']))
-        except text2sql.Text2SQLError as exc:
-            return {'intent': 'open_data_query', 'columns': [], 'rows': [], 'sql': gen['sql'],
-                    'note': f'생성된 조회문이 허용되지 않습니다: {exc}'}
+        columns, rows = None, None
+        safe_sql, last_error = None, None
+        for attempt in range(2):
+            try:
+                safe_sql = text2sql.sanitize_sql(_cap_limit(gen['sql']))
+            except text2sql.Text2SQLError as exc:
+                safe_sql = None
+                last_error = f'생성된 조회문이 허용되지 않습니다: {exc}'
+            else:
+                try:
+                    columns, rows = _execute(con, safe_sql)
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    last_error = f'조회 중 오류가 발생했습니다: {str(exc)[:200]}'
 
-        try:
-            columns, rows = _execute(con, safe_sql)
-        except Exception as exc:  # noqa: BLE001
-            return {'intent': 'open_data_query', 'columns': [], 'rows': [], 'sql': safe_sql,
-                    'note': f'조회 중 오류가 발생했습니다: {str(exc)[:200]}'}
+            if attempt == 1:
+                break
+            # self-repair: 실패한 SQL과 에러를 LLM에 주고 한 번만 재생성
+            repaired = _generate_sql_repair(
+                question, schema, max_wait, current_only, gen['sql'], last_error, period=period,
+            )
+            if repaired is None:
+                break
+            gen = repaired
+
+        if rows is None:
+            return {'intent': 'open_data_query', 'columns': [], 'rows': [],
+                    'sql': safe_sql or gen['sql'], 'note': last_error}
 
         used_sql, source = safe_sql, 'sql'
         if not rows:

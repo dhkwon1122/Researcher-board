@@ -283,7 +283,9 @@ def _org_tree() -> list:
 def org_tree_options() -> list:
     """부서 선택 드롭다운 옵션 — 조직도를 들여쓰기로 평탄화해 계층이 눈에
     보이도록 한다. value는 dep_id — dep_id가 없는 노드는 하위 연구원을
-    org_code로 특정할 수 없으므로 선택지에서 뺀다(자식은 계속 순회)."""
+    org_code로 특정할 수 없으므로 선택지에서 뺀다(자식은 계속 순회).
+    라벨은 pjt_part_name만 사용한다(rd_specialist_markdown.org_tree_html과
+    동일한 규칙 — dep_name은 트리 라벨에 관여하지 않는다)."""
     options = []
 
     def _walk(nodes, depth):
@@ -291,7 +293,7 @@ def org_tree_options() -> list:
             dep_id = (node.get('dep_id') or '').strip()
             if dep_id:
                 indent = '　' * depth
-                head = node.get('end_name') or node.get('project_name') or ''
+                head = node.get('pjt_part_name') or ''
                 who = ' '.join(v for v in (node.get('assignment_name'), node.get('name')) if v)
                 label = f'{indent}{head}' + (f' ({who})' if who else '')
                 options.append({'label': label, 'value': dep_id})
@@ -311,7 +313,7 @@ def _index_org_tree_by_dep_id(nodes: list, out: dict) -> dict:
 
 
 def _collect_org_codes(node: dict, include_children: bool) -> set:
-    codes = {(node.get('project_name') or '').strip()} - {''}
+    codes = {(node.get('org_name_wd') or '').strip()} - {''}
     if include_children:
         for child in node.get('children') or []:
             codes |= _collect_org_codes(child, True)
@@ -337,6 +339,141 @@ def researchers_under_departments(dep_ids: list, include_children: bool) -> list
         return []
     matched = researchers_df[researchers_df['org_code'].isin(org_codes)]
     return matched['researcher_id'].tolist()
+
+
+# ─── "연구원 명단" 화면 부서/과제·파트 검색 필터(pages/researcher_list.py) ──────
+# team_refer의 dep_name/pjt_part_name은 조직도 트리 구조(dep_id/upper_dep_id)와
+# 무관한 평면(flat) 태그다 — 옵션 목록은 team_refer 원본 행을 그대로 groupby해
+# 만들고, 실제 연구원 필터링은 항상 org_name_wd(=researchers.csv의 org_code)
+# 매칭을 거친다(라벨 문자열과 researchers.csv 값이 다를 수 있어 라벨로 직접
+# 비교하지 않는다 — pages/researcher_list.py의 기존 _project_options() 주석
+# 참고: 서로 다른 원천의 표기가 항상 일치한다는 보장이 없다).
+
+def _labels_sorted_by_dep_code(rows: list, label_key: str) -> list:
+    """rows에서 label_key(dep_name 또는 pjt_part_name) 고유값을, 그 값을 가진
+    행들 중 가장 앞선(가장 작은) dep_code 기준 오름차순으로 정렬해 반환한다
+    — 같은 이름이 여러 행에 걸쳐 있어도(예: 여러 파트가 같은 dep_name을
+    공유) 조직도 상 가장 먼저 나오는 위치로 정렬 순서를 정한다."""
+    best_code: dict[str, str] = {}
+    for r in rows:
+        name = (r.get(label_key) or '').strip()
+        if not name:
+            continue
+        code = (r.get('dep_code') or '').strip()
+        if name not in best_code or code < best_code[name]:
+            best_code[name] = code
+    return sorted(best_code, key=lambda n: best_code[n])
+
+
+def department_filter_options(period: tuple | None = None) -> list:
+    """'부서' 드롭다운 옵션 — team_refer의 dep_name 고유값, 조직코드(dep_code)
+    오름차순 정렬(사용자 확정). period=(시작일, 종료일)을 주면 그 기간 기준
+    (그 기간 안 dep_id별 최신 스냅샷) team_refer로 옵션을 만든다(2026-08-29
+    추가, pages/researcher_list.py의 '누적기준 + 기간 지정' 조회) — 생략하면
+    기존처럼 오늘 기준."""
+    names = _labels_sorted_by_dep_code(read_team_refer(DATA_DIR, period=period), 'dep_name')
+    return [{'label': n, 'value': n} for n in names]
+
+
+def pjt_part_filter_options(dep_names=None, period: tuple | None = None) -> list:
+    """'과제/파트' 드롭다운 옵션 — team_refer의 pjt_part_name 고유값,
+    조직코드(dep_code) 오름차순 정렬(사용자 확정). dep_names를 지정하면 그
+    부서(dep_name)에 속한 행만 남긴다(부서 선택 시 캐스케이딩,
+    pages/researcher_list.py의 update_project_options 콜백). period는
+    department_filter_options()와 동일(2026-08-29 추가)."""
+    rows = read_team_refer(DATA_DIR, period=period)
+    if dep_names:
+        wanted = {dep_names} if isinstance(dep_names, str) else set(dep_names)
+        rows = [r for r in rows if (r.get('dep_name') or '').strip() in wanted]
+    names = _labels_sorted_by_dep_code(rows, 'pjt_part_name')
+    return [{'label': n, 'value': n} for n in names]
+
+
+def org_codes_for_dep_names(dep_names, period: tuple | None = None) -> set:
+    """선택된 dep_name(들)에 해당하는 team_refer 행들의 org_name_wd 집합.
+    period=(시작일, 종료일)을 주면 그 기간 기준(그 기간 안 dep_id별 최신
+    스냅샷)으로 매칭한다(2026-08-29 추가, pages/researcher_list.py의
+    '누적기준 + 기간 지정' 조회) — 생략하면 기존처럼 오늘 기준."""
+    if not dep_names:
+        return set()
+    wanted = {dep_names} if isinstance(dep_names, str) else set(dep_names)
+    return {
+        (r.get('org_name_wd') or '').strip()
+        for r in read_team_refer(DATA_DIR, period=period)
+        if (r.get('dep_name') or '').strip() in wanted
+    } - {''}
+
+
+def dep_name_for_org_code(org_code: str) -> str:
+    """researchers.csv의 org_code 하나를 받아, 그 org_code와 매칭되는
+    team_refer 행의 dep_name을 반환한다(없으면 빈 문자열) — 연구원 개별
+    프로필 화면의 '부서' 드롭다운 기본 선택값을 구할 때 쓴다(연구원 명단의
+    '부서' 필터와 동일한 team_refer 기준으로 맞추기 위함)."""
+    org_code = (org_code or '').strip()
+    if not org_code:
+        return ''
+    for r in read_team_refer(DATA_DIR):
+        if (r.get('org_name_wd') or '').strip() == org_code:
+            return (r.get('dep_name') or '').strip()
+    return ''
+
+
+def org_codes_for_pjt_part_names(pjt_part_names, period: tuple | None = None) -> set:
+    """선택된 pjt_part_name(들)에 해당하는 team_refer 행들의 org_name_wd 집합.
+    period는 org_codes_for_dep_names()와 동일(2026-08-29 추가)."""
+    if not pjt_part_names:
+        return set()
+    wanted = {pjt_part_names} if isinstance(pjt_part_names, str) else set(pjt_part_names)
+    return {
+        (r.get('org_name_wd') or '').strip()
+        for r in read_team_refer(DATA_DIR, period=period)
+        if (r.get('pjt_part_name') or '').strip() in wanted
+    } - {''}
+
+
+def title_by_researcher_id(period: tuple | None = None) -> dict:
+    """researcher_id(조직 단위 책임자의 사번) → assignment_name(직책) 매핑 —
+    team_refer 행 중 조직장급만 사번이 채워져 있다(process_team_refer.py
+    참고, 나머지는 매핑이 없어 이 dict에 키 자체가 없다). dep_id별 최신
+    (또는 period 지정 시 그 기간 기준 최신) 스냅샷만 쓰는 read_team_refer()를
+    거쳐, researcher_id가 있는 행만 추린다(2026-08-29 추가 — 이전엔
+    pages/researcher_list.py가 read_processed('team_refer')로 누적된
+    원본 테이블 전체를 그대로 dict(zip(...))해, "최신"을 명시적으로
+    판정하지 않고 CSV에 저장된 행 순서에 우연히 의존하고 있었다 —
+    read_team_refer()로 바꾸면 이 문제도 함께 해결되고, deleted='Y'
+    처리된 조직의 리더도 더 이상 매핑에 남지 않는다)."""
+    mapping: dict = {}
+    for r in read_team_refer(DATA_DIR, period=period):
+        rid = (r.get('researcher_id') or '').strip()
+        if not rid:
+            continue
+        mapping.setdefault(rid, (r.get('assignment_name') or '').strip())
+    return mapping
+
+
+def org_code_label_maps(period: tuple | None = None) -> tuple[dict, dict]:
+    """researchers.csv의 org_code(=team_refer의 org_name_wd) 전체를 한 번에
+    dep_name/pjt_part_name으로 매핑하는 dict 2개(org_code → dep_name,
+    org_code → pjt_part_name)를 team_refer 한 번 순회로 만든다.
+    dep_name_for_org_code()처럼 한 건씩 team_refer 전체를 매번 다시 훑는
+    방식은 명단처럼 수백 행을 한꺼번에 매핑할 때(수백 × team_refer 전체
+    스캔) 느리므로, 이 dict를 한 번만 만들어 재사용하는 용도(연구원 명단
+    화면 참고). 같은 org_code가 여러 team_refer 행에 걸쳐 있으면(정상
+    데이터에서는 드묾) dep_name_for_org_code()와 동일하게 먼저 나온 값을
+    쓴다. 매핑이 없는 org_code는 두 dict 어디에도 키가 생기지 않는다 —
+    호출부가 `.get(org_code, 원본값)`으로 폴백을 직접 처리한다.
+
+    period=(시작일, 종료일)을 주면 그 기간 기준(그 기간 안 dep_id별 최신
+    스냅샷)으로 매핑한다(2026-08-29 추가) — 생략하면 기존처럼 오늘 기준."""
+    dep_map: dict = {}
+    pjt_map: dict = {}
+    for r in read_team_refer(DATA_DIR, period=period):
+        org_code = (r.get('org_name_wd') or '').strip()
+        if not org_code:
+            continue
+        dep_map.setdefault(org_code, (r.get('dep_name') or '').strip())
+        pjt_map.setdefault(org_code, (r.get('pjt_part_name') or '').strip())
+    return dep_map, pjt_map
 
 
 def individual_search_options() -> list:

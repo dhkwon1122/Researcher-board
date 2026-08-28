@@ -4793,3 +4793,1769 @@ str(_PAGE1_FIT_HEIGHT_PX)})`로 속성을 붙였다.
 - **실기 빌드/기동/실제 임베딩 호출까지는 검증하지 못했다** — 사용자가
   실제 Linux 배포 환경에서 `docker compose --profile embed up -d bge-embed`
   로 띄운 뒤 Job Market 화면에서 직접 재현 확인이 필요하다.
+
+## 2026-08-25 (33): 팀참조시트 전처리 개편 + "팀/리더 참조" 관리자 웹 CRUD 탭 신설
+
+배경: 팀참조시트.xlsx의 컬럼 체계를 바꾸고(비공식소속부서명/구분/부서/
+과제·파트 등 신규), 지금까지 파일 전량 덮어쓰기였던 team_refer.csv를
+날짜 기반으로 누적하며, 최초 1회는 엑셀 업로드로 적재하되 이후에는
+관리자 화면에서 웹으로 개별 조직 단위를 수시 수정할 수 있게 해달라는
+요청. 기존 team_refer.csv는 실행할 때마다 전량 교체하는 구조라, 부분
+수정을 전제로 한 웹 CRUD와 근본적으로 맞지 않았다(전체 재업로드가
+아니면 "이번에 없으면 삭제"를 판단할 기준이 없음).
+
+**결정 1 — 컬럼 재매핑**(`pipeline/process_team_refer.py`): 엑셀 헤더명 →
+출력 컬럼명을 `비공식소속부서명→org_name_wd`(researchers.csv org_code
+매칭키, 구 project_name), `구분→work_type`(신규, "R&D"만 전문성 분석
+대상), `부서→dep_name`(신규, "연구원 명단" 부서 필터 표시 전용 — 조직도
+트리 구조와는 무관한 평면 태그), `과제/파트→pjt_part_name`(조직도 트리
+라벨 — 이제 이 값만 사용, 구 end_name/project_name 폴백 제거),
+`조직코드→dep_code`(구 code3)로 바꿨다.
+
+**결정 2 — 날짜 기반 누적, dep_id별 최신 판정**: 자연키를
+`(dep_id, valid_year, valid_month, valid_day)`로 바꾸고 `pipeline/merge_utils.py`의
+기존 upsert 인프라(TABLE_KEYS에 등록)로 계속 누적한다. "현재" 조직도는
+researchers.csv의 is_current처럼 파일 전체 기준 최신 날짜 하나를 쓰지
+않고, **dep_id별로 독립적으로 최신 날짜 행**을 고른다
+(`rd_specialist_markdown._latest_current_rows()`, `read_team_refer()`가
+호출부에 반환하기 전에 자동 적용) — 웹에서 조직 하나만 오늘 날짜로
+저장해도 나머지 dep_id는 각자 마지막 저장 시점 값 그대로 정상 노출되게
+하기 위함(파일 전체 기준이면 부분 수정이 나머지 전체를 "사라짐"으로
+만들어버림). 삭제는 실제로 지우지 않고 `deleted='Y'` 표시가 붙은 새
+날짜 행(톰스톤)으로 남긴다 — 이력은 보존하되 "현재" 판정에서는 제외.
+
+**결정 3 — 전문성 분석 대상 필터 교체**: `전문성 분석 부서.xlsx`
+(`process_analysis_dep.py`, department 화이트리스트)를 `work_type=="R&D"`
+게이트로 완전히 대체하고 그 파일/모듈은 삭제했다(`process_researcher_expertise.py`
+`_filter_eligible_researchers()`). org_code가 team_refer에 매핑되지 않은
+연구원은 이제 R&D 여부를 판단할 근거가 없어 분석 대상에서 제외된다(이전
+"매핑 실패해도 부서 화이트리스트만 통과하면 포함"과 달리 team_refer
+매핑이 필수가 됨 — 사용자 확정).
+
+**결정 4 — "연구원 명단" 부서/과제 필터**: 라벨은 team_refer의
+dep_name/pjt_part_name(신규 `services/similarity_map.py` 헬퍼:
+`department_filter_options`/`pjt_part_filter_options`)에서 가져오되, 실제
+연구원 필터링은 여전히 org_code 매칭(`org_codes_for_dep_names`/
+`org_codes_for_pjt_part_names`)으로 한다 — 라벨 문자열이 researchers.csv
+표기와 다를 수 있어(기존 `_project_options()`가 지적했던 이유) 라벨로
+직접 비교하지 않는다. "과제" 필터 라벨을 "과제/파트"로 변경.
+
+**결정 5 — "팀/리더 참조" 관리자 웹 CRUD**(`pages/admin.py`,
+`services/team_refer_store.py`): 관리자 화면을 `dbc.Tabs`로 재구성해
+"사용자 관리" 옆에 신설. 컬럼은 엑셀 원본 헤더명을 그대로 쓰고
+(`process_team_refer._COL_MAP` 재사용), `dash_table.DataTable`의
+`row_deletable`로 행 삭제, "행 추가" 버튼으로 빈 행 추가. 저장 시
+`dcc.DatePickerSingle`로 지정한 날짜(기본 오늘, 과거 소급 입력 가능)로
+스탬프해 `team_refer.csv`에 반영하고, `team-refer-loaded-dep-ids` Store
+(그리드를 처음 불러올 때의 부서ID 목록)와 저장 시점 그리드를 비교해
+사라진 dep_id는 톰스톤으로 처리한다. `services/team_refer_store.py`가
+CSV 반영과 함께 DB(`DATABASE_URL` 설정 시 `team_refer` 테이블, Postgres
+`ON CONFLICT` upsert, `services/user_store.py`와 동일한 패턴 — DB 없으면
+조용히 실패 반환하고 CSV 반영만으로 정상 동작)에도 반영한다. 저장할
+때마다 `data/processed/team_leader_refer/팀_리더_참조_입력날짜(YYMMDD).xlsx`
+로 그 시점 전체 스냅샷도 남긴다(파일명이 날짜까지만이라 같은 날 재저장은
+덮어써 마지막 저장이 그날의 유효값이 됨 — 사용자 확정). 상위부서ID가
+실제 존재하는 부서ID를 가리키지 않으면 저장은 진행하되 경고를 보여준다
+(`build_org_tree()`가 이런 행을 조용히 최상위 조직으로 취급하므로).
+
+**검증**:
+- `rd_specialist_markdown._latest_current_rows()`/`build_org_tree()`/
+  `org_tree_html()`에 합성 데이터로 부분수정(한 dep_id만 최신 재저장,
+  다른 dep_id는 과거 날짜 그대로 생존)·삭제(톰스톤 제외) 시나리오 통과.
+- `services/similarity_map.py`의 부서/과제·파트 옵션·매칭 헬퍼를 동일한
+  합성 데이터로 별도 검증(캐스케이딩, org_code 집합 산출).
+- `services/team_refer_store.py`의 `save_snapshot()`/`list_editable_rows()`/
+  `export_snapshot_xlsx()`를 CSV 경로로 3회 연속 저장(신규→수정→삭제)
+  시나리오로 직접 실행해, 누적 행 수·최신 판정·톰스톤·엑셀 스냅샷 파일명이
+  전부 의도대로 나오는 것을 확인(DB는 이 세션에 DATABASE_URL이 없어
+  `db_ok=False` 경로만 확인, 실제 Postgres upsert는 미검증).
+- `pages/admin.py`를 `dash.Dash(use_pages=True)` 컨텍스트에서 실제로
+  `layout()`/`_team_refer_tab()`을 렌더링해 컴포넌트 트리 구성 오류가
+  없음을 확인, `team_refer_add_row`/`team_refer_save` 콜백 함수를 직접
+  호출해(빈 부서ID 행 스킵, 로드된 dep_id 목록 갱신) 동작을 확인.
+- 변경된 모든 파일 `py_compile` 통과.
+- **미검증**: 실제 DB(Postgres) upsert 경로, 브라우저에서의 실제
+  클릭·타이핑 조작(DataTable 인라인 편집/행 삭제 UI 자체), 로그인 세션을
+  통한 관리자 권한 게이트의 실제 동작.
+
+## 2026-08-26 (34): 원천 파일명 와일드카드 매칭 도입 + 헤더 행 재조정 + job_profile 2파일 병합 전처리
+
+배경: 사내 시스템에서 원천 엑셀을 다운로드하면 파일명에 다운로드 시각이
+찍혀 나와(예: "T&P 기본 인사 정보 2026-08-26 11_22 GMT+9.xlsx") 매번
+이름이 달라진다 — `pipeline/sources.py`가 그동안 요구하던 고정 파일명
+매칭(`인력현황.xlsx` 등)이 더는 맞지 않는다는 사용자 확인에 따라, 관련
+6개 원천(인력현황/T&P/시상/학력/인사발령/직무이력)의 파일명을 와일드카드
+패턴으로 바꾸고, 각 파일의 실제 헤더 행 위치도 함께(사내 리포트 상단에
+안내문 행이 붙어 있어 예전보다 아래로 밀림) 재조정했다.
+
+**결정 1 — 와일드카드 매칭 인프라**(신규 `pipeline/source_files.py`):
+`find_matches()`/`find_latest()`가 `data/raw/`(또는 `data/updates/`)를
+스캔해 패턴에 맞는 파일을 mtime 오름차순으로 찾는다. 여러 개가 동시에
+매칭되면: 스냅샷성 파일(T&P/시상/학력/인사발령/직무이력)은 `find_latest()`로
+가장 최근 수정된 파일 하나만 쓰고, 인력현황만 `find_matches()`로 매칭되는
+파일을 전부 읽어 이어붙인다(아래 결정 2). `pipeline/sources.py`의 각
+항목은 이제 (스테이징명, 패턴|패턴리스트, header_row, multi=False) 4-tuple이며,
+패턴에 '*'가 없으면 기존과 동일하게 정확한 파일명만 찾는다.
+
+**결정 2 — 인력현황(researchers)은 파일명이 아니라 내부 데이터로 현재/과거를
+가린다**(사용자 확정: "YYYYMM 접두사는 크게 의미가 없다"): 다운로드 파일이
+여러 개 동시에 있어도(`*That Month Headcount*.xlsx` / `*End of Month
+Headcount*.xlsx`) `xlsx_to_raw_csv.py`가 stage 1에서 전부 읽어 그대로
+이어붙이기만 하고(가공 없음 — stage 1의 기존 원칙 유지), 실제 "이 사람의
+현재 소속"은 여전히 `process_researchers.py`가 각 행의 인원실적년도/
+인원실적월(내부 컬럼)로 판단한다(기존 is_current 로직 그대로, 사용자가
+이미 확정한 patterns). 다만 두 파일에 같은 researcher_id가 다른 기간으로
+동시에 존재할 수 있게 되면서, 업서트 시 "새 배치 안에서 키가 중복되면
+마지막 행 채택"(`merge_utils.upsert_merge`)이 파일명이 아니라 기간 순서를
+따르도록 `result.sort_values(['researcher_id','valid_year','valid_month'])`로
+정렬 기준을 변경(기존엔 researcher_id 단일 정렬이라 동순위 정렬이
+불안정해 어느 파일이 이길지 보장이 없었음 — 실제 버그였을 수 있는 지점을
+이번에 같이 정리).
+
+**결정 3 — job_profile은 2개 원천을 병합한 새 파일을 읽는다**(신규
+`pipeline/merge_job_profile_source.py`, `xlsx_to_raw_csv.py`가 매 실행
+맨 앞에서 자동 호출): 구버전 이력 `임직원_직무이력('18.5월_이전).xlsx`
+(직종/직군/주직무여부 삭제, "직무 프로필"→"직무" 개명)와 최신
+`내 리포트 *.xlsx`(ID 컬럼 삭제)를 합친다. 안전을 위해 신규 파일(2번)의
+컬럼명을 기준으로 구버전 데이터(1번)를 `reindex`해 맞춘(사용자 확정 —
+컬럼이 이미 완전히 같더라도 방어적으로) 뒤, 신규 데이터 다음에 구버전을
+이어붙이고 "사번" 오름차순 정렬. 원본을 덮어쓰지 않고 새 파일
+"내 리포트 *_병합.xlsx"로 저장하며, 신규 파일의 앞쪽 안내 행(1~5행)을
+그대로 보존해 병합 산출물도 "6번째 행이 헤더"를 유지한다(`sources.py`의
+job_profile 헤더 행과 일치시키기 위함 — 이를 위해 `excel_reader.py`에
+헤더 적용 없이 원본 행렬을 그대로 돌려주는 `read_xlsx_matrix()` 추가).
+`find_latest(..., exclude='_병합')`로 이 스크립트 자신의 산출물을 다음
+실행에서 다시 입력으로 집어먹지 않게 막는다.
+
+**결정 4 — 헤더 행 재조정**(모두 사용자 지정값, 0-based로 환산):
+인력현황 0→1, T&P 0→8, 시상 0→8, 임직원학력 0→9, 인사발령이력 0→1,
+양성_인력_현황(파일명 불변) 0→1, job_profile(병합본) →5, 업무목표24/25/26
+(파일명 불변) 0→2. 특허/과제정보/핵심기술/보유기술/개인별논문현황/
+리더십진단/핵심이력 등 나머지는 그대로.
+
+**결정 5 — 업무목표24/25/26의 "사번"→"부서장사번" 개명**: 소스 파일
+자체에서(과거 부서장 사번 컬럼이 "사번"으로 잘못 표기돼 연구원 본인
+식별용 "사번"(F열)과 혼동됐던 것을) 개명하기로 확정 — 개명 후에는 파일에
+"사번"이라는 헤더가 F열 하나만 남으므로 `process_work_objective.py`의
+`COL_ID = '사번'`은 코드 수정 없이 그대로 F열을 가리킨다. 2~3열 병합
+셀 해제는 사용자가 실데이터로 직접 확인해 빈 값이 생기지 않는다고
+확정했으므로 fill-down 등 별도 처리 코드는 추가하지 않았다(문제가 생기면
+추후 대응).
+
+**결정 6 — `data/updates/`(수시 업서트) 경로도 새 패턴을 인식**:
+`pipeline/run_update.py`의 파일 존재 판정을 각 process 모듈이 export하는
+`*_PATTERN`/`*_PATTERNS` 상수 기준 와일드카드 매칭으로 바꿨다(기존엔
+정확한 파일명 문자열 비교라 이름이 바뀌면 그냥 무반응이었을 것).
+
+**검증**:
+- 변경된 모든 pipeline 파일 `py_compile` 통과.
+- `source_files.find_matches`/`find_latest`를 합성 파일(동시에 여러 개
+  매칭, `_병합` 제외 옵션 포함)로 직접 실행해 mtime 정렬·제외 동작 확인.
+- `merge_job_profile_source.run()`을 openpyxl로 만든 합성 legacy/new
+  파일(안내 행, 헤더 위치, 중복 사번, 컬럼 불일치 포함)로 직접 실행 —
+  컬럼 삭제/개명/정렬/이어붙이기·안내 행 보존이 모두 의도대로 나오는 것을
+  `pandas.read_excel(header=5)`로 재확인.
+- **미검증(Windows+xlwings+실제 DRM 원본 없이는 불가)**: `xlsx_to_raw_csv.py`
+  전체 실행(실제 회사 다운로드 파일로), `process_researchers.py`의 다중
+  파일 업서트가 실제 DB/CSV 파이프라인 전체를 통과하는 end-to-end 시나리오.
+
+## 2026-08-26 (35): 관리자 "데이터 업데이트" 탭 — 매니페스트 20개 파일 웹 업로드/실행 + DB 반영 버튼
+
+배경: 지금까지 원천 엑셀 갱신은 Windows PC에서 로컬로 process_*.py를 직접
+돌려야 했는데, 매니페스트 22개 중 리더십진단(원본 파일 있음에도 운영상
+제외 확정)·comments_raw(원본 자체가 없음) 2개를 뺀 20개를 관리자 화면에서
+직접 업로드→실행할 수 있게 해달라는 요청. 서버는 리눅스, 사용자는 Windows
+브라우저로 접속(사용자 확정) — 즉 지금까지 전제였던 xlwings(Excel COM,
+Windows 전용) DRM 해제를 서버에서 할 수 없어, **업로드 전 사용자가 자기
+PC의 Excel에서 열어 "다른 이름으로 저장"으로 DRM을 해제한 사본을 올린다**는
+전제로 설계했다(사용자 확정 — 대안으로 제시한 "실제 DRM 여부 테스트"/
+"Windows 워커 별도 구축"은 채택 안 함). 서버는 평범한 xlsx만 받으므로
+excel_reader.read_xlsx()의 기존 openpyxl 폴백(xlwings import 실패 시
+자동 전환)이 그대로 쓰인다 — 이 폴백 자체는 이미 있던 코드라 변경 없음.
+
+**결정 1 — 신규 `services/web_pipeline_runner.py`**: 20개 항목의 매니페스트
+(키/라벨/pipeline 모듈명/업로드 안내문구/모드)를 갖고, `data/web_updates/<key>/`
+폴더에 업로드 파일을 보관한다. 모드 3가지: 'exact'(정확한 파일명 하나 —
+업로드 즉시 그 모듈이 기대하는 파일명으로 저장해, 사용자가 로컬 파일명을
+다르게 저장해와도 실행이 실패하지 않게 함), 'wildcard'(원본 브라우저
+파일명 그대로 보존 — 각 모듈의 raw_dir 오버라이드가 기존
+pipeline/source_files.py 와일드카드 매칭으로 그대로 찾음, 2026-08-26(34)번
+작업 재사용), 'dual'(직무이력 전용 — 사용자 확정: 구버전 이력(선택)/
+"내 리포트"(필수) 두 파일을 각각 업로드, 실행 시 merge_job_profile_source.py
+전처리를 먼저 돌린 뒤 process_job_profile.py 실행).
+
+**결정 2 — 실행/실패 사유 캡처**: 각 process_*.py는 성공 여부만 bool로
+반환하고 실패 사유는 print()로만 남기는 경우가 많아, 실행을
+`contextlib.redirect_stdout`으로 감싸 캡처하고 마지막 [ERROR]/[SKIP]/[WARN]
+줄을 실행결과 메시지로 쓴다(사용자 확정 — "실제 처리를 시도해서 에러
+메시지를 보여주는 걸로 충분", 업로드 파일명 사전 검증은 하지 않음).
+예외가 나면 예외 메시지 + 캡처된 로그를 합쳐 보여준다.
+
+**결정 3 — 실행 로그는 CSV**(`data/processed/web_pipeline_runs.csv`,
+사용자 확정 — DB 대신): 키당 1행(최종실행이력/실행결과)만 유지, 매 실행마다
+덮어씀(이력 누적 아님 — 감사 목적이 아니라 "가장 최근 상태" 표시 목적).
+
+**결정 4 — 동시 실행 방지 락은 파일 기반**(`data/web_updates/.lock.json`):
+이 앱이 `gunicorn --workers 2`로 뜨므로(Dockerfile) 워커 프로세스 메모리상의
+플래그로는 두 워커 간에 공유가 안 돼, 파일 락 + 30분 초과 시 죽은 락으로
+간주하고 무시하는 방식을 썼다. "전체/선택 실행"과 "DB 반영"은 같은 락을
+공유해 동시 진행을 막는다(둘 다 data/processed를 건드리므로).
+
+**결정 5 — 백그라운드 스레드로 실행**(사용자 확정: "브라우저 탭을 꺼도
+서버에서는 계속 돌게"): 버튼 클릭 콜백은 `threading.Thread(daemon=True)`를
+시작만 시키고 즉시 반환하고, 화면은 `dcc.Interval`(3초)로 실행 로그/락
+상태를 다시 읽어와 갱신한다 — 탭을 닫았다 다시 열어도 마지막 상태 그대로
+보인다. "전체 업데이트"는 업로드된 파일이 있는 항목만 자동으로 골라
+실행하고(사용자 확정 — 실패 방지), "선택 업데이트"는 체크된 항목 중
+업로드가 없는 게 있으면 전체를 막고 어느 항목인지 안내한다.
+
+**결정 6 — DB 반영 버튼**: 사용자 제안(raw→processed CSV 변환 후 Postgres
+반영도 웹에서 하고 싶다)에 따라 기존 `pipeline/load_to_db.py`(순수 CSV→
+Postgres, DRM/xlwings 무관이라 리눅스 서버에서 바로 실행 가능)를 그대로
+재사용하는 별도 버튼을 추가했다. 테이블 단위가 아니라 등록된 전체
+테이블을 매번 통째로 재적재하는 기존 스크립트의 방식을 그대로 따른다
+(멱등적이라 자주 눌러도 안전).
+
+**결정 7(부수 버그 수정) — `process_work_objective.py`**: 이번 기능으로
+업무목표24/25/26을 웹에서 "따로" 갱신할 수 있게 되면서, 기존 코드가
+이번 실행에 없는 연도의 출력 컬럼을 무조건 빈 문자열로 채우던 버그가
+실제로 발동하게 됐다(예: 24만 새로 올리면 write_merged가 researcher_id
+하나로 행 전체를 교체해 기존 25/26 값까지 지워버림). 이번 실행에 없는
+연도는 기존 work_objective.csv에서 값을 찾아 이어붙이도록 수정(있으면
+보존, 처음부터 없었으면 그대로 빈 값).
+
+**결정 8 — 권한/탭 배치**: 관리자(`can('manage_users')`)만 접근 가능한
+기존 /admin 페이지 안에 "데이터 업데이트" 탭을 추가(사용자 확정 —
+"사용자 관리, 팀/리더 참조와 동일하게").
+
+**결정 9 — 업로드 용량 상한 50MB**(사용자 확정): `MAX_UPLOAD_BYTES`
+환경변수로 조절 가능(기본 50MB). Flask `MAX_CONTENT_LENGTH`(app.py)도
+기존 10MB 기본값에서 70MB로 올렸다 — dcc.Upload가 base64로 인코딩해
+보내(원본 대비 약 1.37배 부풀림) 50MB 파일이 요청 크기로는 그보다 커짐.
+
+**검증**:
+- `services/web_pipeline_runner.py`를 합성 데이터로 직접 실행: 업로드 없음/
+  필수 컬럼 누락/정상 성공 3가지 경로 모두 실행결과 메시지가 의도대로
+  나오는 것 확인(process_patents.py 기준). 파일 락 이중 획득 방지 확인.
+  job_profile 'dual' 모드에서 legacy 파일 없이 new 파일만 올려도
+  merge_job_profile_source.py 전처리 + process_job_profile.py가 정상
+  연계되는 것을 실제 실행으로 확인. `start_run()`으로 백그라운드 스레드
+  실행 후 락 해제·실행결과 반영까지 end-to-end 확인.
+- `process_work_objective.py` 버그 수정을 합성 데이터(기존 3개년 값이 있는
+  연구원에게 24년만 재실행)로 검증 — 24년만 갱신되고 25/26은 보존됨을 확인.
+- `pages/admin.py`를 `dash.Dash(use_pages=True)` 컨텍스트에서 실제로
+  `layout()`(빈 상태)과 `_data_update_table()`(업로드/실행결과가 채워진
+  상태 포함)을 렌더링해 컴포넌트 트리 구성 오류가 없음을 확인.
+- 변경된 모든 파일 `py_compile` 통과.
+- **미검증**: 실제 브라우저에서의 드래그앤드롭 업로드, 두 gunicorn 워커
+  프로세스에 걸친 실제 동시 클릭 시나리오, 실제 Postgres에 대한
+  `load_to_db.load()` 실행(DATABASE_URL 없는 샌드박스라 "미설정" 분기만
+  확인), 50MB에 가까운 실제 대용량 파일 업로드.
+
+## 2026-08-26 (36): "데이터 업데이트" 탭에 사내 API 연동 확장 포인트(항목별 아이콘) 선반영
+
+배경: 지금은 파일 업로드로 갱신하지만, 궁극적으로는 20개 항목 모두 사내
+API에서 직접 데이터를 받는 게 최종 목표(사용자 확정) — 그때 화면을 다시
+만들지 않고, 지금 미리 아이콘을 심어 두면 연동 시 바로 반영되게 해달라는
+요청.
+
+**결정 — `services/web_pipeline_runner.py`에 `register_api_fetch(key, fn)`
+확장 포인트 추가**: MANIFEST 각 항목에 `api_fetch`(콜러블, 기본 None) 필드를
+두고, `run_one(key, via_api=True)`가 이 훅이 있으면 먼저 호출해 받은
+(파일명, bytes, slot) 목록을 `save_upload()`로 저장한 뒤 — **그 다음부터는
+파일 업로드 실행과 완전히 동일한 경로**(같은 process_*.py 호출, 같은 락/
+로그/폴링)를 탄다. 훅이 없으면(현재 전 항목) 그 자리에서 "아직 사내 API
+연동이 준비되지 않았습니다" 실패로 기록하고 끝난다 — 화면·버튼은 이미
+동작하되 실제 데이터만 없는 상태. 실제 연동 시 각 소스별로
+`register_api_fetch('researchers', fetch_fn)` 한 줄만 호출하면(신규 모듈,
+예: `services/hr_api_client.py`) 화면 변경 없이 그 항목의 아이콘이 바로
+동작한다.
+
+**화면(`pages/admin.py`)**: 각 행의 "구분" 셀에 작은 "API로 가져오기"/
+"API 연동 예정" 버튼을 추가(`{'type':'du-api','key':...}` 패턴 매칭 id,
+`data_update_run_via_api` 콜백 → `wpr.start_run_via_api([key])`). 안내
+알림에도 이 아이콘이 아직 비활성 상태임을 명시.
+
+**검증**: `register_api_fetch()` 등록 전/후 `run_one(key, via_api=True)`를
+합성 데이터로 직접 실행 — 등록 전엔 명확한 "미연동" 실패 메시지, 등록
+후엔 실제 process_patents.py까지 정상 실행되는 것을 확인. `pages/admin.py`
+레이아웃 렌더링(아이콘 포함) 재확인. 변경 파일 `py_compile` 통과.
+
+## 2026-08-26 (37): team_refer 부서ID(dep_id) 중복 진단 — CLI 경고 + 웹 저장 시 별도 창
+
+배경: team_refer.csv 누적 시 원본(엑셀 또는 웹 그리드)의 행 수보다 저장된
+행 수가 적은 문제를 사용자가 발견 — 원인 중 하나가 같은 부서ID가 같은
+업로드/저장 배치 안에 중복되면(자연키가 (dep_id, valid_year, valid_month,
+valid_day)라 한 번의 저장은 전부 같은 날짜라 dep_id만 같아도 충돌)
+merge_utils.upsert_merge()가 "새 데이터 안에서 키 중복 시 마지막 행만
+채택"해 조용히 사라지는 것. 사용자 요청: (1) python으로 실행할 때
+진단되게, (2) 웹 CRUD 저장 시에는 별도 창(모달)으로 보여주게.
+
+**결정 — 진단 로직을 `pipeline/process_team_refer.py`에 공용 함수로**:
+`find_duplicate_dep_ids(result)`(build_rows_from_records() 결과에서 dep_id
+기준 중복 그룹 탐지, 조직코드/과제파트/부서/상위부서ID/사번/성명까지
+같이 반환해 원본에서 바로 찾을 수 있게 함)와, CLI용 콘솔 출력 헬퍼
+`_print_duplicate_warning()`을 추가. `process()`(CLI 실행,
+`python pipeline/process_team_refer.py`)가 저장 직전에 이걸 호출해
+`[WARN]` 블록으로 어느 dep_id가 몇 번 중복됐고 각 행이 무엇인지 출력한다
+(저장 자체는 계속 진행 — 기존 동작 유지, 알림만 추가).
+
+**웹 저장 경로**: `services/team_refer_store.save_snapshot()`도 같은
+`find_duplicate_dep_ids()`를 호출해 반환값에 `duplicate_dep_ids`를
+추가했고, `pages/admin.py`의 `team_refer_save` 콜백이 이걸로 새
+`dbc.Modal`(`team-refer-dupe-modal`)을 자동으로 열어(사용자 요청 —
+"별도창") 중복된 부서ID별로 행 목록을 표로 보여준다. 인라인
+저장결과 알림에도 "N건 중복" 요약을 같이 남겨 모달을 닫아도 다시 열어볼
+필요가 있다는 걸 놓치지 않게 했다.
+
+**검증**: `find_duplicate_dep_ids()`를 합성 데이터(부서ID 중복 2행 + 부서ID
+공란 1행)로 직접 실행 — 공란 행은 기존처럼 필터링되고, 중복 행만 정확히
+잡히는 것 확인, `_print_duplicate_warning()` 콘솔 출력도 확인. `save_snapshot()`
+반환값에 `duplicate_dep_ids`가 올바르게 채워지는 것, `pages/admin.py`의
+`_dupe_modal_body()`와 전체 admin 레이아웃(모달 포함) 렌더링 모두 오류
+없이 되는 것을 Dash 컨텍스트에서 직접 확인. 변경 파일 `py_compile` 통과.
+**미검증**: 실제 브라우저에서 모달이 열리고 닫히는 클릭 동작.
+
+## 2026-08-26 (38): 명단/팀참조 테이블 UX 5건 — 표시 매핑, 가운데정렬+말줄임+호버, 필터 대소문자, 컬럼 리사이즈, AI검색 오류 메시지
+
+배경: 사용자가 화면을 실제로 써보면서 나온 5가지 요청을 한 번에 반영.
+
+**1) 연구원 명단 부서/과제 표시값을 team_refer 매핑으로 변경**(사용자 확정
+— 매핑 없으면 원본 값 유지, 라벨만 "과제"→"과제/파트"): 확인해보니 지금까지
+명단 표의 '부서'/'과제' 셀은 필터 드롭다운만 team_refer 기준이었고 실제
+표시값은 researchers.csv의 원본 department/org_code 그대로였다(특히
+'과제' 열은 사람이 읽는 라벨이 아니라 raw org_code 코드값이었음). 새
+`services/similarity_map.org_code_label_maps()`(team_refer 한 번 순회로
+org_code→dep_name/pjt_part_name dict 2개를 만듦 — 기존
+`dep_name_for_org_code()`는 1건씩 매번 전체 스캔이라 명단 전체에 그대로
+쓰면 느림)를 `pages/researcher_list.py._build_summary_df()`에 적용했다.
+**중요한 부수 수정**: 부서/과제 드롭다운 필터가 내부적으로 "표의 '과제'
+컬럼 값=org_code"라는 전제로 `display_df['과제'].isin(org_codes)`로
+매칭하고 있었는데, '과제' 컬럼이 이제 라벨을 담게 되면서 이 전제가
+깨진다 — 화면에는 안 보이는 내부 컬럼 `_org_code`를 새로 추가해 필터
+매칭은 계속 `_org_code` 기준으로 하도록 고쳤다(안 고쳤으면 매핑된 모든
+행이 부서/과제 필터에서 안 걸리는 회귀 버그가 났을 것). 엑셀 다운로드도
+동일 기준으로 나가야 해서(사용자 확정) `services/researcher_profile_export.py`의
+`_col_dept_task()`(엑셀의 '부서\n(과제)' 셀)도 같은 매핑을 쓰도록 고쳤다
+— `build_profile_workbook()`이 배치당 한 번만 `org_code_label_maps()`를
+호출해 `_researcher_row_context()`로 실어 보낸다(연구원 수만큼 반복 스캔
+방지). `similarity_map`이 이미 `researcher_profile_export`를 임포트하므로
+순환 임포트를 피하려고 지연 임포트로 가져왔다. AI 검색 결과에 붙는
+7개 기본 컬럼(`researcher_profile_export.PERSON_BASE_COLUMNS`, Job
+Market에서도 재사용)과 프로필 화면은 이번 범위에 포함하지 않음(사용자
+요청 범위가 "명단 표 + 그 엑셀 다운로드"였음).
+
+**2) 팀/리더 참조 + 연구원 명단 테이블 — 가운데 정렬 + 말줄임 + 호버**
+(사용자 확정 — 안 들어가면 스크롤 남는 것도 허용): `pages/admin.py`의
+team-refer-table에 없던 `textAlign: center`/`overflow: hidden`/
+`textOverflow: ellipsis`를 추가하고 폰트·여백을 줄였다. 이미 있는
+컬럼 드래그 리사이즈(`.column-header-name`의 CSS `resize`) 트릭과
+안 부딪히도록 `maxWidth`를 강제하지 않고 `overflow`/`textOverflow`만
+추가해, 사용자가 드래그로 넓힌 폭 기준으로 자연스럽게 말줄임되게 했다.
+말줄임된 셀은 마우스 오버로 전체 내용을 볼 수 있게 `tooltip_data`를
+추가했는데, 이 테이블은 행 추가/삭제/정렬/편집 콜백이 여러 개라 각자
+손보는 대신 `data`를 지켜보는 새 콜백(`team_refer_sync_tooltip`) 하나로
+어디서 바뀌든 자동으로 최신 상태를 유지하게 했다. `pages/researcher_list.py`
+쪽도 동일하게 `tooltip_data`를 추가(`_build_tooltip_data()`, `update_table`
+콜백의 5개 반환 지점 전부)했고, 컬럼 리사이즈 CSS 트릭도 그대로 이식했다.
+
+**3) 연구원 명단 필터 행 — 항상 대소문자 무시 + 아이콘 제거 + 시각적 구분**
+(사용자 확정 — 모두 반영): dash_table의 `filter_action='native'` 필터 행에
+기본으로 붙는 "Aa" 대소문자 토글 아이콘의 실제 DOM(`.dash-filter--case`,
+기본 상태가 "sensitive")을 직접 확인 후, 테이블 레벨 `filter_options=
+{'case': 'insensitive', 'placeholder_text': '🔍 검색...'}`로 기본값 자체를
+바꾸고, 그 토글 아이콘은 `css=[{'selector': '.dash-filter--case', 'rule':
+'display: none;'}]`로 숨겼다(숨겨도 무시 동작 자체는 그대로 유지).
+`style_filter`에 진한 배경(#eaf2fb)과 위/아래 테두리를 추가해 검색 가능한
+행이라는 게 눈에 띄게 했다.
+
+**4) AI 검색 LLM 오류 메시지 정확화**: `LLM2_API_URL` 미설정 시
+`services/nl_query.py`가 "지금 요청이 많아 응답을 만들지 못했습니다.
+잠시 후 다시 시도해주세요"라는, 실제로는 영구적인(재시도해도 절대 안
+풀리는) 문제를 마치 일시적인 것처럼 보여주는 오해의 소지가 있는 메시지를
+띄우고 있었다(코드 버그는 아니고 실제 원인은 환경설정 — `.env`의
+`LLM2_API_URL`/`LLM2_MODEL`을 사내 실제 LLM 엔드포인트로 채워야 함).
+`pipeline/llm_client.py`에 `is_configured()`(LLM2_API_URL 설정 여부만
+빠르게 확인, `call_llm()`의 재시도/HTTP오류 등 다른 실패 사유와는 구분)를
+추가하고, `services/nl_query.py.answer_question()`(전체 파이프라인의
+단일 진입점) 맨 앞에서 확인해 미설정이면 "AI 검색을 지금 사용할 수
+없습니다(사내 LLM 서버 설정이 필요합니다) — 관리자에게 문의해주세요"를
+즉시 보여주도록 했다. `call_llm()` 자체의 반환 계약(항상 문자열, 예외
+없음)은 그대로 둬서 다른 10여 개 호출부(배치 스크립트 등)에 영향이
+없게 했다 — `nl_query.py` 한 곳에서만 사전 체크하는 방식으로 최소
+범위로 고쳤다.
+
+**검증**: 5개 항목 모두 합성 데이터로 직접 실행 확인 — `org_code_label_maps()`
+매핑/폴백(매핑 있음/없음 각각), `_org_code` 기반 필터 매칭 유지,
+`_col_dept_task()` 엑셀 셀 값, `is_configured()` 참/거짓, `team_refer_sync_tooltip()`
+콜백 로직. `pages/admin.py`/`pages/researcher_list.py` 둘 다 Dash 컨텍스트에서
+`layout()` 전체 렌더링 재확인. 변경된 모든 파일 `py_compile` 통과.
+**미검증**: 실제 브라우저에서 CSS 리사이즈/호버 툴팁/필터 아이콘 숨김이
+의도대로 보이는지, 좁은 화면에서 실제로 좌우 스크롤이 없어지는지.
+
+## 2026-08-26 (39): "보유 전문성" 탭 "마지막 갱신"이 실제 분석 시점이 아니라 매번 "지금"을 보여주던 버그 수정
+
+배경: 사용자가 "보유 전문성" 탭의 갱신일자가 계속 최신화되는데
+process_researcher_expertise.py/process_researcher_similarity.py를 최근
+돌린 적이 없다고 지적. 확인해보니 `pipeline/rd_specialist_markdown.py`의
+`generated_at_stat()`이 "이 함수가 호출되는 시점"(`datetime.now()`)을
+찍고 있었는데, 2026-08-19에 보안상 이유로(정적 HTML 파일을
+data/processed/에 남기면 권한체크 없이 파일에 직접 접근 가능) "보유
+전문성" 탭을 열 때마다 `build_html()`을 그 자리에서 매번 새로 렌더링하는
+방식으로 바뀌면서, 탭을 열기만 해도(재분석 없이) "마지막 갱신"이 그
+순간으로 갱신되는 것처럼 보이는 표시 버그가 됐다. 실제로 LLM 분석을
+재실행시키는 스케줄러/크론/자동 트리거는 코드 전체에 없음을 확인(전수
+검색) — 순수 표시 문제였고 재분석이 몰래 도는 게 아니었다.
+
+**결정**: `연구원 보유 전문성 분석.json`/`researcher_similarity.json`을
+저장하는 `process()`가 이제 결과 각 항목에 `computed_at`(YYYY-MM-DD HH:MM,
+그 배치 전체가 공유하는 값 — 항목마다 새로 계산하지 않음)을 함께 찍어
+저장한다(두 파일 다 flat list of dict 구조를 유지 — pipeline/load_to_db.py
+JSON_TABLES 적재기는 dict 키 집합에 제약이 없어 그대로 통과, services/
+data_store.py의 DB-or-JSON 읽기 경로도 항목을 그대로 반환하므로 별도
+수정 불필요). `generated_at_stat()`은 이제 `datetime.now()`를 직접 찍지
+않고 호출부가 넘겨주는 `computed_at` 값을 그대로 보여준다 — 두
+build_html()(process_researcher_expertise.py/process_researcher_similarity.py)이
+각각 `results[0].get('computed_at')`을 뽑아 넘긴다. 값이 없으면(이 필드가
+생기기 전 예전 JSON) "알 수 없음(파이프라인 재실행 필요)"를 보여준다.
+
+**영향받은 다른 호출부**: `generated_at_stat()`을 인자 없이 쓰던
+`pipeline/process_project_expertise.py`(메일 전용 리포트)와
+`pipeline/build_strength_taxonomy.py`(수동 검토 리포트) — 둘 다 "생성과
+동시에 바로 소비되는" 배치 실행형 리포트라 render-time datetime.now()가
+애초에 문제가 안 되는 경우라, 동작을 그대로 보존하기 위해 그 자리에서
+`datetime.now()`를 인자로 넘기도록만 고쳤다(의미상 변화 없음, 시그니처
+변경에 맞춘 최소 수정).
+
+**검증**: `generated_at_stat(computed_at)`가 값 있음/없음 각각 올바르게
+반환하는지, save(각 항목에 computed_at 찍기) → JSON round-trip 저장/로드
+→ `data_store` 읽기 경로와 동일한 방식으로 재구성 → `generated_at_stat()`
+추출까지 합성 데이터로 end-to-end 실행해 원본 계산 시각이 그대로 보존됨을
+확인(여러 번 "읽어도"—즉 탭을 여러 번 열어도—같은 값이 나옴, 기존
+버그였던 매번 다른 값과 대조). 변경된 5개 파일 `py_compile` 통과.
+**미검증**: 실제 LLM 파이프라인을 재실행해 실제 JSON 파일에 필드가
+반영되는 것, 브라우저에서 탭을 여러 번 열어도 값이 고정돼 보이는지.
+파이프라인을 한 번 재실행하기 전까지는 기존 JSON에 이 필드가 없어
+"알 수 없음(파이프라인 재실행 필요)"로 보일 것.
+
+## 2026-08-26 (40): run_ready.py의 Confluence 토큰 미설정 경고 문구가 실제 동작과 반대로 적혀 있던 버그 수정
+
+배경: 사용자가 로컬에서 `python pipeline/run_ready.py` 실행 시 뜨는 "confl_address가
+있는 과제는 PDF 폴백이 없으면 건너뛰어집니다"라는 문구가 실제 동작과 다른
+것 같다고 지적. `pipeline/project_summary.py._get_page_text()`를 확인한
+결과, PDF 폴백(`data/raw/conflue_MPR/{과제명}.pdf`)은 **confl_address가
+아예 없는 과제에서만** 쓰이는 완전히 별개의 분기였다 — confl_address가
+있는 과제는 Confluence만 시도하고 실패(토큰 없음 포함)하면 PDF 폴백을
+전혀 보지 않고 그대로 건너뛴다. 기존 문구는 "confl_address가 있는 과제도
+PDF 폴백이 있으면 살아남는다"는 반대 인상을 줘 사실과 어긋났다.
+
+**결정**: `pipeline/run_ready.py._check_confluence()`의 경고 문구를 실제
+동작대로 정정 — "confl_address가 있는 과제는 (PDF 폴백 여부와 무관하게)
+전부 건너뛰어집니다. confl_address가 없는 과제만
+data/raw/conflue_MPR/{과제명}.pdf 로 계속 처리됩니다."
+
+**검증**: `py_compile` 통과. `pipeline/project_summary.py`/`pipeline/pdf_reader.py`
+소스와 문구를 대조해 실제 분기 조건과 정확히 일치하는지 확인.
+
+## 2026-08-26 (41): 관리자 "개발업데이트 이력" 탭 신설 + 매주 금요일 자동 점검 예약
+
+배경: 6월 초부터 지금까지의 기능 변경 이력을 정리해준 것을 보고, 이걸
+관리자 화면 안에 상시 남겨두고 싶다는 요청 — "데이터 업데이트" 탭 다음
+순서에 "개발업데이트 이력" 탭을 만들어 주 단위로 큰 업데이트/세부사항을
+개조식으로 간략히 기록하고, 앞으로도 매주 금요일(기능 업데이트가 있었던
+주만 — 데이터 업데이트 탭을 통한 단순 데이터/DB 갱신 실행은 제외)마다
+Claude가 스스로 업데이트를 제안해달라는 요청.
+
+**결정 1 — 콘텐츠는 웹 CRUD가 아니라 코드로 관리**: 신규
+`services/dev_updates.py`에 `WEEKS`(주차별 dict 리스트, 최신 주가 맨 앞)를
+두고, 각 항목은 `range_label`(MM.DD – MM.DD)/`major`(주요 업데이트)/
+`detail`(세부사항)로 구성한다. 관리자가 화면에서 직접 입력하는 게 아니라
+Claude가 기능을 만들 때마다(또는 아래 금요일 점검에서) 이 파일에 직접
+추가하는 방식 — "팀/리더 참조"처럼 조직 데이터를 자주 손보는 게 아니라
+"매번 내가 코드를 고칠 때 기록하는" 개발 로그 성격이라 이 편이 더 맞다고
+판단(사용자도 "제가 이 페이지에 남길 것"이라고 확인). 초기 콘텐츠는
+2026-06-01부터 지금까지 git 전체 이력(--all, 253개 커밋)을 훑어 11개
+주차로 정리해 채웠다.
+
+**결정 2 — 화면**(`pages/admin.py._dev_updates_tab()`): "데이터 업데이트"
+탭 바로 다음 탭으로 추가(`tab_id='tab-dev-updates'`). 주차별 카드 하나에
+"주요 업데이트"(진하게)와 "세부사항"(작게, 흐리게) 두 개조식 목록을
+보여준다.
+
+**결정 3 — 매주 금요일 자동 점검**: `create_trigger`로 이 세션에 매주
+금요일(cron `0 0 * * 5`, 09:00 KST) 자동으로 프롬프트가 들어오도록
+예약했다. 지난 7일 git 로그를 보고 "화면에서 체감되는 실제 기능
+변경"이 있었으면 `services/dev_updates.py`에 추가할 내용을 사용자에게
+제안하고, 승인받으면 반영·커밋·푸시까지 한다. 단순 데이터/DB 갱신
+실행 기록·문서/오타 수정만 있는 주·커밋이 아예 없는 주는 조용히
+건너뛰고 사용자에게 보고하지 않는다(잡음 방지).
+
+**검증**: `pages/admin.py`를 Dash 컨텍스트에서 전체 렌더링해 새 탭 포함
+오류 없음 확인. `py_compile` 통과. 트리거 생성 결과(`persist_session: true`,
+`next_run_at`)로 이 세션에 바인딩됐음을 확인.
+
+## 2026-08-26 (42): "현재상태형" 4개 테이블(T&P평가/보유기술/직무이력/업무목표)에
+유효연월 기반 시점 보호 + 별도 이력 테이블 추가
+
+배경: "데이터 업데이트" 탭의 누적 로직을 점검하다, 매니페스트 20개 중
+자연키가 researcher_id 하나뿐인 "현재상태" 그룹(evaluations/
+tech_ownership/job_profile/work_objective — 회차·기간이 자연키에 없어
+업로드 순서만으로 덮어쓰는 구조)은 나중에 실수로 과거 파일을 다시
+올리면 최신 값을 조용히 되돌려버릴 위험이 있음을 확인. 앞으로 미래
+데이터 누적과 과거 데이터 소급 반영이 둘 다 필요해질 것을 감안해,
+이 4개 테이블에 시점 보호 장치를 추가해달라는 요청(사용자 확정 —
+추천안 그대로: 관리자가 업로드 시점에 직접 지정하는 날짜, 연/월
+단위면 충분, 4개 테이블 전부에 별도 이력 테이블도 남김).
+
+**결정 1 — 컬럼은 `valid_year`/`valid_month` 2개, 관리자 지정**:
+team_refer 탭의 "입력 날짜"(`dcc.DatePickerSingle`, 기본값 오늘)와 같은
+UX를 재사용 — 파일 자체의 날짜를 파싱하지 않고 관리자가 "이 업로드가
+어느 시점 기준 데이터인지"를 직접 고른다(연/월만, 일 단위는 불필요–
+사용자 확정).
+
+**결정 2 — `pipeline/merge_utils.py`에 `write_merged_with_valid_period()`
+신설**: 기존 `write_merged()`(자연키 upsert, 시점 개념 없음)와 별도로,
+researcher_id별 저장된 `(valid_year, valid_month)`보다 이번 업로드가
+과거면 그 사람 행만 갱신을 건너뛰고(`skipped` 목록으로 반환, 다른
+사람 행은 정상 반영), 항상 이력 테이블(`*_history.csv`, TABLE_KEYS에
+`researcher_id+valid_year+valid_month`로 등록)에는 건너뛴 것 포함
+전부 추가한다 — "현재값"은 최신만 보호하고 "이력"은 소급 여부와
+무관하게 전부 남기는 두 가지 목적을 분리했다.
+
+**결정 3 — 4개 process_*.py에 동일 패턴 적용**: `process_tp_evaluation.py`
+(→evaluations.csv/evaluations_history.csv), `process_tech_ownership.py`
+(→tech_ownership.csv/_history.csv), `process_job_profile.py`
+(→job_profile.csv/_history.csv), `process_work_objective.py`
+(→work_objective.csv/_history.csv)에 각각 `valid_date: date | None = None`
+파라미터를 추가(기본값 오늘)해 `write_merged()` 호출을
+`write_merged_with_valid_period()`로 교체하고, 건너뛴 사람이 있으면
+실행결과 메시지에 "N명은 기존 저장된 값이 더 최신이라 건너뜀" +
+사유(기존 시점 vs 이번 시점)를 함께 남긴다. `process_work_objective.py`는
+2026-08-26(35)번에서 고친 "이번 실행에 없는 연도 컬럼 보존" 로직과
+공존해야 해서, 연도별 백필은 그대로 두고 그 결과물 전체에 대해서만
+시점 보호를 추가로 씌웠다(둘 다 정상 동작함을 합성 데이터로 확인).
+
+**결정 4 — `services/web_pipeline_runner.py`/`pages/admin.py` 웹 연동**:
+MANIFEST의 해당 6개 항목(evaluations/tech_ownership/job_profile/
+work_objective_24/_25/_26)에 `needs_valid_date=True` 플래그를 추가하고,
+`run_one()`/`run_many()`/`start_run()`에 `valid_date`/`valid_dates`를
+관통시켜 process 호출에 그대로 전달한다. 화면에서는 `needs_valid_date`인
+항목의 "구분" 칸에만 "기준 연/월" DatePicker(기본값 오늘)를 추가로
+보여주고, "전체/선택 실행" 콜백이 그 값들을 모아 `start_run(keys,
+valid_dates=...)`으로 넘긴다. "API로 가져오기" 경로는 아직 API 연동
+자체가 없어(2026-08-26(36)번 확장 포인트) valid_date 없이 기본값(오늘)로
+동작 — 추후 API 연동 시점에 함께 손보면 됨(미결 항목으로 남김).
+
+**검증**: `pipeline/merge_utils.py`의 `write_merged_with_valid_period()`를
+합성 데이터로 직접 실행 — 최초 반영/더 최신 시점 재반영(정상 갱신)/더
+과거 시점 재반영(정상 건너뜀 + 정확한 경고) 3가지 경로 모두 확인,
+이력 테이블에는 매번 스냅샷이 쌓이는 것도 확인. 4개 process_*.py 전부
+동일 시나리오로 개별 실행 검증(`process_work_objective.py`는 연도별
+보존과의 공존까지 함께 확인). `services/web_pipeline_runner.py`의
+`run_one(valid_date=...)`/`start_run(valid_dates=...)`(백그라운드 스레드
+경로 포함)까지 synthetic 업로드로 end-to-end 실행해 지정한 연/월이
+그대로 반영·보호되는 것을 확인. 변경된 모든 파일 `py_compile` 통과.
+**미검증**: 실제 브라우저에서의 DatePicker 조작(샌드박스는 콜백 함수
+직접 호출로만 검증), 실제 다년치 누적 데이터에 대한 장기 운영 시나리오.
+
+## 2026-08-27 (43): `pipeline/run_update.py` 제거 — 웹 "데이터 업데이트" 탭이 대체
+
+배경: 위 (42)번 작업 중 "이 4개 항목의 valid_date가 `run_update.py`(CLI,
+`data/updates/` 폴더 기반 수시 업서트 스크립트)에도 반영되는지" 질문이
+나왔고, 확인해보니 evaluations/tech_ownership/job_profile 3개는 valid_date를
+안 넘겨 항상 오늘 날짜로 찍히고, work_objective는 애초에 `run_update.py`에
+등록조차 안 돼 있었다. 사용자가 이 상태를 보고 "웹 업데이트 기능을
+구현했으니 `run_update.py`는 앞으로 쓸 일이 없을 것 같다"고 판단 —
+2026-08-26(35)번에서 만든 관리자 "데이터 업데이트" 탭이 20개 항목 전부(업로드
+→ 실행 → 로그, 이제는 valid_date 지정까지) 이미 대체하고 있으므로 CLI
+경로를 계속 이중 유지·보수할 이유가 없다고 확인해, 스크립트 자체를
+제거했다.
+
+**결정**: `pipeline/run_update.py` 삭제. `pipeline/paths.py`의 `UPDATES_DIR`
+상수도 이 스크립트 전용이라 함께 제거(다른 모듈은 참조하지 않음 —
+`WEB_UPDATES_DIR`는 `services/web_pipeline_runner.py`가 독립적으로 정의하는
+별개 상수라 영향 없음). `process_researchers.py`/`process_comments.py`
+docstring·주석에 남아있던 `run_update.py`/`data/updates` 언급은 일반적인
+"raw_dir 오버라이드 가능" 설명으로 정리(각 process_*.py의 `raw_dir` 인자
+자체는 web_pipeline_runner가 `data/web_updates/<key>`를 넘기는 데 여전히
+쓰이므로 그대로 둠). `data/updates/` 폴더 자체(사용자가 로컬에 파일을 넣어둔
+경우)는 코드가 참조하지 않게만 됐을 뿐 건드리지 않았다.
+
+**검증**: 레포 전체에서 `run_update`/`UPDATES_DIR` 문자열 검색 — 이 문서
+(과거 이력) 외에는 참조가 전혀 남지 않은 것 확인. 배포 설정(Dockerfile/
+docker-compose/README 등)에도 원래부터 참조가 없었음(수동 CLI 실행 전용
+스크립트였음). 변경된 파일 `py_compile` 통과.
+
+## 2026-08-27 (44): 누적 로직 전수 점검 중 발견한 2건(researchers/core_technology)에
+유효연월 시점 보호 적용
+
+배경: (42)번에서 "현재상태형" 4개 테이블에 유효연월 보호를 넣은 뒤, 나머지
+매니페스트 항목들도 미래 누적/과거 소급 관점에서 안전한지 전수 점검했다.
+`merge_utils.py`의 `TABLE_KEYS`/실제 `process_*.py` 코드를 하나씩 대조한
+결과 두 가지를 발견:
+
+1. **researchers.csv**: `is_current` 재계산 로직은 있었지만, 그건 "전체
+   파일에서 가장 최근 (valid_year, valid_month)"만 보고 각 행에 Y/N을
+   다시 매기는 것일 뿐 — 필드 값(부서/CL/직무 등) 자체는 시점 보호 없이
+   researcher_id 하나만으로 그냥 덮어써졌다. 옛날 헤드카운트 파일을 나중에
+   실수로 재업로드하면 그 사람 행의 필드 값들이 옛날 값으로 되돌아간 채
+   `is_current='N'`으로만 표시되고, 다음 정상 업로드 전까지 오염된 상태로
+   남는 문제가 있었다. (42)번과 동일한 B그룹 취약점.
+2. **core_technology.csv**: `merge_utils.py`의 `TABLE_KEYS`에는
+   `['researcher_id', 'tech_field', 'tech_name']`가 등록돼 있어 업서트로
+   보호되는 것처럼 보였지만, **`process_core_technology.py`가 `merge_utils`를
+   아예 import하지 않고 `result.to_csv()`로 매 실행마다 파일 전체를
+   덮어쓰고 있었다** — 등록부와 실제 동작이 어긋난 버그. 부분 인원만 담긴
+   파일을 올리면 나머지 사람 데이터가 전부 사라지고, 옛날 파일을 재업로드하면
+   최신 데이터 전체가 옛날 것으로 되돌아갔다(단순 시점 문제보다 심각 —
+   "이번 파일에 없으면 보존"조차 안 되는 상태).
+
+**결정 1 — `write_merged_with_valid_period()`를 다중 컬럼 키로 일반화**:
+기존 구현은 "그 사람의 기존 저장값"을 찾을 때 `researcher_id` 컬럼을
+하드코딩해 조회했다. core_technology는 "현재상태" 판정 단위가 사람 1명이
+아니라 (사람, 기술분야, 핵심기술) 조합이라, 그대로는 재사용할 수 없었다.
+`keys` 매개변수(원래도 `write_merged()`에 넘기던 그 자연키) 자체를
+기준으로 조회 dict를 만들도록 일반화해서, 기존 4개 호출부(단일 컬럼
+`['researcher_id']`)는 동작 변화 없이 그대로 두고 core_technology
+(3컬럼 키)도 같은 함수로 처리되게 했다. 반환값의 `skipped` 항목에
+`entity`(키 컬럼 전체를 담은 dict) 필드를 추가하되 기존 `researcher_id`
+필드는 유지해 기존 4개 호출부의 경고 출력 코드는 수정 없이 그대로 동작한다.
+
+**결정 2 — researchers.csv**: `process()`는 admin이 날짜를 따로 지정할
+필요가 없다 — 원본 컬럼(인원실적년도/월)에서 이미 행마다 valid_year/
+valid_month를 추출해두므로 그 값을 그대로 시점 키로 재사용해
+`write_merged_with_valid_period()` 한 번으로 researchers.csv 업서트 +
+researchers_history.csv 저장을 함께 처리하도록 교체(기존에는 이 둘을
+각각 별도 `write_merged()` 호출로 처리했음 — 동작은 그대로, 시점 보호만
+추가됨). 저장 후 파일을 다시 읽어 기존과 동일하게 `is_current`를
+재계산한다. 웹 "데이터 업데이트" 탭에는 변경 없음(이 항목은 원래도
+`needs_valid_date` 대상이 아님 — 날짜를 admin이 지정하는 게 아니라
+데이터 자체에 있으므로).
+
+**결정 3 — core_technology.csv**: 4개 B그룹과 동일한 패턴으로 전환 —
+`valid_date` 파라미터 추가(기본값 오늘), `write_merged_with_valid_period()`
+호출, 신규 `core_technology_history.csv` + `TABLE_KEYS['core_technology_history']
+= [researcher_id, tech_field, tech_name, valid_year, valid_month]` 등록.
+`services/web_pipeline_runner.py`의 MANIFEST에 `needs_valid_date=True`
+추가 — 관리자 웹 화면에 "기준 연/월" DatePicker가 자동으로 뜬다(admin.py는
+`needs_valid_date` 플래그만 보고 렌더링하므로 화면 쪽 추가 수정 불필요).
+
+**검증**: `write_merged_with_valid_period()`를 합성 데이터로 직접 실행 —
+core_technology는 (1) 부분 인원 파일 업로드 시 기존 다른 사람 데이터가
+더 이상 삭제되지 않는 것(옛 버그 재현·수정 확인), (2) 같은 (사람,분야,
+기술) 조합에 대한 과거 시점 재업로드가 정확히 건너뛰어지는 것, (3) 더
+최근 시점 업로드는 정상 반영되는 것, (4) 이력 테이블에 건너뛴 것 포함
+모든 시점이 쌓이는 것을 확인. researchers.csv도 동일한 4가지 시나리오를
+합성 헤드카운트 파일로 확인(부서 필드가 과거 재업로드에 더 이상
+오염되지 않음, is_current 재계산은 기존과 동일하게 정상 동작).
+`services/web_pipeline_runner.py`의 `run_one()`을 통한 실제 웹 업로드
+경로로도 core_technology를 end-to-end 확인. 기존 4개(B그룹) 호출부가
+일반화된 `write_merged_with_valid_period()`로도 그대로 동작하는지
+`py_compile` + 코드 검토로 확인(반환 dict의 `researcher_id` 필드 유지로
+하위 호환). 변경된 모든 파일 `py_compile` 통과.
+
+## 2026-08-28 (45): 데이터 관리 구조 점검 ① — 원본 파일 아카이브 + DB 이력 반영
+
+배경: "원본 → CSV → DB" 전체 흐름을 다시 점검하며 세 가지를 확인했다.
+(1) 원본 파일은 웹 업로드든 CLI(`data/raw/`)든 새 파일이 오면 이전 파일이
+그 자리에서 사라져 재처리·감사 추적이 불가능했다. (2) `load_to_db.py`는
+매번 `to_sql(if_exists='replace')`로 테이블을 통째로 지우고 다시 채우는
+"CSV의 미러"일 뿐 자체 누적이 없는데, 그마저 (42)~(44)번에서 만든 6개
+`*_history.csv`와 `work_objective.csv`/`leadership_comments.csv`가 적재
+대상 목록에서 아예 빠져 있어 CSV에 쌓인 이력이 DB에는 전혀 반영되지
+않고 있었다. (3) "누적기준" 화면 토글은 시점별 이력 조회가 아니라
+researchers.csv 안에서 과거 재직자를 안 지우고 같이 보여주는 것뿐이라,
+"그 사람이 특정 시점엔 어땠는지" 조회는 애초에 불가능했다. 사용자가
+원하는 목표 구조(원본 별도 보관 + 최신/누적 CSV + DB 반영)와 대조해
+차이를 좁히는 작업— 총 3단계 중 앞 2단계(저장 구조).
+
+**결정 1 — 원본 파일 무제한 아카이브(신규 `pipeline/raw_archive.py`)**:
+`archive_raw_file()`/`archive_raw_bytes()`가 원본을
+`data/raw_archive/<구분>/<YYYYMMDD_HHMMSS>_<원본파일명>`으로 복사한다
+(사용자 확정 — 무제한 보관, 정리 정책은 추후 판단). 웹 업로드
+(`web_pipeline_runner.save_upload()`, 기존 "덮어쓰기 전 삭제" 로직은
+그대로 두고 저장 직후 한 번 더 아카이브)와 CLI 1단계
+(`xlsx_to_raw_csv.py`, 이번 실행에 실제로 쓰인 원본을 변환 직전 아카이브)
+양쪽에서 호출한다. 아카이브 실패가 실제 업로드/변환을 막으면 안 되므로
+`OSError`는 무시하고 진행. `.gitignore`에 `data/raw_archive/` 추가.
+
+**결정 2 — DB 적재 목록에 누락된 8개 테이블 추가**: `load_to_db.py`의
+`TABLES`에 `researchers_history`/`evaluations_history`/
+`tech_ownership_history`/`job_profile_history`/`work_objective_history`/
+`core_technology_history`(6개, CSV엔 쌓이는데 DB 적재만 빠져 있었음)와
+`work_objective`/`leadership_comments`(현재값 파일조차 DB에 없었던 별개
+누락)를 추가했다. 로직 변경 없이 리스트에 8줄만 추가 — `_load_csv_tables()`
+가 이미 제너릭하게 순회하고, `services/data_store.py`의 `_read_from_db()`도
+`SELECT * FROM {name}`으로 테이블명에 구애받지 않아 추가 코드 변경이
+필요 없었다.
+
+**검증**: `archive_raw_file()`/`archive_raw_bytes()`를 합성 데이터로 직접
+호출 — 같은 초에 두 번 호출해도 파일명이 충돌하지 않고 둘 다 보존되는
+것, 원본이 없을 때 조용히 `None`을 반환하는 것 확인.
+`web_pipeline_runner.save_upload()`를 실제로 두 번 호출해
+`data/raw_archive/<key>/`에 두 버전이 모두 남는 것 확인.
+`load_to_db.py`의 `TABLES` 30개 중복 없음 확인, `py_compile` 통과,
+`DATABASE_URL` 미설정 시 기존과 동일하게 안내만 출력하고 종료하는 것
+확인(샌드박스에 실제 Postgres가 없어 실제 적재 자체는 미검증 — 로직은
+기존 20여 개 테이블과 완전히 동일한 제너릭 루프라 리스크 낮음).
+
+**다음(3단계)**: 명단/AI검색 화면에 기간(날짜 범위) 지정 조회 추가 —
+`researchers_history.csv`를 이용해 "2023-05-01~2024-03-31 사이 소속돼
+있던 사람" 같은 질의를 지원하는 작업은 별도로 진행.
+
+## 2026-08-28 (46): 데이터 관리 구조 점검 ② — 연구원 명단에 기간(날짜 범위)
+지정 누적기준 조회 추가
+
+배경: (45)번에서 "누적기준" 토글이 시점별 이력 조회가 아니라 researchers.csv
+안에서 과거 재직자를 안 지우고 같이 보여주는 것뿐임을 확인했다. 사용자가
+"2023년 5월 1일 ~ 2024년 3월 31일처럼 기간을 정해서 그 시점의 소속을
+조회하고 싶다"고 요청 — 명단 화면에 실제로 `researchers_history.csv`
+(연구원별 월별 스냅샷, (42)/(45)번에서 이미 쌓이고 있었음)를 활용하는
+첫 조회 기능을 추가했다(AI 검색까지의 확장은 범위/난이도를 별도로
+재평가하기로 하고 이번엔 명단 화면만).
+
+**결정 1 — 화면(`pages/researcher_list.py`)**: "검색 기준" 라디오가
+'누적기준'일 때만 `dcc.DatePickerRange`(id `list-period-range`)가
+활성화된다. 기간을 지정하지 않으면 기존과 동일하게 동작(하위 호환).
+기간을 지정하면 부서/과제/직급/직책 필터가 다시 켜진다 — 기존엔 "누적
+기준에서는 조직 배치가 최신 시점 기준이 아닐 수 있어" 꺼뒀지만, 기간을
+지정한 순간부터는 그 시점 기준 값이라 다시 의미가 있다(`toggle_org_filters`
+콜백에 기간 두 Input을 추가해 판단).
+
+**결정 2 — 데이터(`_resolve_period_snapshot()`, 신규)**:
+`researchers_history.csv`에서 (valid_year, valid_month)가 [시작, 종료]
+구간에 속하는 행만 골라, researcher_id별로 그 구간 안에서 가장 최근
+스냅샷 1행을 대표값으로 쓴다("이 기간 동안 소속돼 있었고, 그 기간의
+마지막 시점엔 이런 상태였다") — 구간에 스냅샷이 하나도 없는 사람은
+"그 기간엔 존재를 확인할 수 없음"으로 보고 결과에서 제외한다.
+`_build_summary_df(period=...)`가 이 결과를 기존 `res`(researchers.csv)
+자리에 그대로 꽂아 넣어, 평가/논문/특허/수상/학력 등 나머지 집계 로직은
+전혀 손대지 않았다 — 다만 이 항목들(및 직책 — team_refer 조회)은 여전히
+"현재" 기준이라 기간과 정확히 일치하지 않을 수 있다는 한계는 남는다
+(1차 범위, 필요시 추후 확장).
+
+**결정 3 — 표시**: 기간 지정 시 '현재소속' 대신 '조회기간 기준' 컬럼에
+그 사람 대표 스냅샷의 연-월을 보여준다(`_ESSENTIAL_COLUMNS`에 추가,
+`researchers.csv`/history 어느 쪽에서도 해당 컬럼이 없으면 자동으로
+숨겨짐).
+
+**검증**: `_resolve_period_snapshot()`을 합성 이력 데이터(한 사람이 구간
+안에 2개, 구간 밖에 1개 스냅샷)로 직접 실행 — 구간 안 최신 스냅샷만
+정확히 골라지는 것, 구간 밖 전용 인원은 제외되는 것, 완전히 빈 구간은
+0행을 반환하는 것 확인. `_build_summary_df(period=...)`까지 이어서
+실행해 '조회기간 기준' 컬럼이 정확한 연-월로 채워지는 것 확인. `dash.Dash`
+컨텍스트에서 `layout()`을 실제로 렌더링해 새 UI 컴포넌트 포함 오류 없음
+확인. `py_compile` 통과.
+
+**미검증**: 실제 브라우저에서의 DatePickerRange 조작, 대규모(1500명대)
+`researchers_history.csv`에서의 실제 응답 속도(샌드박스 데이터가 소규모라
+성능은 별도 확인 필요).
+
+## 2026-08-28 (47): 데이터 관리 구조 점검 ③ — AI 검색에도 기간(날짜 범위)
+지정 조회 확장 + 저장 구조 설계 검토
+
+배경: (46)번(명단 화면 기간 지정)에 이어 "AI 검색에도 이력을 반영하자"는
+요청. 진행 전에 사용자가 제안한 대안 구조("항목별 CSV 1개에 과거~현재
+전체를 누적하고, 조회 시점에 최신/최근접을 계산")를 현재 구조("현재값
+파일 + 별도 이력 파일", (42)~(46)번)와 비교 검토했다 — 결론: 사용자가
+설명한 "누적(지금 기준 최근접)" 동작은 이미 `<table>.csv`(researcher_id
+업서트, 항상 그 사람의 마지막 확인값을 보존)로 정확히 구현돼 있어(기존
+"누적기준" 토글이 `is_current` 필터만 빼고 이 파일을 그대로 보여줌),
+단일 테이블로 재구조화해도 기능상 달라지는 게 없다. 반면 재구조화하려면
+`read_processed('researchers')`류를 호출하는 앱 전역 수십 곳이 전부
+"매번 최신/최근접을 계산하는" 형태로 바뀌어야 해서(현재 구조는 이미
+계산된 값을 캐시처럼 읽기만 함) 이번 세션에서 지향한 "적은 수정" 원칙과
+정반대 방향이라고 판단 — 현재 2-파일 구조를 유지하기로 확정.
+
+**결정 1 — `services/open_data_query.py`에 기간 규칙 추가**: 기존
+`_CURRENT_ONLY_RULE`/`_CUMULATIVE_RULE`(SQL 생성 프롬프트에 주입되는
+지시문)에 `_PERIOD_RULE_TEMPLATE`을 추가 — period가 주어지면 이 규칙이
+둘 다를 대체한다. LLM에게 "현재상태 테이블/is_current 대신 *_history
+테이블을 쓰고, 지정한 기간(YYYY-MM~YYYY-MM)으로 스냅샷을 필터링한 뒤
+`QUALIFY ROW_NUMBER() OVER (PARTITION BY researcher_id ORDER BY
+valid_year, valid_month DESC) = 1`(또는 동등한 서브쿼리)로 그 기간 안
+최신 스냅샷 1건만 사람별 대표값으로 쓰라"고 명시적으로 지시한다.
+`_generate_sql()`/`_generate_sql_repair()`/`answer()` 모두 `period`
+매개변수를 받아 이 규칙 선택에 반영한다.
+
+**결정 2 — 데이터 발견은 이미 자동, 권한만 추가**:
+`open_data_query._discover_csv_tables()`가 `data/processed/*.csv`를 매번
+동적으로 스캔하므로 `researchers_history.csv` 등은 이미 자동으로
+"발견"되고 있었다 — 다만 `config/auth_config.py`의 `TABLE_PERMISSIONS`가
+AI 검색이 쓸 수 있는 테이블의 명시적 화이트리스트라(없으면 기본 거부),
+`researchers_history`/`evaluations_history`/`tech_ownership_history`/
+`job_profile_history`/`core_technology_history` 5개를 각각 대응하는
+현재상태 테이블과 동일한 민감도(`view_evaluation` 등)로 추가했다.
+`work_objective`는 원래도 AI 검색 화이트리스트에 없어(별개의 기존
+제품 결정) `work_objective_history`도 이번엔 함께 제외했다.
+
+**결정 3 — UI/파라미터 전달 경로**: `pages/researcher_list.py`에 이미 있는
+`list-period-range`(DatePickerRange, (46)번)를
+`components/nl_query_bar.py`의 검색 콜백이 그대로 State로 공유해
+재사용한다(별도 UI 추가 없음 — "검색 기준"이 명단·AI검색 두 화면에
+따로 있으면 헷갈린다던 기존 설계 원칙을 그대로 따름). 날짜(YYYY-MM-DD)에서
+일자는 버리고 "YYYY-MM" 튜플로 `nl_query.answer_question(question,
+current_only=..., period=...)` → `execute_query()` → `open_data_query.
+answer()`까지 그대로 전달한다. 구조화 3-intent(전문성/유사도/기준검색)는
+애초에 "지금 기준 vs 전체"만 구분하고 특정 과거 시점 개념이 없어 이번
+확장 대상에서 제외(open_data_query 경로에만 적용).
+
+**검증**: `_period_or_current_rule()`을 직접 호출해 period 유무에 따라
+올바른 규칙 문자열이 선택되고 날짜가 정확히 보간되는 것 확인.
+`_discover_csv_tables()`가 합성 `researchers_history.csv`를 실제로
+발견하는 것, `TABLE_PERMISSIONS`에 5개 항목이 정확히 등록된 것 확인.
+`nl_query.answer_question(period=...)`을 호출해 새 매개변수가 있어도
+기존 "LLM 미설정" 안내 분기가 그대로 정상 동작(크래시 없음)하는 것
+확인(샌드박스에 LLM 서버가 없어 실제 SQL 생성·실행 자체는 미검증).
+`pages/researcher_list.py` 레이아웃을 `components.nl_query_bar`와 함께
+렌더링해 콜백 등록/컴포넌트 트리에 오류 없음 확인. 변경된 모든 파일
+`py_compile` 통과.
+
+**미검증**: 실제 LLM을 통한 기간 지정 SQL 생성·실행(사내 LLM 서버 필요),
+실제 브라우저에서 AI 검색 입력창 + 기간 선택을 함께 쓰는 시나리오.
+
+## 2026-08-28 (48): "관리자 지정 시점" 6개 항목에 대량 소급 백필 업로드 추가
+
+배경: (44)~(47)번을 거치며 evaluations/tech_ownership/core_technology/
+work_objective_24~26(job_profile 제외, 아래 참고) 6개 항목은 "파일 1개 +
+날짜 1개"만 한 번에 반영할 수 있었다 — 원본 파일 자체에 시점 컬럼이 없어
+매번 관리자가 화면에서 날짜를 지정해야 하는 구조라, 수개월~수년치를
+한꺼번에 소급 반영하려면 그만큼 반복해야 했다. 사용자가 "파일명에 시점을
+명시(예: T&P 기본 인사정보 *_YYMM.xlsx)"를 제안했고, 검토 후 6자리
+`_YYYYMM`(4자리보다 세기 모호함이 없음)로 다듬어 확정.
+
+**결정 1 — 신규 `pipeline/backfill_utils.py`**: `parse_backfill_date(filename)`
+하나 — 파일명 끝(확장자 앞)의 `_YYYYMM`을 찾아 그 달 1일의 `date`로
+반환한다. 없거나 형식이 안 맞으면 `None`(=백필 대상 아닌 일반 업로드로
+취급, 기존 동작 완전히 유지).
+
+**결정 2 — 저장은 별도 폴더, 실행은 오래된 시점부터 순차 반영**:
+`data/web_updates/_backfill/<key>/`(기존 `_key_dir(key)`와 분리 — 기존
+"정규 슬롯" 로직인 `uploaded_files()`/`has_upload()`가 이 폴더를 파일로
+오인하지 않게 하기 위함)에 `_YYYYMM` 파일명 업로드를 계속 누적해서
+쌓아둔다(기존 슬롯처럼 삭제 후 교체하지 않음). `run_one()`이 실행될 때
+`_run_backfill_batch()`가 이 폴더의 파일들을 파싱한 날짜 오름차순으로
+정렬해 하나씩 — 파일마다 그 파일 하나만 담은 임시 폴더를 만들어(exact
+모드는 원래 기대하는 정확한 파일명으로 복사, wildcard 모드는 원본
+파일명 그대로 — 이미 패턴에 맞으므로) `module.process(raw_dir=임시폴더,
+valid_date=파싱된날짜)`를 호출한다 — process_*.py 쪽 로직은 전혀 손대지
+않았다. 순서가 뒤섞여 있어도 (42)~(44)번의 시점 보호가 이미 순서 무관하게
+안전하지만, 건너뜀 경고를 줄이려고 오래된 것부터 처리한다. 배치 처리 후
+정규 슬롯(있으면, 관리자가 고른 날짜로)도 이어서 처리하고, 결과를
+"백필 N건 중 M건 반영 (+ 정규 업로드 결과)" 형태로 합쳐 기록한다. 백필
+파일은 실행 후 지운다(원본은 raw_archive에 이미 무제한 보관돼 있어 안전,
+같은 파일이 재실행 때 중복 반영되는 것만 방지).
+
+**결정 3 — 화면**: `_upload_box()`에 `multiple` 옵션을 추가해 이 6개
+항목의 업로드 드롭존만 `dcc.Upload(multiple=True)`로 바꿨다(그 외 항목은
+기존과 동일하게 단일 파일). 여러 파일을 한 번에 끌어놓으면 업로드 콜백이
+파일명이 `_YYYYMM`으로 끝나는 것만 백필로 인식해 쌓고, 나머지는 기존
+단일 슬롯 규칙 그대로 처리한다("_YYYYMM"이 없는 파일을 이 드롭존에 여러
+개 끌어놓아도 안전하게 마지막 하나만 정규 슬롯에 남는다 — 기존 exact/
+wildcard 저장 로직 그대로). 업로드 셀에 "백필 대기 N건(YYYY-MM ~
+YYYY-MM)" 안내를 추가하고, 날짜 선택기 옆에는 백필 파일에는 이 값이
+적용되지 않는다는 안내를 붙였다.
+
+**결정 4 — job_profile 제외**: legacy 이력 + "내 리포트" 병합이 선행돼야
+하는 구조(`mode='dual'`, `merge_job_profile_source.py`)라 이번 백필
+메커니즘을 그대로 적용할 수 없다(사용자 확정 — 이번 범위에서 제외,
+필요해지면 별도 설계).
+
+**검증**: `tech_ownership`(exact)로 뒤섞인 순서(2024-01, 2023-12, 2024-03)
+3개 백필 업로드 → 오름차순으로 정확히 정렬돼 처리되고, 최종 현재값은
+2024-03(최신), 이력에는 3건 모두 쌓이는 것을 확인. `evaluations`
+(wildcard)로 백필 1건 + 정규 슬롯 1건을 같은 실행에 섞어 넣어 각자
+의도한 시점(2023-05 / 관리자 지정 2026-08)으로 올바르게 반영되는 것,
+결과 메시지가 두 결과를 합쳐 보여주는 것 확인. `core_technology`로
+3건 중 1건(필수 컬럼 누락)이 실패하는 상황에서 나머지 2건은 정상
+반영되고 실패 사유가 정확히 보고되는 것, 백필 폴더가 실행 후 비워지는
+것 확인. `pages/admin.py`의 `_data_update_row()`/`_data_update_table()`을
+합성 스냅샷으로 직접 렌더링해 백필 안내 UI 포함 오류 없음 확인. 변경된
+모든 파일 `py_compile` 통과.
+
+**미검증**: 실제 브라우저에서 `dcc.Upload(multiple=True)`로 여러 파일을
+한 번에 드래그해 올리는 시나리오, 대용량(수십~수백 개) 백필 파일에서의
+처리 시간.
+
+## 2026-08-28 (49): evaluations 백필이 회계연도 컬럼을 "오늘 기준"으로 찾아
+전부 실패하던 버그 수정
+
+배경: (48)번 백필 기능을 만든 뒤 "T&P(평가)는 회계연도(매년 3월 시작) 기준
+동적 컬럼인데, 과거 시점을 검색하면 그 시점 기준 3년을 보여주는지 현재
+기준 3년을 보여주는지" 질문을 받고 코드를 다시 보니, `services.evaluations.
+evaluation_years()`가 `pipeline/process_tp_evaluation.py`에서 `valid_date`
+없이(인자 없이) 호출되고 있어 항상 실제 오늘 날짜 기준으로 회계연도를
+계산하고 있었다. 단순히 "표시가 살짝 안 맞는" 정도가 아니라, **(48)번
+백필 기능이 evaluations에 대해서는 실질적으로 동작하지 않는 버그**였다 —
+합성 데이터로 재현: 2023-05 시점 T&P 파일(실제로는 "2023/2022/2021
+연봉등급" 컬럼을 가짐)을 오늘(2026-08) 백필로 올리면, 코드가 오늘 기준
+회계연도 컬럼("2026/2025/2024 연봉등급")을 그 파일에서 찾다가 전부
+실패해 `[SKIP] 추출된 평가 데이터가 없습니다`로 끝나고 아무 것도 반영되지
+않았다.
+
+**결정**: `process()`에서 `valid_date = valid_date or date.today()` 계산을
+`evaluation_years()` 호출보다 앞으로 옮기고, `evaluation_years(today=
+valid_date)`로 호출하도록 수정(1줄 순서 변경 + 인자 하나 추가, 아래쪽의
+중복된 `valid_date` 재계산 줄은 제거). 이렇게 하면 원본 파일에서 찾는
+컬럼명도, 결과에 저장되는 컬럼명도 모두 "그 파일이 실제로 대표하는 시점"
+기준 회계연도가 된다.
+
+**남은 과제(합의 후 진행 예정)**: 저장(파이프라인) 쪽만 이번에 고쳤다.
+조회(AI 검색의 기간 지정 질의) 쪽은 `evaluations_history`에서 특정 과거
+시점을 물었을 때 어느 연도 컬럼(예: 2023년 조회 시 `2023_salary_grade`)을
+봐야 하는지가 (47)번 프롬프트 규칙에 명시돼 있지 않아 LLM 추론에 맡겨진
+상태 — 필요하면 회계연도 매칭 규칙을 프롬프트에 명시적으로 추가할 것.
+명단 화면의 기간 지정 기능((46)번)은 애초에 부서/직급만 그 시점 기준으로
+보여주고 평가등급은 여전히 "현재" 값을 보여주도록 설계돼 있어(범위를
+의도적으로 좁혔음) 그대로 둘지 확장할지도 별도 결정 필요.
+
+**검증**: 위 2023-05 재현 시나리오를 수정 후 재실행 — "2023_salary_grade,
+2022_salary_grade, 2021_salary_grade, ..." 등 올바른 시점 기준 컬럼으로
+정상 반영되는 것 확인. `valid_date` 없이(일반 업로드, 오늘 날짜 파일)
+호출하는 기존 경로도 동일한 결과("2026/2025/2024_salary_grade" 등)로
+회귀 없이 그대로 동작하는 것 확인. `py_compile` 통과.
+
+## 2026-08-28 (50): (49)번의 "남은 과제" 두 건 마무리 — AI 검색 프롬프트에
+회계연도 매칭 규칙 명시 + 명단 화면 기간 지정 조회에 평가등급도 반영
+
+배경: (49)번에서 evaluations 파이프라인의 회계연도 버그를 고치며 남겨둔
+두 가지 후속 항목을 이어서 처리했다.
+
+**1) 명단 화면 기간 지정 조회 — 평가등급도 그 시점 기준으로**
+(`pages/researcher_list.py`): (46)번에서 만든 "누적기준 + 기간(날짜
+범위) 지정" 조회는 부서/직급 등은 `researchers_history.csv`로 그 시점
+값을 보여주면서도, 평가등급 열은 여전히 오늘 기준 `evaluations.csv`
+(`_EVAL_SALARY_YEARS`/`_EVAL_GRADE_COLUMNS`, 모듈 로드 시점에 고정)를
+그대로 썼다 — 설계 당시 범위를 의도적으로 좁혔던 부분. `_resolve_period_snapshot()`
+을 `researchers_history` 전용에서 `table` 매개변수를 받는 범용 함수로
+일반화해 `evaluations_history.csv`에도 재사용하고, `_build_summary_df()`가
+`period`가 주어지면 그 기간의 마지막 평가 스냅샷(`eva`)과, `period[1]`
+(조회 기간의 끝)을 기준 시점으로 삼아 다시 계산한 회계연도 3개년
+(`eval_salary_years`/`eval_grade_columns`, `evaluation_years(today=
+period[1])` — (49)번에서 고친 `process_tp_evaluation.py`와 동일한 원리)을
+쓰도록 했다. `grades = {...}` 조립부도 이 새 지역변수를 쓰도록 함께
+고쳤다(처음엔 지역변수만 만들어 놓고 이 조립부를 놓쳤던 실수를 바로
+잡음).
+
+**부수 발견·수정 2건**(위 변경 중 함께 드러난, 손대지 않으면 회귀가 될
+문제들):
+- `_apply_permission_filter()`가 평가등급 열람 권한이 없을 때 지울 컬럼을
+  고정 목록(`_EVAL_GRADE_COLUMNS`, 오늘 기준)으로만 찾고 있어서, 기간
+  지정 조회로 다른 연도의 컬럼("'23평가" 등)이 생기면 그 컬럼은 권한
+  필터를 피해 그대로 노출되는 실제 보안 문제가 있었다. 컬럼명 정규식
+  (`_EVAL_GRADE_PATTERN = re.compile(r"^'\d{2}평가$")`)으로 df에 실제
+  존재하는 평가등급 컬럼을 그때그때 찾아 지우도록 일반화했다.
+- 조건부 색상 스타일(`_GRADE_STYLES`)도 같은 이유로 모듈 로드 시점에
+  고정된 오늘 기준 컬럼에만 적용되고 있었다 — `_grade_styles_for(columns)`/
+  `_style_data_conditional_for(columns, show_eval)`로 일반화해, `layout()`
+  뿐 아니라 `update_table` 콜백도 매번 실제 표시되는 컬럼 기준으로 다시
+  계산하도록 새 `Output('researcher-table', 'style_data_conditional')`을
+  추가했다(기존엔 이 콜백에 이 Output 자체가 없어 layout 최초 렌더링
+  값이 이후 AI 검색 결과 등으로 컬럼이 바뀌어도 전혀 안 갱신되고
+  있었다 — 실질적으로는 죽은 기능이었던 것도 함께 바로잡음).
+
+**2) AI 검색 프롬프트 — 회계연도 매칭 규칙 명시**(`services/open_data_query.py`):
+`_PERIOD_RULE_TEMPLATE`(기간 지정 시 *_history 테이블/기간 내 최신
+스냅샷 사용을 지시하는 규칙)에 이어, 신규 `_evaluation_period_hint(period)`가
+`services.evaluations.evaluation_years(today=period[1]로 만든 date)`로
+그 기간에 실제로 대응하는 연봉등급/상하반기업적 컬럼명을 **미리 계산해
+리터럴로** 프롬프트에 박아 넣는다(LLM이 "회계연도가 몇인지"를 스스로
+추론하게 두지 않음 — 명단 화면·파이프라인과 동일한 단일 계산 로직을
+공유해 세 곳이 서로 다른 연도를 가리킬 위험을 없앴다). `_period_or_current_rule()`
+이 period가 있을 때 이 힌트를 기존 기간 규칙 뒤에 이어 붙인다.
+
+**검증**: `_resolve_period_snapshot(period, table='evaluations_history')`로
+합성 이력 데이터(2023-05/2026-08 두 스냅샷)를 읽어 기간(2023-05~2024-03)
+안의 최신 스냅샷이 정확히 골라지는지, `_build_summary_df(period=...)`가
+그 스냅샷의 회계연도 기준 컬럼("'22평가"/"'23평가"/"'24평가")과 값을
+정확히 조립하는지 확인. `_apply_permission_filter()`가 기간 지정으로
+생긴 "'23평가" 같은 컬럼도 정규식으로 찾아 권한 없을 때 실제로 지우는
+것 확인. `_style_data_conditional_for()`가 AI 검색 결과로 붙은 임의
+연도의 평가등급 컬럼에도 등급별 색상 규칙을 정확히 만들어내는 것 확인.
+`services/open_data_query.py`의 `_period_or_current_rule(True, ('2023-05',
+'2024-03'))`을 직접 호출해 기간 규칙 + 회계연도 힌트("FY2024" 기준
+2022~2024년 컬럼명, 2021~2023년 반기 컬럼명)가 정확히 렌더링되는 것 확인.
+변경된 두 파일 모두 `py_compile` 통과.
+
+**미검증**: 실제 사내 LLM을 통한 기간 지정 질문의 실제 SQL 생성(이
+프롬프트 힌트가 실제로 LLM의 컬럼 선택을 개선하는지는 사내 LLM 서버
+접근 환경에서 확인 필요), 실제 브라우저에서의 조작.
+
+## 2026-08-29: 나이 "-" 표시 버그 수정 + T&P(평가) 역량 필드 추가 + 상하반기업적 값 제한 제거
+
+세 가지 요청을 처리했다.
+
+### 1) 엑셀 다운로드/AI 검색 결과의 "나이"가 전부 "-"로 나오던 버그
+
+**원인**: `services/data_store.read_processed()`가 CSV를 읽을 때
+`researcher_id`만 문자열로 강제하고 나머지 컬럼은 dtype을 지정하지 않는다
+— `birth_year`가 하나라도 비어있는(NaN) 행이 있으면 pandas가 컬럼 전체를
+float로 추론해, 정상 값(예: 1990)도 파이썬에서 `1990.0`으로 들어온다.
+`str(1990.0)`은 `"1990.0"`이고 `"1990.0".isdigit()`은 `False`라서, 나이가
+있는 사람까지 전부 "-"로 나왔다.
+
+**수정**: `services/researcher_profile_export.py`에 `_birth_year_int(v)`
+신규 — `int(float(s))`로 소수점 붙은 문자열도 안전하게 정수로 파싱한다.
+`_col_name_gender_age()`(엑셀 "성명(성별/나이)" 컬럼)와 `person_base_table()`
+(AI 검색 결과 표의 나이 컬럼) 둘 다 이 헬퍼로 교체.
+
+**같은 버그를 쓰던 다른 2곳도 함께 발견·수정**(사용자가 지목한 범위 밖이지만
+동일한 `.isdigit()` 패턴이라 손대는 김에 같이 고침, 명시적으로 알림):
+- `pages/researcher_profile.py`: 연구원 프로필 화면 상단의 "OOOO년생" 표시
+  (`birth_date`가 없어 `birth_year`로 폴백하는 경우만 해당).
+- `services/nl_query.py`의 `_age()`: AI 검색의 나이 범위 필터(`age_min`/
+  `age_max`)가 이 버그로 정상적인 출생연도를 가진 사람까지 결과에서
+  조용히 빠뜨리고 있었다(표시 문제가 아니라 검색 결과 누락이라 더
+  심각한 케이스).
+
+### 2) 팀/리더 참조 — 기간 지정 조회 시 팀/리더 참조 기준 확인 (질문 답변, 코드 변경 없음)
+
+사용자 질문: "검색 기준을 누적으로 할 때 해당 시기의 팀/리더 참조를
+기준으로 찾아주는 걸까?" — 확인 결과 **아니오**. `services/similarity_map.py`
+의 `org_code_label_maps()`/`org_codes_for_dep_names()` 등은 전부
+`pipeline.rd_specialist_markdown.read_team_refer()`를 호출하는데, 이
+함수는 항상 dep_id별 "가장 최근 날짜" 행만 반환한다(기간 인자 자체가
+없음). 즉 명단 화면에서 "누적기준 + 2023-05~2024-03" 같은 기간을 지정해도,
+그 사람의 부서/과제(파트) 라벨은 **그 시점 당시가 아니라 항상 오늘 기준
+team_refer**로 매핑된다 — 조직명이 그 사이 바뀌었거나 org_code 자체가
+지금 team_refer에 없어졌으면(조직 개편 등) 라벨이 그 시점과 어긋나거나
+원본 코드값 그대로 표시될 수 있다. team_refer.csv 자체는 날짜 기반으로
+누적돼 있어 기술적으로는 과거 시점 조회가 가능한 데이터지만, 그 경로가
+아직 연결돼 있지 않다는 뜻. 사용자가 "확인만" 요청해 코드는 변경하지
+않았다 — 필요해지면 `evaluations_history`처럼 team_refer에도 기간 조회
+경로를 추가할 수 있다.
+
+### 3) T&P(평가) — 역량(competency) 필드 추가 + 상/하반기업적 값 제한 제거
+
+**배경**: 원본 T&P 파일에 연도별로 "{YYYY} 역량" 컬럼이 추가로 있을 수
+있음(선택 항목, 모든 연도에 있는 건 아님)을 확인. 연봉등급이 있는 해에는
+기존에 상반기업적과 짝지어 표시하던 것을, 역량과 짝짓는 것으로 교체해야
+한다는 요청과, 상/하반기업적 값을 EM/ES/MT로 제한하지 말고 원본 그대로
+받으라는 요청.
+
+**`services/evaluations.py`**: `competency_column(year)` 신규(`{year}_
+competency_grade`). `format_evaluation_cell()`/`format_half_display()`에
+`competency` 매개변수 추가(필수) — 연봉등급이 있으면 이제 (역량, 하반기업적)
+중 있는 것만 슬래시로 이어붙이고(기존엔 상반기업적과 짝지었음), **연봉등급이
+없을 때의 동작은 그대로 유지**(사용자 확정 — "감싸기 없이 기존처럼",
+상/하반기업적을 `format_half_pair()`로 그대로 표시). `HALF_GRADES` 상수는
+더 이상 값 검증에 쓰지 않아 삭제(다른 참조 없음, 확인 후 제거).
+
+**`pipeline/process_tp_evaluation.py`**: `_extract()`에
+`valid_values: tuple | None`(None이면 값 제한 없이 공백만 정리해 원본
+그대로 저장)와 `warn_if_missing: bool = True`(False면 컬럼 자체가 없어도
+경고 안 남김) 두 매개변수 추가. 추출 루프를 half_years마다 상반기업적/
+하반기업적(제한 없음, 컬럼 없으면 경고)에 이어 "{year} 역량"도 추출(제한
+없음, 컬럼 없어도 조용히 빈 값 — `warn_if_missing=False`)하도록 확장.
+연봉등급(SALARY_GRADES)은 기존처럼 허용값 검증 그대로 유지(사용자 확정 —
+"연봉등급은 항상 동일").
+
+**적용 범위**(연구원 프로필 화면·인쇄 카드의 통합 셀·엑셀 다운로드 평가
+컬럼 전부, 사용자 확정):
+- `components/profile_sections.py`의 `_eval_cell()` — `competency_column
+  (year-1)`을 함께 읽어 `format_evaluation_cell()`에 전달
+  (`evaluation_incentive_block()`(프로필 화면 표)와
+  `evaluation_incentive_summary_text()`(A4 인쇄 카드 통합 셀 텍스트)가
+  이 함수를 공유하므로 두 화면 모두 한 번에 반영됨).
+- `services/researcher_profile_export.py`의 `_col_evaluation()` — 엑셀
+  "평가" 컬럼 둘째 줄 조립 시 `evaluations.competency_column(y)`을 함께
+  읽어 `format_half_display()`에 전달.
+- `services/open_data_query.py`의 `_evaluation_period_hint()`(직전
+  2026-08-28(50) 항목에서 추가한 AI 검색 프롬프트 힌트)에도 competency_grade
+  컬럼명을 함께 안내하도록 갱신(역량은 선택 항목이라 없을 수 있다는 점도
+  명시) — 요청 범위 밖이지만 같은 로직을 다루는 곳이라 함께 갱신.
+
+**기존 저장 데이터에 소급 반영(사용자 확정)**: `pipeline/merge_utils.py`의
+`write_merged_with_valid_period()`는 같은(또는 더 최신) 시점 재업로드를
+막지 않는다(과거 시점보다 "이전"일 때만 건너뜀, 같음/이후는 항상 반영) —
+즉 이미 저장된 값(예: EM/ES/MT 제한으로 비워졌던 값)을 되살리려면, 그
+시점의 원본 T&P 파일(웹 업로드라면 `data/raw_archive/evaluations*`에
+보관돼 있음)을 **같은 기준 연/월로 다시 업로드**하면 새 로직으로
+재추출되어 현재값(evaluations.csv)이 통째로 덮어써진다 — 별도의 데이터
+마이그레이션 스크립트를 만들지 않고 기존 재업로드 경로를 그대로 재사용하는
+방식(실제로 같은 기준 연/월 재업로드가 값을 덮어쓰는 것을 테스트로 확인).
+과거 기준 연/월 자체를 소급하려면(예: 2023-05 시점 원본을 새로 반영)
+기존 대량 백필 업로드 기능(`_YYYYMM` 파일명)을 그대로 쓰면 된다 — 이
+경우엔 evaluations_history에는 반영되고, evaluations.csv(현재값)는 이미
+더 최신 시점이 저장돼 있으면 갱신되지 않는다(기존 설계 그대로, 현재값은
+항상 최신 시점을 반영한다는 원칙 유지). 이 세션에는 실제 원본 T&P 파일이
+없어 사용자가 실제 파일로 재업로드해야 한다.
+
+**검증**: `process_tp_evaluation.py`를 합성 T&P 파일(EM/ES/MT 외
+VG/T/NM/MS/GD 값 포함, 2025년만 역량 컬럼 있고 2024/2023엔 역량 컬럼
+자체가 없음)로 직접 실행 — (1) 역량 컬럼이 있는 해만 정상 추출되고 없는
+해는 경고 없이 조용히 빈 값 처리되는지, (2) 상/하반기업적에 EM/ES/MT
+밖의 값(VG, T, NM, MS, GD)이 전부 그대로 저장되는지(더 이상 걸러지지
+않음), (3) 연봉등급은 여전히 가/나/다/라/마만 허용되는지 확인. 같은
+기준 연/월로 값을 바꿔 재업로드해 현재값이 정상적으로 덮어써지는지(소급
+반영 메커니즘) 확인. `format_evaluation_cell()`/`format_half_display()`를
+사용자가 준 4가지 예시로 직접 호출해 "나(ES)"/"나(VG/VG)"/"-/ES"(감싸기
+없음)/"ES/ES"가 정확히 일치하는지 확인. `_birth_year_int()`를 float/
+float-string/정수문자열/NaN/빈값 5가지로 직접 호출해 기대값과 일치하는지,
+`_col_name_gender_age()`를 float birth_year를 가진 합성 행으로 호출해
+"36세"가 정상적으로 나오는지 확인. 변경된 7개 파일 모두 `py_compile`
+통과, `dash.Dash(use_pages=True)` 컨텍스트에서 `pages.researcher_profile`/
+`pages.researcher_list` 임포트까지 재확인(모듈 로드 자체가 깨지지 않음).
+
+**미검증**: 실제 T&P 원본 파일로 재업로드해 이미 저장된 데이터가 실제로
+소급 반영되는지(이 세션엔 실제 원본 파일이 없음 — 운영 환경에서 사용자가
+직접 확인 필요), 실제 브라우저에서의 평가 셀/엑셀 렌더링.
+
+## 2026-08-29 (2): 연구원 명단 기간 지정 조회에 team_refer(부서/과제/직책)도 반영
+
+배경: 바로 앞 항목에서 "명단 화면의 누적기준+기간 지정 조회 시 team_refer
+(부서/과제/직책 표시)도 그 시점 기준으로 찾아주는가"라는 질문에 "아니오,
+항상 오늘 기준"이라고 답했는데, 이어서 이것도 기간 조회가 되도록
+확장해달라는 요청.
+
+**`pipeline/rd_specialist_markdown.py`**: `_latest_current_rows()`(파일
+전체 기준 dep_id별 최신 행 선정)와 나란히 `_latest_rows_in_period(rows,
+start, end)` 신규 — 원리는 동일하되 "파일 전체에서 최신"이 아니라 "[start,
+end] 구간 안에서 dep_id별 최신"만 남긴다. 구간에 스냅샷이 하나도 없는
+dep_id는 제외(그 기간에 그 조직이 있었는지 알 수 없으므로), 구간 안 최신
+스냅샷이 `deleted='Y'`면 그 dep_id도 제외 — `pages/researcher_list.py`의
+`_resolve_period_snapshot()`(researchers_history/evaluations_history에 이미
+적용된 것)과 같은 발상이다. `read_team_refer(out_dir, period=None)`에
+`period` 매개변수를 추가해 지정 시 `_latest_rows_in_period()`를, 생략(기존
+호출부 전부 해당)하면 기존처럼 `_latest_current_rows()`를 쓴다 — 기본값이
+기존과 동일해 다른 호출부(조직도 사이드바, 팀/리더 참조 관리자 화면 등
+7곳)는 전혀 영향받지 않는다.
+
+**`services/similarity_map.py`**: 연구원 명단 화면이 실제로 쓰는 3개 함수
+`org_codes_for_dep_names()`/`org_codes_for_pjt_part_names()`/
+`org_code_label_maps()`에 `period=None` 매개변수를 추가해 `read_team_refer
+(DATA_DIR, period=period)`로 그대로 전달(드롭다운 옵션 자체를 만드는
+`department_filter_options()`/`pjt_part_filter_options()`는 대상에서
+제외 — 화면에 보여줄 선택지 자체를 기간별로 다르게 만드는 건 이번 요청
+범위 밖으로 판단, 실제 매칭·표시 로직만 기간을 반영). 신규
+`title_by_researcher_id(period=None)` — team_refer 행 중 사번이 채워진
+조직장급 행만 `{researcher_id: assignment_name}`으로 매핑.
+
+**부수 발견·수정(직책 매핑의 기존 잠재 버그)**: `pages/researcher_list.py`
+가 지금까지 직책(`title_by_id`)을 `read_processed('team_refer')`로 읽은
+원본 누적 테이블 전체를 그대로 `dict(zip(researcher_id, assignment_name))`
+해서 만들고 있었다 — dep_id별 "최신"을 명시적으로 비교하지 않고 CSV에
+저장된 행 순서(대체로 최근에 저장한 배치가 뒤에 옴)에 우연히 의존했고,
+`deleted='Y'`(관리자 화면에서 삭제 처리된 조직) 여부도 전혀 걸러내지
+않았다. `title_by_researcher_id()`(내부적으로 `read_team_refer()`를 거쳐
+명시적 날짜 비교 + deleted 제외를 적용)로 교체하면서 "현재(기간 미지정)"
+모드의 이 잠재 버그도 함께 해결됐다.
+
+**`pages/researcher_list.py`**: `_build_summary_df()`에서 `team =
+read_processed('team_refer')` 직접 읽기 + 수동 dict 조립을 제거하고
+`title_by_id = similarity_map.title_by_researcher_id(period=period)`/
+`dep_label_map, pjt_label_map = similarity_map.org_code_label_maps(period=
+period)`로 교체. `update_table()` 콜백의 부서/과제 필터 매칭
+(`org_codes_for_dep_names()`/`org_codes_for_pjt_part_names()`)에도
+`period=period`를 추가 — 기간을 지정한 상태에서 부서/과제 필터를 고르면,
+그 이름이 오늘이 아니라 그 시점에 실제로 가리켰던 org_code로 매칭된다.
+
+**부수 발견·수정(별개 버그, 오늘 작업 중 실제로 걸림)**:
+`_resolve_period_snapshot()`이 구간 안에 스냅샷이 하나도 없을 때(이력
+테이블 자체가 비어있거나, 그 구간에 아무도 없거나) 완전히 빈
+`pd.DataFrame()`(컬럼 자체가 없음)을 반환하고 있었다 — 호출부
+(`_build_summary_df()`의 `eva[eva['researcher_id'] == rid]`)는 그 컬럼이
+항상 있다고 가정하므로 `KeyError: 'researcher_id'`로 죽는다. 두 반환
+지점(테이블 자체가 비었거나 valid_year/valid_month가 없을 때, 구간에
+매칭되는 행이 없을 때) 모두 최소한 `researcher_id` 컬럼은 있는(0행)
+DataFrame을 반환하도록 수정 — evaluations_history.csv가 아직 비어있는
+상태(예: 이 기능을 막 배포한 직후, 아무도 T&P를 valid_date와 함께 올린
+적이 없는 경우)에서 기간 조회를 시도하면 화면 전체가 죽던 것을 막았다.
+
+**검증**: `_latest_rows_in_period()`를 조직 개편(같은 dep_id가 2022년엔
+"옛부서명", 2026년엔 "새부서명"으로 이름이 바뀐) 합성 데이터로 직접
+호출 — 2022~2023 구간 조회 시 "옛부서명"이, 2026 구간 조회 시 "새부서명"이
+나오는 것, 아직 생기지 않은 조직(2026년에만 존재)이 그 이전 구간 조회에는
+안 나오는 것, 구간 중 삭제(deleted='Y') 처리된 조직이 그 구간 조회에서
+제외되는 것을 확인. `_build_summary_df(period=(2022-01-01, 2023-12-31))`을
+같은 합성 데이터로 실행해 '부서'/'과제' 컬럼이 정확히 "옛부서명"/
+"옛과제팀"으로(오늘 기준 "새부서명"이 아니라) 나오는 것, `current_only=True`
+(기간 미지정)로는 여전히 "새부서명"이 나오는 것(회귀 없음)을 확인.
+`org_codes_for_dep_names(['옛부서명'], period=...)`가 그 시점의 org_code만
+정확히 반환하는 것, `title_by_researcher_id(period=...)`가 그 시점의
+조직장 사번만 반환하는 것(오늘 기준 조직장과 다름)을 확인. 이번에 함께
+고친 `_resolve_period_snapshot()`의 빈 DataFrame 버그도 evaluations_history.csv
+가 완전히 비어있는 상태로 기간 조회를 실행해 재현 후 수정 확인(수정 전엔
+`KeyError: 'researcher_id'`로 `_build_summary_df()` 전체가 죽었음). 변경된
+3개 파일(`pipeline/rd_specialist_markdown.py`/`services/similarity_map.py`/
+`pages/researcher_list.py`) 모두 `py_compile` 통과, 새로 추가한 `period`
+매개변수는 전부 기본값 `None`이라 기존 7곳의 다른 호출부(조직도 사이드바,
+팀/리더 참조 관리자 화면, 연구원 프로필 화면의 부서 드롭다운 기본값 등)는
+그대로 동작함을 `grep`으로 호출부 전수 확인.
+
+**의도적으로 범위에서 뺀 것**: 부서/과제 드롭다운의 "선택지 목록" 자체
+(`department_filter_options()`/`pjt_part_filter_options()`)는 여전히
+오늘 기준 team_refer로만 채워진다 — 기간을 바꿀 때마다 그 시점에만
+존재했던 부서명까지 선택지에 나타나게 하려면 옵션 자체를 서버 콜백으로
+다시 계산해야 해서(현재는 `layout()` 최초 렌더링 시 한 번만 만듦) 범위를
+넓히지 않았다. 다만 실제 매칭(어떤 org_code가 그 이름에 해당하는지)은
+기간을 반영하므로, 오늘 기준으로도 남아있는 이름을 고르면 결과는 정확히
+그 시점 기준으로 나온다 — 필요하면 옵션 목록도 기간별로 동적으로 만드는
+후속 작업을 진행할 수 있다.
+
+## 2026-08-29 (3): 연구원 명단 부서/과제 드롭다운 "선택지 목록" 자체도 기간별로 동적으로
+
+바로 앞 항목에서 "의도적으로 뺀 것"으로 남겨뒀던 부분 — 부서/과제 드롭다운의
+선택지 자체(오늘 기준으로만 채워지던 것)도 기간별로 동적으로 바뀌게
+해달라는 요청.
+
+**`services/similarity_map.py`**: `department_filter_options()`/
+`pjt_part_filter_options()`에 `period: tuple | None = None` 매개변수 추가,
+`read_team_refer(DATA_DIR, period=period)`로 전달(직전 항목에서 이미
+`read_team_refer()`에 만들어둔 period 인자를 그대로 재사용 — 새 인프라
+불필요).
+
+**`pages/researcher_list.py`**:
+- 신규 `_active_period(mode, period_start, period_end)` — "누적기준
+  (`mode == 'all'`) + 시작·종료일 둘 다 지정"일 때만 기간이 있는 것으로
+  판정하는 로직을 한 곳으로 뽑았다(이전엔 `update_table` 콜백 안에만 있던
+  걸, 이번에 이 판정이 필요한 콜백이 3개로 늘면서 공용화 — `toggle_org_
+  filters`/`update_project_options`/`update_table` 셋이 공유).
+- '부서' 드롭다운의 **옵션 자체**를 `layout()` 최초 렌더링 시 한 번만
+  만들던 것에서, `toggle_org_filters` 콜백(검색 기준/기간이 바뀔 때마다
+  이미 실행되고 있었음)이 매번 `similarity_map.department_filter_options
+  (period=period)`로 다시 계산해 `Output('filter-dept', 'options')`로
+  내보내도록 확장. 옵션이 그 시점 기준으로 달라지면 이전에 골라둔
+  값이 새 목록엔 없는 옵션일 수 있어, 기간이 설정/변경될 때마다 부서·
+  과제 선택값을 함께 초기화한다(직급/직책 옵션은 team_refer가 아니라
+  researchers.csv 기준이라 이 갱신과 무관 — 값 유지).
+- '과제/파트' 드롭다운은 기존에도 '부서' 선택값이 바뀔 때 캐스케이딩되던
+  콜백(`update_project_options`)이 있었는데, 여기에도
+  `list-search-mode`/`list-period-range` 두 날짜를 Input으로 추가해
+  기간이 바뀌는 것만으로도(부서 선택을 안 건드려도) 그 시점 기준으로
+  다시 계산되도록 확장.
+- `update_table` 콜백의 기간 계산 인라인 코드를 `_active_period()` 호출로
+  교체(동작 변화 없음, 중복 제거).
+
+**검증**: 조직 개편 합성 데이터(D1: 2022년 "옛부서명" → 2026년 "새부서명"
+으로 개명, D2: 2026년 3월에 신설)로 `toggle_org_filters`/
+`update_project_options` 콜백 함수를 직접 호출해 확인 — (1) 기간 미지정
+(현재기준·누적기준 모두)에서는 오늘 기준 옵션(새부서명/신설부서)만 나옴,
+(2) 기간을 2022~2023으로 잡으면 그 구간에 존재했던 "옛부서명"만 나오고
+아직 생기지 않은 "신설부서"/"새부서명"은 안 나옴, (3) 기간을 2026 전체로
+잡으면 새부서명·신설부서 둘 다 나옴, (4) 과제/파트 옵션도 부서 선택
+여부와 무관하게 기간만으로 정확히 캐스케이딩됨을 확인. `dash.Dash
+(use_pages=True)` 컨텍스트에서 모듈 임포트 + 콜백 등록까지 오류 없이
+되는 것 확인(콜백 중복 Output 등 구조적 문제 없음). 변경된 2개 파일
+`py_compile` 통과.
+
+**미검증**: 실제 브라우저에서 부서 드롭다운을 열어 기간 변경 시 옵션
+목록이 실시간으로 바뀌는지, 선택값이 초기화되는 체감이 자연스러운지.
+
+## 2026-08-29 (4): 팀/리더 참조도 관리자 "데이터 업데이트" 탭에서 파일 업로드로 대량 반영 가능하도록 추가
+
+배경: 지금까지 team_refer는 웹에서 (1) 최초 1회 CLI로 xlsx 대량 적재
+(`pipeline/process_team_refer.py`, `data/raw/`를 직접 읽음) 또는 (2) 관리자
+"팀/리더 참조" 탭의 그리드 CRUD(조직 단위를 한 행씩 수기 편집)로만 갱신할
+수 있었다 — 다른 20개 항목처럼 웹에서 xlsx 파일을 올려 한 번에 대량
+반영하는 경로가 없었다("team_refer도 웹상에서 파일업로드를 통해 대량
+업로드가 가능할까?" 질문). 확인 결과 `process_team_refer.process()`가
+`valid_date`만 받고 `raw_dir`을 안 받는 것 말고는(다른 process_*.py는
+전부 `raw_dir` 매개변수가 있음) 구조적으로 이미 다른 20개 항목과 거의
+동일해서(원본 파일이 고정 파일명, valid_date 기반 시점 보호 이미 있음),
+`services/web_pipeline_runner.py`의 매니페스트 기반 인프라에 그대로 얹을
+수 있었다.
+
+**`pipeline/process_team_refer.py`**: `process(valid_date=None)` →
+`process(raw_dir: str = RAW_DIR, valid_date: date | None = None)`로 변경,
+`RAW_DIR/SOURCE_FILE`을 `raw_dir/SOURCE_FILE`로 교체(그 외 로직 변경
+없음 — 이 모듈은 애초에 source_reader.read_source() DB 경로가 없어
+다른 process_*.py보다 오히려 더 단순한 변경이었다). 기본값이 기존과
+동일해 인자 없이 부르던 기존 호출부(`pipeline/run_expertise.py`)는
+그대로 동작.
+
+**`services/web_pipeline_runner.py`**: MANIFEST에 `team_refer` 항목 추가
+(`mode='exact'`, `dest_filename='팀참조시트.xlsx'`, `needs_valid_date=True`).
+이 매니페스트 등록 하나로 자동으로 따라오는 것: 원본 파일 무제한 아카이브
+(`save_upload()`가 자동 호출), 관리자가 지정하는 "기준 연/월" 날짜, 대량
+소급 백필(`_YYYYMM` 파일명으로 여러 시점 파일을 한꺼번에 올려 오래된
+순서로 반영), 실행 로그/락. `pages/admin.py`는 매니페스트를 그대로
+순회해 행을 렌더링하는 완전히 제너릭한 구조라 **코드 변경이 전혀
+필요 없었다** — MANIFEST에 항목 하나 추가한 것만으로 "데이터 업데이트"
+탭에 "팀/리더 참조" 행이 자동으로 나타난다.
+
+**기존 그리드 CRUD와의 관계**: 두 경로(그리드 CRUD의
+`services/team_refer_store.save_snapshot()`, 이번에 추가한 파일 업로드의
+`process_team_refer.process()`) 모두 같은 `team_refer.csv`에 같은 자연키
+(`dep_id, valid_year, valid_month, valid_day`)로 upsert하므로 서로
+충돌하지 않는다 — 소수 조직을 수시로 고칠 땐 그리드 CRUD를, 조직 전체를
+xlsx로 한 번에(또는 여러 과거 시점을 한꺼번에 백필) 갱신할 땐 새 파일
+업로드 경로를 쓰면 된다. 중복 부서ID 경고(`find_duplicate_dep_ids()`)는
+그리드 CRUD 쪽엔 별도 모달로 뜨지만, 이번 파일 업로드 경로에서는 다른
+19개 항목과 동일하게 콘솔 `[WARN]` 로그가 "실행결과" 칸에 그대로
+노출되는 방식(기존 관례 그대로, 별도 UI 추가 안 함).
+
+**검증**: 합성 팀참조시트.xlsx(안내문 1행 + 헤더 + 데이터 1행)를
+`services.web_pipeline_runner.save_upload()`/`run_one(valid_date=...)`로
+실제 웹 업로드 경로 그대로 실행 — team_refer.csv에 정상 반영되는 것,
+`data/raw_archive/team_refer/`에 원본이 타임스탬프와 함께 아카이브되는
+것 확인. `_YYYYMM` 파일명 2개(2023-01/2024-01, 서로 다른 dep_name)를
+연속 업로드해 백필 배치 실행 — 오래된 순서로 처리되어 두 시점 모두 각자의
+dep_name으로 team_refer.csv에 누적되는 것 확인. `services.web_pipeline_runner.
+snapshot()`이 만든 team_refer 행을 `pages.admin._data_update_row()`에
+직접 넣어 렌더링 오류 없이 `html.Tr`이 만들어지는 것 확인(admin.py 코드
+변경이 전혀 없었음을 재확인). `py_compile` 통과. 테스트로 만든
+`data/raw_archive/team_refer/` 아카이브 파일은 정리(어차피 `.gitignore`
+대상이라 커밋에는 영향 없었음).
+
+**미검증**: 실제 브라우저에서 "데이터 업데이트" 탭에 새로 나타난 "팀/리더
+참조" 행의 업로드 버튼/날짜 선택기 조작.
+
+## 2026-08-29 (5): 엑셀 다운로드 "평가('24~'26)" 컬럼 — 헤더와 셀 값 연도
+순서가 어긋나 있던 버그 수정
+
+배경: 헤더는 "평가('24~'26)"로 오름차순(과거→최신)으로 읽히는데, 실제
+셀 값(연봉등급 3개년/역량·하반기업적 3개년)은 내림차순(최신→과거)으로
+채워지고 있었다. 원인은 `services/researcher_profile_export.py`가
+`services.evaluations.evaluation_years()`(최신 연도가 먼저 오는 내림차순
+반환, 예: `[2026,2025,2024]`)의 결과를 정렬 없이 그대로 `_EVAL_SALARY_YEARS`/
+`_EVAL_HALF_YEARS`로 썼기 때문 — `pages/researcher_list.py`는 이미
+`sorted(evaluation_years()[0])`로 오름차순 정렬해 쓰고 있었는데, 이
+모듈만 그 정렬을 빠뜨린 상태였다.
+
+**수정**: `_EVAL_SALARY_YEARS = sorted(evaluations.evaluation_years()[0])`/
+`_EVAL_HALF_YEARS = sorted(evaluations.evaluation_years()[1])`로 오름차순
+정렬(다른 모듈과 동일한 패턴). 헤더 문자열 조립도 정렬 방향이 바뀌었으므로
+`_EVAL_SALARY_YEARS[0]`(가장 과거)~`_EVAL_SALARY_YEARS[-1]`(가장 최신)
+순서로 맞춰 인덱스를 바꿨다(기존엔 내림차순 전제라 `[-1]`~`[0]` 순으로
+읽었음). `_col_evaluation()`(연봉등급 줄/업적·역량 줄 조립)은 이 두
+리스트를 순서대로 순회할 뿐이라 코드 변경 없이 정렬 순서만 바뀌어도
+자동으로 올바른 순서로 채워진다.
+
+**검증**: 연도별로 구분되는 값(예: `등급2024`/`등급2025`/`등급2026`)을 넣은
+합성 데이터로 `_col_evaluation()`을 직접 호출해 — 헤더가 `'24~'26`,
+연봉등급 줄이 `등급2024/등급2025/등급2026`(오름차순), 업적·역량 줄이
+`(역량2023/하반기2023, 역량2024/하반기2024, 역량2025/하반기2025)`(오름차순)
+으로 헤더와 정확히 일치하는 순서로 나오는 것을 확인. `dash.Dash
+(use_pages=True)` 컨텍스트에서 관련 페이지 임포트까지 재확인. `py_compile`
+통과.
+
+## 2026-08-29 (6): 신규 데이터 "어학" 추가 — 원본 어학자격 *.xlsx → language_qualification.csv, 프로필/엑셀/관리자 3곳에 반영
+
+배경: 새 데이터 유형("어학자격") 추가 요청. 원본 파일이 언어별로 "{언어}
+회화"/발급일/만료일 3컬럼(+같은 구조의 "{언어} 필기" 3컬럼, 안 씀) 블록이
+반복되고, "만료일" 헤더 자체는 모든 블록에서 동일한 문자열이라 이름만으로는
+어느 언어의 만료일인지 구분이 안 되는 특이한 구조라, 이해한 내용을 먼저
+설명하고 확인 문답을 거친 뒤 구현했다.
+
+**사용자가 확정한 사항**:
+1. 원본 컬럼 구조 — A열 사번, B~Y열 무관, Z열부터 "{언어} 회화, 발급일,
+   만료일, {언어} 필기, 발급일, 만료일" 6컬럼씩 반복(필기는 안 씀). 만료일은
+   "{언어} 회화" 컬럼 위치 기준 +2번째 컬럼(발급일 다음)에 있음.
+2. "{언어} 회화" 셀 값 자체에 등급이 이미 포함돼 있음(예: "2등급") — 별도
+   가공 안 함.
+3. processed CSV 스키마는 (A) long 포맷 — `researcher_id, language,
+   speak_grade, expiration_date`(사람당 보유 언어 수만큼 여러 행,
+   core_technology.csv와 동일한 패턴).
+4. 여러 언어 보유 시 프로필 표시는 콤마가 아니라 줄바꿈으로 나열.
+5. 인쇄 카드(A4)에도 포함.
+6. 엑셀 다운로드는 다른 옵트인 컬럼(특허/논문/직무 등)과 동일하게 기본
+   해제된 체크박스로.
+7. 누적 안 함 — 매번 파일 전체로 통째 교체(이번 업로드에 없는 사람의 기존
+   어학 데이터는 사라짐, 다른 대부분 테이블의 "이번 파일에 없어도 보존"
+   원칙과 다름 — 의도된 동작).
+8. AI 검색(자연어 질문)에서도 조회 가능하게.
+9. 웹 업로드뿐 아니라 CLI(`data/raw/`, DRM 제거 파이프라인) 경로도 함께 지원.
+10. 사번(researcher_id) 없는 행은 제외.
+
+**신규 `pipeline/process_language_qualification.py`**: `_find_language_specs()`
+가 헤더를 순회하며 "{언어} 회화"로 끝나는 컬럼을 전부 찾아(언어명, 회화
+컬럼 위치, 만료일 컬럼 위치=+2)로 등록한다 — "필기" 컬럼은 애초에 "회화"로
+끝나지 않아 이 스캔에서 자동으로 제외된다. 만료일 컬럼 값은 반드시
+`.iloc[:, 위치]`(위치 기반)로만 읽는다 — pandas가 중복 헤더("만료일")를
+자동으로 "만료일"/"만료일.1"/... 로 구분해 주지만, 이름 기반 조회는 어느
+쪽이든 여전히 모호할 수 있어 처음부터 위치로만 접근했다. 그 위치의 실제
+헤더가 "만료일"로 시작하지 않으면(오프셋 가정이 어긋났을 가능성) 값은
+그대로 신뢰해 쓰되 `[WARN]`을 남긴다. `write_merged()` 업서트 대신
+`result.to_csv()`로 매번 전체 교체(사용자 확정 7번). `raw_dir` 매개변수를
+받아 CLI(`source_reader.read_source()`)/웹 업로드(`find_latest()` 와일드카드)
+양쪽 경로를 모두 지원(다른 대부분 process_*.py와 동일한 패턴).
+
+**`pipeline/sources.py`**: `('language_qualification', '어학자격 *.xlsx', 6)`
+등록(사용자 확정 9번, CLI 경로) — 헤더 행 번호 6(0-based, 실제 7번째 행)은
+사용자가 직접 확인해 준 값(2026-08-29 추가 확인, 1~6행은 무시)이다.
+`process_language_qualification.py` 상단의 `_HEADER_ROW = 6`도 동일하게
+맞춰뒀다.
+
+**부수 발견·수정**: `pipeline/sources.py`를 손보다가 `pipeline/load_raw_to_db.py`
+의 `for name, _filename, _header_row in SOURCES:`가 `researchers`처럼
+4-tuple(추가로 multi 플래그가 있는) 항목을 만나면 `ValueError: too many
+values to unpack`로 죽는 기존 버그를 발견했다 — `DATABASE_URL`이 설정된
+환경에서만 실행되는 경로라 이 샌드박스(DB 미설정)에서는 지금까지 재현된
+적이 없었을 뿐 실제 운영 환경에서 DB를 쓰고 있었다면 이미 깨져 있었을
+코드다. `*_rest`로 나머지를 흡수하도록 고쳐 3-tuple/4-tuple 모두 안전하게
+처리되도록 수정.
+
+**`pipeline/run_pipeline.py`**: "9-7. 어학자격" 단계로 `process_language_
+qualification()` 호출 추가(폴백 없음, work_objective/tasks와 동일한
+패턴) — CLI 전체 파이프라인 실행 시 함께 돈다.
+
+**신규 `services/language_qualification.py`**: `read_rows(researcher_id)`/
+`format_lines(rows)`/`format_block(researcher_id, label='어학')` — 프로필
+화면·인쇄 카드·엑셀 다운로드가 공유하는 단일 표시 로직(services/evaluations.py
+와 동일한 목적). `format_block()`은 "어학 : {첫 언어}\n{둘째 언어}..."
+형태(사용자 확정 4번 — 줄바꿈, 콤마 아님)를 만들고, 데이터가 전혀 없으면
+`None`(호출부가 줄 자체를 생략).
+
+**`components/profile_sections.py`**: `photo_block()`의 "재직상태" 줄
+바로 아래에 어학 줄 추가(`language_block_text(rid)`, 데이터 없으면 생략).
+`photo_block()`은 라이브 프로필 화면과 A4 인쇄 카드가 공유하는 함수라
+코드 변경 없이 양쪽에 동시 반영된다(사용자 확정 5번 — 인쇄 카드 포함).
+`white-space: pre-line`으로 `\n`이 실제 줄바꿈으로 렌더링되게 함.
+⚠️ 인쇄 카드는 지난 세션들에서 1페이지 높이 예산(약 937px)을 여러 차례
+정밀 조정해 왔는데, 이번에 추가한 어학 줄이 그 예산에 미치는 영향은
+실제 브라우저로 재검증하지 못했다 — 보유 언어가 많은 사람의 인쇄 결과가
+2페이지로 넘치지 않는지 확인 필요.
+
+**`services/researcher_profile_export.py`**: `_col_language()` +
+`_LANGUAGE_COLUMNS`/`_LANGUAGE_COLUMN_WIDTH` 신규, `_load_tables()`/
+`_researcher_row_context()`에 `language_qualification` 테이블 추가.
+`build_profile_workbook(..., include_language=False)` — 기본 해제
+(사용자 확정 6번), 다른 옵트인 컬럼(특허/논문/직무/직무이력/재직상태)과
+동일한 방식으로 맨 끝(보유 전문성 앞)에 추가.
+
+**`pages/researcher_list.py`**: 엑셀 옵션 체크리스트에 "어학 포함"
+(`value='language'`) 추가, `download_excel()` 콜백에
+`include_language='language' in excel_options` 전달.
+
+**`services/web_pipeline_runner.py`**: MANIFEST에 `language_qualification`
+항목 추가(`mode='wildcard'`, `needs_valid_date` 없음 — 사용자 확정 7번,
+시점보호/백필 대상 아님). 관리자 "데이터 업데이트" 탭은 매니페스트를
+그대로 순회하는 제너릭 구조라 UI 코드 변경 불필요(team_refer 추가 때와
+동일).
+
+**`config/auth_config.py`**: `TABLE_PERMISSIONS`에 `'language_qualification':
+None` 추가(사용자 확정 8번 — AI 검색에서 권한 제한 없이 조회 가능).
+`services/open_data_query.py`의 `_discover_csv_tables()`가 `data/processed/*.csv`
+를 매 질의 시점에 자동 스캔하므로 이 화이트리스트 등록만으로 AI 검색
+대상에 포함된다(코드 변경 불필요).
+
+**`services/data_labels.py`**: `language`/`speak_grade`/`expiration_date`
+한글 라벨(언어/회화등급/만료일) 추가(AI 검색 결과 표 헤더용).
+
+**`pipeline/load_to_db.py`**: `TABLES`에 `language_qualification` 추가(DB
+반영 시에도 CSV와 동일하게 매번 전체 교체됨 — 다른 테이블과 적재 방식은
+동일).
+
+**검증**: `_find_language_specs()`/`process()`를 사용자가 설명한 구조 그대로
+(A=사번, B~Y 필러 24컬럼, Z부터 영어/일본어/중국어 각 회화·필기 블록)
+합성 xlsx로 직접 실행 — 필기 컬럼은 완전히 무시되고, 회화 등급("2등급"
+등)과 만료일이 정확한 언어에 매칭되는 것(오프셋이 실제로 올바르게
+동작하는지가 이번 기능의 가장 중요한 위험 포인트), 사번 없는 행이
+제외되는 것, 회화 값이 없는 언어는 결과에서 빠지는 것을 확인. 웹 업로드
+경로(`web_pipeline_runner.save_upload()`/`run_one()`) 전체를 실제로
+실행해 원본 아카이브·CSV 저장까지 end-to-end 확인, 두 번째 실행이 첫
+실행 결과를 업서트가 아니라 완전히 대체하는지(사용자 확정 7번)도 확인.
+`services.language_qualification.format_block()`/`researcher_profile_export.
+_col_language()` 둘 다 같은 합성 데이터로 호출해 "어학 : 영어 2등급(만료일
+2026-12-31)\n일본어 3등급(만료일 2027-06-30)" 형태(줄바꿈, 콤마 아님)가
+정확히 나오는 것, 데이터 없으면 각각 `None`/`'-'`로 안전하게 처리되는 것
+확인. `pages.admin._data_update_row()`에 `web_pipeline_runner.snapshot()`이
+만든 실제 language_qualification 행을 넣어 렌더링 오류 없음 확인.
+`dash.Dash(use_pages=True)` 컨텍스트에서 admin/researcher_list/
+researcher_profile 등 관련 페이지 전체 임포트까지 재확인(무관한 기존
+`dash_cytoscape` 미설치 문제 제외). 변경/신규 파일 전부 `py_compile` 통과.
+테스트로 생성된 `data/raw_archive/language_qualification/`,
+`data/processed/web_pipeline_runs.csv`는 정리(둘 다 `.gitignore` 대상이라
+커밋에는 영향 없었음).
+
+**미검증 / 후속 확인 필요**:
+- **A4 인쇄 카드 1페이지 높이 예산**: 어학 줄 추가가 기존에 정밀 조정된
+  페이지 예산에 미치는 실제 영향을 브라우저로 확인 못 했다.
+- 실제 원본 파일로 웹 업로드 → 명단/프로필 화면 렌더링까지 브라우저
+  end-to-end 확인 필요.
+
+### 후속: 헤더 행 번호 확인(2026-08-29)
+
+사용자가 실제 원본 파일 헤더 위치를 확인해줌 — 7번째 행(1~6행은 무시).
+`pipeline/process_language_qualification.py`의 `_HEADER_ROW`와
+`pipeline/sources.py`의 `language_qualification` 항목 헤더 행을 모두
+0-based 값 6으로 수정. 1~6행 무시 + 7번째 행이 헤더인 합성 xlsx로
+`process()`를 재실행해 정상 추출되는 것을 확인, `py_compile` 통과.
+
+## 2026-08-29 (7): 신규 데이터 "근무 경력" 추가 — 원본 임직원 근무경력
+*.xlsx → work_experience.csv, 프로필/엑셀/관리자 3곳에 반영
+
+배경: 어학(위 (6)번)에 이어 두 번째 새 데이터 유형 추가 요청. 원본 스펙은
+사번/회사/시작일/종료일/직무명 5개 컬럼, "researcher_id 기준으로 매번
+누적, 기존 researcher_id가 있으면 덮어쓰고..."라는 설명이었는데, 이해한
+내용을 설명하고 확인 질문 8개를 먼저 보낸 뒤(가장 핵심: 한 사람이 여러
+회사 이력(여러 행)을 가질 수 있다면 "덮어쓰기" 정책이 모호해진다는 점)
+사용자 확인을 받아 구현했다.
+
+**사용자가 확정한 사항**:
+1. 한 researcher_id가 여러 행(여러 회사 경력)을 가질 수 있음 — 그래서
+   자연키 upsert 대신 `pipeline/merge_utils.group_replace_merge()`(내
+   추천안, `leadership_comments.csv`와 동일한 인프라)로 "이번 업로드에
+   그 사람 행이 있으면 그 사람의 기존 행 전체를 이번 내용으로 완전히
+   교체"한다(이번 업로드에 없는 사람은 기존 행 그대로 보존).
+2. processed 파일명 오타 수정: `work_exprience.csv` → `work_experience.csv`.
+3. 종료일이 없으면 "현재"로 채우지 않고 그냥 공란(파이프라인의
+   `parse_flexible_date()`가 이미 빈 값을 `''`로 반환해 별도 코드 없이
+   저장 단계에서 자동으로 만족됨).
+4. 인쇄 카드(A4)에는 최근 1건만.
+5. 엑셀 다운로드 체크박스는 다른 옵트인 컬럼과 동일하게 기본 해제.
+6. AI 검색(자연어 질문)에서도 조회 가능하게.
+7. CLI(`data/raw/`, DRM 제거 파이프라인) 경로도 함께 지원.
+8. 표시 예시의 "*"는 메모용 기호일 뿐 실제 출력에는 포함하지 않음
+   ("Cornell Univ.('04.02 ~ '07.12, Post Doc.)" 형태, 앞에 "*" 없음).
+9. 원본 헤더는 6번째 행(1~5행 무시, 0-based 5).
+
+**신규 `pipeline/process_work_experience.py`**: `researcher_id`/`company_name`/
+`work_start_date`(YYYY-MM-DD)/`work_end_date`(YYYY-MM-DD, 없으면 `''`)/
+`role_name` long 포맷(사람당 여러 행). 사번 없는 행 제외(사용자 확정).
+`merge_utils.write_merged(..., group_replace=True)`로 저장 — 다른 대부분
+"이번 파일에 없어도 보존"하는 업서트 테이블과 달리, 이 테이블은 매
+업로드마다 **그 사람의 경력 전체를 통째로 교체**한다(사용자 확정 1번 —
+자연키(회사명+시작일 등)로 개별 행을 upsert하면 원본에서 삭제/수정된
+경력이 옛 행으로 계속 남는 문제를 group_replace로 해결). `raw_dir`
+매개변수로 CLI(`source_reader.read_source()`)/웹 업로드(`find_latest()`
+와일드카드) 양쪽 경로 모두 지원(사용자 확정 7번).
+
+**`pipeline/merge_utils.py`**: `GROUP_REPLACE_KEYS['work_experience'] =
+['researcher_id']` 등록.
+
+**`pipeline/sources.py`**: `('work_experience', '임직원 근무경력 *.xlsx', 5)`
+등록(사용자 확정 9번, CLI 경로 — 0-based 5 = 실제 6번째 행).
+
+**신규 `services/work_experience.py`**: `read_rows()`/`format_line()`
+(`"{회사명}({시작'YY.MM} ~ {종료'YY.MM}, {직무명})"`, 종료일 없으면
+그 자리만 공란 — "현재"로 채우지 않음, 사용자 확정 3번, "*" 접두사
+없음 — 사용자 확정 8번)/`format_lines()`(전체 목록, 프로필 화면용)/
+`format_latest_line()`(가장 최근 1건, 사용자 확정 4번)/`format_block()`.
+프로필 화면·인쇄 카드·엑셀 다운로드가 공유하는 단일 표시 로직
+(services/language_qualification.py와 동일한 목적).
+
+**`components/profile_sections.py`**: 신규 `work_experience_block(we_df,
+rid, *, limit=None, single_line=False, show_empty_message=True,
+plain_style=False)` — `award_block()`과 완전히 동일한 시그니처/동작
+패턴(사용자 확정 — "시상 이력과 동일한 형태로"). 내부적으로
+`services.work_experience.format_line()`을 재사용해 표시 문구를 만든다.
+
+**`pages/researcher_profile.py`**:
+- 라이브 화면: `_photo_info_card()`의 "시상 이력" 섹션 바로 아래에
+  "근무 경력" 섹션(`html.P(section-label)` + `html.Div(id=
+  'work-experience-block')`) 추가, `update_profile()` 콜백에
+  `Output('work-experience-block', 'children')` + 반환값
+  `work_experience_block(tables['work_experience'], rid)`(전체 목록)
+  추가. `_empty_profile_output()`에도 빈 값 하나 추가.
+- 인쇄 카드: `history_box`(논문·특허+양성·시상 통합 박스) 안, 시상
+  이력 다음에 "근무 경력" 소제목 + `work_experience_block(tables[
+  'work_experience'], rid, limit=1, single_line=True, show_empty_message=
+  False, plain_style=True)`(최근 1건만, 사용자 확정 4번).
+
+**`services/data_store.py`**: `read_profile_tables()`의 테이블 목록에
+`work_experience` 추가(라이브 화면·인쇄 카드·일괄 인쇄가 공유하는
+`_cached_profile_tables()`도 이 함수를 감싸므로 자동으로 함께 반영됨).
+
+**`services/researcher_profile_export.py`**: `_col_work_experience()` +
+`_WORK_EXPERIENCE_COLUMNS`/`_WORK_EXPERIENCE_COLUMN_WIDTH` 신규,
+`_load_tables()`/`_researcher_row_context()`에 `work_experience` 테이블
+추가. `build_profile_workbook(..., include_work_experience=False)` —
+기본 해제(사용자 확정 5번), 다른 옵트인 컬럼과 동일한 방식으로 어학
+컬럼 다음(보유 전문성 앞)에 추가.
+
+**`pages/researcher_list.py`**: 엑셀 옵션 체크리스트에 "근무 경력 포함"
+(`value='work_experience'`) 추가, `download_excel()` 콜백에
+`include_work_experience='work_experience' in excel_options` 전달.
+
+**`services/web_pipeline_runner.py`**: MANIFEST에 `work_experience` 항목
+추가(`mode='wildcard'`, `needs_valid_date` 없음 — group_replace_merge라
+시점보호/백필 대상 아님). 관리자 "데이터 업데이트" 탭은 매니페스트를
+그대로 순회하는 제너릭 구조라 UI 코드 변경 불필요(어학/team_refer 추가
+때와 동일한 패턴).
+
+**`config/auth_config.py`**: `TABLE_PERMISSIONS`에 `'work_experience':
+None` 추가(사용자 확정 6번 — AI 검색에서 권한 제한 없이 조회 가능).
+`_discover_csv_tables()`가 `data/processed/*.csv`를 매 질의 시점에 자동
+스캔하므로 이 화이트리스트 등록만으로 AI 검색 대상에 포함된다(코드
+변경 불필요).
+
+**`services/data_labels.py`**: `company_name`/`work_start_date`/
+`work_end_date`/`role_name` 한글 라벨(회사/근무 시작일/근무 종료일/
+직무명) 추가.
+
+**`pipeline/load_to_db.py`**: `TABLES`에 `work_experience` 추가(DB 반영
+시에도 CSV와 동일하게 매번 전체 replace — 로직은 group_replace로 이미
+CSV에 저장된 값을 그대로 미러링).
+
+**`pipeline/run_pipeline.py`**: "9-8. 근무 경력" 단계로
+`process_work_experience()` 호출 추가(폴백 없음, 어학과 동일한 패턴).
+
+**검증**: `process_work_experience.process()`를 합성 xlsx(5행 무시 + 6번째
+행 헤더, 한 사람이 회사 2곳(하나는 종료일 없음) + 다른 사람 1곳)로
+직접 실행 — (1) 한 사람이 여러 행으로 보존되는지(자연키 upsert처럼
+1행으로 붕괴되지 않는지), (2) 종료일 없는 행이 `''`로 저장되는지("현재"
+아님), (3) 두 번째 실행(첫 사람의 회사 구성을 다른 회사로 완전히 교체)이
+group_replace_merge 의미대로 그 사람의 기존 행을 통째로 새 내용으로
+대체하고, 손대지 않은 다른 사람은 그대로 보존되는지 확인 — 3가지 모두
+통과. `services.work_experience.format_line()`/`format_lines()`/
+`format_latest_line()`을 합성 데이터로 직접 호출해 "Cornell
+Univ.('04.02 ~ '07.12, Post Doc.)"(종료일 있음)/"Samsung('08.01 ~ ,
+Researcher)"(종료일 없음, 자리만 비고 "현재" 아님) 형식이 정확히
+나오는 것, `format_latest_line()`이 가장 최근 1건만 반환하는 것 확인.
+`components.profile_sections.work_experience_block()`을 award_block()과
+동일한 옵션 조합(limit/single_line/show_empty_message/plain_style)으로
+호출해 각각 기대한 형태로 렌더링되는지 확인. `dash.Dash(use_pages=True,
+pages_folder='')` 컨텍스트(이 세션 컨테이너에 `dash_cytoscape`가 없어
+전체 `pages_folder` 스캔은 우회 — 무관한 기존 의존성 문제)에서
+`pages.researcher_profile`/`pages.researcher_list`/`pages.admin`/
+`services.researcher_profile_export`/`services.work_experience`/
+`services.data_store`/`components.profile_sections`/
+`services.web_pipeline_runner` 전부 임포트 오류 없이 로드되는 것을
+확인. 변경/신규 파일 전부 `py_compile` 통과.
+
+**미검증 / 후속 확인 필요**:
+- **A4 인쇄 카드 1페이지 높이 예산**: 근무 경력 소제목+1줄 추가가 기존에
+  정밀 조정된 페이지 예산에 미치는 실제 영향을 브라우저로 확인 못 했다
+  (어학과 마찬가지 — 근무 경력은 최근 1건만 표시하도록 이미 제한해뒀지만,
+  회사명이 매우 긴 경우 줄바꿈 등은 확인 안 됨).
+- 실제 원본 파일로 웹 업로드 → 명단/프로필 화면 렌더링까지 브라우저
+  end-to-end 확인 필요.
+- 실제 브라우저에서의 "근무 경력 포함" 체크박스 조작.
+
+## 2026-08-29 (8): 연구원↔연구원 유사도 — 학력 하드 파티션 + 과거 시점
+온디맨드 보유 전문성 분석
+
+사용자 질문 2건에 대한 논의 끝에 확정된 두 가지 기능.
+
+### 1) 연구원 ↔ 연구원 유사도 — 최소한 동일 학위끼리만 매칭
+
+사용자 우려: "박사 리더 vs 고졸 리더가 유사하게 나오는 케이스가 있어
+신뢰성이 낮아진다." 처음엔 코사인 유사도에 동일 학력 가산점만 주는 소프트
+부스트를 검토했으나, 이미 텍스트 내용(예: "리더십/전략 업무" 표현)이
+우연히 겹쳐 유사도가 높게 나온 경우 약간의 부스트로는 순위를 못 뒤집는다고
+판단(부스트는 "순위를 밀어올리는" 효과일 뿐 "다른 학력군을 걸러내는"
+효과가 없음) — 기존 CL 시니어/주니어 그룹핑(`_tenure_level`)과 동일한
+**하드 파티션** 방식을 학력에도 적용하기로 확정.
+
+**`pipeline/researcher_fit.py`**: `read_education(out_dir)` 신규 —
+`read_researchers()`와 동일한 패턴으로 `education.csv`를 읽는다.
+
+**`pipeline/process_researcher_similarity.py`**:
+- `build_degree_map(education_df)` 신규 — `services.researcher_profile_export.
+  highest_degree_row()`(기존에 이미 있던 "최종학력 1건" 판정 헬퍼, 박사>석사>
+  학사>전문대>고교 우선순위)를 재사용해 `researcher_id -> 최종학력` 매핑을
+  `build_tenure_map()`과 동일한 발상으로 한 번만 계산한다.
+- `compute_similarity()`에 `degree_map` 매개변수 추가 — 대상 연구원의
+  최종학력을 알면, 후보를 **같은 학력인 사람으로만** 하드 필터링한 뒤(이
+  좁혀진 풀 안에서) 기존 CL 시니어/주니어 그룹별 검색을 그대로 수행한다.
+  본인 학력을 모르면(교육 이력 없음) 필터 없이 전체 후보에서 찾는다(CL
+  미분류와 동일한 하위 호환 폴백 원칙). 학력이 같은 사람이 조직에 적거나
+  없으면(전문대/고교 학력자 등) 결과가 적거나 비어 있을 수 있다 — 다른
+  학력 후보로 억지로 채우지 않는다(신뢰할 수 없는 매칭을 보여주지 않는
+  게 우선이라는 판단, 사용자 우려와 정확히 부합).
+- `process()`가 `fit.read_education(OUT_DIR)` → `build_degree_map()`을
+  거쳐 `compute_similarity(..., degree_map=degree_map)`으로 전달.
+
+검증: `compute_similarity()`를 "모든 사람의 임베딩이 완전히 동일"(리더십
+관련 표현이 우연히 겹쳐 텍스트 유사도가 높게 나오는 최악의 시나리오를
+재현)하도록 몽키패치한 뒤, 박사(시니어)/고졸(시니어)/박사(주니어)/석사
+(시니어) 4명으로 확인 — 박사(시니어) 대상자는 임베딩이 완전히 같은데도
+고졸·석사 후보는 전혀 안 나오고 박사(주니어) 1명만 매칭됨을 확인(하드
+파티션이 실제로 텍스트 유사도와 무관하게 학력 경계를 지키는지 검증).
+본인 학력을 모르는 사람은 기존처럼 전체 후보(4명 전부)에서 찾는 것도
+확인. `build_degree_map()`을 최종학력이 여러 행(박사+학사)인 합성
+education.csv로 확인해 최우선순위(박사)가 정확히 선택되는지 확인.
+
+### 2) 과거 시점 온디맨드 보유 전문성 분석
+
+사용자 확인 질문 2건에 대한 답변으로 확정된 설계: (1) 결과는 저장해서
+재사용(같은 사번+시점 재조회 시 LLM 재호출 없음), (2) 여러 사번 요청 시
+백그라운드 실행 + 진행 상황 폴링(관리자 "데이터 업데이트" 탭과 동일한
+패턴). 기본은 지금처럼 현재 재직자 전체를 배치로 자동 분석하고, 과거
+시점 분석은 "보유 전문성" 탭 하단에서 시점+사번을 입력해 필요할 때만
+요청한다.
+
+**시점 데이터 가용성 조사 결과**(구현 전 확인): `process_researcher_
+expertise.py`가 쓰는 입력 중 `job_profile`/`core_technology`/
+`tech_ownership`/`work_objective`는 이미 `<table>_history.csv`(2026-08-28
+(42)/(44) 항목)가 있어 그 시점 스냅샷을 그대로 쓸 수 있고, `tasks`/
+`publications`/`patents`는 원래 날짜 범위 데이터라 이력 테이블 없이도
+"그 시점 이전"으로 걸러낼 수 있다. `education`(학력)과
+`project_personnel`(과제 문서 인력 매칭)은 시점 개념이 아예 없어 —
+사용자 확인: 근사치(현재 값 그대로 사용)로 받아들이기로 함(학위는
+거의 안 바뀌고, 프로젝트 인력 매칭도 문서 재분석 때마다 통째로 다시
+만들어지는 성격이라 이력화 비용 대비 실익이 낮다고 판단).
+
+**신규 `services/period_snapshot.py`**: `pages/researcher_list.py`의
+`_resolve_period_snapshot()`(2026-08-28, 명단 화면 "누적기준+기간 지정"
+조회 전용으로 만들었던 것)을 그대로 옮겨 `resolve_period_snapshot()`로
+공용화 — 파이프라인 스크립트가 `pages/*.py`를 import하는 역방향 의존을
+피하기 위해서다. `pages/researcher_list.py`는 이 공용 함수를
+`_resolve_period_snapshot`이라는 별칭으로 import해 기존 호출부는 전혀
+안 건드렸다(순수 리팩터링, 동작 변화 없음).
+
+**`pipeline/process_researcher_expertise.py`**: 신규
+`analyze_researchers_as_of(researcher_ids, valid_date)` — process()의
+"현재 재직자 전체" 배치와 별개 경로. `_snapshot_rows_as_of(table, ids,
+valid_date)`(`resolve_period_snapshot((아주 이른 날짜, valid_date), ...)`
+로 "그 시점까지 최신 스냅샷"을 얻음)와 `_filter_as_of(df, date_col,
+valid_date)`(날짜 범위형 3개 테이블용, 문자열 비교로 그 시점 이전만
+필터)를 새로 추가하고, 기존 `_education_text()`/`_task_history_text()`
+등 텍스트 조립 함수들(process()와 완전히 공유)을 그대로 재사용해
+프롬프트를 만든다. process()와 달리 eligibility 필터(team_refer
+work_type=="R&D" 등 — 현재 조직 구조 기준이라 과거 시점엔 적용할 근거가
+없음)를 적용하지 않고 호출부가 넘긴 사번을 그대로 분석한다. 결과는
+파일에 저장하지 않고 그대로 반환(캐시 저장은 호출부인
+services/expertise_ondemand.py가 담당) — `{researcher_id, as_of,
+computed_at, strength_fields...}` 또는 데이터/LLM 응답이 없으면
+`{researcher_id, as_of, error}`.
+
+**신규 `services/expertise_ondemand.py`**: `services/web_pipeline_runner.py`
+와 동일한 이유(gunicorn --workers 2, 메모리 상태 비공유)로 락도 파일
+기반(`data/processed/.expertise_ondemand.lock.json`, 30분 초과 시 죽은
+락으로 간주)이다. 결과 캐시는 `data/processed/expertise_ondemand_cache.json`
+에 `"{사번}|{YYYY-MM-DD}"` 키로 영구 저장. `request_analysis(researcher_ids,
+valid_date)`가 진입점 — 이미 캐시에 다 있으면 `'ready'`(즉시 표시),
+캐시에 없는 사번이 있으면 `threading.Thread(daemon=True)`로 `analyze_
+researchers_as_of()`를 돌리고 `'started'`, 다른 분석이 이미 진행 중이면
+`'busy'`를 반환한다. `get_results(researcher_ids, valid_date)`가 캐시
+조회 전담.
+
+**`pages/researcher_similarity_map.py`**: 기존 "최신기준"/"누적기준"
+검색기준 라디오(`expertise-search-mode`)에 3번째 옵션 "과거 시점 조회
+(온디맨드 분석, 연구원 탭 전용)" 추가. "연구원 ↔ 연구원" 탭에서 이 모드를
+고르면(그 시점 기준 유사도 재계산은 훨씬 큰 범위라 이번엔 제외) 안내
+Alert만 보여준다. 신규 `_historical_search_panel()`(시점 `dcc.
+DatePickerSingle` + 사번 검색 `dcc.Dropdown(multi=True, options=
+_cumulative_person_options()`, 기존 "누적기준" 패널이 쓰던 것과 동일한
+목록 — 전배·퇴사자 포함) + "분석 요청" 버튼)과 `_render_historical_
+results()`(캐시 결과를 사번별로 Alert(에러) 또는 `pipeline.process_
+researcher_expertise.researcher_card_html()`(process()의 정적 리포트와
+동일한 카드 스타일)로 렌더링, 여러 명의 카드는 `pipeline.rd_specialist_
+markdown.mail_page()`(사이드바 없는 단순 HTML 셸, 원래 메일 발송용으로
+만들었던 것을 그대로 재사용) 하나에 모아 `html.Iframe(srcDoc=...)`로
+표시, `_iframe_tab()`과 동일한 방식)을 추가. 버튼 클릭 콜백이 `request_
+analysis()`를 호출해 `'ready'`면 바로 결과를, `'started'`면 스피너 +
+`dcc.Interval`(3초 폴링) 활성화, `'busy'`면 경고를 보여준다. 폴링
+콜백은 `expertise_ondemand.lock_status()`가 `None`이 되면(백그라운드
+스레드 완료) 결과를 렌더링하고 Interval을 끈다.
+
+검증: `pipeline.process_researcher_expertise.analyze_researchers_as_of()`
+를 합성 `<table>_history.csv`(2019/2023 두 시점 스냅샷, job_profile/
+core_technology)와 날짜가 다른 tasks/publications/patents 픽스처로 직접
+호출 — 2020-06 시점 조회 시 2019 스냅샷(과거 값)이, 2023-06 시점 조회 시
+2023 스냅샷(최신 값)이 정확히 선택되는지, tasks/publications가 그 시점
+이전 것만 남는지 확인. `_analyze_researcher()`를 몽키패치해 LLM 없이
+`analyze_researchers_as_of()` 전체 흐름(정상 분석/데이터 전혀 없는
+사번의 error 처리)을 확인. `services/expertise_ondemand.py`는
+`analyze_researchers_as_of()`를 몽키패치해 — 최초 요청 시 `'started'`
+와 함께 락이 걸리고, 그 사이 들어온 두 번째 요청은 `'busy'`, 백그라운드
+스레드 완료 후 락이 풀리고 결과가 캐시에 반영되는지, 같은 사번+시점
+재요청은 `'ready'`(재계산 없음), 일부만 캐시에 있는 혼합 요청은
+캐시에 없는 것만 다시 분석(`'started'`)하는지 전부 확인.
+`pages.researcher_similarity_map`을 실제 `dash.Dash(use_pages=True)`
+컨텍스트에서 임포트(이번엔 `dash_cytoscape`도 설치해 완전히 로드) —
+`layout()` 렌더링, "연구원"+"historical"/"연구원 ↔ 연구원"+"historical"
+디스패치 분기(각각 패널/안내 Alert), 다운로드 패널 숨김 토글, 합성
+캐시 데이터로 `_render_historical_results()`(에러 2건 + 정상 1건 혼합)가
+Alert 2개 + Iframe 1개로 정확히 렌더링되는지까지 전부 확인. 변경/신규
+파일 전부 `py_compile` 통과.
+
+**미검증**: 실제 사내 LLM을 통한 실제 온디맨드 분석 호출(이 세션에
+`llm_config.py`가 없어 재현 불가), 실제 브라우저에서의 DatePicker/
+Dropdown 조작과 백그라운드 실행 중 실제 3초 폴링 UX, gunicorn 멀티
+워커 환경에서의 실제 락 공유(파일 기반이라 이론상 안전하지만 실기
+검증은 못 함 — web_pipeline_runner.py와 동일한 인프라를 그대로
+재사용했으므로 위험도는 낮다고 판단).

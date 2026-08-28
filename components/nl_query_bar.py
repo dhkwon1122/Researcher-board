@@ -20,6 +20,8 @@ Dash 콜백 설계 메모(재발 방지 — data/processed/CLAUDE.md에도 기�
 만들지 않으므로(명단 테이블 쪽 책임) 이 문제와 무관해졌다.
 """
 
+from datetime import date
+
 import dash
 import dash_bootstrap_components as dbc
 from dash import Input, Output, State, callback, dcc, html
@@ -82,7 +84,16 @@ def render() -> html.Div:
             dbc.Button([html.I(className='bi bi-x-circle me-1'), '초기화'],
                        id='nl-query-reset-btn', color='secondary', outline=True, n_clicks=0),
         ], className='mb-2'),
-        dcc.Loading(html.Div(id='nl-query-note')),
+        # target_components: 실제 느린 작업(LLM 호출 + SQL 실행)은 _run_nl_query
+        # 콜백이 하고 그 결과를 화면에 안 보이는 nl-query-full-result Store에
+        # 담는다 — 이 Store가 Loading의 자식이 아니라서(안 보이는 컴포넌트라
+        # 안에 둘 수 없음) 그냥 두면 스피너가 실제 대기 시간 동안 뜨지 않는다.
+        # target_components로 "이 컴포넌트의 이 prop이 갱신되는 동안 로딩
+        # 표시"를 명시적으로 지정해 해결한다.
+        dcc.Loading(
+            html.Div(id='nl-query-note'),
+            target_components={'nl-query-full-result': 'data'},
+        ),
         dcc.Store(id='nl-query-full-result'),
     ], className='mb-3')
 
@@ -105,12 +116,19 @@ def answer_block(answer: str):
     Input('nl-query-input', 'n_submit'),
     State('nl-query-input', 'value'),
     State('list-search-mode', 'value'),
+    State('list-period-range', 'start_date'),
+    State('list-period-range', 'end_date'),
     prevent_initial_call=True,
 )
-def _run_nl_query(_n_clicks, _n_submit, question, search_mode):
+def _run_nl_query(_n_clicks, _n_submit, question, search_mode, period_start, period_end):
     """실제 LLM 호출/SQL 실행을 여기서 한 번만 하고 dcc.Store에 담아 둔다 —
     researcher_list.py의 update_table 콜백이 이 Store를 Input으로 받아
-    명단 테이블의 데이터/컬럼을 그 결과로 바꾼다."""
+    명단 테이블의 데이터/컬럼을 그 결과로 바꾼다.
+
+    누적기준에서 명단과 동일하게 기간(list-period-range)을 지정할 수 있다
+    (2026-08-28) — 지정하면 그 기간의 마지막 스냅샷 기준으로 조회한다(연/월
+    단위만 의미가 있어 날짜에서 일자는 버리고 nl_query.answer_question()에
+    "YYYY-MM" 튜플로 넘긴다)."""
     from dash.exceptions import PreventUpdate
     from services.auth import get_current_user
     if get_current_user() is None:
@@ -118,7 +136,15 @@ def _run_nl_query(_n_clicks, _n_submit, question, search_mode):
     empty = {'intent': 'unsupported', 'columns': [], 'labels': [], 'rows': [], 'total_rows': 0, 'note': ''}
     if not question or not question.strip():
         return {**empty, 'note': '질문을 입력해주세요.'}
-    return nl_query.answer_question(question, current_only=(search_mode != 'all'))
+
+    current_only = (search_mode != 'all')
+    period = None
+    if search_mode == 'all' and period_start and period_end:
+        start = date.fromisoformat(period_start)
+        end = date.fromisoformat(period_end)
+        period = (f'{start.year:04d}-{start.month:02d}', f'{end.year:04d}-{end.month:02d}')
+
+    return nl_query.answer_question(question, current_only=current_only, period=period)
 
 
 @callback(

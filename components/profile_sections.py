@@ -10,7 +10,11 @@ from dash import html
 
 from components.detail_tabs import plain_indent_list
 from services.data_store import ASSETS_DIR, PHOTO_DIR, RAW_DIR
-from services.evaluations import first_half_column, format_evaluation_cell, salary_grade_column, second_half_column
+from services.evaluations import (
+    competency_column, first_half_column, format_evaluation_cell, salary_grade_column, second_half_column,
+)
+from services.language_qualification import format_block as language_block_text
+from services.work_experience import format_line as _work_exp_format_line
 
 DEGREE_ORDER = ['박사', '석사', '학사', '전문대', '고교']
 GRADE_COLOR = {
@@ -151,6 +155,17 @@ def photo_block(rid: str, name: str, row=None, current_year: int = 2026, *,
                 f'재직상태 : {employment_status}', className='text-muted text-center mb-0',
                 style={'fontSize': '0.78rem'},
             ))
+
+        # 어학 — 재직상태 줄 바로 아래. 여러 언어를 보유하면 줄바꿈으로
+        # 나열한다(사용자 확정 — 콤마 아님). 데이터가 전혀 없으면 줄 자체를
+        # 생략(재직상태와 동일한 관례). 화면·A4 인쇄 카드가 이 함수를
+        # 공유하므로 둘 다에 함께 반영된다(사용자 확정 — 인쇄 카드에도 포함).
+        language_text = language_block_text(rid)
+        if language_text:
+            sub_lines.append(html.P(
+                language_text, className='text-muted text-center mb-0',
+                style={'fontSize': '0.78rem', 'whiteSpace': 'pre-line'},
+            ))
     else:
         sub_lines = [html.P(name, className='fw-bold mt-2 mb-0 text-center small')]
 
@@ -258,7 +273,8 @@ def _eval_cell(eva, year) -> tuple[str, str]:
     salary = _clean_str(eva.get(salary_grade_column(year)))
     first_half = _clean_str(eva.get(first_half_column(year - 1)))
     second_half = _clean_str(eva.get(second_half_column(year - 1)))
-    display = format_evaluation_cell(salary, first_half, second_half)
+    competency = _clean_str(eva.get(competency_column(year - 1)))
+    display = format_evaluation_cell(salary, first_half, second_half, competency)
     return salary, display
 
 
@@ -274,8 +290,9 @@ def _eval_incentive_rows(eva_df, inc_df, rid: str):
 
 def evaluation_incentive_block(eva_df, inc_df, rid: str, years: list[int]):
     """years: 연봉등급 연도 리스트(오름차순, 예: [2024,2025,2026]) — 각 연도
-    열은 그 해 연봉등급과, 대응하는 전년도(연도-1) 상/하반기업적을 합쳐
-    services.evaluations.format_evaluation_cell()로 한 셀에 표시한다(예:
+    열은 그 해 연봉등급과, 대응하는 전년도(연도-1) 역량/하반기업적(연봉등급이
+    없으면 상/하반기업적)을 합쳐 services.evaluations.format_evaluation_cell()로
+    한 셀에 표시한다(예:
     "다(EM/EM)")."""
     inc, eva = _eval_incentive_rows(eva_df, inc_df, rid)
 
@@ -405,6 +422,38 @@ def award_block(awd_df, rid: str, *, limit: int | None = None, single_line: bool
         desc  = str(row.get('description', '')).strip()
         parts = [p for p in [yr_label, aname, desc] if p and p not in ('nan',)]
         texts.append(' / '.join(parts) if parts else '-')
+    if plain_style:
+        return html.Div([
+            html.Div(t, className='small', style={**item_style, 'marginLeft': '10px', 'marginBottom': '3px',
+                                                    'wordBreak': 'break-word'})
+            for t in texts
+        ])
+    return html.Ul([html.Li(t, className='small', style=item_style) for t in texts], className='ps-3 mb-0 small')
+
+
+def work_experience_block(we_df, rid: str, *, limit: int | None = None, single_line: bool = False,
+                           show_empty_message: bool = True, plain_style: bool = False):
+    """근무 경력 표시 — award_block()과 동일한 형태/인자(limit/single_line/
+    show_empty_message/plain_style)를 공유한다(사용자 요청: "시상 이력과
+    동일한 형태로"). 표시 문구 자체("회사명(시작'YY.MM ~ 종료'YY.MM,
+    직무명)")는 services.work_experience.format_line()이 만든다 — 프로필
+    화면·인쇄 카드가 같은 표기 규칙을 공유하도록. limit이 주어지면 최신
+    시작일순 상위 limit건만(인쇄 카드는 최근 1건만, 사용자 확정
+    2026-08-29)."""
+    if we_df.empty:
+        return html.Div('근무 경력 없음', className='text-muted small') if show_empty_message else None
+    rows = we_df[we_df['researcher_id'] == rid].copy()
+    if rows.empty:
+        return html.Div('근무 경력 없음', className='text-muted small') if show_empty_message else None
+    if 'work_start_date' in rows.columns:
+        rows = rows.sort_values('work_start_date', ascending=False)
+    if limit:
+        rows = rows.head(limit)
+
+    item_style = {'whiteSpace': 'nowrap', 'overflow': 'hidden', 'textOverflow': 'ellipsis'} if single_line else {}
+    texts = [line for line in (_work_exp_format_line(row.to_dict()) for _, row in rows.iterrows()) if line]
+    if not texts:
+        return html.Div('근무 경력 없음', className='text-muted small') if show_empty_message else None
     if plain_style:
         return html.Div([
             html.Div(t, className='small', style={**item_style, 'marginLeft': '10px', 'marginBottom': '3px',

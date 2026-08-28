@@ -4,8 +4,8 @@
 원천: 기본은 source_reader.read_source('researchers')
   → DB researchers_stg 테이블 또는 data/raw_csv/researchers.csv
   (1단계 xlsx_to_raw_csv.py가 data/raw/인력현황.xlsx를 DRM 제거해 만든 사본)
-  raw_dir이 명시적으로 오버라이드되면(예: data/updates) 그 폴더의 인력현황.xlsx를
-  직접 읽는다 — 아래 참고.
+  raw_dir이 명시적으로 오버라이드되면(예: data/web_updates/<key>) 그 폴더의
+  인력현황.xlsx를 직접 읽는다 — 아래 참고.
 출력 파일: data/processed/researchers.csv, data/processed/researchers_history.csv
 
 읽는 컬럼:
@@ -51,8 +51,8 @@ researchers_history.csv는 별도로 (researcher_id, valid_year, valid_month)
 않는다.
 
 raw_dir 인자로 원본 위치를 바꿀 수 있다 — 기본은 data/raw(최초 적재),
-data/updates를 넘기면 그 폴더의 파일로 업서트만 수행한다(pipeline/run_update.py
-참고).
+그 외 폴더(예: 관리자 웹 "데이터 업데이트" 탭이 쓰는 data/web_updates/<key>)를
+넘기면 그 폴더의 파일로 업서트만 수행한다.
 """
 
 import csv
@@ -63,8 +63,8 @@ from datetime import date, datetime
 
 import pandas as pd
 
-RESEARCHERS_FILE = '인력현황.xlsx'
-_RESEARCHERS_HEADER_ROW = 0  # sources.py 매니페스트 기준 (1번째 행)
+RESEARCHERS_PATTERNS = ['*That Month Headcount*.xlsx', '*End of Month Headcount*.xlsx']
+_RESEARCHERS_HEADER_ROW = 1  # sources.py 매니페스트 기준 (2번째 행)
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
 COL_ID         = '사원번호'
@@ -99,7 +99,8 @@ POSITION_LABEL_MAP = {
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import is_blank, read_xlsx, norm_id  # noqa: E402
-from merge_utils import TABLE_KEYS, write_merged  # noqa: E402
+from merge_utils import TABLE_KEYS, read_existing, write_merged_with_valid_period  # noqa: E402
+from source_files import find_latest  # noqa: E402
 from source_reader import read_source  # noqa: E402
 
 
@@ -201,12 +202,12 @@ def process(raw_dir: str = RAW_DIR) -> bool:
             print('[SKIP] researchers 원천 데이터 없음 '
                   '(DB researchers_stg 또는 data/raw_csv/researchers.csv) — researchers_raw 폴백 시도')
     else:
-        raw_path = os.path.join(raw_dir, RESEARCHERS_FILE)
-        if os.path.exists(raw_path):
+        raw_path = find_latest(raw_dir, RESEARCHERS_PATTERNS)
+        if raw_path is not None:
             df = read_xlsx(raw_path, header_row=_RESEARCHERS_HEADER_ROW)
         else:
             df = None
-            print(f'[SKIP] {RESEARCHERS_FILE} 파일 없음({raw_dir}) — researchers_raw 폴백 시도')
+            print(f'[SKIP] {RESEARCHERS_PATTERNS} 파일 없음({raw_dir}) — researchers_raw 폴백 시도')
 
     if df is None:
         return False
@@ -264,24 +265,49 @@ def process(raw_dir: str = RAW_DIR) -> bool:
 
     result = pd.DataFrame(rows)
     result = result[result['researcher_id'] != ''].reset_index(drop=True)
-    result = result.sort_values('researcher_id').reset_index(drop=True)
+    # researcher_id로만 정렬하면 안 된다 — 이제 원본이 여러 헤드카운트 다운로드
+    # 파일을 합친 것일 수 있어(예: 이번 달 + 지난 달 파일이 동시에 존재), 같은
+    # researcher_id가 valid_year/valid_month가 다른 여러 행으로 나타날 수 있다.
+    # write_merged()의 업서트가 "같은 키가 중복되면 마지막 행 채택"이므로,
+    # valid_year/valid_month를 오름차순 보조키로 둬서 각 사람의 가장 최근
+    # 기간 행이 항상 마지막에 오게 만든다(파일명이 아니라 내부 데이터 기준 —
+    # 사용자 확정, pipeline/sources.py docstring 참고).
+    result = result.sort_values(['researcher_id', 'valid_year', 'valid_month']).reset_index(drop=True)
 
     os.makedirs(OUT_DIR, exist_ok=True)
 
-    # 1) researchers.csv — researcher_id 업서트(없는 사람은 보존) 후 is_current 재계산
+    # 1) researchers.csv — researcher_id 업서트 + 시점(valid_year/valid_month) 보호
+    #    (evaluations/tech_ownership/job_profile/work_objective와 동일한 이유 —
+    #    옛날 헤드카운트 파일을 나중에 실수로 재업로드해도 이미 저장된 더 최근
+    #    값이 조용히 덮어써지지 않게 한다. 이 테이블은 admin이 날짜를 따로
+    #    지정할 필요가 없다 — 원본 컬럼(인원실적년도/월)에서 행마다 이미
+    #    valid_year/valid_month를 추출해뒀으므로 그걸 그대로 시점 키로 쓴다.
+    #    write_merged_with_valid_period()가 researchers_history.csv 저장까지
+    #    함께 처리한다(건너뛴 사람 포함 전체가 이력에는 그대로 쌓임).
     out_path = os.path.join(OUT_DIR, 'researchers.csv')
-    merged = write_merged(out_path, result, TABLE_KEYS['researchers'])
+    hist_path = os.path.join(OUT_DIR, 'researchers_history.csv')
+    outcome = write_merged_with_valid_period(
+        out_path, hist_path, result, TABLE_KEYS['researchers'], TABLE_KEYS['researchers_history'])
+
+    # is_current는 "현재상태" 파일 전체를 다시 읽어 재계산(건너뛴 사람의 기존
+    # 행도 포함해 전체 최신월 기준으로 판단해야 하므로 outcome이 아니라 파일을
+    # 다시 읽는다).
+    merged = read_existing(out_path)
     merged = _compute_is_current(merged)
     merged.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
 
     n_current = (merged['is_current'] == 'Y').sum()
     n_not_current = (merged['is_current'] == 'N').sum()
-    print(f'[OK]   researchers.csv 저장 (총 {len(merged)}명, 현재 소속 {n_current}명, 미소속 {n_not_current}명)')
+    print(f'[OK]   researchers.csv 저장 (총 {len(merged)}명 중 이번 파일 {outcome["updated_rows"]}명 반영, '
+          f'현재 소속 {n_current}명, 미소속 {n_not_current}명)')
+    if outcome['skipped']:
+        print(f'  [WARN] {len(outcome["skipped"])}명은 기존 저장된 값이 더 최신이라 건너뜀:')
+        for s in outcome['skipped'][:10]:
+            print(f'    · {s["researcher_id"]}: 기존 {s["existing_period"]} > 이번 {s["new_period"]}')
+        if len(outcome['skipped']) > 10:
+            print(f'    · 외 {len(outcome["skipped"]) - 10}명')
 
-    # 2) researchers_history.csv — (researcher_id, valid_year, valid_month) 누적(삭제 없음)
-    hist_path = os.path.join(OUT_DIR, 'researchers_history.csv')
-    hist_merged = write_merged(hist_path, result, TABLE_KEYS['researchers_history'])
-    print(f'[OK]   researchers_history.csv 저장 (누적 {len(hist_merged)}행)')
+    print(f'[OK]   researchers_history.csv 저장 (누적 {len(read_existing(hist_path))}행)')
 
     return True
 

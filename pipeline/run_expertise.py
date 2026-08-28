@@ -27,18 +27,17 @@ pipeline/run_ready.py로 사내 LLM/BGE-M3/Confluence 환경이 준비됐는지 
   job_profile.csv, job_profile_info_standard.json, job_profile_info_sait.json,
   core_technology.csv, core_technology_grade_info.json, tech_ownership.csv,
   tech_ownership_lv_info.json, publications.csv, patents.csv,
-  work_objective.csv, project_confl_address.csv, analysis_dep.csv, team_refer.csv
+  work_objective.csv, project_confl_address.csv, team_refer.csv
 
 team_refer.csv(팀참조시트.xlsx 전처리, 선택)는 조직도(계층 구조) 데이터다 —
-researchers.csv의 org_code와 project_name으로 매핑해 "보유 전문성" 콘솔의
+researchers.csv의 org_code와 org_name_wd로 매핑해 "보유 전문성" 콘솔의
 연구원/연구원↔연구원/연구원↔과제 탭 좌측 사이드바에 트리로 표시하는 데 쓰인다.
-파일이 없으면 각 리포트가 조직도 없이 생성된다(정상 동작이므로 missing 목록에
-포함되지 않음).
-
-analysis_dep.csv(전문성 분석 부서.xlsx 전처리, 선택)는 process_researcher_expertise.py가
-연구원 전문성 분석 대상 부서를 거르는 데 쓰인다 — 연구원의 department(researchers.csv,
-현소속부서명)가 이 목록에 있을 때만 분석 대상에 포함한다. 파일이 없으면 부서
-필터 없이 전체 연구원을 분석한다(정상 동작이므로 missing 목록에 포함되지 않음).
+또한 process_researcher_expertise.py가 연구원 전문성 분석 대상을 거르는 데도
+쓰인다 — 연구원의 org_code가 매칭되는 team_refer 행의 work_type이 "R&D"일
+때만 분석 대상에 포함한다(옛 analysis_dep.csv/전문성 분석 부서.xlsx 방식은
+이 work_type 게이트로 완전히 대체됐다). 파일이 없으면 각 리포트가 조직도 없이
+생성되고, 전문성 분석도 부서 필터 없이 전체 연구원을 대상으로 한다(정상
+동작이므로 missing 목록에 포함되지 않음).
 
 이 스크립트가 실행하지 않는 것 (사내 Confluence + 사내 LLM 필요, 비용 발생 —
 위 전처리가 끝난 뒤 아래 순서로 직접 실행, 또는 pipeline/run_analysis.py로
@@ -170,15 +169,12 @@ def run():
     if not process_project_confl():
         missing.append('project_confl_address (과제별컨플.xlsx)')
 
-    # ── 14. 전문성 분석 대상 부서: 전문성 분석 부서.xlsx (폴백 없음, 선택) ──
-    # 없어도 process_researcher_expertise.py가 부서 필터 없이 전체 연구원을
-    # 분석하므로(정상 동작) missing 목록에는 추가하지 않는다.
-    from process_analysis_dep import process as process_analysis_dep
-    process_analysis_dep()
-
-    # ── 15. 팀참조시트: 조직도 구조 (폴백 없음, 선택) ─────────────────────
-    # 없어도 각 리포트가 조직도 없이(기존 부서/과제·파트 평면 목록으로) 생성되므로
-    # (정상 동작) missing 목록에는 추가하지 않는다.
+    # ── 14. 팀참조시트: 조직도 구조 + 전문성 분석 대상(work_type=="R&D") 게이트
+    # (폴백 없음, 선택) ──────────────────────────────────────────────────
+    # 없어도 각 리포트가 조직도 없이(기존 부서/과제·파트 평면 목록으로) 생성되고,
+    # process_researcher_expertise.py도 부서 필터 없이 전체 연구원을 분석하므로
+    # (정상 동작) missing 목록에는 추가하지 않는다. 옛 process_analysis_dep.py
+    # (전문성 분석 부서.xlsx)는 이 work_type 게이트로 완전히 대체되어 제거됐다.
     from process_team_refer import process as process_team_refer
     process_team_refer()
 

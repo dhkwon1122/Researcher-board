@@ -2,11 +2,17 @@
 관리자 페이지: 사용자 계정 관리 (추가 / 수정 / 삭제)
 manage_users 권한이 있는 계정만 접근 가능.
 """
+import base64
+import os
+from datetime import date
+
 import dash
 import dash_bootstrap_components as dbc
-from dash import ALL, Input, Output, State, callback, dcc, html, no_update
+from dash import ALL, Input, Output, State, callback, dash_table, dcc, html, no_update
 
 from config.auth_config import ROLE_LABELS
+from services import team_refer_store
+from services import web_pipeline_runner as wpr
 
 dash.register_page(__name__, path='/admin', name='관리자', title='사용자 관리')
 
@@ -172,13 +178,10 @@ def _delete_modal():
 
 # ── 레이아웃 ──────────────────────────────────────────────────────────────────
 
-def layout():
-    from services.auth import can, list_users
-    if not can('manage_users'):
-        return _access_denied()
+def _user_management_tab() -> html.Div:
+    from services.auth import list_users
 
     users = list_users()
-
     rows = [_user_row(u, i) for i, u in enumerate(users)]
 
     table = dbc.Table(
@@ -196,19 +199,9 @@ def layout():
         bordered=True, hover=True, responsive=True, size='sm', className='mb-0',
     )
 
-    return dbc.Container([
+    return html.Div([
         dcc.Store(id='user-refresh-counter', data=0),
         dcc.Store(id='user-list-store', data=users),
-
-        dbc.Row(
-            dbc.Col([
-                html.H5(
-                    [html.I(className='bi bi-people me-2'), '사용자 관리'],
-                    className='mb-0',
-                ),
-            ]),
-            className='mb-3 align-items-center',
-        ),
 
         dbc.Card([
             dbc.CardHeader(
@@ -235,6 +228,358 @@ def layout():
 
         _user_modal(),
         _delete_modal(),
+    ], className='pt-3')
+
+
+def _sort_key(value):
+    """정렬용 키 — 숫자로 보이는 값(조직 레벨/사번/부서ID/상위부서ID 등)은
+    숫자로, 아니면 문자열로 비교한다. 빈 값은 항상 맨 뒤로 보낸다."""
+    s = str(value or '').strip()
+    if not s:
+        return (2, '')
+    try:
+        return (0, int(s))
+    except ValueError:
+        return (1, s)
+
+
+def _renumbered(rows: list) -> list:
+    """현재 순서(정렬/추가/삭제 반영 후) 그대로 1부터 번호를 다시 매긴다 —
+    '_no'는 화면 표시 전용이라 저장 대상 데이터에는 포함되지 않는다."""
+    for i, r in enumerate(rows, start=1):
+        r['_no'] = i
+    return rows
+
+
+def _team_refer_tab() -> html.Div:
+    """팀/리더 참조 웹 CRUD 탭. 컬럼은 팀참조시트.xlsx 원본 헤더명을 그대로
+    쓴다(pipeline.process_team_refer._COL_MAP 재사용, services.team_refer_store
+    참고) — 행 추가/삭제로 조직 단위를 직접 편집하고, 저장하면 지정한 날짜로
+    누적된다(같은 날 재저장은 그날 값을 덮어씀)."""
+    rows = team_refer_store.list_editable_rows()
+    loaded_dep_ids = sorted({r.get('부서ID', '') for r in rows if r.get('부서ID')})
+    rows = _renumbered(rows)
+
+    # 'No.' 는 화면 표시 전용 — 저장 대상 컬럼(KOREAN_COLUMNS)에는 없으므로
+    # team_refer_store.save_snapshot()이 그대로 무시한다(_COL_MAP에 없는 키).
+    columns = [{'name': 'No.', 'id': '_no', 'editable': False}] + [
+        {'name': col, 'id': col, 'editable': True}
+        for col in team_refer_store.KOREAN_COLUMNS
+    ]
+
+    return html.Div([
+        dcc.Store(id='team-refer-loaded-dep-ids', data=loaded_dep_ids),
+
+        dbc.Alert(
+            [
+                html.I(className='bi bi-info-circle me-2'),
+                '조직 레벨/부서ID가 비어 있는 행은 저장되지 않습니다. 상위부서ID는 '
+                '실제 존재하는 부서ID를 가리켜야 하며, 없으면 최상위 조직으로 취급됩니다.',
+            ],
+            color='light', className='small border mb-3',
+        ),
+
+        dbc.Row([
+            dbc.Col([
+                dbc.Label('입력 날짜', className='small fw-semibold text-muted mb-1'),
+                dcc.DatePickerSingle(
+                    id='team-refer-valid-date', date=date.today().isoformat(),
+                    display_format='YYYY-MM-DD', className='d-block',
+                ),
+                html.Div(
+                    '기본값은 오늘 — 과거 데이터를 소급 입력할 때만 바꾸세요.',
+                    className='text-muted', style={'fontSize': '0.72rem'},
+                ),
+            ], md='auto'),
+            dbc.Col([
+                dbc.Label(' ', className='small d-block mb-1'),
+                dbc.ButtonGroup([
+                    dbc.Button([html.I(className='bi bi-plus-lg me-1'), '행 추가'],
+                               id='team-refer-add-row-btn', color='secondary', outline=True, size='sm'),
+                    dbc.Button([html.I(className='bi bi-save me-1'), '저장'],
+                               id='team-refer-save-btn', color='primary', size='sm'),
+                ]),
+            ], md='auto'),
+        ], className='mb-2 align-items-end'),
+
+        dash_table.DataTable(
+            id='team-refer-table',
+            columns=columns,
+            data=rows,
+            editable=True,
+            row_deletable=True,
+            page_action='none',  # 페이지 나누지 않고 전체 행을 한 번에 표시
+            sort_action='custom',  # 헤더 클릭 정렬 — team_refer_sort 콜백이 처리(No.도 같이 갱신)
+            sort_by=[],
+            style_table={'overflowX': 'auto'},
+            # 전체 가운데 정렬 + 좁은 폭에서도 최대한 좌우 스크롤 없이 한 화면에
+            # 들어오도록 폰트/여백을 줄이고, 그래도 안 들어가는 내용은 말줄임
+            # 처리 후 마우스 오버로 전체를 보여준다(tooltip_data, 사용자 확정
+            # — 안 들어가면 스크롤이 남는 것도 허용).
+            style_cell={
+                'fontSize': '0.72rem', 'padding': '3px 6px', 'textAlign': 'center',
+                'minWidth': '55px', 'maxWidth': '160px',
+                'overflow': 'hidden', 'textOverflow': 'ellipsis',
+            },
+            style_cell_conditional=[{'if': {'column_id': '_no'}, 'width': '40px', 'textAlign': 'center'}],
+            style_header={'fontWeight': '600', 'backgroundColor': '#f1f3f5',
+                          'textAlign': 'center', 'fontSize': '0.72rem'},
+            tooltip_delay=0,
+            tooltip_duration=None,
+            # DataTable에는 컬럼 너비 드래그 조절 기능이 없어(구버전 dash_table),
+            # 헤더 텍스트를 감싸는 요소에 브라우저 네이티브 CSS resize를 적용해
+            # 우측 하단 모서리를 드래그해 너비를 조절할 수 있게 한다.
+            css=[{
+                'selector': '.column-header-name',
+                'rule': ('display: inline-block; resize: horizontal; overflow: auto; '
+                         'min-width: 40px; max-width: 600px; vertical-align: bottom;'),
+            }],
+        ),
+
+        html.Div(id='team-refer-save-msg', className='mt-2'),
+
+        # 저장한 행들 안에 부서ID(dep_id)가 중복되면(업서트 자연키 충돌로
+        # 일부 행이 조용히 사라지는 원인) 별도 창으로 바로 보여준다(사용자
+        # 요청) — data/processed/CLAUDE.md 참고.
+        dbc.Modal(
+            [
+                dbc.ModalHeader(dbc.ModalTitle([
+                    html.I(className='bi bi-exclamation-triangle-fill text-warning me-2'),
+                    '부서ID(dep_id) 중복 발견',
+                ])),
+                dbc.ModalBody(id='team-refer-dupe-modal-body'),
+                dbc.ModalFooter(dbc.Button('확인', id='team-refer-dupe-modal-close', size='sm')),
+            ],
+            id='team-refer-dupe-modal', is_open=False, size='lg',
+        ),
+    ], className='pt-3')
+
+
+_STATUS_COLORS = {'성공': 'success', '실패': 'danger', '실행중': 'info'}
+
+
+def _upload_box(key: str, slot: str, small_label: str = '', multiple: bool = False) -> html.Div:
+    """단일 업로드 드롭존. slot: 'single'(대부분) | 'legacy'/'new'(직무이력 전용).
+    multiple=True(대량 백필 대상 항목만, needs_valid_date 참고)면 파일을
+    여러 개 한 번에 선택할 수 있다 — 파일명이 "_YYYYMM"으로 끝나는 것만
+    백필로 인식되고(pipeline/backfill_utils.py), 그 외는 무시된다."""
+    return dcc.Upload(
+        id={'type': 'du-upload', 'key': key, 'slot': slot},
+        children=html.Div([
+            html.I(className='bi bi-cloud-arrow-up me-1'),
+            small_label or '클릭 또는 드래그해 업로드',
+        ], className='small text-muted'),
+        style={
+            'padding': '4px 8px', 'border': '1px dashed #adb5bd', 'borderRadius': '4px',
+            'textAlign': 'center', 'cursor': 'pointer',
+        },
+        multiple=multiple,
+    )
+
+
+def _data_update_row(row: dict) -> html.Tr:
+    key = row['key']
+
+    if row['mode'] == 'dual':
+        upload_cell = html.Div([
+            html.Div('① 구버전 이력(선택, 최초 1회)', className='small text-muted mb-1'),
+            _upload_box(key, 'legacy', '업로드'),
+            html.Div('② 내 리포트(필수)', className='small text-muted mt-2 mb-1'),
+            _upload_box(key, 'new', '업로드'),
+        ])
+    else:
+        upload_cell = _upload_box(key, 'single', multiple=row['needs_valid_date'])
+
+    filenames = row['uploaded_filenames']
+    filenames_view = (
+        html.Div([html.Div(f, className='small') for f in filenames], className='mt-1')
+        if filenames else html.Div('업로드된 파일 없음', className='small text-muted mt-1')
+    )
+
+    # 대량 백필 대기 파일(파일명이 "_YYYYMM"으로 끝나는 것들, 2026-08-28) —
+    # 실행을 누르면 오래된 시점부터 순서대로 전부 반영된다.
+    backfill_view = None
+    if row['needs_valid_date'] and row.get('backfill_files'):
+        bf = row['backfill_files']
+        backfill_view = html.Div([
+            html.Div(
+                [html.I(className='bi bi-layers me-1'), f'백필 대기 {len(bf)}건 ({bf[0][1]} ~ {bf[-1][1]})'],
+                className='small text-info fw-semibold mt-1',
+            ),
+            html.Div(
+                '한 파일에 "_YYYYMM"(예: _202305)을 붙여 여러 개를 한 번에 올리면, '
+                '실행 시 오래된 시점부터 순서대로 전부 반영됩니다.',
+                className='text-muted', style={'fontSize': '0.68rem'},
+            ),
+        ])
+
+    status = row['status']
+    status_badge = (
+        dbc.Badge([html.I(className='bi bi-arrow-repeat me-1'), '실행중'], color='info')
+        if status == '실행중'
+        else dbc.Badge(status or '-', color=_STATUS_COLORS.get(status, 'secondary'))
+    )
+
+    api_btn = dbc.Button(
+        [html.I(className='bi bi-cloud-arrow-down me-1'),
+         'API로 가져오기' if row['has_api'] else 'API 연동 예정'],
+        id={'type': 'du-api', 'key': key},
+        color='primary' if row['has_api'] else 'secondary',
+        outline=True, size='sm', className='mt-2 py-0 px-1',
+        style={'fontSize': '0.68rem'},
+    )
+
+    # "현재상태" 성격 항목(evaluations/tech_ownership/job_profile/work_objective_*)은
+    # 이번 업로드분이 어느 시점 기준인지(연/월) 지정해야 한다 — 과거 시점으로
+    # 잘못 지정하면 process_*.py가 기존 최신 값을 보호하려고 그 사람 행을
+    # 건너뛴다(정상 동작, 실행결과 메시지로 안내). 기본값은 오늘.
+    valid_date_picker = (
+        html.Div([
+            dbc.Label('기준 연/월', className='small text-muted mb-0', style={'fontSize': '0.68rem'}),
+            dcc.DatePickerSingle(
+                id={'type': 'du-valid-date', 'key': key}, date=date.today().isoformat(),
+                display_format='YYYY-MM', className='d-block',
+            ),
+            html.Div(
+                '파일명이 "_YYYYMM"으로 끝나는 백필 업로드에는 적용되지 않습니다(파일명의 날짜를 그대로 씀).',
+                className='text-muted', style={'fontSize': '0.65rem'},
+            ),
+        ], className='mt-2')
+        if row['needs_valid_date'] else None
+    )
+
+    return html.Tr([
+        html.Td(dbc.Checkbox(id={'type': 'du-check', 'key': key}, value=False), className='align-middle text-center'),
+        html.Td([html.Div(row['label'], className='fw-semibold'),
+                 html.Div(row['hint'], className='text-muted', style={'fontSize': '0.72rem'}),
+                 api_btn, valid_date_picker],
+                className='align-middle'),
+        html.Td([upload_cell, filenames_view, backfill_view], className='align-middle', style={'minWidth': '220px'}),
+        html.Td([
+            dbc.Button(html.I(className='bi bi-download'), id={'type': 'du-download', 'key': key},
+                       color='link', size='sm', disabled=not row['has_upload'], className='p-0'),
+            html.Div(row['uploaded_at'] or '-', className='small text-muted'),
+        ], className='align-middle text-center'),
+        html.Td(row['last_run_at'] or '-', className='align-middle small text-center'),
+        html.Td([status_badge, html.Div(row['message'], className='small text-muted mt-1',
+                                         title=row['message'])],
+                className='align-middle', style={'minWidth': '200px'}),
+    ])
+
+
+def _data_update_table() -> dbc.Table:
+    rows = wpr.snapshot()
+    header = html.Thead(html.Tr([
+        html.Th('', style={'width': '36px'}), html.Th('구분'), html.Th('업로드'),
+        html.Th('이전 Data'), html.Th('최종실행이력'), html.Th('실행결과'),
+    ]))
+    body = html.Tbody([_data_update_row(r) for r in rows])
+    return dbc.Table([header, body], bordered=True, hover=True, responsive=True, size='sm',
+                      className='align-middle mb-0')
+
+
+def _db_status_view() -> html.Span:
+    s = wpr.db_load_status()
+    if not s.get('last_run_at'):
+        return html.Span('DB 반영: 아직 실행한 적 없음', className='text-muted small')
+    color = _STATUS_COLORS.get(s['status'], 'secondary')
+    return html.Span([
+        html.Span('DB 반영 ', className='small text-muted'),
+        dbc.Badge(s['status'] or '-', color=color, className='me-2'),
+        html.Span(s['last_run_at'], className='text-muted small me-2'),
+        html.Span(s.get('message', ''), className='small'),
+    ])
+
+
+def _data_update_tab() -> html.Div:
+    """매니페스트 등록 파일 중 20개(리더십진단·comments 제외)를 웹에서 직접
+    업로드→실행할 수 있는 탭. 실제 실행/락/로그는 services/web_pipeline_runner.py.
+    전제: 업로드 전 사용자가 DRM을 해제한 사본을 올린다(사용자 확정)."""
+    return html.Div([
+        dcc.Download(id='data-update-download'),
+        dcc.Interval(id='data-update-interval', interval=3000, disabled=not wpr.any_running()),
+
+        dbc.Alert(
+            [
+                html.I(className='bi bi-info-circle me-2'),
+                '원본 엑셀이 사내 DRM으로 보호돼 있다면, 업로드 전 자신의 PC에서 '
+                'Excel로 열어 "다른 이름으로 저장"으로 DRM이 풀린 사본을 만들어 '
+                '올려주세요. "전체 업데이트"는 파일이 업로드된 항목만 실행합니다. '
+                '각 항목의 "API 연동 예정" 아이콘은 추후 사내 API 연동 시 사용할 '
+                '자리로, 현재는 눌러도 동작하지 않습니다.',
+            ],
+            color='light', className='small border mb-3',
+        ),
+
+        dbc.Row([
+            dbc.Col(html.Div(id='data-update-status-msg'), md=True),
+            dbc.Col(
+                dbc.ButtonGroup([
+                    dbc.Button([html.I(className='bi bi-database-up me-1'), 'DB 반영'],
+                               id='data-update-db-btn', color='secondary', outline=True, size='sm'),
+                    dbc.Button([html.I(className='bi bi-check2-square me-1'), '선택 업데이트'],
+                               id='data-update-selected-btn', color='primary', outline=True, size='sm'),
+                    dbc.Button([html.I(className='bi bi-arrow-repeat me-1'), '전체 업데이트'],
+                               id='data-update-all-btn', color='primary', size='sm'),
+                ]),
+                md='auto',
+            ),
+        ], className='mb-2 align-items-start'),
+
+        html.Div(_db_status_view(), id='data-update-db-status', className='mb-2'),
+
+        html.Div(_data_update_table(), id='data-update-table-container'),
+    ], className='pt-3')
+
+
+def _dev_update_week_card(week: dict) -> dbc.Card:
+    body = [html.Div(week['range_label'], className='fw-bold mb-2', style={'fontSize': '0.95rem'})]
+    if week.get('major'):
+        body.append(html.Div('주요 업데이트', className='text-uppercase text-muted fw-semibold',
+                              style={'fontSize': '0.68rem', 'letterSpacing': '0.04em'}))
+        body.append(html.Ul([html.Li(m, className='mb-1') for m in week['major']],
+                             className='mb-2', style={'fontSize': '0.88rem'}))
+    if week.get('detail'):
+        body.append(html.Div('세부사항', className='text-uppercase text-muted fw-semibold',
+                              style={'fontSize': '0.68rem', 'letterSpacing': '0.04em'}))
+        body.append(html.Ul([html.Li(d, className='mb-1') for d in week['detail']],
+                             className='mb-0 text-muted', style={'fontSize': '0.82rem'}))
+    return dbc.Card(dbc.CardBody(body), className='shadow-sm mb-3')
+
+
+def _dev_updates_tab() -> html.Div:
+    """이 앱 자체의 기능 변경 이력을 주 단위 개조식으로 보여주는 탭 — 콘텐츠는
+    services/dev_updates.py에서 관리한다(웹 CRUD 아님, 코드로 유지 — 매주
+    금요일 기능 업데이트가 있으면 Claude가 이 파일에 추가할 내용을 제안하도록
+    예약돼 있다. 사용자 확정)."""
+    from services import dev_updates
+    return html.Div([
+        dbc.Alert(
+            [html.I(className='bi bi-info-circle me-2'),
+             '이 화면에 보이는 기능 개발 이력입니다(원천 데이터/DB 갱신은 포함하지 않습니다). '
+             '최신 주가 맨 위에 옵니다.'],
+            color='light', className='small border mb-3',
+        ),
+        html.Div([_dev_update_week_card(w) for w in dev_updates.WEEKS]),
+    ], className='pt-3')
+
+
+def layout():
+    from services.auth import can
+    if not can('manage_users'):
+        return _access_denied()
+
+    return dbc.Container([
+        dbc.Tabs([
+            dbc.Tab(_user_management_tab(), label='사용자 관리',
+                    tab_id='tab-users', label_style={'fontWeight': '600'}),
+            dbc.Tab(_team_refer_tab(), label='팀/리더 참조',
+                    tab_id='tab-team-refer', label_style={'fontWeight': '600'}),
+            dbc.Tab(_data_update_tab(), label='데이터 업데이트',
+                    tab_id='tab-data-update', label_style={'fontWeight': '600'}),
+            dbc.Tab(_dev_updates_tab(), label='개발업데이트 이력',
+                    tab_id='tab-dev-updates', label_style={'fontWeight': '600'}),
+        ], id='admin-tabs', active_tab='tab-users'),
     ], className='py-4')
 
 
@@ -511,6 +856,370 @@ def send_mail_report(_, recipients_raw):
             'warning',
         )
     return _alert(f"리포트를 발송했습니다 ({', '.join(recipients)})", 'success')
+
+
+# ── 콜백: 팀/리더 참조 — 행 추가 ─────────────────────────────────────────────
+# 클릭(선택)해둔 셀이 있으면 그 행 바로 다음에 삽입하고, 선택된 셀이 없으면
+# 맨 뒤에 추가한다(사용자 요청: 항상 맨 뒤가 아니라 원하는 위치에 끼워 넣기).
+@callback(
+    Output('team-refer-table', 'data', allow_duplicate=True),
+    Input('team-refer-add-row-btn', 'n_clicks'),
+    State('team-refer-table', 'data'),
+    State('team-refer-table', 'active_cell'),
+    prevent_initial_call=True,
+)
+def team_refer_add_row(n_clicks, rows, active_cell):
+    if not n_clicks:
+        return no_update
+    rows = list(rows or [])
+    new_row = {col: '' for col in team_refer_store.KOREAN_COLUMNS}
+    insert_at = active_cell['row'] + 1 if active_cell else len(rows)
+    rows.insert(insert_at, new_row)
+    return _renumbered(rows)
+
+
+# ── 콜백: 팀/리더 참조 — 헤더 클릭 정렬(오름차순/내림차순) ────────────────────
+# sort_action='custom'이라 DataTable이 데이터를 직접 재정렬하지 않고
+# sort_by(정렬 기준)만 갱신한다 — 여기서 실제로 재정렬하고, 'No.' 열도
+# 새 순서에 맞게 다시 매긴다("정렬순에 따라 동적으로 맵핑").
+@callback(
+    Output('team-refer-table', 'data', allow_duplicate=True),
+    Input('team-refer-table', 'sort_by'),
+    State('team-refer-table', 'data'),
+    prevent_initial_call=True,
+)
+def team_refer_sort(sort_by, rows):
+    if not sort_by:
+        return no_update
+    rows = list(rows or [])
+    for spec in reversed(sort_by):
+        col = spec['column_id']
+        rows.sort(key=lambda r: _sort_key(r.get(col)), reverse=(spec['direction'] == 'desc'))
+    return _renumbered(rows)
+
+
+# ── 콜백: 팀/리더 참조 — 행 삭제 직후 No. 즉시 재번호 ─────────────────────────
+# row_deletable(행 삭제)은 DataTable이 클라이언트에서 바로 처리해 data가
+# 곧장 줄어드는데, 그때는 team_refer_add_row/team_refer_sort 같은 명시적
+# 콜백이 안 걸린다. 그래서 data 자체를 Input으로 지켜보다가 'No.'가 현재
+# 순서(1..N)와 어긋나 있으면(=삭제로 빠짐) 바로 다시 매긴다. Output도 같은
+# data라 자기 자신을 다시 트리거하지만, 이미 맞게 매겨진 상태에서는
+# no_update를 반환해 루프가 멈춘다(idempotent) — 편집(셀 값 변경)처럼
+# 순서가 안 바뀌는 변경에서도 한 번 더 불리지만 즉시 no_update로 끝난다.
+@callback(
+    Output('team-refer-table', 'data', allow_duplicate=True),
+    Input('team-refer-table', 'data'),
+    prevent_initial_call=True,
+)
+def team_refer_renumber_on_change(rows):
+    if not rows:
+        return no_update
+    if [r.get('_no') for r in rows] == list(range(1, len(rows) + 1)):
+        return no_update
+    return _renumbered(list(rows))
+
+
+# ── 콜백: 팀/리더 참조 — 셀 툴팁을 항상 최신 데이터로 유지 ─────────────────────
+# 말줄임(...) 처리된 셀도 마우스를 올리면 전체 내용을 볼 수 있게(사용자
+# 확정) — 행 추가/삭제/정렬/편집 등 data를 바꾸는 콜백이 여러 개라 그때마다
+# 각자 tooltip_data를 다시 계산하게 하는 대신, data 자체를 지켜보다가 한
+# 곳에서만 갱신한다.
+@callback(
+    Output('team-refer-table', 'tooltip_data'),
+    Input('team-refer-table', 'data'),
+)
+def team_refer_sync_tooltip(rows):
+    if not rows:
+        return []
+    return [{k: str(v) if v is not None else '' for k, v in row.items()} for row in rows]
+
+
+# ── 콜백: 팀/리더 참조 — 저장 ─────────────────────────────────────────────────
+# 행 삭제(row_deletable) 자체는 DataTable이 클라이언트에서 바로 처리하므로
+# 별도 저장 로직은 없다 — 저장 시점에 team-refer-loaded-dep-ids(그리드를
+# 처음 불러올 때의 부서ID 목록)와 현재 그리드의 부서ID를 비교해 사라진
+# 것을 삭제로 판단한다.
+@callback(
+    Output('team-refer-save-msg', 'children'),
+    Output('team-refer-loaded-dep-ids', 'data', allow_duplicate=True),
+    Output('team-refer-dupe-modal', 'is_open', allow_duplicate=True),
+    Output('team-refer-dupe-modal-body', 'children'),
+    Input('team-refer-save-btn', 'n_clicks'),
+    State('team-refer-table', 'data'),
+    State('team-refer-valid-date', 'date'),
+    State('team-refer-loaded-dep-ids', 'data'),
+    prevent_initial_call=True,
+)
+def team_refer_save(n_clicks, rows, valid_date_str, loaded_dep_ids):
+    from services.auth import can
+    if not can('manage_users'):
+        return _alert('관리자만 저장할 수 있습니다.', 'danger'), no_update, no_update, no_update
+    if not n_clicks:
+        return no_update, no_update, no_update, no_update
+    if not valid_date_str:
+        return _alert('입력 날짜를 선택해주세요.', 'warning'), no_update, no_update, no_update
+
+    valid_date = date.fromisoformat(valid_date_str[:10])
+    rows = rows or []
+
+    valid_rows = [r for r in rows if str(r.get('부서ID') or '').strip()]
+    skipped = len(rows) - len(valid_rows)
+
+    current_dep_ids = {str(r.get('부서ID')).strip() for r in valid_rows}
+    deleted_dep_ids = [d for d in (loaded_dep_ids or []) if d not in current_dep_ids]
+
+    # upper_dep_id(상위부서ID) 존재성 검증 — 저장은 진행하되 경고만 표시한다
+    # (build_org_tree()는 존재하지 않는 upper_dep_id를 조용히 최상위로 취급
+    # 하므로, 오타를 그냥 두면 트리 구조가 의도와 다르게 만들어질 수 있다).
+    warnings = []
+    for r in valid_rows:
+        updep = str(r.get('상위부서ID') or '').strip()
+        if updep and updep not in current_dep_ids:
+            warnings.append(f"부서ID {r.get('부서ID')}({r.get('과제/파트', '')})의 상위부서ID "
+                             f"'{updep}'가 존재하지 않아 최상위 조직으로 취급됩니다")
+
+    result = team_refer_store.save_snapshot(valid_rows, deleted_dep_ids, valid_date)
+    team_refer_store.export_snapshot_xlsx(valid_rows, valid_date)
+
+    parts = [
+        f"저장 완료 — 이번 저장 {result['saved_rows']}행 반영"
+        + ('' if result['db_ok'] else ' (DB 미반영, CSV에는 반영됨)') + '.',
+    ]
+    if deleted_dep_ids:
+        parts.append(f'{len(deleted_dep_ids)}개 조직이 삭제 처리됐습니다.')
+    if skipped:
+        parts.append(f'부서ID가 비어 있어 {skipped}행은 저장에서 제외됐습니다.')
+
+    dupes = result.get('duplicate_dep_ids') or []
+    if dupes:
+        parts.append(f'부서ID가 중복된 항목이 {len(dupes)}건 있어 일부 행이 저장되지 '
+                      '않았을 수 있습니다 — 아래 창을 확인해주세요.')
+
+    alert_color = 'warning' if (warnings or dupes) else 'success'
+    body = [html.Div(p) for p in parts]
+    if warnings:
+        body.append(html.Div('경고: ' + ' / '.join(warnings[:5])
+                              + (f' 외 {len(warnings) - 5}건' if len(warnings) > 5 else '')))
+
+    msg = dbc.Alert(body, color=alert_color, dismissable=True, className='py-2 small mb-0')
+    return msg, sorted(current_dep_ids), bool(dupes), _dupe_modal_body(dupes)
+
+
+def _dupe_modal_body(dupes: list[dict]):
+    """부서ID(dep_id) 중복 그룹 리스트를 별도 창(모달)에 보여줄 표로 렌더링.
+    dupes: pipeline.process_team_refer.find_duplicate_dep_ids()의 반환값."""
+    if not dupes:
+        return None
+    header = html.Thead(html.Tr([
+        html.Th('부서ID'), html.Th('조직코드'), html.Th('과제/파트'), html.Th('부서'),
+        html.Th('상위부서ID'), html.Th('사번'), html.Th('성명'),
+    ]))
+    body_rows = []
+    for g in dupes:
+        for row in g['rows']:
+            body_rows.append(html.Tr([
+                html.Td(g['dep_id'], className='fw-semibold'),
+                html.Td(row['dep_code']), html.Td(row['pjt_part_name']), html.Td(row['dep_name']),
+                html.Td(row['upper_dep_id']), html.Td(row['researcher_id']), html.Td(row['name']),
+            ]))
+    return html.Div([
+        html.Div(
+            f"같은 부서ID를 가진 행이 {len(dupes)}개 부서ID에서 발견됐습니다 — 같은 "
+            '부서ID로는 하나만 저장되고 나머지는 사라지니, 부서ID를 다르게 고쳐서 '
+            '다시 저장해주세요.',
+            className='small text-muted mb-2',
+        ),
+        dbc.Table([header, html.Tbody(body_rows)], bordered=True, hover=True, size='sm',
+                   responsive=True, className='mb-0'),
+    ])
+
+
+@callback(
+    Output('team-refer-dupe-modal', 'is_open', allow_duplicate=True),
+    Input('team-refer-dupe-modal-close', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def team_refer_close_dupe_modal(n_clicks):
+    if not n_clicks:
+        return no_update
+    return False
+
+
+# ── 콜백: 데이터 업데이트 — 파일 업로드 ────────────────────────────────────────
+@callback(
+    Output('data-update-table-container', 'children', allow_duplicate=True),
+    Output('data-update-status-msg', 'children', allow_duplicate=True),
+    Input({'type': 'du-upload', 'key': ALL, 'slot': ALL}, 'contents'),
+    State({'type': 'du-upload', 'key': ALL, 'slot': ALL}, 'filename'),
+    State({'type': 'du-upload', 'key': ALL, 'slot': ALL}, 'id'),
+    prevent_initial_call=True,
+)
+def data_update_on_upload(all_contents, all_filenames, all_ids):
+    from services.auth import can
+    if not can('manage_users'):
+        return no_update, _alert('관리자만 업로드할 수 있습니다.', 'danger')
+
+    trig = dash.callback_context.triggered_id
+    if trig is None:
+        return no_update, no_update
+    idx = next((i for i, cid in enumerate(all_ids) if cid == trig), None)
+    if idx is None or not all_contents[idx]:
+        return no_update, no_update
+
+    # needs_valid_date 항목의 대량 백필 업로드는 dcc.Upload(multiple=True)라
+    # contents/filename이 리스트로 온다 — 그 외(기존 단일 업로드)는 문자열
+    # 그대로 온다. 둘 다 아래에서 같은 방식으로 처리하도록 리스트로 통일한다.
+    raw_contents = all_contents[idx]
+    raw_filenames = all_filenames[idx]
+    if isinstance(raw_contents, list):
+        contents_list, filenames_list = raw_contents, raw_filenames
+    else:
+        contents_list, filenames_list = [raw_contents], [raw_filenames]
+
+    slot = None if trig['slot'] == 'single' else trig['slot']
+    ok_count, errors = 0, []
+    for filename, contents in zip(filenames_list, contents_list):
+        try:
+            _header, b64data = contents.split(',', 1)
+            file_bytes = base64.b64decode(b64data, validate=True)
+        except (ValueError, TypeError):
+            errors.append(f'{filename}: 파일을 읽지 못했습니다.')
+            continue
+        if len(file_bytes) > wpr.MAX_UPLOAD_BYTES:
+            limit_mb = wpr.MAX_UPLOAD_BYTES // (1024 * 1024)
+            errors.append(f'{filename}: 파일이 너무 큽니다(최대 {limit_mb}MB).')
+            continue
+        wpr.save_upload(trig['key'], filename, file_bytes, slot=slot)
+        ok_count += 1
+
+    if ok_count and not errors:
+        msg, color = f'{ok_count}개 파일 업로드 완료.' if ok_count > 1 else f'{filenames_list[0]} 업로드 완료.', 'success'
+    elif ok_count and errors:
+        msg, color = f'{ok_count}개 업로드 완료, {len(errors)}개 실패({"; ".join(errors[:3])})', 'warning'
+    else:
+        msg, color = '; '.join(errors[:3]) or '업로드에 실패했습니다.', 'danger'
+    return _data_update_table(), _alert(msg, color)
+
+
+# ── 콜백: 데이터 업데이트 — 전체/선택 실행 ─────────────────────────────────────
+@callback(
+    Output('data-update-status-msg', 'children', allow_duplicate=True),
+    Output('data-update-interval', 'disabled', allow_duplicate=True),
+    Input('data-update-all-btn', 'n_clicks'),
+    Input('data-update-selected-btn', 'n_clicks'),
+    State({'type': 'du-check', 'key': ALL}, 'value'),
+    State({'type': 'du-check', 'key': ALL}, 'id'),
+    State({'type': 'du-valid-date', 'key': ALL}, 'date'),
+    State({'type': 'du-valid-date', 'key': ALL}, 'id'),
+    prevent_initial_call=True,
+)
+def data_update_run(_all_clicks, _sel_clicks, check_values, check_ids, valid_dates, valid_date_ids):
+    from services.auth import can
+    if not can('manage_users'):
+        return _alert('관리자만 실행할 수 있습니다.', 'danger'), True
+
+    trig = dash.callback_context.triggered_id
+    if trig == 'data-update-all-btn':
+        keys = wpr.runnable_keys()
+        if not keys:
+            return _alert('업로드된 파일이 있는 항목이 없습니다.', 'warning'), True
+    elif trig == 'data-update-selected-btn':
+        keys = [cid['key'] for cid, v in zip(check_ids, check_values) if v]
+        if not keys:
+            return _alert('선택된 항목이 없습니다.', 'warning'), True
+        missing = [k for k in keys if not wpr.has_upload(k)]
+        if missing:
+            labels = [wpr._BY_KEY[k]['label'] for k in missing]
+            return (_alert(f"업로드되지 않은 항목이 선택됐습니다: {', '.join(labels)}"
+                            ' — 업로드 후 다시 시도해주세요.', 'warning'), True)
+    else:
+        return no_update, no_update
+
+    # needs_valid_date 항목(evaluations/tech_ownership/job_profile/work_objective_*)만
+    # 화면에 기준 연/월 DatePicker가 렌더링되므로, id-value를 매칭해 그 항목만
+    # valid_dates 딕셔너리로 모은다. 지정 안 된 항목은 process_*.py 기본값(오늘).
+    valid_dates_by_key = {}
+    for cid, d in zip(valid_date_ids, valid_dates):
+        if d:
+            valid_dates_by_key[cid['key']] = date.fromisoformat(d)
+
+    if not wpr.start_run(keys, valid_dates=valid_dates_by_key):
+        return _alert('이미 다른 작업이 실행 중입니다. 잠시 후 다시 시도해주세요.', 'warning'), False
+    return (_alert(f'{len(keys)}개 항목 실행을 시작했습니다. 브라우저를 닫아도 서버에서 계속 '
+                    '진행되며, 화면은 자동으로 갱신됩니다.', 'info'), False)
+
+
+# ── 콜백: 데이터 업데이트 — 항목별 "API로 가져오기" 아이콘 ─────────────────────
+# 사내 API 연동은 아직 없다(services/web_pipeline_runner.py의 register_api_fetch()
+# 참고) — 지금 눌러도 파일 업로드 실행과 완전히 같은 경로(락/로그/폴링)를 타되,
+# 실행결과 칸에 "아직 연동되지 않음"이 그대로 표시된다. 연동을 붙이는 시점에
+# register_api_fetch()만 호출하면 이 아이콘이 화면 변경 없이 바로 동작한다.
+@callback(
+    Output('data-update-status-msg', 'children', allow_duplicate=True),
+    Output('data-update-interval', 'disabled', allow_duplicate=True),
+    Input({'type': 'du-api', 'key': ALL}, 'n_clicks'),
+    prevent_initial_call=True,
+)
+def data_update_run_via_api(n_clicks_list):
+    from services.auth import can
+    if not can('manage_users'):
+        return _alert('관리자만 실행할 수 있습니다.', 'danger'), True
+
+    trig = dash.callback_context.triggered_id
+    if not trig or not any(n_clicks_list):
+        return no_update, no_update
+
+    key = trig['key']
+    if not wpr.start_run_via_api([key]):
+        return _alert('이미 다른 작업이 실행 중입니다. 잠시 후 다시 시도해주세요.', 'warning'), False
+    return _alert(f"{wpr._BY_KEY[key]['label']} 항목의 API 연동을 시도합니다.", 'info'), False
+
+
+# ── 콜백: 데이터 업데이트 — DB 반영 ────────────────────────────────────────────
+@callback(
+    Output('data-update-status-msg', 'children', allow_duplicate=True),
+    Output('data-update-interval', 'disabled', allow_duplicate=True),
+    Input('data-update-db-btn', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def data_update_db_load(n_clicks):
+    from services.auth import can
+    if not can('manage_users'):
+        return _alert('관리자만 실행할 수 있습니다.', 'danger'), True
+    if not n_clicks:
+        return no_update, no_update
+    if not wpr.start_db_load():
+        return _alert('이미 다른 작업이 실행 중입니다. 잠시 후 다시 시도해주세요.', 'warning'), False
+    return _alert('DB 반영을 시작했습니다. 완료되면 아래 상태가 갱신됩니다.', 'info'), False
+
+
+# ── 콜백: 데이터 업데이트 — 진행 상황 폴링(브라우저를 새로 열어도 최신 상태) ────
+@callback(
+    Output('data-update-table-container', 'children', allow_duplicate=True),
+    Output('data-update-db-status', 'children', allow_duplicate=True),
+    Output('data-update-interval', 'disabled', allow_duplicate=True),
+    Input('data-update-interval', 'n_intervals'),
+    prevent_initial_call=True,
+)
+def data_update_poll(_n):
+    return _data_update_table(), _db_status_view(), not wpr.any_running()
+
+
+# ── 콜백: 데이터 업데이트 — "이전 Data" 다운로드 ───────────────────────────────
+@callback(
+    Output('data-update-download', 'data'),
+    Input({'type': 'du-download', 'key': ALL}, 'n_clicks'),
+    prevent_initial_call=True,
+)
+def data_update_download(_n_clicks_list):
+    trig = dash.callback_context.triggered_id
+    if not trig:
+        return no_update
+    files = wpr.uploaded_files(trig['key'])
+    if not files:
+        return no_update
+    path = max(files, key=os.path.getmtime)
+    return dcc.send_file(path)
 
 
 # ── 헬퍼 ─────────────────────────────────────────────────────────────────────

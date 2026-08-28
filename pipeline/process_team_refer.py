@@ -8,31 +8,70 @@
 사번/성명/직책이 함께 표기되어 있다 — 연구원별 1행이 아니라 조직 단위별 1행이다.
 
 컬럼명 매핑(엑셀 헤더명 → 위치와 무관하게 이름으로 찾아 변환):
-  과제파트명 → project_name    researchers.csv의 org_code와 매핑되는 조직 단위 키
-  과제명통일 → end_name        조직도에 표시할 통일된 명칭
-  조직 레벨  → team_layer      조직도 깊이(1~4). 비어 있으면 조직도에 표시되지 않는 행이므로 제외한다.
-  사번      → researcher_id   해당 조직 단위 책임자(부서장) 사번
-  성명      → name            해당 조직 단위 책임자 성명
-  직책      → assignment_name 해당 조직 단위 책임자 직책 (예: PL/본부장/파트장)
-  코드3     → code3           조직도 상 위계·표시 순서를 나타내는 코드 (예: A0000, B0100, B0101~B0116)
-  부서ID    → dep_id          이 조직 단위 고유 ID
-  상위부서ID → upper_dep_id    상위 조직 단위의 dep_id (없으면 최상위 조직)
+  비공식소속부서명 → org_name_wd     researchers.csv의 org_code와 매핑되는 조직 단위 키
+  구분             → work_type       "R&D"인 행만 보유 전문성 분석 대상
+                                     (process_researcher_expertise.py._filter_eligible_researchers)
+  부서             → dep_name        "연구원 명단" 화면 부서 검색 필터의 표시값 — 조직도
+                                     트리 구조(dep_id/upper_dep_id)와는 무관한 평면 태그
+  과제/파트         → pjt_part_name   조직도에 표시할 명칭. 트리 노드 라벨은 이 값만 사용한다
+                                     (rd_specialist_markdown.org_tree_html) — dep_name은
+                                     트리 라벨에 관여하지 않는다.
+  조직 레벨         → team_layer      조직도 깊이(1~4). 비어 있으면 조직도에 표시되지 않는
+                                     행이므로 제외한다.
+  사번             → researcher_id   해당 조직 단위 책임자(부서장) 사번
+  성명             → name            해당 조직 단위 책임자 성명
+  직책             → assignment_name 해당 조직 단위 책임자 직책 (예: PL/본부장/파트장)
+  조직코드          → dep_code        조직도 상 같은 부모 아래 형제 노드의 표시 순서 코드
+                                     (구 code3와 동일한 값)
+  부서ID           → dep_id          이 조직 단위 고유 ID
+  상위부서ID        → upper_dep_id    상위 조직 단위의 dep_id (없으면 최상위 조직)
 
 dep_id/upper_dep_id는 rd_specialist_markdown.build_org_tree()가 조직도 부모-자식
 관계를 판단하는 기준이다(파일에 적힌 행 순서와 무관하게 정확한 계층을 구성).
 
+── 날짜 기반 누적 ───────────────────────────────────────────────────────────
+과거에는 실행할 때마다 team_refer.csv를 전량 덮어썼다. 지금은 관리자 화면
+("팀/리더 참조" 탭)에서도 개별 조직 단위(행)가 수시로 부분 수정될 수 있어,
+"이번 파일에 없으면 사라진 것"(researchers.csv의 is_current 판정 방식 — 매번
+전체를 다시 올린다는 전제가 있어야 성립)을 그대로 쓸 수 없다 — 그 방식을 그대로
+쓰면, 오늘 조직 하나만 고쳐 저장했을 때 건드리지 않은 나머지 조직이 전부
+"사라짐"으로 판정돼버린다.
+
+그래서 자연키를 (dep_id, valid_year, valid_month, valid_day)로 두고 계속
+누적하며, dep_id별로 "그 dep_id의 가장 최근 날짜 행"을 독립적으로 "현재" 상태로
+취급한다(rd_specialist_markdown.read_team_refer() 참고) — 오늘 조직 하나만
+고쳐도 나머지는 각자 마지막 저장 시점 값 그대로 정상 노출된다. 행 삭제는 실제로
+지우지 않고 deleted='Y' 표시가 붙은 새 날짜 행을 남기는 방식으로 처리한다(그
+dep_id의 최신 상태가 곧 "삭제됨"이 되게 — 과거 이력은 그대로 보존).
+
+이 모듈의 process()(xlsx 일괄 업로드)는 항상 deleted='N'으로 저장하고,
+valid_date 인자(기본값 오늘)로 유효 날짜를 지정할 수 있다 — 과거 데이터를
+소급 입력해도, 실제로 그 날짜가 해당 dep_id의 최신이 아니면 "현재" 조직도에는
+반영되지 않는다("현재" 판정은 항상 실제 최댓값 기준).
+
 컬럼명이 다를 경우 파일 상단의 _COL_MAP을 실제 헤더에 맞게 수정하세요.
+
+── 웹 업로드(관리자 "데이터 업데이트" 탭) ─────────────────────────────────────
+process()는 다른 process_*.py처럼 raw_dir 매개변수를 받는다(2026-08-29
+추가) — services.web_pipeline_runner가 이 값을 data/web_updates/team_refer/
+로 넘겨 업로드된 파일을 읽게 한다(기본값은 기존과 동일한 data/raw). 이
+모듈은 pipeline/sources.py(1단계 DRM 제거 파이프라인)에 등록돼 있지 않은
+독립 스크립트라 다른 대부분의 process_*.py와 달리 source_reader.read_source()
+DB/스테이징 경로가 없다 — raw_dir 안의 팀참조시트.xlsx를 항상 직접 읽는다
+(관리자가 웹 업로드 전 Excel에서 DRM을 해제한 사본을 올린다는 전제는
+web_pipeline_runner의 다른 항목과 동일).
 """
 
-import csv
 import os
 import sys
+from datetime import date
 
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
-from excel_reader import clean_str as _clean, is_blank, norm_id, read_xlsx
+from excel_reader import clean_str as _clean, is_blank, norm_id, read_xlsx  # noqa: E402
+from merge_utils import TABLE_KEYS, write_merged  # noqa: E402
 
 SOURCE_FILE = '팀참조시트.xlsx'
 
@@ -63,23 +102,113 @@ def _clean_id(val) -> str:
 
 # ── 컬럼명 매핑(엑셀 헤더명 → 출력 컬럼명) — 순서 무관, 이름으로 찾아 변환 ──────
 _COL_MAP = {
-    '과제파트명': 'project_name',
-    '과제명통일': 'end_name',
+    '비공식소속부서명': 'org_name_wd',
+    '구분': 'work_type',
+    '부서': 'dep_name',
+    '과제/파트': 'pjt_part_name',
+    '조직코드': 'dep_code',
+    '부서ID': 'dep_id',
+    '상위부서ID': 'upper_dep_id',
     '조직 레벨': 'team_layer',
     '사번': 'researcher_id',
     '성명': 'name',
     '직책': 'assignment_name',
-    '코드3': 'code3',
-    '부서ID': 'dep_id',
-    '상위부서ID': 'upper_dep_id',
 }
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def process() -> bool:
-    raw_path = os.path.join(RAW_DIR, SOURCE_FILE)
+def stamp_valid_date(df: pd.DataFrame, valid_date: date) -> pd.DataFrame:
+    """valid_year/valid_month/valid_day 컬럼을 붙인다. process()(xlsx 일괄
+    업로드)와 관리자 화면(services.team_refer_store)의 웹 CRUD 저장 경로가
+    공유하는 헬퍼 — 자연키((dep_id, valid_year, valid_month, valid_day))
+    형식을 한 곳에서만 정의해 두 경로가 어긋나지 않게 한다."""
+    df = df.copy()
+    df['valid_year'] = f'{valid_date.year:04d}'
+    df['valid_month'] = f'{valid_date.month:02d}'
+    df['valid_day'] = f'{valid_date.day:02d}'
+    return df
+
+
+def build_rows_from_records(records: list) -> pd.DataFrame:
+    """레코드 리스트(엑셀 헤더명을 키로 쓰는 dict — xlsx 일괄 업로드의
+    df.to_dict('records')든, 관리자 화면 그리드의 행이든 동일한 형태)를
+    _COL_MAP 기준으로 컬럼 매핑 + 정제해 표준 스키마(영문 컬럼명)
+    DataFrame으로 변환한다. 조직 레벨(team_layer)이 없거나 dep_id가 없는
+    행은 조직도에 나타날 수 없고 누적 자연키도 만들 수 없으므로 제외한다.
+    valid_year/valid_month/valid_day/deleted는 이 함수가 붙이지 않는다 —
+    호출부가 stamp_valid_date()로 붙인다(저장 시점을 여기서 강제하지
+    않기 위함)."""
+    df = pd.DataFrame(records)
+    for col in _COL_MAP:
+        if col not in df.columns:
+            df[col] = ''
+
+    result = pd.DataFrame({
+        out_col: df[src_col].apply(_clean)
+        for src_col, out_col in _COL_MAP.items()
+    })
+    result['researcher_id'] = result['researcher_id'].apply(norm_id)
+    result['team_layer'] = df['조직 레벨'].apply(_clean_int)  # '1.0' 같은 실수형 표기 정리
+    result['dep_id'] = df['부서ID'].apply(_clean_id)
+    result['upper_dep_id'] = df['상위부서ID'].apply(_clean_id)
+
+    return result[(result['team_layer'] != '') & (result['dep_id'] != '')].reset_index(drop=True)
+
+
+def find_duplicate_dep_ids(result: pd.DataFrame) -> list[dict]:
+    """같은 업로드/저장 안에서 부서ID(dep_id)가 중복된 행을 찾는다.
+
+    한 번의 process()/save_snapshot() 호출은 전체를 같은 valid_date로
+    스탬프하므로, 자연키((dep_id, valid_year, valid_month, valid_day))가
+    이 배치 안에서 부서ID만 같아도 곧바로 충돌한다 — merge_utils.upsert_merge()가
+    "새 데이터 안에서 키가 중복되면 마지막 행만 채택"하기 때문에, 사용자가
+    모르는 새 앞선 행들이 조용히 사라진다(원본 행 수보다 저장된 행 수가
+    적어지는 원인 중 하나 — data/processed/CLAUDE.md 참고). 저장 전에 이걸
+    미리 알려주기 위한 진단 함수로, process()(CLI 실행)와
+    services.team_refer_store.save_snapshot()(웹 저장) 양쪽이 공유한다.
+
+    반환: [{'dep_id': ..., 'count': N, 'rows': [{...행 정보...}, ...]}, ...]
+    (dep_id 오름차순, 문자열 정렬 — 화면/콘솔 표시용이라 정확한 정렬 기준은
+    중요하지 않음)."""
+    if result.empty:
+        return []
+    dupes = result[result.duplicated('dep_id', keep=False)]
+    if dupes.empty:
+        return []
+
+    display_cols = ['dep_id', 'dep_code', 'pjt_part_name', 'dep_name',
+                     'upper_dep_id', 'researcher_id', 'name']
+    groups = []
+    for dep_id, grp in dupes.groupby('dep_id'):
+        groups.append({
+            'dep_id': dep_id,
+            'count': len(grp),
+            'rows': grp[display_cols].to_dict('records'),
+        })
+    return sorted(groups, key=lambda g: g['dep_id'])
+
+
+def _print_duplicate_warning(dupes: list[dict]) -> None:
+    if not dupes:
+        return
+    print(f'[WARN] 부서ID(dep_id) 중복 {len(dupes)}건 발견 — 업서트 시 각 부서ID당 '
+          f'마지막 행만 남고 나머지는 저장되지 않습니다:')
+    for g in dupes:
+        print(f"  · dep_id={g['dep_id']} ({g['count']}행)")
+        for i, row in enumerate(g['rows'], start=1):
+            print(f"      {i}) 조직코드={row['dep_code']} 과제/파트={row['pjt_part_name']} "
+                  f"부서={row['dep_name']} 상위부서ID={row['upper_dep_id']} "
+                  f"사번={row['researcher_id']} 성명={row['name']}")
+
+
+def process(raw_dir: str = RAW_DIR, valid_date: date | None = None) -> bool:
+    """raw_dir: 팀참조시트.xlsx를 찾을 폴더(기본값 data/raw — 웹 업로드 시
+    services.web_pipeline_runner가 data/web_updates/team_refer/를 넘긴다).
+    valid_date: 이번 업로드분의 유효 날짜(기본값 오늘) — 과거 데이터
+    소급 입력 시 지정."""
+    raw_path = os.path.join(raw_dir, SOURCE_FILE)
     if not os.path.exists(raw_path):
-        print(f'[SKIP] {SOURCE_FILE} 파일 없음')
+        print(f'[SKIP] {SOURCE_FILE} 파일 없음({raw_dir})')
         return False
 
     df = read_xlsx(raw_path, header_row=1)
@@ -94,23 +223,16 @@ def process() -> bool:
         )
         return False
 
-    result = pd.DataFrame({
-        out_col: df[src_col].apply(_clean)
-        for src_col, out_col in _COL_MAP.items()
-    })
-    result['researcher_id'] = result['researcher_id'].apply(norm_id)
-    result['team_layer'] = df['조직 레벨'].apply(_clean_int)  # '1.0' 같은 실수형 표기 정리
-    result['dep_id'] = df['부서ID'].apply(_clean_id)
-    result['upper_dep_id'] = df['상위부서ID'].apply(_clean_id)
+    result = build_rows_from_records(df.to_dict('records'))
+    _print_duplicate_warning(find_duplicate_dep_ids(result))
 
-    # 조직 레벨(team_layer)이 없는 행은 조직도에 나타나지 않으므로 제외한다.
-    result = result[result['team_layer'] != ''].reset_index(drop=True)
+    result = stamp_valid_date(result, valid_date or date.today())
+    result['deleted'] = 'N'
 
-    os.makedirs(OUT_DIR, exist_ok=True)
     out_path = os.path.join(OUT_DIR, 'team_refer.csv')
-    result.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+    merged = write_merged(out_path, result, TABLE_KEYS['team_refer'])
 
-    print(f'[OK]   team_refer.csv 저장 ({len(result)}행)')
+    print(f'[OK]   team_refer.csv 저장 (이번 업로드 {len(result)}행 반영, 누적 총 {len(merged)}행)')
     return True
 
 

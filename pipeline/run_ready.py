@@ -97,8 +97,14 @@ def _check_confluence() -> list:
     if not token or token == _PLACEHOLDER_TOKEN:
         checks.append(Check(
             'Confluence 토큰', 'warn',
+            # pipeline/project_summary.py._get_page_text()는 confl_address 유무로
+            # 분기한다 — confl_address가 있으면 Confluence만 시도하고 실패하면
+            # 그대로 건너뛴다(PDF 폴백은 안 봄). PDF 폴백은 confl_address가
+            # 아예 없는 과제에서만 쓰인다(사용자 지적으로 문구 수정 —
+            # data/processed/CLAUDE.md 참고).
             'CONFLUENCE_TOKEN이 설정되지 않았습니다 — confl_address가 있는 과제는 '
-            'PDF 폴백(data/raw/conflue_MPR/)이 없으면 건너뛰어집니다.',
+            '(PDF 폴백 여부와 무관하게) 전부 건너뛰어집니다. confl_address가 없는 '
+            '과제만 data/raw/conflue_MPR/{과제명}.pdf 로 계속 처리됩니다.',
         ))
         return checks
     checks.append(Check('Confluence 토큰', 'ok', '설정됨'))

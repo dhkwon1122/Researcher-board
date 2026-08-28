@@ -22,6 +22,7 @@ E_support: 원본 값이 'E'면 'E', 그 외(빈 값 포함)에는 모두 'R'로
 
 import os
 import sys
+from datetime import date
 
 import pandas as pd
 
@@ -40,7 +41,7 @@ def _slot_cols(i):
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import is_blank, read_xlsx, norm_id
-from merge_utils import TABLE_KEYS, write_merged
+from merge_utils import TABLE_KEYS, write_merged_with_valid_period
 from source_reader import read_source
 
 
@@ -73,7 +74,10 @@ def _scale_portion(val) -> str:
         return s
 
 
-def process(raw_dir: str = RAW_DIR) -> bool:
+def process(raw_dir: str = RAW_DIR, valid_date: date | None = None) -> bool:
+    """valid_date: 이번 업로드분의 기준 연/월(기본값 오늘) — tech_ownership.csv에
+    이미 저장된 사람보다 과거 시점이면 그 사람 행은 갱신하지 않고 건너뛴다
+    (tech_ownership_history.csv에는 건너뛴 것 포함 전부 쌓임)."""
     if raw_dir == RAW_DIR:
         df = read_source('tech_ownership')
         if df is None:
@@ -125,11 +129,22 @@ def process(raw_dir: str = RAW_DIR) -> bool:
     result = result.replace({'nan': '', 'None': ''})
     result = result.sort_values(['researcher_id']).reset_index(drop=True)
 
-    out_path = os.path.join(OUT_DIR, 'tech_ownership.csv')
-    merged = write_merged(out_path, result, TABLE_KEYS['tech_ownership'])
+    valid_date = valid_date or date.today()
+    result['valid_year'] = f'{valid_date.year:04d}'
+    result['valid_month'] = f'{valid_date.month:02d}'
 
-    n = merged['researcher_id'].nunique()
-    print(f'[OK]   tech_ownership.csv 저장 (총 {len(merged)}행, {n}명, 이번 파일 {len(result)}행 반영)')
+    out_path = os.path.join(OUT_DIR, 'tech_ownership.csv')
+    hist_path = os.path.join(OUT_DIR, 'tech_ownership_history.csv')
+    outcome = write_merged_with_valid_period(
+        out_path, hist_path, result, TABLE_KEYS['tech_ownership'], TABLE_KEYS['tech_ownership_history'])
+
+    print(f'[OK]   tech_ownership.csv 저장 (이번 파일 {len(result)}명 중 {outcome["updated_rows"]}명 반영)')
+    if outcome['skipped']:
+        print(f'  [WARN] {len(outcome["skipped"])}명은 기존 저장된 값이 더 최신이라 건너뜀:')
+        for s in outcome['skipped'][:10]:
+            print(f'    · {s["researcher_id"]}: 기존 {s["existing_period"]} > 이번 {s["new_period"]}')
+        if len(outcome['skipped']) > 10:
+            print(f'    · 외 {len(outcome["skipped"]) - 10}명')
     return True
 
 

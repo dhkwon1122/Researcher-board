@@ -2,7 +2,8 @@
 화면 3: 연구원 명단 (정량 지표 테이블)
 """
 
-from datetime import datetime
+import re
+from datetime import date, datetime
 from urllib.parse import parse_qs
 
 import dash
@@ -12,9 +13,10 @@ from dash import Input, Output, State, callback, dash_table, dcc, html, no_updat
 
 from components import nl_query_bar
 from components.timeline_data import dedupe_patents
-from services import researcher_profile_export
+from services import researcher_profile_export, similarity_map
 from services.data_store import filter_current, read_processed
 from services.evaluations import evaluation_years, salary_grade_column
+from services.period_snapshot import resolve_period_snapshot as _resolve_period_snapshot
 
 dash.register_page(
     __name__,
@@ -31,35 +33,80 @@ _EVAL_SALARY_YEARS = sorted(evaluation_years()[0])
 _EVAL_GRADE_COLUMNS = [f"'{str(y)[-2:]}평가" for y in _EVAL_SALARY_YEARS]
 _INCENTIVE_COL = '인센티브'
 
+# 평가등급 컬럼 판별용 정규식 — 기간 지정(period) 조회 시에는 _EVAL_GRADE_COLUMNS
+# (오늘 기준 3개년)와 다른 연도의 컬럼("'23평가" 등)이 만들어질 수 있어(2026-08-28),
+# 권한 필터/조건부 색상 스타일 둘 다 이 패턴으로 "실제 df에 있는" 평가등급
+# 컬럼을 동적으로 찾아야 한다 — 고정 목록만 보면 기간 조회 시 권한 필터가
+# 그 컬럼을 못 찾아 평가등급이 권한 없이도 그대로 노출되는 문제가 생긴다.
+_EVAL_GRADE_PATTERN = re.compile(r"^'\d{2}평가$")
+
 # ── 학위 우선순위 ─────────────────────────────────────────────────────────────
 _DEGREE_RANK = {'박사': 5, '석사': 4, '학사': 3, '전문대': 2, '고교': 1}
 
 
-def _build_summary_df(current_only: bool = True) -> pd.DataFrame:
+def _active_period(mode: str, period_start: str | None, period_end: str | None) -> tuple[date, date] | None:
+    """검색 기준 모드 + 기간 두 날짜 문자열로부터 실제 적용할 기간을
+    계산한다 — 누적기준(mode == 'all')이고 두 날짜가 다 지정됐을 때만
+    기간이 있는 것으로 본다. toggle_org_filters/update_project_options/
+    update_table 콜백이 전부 같은 판정을 공유한다(2026-08-29 추가 —
+    이전엔 update_table 안에 이 판정이 중복돼 있었다)."""
+    if mode == 'all' and period_start and period_end:
+        return date.fromisoformat(period_start), date.fromisoformat(period_end)
+    return None
+
+
+def _build_summary_df(current_only: bool = True, period: tuple[date, date] | None = None) -> pd.DataFrame:
     """CSV들을 집계하여 연구원 1인 1행의 요약 DataFrame 반환.
     current_only=False(누적기준)면 전배·퇴사 등으로 최신 인력현황에 없는
     사람도 포함하고, 그 경우에만 '현재소속' 열을 추가로 붙인다(최신기준에서는
-    전원이 '현재'라 의미가 없어 열 자체를 안 만든다)."""
+    전원이 '현재'라 의미가 없어 열 자체를 안 만든다).
+    period=(시작일, 종료일)이 함께 주어지면(누적기준에서만 의미가 있음)
+    "한 번이라도 있었던 전체 인원"이 아니라 "그 기간 동안 소속돼 있던
+    사람"만, researchers_history.csv 기준 그 기간의 마지막 상태로 보여준다
+    — 이때는 '현재소속' 대신 '조회기간 기준' 열에 그 사람 스냅샷의
+    연/월을 보여준다."""
     try:
-        res  = read_processed('researchers')
-        eva  = read_processed('evaluations')
+        res  = _resolve_period_snapshot(period) if period else read_processed('researchers')
+        # 평가등급도 기간이 주어지면 evaluations_history.csv에서 그 기간의
+        # 마지막 스냅샷을 쓴다(2026-08-28) — evaluations.csv/_history.csv는
+        # 회계연도(매년 3월 시작) 이름의 동적 컬럼이라({연도}_salary_grade),
+        # "그 시점 기준 최근 3개년"이 실제 오늘 기준과 다르면 컬럼명 자체가
+        # 달라진다. period[1](조회 기간의 끝)을 기준 시점으로 삼아 그 3개년
+        # 컬럼을 다시 계산한다 — process_tp_evaluation.py의 evaluation_years
+        # (valid_date=...) 수정과 동일한 원리.
+        if period:
+            eva = _resolve_period_snapshot(period, table='evaluations_history')
+            eval_salary_years = sorted(evaluation_years(today=period[1])[0])
+            eval_grade_columns = [f"'{str(y)[-2:]}평가" for y in eval_salary_years]
+        else:
+            eva = read_processed('evaluations')
+            eval_salary_years, eval_grade_columns = _EVAL_SALARY_YEARS, _EVAL_GRADE_COLUMNS
         pub  = read_processed('publications')
         pat  = read_processed('patents')
         awd  = read_processed('awards')
         edu  = read_processed('education')
         inc  = read_processed('incentive_selection')
-        team = read_processed('team_refer')
     except Exception:
         return pd.DataFrame()
 
-    res = filter_current(res, current_only)
+    if not period:
+        res = filter_current(res, current_only)
 
-    # 직책 = team_refer.csv의 assignment_name(researcher_id 기준, 조직장급만
-    # 등록돼 있어 나머지는 매핑이 없음 — 그 경우 "-").
-    title_by_id = (
-        dict(zip(team['researcher_id'], team['assignment_name']))
-        if not team.empty and {'researcher_id', 'assignment_name'} <= set(team.columns) else {}
-    )
+    # 직책 = team_refer의 assignment_name(researcher_id 기준, 조직장급만
+    # 등록돼 있어 나머지는 매핑이 없음 — 그 경우 "-"). 부서/과제(파트)
+    # 표시값 = researchers.csv의 org_code를 team_refer의 dep_name/
+    # pjt_part_name으로 매핑(검색 기준의 부서/과제 필터와 동일한 기준으로
+    # 통일 — 사용자 확정). team_refer에 매핑이 없는 org_code는 원본
+    # department/org_code 값을 그대로 보여준다(빈 칸으로 두면 데이터
+    # 누락처럼 보이므로 — 사용자 확정).
+    #
+    # period가 주어지면(누적기준 + 기간 지정) 셋 다 "오늘 기준"이 아니라
+    # 그 기간 기준(그 기간 안 dep_id별 최신 스냅샷) team_refer로 매핑한다
+    # (2026-08-29 추가 — 이전엔 team_refer 관련 매핑 전부가 항상 오늘
+    # 기준이라, 예를 들어 2023년 조직 개편 이전 시점을 조회해도 오늘
+    # 기준 조직명이 표시됐다).
+    title_by_id = similarity_map.title_by_researcher_id(period=period)
+    dep_label_map, pjt_label_map = similarity_map.org_code_label_maps(period=period)
 
     # 숫자 변환
     for col in ['pub_year', 'impact_factor', 'citation_count', 'contribution']:
@@ -83,7 +130,7 @@ def _build_summary_df(current_only: bool = True) -> pd.DataFrame:
                 return '-'
             val = str(ev.get(salary_grade_column(yr), '') or '').strip()
             return val if val and val.lower() != 'nan' else '-'
-        grades = {col: _grade(yr) for col, yr in zip(_EVAL_GRADE_COLUMNS, _EVAL_SALARY_YEARS)}
+        grades = {col: _grade(yr) for col, yr in zip(eval_grade_columns, eval_salary_years)}
 
         # ── 인센티브 ───────────────────────────────────────────────────────
         sel = inc[inc['researcher_id'] == rid]
@@ -125,11 +172,13 @@ def _build_summary_df(current_only: bool = True) -> pd.DataFrame:
             highest = '-'
             major = '-'
 
+        org_code = str(r.get('org_code', ''))
         row = {
             'researcher_id': rid,
+            '_org_code':      org_code,  # 화면에는 안 보임 — 부서/과제 필터가 org_code로 매칭할 때만 씀
             '이름':           str(r.get('name', '')),
-            '부서':           str(r.get('department', '')),
-            '과제':           str(r.get('org_code', '')),
+            '부서':           dep_label_map.get(org_code) or str(r.get('department', '')),
+            '과제':           pjt_label_map.get(org_code) or org_code,
             '직급':           str(r.get('position', '')),
             '직책':           str(title_by_id.get(rid, '') or '').strip() or '-',
             '성별':           str(r.get('gender', '')),
@@ -146,7 +195,10 @@ def _build_summary_df(current_only: bool = True) -> pd.DataFrame:
             '특허(등록)':     pat_reg,
             '수상':           awd_cnt,
         }
-        if not current_only:
+        if period:
+            y, m = str(r.get('valid_year', '')).strip(), str(r.get('valid_month', '')).strip()
+            row['조회기간 기준'] = f'{y}-{m}' if y and m else '-'
+        elif not current_only:
             row['현재소속'] = '미소속' if str(r.get('is_current', 'Y')) == 'N' else '현재'
         rows.append(row)
 
@@ -154,10 +206,13 @@ def _build_summary_df(current_only: bool = True) -> pd.DataFrame:
 
 
 def _apply_permission_filter(df: pd.DataFrame, show_eval: bool, show_incentive: bool) -> pd.DataFrame:
-    """평가/인센티브 열람 권한이 없으면 해당 컬럼을 통째로 제거한다."""
+    """평가/인센티브 열람 권한이 없으면 해당 컬럼을 통째로 제거한다.
+    평가등급 컬럼은 df에 실제로 있는 컬럼 중 _EVAL_GRADE_PATTERN에 맞는
+    것을 전부 찾아 지운다(고정 _EVAL_GRADE_COLUMNS만 보면, 기간 지정 조회로
+    다른 연도의 컬럼이 만들어졌을 때 권한 필터가 그 컬럼을 놓친다)."""
     drop = []
     if not show_eval:
-        drop.extend(_EVAL_GRADE_COLUMNS)
+        drop.extend(c for c in df.columns if _EVAL_GRADE_PATTERN.match(str(c)))
     if not show_incentive:
         drop.append(_INCENTIVE_COL)
     if not drop:
@@ -172,21 +227,6 @@ def _filter_options(df: pd.DataFrame, col: str) -> list:
     return [{'label': v, 'value': v} for v in vals if str(v).strip()]
 
 
-def _project_options(department=None) -> list:
-    """과제(=researchers.csv의 org_code) 드롭다운 옵션. 부서를 지정하면 그
-    부서 소속 연구원들의 org_code만 남긴다 — 이 페이지 자체 데이터만으로
-    캐스케이딩을 구성한다(project_confl_address.csv의 dep_name 표기와 이
-    페이지의 '부서'(researchers.csv department) 표기가 항상 일치한다는
-    보장이 없어, 다른 화면의 과제 카탈로그와는 별도로 자기완결적으로 둔다)."""
-    researchers = read_processed('researchers')
-    if researchers.empty or 'org_code' not in researchers.columns:
-        return []
-    df = researchers
-    if department:
-        depts = {department} if isinstance(department, str) else {str(d) for d in department}
-        df = df[df['department'].astype(str).isin(depts)]
-    vals = sorted({str(v).strip() for v in df['org_code'] if str(v).strip()})
-    return [{'label': v, 'value': v} for v in vals]
 
 
 # ── 조건부 스타일 (평가등급 색상) ─────────────────────────────────────────────
@@ -197,12 +237,41 @@ _GRADE_COLOR = {
     '라': ('#fde8d8', '#7d3c00'),
     '마': ('#f8d7da', '#721c24'),
 }
-_GRADE_STYLES = [
-    {'if': {'filter_query': f'{{{col}}} = {grade}', 'column_id': col},
-     'backgroundColor': bg, 'color': fg}
-    for col in _EVAL_GRADE_COLUMNS
-    for grade, (bg, fg) in _GRADE_COLOR.items()
+def _grade_styles_for(columns) -> list:
+    """주어진 컬럼id 목록 중 평가등급 컬럼(_EVAL_GRADE_PATTERN에 맞는 것)에
+    대해서만 조건부 색상 스타일을 만든다. 고정 _EVAL_GRADE_COLUMNS(오늘 기준
+    3개년) 대신 실제 표시되는 컬럼 기준으로 매번 계산해야, 기간 지정 조회로
+    다른 연도의 평가등급 컬럼("'23평가" 등)이 나와도 색상이 정상 적용된다
+    (2026-08-28 — 고정 목록만 쓰면 기간 조회 시 색상이 하나도 안 붙었다)."""
+    grade_cols = [c for c in columns if _EVAL_GRADE_PATTERN.match(str(c))]
+    return [
+        {'if': {'filter_query': f'{{{col}}} = {grade}', 'column_id': col},
+         'backgroundColor': bg, 'color': fg}
+        for col in grade_cols
+        for grade, (bg, fg) in _GRADE_COLOR.items()
+    ]
+
+
+_GRADE_STYLES = _grade_styles_for(_EVAL_GRADE_COLUMNS)
+
+# 순서 중요: style_data_conditional은 뒤에 오는 규칙이 같은 셀의 같은 속성을
+# 덮어쓴다(나중에 매치되는 규칙이 우선) — 홀수행 줄무늬(row_index: 'odd')가
+# 열 지정 없이 모든 셀에 적용되므로, 평가등급 색상(특정 열만 대상)보다
+# 먼저 와야 홀수행에서도 등급 색이 줄무늬 배경에 덮이지 않고 살아남는다.
+_BASE_STYLE_DATA_CONDITIONAL = [
+    {'if': {'row_index': 'odd'}, 'backgroundColor': '#f9fbfd'},
+    {'if': {'state': 'active'}, 'backgroundColor': '#dbeafe',
+     'border': '1px solid #3b82f6'},
 ]
+
+
+def _style_data_conditional_for(columns: list, show_eval: bool) -> list:
+    """`columns`(_build_columns()가 만든 dict 목록)에 실제로 포함된 평가등급
+    컬럼 기준으로 조건부 색상 스타일을 계산한다."""
+    if not show_eval:
+        return _BASE_STYLE_DATA_CONDITIONAL
+    col_ids = [c['id'] for c in columns]
+    return _BASE_STYLE_DATA_CONDITIONAL + _grade_styles_for(col_ids)
 
 
 # ── 필수 컬럼(사용자 확정) — AI 검색 없이도 항상 노출된다. 사번(researcher_id)은
@@ -216,11 +285,12 @@ _ESSENTIAL_COLUMNS = [
     ('researcher_id', '사번'),
     ('이름', '이름'),
     ('부서', '부서'),
-    ('과제', '과제'),
+    ('과제', '과제/파트'),
     ('직급', '직급'),
     ('직책', '직책'),
     ('재직상태', '재직상태'),
     ('Knox ID', 'Knox ID'),
+    ('조회기간 기준', '조회기간 기준'),
 ]
 _ESSENTIAL_IDS = {col_id for col_id, _ in _ESSENTIAL_COLUMNS}
 
@@ -255,6 +325,14 @@ def _build_columns(df: pd.DataFrame, optional_ids: list | None = None,
                      'type': 'numeric' if col_id in _NUMERIC_COLUMNS else 'text'})
     return cols
     # 평균IF는 혼합값(숫자/'-')이 있어 numeric으로 분류하지 않고 text로 유지
+
+
+def _build_tooltip_data(records: list) -> list:
+    """각 셀에 그 값 전체를 툴팁으로 붙인다 — 컬럼 너비가 좁아 말줄임(...)
+    처리된 값도 마우스를 올리면 전체를 볼 수 있게(사용자 확정: 전체 컬럼
+    대상). `_org_code`처럼 화면에 없는 내부 컬럼이 섞여 있어도 dash_table이
+    실제 렌더링 중인 컬럼id만 골라 쓰므로 문제없다."""
+    return [{k: str(v) if v is not None else '' for k, v in row.items()} for row in records]
 
 
 # AI 검색 결과 중 명단에 다시 노출하지 않을 컬럼 — 이름/부서는 필수 컬럼과
@@ -315,8 +393,8 @@ def layout():
     df = _build_summary_df(current_only=True)
     display_df = _apply_permission_filter(df, show_eval, show_incentive)
 
-    dept_opts     = _filter_options(df, '부서')
-    project_opts  = _project_options()
+    dept_opts     = similarity_map.department_filter_options()
+    project_opts  = similarity_map.pjt_part_filter_options()
     pos_opts      = _filter_options(df, '직급')
     title_opts    = _filter_options(df, '직책')
     gender_opts   = _filter_options(df, '성별')
@@ -325,7 +403,7 @@ def layout():
     employ_opts   = _filter_options(df, '재직상태')
 
     columns = _build_columns(display_df)
-    grade_styles = _GRADE_STYLES if show_eval else []
+    style_data_conditional = _style_data_conditional_for(columns, show_eval)
 
     return html.Div([
         dcc.Location(id='list-url', refresh=True),
@@ -374,6 +452,26 @@ def layout():
                             '누적기준: 이름/사번 검색 중심 (부서·과제·직급·직책 필터 비활성화)',
                             className='text-muted', style={'fontSize': '0.72rem'},
                         ),
+                        # 누적기준에서 기간(시작~종료)을 지정하면, 그 기간 동안
+                        # 소속돼 있던 사람만(researchers_history.csv 기준, 그
+                        # 기간 내 가장 최근 스냅샷 값으로) 조회한다 — 이때는
+                        # 부서/과제/직급/직책도 그 시점 값이라 필터를 다시
+                        # 켠다(toggle_org_filters 콜백 참고). 기간을 비워두면
+                        # 기존과 동일하게 "한 번이라도 있었던 전체 인원"만 보임.
+                        dcc.DatePickerRange(
+                            id='list-period-range',
+                            start_date_placeholder_text='시작일',
+                            end_date_placeholder_text='종료일',
+                            display_format='YYYY-MM-DD',
+                            disabled=True,
+                            className='mt-1',
+                            style={'fontSize': '0.72rem'},
+                        ),
+                        html.Div(
+                            '기간 지정 시 그 기간 내 마지막 상태 기준으로 조회(부서·과제·직급·직책 필터 다시 사용 가능)',
+                            id='list-period-hint',
+                            className='text-muted', style={'fontSize': '0.68rem', 'display': 'none'},
+                        ),
                     ], md=3),
                     dbc.Col([
                         dbc.Label('부서', className='small fw-semibold text-muted mb-1'),
@@ -381,7 +479,7 @@ def layout():
                                      placeholder='전체', clearable=True),
                     ], md=3),
                     dbc.Col([
-                        dbc.Label('과제', className='small fw-semibold text-muted mb-1'),
+                        dbc.Label('과제/파트', className='small fw-semibold text-muted mb-1'),
                         dcc.Dropdown(id='filter-project', options=project_opts, multi=True,
                                      placeholder='전체', clearable=True),
                     ], md=3),
@@ -395,22 +493,35 @@ def layout():
                                        color='primary', title='검색(필터 적용)'),
                             dbc.Button(html.I(className='bi bi-file-earmark-excel'), id='list-excel-btn',
                                        color='success', title='엑셀 다운로드(현재 화면에 보이는 대상)'),
+                            dbc.Button(html.I(className='bi bi-sliders'), id='list-excel-options-btn',
+                                       color='secondary', outline=True,
+                                       title='추가 항목 선택(보유 전문성, 직무, 재직상태 등)'),
                             dbc.Button(html.I(className='bi bi-printer'), id='list-bulk-print-btn',
                                        color='info',
                                        title='프로필 일괄 인쇄(체크한 사람, 없으면 현재 화면에 보이는 전체)'),
                         ], className='w-100'),
-                        dbc.Checklist(
-                            id='list-excel-options-check',
-                            options=[
-                                {'label': '보유 전문성 포함', 'value': 'expertise'},
-                                {'label': '특허 포함', 'value': 'patents'},
-                                {'label': '논문 포함', 'value': 'publications'},
-                                {'label': '직무 포함', 'value': 'job_function'},
-                                {'label': '직무이력 포함', 'value': 'job_profile'},
-                                {'label': '재직상태 포함', 'value': 'employment_status'},
-                            ],
-                            value=[], switch=True,
-                            className='small mt-1',
+                        # 엑셀 다운로드에 포함할 추가 항목 — 항상 노출하지 않고
+                        # 위 아이콘(list-excel-options-btn) 클릭 시 뜨는 가벼운
+                        # 팝오버로 옮겼다(사용자 요청). trigger='click'이라 별도
+                        # 열기/닫기 콜백 없이 dbc가 알아서 토글한다.
+                        dbc.Popover(
+                            dbc.Checklist(
+                                id='list-excel-options-check',
+                                options=[
+                                    {'label': '보유 전문성 포함', 'value': 'expertise'},
+                                    {'label': '특허 포함', 'value': 'patents'},
+                                    {'label': '논문 포함', 'value': 'publications'},
+                                    {'label': '직무 포함', 'value': 'job_function'},
+                                    {'label': '직무이력 포함', 'value': 'job_profile'},
+                                    {'label': '재직상태 포함', 'value': 'employment_status'},
+                                    {'label': '어학 포함', 'value': 'language'},
+                                    {'label': '근무 경력 포함', 'value': 'work_experience'},
+                                ],
+                                value=[], switch=True,
+                                className='small',
+                            ),
+                            target='list-excel-options-btn', trigger='click',
+                            placement='bottom', body=True,
                         ),
                         html.Div(
                             '프로필 인쇄: 표에서 원하는 행을 체크하면 그 인원만, '
@@ -501,9 +612,13 @@ def layout():
                         'textAlign': 'center',
                         'whiteSpace': 'normal',
                     },
+                    # 검색(필터) 행이라는 게 눈에 띄도록 배경/테두리를 뚜렷하게
+                    # 준다(사용자 확정 — "검색 가능한 행이라는 걸 보여주면 좋겠다").
                     style_filter={
-                        'backgroundColor': '#f0f4f8',
+                        'backgroundColor': '#eaf2fb',
                         'fontSize': '0.75rem',
+                        'borderTop': '2px solid #1e3a5f',
+                        'borderBottom': '2px solid #cfe0f3',
                     },
                     style_cell={
                         'fontSize': '0.82rem',
@@ -520,19 +635,25 @@ def layout():
                         {'if': {'column_id': '부서'}, 'textAlign': 'left', 'minWidth': '100px'},
                         {'if': {'column_id': '과제'}, 'textAlign': 'left', 'minWidth': '100px'},
                     ],
-                    # 순서 중요: style_data_conditional은 뒤에 오는 규칙이 같은 셀의
-                    # 같은 속성을 덮어쓴다(나중에 매치되는 규칙이 우선) — 홀수행
-                    # 줄무늬(row_index: 'odd')가 열 지정 없이 모든 셀에 적용되므로,
-                    # grade_styles(평가등급 색상, 특정 열만 대상)보다 먼저 와야
-                    # 홀수행에서도 등급 색이 줄무늬 배경에 덮이지 않고 살아남는다.
-                    style_data_conditional=[
-                        {'if': {'row_index': 'odd'}, 'backgroundColor': '#f9fbfd'},
-                        {'if': {'state': 'active'}, 'backgroundColor': '#dbeafe',
-                         'border': '1px solid #3b82f6'},
-                    ] + grade_styles,
+                    style_data_conditional=style_data_conditional,
                     tooltip_header={col['id']: col['id'] for col in columns},
+                    tooltip_data=_build_tooltip_data(display_df.to_dict('records') if not display_df.empty else []),
                     tooltip_delay=0,
                     tooltip_duration=None,
+                    # 대소문자 구분 없이 항상 필터(사용자 확정) + 필터 행 자체에
+                    # 브라우저 네이티브 CSS resize로 컬럼 너비 드래그 조절(admin.py
+                    # team-refer-table과 동일한 트릭).
+                    filter_options={'case': 'insensitive', 'placeholder_text': '🔍 검색...'},
+                    css=[
+                        {
+                            'selector': '.column-header-name',
+                            'rule': ('display: inline-block; resize: horizontal; overflow: auto; '
+                                     'min-width: 40px; max-width: 600px; vertical-align: bottom;'),
+                        },
+                        # 대소문자 토글 아이콘(Aa) 숨김 — filter_options.case로 이미
+                        # 항상 대소문자 무시로 고정했으니 토글 자체가 필요 없다.
+                        {'selector': '.dash-filter--case', 'rule': 'display: none;'},
+                    ],
                 ),
                 className='p-0',
             ),
@@ -546,37 +667,70 @@ def layout():
     ])
 
 
-# ── 콜백 1: 부서 선택 → 과제 드롭다운 옵션 캐스케이딩 ─────────────────────────
+# ── 콜백 1: 부서 선택(+ 검색 기준/기간) → 과제/파트 드롭다운 옵션 캐스케이딩 ────
+# 기간을 지정한 상태(누적기준 + 기간)면 그 기간 기준 team_refer로 옵션을
+# 만든다(2026-08-29 추가) — 부서를 먼저 바꾸든 기간을 먼저 바꾸든 둘 다
+# 이 콜백을 다시 트리거해 최종적으로는 항상 "선택된 부서 + 현재 기간"
+# 기준으로 수렴한다.
 @callback(
     Output('filter-project', 'options'),
     Input('filter-dept', 'value'),
+    Input('list-search-mode', 'value'),
+    Input('list-period-range', 'start_date'),
+    Input('list-period-range', 'end_date'),
 )
-def update_project_options(dept):
-    return _project_options(dept)
+def update_project_options(dept, mode, period_start, period_end):
+    period = _active_period(mode, period_start, period_end)
+    return similarity_map.pjt_part_filter_options(dept, period=period)
 
 
-# ── 콜백 1-1: 검색 기준(현재/누적) → 부서·과제·직급·직책 필터 비활성화 ─────────
+# ── 콜백 1-1: 검색 기준(현재/누적) → 부서·과제·직급·직책 필터 비활성화 + 부서
+# 옵션 갱신 ────────────────────────────────────────────────────────────────
 # 누적기준에서는 조직 배치(부서/과제/직급/직책)가 최신 시점 기준이 아닐 수 있어
 # 혼란을 줄 수 있으므로 비활성화하고 값도 비운다 — 이름/사번(테이블 자체
 # 필터 행)으로만 찾도록 유도한다. 성별/학력/전공/재직상태는 시점에 덜
-# 민감해 그대로 둔다.
+# 민감해 그대로 둔다. 다만 누적기준에서 기간(시작~종료)까지 지정하면
+# researchers_history.csv에서 그 기간의 마지막 스냅샷을 쓰므로(사용자 요청,
+# data/processed/CLAUDE.md 2026-08-28 참고) 부서/과제/직급/직책도 그 시점
+# 기준으로 다시 의미가 있어져 필터를 도로 켠다.
+#
+# '부서' 드롭다운 옵션 자체도 이 콜백에서 기간 기준으로 다시 계산한다
+# (2026-08-29 추가 — 이전엔 layout() 최초 렌더링 시 오늘 기준으로 한 번만
+# 만들고 끝이었다). 기간이 바뀌면(옵션 자체가 그 시점 기준으로 달라질 수
+# 있으므로) 부서/과제 선택값을 초기화한다 — 이전 기간에 고른 값이 새
+# 기간엔 없는 옵션일 수 있어서. 직급/직책 옵션은 team_refer가 아니라
+# researchers.csv 기준이라 이 갱신과 무관해 값을 그대로 둔다.
 @callback(
     Output('filter-dept', 'disabled'),
     Output('filter-project', 'disabled'),
     Output('filter-pos', 'disabled'),
     Output('filter-title', 'disabled'),
+    Output('filter-dept', 'options'),
     Output('filter-dept', 'value', allow_duplicate=True),
     Output('filter-project', 'value', allow_duplicate=True),
     Output('filter-pos', 'value', allow_duplicate=True),
     Output('filter-title', 'value', allow_duplicate=True),
+    Output('list-period-range', 'disabled'),
+    Output('list-period-hint', 'style'),
     Input('list-search-mode', 'value'),
+    Input('list-period-range', 'start_date'),
+    Input('list-period-range', 'end_date'),
     prevent_initial_call=True,
 )
-def toggle_org_filters(mode):
+def toggle_org_filters(mode, period_start, period_end):
+    period = _active_period(mode, period_start, period_end)
     is_cumulative = (mode == 'all')
+    has_period = period is not None
+    hint_style = {'fontSize': '0.68rem', 'display': 'block' if has_period else 'none'}
+    dept_options = similarity_map.department_filter_options(period=period)
+
+    if has_period:
+        return (False, False, False, False, dept_options, None, None, no_update, no_update,
+                False, hint_style)
     if is_cumulative:
-        return True, True, True, True, None, None, None, None
-    return False, False, False, False, no_update, no_update, no_update, no_update
+        return True, True, True, True, dept_options, None, None, None, None, False, hint_style
+    return (False, False, False, False, dept_options, no_update, no_update, no_update, no_update,
+            True, hint_style)
 
 
 # ── 콜백 2: 검색 버튼(필터 적용) / 필터 초기화 버튼 → 테이블 데이터 갱신 ──────
@@ -587,7 +741,9 @@ def toggle_org_filters(mode):
     Output('researcher-table', 'data'),
     Output('researcher-table', 'columns'),
     Output('researcher-table', 'tooltip_header'),
+    Output('researcher-table', 'tooltip_data'),
     Output('researcher-table', 'selected_rows'),
+    Output('researcher-table', 'style_data_conditional'),
     Input('list-search-btn',   'n_clicks'),
     Input('filter-modal-apply-btn', 'n_clicks'),
     Input('clear-filters-btn', 'n_clicks'),
@@ -601,17 +757,23 @@ def toggle_org_filters(mode):
     State('filter-degree',     'value'),
     State('filter-major',      'value'),
     State('filter-employment', 'value'),
+    State('list-period-range', 'start_date'),
+    State('list-period-range', 'end_date'),
     prevent_initial_call=True,
 )
 def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, dept, project, pos, title,
-                  gender, degree, major, employment):
+                  gender, degree, major, employment, period_start, period_end):
     from services.auth import can
     show_eval = can('view_evaluation')
     show_incentive = can('view_incentive')
 
     current_only = (mode != 'all')
-    df = _build_summary_df(current_only=current_only)
+    period = _active_period(mode, period_start, period_end)
+    df = _build_summary_df(current_only=current_only, period=period)
     display_df = _apply_permission_filter(df, show_eval, show_incentive)
+    # 기간을 지정했을 땐 그 시점 기준 값이 있어 부서/과제/직급/직책 필터도
+    # 다시 쓸 수 있다(toggle_org_filters 콜백과 동일한 조건).
+    filters_active = current_only or bool(period)
 
     triggered = dash.ctx.triggered_id
 
@@ -623,32 +785,49 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, 
             # 질문 없음/초기화/결과 없음 → 필수 컬럼만으로 전체 목록 복귀
             columns = _build_columns(display_df)
             tooltip_header = {c['id']: c['id'] for c in columns}
-            return display_df.to_dict('records'), columns, tooltip_header, []
+            records = display_df.to_dict('records')
+            return (records, columns, tooltip_header, _build_tooltip_data(records), [],
+                    _style_data_conditional_for(columns, show_eval))
         merged_df, extra_ids, extra_labels = _merge_ai_result(display_df, ai_result)
         columns = _build_columns(merged_df, extra_ids=extra_ids, extra_labels=extra_labels)
         tooltip_header = {c['id']: c['id'] for c in columns}
-        return merged_df.to_dict('records'), columns, tooltip_header, []
+        records = merged_df.to_dict('records')
+        return (records, columns, tooltip_header, _build_tooltip_data(records), [],
+                _style_data_conditional_for(columns, show_eval))
 
     # 상세 필터(성별/학력/전공)로 값을 고르면 그 컬럼도 함께 보여준다.
     optional_values = dict(zip(_OPTIONAL_FILTER_COLUMNS, (gender, degree, major)))
     optional_ids = [col for col in _OPTIONAL_FILTER_COLUMNS if optional_values[col]]
     columns = _build_columns(display_df, optional_ids=optional_ids)
     tooltip_header = {c['id']: c['id'] for c in columns}
+    style_data_conditional = _style_data_conditional_for(columns, show_eval)
     if display_df.empty:
-        return [], columns, tooltip_header, []
+        return [], columns, tooltip_header, [], [], style_data_conditional
 
     # 모드 전환 자체가 트리거면(부서/과제/직급/직책 필터가 비활성화·초기화되는
     # 시점과 겹칠 수 있어) 조직 필터는 적용하지 않고 전체(해당 모드) 목록을 보여준다.
     if triggered in ('clear-filters-btn', 'list-search-mode'):
-        return display_df.to_dict('records'), columns, tooltip_header, []
+        records = display_df.to_dict('records')
+        return records, columns, tooltip_header, _build_tooltip_data(records), [], style_data_conditional
 
-    if dept and current_only:
-        display_df = display_df[display_df['부서'].isin(dept)]
-    if project and current_only:
-        display_df = display_df[display_df['과제'].isin(project)]
-    if pos and current_only:
+    # 부서/과제·파트 필터는 team_refer의 dep_name/pjt_part_name을 라벨로 쓰지만,
+    # 실제 매칭은 항상 org_name_wd(=researchers.csv의 org_code, 화면에는 안
+    # 보이는 내부 컬럼 '_org_code')로 한다 — 라벨 문자열이 researchers.csv
+    # 표기와 다를 수 있어 라벨로 직접 비교하지 않는다(services.similarity_map
+    # 참고). '과제' 컬럼 자체는 이제 표시용 pjt_part_name 라벨이라 이 매칭에
+    # 쓸 수 없다(사용자 확정 — 명단 '과제/파트' 열을 team_refer 라벨로 표시).
+    # period가 주어지면(누적기준 + 기간 지정) 그 기간 기준 team_refer로
+    # 매칭한다(2026-08-29 추가) — 선택한 부서/과제 이름이 그 시점에 실제로
+    # 그 org_code를 가리켰는지 오늘 기준이 아니라 그 시점 기준으로 판단한다.
+    if dept and filters_active:
+        org_codes = similarity_map.org_codes_for_dep_names(dept, period=period)
+        display_df = display_df[display_df['_org_code'].isin(org_codes)]
+    if project and filters_active:
+        org_codes = similarity_map.org_codes_for_pjt_part_names(project, period=period)
+        display_df = display_df[display_df['_org_code'].isin(org_codes)]
+    if pos and filters_active:
         display_df = display_df[display_df['직급'].isin(pos)]
-    if title and current_only:
+    if title and filters_active:
         display_df = display_df[display_df['직책'].isin(title)]
     if gender:
         display_df = display_df[display_df['성별'].isin(gender)]
@@ -658,7 +837,8 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, 
         display_df = display_df[display_df['전공'].isin(major)]
     if employment:
         display_df = display_df[display_df['재직상태'].isin(employment)]
-    return display_df.to_dict('records'), columns, tooltip_header, []
+    records = display_df.to_dict('records')
+    return records, columns, tooltip_header, _build_tooltip_data(records), [], style_data_conditional
 
 
 # ── 콜백 3: 필터 초기화 버튼 → 드롭다운 값 비우기(메인 화면 + 필터 모달) ─────
@@ -715,6 +895,8 @@ def download_excel(n_clicks, virtual_data, excel_options):
         include_job_function='job_function' in excel_options,
         include_job_profile='job_profile' in excel_options,
         include_employment_status='employment_status' in excel_options,
+        include_language='language' in excel_options,
+        include_work_experience='work_experience' in excel_options,
     )
     return dcc.send_bytes(data, researcher_profile_export.default_filename())
 

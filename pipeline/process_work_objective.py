@@ -27,16 +27,21 @@ Output 컬럼(4개): researcher_id, work_objective24, work_objective25, work_obj
 
 import os
 import sys
+from datetime import date
 
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import clean_str, read_xlsx, norm_id
-from merge_utils import TABLE_KEYS, write_merged
+from merge_utils import TABLE_KEYS, read_existing, write_merged_with_valid_period
 from source_reader import read_source
 
 # 원본 컬럼 이름 (파일에 없으면 아래 값을 실제 헤더명으로 수정)
+# 업무목표24/25/26.xlsx 원본에는 부서장 사번 컬럼도 있었는데(예전엔 "사번"으로
+# 표기돼 연구원 본인 식별용 "사번"(F열)과 헷갈렸다), 소스 파일에서 그 컬럼을
+# "부서장사번"으로 이름을 바꿔 이제 "사번"은 F열(연구원 본인 식별용) 하나만
+# 가리킨다 — 그래서 아래 COL_ID는 그대로 '사번'을 쓰면 된다(사용자 확정).
 COL_ID = '사번'
 COL_NAME = '목표명'
 COL_DETAIL = '상세설명'
@@ -78,7 +83,7 @@ def _read_year_file(year: int, filename: str, raw_dir: str) -> pd.DataFrame:
             print(f'[SKIP] {path} 파일 없음')
             return empty
 
-        df = read_xlsx(path, header_row=0)
+        df = read_xlsx(path, header_row=2)  # sources.py 매니페스트 기준 (3번째 행)
         if df.empty:
             print(f'[SKIP] {filename} 읽기 결과가 비어 있습니다.')
             return empty
@@ -112,7 +117,12 @@ def _read_year_file(year: int, filename: str, raw_dir: str) -> pd.DataFrame:
     return grouped
 
 
-def process(raw_dir: str = RAW_DIR) -> bool:
+def process(raw_dir: str = RAW_DIR, valid_date: date | None = None) -> bool:
+    """valid_date: 이번 업로드분의 기준 연/월(기본값 오늘) — work_objective.csv에
+    이미 저장된 사람보다 과거 시점이면 그 사람 행은 갱신하지 않고 건너뛴다
+    (work_objective_history.csv에는 건너뛴 것 포함 전부 쌓임). 연도별 컬럼
+    보존(아래)과는 별개 안전장치 — 이건 "이 업로드 자체가 기존보다 오래된
+    스냅샷인지"를 본다."""
     year_dfs = [_read_year_file(year, filename, raw_dir) for year, filename in YEAR_FILES.items()]
     if all(d.empty for d in year_dfs):
         print('[SKIP] 업무목표 파일을 하나도 찾지 못했습니다.')
@@ -124,18 +134,42 @@ def process(raw_dir: str = RAW_DIR) -> bool:
             continue
         merged = d if merged is None else merged.merge(d, on='researcher_id', how='outer')
 
-    for year in YEAR_FILES:
+    # 이번 실행에 파일이 없던 연도(웹 업로드처럼 연도별로 따로 갱신하는 경우
+    # 흔함 — 예: 업무목표24만 새로 올라온 경우)는 무조건 빈 값으로 채우면 안
+    # 된다 — write_merged()가 researcher_id 하나로 행 전체를 교체하므로, 이미
+    # 저장돼 있던 다른 연도 값까지 함께 지워버리는 데이터 유실 버그가 된다.
+    # 기존 work_objective.csv에서 그 연도 값을 찾아 이어붙이고(없으면 그때
+    # 처음으로 빈 값), 있던 값은 그대로 보존한다.
+    out_path = os.path.join(OUT_DIR, 'work_objective.csv')
+    existing = read_existing(out_path)
+    for year, d in zip(YEAR_FILES, year_dfs):
         col = f'work_objective{year}'
-        if col not in merged.columns:
+        if col in merged.columns:
+            continue
+        if not existing.empty and col in existing.columns:
+            merged = merged.merge(existing[['researcher_id', col]], on='researcher_id', how='left')
+        else:
             merged[col] = ''
     merged = merged.fillna('')
 
     out_cols = ['researcher_id'] + [f'work_objective{year}' for year in YEAR_FILES]
     merged = merged[out_cols].sort_values('researcher_id').reset_index(drop=True)
 
-    out_path = os.path.join(OUT_DIR, 'work_objective.csv')
-    final = write_merged(out_path, merged, TABLE_KEYS['work_objective'])
-    print(f'[OK]   work_objective.csv 저장 (총 {len(final)}명, 이번 파일 {len(merged)}명 반영)')
+    valid_date = valid_date or date.today()
+    merged['valid_year'] = f'{valid_date.year:04d}'
+    merged['valid_month'] = f'{valid_date.month:02d}'
+
+    hist_path = os.path.join(OUT_DIR, 'work_objective_history.csv')
+    outcome = write_merged_with_valid_period(
+        out_path, hist_path, merged, TABLE_KEYS['work_objective'], TABLE_KEYS['work_objective_history'])
+
+    print(f'[OK]   work_objective.csv 저장 (이번 파일 {len(merged)}명 중 {outcome["updated_rows"]}명 반영)')
+    if outcome['skipped']:
+        print(f'  [WARN] {len(outcome["skipped"])}명은 기존 저장된 값이 더 최신이라 건너뜀:')
+        for s in outcome['skipped'][:10]:
+            print(f'    · {s["researcher_id"]}: 기존 {s["existing_period"]} > 이번 {s["new_period"]}')
+        if len(outcome['skipped']) > 10:
+            print(f'    · 외 {len(outcome["skipped"]) - 10}명')
     return True
 
 

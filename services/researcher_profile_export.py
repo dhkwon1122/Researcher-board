@@ -20,6 +20,8 @@ from openpyxl.utils import get_column_letter
 
 from components.timeline_data import dedupe_patents, job_points
 from services import auth, data_store, evaluations
+from services import language_qualification as language_qual
+from services import work_experience as work_exp
 
 _FONT_NAME = '바탕체'
 _FONT_SIZE = 11
@@ -30,8 +32,13 @@ _BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
 # 최근 3개년. 헤더 문자열은 모듈 임포트 시점에 한 번 계산(연 1회만 바뀌므로
 # 요청마다 다시 계산할 필요 없음 — 다른 회계연도 경계를 넘기려면 프로세스
 # 재시작만 있으면 됨, 이 앱의 다른 "현재 시점 기준" 값들과 동일한 전제).
-_EVAL_SALARY_YEARS, _EVAL_HALF_YEARS = evaluations.evaluation_years()
-_EVAL_HEADER = f"평가\n('{str(_EVAL_SALARY_YEARS[-1])[-2:]}~'{str(_EVAL_SALARY_YEARS[0])[-2:]})"
+# evaluation_years()는 최신 연도가 먼저 오는 내림차순([2026,2025,2024])을
+# 반환하는데, 헤더("'24~'26")는 오름차순으로 읽히므로 오름차순으로 정렬해야
+# 셀 값 순서와 헤더가 맞는다(2026-08-29 발견·수정 — pages/researcher_list.py는
+# 이미 sorted()로 오름차순을 쓰고 있었는데 이 모듈만 정렬 없이 그대로 썼다).
+_EVAL_SALARY_YEARS = sorted(evaluations.evaluation_years()[0])
+_EVAL_HALF_YEARS = sorted(evaluations.evaluation_years()[1])
+_EVAL_HEADER = f"평가\n('{str(_EVAL_SALARY_YEARS[0])[-2:]}~'{str(_EVAL_SALARY_YEARS[-1])[-2:]})"
 
 _DEGREE_ORDER = ['박사', '석사', '학사']
 _DEGREE_CODE = {'박사': '박', '석사': '석', '학사': '학'}
@@ -50,6 +57,24 @@ def _s(v) -> str:
 def _or_dash(v) -> str:
     s = _s(v)
     return s if s else '-'
+
+
+def _birth_year_int(v) -> int | None:
+    """researchers.csv의 birth_year를 정수로 안전하게 파싱한다.
+    data_store.read_processed()가 researcher_id 외 컬럼은 dtype을 지정하지
+    않고 CSV를 읽는데, birth_year가 하나라도 비어있는(NaN) 행이 있으면
+    pandas가 컬럼 전체를 float로 추론해 정상 값도 "1990.0"처럼 소수점이
+    붙어 들어온다(2026-08-29 발견 — 엑셀 다운로드/AI 검색 결과의 나이가
+    전부 "-"로 나오던 원인). 단순 `.isdigit()` 체크는 "1990.0"을 숫자로
+    인정하지 않아 실패하므로, float로 한 번 변환한 뒤 int로 반올림 없이
+    잘라 정수를 얻는다."""
+    s = _s(v)
+    if not s:
+        return None
+    try:
+        return int(float(s))
+    except (TypeError, ValueError):
+        return None
 
 
 def _yy(date_str) -> str:
@@ -98,6 +123,8 @@ def _load_tables() -> dict:
         'patents': data_store.read_processed('patents'),
         'publications': data_store.read_processed('publications'),
         'job_profile': data_store.read_processed('job_profile'),
+        'language_qualification': data_store.read_processed('language_qualification'),
+        'work_experience': data_store.read_processed('work_experience'),
         'expertise_profiles': data_store.read_expertise_profiles(),
     }
 
@@ -130,8 +157,8 @@ def _col_name_gender_age(_rid, rows):
         return '-'
     name = _or_dash(r.get('name'))
     gender = _s(r.get('gender')) or '-'
-    birth_year = _s(r.get('birth_year'))
-    age = f'{datetime.now().year - int(birth_year)}세' if birth_year.isdigit() else '-'
+    birth_year = _birth_year_int(r.get('birth_year'))
+    age = f'{datetime.now().year - birth_year}세' if birth_year is not None else '-'
     return f'{name}\n({gender}/{age})'
 
 
@@ -139,8 +166,13 @@ def _col_dept_task(_rid, rows):
     r = rows['researcher']
     if not r:
         return '-'
-    dept = _or_dash(r.get('department'))
-    org = _or_dash(r.get('org_code'))
+    org_code = str(r.get('org_code') or '').strip()
+    dep_map, pjt_map = rows.get('dep_pjt_maps') or ({}, {})
+    # 부서/과제(파트) = team_refer의 dep_name/pjt_part_name(연구원 명단 표와
+    # 동일 기준 — 사용자 확정). 매핑이 없으면 원본 department/org_code
+    # 그대로 보여준다(빈 칸이면 데이터 누락처럼 보이므로).
+    dept = _or_dash(dep_map.get(org_code) or r.get('department'))
+    org = _or_dash(pjt_map.get(org_code) or org_code)
     return f'{dept}\n({org})'
 
 
@@ -173,12 +205,18 @@ def _col_education(_rid, rows):
 
 
 def _col_evaluation(_rid, rows):
-    """평가 — 연봉등급 3개년을 첫 줄에 "다/다/다", 그에 대응하는(각 연봉등급
-    연도 - 1) 상/하반기업적 3개년을 둘째 줄에 "(MT/MT, MT/MT, MT/MT)"로 표시.
-    둘째 줄의 각 항목은 evaluations.format_half_display()로 만드는데, 그 해
-    연봉등급이 있으면 있는 반기만 보여주고(예: 상반기 없음/하반기만 있음 →
-    "EM"만, "-/EM"처럼 빈 자리를 표시하지 않음 — 사용자 확정), 연봉등급
-    자체가 없으면 기존대로 반기 두 자리를 항상 표시한다(빈 자리는 '-').
+    """평가 — 연봉등급 3개년을 첫 줄에 헤더("'24~'26")와 같은 오름차순으로
+    "다/다/다", 그에 대응하는(각 연봉등급 연도 - 1) 역량/하반기업적 3개년을
+    둘째 줄에 역시 오름차순으로 "(VG/MT, VG/MT, VG/MT)"로 표시(2026-08-29
+    수정 — _EVAL_SALARY_YEARS/_EVAL_HALF_YEARS를 정렬 없이 그대로 써서
+    evaluation_years()의 내림차순(최신 연도가 먼저)이 그대로 노출돼 헤더와
+    셀 값 순서가 어긋나 있었다). 둘째 줄의 각 항목은
+    evaluations.format_half_display()로 만드는데,
+    그 해 연봉등급이 있으면 역량/하반기업적 중 있는 것만 보여주고(예: 역량
+    없음/하반기만 있음 → "MT"만, "-/MT"처럼 빈 자리를 표시하지 않음 —
+    2026-08-29 확정, 예전엔 상반기업적과 짝지었으나 역량으로 교체), 연봉등급
+    자체가 없으면 기존대로 상/하반기업적 두 자리를 항상 표시한다(빈 자리는
+    '-').
 
     화면(pages/*.py)이 view_evaluation 권한 없는 역할에는 평가등급을 아예
     안 보여주는 것과 동일한 기준을 여기 엑셀 다운로드에도 적용한다 — 권한
@@ -194,6 +232,7 @@ def _col_evaluation(_rid, rows):
             _s(eva.get(evaluations.salary_grade_column(y + 1))),
             _s(eva.get(evaluations.first_half_column(y))),
             _s(eva.get(evaluations.second_half_column(y))),
+            _s(eva.get(evaluations.competency_column(y))),
         )
         for y in _EVAL_HALF_YEARS
     ) + ')'
@@ -384,11 +423,31 @@ def _col_job_profile(_rid, rows):
     return '\n'.join(lines)
 
 
+def _col_language(_rid, rows):
+    """어학 — language_qualification.csv(언어별 1행)를 services.
+    language_qualification.format_lines()로 "{언어} {등급}(만료일 {날짜})"
+    줄로 만들어 한 셀에 줄바꿈 나열(사용자 확정 — 프로필 화면과 동일한
+    형식·헬퍼 공유). 보유 언어가 없으면 '-'."""
+    lines = language_qual.format_lines(rows.get('language_qualification') or [])
+    return '\n'.join(lines) if lines else '-'
+
+
+def _col_work_experience(_rid, rows):
+    """근무 경력 — work_experience.csv(회사별 1행)를 services.work_experience.
+    format_lines()로 "회사명(시작'YY.MM ~ 종료'YY.MM, 직무명)" 줄로 만들어
+    한 셀에 줄바꿈 나열(사용자 확정 — 프로필 화면과 동일한 형식·헬퍼
+    공유). 경력이 없으면 '-'."""
+    lines = work_exp.format_lines(rows.get('work_experience') or [])
+    return '\n'.join(lines) if lines else '-'
+
+
 _PATENT_COLUMNS = [('특허 실적', _col_patents)]
 _PUBLICATION_COLUMNS = [('논문 실적', _col_publications)]
 _JOB_FUNCTION_COLUMNS = [('직무', _col_job_function)]
 _JOB_PROFILE_COLUMNS = [('직무이력', _col_job_profile)]
 _EMPLOYMENT_STATUS_COLUMNS = [('재직상태', _col_employment_status)]
+_LANGUAGE_COLUMNS = [('어학', _col_language)]
+_WORK_EXPERIENCE_COLUMNS = [('근무 경력', _col_work_experience)]
 
 
 # (헤더, 값 계산 함수) — 순서 = 엑셀 컬럼 순서
@@ -409,9 +468,11 @@ _COLUMNS = [
 ]
 
 
-def _researcher_row_context(researcher_id: str, tables: dict, permissions: dict) -> dict:
+def _researcher_row_context(researcher_id: str, tables: dict, permissions: dict,
+                             dep_pjt_maps: tuple | None = None) -> dict:
     researcher_rows = _rows_for(tables['researchers'], researcher_id)
     return {
+        'dep_pjt_maps': dep_pjt_maps,
         'researcher': researcher_rows[0] if researcher_rows else None,
         'education': _rows_for(tables['education'], researcher_id),
         'evaluations': _rows_for(tables['evaluations'], researcher_id),
@@ -423,6 +484,8 @@ def _researcher_row_context(researcher_id: str, tables: dict, permissions: dict)
         'patents_df': _df_for(tables['patents'], researcher_id),
         'publications': _rows_for(tables['publications'], researcher_id),
         'job_profile_df': _df_for(tables['job_profile'], researcher_id),
+        'language_qualification': _rows_for(tables['language_qualification'], researcher_id),
+        'work_experience': _rows_for(tables['work_experience'], researcher_id),
         'expertise_profile': tables['expertise_profiles'].get(researcher_id),
         # 요청(로그인 사용자) 단위로 한 번만 계산해 매 행마다 auth.can()을
         # 다시 호출하지 않도록 build_profile_workbook()에서 전달받는다
@@ -511,8 +574,8 @@ def person_base_table(researcher_ids: list) -> dict:
             department = _or_dash(r.get('department'))
             org_code = _or_dash(r.get('org_code'))
             position_year = _col_position_year(rid, {'researcher': r})
-            birth_year = _s(r.get('birth_year'))
-            age = str(current_year - int(birth_year)) if birth_year.isdigit() else '-'
+            birth_year = _birth_year_int(r.get('birth_year'))
+            age = str(current_year - birth_year) if birth_year is not None else '-'
         else:
             name = department = org_code = position_year = age = '-'
         out[rid] = [rid, name, department, org_code, position_year, degree_major, age]
@@ -526,6 +589,8 @@ _PATENT_COLUMN_WIDTH = 40
 _PUBLICATION_COLUMN_WIDTH = 40
 _JOB_FUNCTION_COLUMN_WIDTH = 14
 _JOB_PROFILE_COLUMN_WIDTH = 30
+_LANGUAGE_COLUMN_WIDTH = 26
+_WORK_EXPERIENCE_COLUMN_WIDTH = 30
 
 
 def build_profile_workbook(
@@ -536,18 +601,26 @@ def build_profile_workbook(
     include_job_function: bool = False,
     include_job_profile: bool = False,
     include_employment_status: bool = False,
+    include_language: bool = False,
+    include_work_experience: bool = False,
 ) -> bytes:
     """선택된 researcher_id 목록으로 엑셀(xlsx) 바이트를 만들어 반환한다.
     양식: 바탕체 11pt, 전체 검정 테두리, 헤더만 볼드, 줄바꿈 셀은 자동 줄바꿈.
     include_*가 True인 항목만 해당 옵트인 컬럼 그룹(_PATENT_COLUMNS/
     _PUBLICATION_COLUMNS/_JOB_FUNCTION_COLUMNS/_JOB_PROFILE_COLUMNS/
-    _EMPLOYMENT_STATUS_COLUMNS/_EXPERTISE_COLUMNS)을 이 순서대로 맨 끝에
+    _EMPLOYMENT_STATUS_COLUMNS/_LANGUAGE_COLUMNS/_WORK_EXPERIENCE_COLUMNS/
+    _EXPERTISE_COLUMNS)을 이 순서대로 맨 끝에
     추가한다 — 전부 기본값은 False(다운로드 화면 체크박스 기본 해제)이고,
     켜져도 _COLUMNS 자체는 건드리지 않고 이 함수 안에서만 로컬 사본에 덧붙인다."""
     tables = _load_tables()
     # 로그인 사용자당 한 번만 계산 — _col_evaluation/_col_incentive가 매 행마다
     # auth.can()을 다시 호출하지 않도록 _researcher_row_context()에 실어 보낸다.
     permissions = {'view_evaluation': auth.can('view_evaluation'), 'view_incentive': auth.can('view_incentive')}
+    # org_code → dep_name/pjt_part_name 매핑도 배치당 한 번만 만든다(연구원
+    # 수만큼 team_refer를 반복 스캔하지 않도록) — similarity_map이 이 모듈을
+    # 임포트하므로(순환 임포트 방지) 여기서는 지연 임포트로 가져온다.
+    from services import similarity_map
+    dep_pjt_maps = similarity_map.org_code_label_maps()
 
     columns = list(_COLUMNS)
     widths = list(_COLUMN_WIDTHS)
@@ -566,6 +639,12 @@ def build_profile_workbook(
     if include_employment_status:
         columns.extend(_EMPLOYMENT_STATUS_COLUMNS)
         widths.extend([_EMPLOYMENT_STATUS_COLUMN_WIDTH] * len(_EMPLOYMENT_STATUS_COLUMNS))
+    if include_language:
+        columns.extend(_LANGUAGE_COLUMNS)
+        widths.extend([_LANGUAGE_COLUMN_WIDTH] * len(_LANGUAGE_COLUMNS))
+    if include_work_experience:
+        columns.extend(_WORK_EXPERIENCE_COLUMNS)
+        widths.extend([_WORK_EXPERIENCE_COLUMN_WIDTH] * len(_WORK_EXPERIENCE_COLUMNS))
     # 보유 전문성(LLM 산출, 부서장/본인 컨펌을 거치지 않은 비객관적 정보)은
     # 다른 옵트인 컬럼과 무엇을 같이 선택하든 항상 맨 마지막 컬럼이 되도록
     # 다른 그룹 뒤에 붙인다.
@@ -589,7 +668,7 @@ def build_profile_workbook(
         cell.alignment = wrap_center
 
     for row_idx, rid in enumerate(researcher_ids, start=2):
-        ctx = _researcher_row_context(rid, tables, permissions)
+        ctx = _researcher_row_context(rid, tables, permissions, dep_pjt_maps)
         for col_idx, (_header, fn) in enumerate(columns, start=1):
             value = fn(rid, ctx)
             cell = ws.cell(row=row_idx, column=col_idx, value=value)

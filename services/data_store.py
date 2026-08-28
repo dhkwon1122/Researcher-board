@@ -159,5 +159,6 @@ def read_profile_tables() -> dict[str, pd.DataFrame]:
         'core_technology',
         'tech_ownership',
         'job_profile',
+        'work_experience',
     ]
     return {name: read_processed(name) for name in names}

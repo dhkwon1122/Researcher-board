@@ -29,7 +29,8 @@ import sys
 
 import pandas as pd
 
-ORDERS_FILE = '인사발령이력.xlsx'
+ORDERS_PATTERN = 'report_*.xlsx'
+_ORDERS_HEADER_ROW = 1  # sources.py 매니페스트 기준 (2번째 행)
 
 # ── 컬럼명 설정 (파일 헤더와 다를 경우 여기서 수정) ──────────────────────────
 COL_ID         = '사원번호'
@@ -44,6 +45,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import parse_yyyymmdd, read_xlsx, norm_id
 from merge_utils import TABLE_KEYS, write_merged
+from source_files import find_latest
 from source_reader import read_source
 
 _PAREN_RE = re.compile(r'[\(（][^)）]*[\)）]')
@@ -62,12 +64,12 @@ def process(raw_dir: str = RAW_DIR) -> bool:
             print('[SKIP] hr_orders 원천 데이터 없음 '
                   '(DB hr_orders_stg 또는 data/raw_csv/hr_orders.csv) — hr_orders_raw 폴백 시도')
     else:
-        raw_path = os.path.join(raw_dir, ORDERS_FILE)
-        if os.path.exists(raw_path):
-            df = read_xlsx(raw_path, header_row=0)
+        raw_path = find_latest(raw_dir, ORDERS_PATTERN)
+        if raw_path is not None:
+            df = read_xlsx(raw_path, header_row=_ORDERS_HEADER_ROW)
         else:
             df = None
-            print(f'[SKIP] {ORDERS_FILE} 파일 없음({raw_dir})')
+            print(f'[SKIP] {ORDERS_PATTERN} 파일 없음({raw_dir})')
 
     if df is None:
         return False

@@ -56,6 +56,7 @@ import html
 import json
 import os
 import sys
+from datetime import datetime
 
 import pandas as pd
 
@@ -156,7 +157,7 @@ def build_html(items: list, total_projects: int, include_links: bool = True) -> 
         mmd.coverage_stat(len(items), total_projects, '분석 완료 / 분석 대상 과제'),
         (len(all_personnel), '문서에서 발견된 인력 수'),
         (matched_count, '연구원과 매칭된 인력 수'),
-        mmd.generated_at_stat(),
+        mmd.generated_at_stat(datetime.now().strftime('%Y-%m-%d %H:%M')),
     ])
 
     sections = []

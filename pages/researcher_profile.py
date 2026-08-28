@@ -22,6 +22,7 @@ from components.profile_sections import (
     leadership_year_options,
     nurturing_block,
     photo_block,
+    work_experience_block,
 )
 from components.timeline_data import (
     cell,
@@ -42,6 +43,7 @@ from services.data_store import (
     read_similar_researchers,
 )
 from services.evaluations import evaluation_years
+from services import similarity_map
 
 dash.register_page(
     __name__,
@@ -100,22 +102,30 @@ def _opt(row):
 def _load_selector_data(current_only: bool = True):
     """current_only=True(최신기준)면 현재 소속자만, False(누적기준)면 전배·퇴사
     등으로 최신 인력현황에 없는 사람까지 전부 포함해 검색 옵션을 만든다.
-    dept_opts(조직 드롭다운)는 항상 전체(all-time) 부서 목록으로 만들어 모드가
-    바뀌어도 그 자체는 다시 계산할 필요가 없게 한다."""
+    dept_opts('부서' 드롭다운)는 항상 전체(all-time) 부서 목록으로 만들어
+    모드가 바뀌어도 그 자체는 다시 계산할 필요가 없게 한다.
+
+    부서 목록/그룹핑은 researchers.csv의 원본 department 컬럼이 아니라
+    services.similarity_map(team_refer 기반, "연구원 명단" 화면의 '부서'
+    필터와 동일한 기준)을 그대로 쓴다 — 두 화면의 '부서' 옵션·데이터가
+    항상 같은 원천을 보도록 하기 위함(사용자 확정)."""
     try:
-        full_df = read_processed('researchers').sort_values(['department', 'name'])
+        full_df = read_processed('researchers')
         if full_df.empty:
             return [], [], {}
         res_df = filter_current(full_df, current_only)
 
-        all_opts = [_opt(row) for _, row in res_df.iterrows()]
-        by_dept = {
-            dept: [_opt(row) for _, row in grp.iterrows()]
-            for dept, grp in res_df.groupby('department', sort=True)
-        }
-        dept_opts = [{'label': '전체', 'value': ''}] + [
-            {'label': d, 'value': d} for d in sorted(full_df['department'].dropna().unique()) if d
-        ]
+        all_opts = [_opt(row) for _, row in res_df.sort_values(['department', 'name']).iterrows()]
+
+        dept_opts = similarity_map.department_filter_options()
+        by_dept = {}
+        for opt in dept_opts:
+            dep_name = opt['value']
+            org_codes = similarity_map.org_codes_for_dep_names([dep_name])
+            grp = res_df[res_df['org_code'].isin(org_codes)] if 'org_code' in res_df.columns else res_df.iloc[0:0]
+            by_dept[dep_name] = [_opt(row) for _, row in grp.sort_values(['department', 'name']).iterrows()]
+        dept_opts = [{'label': '전체', 'value': ''}] + dept_opts
+
         return dept_opts, all_opts, by_dept
     except Exception:
         return [], [], {}
@@ -269,7 +279,7 @@ def layout(id=None, ids=None, **_kwargs):
                 res_df = read_processed('researchers')
                 match = res_df[res_df['researcher_id'] == id]
                 if not match.empty:
-                    default_dept = str(match.iloc[0].get('department', ''))
+                    default_dept = similarity_map.dep_name_for_org_code(str(match.iloc[0].get('org_code', '')))
                     res_opts = by_dept.get(default_dept, all_opts)
             except Exception:
                 pass
@@ -413,7 +423,7 @@ def _selector_card(dept_opts, res_opts, default_dept, default_rid, default_mode=
                     ),
                 ], width='auto'),
                 dbc.Col([
-                    dbc.Label('조직', className='fw-semibold small text-muted mb-1'),
+                    dbc.Label('부서', className='fw-semibold small text-muted mb-1'),
                     dcc.Dropdown(
                         id='dept-select',
                         options=dept_opts,
@@ -493,6 +503,9 @@ def _photo_info_card(show_eval: bool = True):
                     html.Hr(className='my-2'),
                     html.P('시상 이력', className='section-label'),
                     html.Div(id='award-block'),
+                    html.Hr(className='my-2'),
+                    html.P('근무 경력', className='section-label'),
+                    html.Div(id='work-experience-block'),
                 ], md=8, className='p-3 border-start',
                    style={'maxHeight': f'{PHOTO_INFO_HEIGHT - 40}px', 'overflowY': 'auto'}),
             ], className='g-0 h-100'),
@@ -621,7 +634,7 @@ def _card(children, *, body_class='p-2', card_class='shadow-sm profile-card mb-2
 def _empty_profile_output():
     prompt = html.Div('연구원을 선택하세요.', className='text-muted p-3')
     return (
-        avatar('?'), html.Div(), html.Div(), html.Div(), html.Div(),
+        avatar('?'), html.Div(), html.Div(), html.Div(), html.Div(), html.Div(),
         [], None, html.Div(), prompt, prompt, prompt, html.Div(), html.Div(),
         True,  # print-ready — 인쇄할 내용은 없지만 대기할 것도 없다.
     )
@@ -1040,8 +1053,17 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
         bd = date.fromisoformat(birth_date_str[:10])
         birth_label = f'{bd.year}년 {bd.month}월 {bd.day}일'
     else:
-        birth_year = str(researcher.get('birth_year', '') or '').strip()
-        birth_label = f'{birth_year}년생' if birth_year.isdigit() else '-'
+        # birth_year는 researchers.csv를 read_processed()로 읽을 때
+        # researcher_id 외 dtype을 지정하지 않아, 다른 사람 행에 NaN이
+        # 하나라도 있으면 컬럼 전체가 float로 추론돼 "1990.0"처럼 소수점이
+        # 붙어 들어온다 — str(v).isdigit()는 이걸 숫자로 인정하지 않으므로
+        # int(float(...))로 안전하게 파싱한다(2026-08-29, researcher_profile_
+        # export.py의 _birth_year_int()와 동일한 원인/해결).
+        birth_year_raw = str(researcher.get('birth_year', '') or '').strip()
+        try:
+            birth_label = f'{int(float(birth_year_raw))}년생' if birth_year_raw else '-'
+        except (TypeError, ValueError):
+            birth_label = '-'
     current_task = _current_task_label(tables['tasks'], rid)
 
     info_rows = [
@@ -1160,6 +1182,11 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
         nurturing_block(tables['nurturing'], rid, show_empty_message=False, plain_style=True),
         html.Div(print_sub_heading('시상 이력'), className='mt-2 mb-1'),
         award_block(tables['awards'], rid, limit=3, single_line=True, show_empty_message=False, plain_style=True),
+        html.Div(print_sub_heading('근무 경력'), className='mt-2 mb-1'),
+        # 인쇄 카드는 지면이 좁아 최근 1건만(사용자 확정, 2026-08-29) —
+        # 화면(라이브) 탭은 전체를 보여줌(update_profile() 콜백 쪽).
+        work_experience_block(tables['work_experience'], rid, limit=1, single_line=True,
+                               show_empty_message=False, plain_style=True),
     ]))
 
     # 핵심기술/보유기술이 위 right_box로 옮겨간 만큼, 전문성 요약(LLM)은 이제
@@ -1306,7 +1333,7 @@ def _render_history_chips(history):
     prevent_initial_call=True,
 )
 def _select_from_history(n_clicks_list, ids):
-    """"최근 검색" 칩을 누르면 그 사람의 부서로 조직 드롭다운을 같이 옮겨줘야
+    """"최근 검색" 칩을 누르면 그 사람의 부서로 '부서' 드롭다운을 같이 옮겨줘야
     (layout()의 id= 딥링크와 동일한 이유로) researcher-select 옵션 목록에 그
     사람이 실제로 들어있는 상태가 된다 — 부서만 안 맞추면 필터링된 옵션에서
     빠져 있어 선택이 무시될 수 있다."""
@@ -1319,7 +1346,7 @@ def _select_from_history(n_clicks_list, ids):
     rid = triggered_id['rid']
     res_df = read_processed('researchers')
     match = res_df[res_df['researcher_id'] == rid]
-    dept = str(match.iloc[0].get('department', '') or '') if not match.empty else None
+    dept = similarity_map.dep_name_for_org_code(str(match.iloc[0].get('org_code', ''))) if not match.empty else None
     return (dept or None), rid
 
 
@@ -1354,6 +1381,7 @@ def _build_print_block(rid, tables, researchers, name_map, show_eval):
     Output('eval-incentive-block', 'children'),
     Output('nurturing-block', 'children'),
     Output('award-block', 'children'),
+    Output('work-experience-block', 'children'),
     Output('leadership-year', 'options'),
     Output('leadership-year', 'value'),
     Output('comments-block', 'children'),
@@ -1418,6 +1446,7 @@ def update_profile(rid):
             eval_content,
             nurturing_block(tables['nurturing'], rid),
             award_block(tables['awards'], rid),
+            work_experience_block(tables['work_experience'], rid),
             leadership_options,
             leadership_default,
             comments_content,

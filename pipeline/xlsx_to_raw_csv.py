@@ -21,8 +21,12 @@ Windows + Microsoft Excel 설치 PC에서 실행한다(xlwings가 Excel COM으�
 import os
 import sys
 
+import pandas as pd
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from excel_reader import read_xlsx
+from raw_archive import archive_raw_file
+from source_files import find_matches, is_wildcard
 from sources import SOURCES
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -30,21 +34,60 @@ RAW_DIR = os.path.join(BASE_DIR, 'data', 'raw')
 RAW_CSV_DIR = os.path.join(BASE_DIR, 'data', 'raw_csv')
 
 
+def _resolve(raw_dir: str, pattern) -> list[str]:
+    """와일드카드 패턴(예: 인력현황 다운로드 파일들)이 있으면 매칭되는 파일을
+    전부 찾아 mtime 오름차순으로 반환한다. 패턴이 아니면(고정 파일명) 그
+    파일이 있을 때만 [경로] 하나를 반환한다."""
+    if is_wildcard(pattern):
+        return find_matches(raw_dir, pattern)
+    single = os.path.join(raw_dir, pattern)
+    return [single] if os.path.exists(single) else []
+
+
 def run():
     os.makedirs(RAW_CSV_DIR, exist_ok=True)
     converted, missing = [], []
 
-    for name, filename, header_row in SOURCES:
-        src_path = os.path.join(RAW_DIR, filename)
-        if not os.path.exists(src_path):
-            print(f'  [SKIP] {filename} 없음')
-            missing.append(filename)
-            continue
+    print('── job_profile 원천 사전 병합 ──')
+    from merge_job_profile_source import run as merge_job_profile
+    merge_job_profile(RAW_DIR)
 
-        print(f'  [READ] {filename} (header_row={header_row})')
-        df = read_xlsx(src_path, header_row=header_row)
+    for entry in SOURCES:
+        name, pattern, header_row = entry[0], entry[1], entry[2]
+        multi = entry[3] if len(entry) > 3 else False
+
+        src_paths = _resolve(RAW_DIR, pattern)
+        if not src_paths:
+            print(f'  [SKIP] {pattern} 없음')
+            missing.append(pattern)
+            continue
+        if not multi and len(src_paths) > 1:
+            chosen = src_paths[-1]
+            print(f'  [INFO] {pattern} 후보 {len(src_paths)}개 중 최신 파일 선택: '
+                  f'{os.path.basename(chosen)}')
+            src_paths = [chosen]
+
+        # 이번 실행에 실제로 쓰인 원본은 변환 전에 무제한 보관 아카이브에도
+        # 남긴다(사용자 확정, data/processed/CLAUDE.md 2026-08-27 참고) —
+        # 나중에 처리 로직 버그를 발견해도 그 시점 원본으로 재처리할 수 있게.
+        # 아카이브 실패가 변환 자체를 막으면 안 되므로 실패해도 무시하고 계속.
+        for src_path in src_paths:
+            try:
+                archive_raw_file(src_path, category=name)
+            except OSError as exc:
+                print(f'  [WARN] 원본 아카이브 실패(무시하고 계속) {src_path}: {exc}')
+
+        if len(src_paths) == 1:
+            print(f'  [READ] {os.path.basename(src_paths[0])} (header_row={header_row})')
+            df = read_xlsx(src_paths[0], header_row=header_row)
+        else:
+            print(f'  [READ] {pattern} — {len(src_paths)}개 파일 합침(mtime 오름차순): '
+                  f'{[os.path.basename(p) for p in src_paths]}')
+            dfs = [read_xlsx(p, header_row=header_row) for p in src_paths]
+            df = pd.concat([d for d in dfs if not d.empty], ignore_index=True, sort=False)
+
         if df.empty:
-            print(f'  [WARN] {filename} 읽은 결과가 비어 있습니다 — 건너뜀')
+            print(f'  [WARN] {pattern} 읽은 결과가 비어 있습니다 — 건너뜀')
             continue
 
         out_path = os.path.join(RAW_CSV_DIR, f'{name}.csv')

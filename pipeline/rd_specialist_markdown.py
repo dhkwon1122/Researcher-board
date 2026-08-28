@@ -39,7 +39,73 @@ def group_ordered(items: list, key_fn) -> list:
 # 사이드바에 공통으로 쓰는 확장/축소 가능한 조직도 트리 인프라.
 
 
-def read_team_refer(out_dir: str) -> list:
+def _date_key(row: dict) -> tuple:
+    return (
+        str(row.get('valid_year') or '').zfill(4),
+        str(row.get('valid_month') or '').zfill(2),
+        str(row.get('valid_day') or '').zfill(2),
+    )
+
+
+def _latest_current_rows(rows: list) -> list:
+    """team_refer는 (dep_id, valid_year, valid_month, valid_day) 자연키로
+    계속 누적되는 테이블이다(process_team_refer.py 모듈 docstring 참고) —
+    dep_id별로 가장 최근 날짜의 행만 "현재" 상태로 취급하고, 그 최신 행이
+    deleted='Y'(관리자 화면에서 삭제 처리)면 그 dep_id는 아예 제외한다.
+    전체 파일에서 단일 최신 날짜를 고르지 않고 dep_id별로 독립 판정하는
+    이유: 오늘 조직 하나만 고쳐 저장해도 나머지 dep_id는 각자의 마지막
+    저장 시점 값 그대로 정상 노출되어야 하기 때문(전체 기준으로 하면 이번에
+    건드리지 않은 나머지 조직이 전부 "사라진 것"처럼 판정돼버린다).
+    valid_year 컬럼이 없는 옛 스키마 데이터는 필터 없이 그대로 통과시킨다."""
+    if not rows or not any('valid_year' in r for r in rows):
+        return rows
+
+    latest_by_dep: dict = {}
+    for row in rows:
+        dep_id = (row.get('dep_id') or '').strip()
+        if not dep_id:
+            continue
+        if dep_id not in latest_by_dep or _date_key(row) > _date_key(latest_by_dep[dep_id]):
+            latest_by_dep[dep_id] = row
+
+    return [row for row in latest_by_dep.values() if str(row.get('deleted') or '').strip().upper() != 'Y']
+
+
+def _period_bound_key(d) -> tuple:
+    return (f'{d.year:04d}', f'{d.month:02d}', f'{d.day:02d}')
+
+
+def _latest_rows_in_period(rows: list, start, end) -> list:
+    """_latest_current_rows()의 기간(period) 버전(2026-08-29 추가) — 파일
+    전체에서 가장 최근 날짜가 아니라, [start, end] 구간 안에서 dep_id별
+    가장 최근 스냅샷만 "그 기간 기준 현재" 상태로 취급한다(연구원 명단
+    화면의 '누적기준 + 기간 지정' 조회, pages/researcher_list.py의
+    _resolve_period_snapshot()과 동일한 발상 — researchers_history.csv/
+    evaluations_history.csv에 이미 적용된 것과 같은 원리를 team_refer에도
+    적용). 구간 안에 스냅샷이 하나도 없는 dep_id는 제외한다(그 기간에 이
+    조직이 있었는지 이 데이터로는 알 수 없으므로). 구간 안 최신 스냅샷이
+    deleted='Y'면(그 기간 중 삭제 처리됨) 그 dep_id도 제외한다.
+    valid_year 컬럼이 없는 옛 스키마 데이터는 필터 없이 그대로 통과시킨다
+    (_latest_current_rows()와 동일한 폴백)."""
+    if not rows or not any('valid_year' in r for r in rows):
+        return rows
+
+    start_key, end_key = _period_bound_key(start), _period_bound_key(end)
+    latest_by_dep: dict = {}
+    for row in rows:
+        dep_id = (row.get('dep_id') or '').strip()
+        if not dep_id:
+            continue
+        key = _date_key(row)
+        if not (start_key <= key <= end_key):
+            continue
+        if dep_id not in latest_by_dep or key > _date_key(latest_by_dep[dep_id]):
+            latest_by_dep[dep_id] = row
+
+    return [row for row in latest_by_dep.values() if str(row.get('deleted') or '').strip().upper() != 'Y']
+
+
+def read_team_refer(out_dir: str, period: tuple | None = None) -> list:
     """team_refer.csv(또는 DB 테이블 team_refer)를 dict 리스트로 반환한다
     (build_org_tree()가 dep_id/upper_dep_id로 부모-자식 관계를 판단하므로
     행 순서는 무관). DB(DATABASE_URL)가 설정돼 있으면 services.data_store.
@@ -50,7 +116,15 @@ def read_team_refer(out_dir: str) -> list:
     data/processed/CLAUDE.md 2026-08-19 참고). 앱 서버에 team_refer.csv가
     없어도(DB만 붙어 있어도) 조직도가 정상적으로 만들어지도록 DB를 우선
     시도한다. 파일도 DB도 없으면 빈 리스트(호출부가 조직도 없이 기존
-    방식으로 폴백할 수 있도록)."""
+    방식으로 폴백할 수 있도록).
+
+    period=(시작일, 종료일)을 주면 _latest_rows_in_period()로 그 기간 기준
+    dep_id별 최신 스냅샷만 남기고, 생략하면 기존처럼 _latest_current_rows()로
+    파일 전체 기준 "현재" 상태만 남긴다(2026-08-29 추가 — 기본값은 이전과
+    동일하게 동작해 다른 호출부에 영향 없음)."""
+    def _pick(rows: list) -> list:
+        return _latest_rows_in_period(rows, period[0], period[1]) if period else _latest_current_rows(rows)
+
     try:
         _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         if _project_root not in sys.path:
@@ -62,7 +136,7 @@ def read_team_refer(out_dir: str) -> list:
             # 나머지 컬럼의 빈 셀은 (DB 경로가 아니라 CSV 폴백 경로일 때) NaN으로
             # 남긴다 — build_org_tree()가 upper_dep_id 등에 바로 .strip()을
             # 호출하므로 여기서 직접 한 번 더 채워야 안전하다.
-            return df.fillna('').to_dict('records')
+            return _pick(df.fillna('').to_dict('records'))
     except Exception:
         pass
 
@@ -71,7 +145,7 @@ def read_team_refer(out_dir: str) -> list:
         return []
     import pandas as pd
     df = pd.read_csv(path, encoding='utf-8-sig', dtype=str).fillna('')
-    return df.to_dict('records')
+    return _pick(df.to_dict('records'))
 
 
 def build_org_tree(rows: list) -> list:
@@ -80,11 +154,15 @@ def build_org_tree(rows: list) -> list:
     파일에 적힌 행 순서와 무관하게 정확한 계층을 구성한다(예전 team_layer
     스택 방식은 엑셀이 계층 순서대로 적혀 있다는 전제가 깨지면 잘못된 트리가
     만들어졌음). upper_dep_id가 비어 있거나, 가리키는 dep_id가 데이터에 없으면
-    최상위 노드로 취급한다. 각 노드의 자식들은 code3(조직 위계·표시 순서 코드)
-    오름차순으로 정렬한다.
+    최상위 노드로 취급한다. 각 노드의 자식들은 dep_code(조직 위계·표시 순서
+    코드, 구 code3) 오름차순으로 정렬한다.
     반환: 최상위 노드 리스트, 각 노드는
-      {project_name, end_name, team_layer(int), researcher_id, name,
-       assignment_name, code3, dep_id, upper_dep_id, children: [...]}"""
+      {org_name_wd, work_type, dep_name, pjt_part_name, team_layer(int),
+       researcher_id, name, assignment_name, dep_code, dep_id, upper_dep_id,
+       children: [...]}
+    노드 라벨(org_tree_html._label)은 pjt_part_name만 사용한다 — dep_name은
+    "연구원 명단" 화면의 부서 검색 필터 표시값 전용이라 트리 렌더링에는
+    관여하지 않는다."""
     nodes: list = []
     nodes_by_id: dict = {}
     for row in rows:
@@ -107,7 +185,7 @@ def build_org_tree(rows: list) -> list:
         (parent['children'] if parent is not None else roots).append(node)
 
     def _sort(items: list):
-        items.sort(key=lambda n: n.get('code3', ''))
+        items.sort(key=lambda n: n.get('dep_code', ''))
         for n in items:
             _sort(n['children'])
 
@@ -156,7 +234,7 @@ def nav_items_html(items: list) -> str:
 
 def org_tree_html(tree: list, node_content_fn=None) -> str:
     """조직도를 <details>/<summary> 중첩 구조로 렌더링한다(JS 없이 클릭으로
-    확장/축소). 라벨은 '{과제명통일}({직책} {성명})' 형식(예: '기계시스템연구팀
+    확장/축소). 라벨은 '{과제/파트}({직책} {성명})' 형식(예: '기계시스템연구팀
     (PL 정재원)'). node_content_fn(node) -> str|None: 해당 조직 노드에 붙일
     추가 콘텐츠(nav_items_html로 만든 연구원/과제 목록 등) — 없으면 생략.
     team_layer 1~2(상위 조직)는 기본으로 펼쳐서 보여준다. 자신에게도, 하위
@@ -165,7 +243,7 @@ def org_tree_html(tree: list, node_content_fn=None) -> str:
     구경만 하게 두지 않기 위함. 하위 노드들은 .org-node-body로 감싸 들여쓰기
     (padding-left/border-left, CONSOLE_STYLE 참고)가 적용되게 한다."""
     def _label(node: dict) -> str:
-        head = html.escape(node.get('end_name') or node.get('project_name') or '')
+        head = html.escape(node.get('pjt_part_name') or '')
         assignment = (node.get('assignment_name') or '').strip()
         person = (node.get('name') or '').strip()
         who = f'{assignment} {person}'.strip()
@@ -710,7 +788,16 @@ def coverage_stat(analyzed: int, total: int, label: str) -> tuple:
     return (value, label)
 
 
-def generated_at_stat() -> tuple:
-    """리포트를 실제로 생성한 시각(이 함수가 호출되는 시점) — 화면이 "언제 기준"
-    데이터인지 한눈에 보여주기 위한 스탯 카드 하나."""
-    return (datetime.now().strftime('%Y-%m-%d %H:%M'), '마지막 갱신')
+def generated_at_stat(computed_at: str | None) -> tuple:
+    """이 리포트가 근거로 삼은 LLM 분석이 실제로 마지막으로 계산·저장된
+    시각 — process_researcher_expertise.py/process_researcher_similarity.py의
+    process()가 결과 JSON을 저장할 때 각 항목에 함께 찍어 둔 computed_at
+    값을 그대로 보여준다. 화면(pages/researcher_similarity_map.py)은 탭을
+    열 때마다 build_html()을 그 자리에서 다시 렌더링하므로, 예전처럼 이
+    함수가 호출되는 시점(datetime.now())을 찍으면 탭을 열기만 해도 "방금
+    갱신됨"으로 보여 실제 분석 시점과 완전히 다른 값이 표시되는 문제가
+    있었다(사용자 지적, data/processed/CLAUDE.md 참고) — 이제는 저장된
+    값을 그대로 보여주므로 탭을 몇 번을 열어도 값이 그대로다. 예전 JSON
+    (이 필드가 생기기 전에 저장된 파일)은 값이 없으므로, 그 경우 파이프라인
+    재실행이 필요하다는 안내를 함께 보여준다."""
+    return (computed_at or '알 수 없음(파이프라인 재실행 필요)', '마지막 갱신')

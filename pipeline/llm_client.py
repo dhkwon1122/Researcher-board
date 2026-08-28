@@ -91,6 +91,16 @@ def _record_truncation():
         _truncation_count += 1
 
 
+def is_configured() -> bool:
+    """LLM2_API_URL이 설정돼 있는지만 빠르게 확인한다(실제 접속 가능 여부는
+    확인하지 않음). call_llm()은 미설정이든 접속 실패든 똑같이 빈 문자열을
+    반환해 호출부가 구분할 수 없었는데, 화면에서 실시간으로 응답을 기다리는
+    호출부(services/nl_query.py)가 "지금 요청이 많아 실패했다"는 오해의
+    소지가 있는 안내 대신 "설정이 안 됐다"는 정확한 안내를 보여주려면 이
+    구분이 필요하다 — call_llm()을 실제로 호출하기 전에 미리 확인하는 용도."""
+    return bool(os.environ.get('LLM2_API_URL', '').strip())
+
+
 def max_concurrency() -> int:
     """설정된 동시 호출 허용치. run_concurrent()로 여러 건을 한꺼번에 넘길 때
     스레드풀 크기를 이 값에 맞추면 된다(세마포어 자체는 call_llm() 내부에서
