@@ -47,6 +47,7 @@ import json
 import os
 import re
 import sys
+from datetime import date
 
 import pandas as pd
 
@@ -61,6 +62,9 @@ from services import data_store  # noqa: E402
 from services import query_settings  # noqa: E402
 from services import researcher_profile_export as rpe  # noqa: E402
 from services import text2sql  # noqa: E402
+from services.evaluations import (  # noqa: E402
+    evaluation_years, first_half_column, salary_grade_column, second_half_column,
+)
 from services.llm import LLMError  # noqa: E402
 
 DISPLAY_LIMIT = 1000
@@ -281,9 +285,42 @@ def _parse_gen_response(raw: str) -> dict | None:
     }
 
 
+def _evaluation_period_hint(period: tuple[str, str]) -> str:
+    """evaluations/evaluations_history의 연봉등급·상하반기업적 컬럼명은
+    회계연도(매년 3월 시작)를 그대로 담아({연도}_salary_grade 등) 만들어지므로,
+    "2023년 평가가 어땠는지" 같은 질문에 LLM이 어느 컬럼을 봐야 할지 그때그때
+    추론하게 두면 틀리기 쉽다(예: 실제로는 2023_salary_grade인데 2023년 =
+    calendar year로 착각해 다른 연도를 짚을 수 있음). period의 끝(=조회하려는
+    시점)을 기준으로 services.evaluations.evaluation_years()(process_tp_evaluation.py
+    /pages/researcher_list.py가 쓰는 것과 동일한 회계연도 계산, 2026-08-28
+    수정분과 같은 원리)로 실제 컬럼명을 미리 계산해 리터럴로 알려준다 — LLM이
+    "회계연도가 몇인지"를 스스로 추론할 필요 없이 이 목록에서 고르기만 하면
+    된다."""
+    try:
+        end_year, end_month = period[1].split('-')
+        target_date = date(int(end_year), int(end_month), 1)
+    except (ValueError, IndexError):
+        return ''
+    salary_years, half_years = evaluation_years(today=target_date)
+    salary_cols = ', '.join(f'"{salary_grade_column(y)}" (FY{y})' for y in sorted(salary_years))
+    half_cols = ', '.join(
+        f'"{first_half_column(y)}"/"{second_half_column(y)}" (FY{y})' for y in sorted(half_years)
+    )
+    return (
+        "\n- If the question is about evaluations/evaluations_history for this "
+        "period, the fiscal year is computed as: fiscal_year = valid_year if "
+        "valid_month >= 3 else valid_year - 1 (fiscal year starts every March). "
+        f"For the end of the requested period ({period[1]}), the actual salary "
+        f"grade columns to use are: {salary_cols}. The half-year performance "
+        f"grade columns are: {half_cols}. Pick the exact column name from this "
+        "list that matches the year the question asks about — do not guess a "
+        "column name yourself."
+    )
+
+
 def _period_or_current_rule(current_only: bool, period: tuple[str, str] | None) -> str:
     if period:
-        return _PERIOD_RULE_TEMPLATE.format(start=period[0], end=period[1])
+        return _PERIOD_RULE_TEMPLATE.format(start=period[0], end=period[1]) + _evaluation_period_hint(period)
     return _CURRENT_ONLY_RULE if current_only else _CUMULATIVE_RULE
 
 

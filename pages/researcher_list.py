@@ -2,6 +2,7 @@
 화면 3: 연구원 명단 (정량 지표 테이블)
 """
 
+import re
 from datetime import date, datetime
 from urllib.parse import parse_qs
 
@@ -31,22 +32,31 @@ _EVAL_SALARY_YEARS = sorted(evaluation_years()[0])
 _EVAL_GRADE_COLUMNS = [f"'{str(y)[-2:]}평가" for y in _EVAL_SALARY_YEARS]
 _INCENTIVE_COL = '인센티브'
 
+# 평가등급 컬럼 판별용 정규식 — 기간 지정(period) 조회 시에는 _EVAL_GRADE_COLUMNS
+# (오늘 기준 3개년)와 다른 연도의 컬럼("'23평가" 등)이 만들어질 수 있어(2026-08-28),
+# 권한 필터/조건부 색상 스타일 둘 다 이 패턴으로 "실제 df에 있는" 평가등급
+# 컬럼을 동적으로 찾아야 한다 — 고정 목록만 보면 기간 조회 시 권한 필터가
+# 그 컬럼을 못 찾아 평가등급이 권한 없이도 그대로 노출되는 문제가 생긴다.
+_EVAL_GRADE_PATTERN = re.compile(r"^'\d{2}평가$")
+
 # ── 학위 우선순위 ─────────────────────────────────────────────────────────────
 _DEGREE_RANK = {'박사': 5, '석사': 4, '학사': 3, '전문대': 2, '고교': 1}
 
 
-def _resolve_period_snapshot(period: tuple[date, date]) -> pd.DataFrame:
-    """researchers_history.csv에서 period=(시작일, 종료일) 구간에 속하는
-    (valid_year, valid_month) 스냅샷만 골라, researcher_id별로 그 구간 안에서
-    가장 최근 스냅샷 1행을 대표값으로 돌려준다 — "이 기간 동안 소속돼
-    있었고, 그 기간의 마지막 시점엔 이런 상태였다"는 의미(2026-08-28,
-    data/processed/CLAUDE.md 참고). 구간에 스냅샷이 하나도 없는 사람은
-    결과에서 빠진다(그 기간엔 존재를 확인할 수 없으므로).
+def _resolve_period_snapshot(period: tuple[date, date], table: str = 'researchers_history') -> pd.DataFrame:
+    """<table>(기본 researchers_history.csv, researcher_id+valid_year+
+    valid_month 자연키를 가진 이력 테이블이면 재사용 가능 — evaluations_
+    history.csv 등)에서 period=(시작일, 종료일) 구간에 속하는 (valid_year,
+    valid_month) 스냅샷만 골라, researcher_id별로 그 구간 안에서 가장 최근
+    스냅샷 1행을 대표값으로 돌려준다 — "이 기간 동안 소속돼 있었고, 그
+    기간의 마지막 시점엔 이런 상태였다"는 의미(2026-08-28, data/processed/
+    CLAUDE.md 참고). 구간에 스냅샷이 하나도 없는 사람은 결과에서 빠진다
+    (그 기간엔 존재를 확인할 수 없으므로).
 
     주의: 직책(team_refer 조회)은 항상 "현재" team_refer 기준이라 과거
-    시점과 다를 수 있다 — 이 함수가 반환하는 값은 어디까지나 researchers_
-    history.csv에 있는 컬럼(부서/직급/직무/재직상태 등)에 한한다."""
-    hist = read_processed('researchers_history')
+    시점과 다를 수 있다 — 이 함수가 반환하는 값은 어디까지나 그 이력
+    테이블에 있는 컬럼에 한한다."""
+    hist = read_processed(table)
     if hist.empty or not {'valid_year', 'valid_month'} <= set(hist.columns):
         return pd.DataFrame()
 
@@ -87,7 +97,20 @@ def _build_summary_df(current_only: bool = True, period: tuple[date, date] | Non
     연/월을 보여준다."""
     try:
         res  = _resolve_period_snapshot(period) if period else read_processed('researchers')
-        eva  = read_processed('evaluations')
+        # 평가등급도 기간이 주어지면 evaluations_history.csv에서 그 기간의
+        # 마지막 스냅샷을 쓴다(2026-08-28) — evaluations.csv/_history.csv는
+        # 회계연도(매년 3월 시작) 이름의 동적 컬럼이라({연도}_salary_grade),
+        # "그 시점 기준 최근 3개년"이 실제 오늘 기준과 다르면 컬럼명 자체가
+        # 달라진다. period[1](조회 기간의 끝)을 기준 시점으로 삼아 그 3개년
+        # 컬럼을 다시 계산한다 — process_tp_evaluation.py의 evaluation_years
+        # (valid_date=...) 수정과 동일한 원리.
+        if period:
+            eva = _resolve_period_snapshot(period, table='evaluations_history')
+            eval_salary_years = sorted(evaluation_years(today=period[1])[0])
+            eval_grade_columns = [f"'{str(y)[-2:]}평가" for y in eval_salary_years]
+        else:
+            eva = read_processed('evaluations')
+            eval_salary_years, eval_grade_columns = _EVAL_SALARY_YEARS, _EVAL_GRADE_COLUMNS
         pub  = read_processed('publications')
         pat  = read_processed('patents')
         awd  = read_processed('awards')
@@ -136,7 +159,7 @@ def _build_summary_df(current_only: bool = True, period: tuple[date, date] | Non
                 return '-'
             val = str(ev.get(salary_grade_column(yr), '') or '').strip()
             return val if val and val.lower() != 'nan' else '-'
-        grades = {col: _grade(yr) for col, yr in zip(_EVAL_GRADE_COLUMNS, _EVAL_SALARY_YEARS)}
+        grades = {col: _grade(yr) for col, yr in zip(eval_grade_columns, eval_salary_years)}
 
         # ── 인센티브 ───────────────────────────────────────────────────────
         sel = inc[inc['researcher_id'] == rid]
@@ -212,10 +235,13 @@ def _build_summary_df(current_only: bool = True, period: tuple[date, date] | Non
 
 
 def _apply_permission_filter(df: pd.DataFrame, show_eval: bool, show_incentive: bool) -> pd.DataFrame:
-    """평가/인센티브 열람 권한이 없으면 해당 컬럼을 통째로 제거한다."""
+    """평가/인센티브 열람 권한이 없으면 해당 컬럼을 통째로 제거한다.
+    평가등급 컬럼은 df에 실제로 있는 컬럼 중 _EVAL_GRADE_PATTERN에 맞는
+    것을 전부 찾아 지운다(고정 _EVAL_GRADE_COLUMNS만 보면, 기간 지정 조회로
+    다른 연도의 컬럼이 만들어졌을 때 권한 필터가 그 컬럼을 놓친다)."""
     drop = []
     if not show_eval:
-        drop.extend(_EVAL_GRADE_COLUMNS)
+        drop.extend(c for c in df.columns if _EVAL_GRADE_PATTERN.match(str(c)))
     if not show_incentive:
         drop.append(_INCENTIVE_COL)
     if not drop:
@@ -240,12 +266,41 @@ _GRADE_COLOR = {
     '라': ('#fde8d8', '#7d3c00'),
     '마': ('#f8d7da', '#721c24'),
 }
-_GRADE_STYLES = [
-    {'if': {'filter_query': f'{{{col}}} = {grade}', 'column_id': col},
-     'backgroundColor': bg, 'color': fg}
-    for col in _EVAL_GRADE_COLUMNS
-    for grade, (bg, fg) in _GRADE_COLOR.items()
+def _grade_styles_for(columns) -> list:
+    """주어진 컬럼id 목록 중 평가등급 컬럼(_EVAL_GRADE_PATTERN에 맞는 것)에
+    대해서만 조건부 색상 스타일을 만든다. 고정 _EVAL_GRADE_COLUMNS(오늘 기준
+    3개년) 대신 실제 표시되는 컬럼 기준으로 매번 계산해야, 기간 지정 조회로
+    다른 연도의 평가등급 컬럼("'23평가" 등)이 나와도 색상이 정상 적용된다
+    (2026-08-28 — 고정 목록만 쓰면 기간 조회 시 색상이 하나도 안 붙었다)."""
+    grade_cols = [c for c in columns if _EVAL_GRADE_PATTERN.match(str(c))]
+    return [
+        {'if': {'filter_query': f'{{{col}}} = {grade}', 'column_id': col},
+         'backgroundColor': bg, 'color': fg}
+        for col in grade_cols
+        for grade, (bg, fg) in _GRADE_COLOR.items()
+    ]
+
+
+_GRADE_STYLES = _grade_styles_for(_EVAL_GRADE_COLUMNS)
+
+# 순서 중요: style_data_conditional은 뒤에 오는 규칙이 같은 셀의 같은 속성을
+# 덮어쓴다(나중에 매치되는 규칙이 우선) — 홀수행 줄무늬(row_index: 'odd')가
+# 열 지정 없이 모든 셀에 적용되므로, 평가등급 색상(특정 열만 대상)보다
+# 먼저 와야 홀수행에서도 등급 색이 줄무늬 배경에 덮이지 않고 살아남는다.
+_BASE_STYLE_DATA_CONDITIONAL = [
+    {'if': {'row_index': 'odd'}, 'backgroundColor': '#f9fbfd'},
+    {'if': {'state': 'active'}, 'backgroundColor': '#dbeafe',
+     'border': '1px solid #3b82f6'},
 ]
+
+
+def _style_data_conditional_for(columns: list, show_eval: bool) -> list:
+    """`columns`(_build_columns()가 만든 dict 목록)에 실제로 포함된 평가등급
+    컬럼 기준으로 조건부 색상 스타일을 계산한다."""
+    if not show_eval:
+        return _BASE_STYLE_DATA_CONDITIONAL
+    col_ids = [c['id'] for c in columns]
+    return _BASE_STYLE_DATA_CONDITIONAL + _grade_styles_for(col_ids)
 
 
 # ── 필수 컬럼(사용자 확정) — AI 검색 없이도 항상 노출된다. 사번(researcher_id)은
@@ -377,7 +432,7 @@ def layout():
     employ_opts   = _filter_options(df, '재직상태')
 
     columns = _build_columns(display_df)
-    grade_styles = _GRADE_STYLES if show_eval else []
+    style_data_conditional = _style_data_conditional_for(columns, show_eval)
 
     return html.Div([
         dcc.Location(id='list-url', refresh=True),
@@ -607,16 +662,7 @@ def layout():
                         {'if': {'column_id': '부서'}, 'textAlign': 'left', 'minWidth': '100px'},
                         {'if': {'column_id': '과제'}, 'textAlign': 'left', 'minWidth': '100px'},
                     ],
-                    # 순서 중요: style_data_conditional은 뒤에 오는 규칙이 같은 셀의
-                    # 같은 속성을 덮어쓴다(나중에 매치되는 규칙이 우선) — 홀수행
-                    # 줄무늬(row_index: 'odd')가 열 지정 없이 모든 셀에 적용되므로,
-                    # grade_styles(평가등급 색상, 특정 열만 대상)보다 먼저 와야
-                    # 홀수행에서도 등급 색이 줄무늬 배경에 덮이지 않고 살아남는다.
-                    style_data_conditional=[
-                        {'if': {'row_index': 'odd'}, 'backgroundColor': '#f9fbfd'},
-                        {'if': {'state': 'active'}, 'backgroundColor': '#dbeafe',
-                         'border': '1px solid #3b82f6'},
-                    ] + grade_styles,
+                    style_data_conditional=style_data_conditional,
                     tooltip_header={col['id']: col['id'] for col in columns},
                     tooltip_data=_build_tooltip_data(display_df.to_dict('records') if not display_df.empty else []),
                     tooltip_delay=0,
@@ -703,6 +749,7 @@ def toggle_org_filters(mode, period_start, period_end):
     Output('researcher-table', 'tooltip_header'),
     Output('researcher-table', 'tooltip_data'),
     Output('researcher-table', 'selected_rows'),
+    Output('researcher-table', 'style_data_conditional'),
     Input('list-search-btn',   'n_clicks'),
     Input('filter-modal-apply-btn', 'n_clicks'),
     Input('clear-filters-btn', 'n_clicks'),
@@ -747,26 +794,29 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, 
             columns = _build_columns(display_df)
             tooltip_header = {c['id']: c['id'] for c in columns}
             records = display_df.to_dict('records')
-            return records, columns, tooltip_header, _build_tooltip_data(records), []
+            return (records, columns, tooltip_header, _build_tooltip_data(records), [],
+                    _style_data_conditional_for(columns, show_eval))
         merged_df, extra_ids, extra_labels = _merge_ai_result(display_df, ai_result)
         columns = _build_columns(merged_df, extra_ids=extra_ids, extra_labels=extra_labels)
         tooltip_header = {c['id']: c['id'] for c in columns}
         records = merged_df.to_dict('records')
-        return records, columns, tooltip_header, _build_tooltip_data(records), []
+        return (records, columns, tooltip_header, _build_tooltip_data(records), [],
+                _style_data_conditional_for(columns, show_eval))
 
     # 상세 필터(성별/학력/전공)로 값을 고르면 그 컬럼도 함께 보여준다.
     optional_values = dict(zip(_OPTIONAL_FILTER_COLUMNS, (gender, degree, major)))
     optional_ids = [col for col in _OPTIONAL_FILTER_COLUMNS if optional_values[col]]
     columns = _build_columns(display_df, optional_ids=optional_ids)
     tooltip_header = {c['id']: c['id'] for c in columns}
+    style_data_conditional = _style_data_conditional_for(columns, show_eval)
     if display_df.empty:
-        return [], columns, tooltip_header, [], []
+        return [], columns, tooltip_header, [], [], style_data_conditional
 
     # 모드 전환 자체가 트리거면(부서/과제/직급/직책 필터가 비활성화·초기화되는
     # 시점과 겹칠 수 있어) 조직 필터는 적용하지 않고 전체(해당 모드) 목록을 보여준다.
     if triggered in ('clear-filters-btn', 'list-search-mode'):
         records = display_df.to_dict('records')
-        return records, columns, tooltip_header, _build_tooltip_data(records), []
+        return records, columns, tooltip_header, _build_tooltip_data(records), [], style_data_conditional
 
     # 부서/과제·파트 필터는 team_refer의 dep_name/pjt_part_name을 라벨로 쓰지만,
     # 실제 매칭은 항상 org_name_wd(=researchers.csv의 org_code, 화면에는 안
@@ -793,7 +843,7 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, 
     if employment:
         display_df = display_df[display_df['재직상태'].isin(employment)]
     records = display_df.to_dict('records')
-    return records, columns, tooltip_header, _build_tooltip_data(records), []
+    return records, columns, tooltip_header, _build_tooltip_data(records), [], style_data_conditional
 
 
 # ── 콜백 3: 필터 초기화 버튼 → 드롭다운 값 비우기(메인 화면 + 필터 모달) ─────

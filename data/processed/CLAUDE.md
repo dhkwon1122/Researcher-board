@@ -5714,3 +5714,69 @@ valid_date)`로 호출하도록 수정(1줄 순서 변경 + 인자 하나 추가
 정상 반영되는 것 확인. `valid_date` 없이(일반 업로드, 오늘 날짜 파일)
 호출하는 기존 경로도 동일한 결과("2026/2025/2024_salary_grade" 등)로
 회귀 없이 그대로 동작하는 것 확인. `py_compile` 통과.
+
+## 2026-08-28 (50): (49)번의 "남은 과제" 두 건 마무리 — AI 검색 프롬프트에
+회계연도 매칭 규칙 명시 + 명단 화면 기간 지정 조회에 평가등급도 반영
+
+배경: (49)번에서 evaluations 파이프라인의 회계연도 버그를 고치며 남겨둔
+두 가지 후속 항목을 이어서 처리했다.
+
+**1) 명단 화면 기간 지정 조회 — 평가등급도 그 시점 기준으로**
+(`pages/researcher_list.py`): (46)번에서 만든 "누적기준 + 기간(날짜
+범위) 지정" 조회는 부서/직급 등은 `researchers_history.csv`로 그 시점
+값을 보여주면서도, 평가등급 열은 여전히 오늘 기준 `evaluations.csv`
+(`_EVAL_SALARY_YEARS`/`_EVAL_GRADE_COLUMNS`, 모듈 로드 시점에 고정)를
+그대로 썼다 — 설계 당시 범위를 의도적으로 좁혔던 부분. `_resolve_period_snapshot()`
+을 `researchers_history` 전용에서 `table` 매개변수를 받는 범용 함수로
+일반화해 `evaluations_history.csv`에도 재사용하고, `_build_summary_df()`가
+`period`가 주어지면 그 기간의 마지막 평가 스냅샷(`eva`)과, `period[1]`
+(조회 기간의 끝)을 기준 시점으로 삼아 다시 계산한 회계연도 3개년
+(`eval_salary_years`/`eval_grade_columns`, `evaluation_years(today=
+period[1])` — (49)번에서 고친 `process_tp_evaluation.py`와 동일한 원리)을
+쓰도록 했다. `grades = {...}` 조립부도 이 새 지역변수를 쓰도록 함께
+고쳤다(처음엔 지역변수만 만들어 놓고 이 조립부를 놓쳤던 실수를 바로
+잡음).
+
+**부수 발견·수정 2건**(위 변경 중 함께 드러난, 손대지 않으면 회귀가 될
+문제들):
+- `_apply_permission_filter()`가 평가등급 열람 권한이 없을 때 지울 컬럼을
+  고정 목록(`_EVAL_GRADE_COLUMNS`, 오늘 기준)으로만 찾고 있어서, 기간
+  지정 조회로 다른 연도의 컬럼("'23평가" 등)이 생기면 그 컬럼은 권한
+  필터를 피해 그대로 노출되는 실제 보안 문제가 있었다. 컬럼명 정규식
+  (`_EVAL_GRADE_PATTERN = re.compile(r"^'\d{2}평가$")`)으로 df에 실제
+  존재하는 평가등급 컬럼을 그때그때 찾아 지우도록 일반화했다.
+- 조건부 색상 스타일(`_GRADE_STYLES`)도 같은 이유로 모듈 로드 시점에
+  고정된 오늘 기준 컬럼에만 적용되고 있었다 — `_grade_styles_for(columns)`/
+  `_style_data_conditional_for(columns, show_eval)`로 일반화해, `layout()`
+  뿐 아니라 `update_table` 콜백도 매번 실제 표시되는 컬럼 기준으로 다시
+  계산하도록 새 `Output('researcher-table', 'style_data_conditional')`을
+  추가했다(기존엔 이 콜백에 이 Output 자체가 없어 layout 최초 렌더링
+  값이 이후 AI 검색 결과 등으로 컬럼이 바뀌어도 전혀 안 갱신되고
+  있었다 — 실질적으로는 죽은 기능이었던 것도 함께 바로잡음).
+
+**2) AI 검색 프롬프트 — 회계연도 매칭 규칙 명시**(`services/open_data_query.py`):
+`_PERIOD_RULE_TEMPLATE`(기간 지정 시 *_history 테이블/기간 내 최신
+스냅샷 사용을 지시하는 규칙)에 이어, 신규 `_evaluation_period_hint(period)`가
+`services.evaluations.evaluation_years(today=period[1]로 만든 date)`로
+그 기간에 실제로 대응하는 연봉등급/상하반기업적 컬럼명을 **미리 계산해
+리터럴로** 프롬프트에 박아 넣는다(LLM이 "회계연도가 몇인지"를 스스로
+추론하게 두지 않음 — 명단 화면·파이프라인과 동일한 단일 계산 로직을
+공유해 세 곳이 서로 다른 연도를 가리킬 위험을 없앴다). `_period_or_current_rule()`
+이 period가 있을 때 이 힌트를 기존 기간 규칙 뒤에 이어 붙인다.
+
+**검증**: `_resolve_period_snapshot(period, table='evaluations_history')`로
+합성 이력 데이터(2023-05/2026-08 두 스냅샷)를 읽어 기간(2023-05~2024-03)
+안의 최신 스냅샷이 정확히 골라지는지, `_build_summary_df(period=...)`가
+그 스냅샷의 회계연도 기준 컬럼("'22평가"/"'23평가"/"'24평가")과 값을
+정확히 조립하는지 확인. `_apply_permission_filter()`가 기간 지정으로
+생긴 "'23평가" 같은 컬럼도 정규식으로 찾아 권한 없을 때 실제로 지우는
+것 확인. `_style_data_conditional_for()`가 AI 검색 결과로 붙은 임의
+연도의 평가등급 컬럼에도 등급별 색상 규칙을 정확히 만들어내는 것 확인.
+`services/open_data_query.py`의 `_period_or_current_rule(True, ('2023-05',
+'2024-03'))`을 직접 호출해 기간 규칙 + 회계연도 힌트("FY2024" 기준
+2022~2024년 컬럼명, 2021~2023년 반기 컬럼명)가 정확히 렌더링되는 것 확인.
+변경된 두 파일 모두 `py_compile` 통과.
+
+**미검증**: 실제 사내 LLM을 통한 기간 지정 질문의 실제 SQL 생성(이
+프롬프트 힌트가 실제로 LLM의 컬럼 선택을 개선하는지는 사내 LLM 서버
+접근 환경에서 확인 필요), 실제 브라우저에서의 조작.
