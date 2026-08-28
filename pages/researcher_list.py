@@ -53,12 +53,12 @@ def _resolve_period_snapshot(period: tuple[date, date], table: str = 'researcher
     CLAUDE.md 참고). 구간에 스냅샷이 하나도 없는 사람은 결과에서 빠진다
     (그 기간엔 존재를 확인할 수 없으므로).
 
-    주의: 직책(team_refer 조회)은 항상 "현재" team_refer 기준이라 과거
-    시점과 다를 수 있다 — 이 함수가 반환하는 값은 어디까지나 그 이력
-    테이블에 있는 컬럼에 한한다."""
+    항상 'researcher_id' 컬럼이 있는 DataFrame을 반환한다(구간에 스냅샷이
+    하나도 없어도 0행짜리 빈 DataFrame — 완전히 빈 pd.DataFrame()을 반환하면
+    호출부의 `eva['researcher_id']`가 KeyError로 죽는다, 2026-08-29 발견·수정)."""
     hist = read_processed(table)
     if hist.empty or not {'valid_year', 'valid_month'} <= set(hist.columns):
-        return pd.DataFrame()
+        return pd.DataFrame(columns=['researcher_id'])
 
     start, end = period
     start_key = (start.year, start.month)
@@ -77,7 +77,10 @@ def _resolve_period_snapshot(period: tuple[date, date], table: str = 'researcher
     hist['_period_key'] = hist.apply(_period_key, axis=1)
     in_range = hist[hist['_period_key'].apply(lambda k: k is not None and start_key <= k <= end_key)]
     if in_range.empty:
-        return pd.DataFrame()
+        # 구간에 스냅샷이 하나도 없어도 in_range 자체엔 이미 원본 컬럼
+        # ('researcher_id' 포함)이 있으므로 그대로 반환한다(0행) — 완전히
+        # 빈 pd.DataFrame()을 반환하면 컬럼 자체가 없어 호출부가 죽는다.
+        return in_range.drop(columns=['_period_key'])
 
     # researcher_id별로 구간 내 최댓값(가장 최근) 스냅샷만 남긴다.
     in_range = in_range.sort_values(['researcher_id', '_period_key'])
@@ -116,26 +119,27 @@ def _build_summary_df(current_only: bool = True, period: tuple[date, date] | Non
         awd  = read_processed('awards')
         edu  = read_processed('education')
         inc  = read_processed('incentive_selection')
-        team = read_processed('team_refer')
     except Exception:
         return pd.DataFrame()
 
     if not period:
         res = filter_current(res, current_only)
 
-    # 직책 = team_refer.csv의 assignment_name(researcher_id 기준, 조직장급만
-    # 등록돼 있어 나머지는 매핑이 없음 — 그 경우 "-").
-    title_by_id = (
-        dict(zip(team['researcher_id'], team['assignment_name']))
-        if not team.empty and {'researcher_id', 'assignment_name'} <= set(team.columns) else {}
-    )
-
-    # 부서/과제(파트) 표시값 = researchers.csv의 org_code를 team_refer의
-    # dep_name/pjt_part_name으로 매핑(검색 기준의 부서/과제 필터와 동일한
-    # 기준으로 통일 — 사용자 확정). team_refer에 매핑이 없는 org_code는
-    # 원본 department/org_code 값을 그대로 보여준다(빈 칸으로 두면 데이터
+    # 직책 = team_refer의 assignment_name(researcher_id 기준, 조직장급만
+    # 등록돼 있어 나머지는 매핑이 없음 — 그 경우 "-"). 부서/과제(파트)
+    # 표시값 = researchers.csv의 org_code를 team_refer의 dep_name/
+    # pjt_part_name으로 매핑(검색 기준의 부서/과제 필터와 동일한 기준으로
+    # 통일 — 사용자 확정). team_refer에 매핑이 없는 org_code는 원본
+    # department/org_code 값을 그대로 보여준다(빈 칸으로 두면 데이터
     # 누락처럼 보이므로 — 사용자 확정).
-    dep_label_map, pjt_label_map = similarity_map.org_code_label_maps()
+    #
+    # period가 주어지면(누적기준 + 기간 지정) 셋 다 "오늘 기준"이 아니라
+    # 그 기간 기준(그 기간 안 dep_id별 최신 스냅샷) team_refer로 매핑한다
+    # (2026-08-29 추가 — 이전엔 team_refer 관련 매핑 전부가 항상 오늘
+    # 기준이라, 예를 들어 2023년 조직 개편 이전 시점을 조회해도 오늘
+    # 기준 조직명이 표시됐다).
+    title_by_id = similarity_map.title_by_researcher_id(period=period)
+    dep_label_map, pjt_label_map = similarity_map.org_code_label_maps(period=period)
 
     # 숫자 변환
     for col in ['pub_year', 'impact_factor', 'citation_count', 'contribution']:
@@ -824,11 +828,14 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, 
     # 표기와 다를 수 있어 라벨로 직접 비교하지 않는다(services.similarity_map
     # 참고). '과제' 컬럼 자체는 이제 표시용 pjt_part_name 라벨이라 이 매칭에
     # 쓸 수 없다(사용자 확정 — 명단 '과제/파트' 열을 team_refer 라벨로 표시).
+    # period가 주어지면(누적기준 + 기간 지정) 그 기간 기준 team_refer로
+    # 매칭한다(2026-08-29 추가) — 선택한 부서/과제 이름이 그 시점에 실제로
+    # 그 org_code를 가리켰는지 오늘 기준이 아니라 그 시점 기준으로 판단한다.
     if dept and filters_active:
-        org_codes = similarity_map.org_codes_for_dep_names(dept)
+        org_codes = similarity_map.org_codes_for_dep_names(dept, period=period)
         display_df = display_df[display_df['_org_code'].isin(org_codes)]
     if project and filters_active:
-        org_codes = similarity_map.org_codes_for_pjt_part_names(project)
+        org_codes = similarity_map.org_codes_for_pjt_part_names(project, period=period)
         display_df = display_df[display_df['_org_code'].isin(org_codes)]
     if pos and filters_active:
         display_df = display_df[display_df['직급'].isin(pos)]

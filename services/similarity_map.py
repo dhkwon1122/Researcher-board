@@ -385,14 +385,17 @@ def pjt_part_filter_options(dep_names=None) -> list:
     return [{'label': n, 'value': n} for n in names]
 
 
-def org_codes_for_dep_names(dep_names) -> set:
-    """선택된 dep_name(들)에 해당하는 team_refer 행들의 org_name_wd 집합."""
+def org_codes_for_dep_names(dep_names, period: tuple | None = None) -> set:
+    """선택된 dep_name(들)에 해당하는 team_refer 행들의 org_name_wd 집합.
+    period=(시작일, 종료일)을 주면 그 기간 기준(그 기간 안 dep_id별 최신
+    스냅샷)으로 매칭한다(2026-08-29 추가, pages/researcher_list.py의
+    '누적기준 + 기간 지정' 조회) — 생략하면 기존처럼 오늘 기준."""
     if not dep_names:
         return set()
     wanted = {dep_names} if isinstance(dep_names, str) else set(dep_names)
     return {
         (r.get('org_name_wd') or '').strip()
-        for r in read_team_refer(DATA_DIR)
+        for r in read_team_refer(DATA_DIR, period=period)
         if (r.get('dep_name') or '').strip() in wanted
     } - {''}
 
@@ -411,19 +414,40 @@ def dep_name_for_org_code(org_code: str) -> str:
     return ''
 
 
-def org_codes_for_pjt_part_names(pjt_part_names) -> set:
-    """선택된 pjt_part_name(들)에 해당하는 team_refer 행들의 org_name_wd 집합."""
+def org_codes_for_pjt_part_names(pjt_part_names, period: tuple | None = None) -> set:
+    """선택된 pjt_part_name(들)에 해당하는 team_refer 행들의 org_name_wd 집합.
+    period는 org_codes_for_dep_names()와 동일(2026-08-29 추가)."""
     if not pjt_part_names:
         return set()
     wanted = {pjt_part_names} if isinstance(pjt_part_names, str) else set(pjt_part_names)
     return {
         (r.get('org_name_wd') or '').strip()
-        for r in read_team_refer(DATA_DIR)
+        for r in read_team_refer(DATA_DIR, period=period)
         if (r.get('pjt_part_name') or '').strip() in wanted
     } - {''}
 
 
-def org_code_label_maps() -> tuple[dict, dict]:
+def title_by_researcher_id(period: tuple | None = None) -> dict:
+    """researcher_id(조직 단위 책임자의 사번) → assignment_name(직책) 매핑 —
+    team_refer 행 중 조직장급만 사번이 채워져 있다(process_team_refer.py
+    참고, 나머지는 매핑이 없어 이 dict에 키 자체가 없다). dep_id별 최신
+    (또는 period 지정 시 그 기간 기준 최신) 스냅샷만 쓰는 read_team_refer()를
+    거쳐, researcher_id가 있는 행만 추린다(2026-08-29 추가 — 이전엔
+    pages/researcher_list.py가 read_processed('team_refer')로 누적된
+    원본 테이블 전체를 그대로 dict(zip(...))해, "최신"을 명시적으로
+    판정하지 않고 CSV에 저장된 행 순서에 우연히 의존하고 있었다 —
+    read_team_refer()로 바꾸면 이 문제도 함께 해결되고, deleted='Y'
+    처리된 조직의 리더도 더 이상 매핑에 남지 않는다)."""
+    mapping: dict = {}
+    for r in read_team_refer(DATA_DIR, period=period):
+        rid = (r.get('researcher_id') or '').strip()
+        if not rid:
+            continue
+        mapping.setdefault(rid, (r.get('assignment_name') or '').strip())
+    return mapping
+
+
+def org_code_label_maps(period: tuple | None = None) -> tuple[dict, dict]:
     """researchers.csv의 org_code(=team_refer의 org_name_wd) 전체를 한 번에
     dep_name/pjt_part_name으로 매핑하는 dict 2개(org_code → dep_name,
     org_code → pjt_part_name)를 team_refer 한 번 순회로 만든다.
@@ -433,10 +457,13 @@ def org_code_label_maps() -> tuple[dict, dict]:
     화면 참고). 같은 org_code가 여러 team_refer 행에 걸쳐 있으면(정상
     데이터에서는 드묾) dep_name_for_org_code()와 동일하게 먼저 나온 값을
     쓴다. 매핑이 없는 org_code는 두 dict 어디에도 키가 생기지 않는다 —
-    호출부가 `.get(org_code, 원본값)`으로 폴백을 직접 처리한다."""
+    호출부가 `.get(org_code, 원본값)`으로 폴백을 직접 처리한다.
+
+    period=(시작일, 종료일)을 주면 그 기간 기준(그 기간 안 dep_id별 최신
+    스냅샷)으로 매핑한다(2026-08-29 추가) — 생략하면 기존처럼 오늘 기준."""
     dep_map: dict = {}
     pjt_map: dict = {}
-    for r in read_team_refer(DATA_DIR):
+    for r in read_team_refer(DATA_DIR, period=period):
         org_code = (r.get('org_name_wd') or '').strip()
         if not org_code:
             continue

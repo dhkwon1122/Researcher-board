@@ -71,7 +71,41 @@ def _latest_current_rows(rows: list) -> list:
     return [row for row in latest_by_dep.values() if str(row.get('deleted') or '').strip().upper() != 'Y']
 
 
-def read_team_refer(out_dir: str) -> list:
+def _period_bound_key(d) -> tuple:
+    return (f'{d.year:04d}', f'{d.month:02d}', f'{d.day:02d}')
+
+
+def _latest_rows_in_period(rows: list, start, end) -> list:
+    """_latest_current_rows()의 기간(period) 버전(2026-08-29 추가) — 파일
+    전체에서 가장 최근 날짜가 아니라, [start, end] 구간 안에서 dep_id별
+    가장 최근 스냅샷만 "그 기간 기준 현재" 상태로 취급한다(연구원 명단
+    화면의 '누적기준 + 기간 지정' 조회, pages/researcher_list.py의
+    _resolve_period_snapshot()과 동일한 발상 — researchers_history.csv/
+    evaluations_history.csv에 이미 적용된 것과 같은 원리를 team_refer에도
+    적용). 구간 안에 스냅샷이 하나도 없는 dep_id는 제외한다(그 기간에 이
+    조직이 있었는지 이 데이터로는 알 수 없으므로). 구간 안 최신 스냅샷이
+    deleted='Y'면(그 기간 중 삭제 처리됨) 그 dep_id도 제외한다.
+    valid_year 컬럼이 없는 옛 스키마 데이터는 필터 없이 그대로 통과시킨다
+    (_latest_current_rows()와 동일한 폴백)."""
+    if not rows or not any('valid_year' in r for r in rows):
+        return rows
+
+    start_key, end_key = _period_bound_key(start), _period_bound_key(end)
+    latest_by_dep: dict = {}
+    for row in rows:
+        dep_id = (row.get('dep_id') or '').strip()
+        if not dep_id:
+            continue
+        key = _date_key(row)
+        if not (start_key <= key <= end_key):
+            continue
+        if dep_id not in latest_by_dep or key > _date_key(latest_by_dep[dep_id]):
+            latest_by_dep[dep_id] = row
+
+    return [row for row in latest_by_dep.values() if str(row.get('deleted') or '').strip().upper() != 'Y']
+
+
+def read_team_refer(out_dir: str, period: tuple | None = None) -> list:
     """team_refer.csv(또는 DB 테이블 team_refer)를 dict 리스트로 반환한다
     (build_org_tree()가 dep_id/upper_dep_id로 부모-자식 관계를 판단하므로
     행 순서는 무관). DB(DATABASE_URL)가 설정돼 있으면 services.data_store.
@@ -84,9 +118,13 @@ def read_team_refer(out_dir: str) -> list:
     시도한다. 파일도 DB도 없으면 빈 리스트(호출부가 조직도 없이 기존
     방식으로 폴백할 수 있도록).
 
-    반환 직전에 _latest_current_rows()로 dep_id별 최신·비삭제 행만 남긴다 —
-    이 함수를 거치는 모든 호출부(build_org_tree() 등)는 항상 "현재" 조직
-    상태만 보게 된다."""
+    period=(시작일, 종료일)을 주면 _latest_rows_in_period()로 그 기간 기준
+    dep_id별 최신 스냅샷만 남기고, 생략하면 기존처럼 _latest_current_rows()로
+    파일 전체 기준 "현재" 상태만 남긴다(2026-08-29 추가 — 기본값은 이전과
+    동일하게 동작해 다른 호출부에 영향 없음)."""
+    def _pick(rows: list) -> list:
+        return _latest_rows_in_period(rows, period[0], period[1]) if period else _latest_current_rows(rows)
+
     try:
         _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         if _project_root not in sys.path:
@@ -98,7 +136,7 @@ def read_team_refer(out_dir: str) -> list:
             # 나머지 컬럼의 빈 셀은 (DB 경로가 아니라 CSV 폴백 경로일 때) NaN으로
             # 남긴다 — build_org_tree()가 upper_dep_id 등에 바로 .strip()을
             # 호출하므로 여기서 직접 한 번 더 채워야 안전하다.
-            return _latest_current_rows(df.fillna('').to_dict('records'))
+            return _pick(df.fillna('').to_dict('records'))
     except Exception:
         pass
 
@@ -107,7 +145,7 @@ def read_team_refer(out_dir: str) -> list:
         return []
     import pandas as pd
     df = pd.read_csv(path, encoding='utf-8-sig', dtype=str).fillna('')
-    return _latest_current_rows(df.to_dict('records'))
+    return _pick(df.to_dict('records'))
 
 
 def build_org_tree(rows: list) -> list:

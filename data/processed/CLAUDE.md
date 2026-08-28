@@ -5900,3 +5900,95 @@ float-string/정수문자열/NaN/빈값 5가지로 직접 호출해 기대값과
 **미검증**: 실제 T&P 원본 파일로 재업로드해 이미 저장된 데이터가 실제로
 소급 반영되는지(이 세션엔 실제 원본 파일이 없음 — 운영 환경에서 사용자가
 직접 확인 필요), 실제 브라우저에서의 평가 셀/엑셀 렌더링.
+
+## 2026-08-29 (2): 연구원 명단 기간 지정 조회에 team_refer(부서/과제/직책)도 반영
+
+배경: 바로 앞 항목에서 "명단 화면의 누적기준+기간 지정 조회 시 team_refer
+(부서/과제/직책 표시)도 그 시점 기준으로 찾아주는가"라는 질문에 "아니오,
+항상 오늘 기준"이라고 답했는데, 이어서 이것도 기간 조회가 되도록
+확장해달라는 요청.
+
+**`pipeline/rd_specialist_markdown.py`**: `_latest_current_rows()`(파일
+전체 기준 dep_id별 최신 행 선정)와 나란히 `_latest_rows_in_period(rows,
+start, end)` 신규 — 원리는 동일하되 "파일 전체에서 최신"이 아니라 "[start,
+end] 구간 안에서 dep_id별 최신"만 남긴다. 구간에 스냅샷이 하나도 없는
+dep_id는 제외(그 기간에 그 조직이 있었는지 알 수 없으므로), 구간 안 최신
+스냅샷이 `deleted='Y'`면 그 dep_id도 제외 — `pages/researcher_list.py`의
+`_resolve_period_snapshot()`(researchers_history/evaluations_history에 이미
+적용된 것)과 같은 발상이다. `read_team_refer(out_dir, period=None)`에
+`period` 매개변수를 추가해 지정 시 `_latest_rows_in_period()`를, 생략(기존
+호출부 전부 해당)하면 기존처럼 `_latest_current_rows()`를 쓴다 — 기본값이
+기존과 동일해 다른 호출부(조직도 사이드바, 팀/리더 참조 관리자 화면 등
+7곳)는 전혀 영향받지 않는다.
+
+**`services/similarity_map.py`**: 연구원 명단 화면이 실제로 쓰는 3개 함수
+`org_codes_for_dep_names()`/`org_codes_for_pjt_part_names()`/
+`org_code_label_maps()`에 `period=None` 매개변수를 추가해 `read_team_refer
+(DATA_DIR, period=period)`로 그대로 전달(드롭다운 옵션 자체를 만드는
+`department_filter_options()`/`pjt_part_filter_options()`는 대상에서
+제외 — 화면에 보여줄 선택지 자체를 기간별로 다르게 만드는 건 이번 요청
+범위 밖으로 판단, 실제 매칭·표시 로직만 기간을 반영). 신규
+`title_by_researcher_id(period=None)` — team_refer 행 중 사번이 채워진
+조직장급 행만 `{researcher_id: assignment_name}`으로 매핑.
+
+**부수 발견·수정(직책 매핑의 기존 잠재 버그)**: `pages/researcher_list.py`
+가 지금까지 직책(`title_by_id`)을 `read_processed('team_refer')`로 읽은
+원본 누적 테이블 전체를 그대로 `dict(zip(researcher_id, assignment_name))`
+해서 만들고 있었다 — dep_id별 "최신"을 명시적으로 비교하지 않고 CSV에
+저장된 행 순서(대체로 최근에 저장한 배치가 뒤에 옴)에 우연히 의존했고,
+`deleted='Y'`(관리자 화면에서 삭제 처리된 조직) 여부도 전혀 걸러내지
+않았다. `title_by_researcher_id()`(내부적으로 `read_team_refer()`를 거쳐
+명시적 날짜 비교 + deleted 제외를 적용)로 교체하면서 "현재(기간 미지정)"
+모드의 이 잠재 버그도 함께 해결됐다.
+
+**`pages/researcher_list.py`**: `_build_summary_df()`에서 `team =
+read_processed('team_refer')` 직접 읽기 + 수동 dict 조립을 제거하고
+`title_by_id = similarity_map.title_by_researcher_id(period=period)`/
+`dep_label_map, pjt_label_map = similarity_map.org_code_label_maps(period=
+period)`로 교체. `update_table()` 콜백의 부서/과제 필터 매칭
+(`org_codes_for_dep_names()`/`org_codes_for_pjt_part_names()`)에도
+`period=period`를 추가 — 기간을 지정한 상태에서 부서/과제 필터를 고르면,
+그 이름이 오늘이 아니라 그 시점에 실제로 가리켰던 org_code로 매칭된다.
+
+**부수 발견·수정(별개 버그, 오늘 작업 중 실제로 걸림)**:
+`_resolve_period_snapshot()`이 구간 안에 스냅샷이 하나도 없을 때(이력
+테이블 자체가 비어있거나, 그 구간에 아무도 없거나) 완전히 빈
+`pd.DataFrame()`(컬럼 자체가 없음)을 반환하고 있었다 — 호출부
+(`_build_summary_df()`의 `eva[eva['researcher_id'] == rid]`)는 그 컬럼이
+항상 있다고 가정하므로 `KeyError: 'researcher_id'`로 죽는다. 두 반환
+지점(테이블 자체가 비었거나 valid_year/valid_month가 없을 때, 구간에
+매칭되는 행이 없을 때) 모두 최소한 `researcher_id` 컬럼은 있는(0행)
+DataFrame을 반환하도록 수정 — evaluations_history.csv가 아직 비어있는
+상태(예: 이 기능을 막 배포한 직후, 아무도 T&P를 valid_date와 함께 올린
+적이 없는 경우)에서 기간 조회를 시도하면 화면 전체가 죽던 것을 막았다.
+
+**검증**: `_latest_rows_in_period()`를 조직 개편(같은 dep_id가 2022년엔
+"옛부서명", 2026년엔 "새부서명"으로 이름이 바뀐) 합성 데이터로 직접
+호출 — 2022~2023 구간 조회 시 "옛부서명"이, 2026 구간 조회 시 "새부서명"이
+나오는 것, 아직 생기지 않은 조직(2026년에만 존재)이 그 이전 구간 조회에는
+안 나오는 것, 구간 중 삭제(deleted='Y') 처리된 조직이 그 구간 조회에서
+제외되는 것을 확인. `_build_summary_df(period=(2022-01-01, 2023-12-31))`을
+같은 합성 데이터로 실행해 '부서'/'과제' 컬럼이 정확히 "옛부서명"/
+"옛과제팀"으로(오늘 기준 "새부서명"이 아니라) 나오는 것, `current_only=True`
+(기간 미지정)로는 여전히 "새부서명"이 나오는 것(회귀 없음)을 확인.
+`org_codes_for_dep_names(['옛부서명'], period=...)`가 그 시점의 org_code만
+정확히 반환하는 것, `title_by_researcher_id(period=...)`가 그 시점의
+조직장 사번만 반환하는 것(오늘 기준 조직장과 다름)을 확인. 이번에 함께
+고친 `_resolve_period_snapshot()`의 빈 DataFrame 버그도 evaluations_history.csv
+가 완전히 비어있는 상태로 기간 조회를 실행해 재현 후 수정 확인(수정 전엔
+`KeyError: 'researcher_id'`로 `_build_summary_df()` 전체가 죽었음). 변경된
+3개 파일(`pipeline/rd_specialist_markdown.py`/`services/similarity_map.py`/
+`pages/researcher_list.py`) 모두 `py_compile` 통과, 새로 추가한 `period`
+매개변수는 전부 기본값 `None`이라 기존 7곳의 다른 호출부(조직도 사이드바,
+팀/리더 참조 관리자 화면, 연구원 프로필 화면의 부서 드롭다운 기본값 등)는
+그대로 동작함을 `grep`으로 호출부 전수 확인.
+
+**의도적으로 범위에서 뺀 것**: 부서/과제 드롭다운의 "선택지 목록" 자체
+(`department_filter_options()`/`pjt_part_filter_options()`)는 여전히
+오늘 기준 team_refer로만 채워진다 — 기간을 바꿀 때마다 그 시점에만
+존재했던 부서명까지 선택지에 나타나게 하려면 옵션 자체를 서버 콜백으로
+다시 계산해야 해서(현재는 `layout()` 최초 렌더링 시 한 번만 만듦) 범위를
+넓히지 않았다. 다만 실제 매칭(어떤 org_code가 그 이름에 해당하는지)은
+기간을 반영하므로, 오늘 기준으로도 남아있는 이름을 고르면 결과는 정확히
+그 시점 기준으로 나온다 — 필요하면 옵션 목록도 기간별로 동적으로 만드는
+후속 작업을 진행할 수 있다.
