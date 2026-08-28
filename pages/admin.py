@@ -358,8 +358,11 @@ def _team_refer_tab() -> html.Div:
 _STATUS_COLORS = {'성공': 'success', '실패': 'danger', '실행중': 'info'}
 
 
-def _upload_box(key: str, slot: str, small_label: str = '') -> html.Div:
-    """단일 업로드 드롭존. slot: 'single'(대부분) | 'legacy'/'new'(직무이력 전용)."""
+def _upload_box(key: str, slot: str, small_label: str = '', multiple: bool = False) -> html.Div:
+    """단일 업로드 드롭존. slot: 'single'(대부분) | 'legacy'/'new'(직무이력 전용).
+    multiple=True(대량 백필 대상 항목만, needs_valid_date 참고)면 파일을
+    여러 개 한 번에 선택할 수 있다 — 파일명이 "_YYYYMM"으로 끝나는 것만
+    백필로 인식되고(pipeline/backfill_utils.py), 그 외는 무시된다."""
     return dcc.Upload(
         id={'type': 'du-upload', 'key': key, 'slot': slot},
         children=html.Div([
@@ -370,7 +373,7 @@ def _upload_box(key: str, slot: str, small_label: str = '') -> html.Div:
             'padding': '4px 8px', 'border': '1px dashed #adb5bd', 'borderRadius': '4px',
             'textAlign': 'center', 'cursor': 'pointer',
         },
-        multiple=False,
+        multiple=multiple,
     )
 
 
@@ -385,13 +388,30 @@ def _data_update_row(row: dict) -> html.Tr:
             _upload_box(key, 'new', '업로드'),
         ])
     else:
-        upload_cell = _upload_box(key, 'single')
+        upload_cell = _upload_box(key, 'single', multiple=row['needs_valid_date'])
 
     filenames = row['uploaded_filenames']
     filenames_view = (
         html.Div([html.Div(f, className='small') for f in filenames], className='mt-1')
         if filenames else html.Div('업로드된 파일 없음', className='small text-muted mt-1')
     )
+
+    # 대량 백필 대기 파일(파일명이 "_YYYYMM"으로 끝나는 것들, 2026-08-28) —
+    # 실행을 누르면 오래된 시점부터 순서대로 전부 반영된다.
+    backfill_view = None
+    if row['needs_valid_date'] and row.get('backfill_files'):
+        bf = row['backfill_files']
+        backfill_view = html.Div([
+            html.Div(
+                [html.I(className='bi bi-layers me-1'), f'백필 대기 {len(bf)}건 ({bf[0][1]} ~ {bf[-1][1]})'],
+                className='small text-info fw-semibold mt-1',
+            ),
+            html.Div(
+                '한 파일에 "_YYYYMM"(예: _202305)을 붙여 여러 개를 한 번에 올리면, '
+                '실행 시 오래된 시점부터 순서대로 전부 반영됩니다.',
+                className='text-muted', style={'fontSize': '0.68rem'},
+            ),
+        ])
 
     status = row['status']
     status_badge = (
@@ -420,6 +440,10 @@ def _data_update_row(row: dict) -> html.Tr:
                 id={'type': 'du-valid-date', 'key': key}, date=date.today().isoformat(),
                 display_format='YYYY-MM', className='d-block',
             ),
+            html.Div(
+                '파일명이 "_YYYYMM"으로 끝나는 백필 업로드에는 적용되지 않습니다(파일명의 날짜를 그대로 씀).',
+                className='text-muted', style={'fontSize': '0.65rem'},
+            ),
         ], className='mt-2')
         if row['needs_valid_date'] else None
     )
@@ -430,7 +454,7 @@ def _data_update_row(row: dict) -> html.Tr:
                  html.Div(row['hint'], className='text-muted', style={'fontSize': '0.72rem'}),
                  api_btn, valid_date_picker],
                 className='align-middle'),
-        html.Td([upload_cell, filenames_view], className='align-middle', style={'minWidth': '220px'}),
+        html.Td([upload_cell, filenames_view, backfill_view], className='align-middle', style={'minWidth': '220px'}),
         html.Td([
             dbc.Button(html.I(className='bi bi-download'), id={'type': 'du-download', 'key': key},
                        color='link', size='sm', disabled=not row['has_upload'], className='p-0'),
@@ -1042,20 +1066,39 @@ def data_update_on_upload(all_contents, all_filenames, all_ids):
     if idx is None or not all_contents[idx]:
         return no_update, no_update
 
-    filename = all_filenames[idx]
-    try:
-        _header, b64data = all_contents[idx].split(',', 1)
-        file_bytes = base64.b64decode(b64data, validate=True)
-    except (ValueError, TypeError):
-        return no_update, _alert(f'{filename}: 파일을 읽지 못했습니다.', 'danger')
-
-    if len(file_bytes) > wpr.MAX_UPLOAD_BYTES:
-        limit_mb = wpr.MAX_UPLOAD_BYTES // (1024 * 1024)
-        return no_update, _alert(f'{filename}: 파일이 너무 큽니다(최대 {limit_mb}MB).', 'danger')
+    # needs_valid_date 항목의 대량 백필 업로드는 dcc.Upload(multiple=True)라
+    # contents/filename이 리스트로 온다 — 그 외(기존 단일 업로드)는 문자열
+    # 그대로 온다. 둘 다 아래에서 같은 방식으로 처리하도록 리스트로 통일한다.
+    raw_contents = all_contents[idx]
+    raw_filenames = all_filenames[idx]
+    if isinstance(raw_contents, list):
+        contents_list, filenames_list = raw_contents, raw_filenames
+    else:
+        contents_list, filenames_list = [raw_contents], [raw_filenames]
 
     slot = None if trig['slot'] == 'single' else trig['slot']
-    wpr.save_upload(trig['key'], filename, file_bytes, slot=slot)
-    return _data_update_table(), _alert(f'{filename} 업로드 완료.', 'success')
+    ok_count, errors = 0, []
+    for filename, contents in zip(filenames_list, contents_list):
+        try:
+            _header, b64data = contents.split(',', 1)
+            file_bytes = base64.b64decode(b64data, validate=True)
+        except (ValueError, TypeError):
+            errors.append(f'{filename}: 파일을 읽지 못했습니다.')
+            continue
+        if len(file_bytes) > wpr.MAX_UPLOAD_BYTES:
+            limit_mb = wpr.MAX_UPLOAD_BYTES // (1024 * 1024)
+            errors.append(f'{filename}: 파일이 너무 큽니다(최대 {limit_mb}MB).')
+            continue
+        wpr.save_upload(trig['key'], filename, file_bytes, slot=slot)
+        ok_count += 1
+
+    if ok_count and not errors:
+        msg, color = f'{ok_count}개 파일 업로드 완료.' if ok_count > 1 else f'{filenames_list[0]} 업로드 완료.', 'success'
+    elif ok_count and errors:
+        msg, color = f'{ok_count}개 업로드 완료, {len(errors)}개 실패({"; ".join(errors[:3])})', 'warning'
+    else:
+        msg, color = '; '.join(errors[:3]) or '업로드에 실패했습니다.', 'danger'
+    return _data_update_table(), _alert(msg, color)
 
 
 # ── 콜백: 데이터 업데이트 — 전체/선택 실행 ─────────────────────────────────────

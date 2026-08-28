@@ -39,7 +39,9 @@ import importlib
 import io
 import json
 import os
+import shutil
 import sys
+import tempfile
 import threading
 import time
 from datetime import date, datetime
@@ -49,6 +51,7 @@ import pandas as pd
 _PIPELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'pipeline')
 sys.path.insert(0, os.path.abspath(_PIPELINE_DIR))
 
+from backfill_utils import parse_backfill_date  # noqa: E402
 from paths import BASE_DIR, OUT_DIR  # noqa: E402
 from raw_archive import archive_raw_bytes  # noqa: E402
 
@@ -158,12 +161,68 @@ def _key_dir(key: str) -> str:
     return d
 
 
+# ── 대량 소급 백필(2026-08-28) ────────────────────────────────────────────────
+# "관리자 지정 시점" 항목(needs_valid_date=True)만 대상 — 파일명 끝에
+# "_YYYYMM"이 있는 업로드는 이 폴더에 계속 누적되고(기존 슬롯처럼 삭제 후
+# 교체하지 않음), run_one()이 실행 시점에 오래된 순서로 하나씩 반영한다.
+# _key_dir(key)와 분리된 별도 위치를 쓰는 이유: uploaded_files()/has_upload()
+# 등 기존 "정규 업로드 슬롯" 로직이 이 폴더를 파일로 오인하지 않게 하기 위함.
+BACKFILL_ROOT = os.path.join(WEB_UPDATES_DIR, '_backfill')
+
+
+def _key_backfill_dir(key: str) -> str:
+    d = os.path.join(BACKFILL_ROOT, key)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def backfill_files(key: str) -> list[tuple[str, date]]:
+    """이 항목의 백필 대기 파일을 (전체경로, 파싱된 날짜) 튜플로, 날짜
+    오름차순(오래된 시점부터)으로 반환한다."""
+    d = _key_backfill_dir(key)
+    items = []
+    for p in glob.glob(os.path.join(d, '*')):
+        if not os.path.isfile(p):
+            continue
+        parsed = parse_backfill_date(os.path.basename(p))
+        if parsed:
+            items.append((p, parsed))
+    items.sort(key=lambda t: t[1])
+    return items
+
+
+def clear_backfill_files(key: str) -> None:
+    """실행이 끝난 백필 파일은 폴더에서 지운다(원본은 raw_archive에 이미
+    남아 있음, save_upload() 참고) — 다음 실행 때 같은 파일이 중복 반영되지
+    않게."""
+    for p, _ in backfill_files(key):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
+
 # ── 업로드 저장 ──────────────────────────────────────────────────────────────
 
 def save_upload(key: str, filename: str, content_bytes: bytes, slot: str | None = None) -> str:
     """업로드된 파일을 저장하고 최종 저장 경로를 반환한다.
-    slot은 job_profile(mode='dual')에서만 쓴다: 'legacy' | 'new'."""
+    slot은 job_profile(mode='dual')에서만 쓴다: 'legacy' | 'new'.
+
+    needs_valid_date 항목이면서 파일명이 "_YYYYMM"으로 끝나면(대량 백필,
+    pipeline/backfill_utils.py) 정규 슬롯을 덮어쓰지 않고 별도 백필 폴더에
+    계속 쌓아둔다 — 여러 달치를 한 번에 올려두고 한 번에 실행하기 위함."""
     item = _BY_KEY[key]
+
+    if item.get('needs_valid_date') and parse_backfill_date(filename):
+        dest = os.path.join(_key_backfill_dir(key), filename)
+        with open(dest, 'wb') as f:
+            f.write(content_bytes)
+        try:
+            archive_raw_bytes(content_bytes, filename, category=f'{key}_backfill')
+        except OSError as exc:
+            print(f'[web_pipeline_runner] 원본 아카이브 실패(무시하고 계속) {key}: {exc}')
+        return dest
+
     d = _key_dir(key)
 
     if item['mode'] == 'exact':
@@ -219,6 +278,8 @@ def uploaded_files(key: str) -> list[str]:
 
 def has_upload(key: str) -> bool:
     item = _BY_KEY[key]
+    if item.get('needs_valid_date') and backfill_files(key):
+        return True
     files = uploaded_files(key)
     if item['mode'] == 'dual':
         # 최소한 '내 리포트 *.xlsx'(new)는 있어야 실행 가능 — legacy는 선택.
@@ -341,6 +402,34 @@ def _last_meaningful_line(output: str) -> str:
     return lines[-1] if lines else ''
 
 
+def _run_backfill_batch(key: str, item: dict) -> list[tuple[str, bool, str]]:
+    """이 항목의 백필 대기 파일을 오래된 시점부터 하나씩 실제 반영한다.
+    각 파일마다 그 파일 하나만 담은 임시 폴더를 만들어 process()가 원래
+    기대하는 파일명 규칙(exact 모드는 정확한 파일명, wildcard 모드는 패턴)에
+    맞춰 넘긴다 — process_*.py 쪽 로직은 전혀 손대지 않는다.
+    반환: [(파일명, 성공여부, 요약메시지), ...] — 순서대로."""
+    module = importlib.import_module(item['module'])
+    importlib.reload(module)
+
+    results = []
+    for path, parsed_date in backfill_files(key):
+        filename = os.path.basename(path)
+        tmp_dir = tempfile.mkdtemp(prefix='backfill_')
+        try:
+            tmp_name = item['dest_filename'] if item['mode'] == 'exact' else filename
+            shutil.copy2(path, os.path.join(tmp_dir, tmp_name))
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                ok = module.process(raw_dir=tmp_dir, valid_date=parsed_date)
+            summary = _last_meaningful_line(buf.getvalue()) or ('성공' if ok else '처리 실패')
+            results.append((filename, bool(ok), summary))
+        except Exception as exc:  # noqa: BLE001 — 한 파일 실패가 나머지 배치를 막지 않게
+            results.append((filename, False, str(exc)[:200]))
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+    return results
+
+
 def run_one(key: str, via_api: bool = False, valid_date: date | None = None) -> dict:
     """항목 하나를 실제로 처리한다 — process_*.py의 stdout/예외를 캡처해
     실행결과 메시지를 만든다. run log에도 즉시 반영한다.
@@ -352,7 +441,15 @@ def run_one(key: str, via_api: bool = False, valid_date: date | None = None) -> 
 
     valid_date: needs_valid_date=True인 항목(evaluations/tech_ownership/
     job_profile/work_objective_*)에서 이번 업로드분의 기준 연/월로 넘겨준다
-    (관리자가 화면에서 지정, 기본값은 process_*.py 쪽에서 오늘로 처리)."""
+    (관리자가 화면에서 지정, 기본값은 process_*.py 쪽에서 오늘로 처리).
+
+    needs_valid_date 항목에 "_YYYYMM" 파일명 백필 업로드(2026-08-28,
+    pipeline/backfill_utils.py)가 쌓여 있으면, 정규 업로드보다 먼저 오래된
+    시점부터 순서대로 전부 반영한 뒤(각 파일의 valid_date는 파일명에서
+    파싱), 정규 슬롯에 파일이 있으면 이어서 처리한다. 시점 보호
+    (write_merged_with_valid_period)가 이미 순서 무관하게 안전하므로 두
+    단계 순서가 바뀌어도 데이터는 항상 올바르지만, 건너뜀 경고를 줄이려고
+    오래된 것부터 처리한다."""
     item = _BY_KEY[key]
     raw_dir = _key_dir(key)
     buf = io.StringIO()
@@ -370,25 +467,45 @@ def run_one(key: str, via_api: bool = False, valid_date: date | None = None) -> 
             _record_result(key, '실패', '업로드된 파일이 없습니다.')
             return last_result(key)
 
-        with contextlib.redirect_stdout(buf):
-            if key == 'job_profile':
-                import merge_job_profile_source
-                importlib.reload(merge_job_profile_source)
-                merge_job_profile_source.run(raw_dir=raw_dir)
+        backfill_results = []
+        if item.get('needs_valid_date'):
+            backfill_results = _run_backfill_batch(key, item)
 
-            module = importlib.import_module(item['module'])
-            importlib.reload(module)
-            if item['needs_valid_date'] and valid_date is not None:
-                ok = module.process(raw_dir=raw_dir, valid_date=valid_date)
-            else:
-                ok = module.process(raw_dir=raw_dir)
+        has_regular_upload = bool(uploaded_files(key))
+        ok, summary = None, None
+        if has_regular_upload:
+            with contextlib.redirect_stdout(buf):
+                if key == 'job_profile':
+                    import merge_job_profile_source
+                    importlib.reload(merge_job_profile_source)
+                    merge_job_profile_source.run(raw_dir=raw_dir)
 
-        output = buf.getvalue()
-        if ok:
-            summary = _last_meaningful_line(output) or '성공'
-            _record_result(key, '성공', summary)
+                module = importlib.import_module(item['module'])
+                importlib.reload(module)
+                if item['needs_valid_date'] and valid_date is not None:
+                    ok = module.process(raw_dir=raw_dir, valid_date=valid_date)
+                else:
+                    ok = module.process(raw_dir=raw_dir)
+            output = buf.getvalue()
+            summary = _last_meaningful_line(output) or ('성공' if ok else '처리 실패(사유 불명 — 로그 확인 필요)')
+
+        if backfill_results:
+            n_ok = sum(1 for _, s, _ in backfill_results if s)
+            n_fail = len(backfill_results) - n_ok
+            backfill_msg = f'백필 {len(backfill_results)}건 중 {n_ok}건 반영'
+            if n_fail:
+                first_fail = next(f'{fn}: {msg}' for fn, s, msg in backfill_results if not s)
+                backfill_msg += f', {n_fail}건 실패({first_fail})'
+            message = backfill_msg + (f' / 정규 업로드: {summary}' if summary is not None else '')
+            overall_ok = (n_fail == 0) and (ok is not False)
+            _record_result(key, '성공' if overall_ok else '실패', message[:500])
+            clear_backfill_files(key)
+        elif has_regular_upload:
+            _record_result(key, '성공' if ok else '실패', summary[:500])
         else:
-            _record_result(key, '실패', _last_meaningful_line(output) or '처리 실패(사유 불명 — 로그 확인 필요)')
+            # needs_upload 체크는 통과했지만(백필 폴더에 파일이 있었음) 배치가
+            # 0건이었던 경우는 사실상 없다 — 방어적으로만 남겨둔다.
+            _record_result(key, '실패', '반영할 파일이 없습니다.')
 
     except Exception as exc:  # noqa: BLE001 — 실행결과 칸에 그대로 보여줘야 함
         output = buf.getvalue()
@@ -471,6 +588,10 @@ def snapshot() -> list[dict]:
             'has_api': has_api(item['key']),
             'uploaded_at': uploaded_at(item['key']),
             'uploaded_filenames': [os.path.basename(p) for p in uploaded_files(item['key'])],
+            'backfill_files': (
+                [(os.path.basename(p), f'{d.year:04d}-{d.month:02d}') for p, d in backfill_files(item['key'])]
+                if item['needs_valid_date'] else []
+            ),
             'last_run_at': result.get('last_run_at', ''),
             'status': status,
             'message': result.get('message', ''),
