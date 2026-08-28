@@ -6041,3 +6041,62 @@ DataFrame을 반환하도록 수정 — evaluations_history.csv가 아직 비어
 
 **미검증**: 실제 브라우저에서 부서 드롭다운을 열어 기간 변경 시 옵션
 목록이 실시간으로 바뀌는지, 선택값이 초기화되는 체감이 자연스러운지.
+
+## 2026-08-29 (4): 팀/리더 참조도 관리자 "데이터 업데이트" 탭에서 파일 업로드로 대량 반영 가능하도록 추가
+
+배경: 지금까지 team_refer는 웹에서 (1) 최초 1회 CLI로 xlsx 대량 적재
+(`pipeline/process_team_refer.py`, `data/raw/`를 직접 읽음) 또는 (2) 관리자
+"팀/리더 참조" 탭의 그리드 CRUD(조직 단위를 한 행씩 수기 편집)로만 갱신할
+수 있었다 — 다른 20개 항목처럼 웹에서 xlsx 파일을 올려 한 번에 대량
+반영하는 경로가 없었다("team_refer도 웹상에서 파일업로드를 통해 대량
+업로드가 가능할까?" 질문). 확인 결과 `process_team_refer.process()`가
+`valid_date`만 받고 `raw_dir`을 안 받는 것 말고는(다른 process_*.py는
+전부 `raw_dir` 매개변수가 있음) 구조적으로 이미 다른 20개 항목과 거의
+동일해서(원본 파일이 고정 파일명, valid_date 기반 시점 보호 이미 있음),
+`services/web_pipeline_runner.py`의 매니페스트 기반 인프라에 그대로 얹을
+수 있었다.
+
+**`pipeline/process_team_refer.py`**: `process(valid_date=None)` →
+`process(raw_dir: str = RAW_DIR, valid_date: date | None = None)`로 변경,
+`RAW_DIR/SOURCE_FILE`을 `raw_dir/SOURCE_FILE`로 교체(그 외 로직 변경
+없음 — 이 모듈은 애초에 source_reader.read_source() DB 경로가 없어
+다른 process_*.py보다 오히려 더 단순한 변경이었다). 기본값이 기존과
+동일해 인자 없이 부르던 기존 호출부(`pipeline/run_expertise.py`)는
+그대로 동작.
+
+**`services/web_pipeline_runner.py`**: MANIFEST에 `team_refer` 항목 추가
+(`mode='exact'`, `dest_filename='팀참조시트.xlsx'`, `needs_valid_date=True`).
+이 매니페스트 등록 하나로 자동으로 따라오는 것: 원본 파일 무제한 아카이브
+(`save_upload()`가 자동 호출), 관리자가 지정하는 "기준 연/월" 날짜, 대량
+소급 백필(`_YYYYMM` 파일명으로 여러 시점 파일을 한꺼번에 올려 오래된
+순서로 반영), 실행 로그/락. `pages/admin.py`는 매니페스트를 그대로
+순회해 행을 렌더링하는 완전히 제너릭한 구조라 **코드 변경이 전혀
+필요 없었다** — MANIFEST에 항목 하나 추가한 것만으로 "데이터 업데이트"
+탭에 "팀/리더 참조" 행이 자동으로 나타난다.
+
+**기존 그리드 CRUD와의 관계**: 두 경로(그리드 CRUD의
+`services/team_refer_store.save_snapshot()`, 이번에 추가한 파일 업로드의
+`process_team_refer.process()`) 모두 같은 `team_refer.csv`에 같은 자연키
+(`dep_id, valid_year, valid_month, valid_day`)로 upsert하므로 서로
+충돌하지 않는다 — 소수 조직을 수시로 고칠 땐 그리드 CRUD를, 조직 전체를
+xlsx로 한 번에(또는 여러 과거 시점을 한꺼번에 백필) 갱신할 땐 새 파일
+업로드 경로를 쓰면 된다. 중복 부서ID 경고(`find_duplicate_dep_ids()`)는
+그리드 CRUD 쪽엔 별도 모달로 뜨지만, 이번 파일 업로드 경로에서는 다른
+19개 항목과 동일하게 콘솔 `[WARN]` 로그가 "실행결과" 칸에 그대로
+노출되는 방식(기존 관례 그대로, 별도 UI 추가 안 함).
+
+**검증**: 합성 팀참조시트.xlsx(안내문 1행 + 헤더 + 데이터 1행)를
+`services.web_pipeline_runner.save_upload()`/`run_one(valid_date=...)`로
+실제 웹 업로드 경로 그대로 실행 — team_refer.csv에 정상 반영되는 것,
+`data/raw_archive/team_refer/`에 원본이 타임스탬프와 함께 아카이브되는
+것 확인. `_YYYYMM` 파일명 2개(2023-01/2024-01, 서로 다른 dep_name)를
+연속 업로드해 백필 배치 실행 — 오래된 순서로 처리되어 두 시점 모두 각자의
+dep_name으로 team_refer.csv에 누적되는 것 확인. `services.web_pipeline_runner.
+snapshot()`이 만든 team_refer 행을 `pages.admin._data_update_row()`에
+직접 넣어 렌더링 오류 없이 `html.Tr`이 만들어지는 것 확인(admin.py 코드
+변경이 전혀 없었음을 재확인). `py_compile` 통과. 테스트로 만든
+`data/raw_archive/team_refer/` 아카이브 파일은 정리(어차피 `.gitignore`
+대상이라 커밋에는 영향 없었음).
+
+**미검증**: 실제 브라우저에서 "데이터 업데이트" 탭에 새로 나타난 "팀/리더
+참조" 행의 업로드 버튼/날짜 선택기 조작.

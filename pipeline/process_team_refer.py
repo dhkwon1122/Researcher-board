@@ -50,6 +50,16 @@ valid_date 인자(기본값 오늘)로 유효 날짜를 지정할 수 있다 —
 반영되지 않는다("현재" 판정은 항상 실제 최댓값 기준).
 
 컬럼명이 다를 경우 파일 상단의 _COL_MAP을 실제 헤더에 맞게 수정하세요.
+
+── 웹 업로드(관리자 "데이터 업데이트" 탭) ─────────────────────────────────────
+process()는 다른 process_*.py처럼 raw_dir 매개변수를 받는다(2026-08-29
+추가) — services.web_pipeline_runner가 이 값을 data/web_updates/team_refer/
+로 넘겨 업로드된 파일을 읽게 한다(기본값은 기존과 동일한 data/raw). 이
+모듈은 pipeline/sources.py(1단계 DRM 제거 파이프라인)에 등록돼 있지 않은
+독립 스크립트라 다른 대부분의 process_*.py와 달리 source_reader.read_source()
+DB/스테이징 경로가 없다 — raw_dir 안의 팀참조시트.xlsx를 항상 직접 읽는다
+(관리자가 웹 업로드 전 Excel에서 DRM을 해제한 사본을 올린다는 전제는
+web_pipeline_runner의 다른 항목과 동일).
 """
 
 import os
@@ -191,12 +201,14 @@ def _print_duplicate_warning(dupes: list[dict]) -> None:
                   f"사번={row['researcher_id']} 성명={row['name']}")
 
 
-def process(valid_date: date | None = None) -> bool:
-    """valid_date: 이번 업로드분의 유효 날짜(기본값 오늘) — 과거 데이터
+def process(raw_dir: str = RAW_DIR, valid_date: date | None = None) -> bool:
+    """raw_dir: 팀참조시트.xlsx를 찾을 폴더(기본값 data/raw — 웹 업로드 시
+    services.web_pipeline_runner가 data/web_updates/team_refer/를 넘긴다).
+    valid_date: 이번 업로드분의 유효 날짜(기본값 오늘) — 과거 데이터
     소급 입력 시 지정."""
-    raw_path = os.path.join(RAW_DIR, SOURCE_FILE)
+    raw_path = os.path.join(raw_dir, SOURCE_FILE)
     if not os.path.exists(raw_path):
-        print(f'[SKIP] {SOURCE_FILE} 파일 없음')
+        print(f'[SKIP] {SOURCE_FILE} 파일 없음({raw_dir})')
         return False
 
     df = read_xlsx(raw_path, header_row=1)

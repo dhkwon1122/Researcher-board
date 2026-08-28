@@ -114,6 +114,15 @@ MANIFEST = [
          hint='직무정보_표준.xlsx', mode='exact', dest_filename='직무정보_표준.xlsx'),
     dict(key='job_profile_info_sait', label='직무정보(SAIT자체)', module='process_job_profile_sait',
          hint='직무정보_부서.xlsx', mode='exact', dest_filename='직무정보_부서.xlsx'),
+    # 팀/리더 참조(team_refer)는 관리자 화면의 "팀/리더 참조" 탭(그리드
+    # CRUD, services/team_refer_store.py)으로도 계속 수정할 수 있다 — 이
+    # 항목은 그와 별개로 xlsx 파일 자체를 한 번에 대량 반영하고 싶을 때
+    # 쓰는 경로다(둘 다 같은 team_refer.csv에 같은 자연키로 upsert하므로
+    # 서로 충돌하지 않는다, 2026-08-29 추가). needs_valid_date=True라
+    # 관리자가 기준 연/월을 지정할 수 있고, "_YYYYMM" 파일명 대량 백필
+    # 업로드도 다른 시점보호 테이블과 동일하게 지원된다.
+    dict(key='team_refer', label='팀/리더 참조', module='process_team_refer',
+         hint='팀참조시트.xlsx', mode='exact', dest_filename='팀참조시트.xlsx', needs_valid_date=True),
 ]
 _BY_KEY = {item['key']: item for item in MANIFEST}
 
