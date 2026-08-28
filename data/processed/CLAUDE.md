@@ -6171,11 +6171,11 @@ snapshot()`이 만든 team_refer 행을 `pages.admin._data_update_row()`에
 받아 CLI(`source_reader.read_source()`)/웹 업로드(`find_latest()` 와일드카드)
 양쪽 경로를 모두 지원(다른 대부분 process_*.py와 동일한 패턴).
 
-**`pipeline/sources.py`**: `('language_qualification', '어학자격 *.xlsx', 0)`
-등록(사용자 확정 9번, CLI 경로). ⚠️ **헤더 행 번호(0)는 실제 원본 파일을
-확인하지 못해 임시값이다** — 배포 전 반드시 실제 파일의 헤더 위치로
-`process_language_qualification.py` 상단의 `_HEADER_ROW`와
-`pipeline/sources.py`의 이 줄을 함께 수정해야 한다.
+**`pipeline/sources.py`**: `('language_qualification', '어학자격 *.xlsx', 6)`
+등록(사용자 확정 9번, CLI 경로) — 헤더 행 번호 6(0-based, 실제 7번째 행)은
+사용자가 직접 확인해 준 값(2026-08-29 추가 확인, 1~6행은 무시)이다.
+`process_language_qualification.py` 상단의 `_HEADER_ROW = 6`도 동일하게
+맞춰뒀다.
 
 **부수 발견·수정**: `pipeline/sources.py`를 손보다가 `pipeline/load_raw_to_db.py`
 의 `for name, _filename, _header_row in SOURCES:`가 `researchers`처럼
@@ -6260,9 +6260,15 @@ researcher_profile 등 관련 페이지 전체 임포트까지 재확인(무관�
 커밋에는 영향 없었음).
 
 **미검증 / 후속 확인 필요**:
-- **헤더 행 번호**: 실제 원본 파일이 없어 `_HEADER_ROW`/`sources.py`의
-  헤더 행을 0(임시값)으로 넣어뒀다 — 실제 파일로 반드시 확인·수정 필요.
 - **A4 인쇄 카드 1페이지 높이 예산**: 어학 줄 추가가 기존에 정밀 조정된
   페이지 예산에 미치는 실제 영향을 브라우저로 확인 못 했다.
 - 실제 원본 파일로 웹 업로드 → 명단/프로필 화면 렌더링까지 브라우저
   end-to-end 확인 필요.
+
+### 후속: 헤더 행 번호 확인(2026-08-29)
+
+사용자가 실제 원본 파일 헤더 위치를 확인해줌 — 7번째 행(1~6행은 무시).
+`pipeline/process_language_qualification.py`의 `_HEADER_ROW`와
+`pipeline/sources.py`의 `language_qualification` 항목 헤더 행을 모두
+0-based 값 6으로 수정. 1~6행 무시 + 7번째 행이 헤더인 합성 xlsx로
+`process()`를 재실행해 정상 추출되는 것을 확인, `py_compile` 통과.

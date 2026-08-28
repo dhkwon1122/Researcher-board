@@ -46,7 +46,7 @@ import sys
 import pandas as pd
 
 LANG_PATTERN = '어학자격 *.xlsx'
-_HEADER_ROW = 0  # ⚠️ 실제 원본 파일을 확인하지 못해 임시값 — 실제 헤더 행으로 수정 필요
+_HEADER_ROW = 6  # 사용자 확인(2026-08-29) — 실제 헤더는 7번째 행(1~6행 무시)
 
 COL_ID = '사번'
 _SPEAK_SUFFIX = ' 회화'
