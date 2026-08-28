@@ -5550,3 +5550,66 @@ researchers.csv 안에서 과거 재직자를 안 지우고 같이 보여주는 
 **미검증**: 실제 브라우저에서의 DatePickerRange 조작, 대규모(1500명대)
 `researchers_history.csv`에서의 실제 응답 속도(샌드박스 데이터가 소규모라
 성능은 별도 확인 필요).
+
+## 2026-08-28 (47): 데이터 관리 구조 점검 ③ — AI 검색에도 기간(날짜 범위)
+지정 조회 확장 + 저장 구조 설계 검토
+
+배경: (46)번(명단 화면 기간 지정)에 이어 "AI 검색에도 이력을 반영하자"는
+요청. 진행 전에 사용자가 제안한 대안 구조("항목별 CSV 1개에 과거~현재
+전체를 누적하고, 조회 시점에 최신/최근접을 계산")를 현재 구조("현재값
+파일 + 별도 이력 파일", (42)~(46)번)와 비교 검토했다 — 결론: 사용자가
+설명한 "누적(지금 기준 최근접)" 동작은 이미 `<table>.csv`(researcher_id
+업서트, 항상 그 사람의 마지막 확인값을 보존)로 정확히 구현돼 있어(기존
+"누적기준" 토글이 `is_current` 필터만 빼고 이 파일을 그대로 보여줌),
+단일 테이블로 재구조화해도 기능상 달라지는 게 없다. 반면 재구조화하려면
+`read_processed('researchers')`류를 호출하는 앱 전역 수십 곳이 전부
+"매번 최신/최근접을 계산하는" 형태로 바뀌어야 해서(현재 구조는 이미
+계산된 값을 캐시처럼 읽기만 함) 이번 세션에서 지향한 "적은 수정" 원칙과
+정반대 방향이라고 판단 — 현재 2-파일 구조를 유지하기로 확정.
+
+**결정 1 — `services/open_data_query.py`에 기간 규칙 추가**: 기존
+`_CURRENT_ONLY_RULE`/`_CUMULATIVE_RULE`(SQL 생성 프롬프트에 주입되는
+지시문)에 `_PERIOD_RULE_TEMPLATE`을 추가 — period가 주어지면 이 규칙이
+둘 다를 대체한다. LLM에게 "현재상태 테이블/is_current 대신 *_history
+테이블을 쓰고, 지정한 기간(YYYY-MM~YYYY-MM)으로 스냅샷을 필터링한 뒤
+`QUALIFY ROW_NUMBER() OVER (PARTITION BY researcher_id ORDER BY
+valid_year, valid_month DESC) = 1`(또는 동등한 서브쿼리)로 그 기간 안
+최신 스냅샷 1건만 사람별 대표값으로 쓰라"고 명시적으로 지시한다.
+`_generate_sql()`/`_generate_sql_repair()`/`answer()` 모두 `period`
+매개변수를 받아 이 규칙 선택에 반영한다.
+
+**결정 2 — 데이터 발견은 이미 자동, 권한만 추가**:
+`open_data_query._discover_csv_tables()`가 `data/processed/*.csv`를 매번
+동적으로 스캔하므로 `researchers_history.csv` 등은 이미 자동으로
+"발견"되고 있었다 — 다만 `config/auth_config.py`의 `TABLE_PERMISSIONS`가
+AI 검색이 쓸 수 있는 테이블의 명시적 화이트리스트라(없으면 기본 거부),
+`researchers_history`/`evaluations_history`/`tech_ownership_history`/
+`job_profile_history`/`core_technology_history` 5개를 각각 대응하는
+현재상태 테이블과 동일한 민감도(`view_evaluation` 등)로 추가했다.
+`work_objective`는 원래도 AI 검색 화이트리스트에 없어(별개의 기존
+제품 결정) `work_objective_history`도 이번엔 함께 제외했다.
+
+**결정 3 — UI/파라미터 전달 경로**: `pages/researcher_list.py`에 이미 있는
+`list-period-range`(DatePickerRange, (46)번)를
+`components/nl_query_bar.py`의 검색 콜백이 그대로 State로 공유해
+재사용한다(별도 UI 추가 없음 — "검색 기준"이 명단·AI검색 두 화면에
+따로 있으면 헷갈린다던 기존 설계 원칙을 그대로 따름). 날짜(YYYY-MM-DD)에서
+일자는 버리고 "YYYY-MM" 튜플로 `nl_query.answer_question(question,
+current_only=..., period=...)` → `execute_query()` → `open_data_query.
+answer()`까지 그대로 전달한다. 구조화 3-intent(전문성/유사도/기준검색)는
+애초에 "지금 기준 vs 전체"만 구분하고 특정 과거 시점 개념이 없어 이번
+확장 대상에서 제외(open_data_query 경로에만 적용).
+
+**검증**: `_period_or_current_rule()`을 직접 호출해 period 유무에 따라
+올바른 규칙 문자열이 선택되고 날짜가 정확히 보간되는 것 확인.
+`_discover_csv_tables()`가 합성 `researchers_history.csv`를 실제로
+발견하는 것, `TABLE_PERMISSIONS`에 5개 항목이 정확히 등록된 것 확인.
+`nl_query.answer_question(period=...)`을 호출해 새 매개변수가 있어도
+기존 "LLM 미설정" 안내 분기가 그대로 정상 동작(크래시 없음)하는 것
+확인(샌드박스에 LLM 서버가 없어 실제 SQL 생성·실행 자체는 미검증).
+`pages/researcher_list.py` 레이아웃을 `components.nl_query_bar`와 함께
+렌더링해 콜백 등록/컴포넌트 트리에 오류 없음 확인. 변경된 모든 파일
+`py_compile` 통과.
+
+**미검증**: 실제 LLM을 통한 기간 지정 SQL 생성·실행(사내 LLM 서버 필요),
+실제 브라우저에서 AI 검색 입력창 + 기간 선택을 함께 쓰는 시나리오.

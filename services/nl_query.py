@@ -615,10 +615,15 @@ def parse_question(question: str) -> dict:
     }
 
 
-def execute_query(parsed: dict, current_only: bool = True) -> dict:
+def execute_query(parsed: dict, current_only: bool = True,
+                   period: tuple[str, str] | None = None) -> dict:
     """parse_question()의 결과를 실제 데이터 조회로 실행한다.
     current_only=False(누적기준)면 전배·퇴사 등으로 최신 인력현황에 없는
-    사람도 조회 대상에 포함한다(AI 검색 전역 토글, components/nl_query_bar.py)."""
+    사람도 조회 대상에 포함한다(AI 검색 전역 토글, components/nl_query_bar.py).
+    period=(시작 YYYY-MM, 종료 YYYY-MM)이 함께 주어지면(누적기준에서 기간까지
+    지정한 경우, 2026-08-28) open_data_query 경로에만 전달한다 — 구조화
+    3-intent(전문성/유사도/기준검색)는 원래도 "지금 기준 vs 전체"만 구분하고
+    특정 과거 시점 스냅샷 개념이 없어 이번 확장 대상이 아니다."""
     intent = parsed.get('intent')
     if intent == 'error':
         return _empty_table_result('error', parsed.get('message', '알 수 없는 오류가 발생했습니다.'))
@@ -630,7 +635,7 @@ def execute_query(parsed: dict, current_only: bool = True) -> dict:
         # 여기서 답이 나올 때가 있다. 그래도 결과가 없으면 기존 안내 문구로 폴백.
         question = parsed.get('question') or ''
         if question:
-            fallback = open_data_query.answer(question, current_only=current_only)
+            fallback = open_data_query.answer(question, current_only=current_only, period=period)
             if fallback.get('rows'):
                 return fallback
 
@@ -643,7 +648,7 @@ def execute_query(parsed: dict, current_only: bool = True) -> dict:
         return _empty_table_result('unsupported', note)
 
     if intent == 'open_data_query':
-        return open_data_query.answer(parsed.get('question') or '', current_only=current_only)
+        return open_data_query.answer(parsed.get('question') or '', current_only=current_only, period=period)
 
     if intent == 'find_researchers_by_expertise':
         return find_researchers_by_expertise(
@@ -711,11 +716,15 @@ def _generate_answer_summary(question: str, result: dict) -> str:
     return raw.strip() if raw else ''
 
 
-def answer_question(question: str, current_only: bool = True) -> dict:
+def answer_question(question: str, current_only: bool = True,
+                     period: tuple[str, str] | None = None) -> dict:
     """질문 → (질의 변환 → 조회 → 결과 설명) 전체 파이프라인의 단일
     진입점. 결과 설명(answer)은 error/unsupported이거나 결과가 없으면
     비워둔다. current_only=False(누적기준)면 전배·퇴사 등으로 최신
-    인력현황에 없는 사람도 조회 대상에 포함한다.
+    인력현황에 없는 사람도 조회 대상에 포함한다. period=(시작 YYYY-MM,
+    종료 YYYY-MM)이 함께 주어지면(명단 화면의 기간 지정과 동일한 UX,
+    2026-08-28) 그 기간의 마지막 스냅샷 기준으로 조회한다(open_data_query
+    경로만 — execute_query() 참고).
 
     LLM2_API_URL이 아예 설정되지 않았으면(운영 환경설정 누락) call_llm()을
     시도해 봐야 매번 똑같이 실패하므로, 여기서 미리 걸러 정확한 안내를
@@ -727,7 +736,7 @@ def answer_question(question: str, current_only: bool = True) -> dict:
             'error',
             'AI 검색을 지금 사용할 수 없습니다(사내 LLM 서버 설정이 필요합니다) — 관리자에게 문의해주세요.',
         )
-    result = execute_query(parse_question(question), current_only=current_only)
+    result = execute_query(parse_question(question), current_only=current_only, period=period)
     if result.get('intent') not in ('error', 'unsupported'):
         result['answer'] = _generate_answer_summary(question, result)
     return result

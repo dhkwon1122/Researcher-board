@@ -145,4 +145,14 @@ TABLE_PERMISSIONS: dict[str, str | None] = {
     'comments':            'view_comments',
     'leadership':          'view_grade',
     'succession':          'view_grade',
+
+    # "누적기준 + 기간 지정"(2026-08-28) AI 검색이 특정 과거 시점을 조회할 때
+    # 쓰는 이력 테이블 — 각 현재상태 테이블과 동일한 민감도로 취급한다.
+    # work_objective/work_objective_history는 원래 기본 테이블 자체가 이
+    # 화이트리스트에 없어(AI 검색 대상 아님) 이력도 함께 제외했다.
+    'researchers_history':      None,
+    'evaluations_history':      'view_evaluation',
+    'tech_ownership_history':   None,
+    'job_profile_history':      None,
+    'core_technology_history':  None,
 }

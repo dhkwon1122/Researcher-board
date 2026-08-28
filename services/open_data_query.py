@@ -238,6 +238,29 @@ _CUMULATIVE_RULE = (
     "explicitly asked for cumulative/all-time results, which should include "
     "people who have since transferred out or left."
 )
+# 명단 화면의 "누적기준 + 기간 지정"(2026-08-28)과 동일한 개념을 AI 검색에도
+# 그대로 적용한다 — *_history 테이블(researcher_id, valid_year, valid_month가
+# 자연키, 한 사람당 여러 스냅샷 행)에서 지정한 기간 안의 스냅샷만 골라, 그
+# 기간 안에서 가장 최근 것 1건만 그 사람의 대표값으로 쓰라고 LLM에게 지시한다.
+_PERIOD_RULE_TEMPLATE = (
+    "- The user has specified a specific historical period: {start} to {end} "
+    "(inclusive, by year-month; format YYYY-MM). For this query, do NOT use "
+    "current-state tables (researchers, evaluations, tech_ownership, "
+    "job_profile, core_technology) or the is_current column — use their "
+    "*_history counterparts instead (e.g. researchers_history, "
+    "evaluations_history, tech_ownership_history, job_profile_history, "
+    "core_technology_history), each of which has one row per "
+    "(researcher_id, valid_year, valid_month) snapshot. First filter snapshot "
+    "rows to those whose (CAST(valid_year AS INTEGER), CAST(valid_month AS "
+    "INTEGER)) falls within the given period, then keep only each "
+    "researcher_id's single most recent snapshot inside that period — e.g. "
+    "using QUALIFY ROW_NUMBER() OVER (PARTITION BY researcher_id ORDER BY "
+    "CAST(valid_year AS INTEGER) DESC, CAST(valid_month AS INTEGER) DESC) = 1 "
+    "after the period filter, or an equivalent subquery. If a *_history table "
+    "for the needed field doesn't exist, fall back to the current-state table "
+    "for that field only, but still restrict the overall person set using a "
+    "*_history table where possible."
+)
 
 
 def _parse_gen_response(raw: str) -> dict | None:
@@ -258,20 +281,27 @@ def _parse_gen_response(raw: str) -> dict | None:
     }
 
 
-def _generate_sql(question: str, schema: str, max_wait, current_only: bool = True) -> dict | None:
-    rule = _CURRENT_ONLY_RULE if current_only else _CUMULATIVE_RULE
+def _period_or_current_rule(current_only: bool, period: tuple[str, str] | None) -> str:
+    if period:
+        return _PERIOD_RULE_TEMPLATE.format(start=period[0], end=period[1])
+    return _CURRENT_ONLY_RULE if current_only else _CUMULATIVE_RULE
+
+
+def _generate_sql(question: str, schema: str, max_wait, current_only: bool = True,
+                   period: tuple[str, str] | None = None) -> dict | None:
+    rule = _period_or_current_rule(current_only, period)
     system = query_settings.apply(_SQL_GEN_SYSTEM_TEMPLATE.format(schema=schema, current_only_rule=rule))
     raw = llm_client.call_llm(question, system, temperature=0.0, max_tokens=700, max_wait=max_wait)
     return _parse_gen_response(raw)
 
 
 def _generate_sql_repair(question: str, schema: str, max_wait, current_only: bool,
-                          bad_sql: str, error: str) -> dict | None:
+                          bad_sql: str, error: str, period: tuple[str, str] | None = None) -> dict | None:
     """실패한 SQL과 에러 메시지를 시스템 프롬프트 뒤에 덧붙여 한 번만 재생성
     시도(self-repair). call_llm이 단일 system/user 메시지쌍만 지원하므로,
     "이전 시도 → 에러" 대화를 시스템 프롬프트 안에 그대로 이어붙이는 방식으로
     같은 효과를 낸다."""
-    rule = _CURRENT_ONLY_RULE if current_only else _CUMULATIVE_RULE
+    rule = _period_or_current_rule(current_only, period)
     base = _SQL_GEN_SYSTEM_TEMPLATE.format(schema=schema, current_only_rule=rule)
     system = query_settings.apply(base) + _REPAIR_SYSTEM_SUFFIX.format(bad_sql=bad_sql, error=error[:500])
     raw = llm_client.call_llm(question, system, temperature=0.0, max_tokens=700, max_wait=max_wait)
@@ -374,10 +404,14 @@ def _semantic_fallback(con, table: str, column: str, term: str) -> tuple | None:
     return select_sql, columns, rows
 
 
-def answer(question: str, current_only: bool = True) -> dict:
+def answer(question: str, current_only: bool = True, period: tuple[str, str] | None = None) -> dict:
     """질문 → {intent, sql, columns, rows(최대 50건), total_rows, source, note}.
     current_only=False(누적기준)면 SQL 생성 지시문에서 is_current 필터를
-    빼서 전배·퇴사 등으로 최신 인력현황에 없는 사람도 조회 대상에 포함한다."""
+    빼서 전배·퇴사 등으로 최신 인력현황에 없는 사람도 조회 대상에 포함한다.
+    period=(시작 YYYY-MM, 종료 YYYY-MM)이 주어지면(누적기준에서 기간까지
+    지정한 경우, 2026-08-28) current_only는 무시하고 *_history 테이블에서
+    그 기간 안의 마지막 스냅샷을 쓰도록 지시한다 — 명단 화면의 기간 지정
+    조회와 동일한 개념(data/processed/CLAUDE.md 참고)."""
     question = (question or '').strip()
     if not question:
         return {'intent': 'open_data_query', 'columns': [], 'rows': [], 'note': '질문을 입력해주세요.'}
@@ -395,7 +429,7 @@ def answer(question: str, current_only: bool = True) -> dict:
 
     schema = _schema_prompt(tables)
     max_wait = llm_client.query_max_wait()
-    gen = _generate_sql(question, schema, max_wait, current_only=current_only)
+    gen = _generate_sql(question, schema, max_wait, current_only=current_only, period=period)
     if gen is None:
         return {'intent': 'open_data_query', 'columns': [], 'rows': [],
                 'note': '지금 요청이 많거나 질문을 조회문으로 바꾸지 못했습니다. '
@@ -436,7 +470,7 @@ def answer(question: str, current_only: bool = True) -> dict:
                 break
             # self-repair: 실패한 SQL과 에러를 LLM에 주고 한 번만 재생성
             repaired = _generate_sql_repair(
-                question, schema, max_wait, current_only, gen['sql'], last_error,
+                question, schema, max_wait, current_only, gen['sql'], last_error, period=period,
             )
             if repaired is None:
                 break
