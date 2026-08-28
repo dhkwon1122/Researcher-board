@@ -30,8 +30,13 @@ _BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
 # 최근 3개년. 헤더 문자열은 모듈 임포트 시점에 한 번 계산(연 1회만 바뀌므로
 # 요청마다 다시 계산할 필요 없음 — 다른 회계연도 경계를 넘기려면 프로세스
 # 재시작만 있으면 됨, 이 앱의 다른 "현재 시점 기준" 값들과 동일한 전제).
-_EVAL_SALARY_YEARS, _EVAL_HALF_YEARS = evaluations.evaluation_years()
-_EVAL_HEADER = f"평가\n('{str(_EVAL_SALARY_YEARS[-1])[-2:]}~'{str(_EVAL_SALARY_YEARS[0])[-2:]})"
+# evaluation_years()는 최신 연도가 먼저 오는 내림차순([2026,2025,2024])을
+# 반환하는데, 헤더("'24~'26")는 오름차순으로 읽히므로 오름차순으로 정렬해야
+# 셀 값 순서와 헤더가 맞는다(2026-08-29 발견·수정 — pages/researcher_list.py는
+# 이미 sorted()로 오름차순을 쓰고 있었는데 이 모듈만 정렬 없이 그대로 썼다).
+_EVAL_SALARY_YEARS = sorted(evaluations.evaluation_years()[0])
+_EVAL_HALF_YEARS = sorted(evaluations.evaluation_years()[1])
+_EVAL_HEADER = f"평가\n('{str(_EVAL_SALARY_YEARS[0])[-2:]}~'{str(_EVAL_SALARY_YEARS[-1])[-2:]})"
 
 _DEGREE_ORDER = ['박사', '석사', '학사']
 _DEGREE_CODE = {'박사': '박', '석사': '석', '학사': '학'}
@@ -196,9 +201,13 @@ def _col_education(_rid, rows):
 
 
 def _col_evaluation(_rid, rows):
-    """평가 — 연봉등급 3개년을 첫 줄에 "다/다/다", 그에 대응하는(각 연봉등급
-    연도 - 1) 역량/하반기업적 3개년을 둘째 줄에 "(VG/MT, VG/MT, VG/MT)"로
-    표시. 둘째 줄의 각 항목은 evaluations.format_half_display()로 만드는데,
+    """평가 — 연봉등급 3개년을 첫 줄에 헤더("'24~'26")와 같은 오름차순으로
+    "다/다/다", 그에 대응하는(각 연봉등급 연도 - 1) 역량/하반기업적 3개년을
+    둘째 줄에 역시 오름차순으로 "(VG/MT, VG/MT, VG/MT)"로 표시(2026-08-29
+    수정 — _EVAL_SALARY_YEARS/_EVAL_HALF_YEARS를 정렬 없이 그대로 써서
+    evaluation_years()의 내림차순(최신 연도가 먼저)이 그대로 노출돼 헤더와
+    셀 값 순서가 어긋나 있었다). 둘째 줄의 각 항목은
+    evaluations.format_half_display()로 만드는데,
     그 해 연봉등급이 있으면 역량/하반기업적 중 있는 것만 보여주고(예: 역량
     없음/하반기만 있음 → "MT"만, "-/MT"처럼 빈 자리를 표시하지 않음 —
     2026-08-29 확정, 예전엔 상반기업적과 짝지었으나 역량으로 교체), 연봉등급
