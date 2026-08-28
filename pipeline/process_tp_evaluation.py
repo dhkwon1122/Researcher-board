@@ -146,7 +146,16 @@ def process(raw_dir: str = RAW_DIR, valid_date: date | None = None):
     # 회계연도(매년 3월 시작) 기준 최근 3개년. 연봉등급은 [FY,FY-1,FY-2],
     # 상/하반기업적은 그보다 항상 1년 이른 [FY-1,FY-2,FY-3](services.evaluations
     # 참고 — 두 로직이 늘 어긋나지 않도록 그 모듈의 evaluation_years() 하나만 쓴다).
-    salary_years, half_years = evaluation_years()
+    #
+    # valid_date 기준으로 계산해야 한다(2026-08-28 발견·수정) — 실제 오늘
+    # 날짜로 계산하면, 과거 시점을 백필(pipeline/backfill_utils.py)할 때
+    # 파일 안에서 "2026 연봉등급" 같은 오늘 기준 컬럼명을 찾게 되는데 그
+    # 시절 파일엔 애초에 그런 컬럼이 없어(그 파일은 "2023 연봉등급" 등을
+    # 갖고 있었을 것) 추출이 통째로 실패한다 — 실제로 재현 확인(아래 검증
+    # 참고). valid_date를 기준으로 하면 그 파일이 실제로 대표하는 시점의
+    # 회계연도로 올바른 컬럼명을 찾는다.
+    valid_date = valid_date or date.today()
+    salary_years, half_years = evaluation_years(today=valid_date)
 
     result = pd.DataFrame({'researcher_id': df['_rid']})
     filled_cols = []
@@ -176,7 +185,6 @@ def process(raw_dir: str = RAW_DIR, valid_date: date | None = None):
         print('[SKIP] 추출된 평가 데이터가 없습니다.')
         return False, res_update
 
-    valid_date = valid_date or date.today()
     result['valid_year'] = f'{valid_date.year:04d}'
     result['valid_month'] = f'{valid_date.month:02d}'
 
