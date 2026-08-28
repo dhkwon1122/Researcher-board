@@ -323,6 +323,12 @@ def run():
     if not process_tasks():
         missing.append('tasks (개인별과제투입기간데이터_260114.xlsb)')
 
+    # ── 9-7. 어학자격: 어학자격 *.xlsx (LLM 호출 없음, 폴백 없음, 누적하지
+    # 않고 매번 전체 교체 — process_language_qualification.py 참고) ──────
+    from process_language_qualification import process as process_language_qualification
+    if not process_language_qualification():
+        missing.append('language_qualification (어학자격 *.xlsx)')
+
     # ── 10. 나머지 테이블 (technology_transfer, transfers, certifications, succession) ──
     # 전용 처리기가 없어 _raw 파일만 지원한다. TABLE_KEYS에 등록된 키가 실제
     # 컬럼에 있으면 업서트(이번 파일에 없는 기존 행 보존), 없으면 예전처럼 전체 교체.

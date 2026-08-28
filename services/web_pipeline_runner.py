@@ -123,6 +123,12 @@ MANIFEST = [
     # 업로드도 다른 시점보호 테이블과 동일하게 지원된다.
     dict(key='team_refer', label='팀/리더 참조', module='process_team_refer',
          hint='팀참조시트.xlsx', mode='exact', dest_filename='팀참조시트.xlsx', needs_valid_date=True),
+    # 어학자격은 "현재 재직자 기준으로만 의미가 있는 자료"라(사용자 확정,
+    # 2026-08-29) 다른 대부분 항목과 달리 업서트가 아니라 매번 파일 전체로
+    # 통째로 교체한다 — needs_valid_date를 안 켜서(백필/시점보호 대상 아님)
+    # "기준 연/월" 입력도, _YYYYMM 백필 업로드도 뜨지 않는다.
+    dict(key='language_qualification', label='어학', module='process_language_qualification',
+         hint='예: 어학자격 *.xlsx', mode='wildcard'),
 ]
 _BY_KEY = {item['key']: item for item in MANIFEST}
 

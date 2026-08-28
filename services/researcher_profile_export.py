@@ -20,6 +20,7 @@ from openpyxl.utils import get_column_letter
 
 from components.timeline_data import dedupe_patents, job_points
 from services import auth, data_store, evaluations
+from services import language_qualification as language_qual
 
 _FONT_NAME = '바탕체'
 _FONT_SIZE = 11
@@ -121,6 +122,7 @@ def _load_tables() -> dict:
         'patents': data_store.read_processed('patents'),
         'publications': data_store.read_processed('publications'),
         'job_profile': data_store.read_processed('job_profile'),
+        'language_qualification': data_store.read_processed('language_qualification'),
         'expertise_profiles': data_store.read_expertise_profiles(),
     }
 
@@ -419,11 +421,21 @@ def _col_job_profile(_rid, rows):
     return '\n'.join(lines)
 
 
+def _col_language(_rid, rows):
+    """어학 — language_qualification.csv(언어별 1행)를 services.
+    language_qualification.format_lines()로 "{언어} {등급}(만료일 {날짜})"
+    줄로 만들어 한 셀에 줄바꿈 나열(사용자 확정 — 프로필 화면과 동일한
+    형식·헬퍼 공유). 보유 언어가 없으면 '-'."""
+    lines = language_qual.format_lines(rows.get('language_qualification') or [])
+    return '\n'.join(lines) if lines else '-'
+
+
 _PATENT_COLUMNS = [('특허 실적', _col_patents)]
 _PUBLICATION_COLUMNS = [('논문 실적', _col_publications)]
 _JOB_FUNCTION_COLUMNS = [('직무', _col_job_function)]
 _JOB_PROFILE_COLUMNS = [('직무이력', _col_job_profile)]
 _EMPLOYMENT_STATUS_COLUMNS = [('재직상태', _col_employment_status)]
+_LANGUAGE_COLUMNS = [('어학', _col_language)]
 
 
 # (헤더, 값 계산 함수) — 순서 = 엑셀 컬럼 순서
@@ -460,6 +472,7 @@ def _researcher_row_context(researcher_id: str, tables: dict, permissions: dict,
         'patents_df': _df_for(tables['patents'], researcher_id),
         'publications': _rows_for(tables['publications'], researcher_id),
         'job_profile_df': _df_for(tables['job_profile'], researcher_id),
+        'language_qualification': _rows_for(tables['language_qualification'], researcher_id),
         'expertise_profile': tables['expertise_profiles'].get(researcher_id),
         # 요청(로그인 사용자) 단위로 한 번만 계산해 매 행마다 auth.can()을
         # 다시 호출하지 않도록 build_profile_workbook()에서 전달받는다
@@ -563,6 +576,7 @@ _PATENT_COLUMN_WIDTH = 40
 _PUBLICATION_COLUMN_WIDTH = 40
 _JOB_FUNCTION_COLUMN_WIDTH = 14
 _JOB_PROFILE_COLUMN_WIDTH = 30
+_LANGUAGE_COLUMN_WIDTH = 26
 
 
 def build_profile_workbook(
@@ -573,12 +587,14 @@ def build_profile_workbook(
     include_job_function: bool = False,
     include_job_profile: bool = False,
     include_employment_status: bool = False,
+    include_language: bool = False,
 ) -> bytes:
     """선택된 researcher_id 목록으로 엑셀(xlsx) 바이트를 만들어 반환한다.
     양식: 바탕체 11pt, 전체 검정 테두리, 헤더만 볼드, 줄바꿈 셀은 자동 줄바꿈.
     include_*가 True인 항목만 해당 옵트인 컬럼 그룹(_PATENT_COLUMNS/
     _PUBLICATION_COLUMNS/_JOB_FUNCTION_COLUMNS/_JOB_PROFILE_COLUMNS/
-    _EMPLOYMENT_STATUS_COLUMNS/_EXPERTISE_COLUMNS)을 이 순서대로 맨 끝에
+    _EMPLOYMENT_STATUS_COLUMNS/_LANGUAGE_COLUMNS/_EXPERTISE_COLUMNS)을
+    이 순서대로 맨 끝에
     추가한다 — 전부 기본값은 False(다운로드 화면 체크박스 기본 해제)이고,
     켜져도 _COLUMNS 자체는 건드리지 않고 이 함수 안에서만 로컬 사본에 덧붙인다."""
     tables = _load_tables()
@@ -608,6 +624,9 @@ def build_profile_workbook(
     if include_employment_status:
         columns.extend(_EMPLOYMENT_STATUS_COLUMNS)
         widths.extend([_EMPLOYMENT_STATUS_COLUMN_WIDTH] * len(_EMPLOYMENT_STATUS_COLUMNS))
+    if include_language:
+        columns.extend(_LANGUAGE_COLUMNS)
+        widths.extend([_LANGUAGE_COLUMN_WIDTH] * len(_LANGUAGE_COLUMNS))
     # 보유 전문성(LLM 산출, 부서장/본인 컨펌을 거치지 않은 비객관적 정보)은
     # 다른 옵트인 컬럼과 무엇을 같이 선택하든 항상 맨 마지막 컬럼이 되도록
     # 다른 그룹 뒤에 붙인다.

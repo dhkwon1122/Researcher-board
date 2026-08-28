@@ -6129,3 +6129,140 @@ snapshot()`이 만든 team_refer 행을 `pages.admin._data_update_row()`에
 으로 헤더와 정확히 일치하는 순서로 나오는 것을 확인. `dash.Dash
 (use_pages=True)` 컨텍스트에서 관련 페이지 임포트까지 재확인. `py_compile`
 통과.
+
+## 2026-08-29 (6): 신규 데이터 "어학" 추가 — 원본 어학자격 *.xlsx → language_qualification.csv, 프로필/엑셀/관리자 3곳에 반영
+
+배경: 새 데이터 유형("어학자격") 추가 요청. 원본 파일이 언어별로 "{언어}
+회화"/발급일/만료일 3컬럼(+같은 구조의 "{언어} 필기" 3컬럼, 안 씀) 블록이
+반복되고, "만료일" 헤더 자체는 모든 블록에서 동일한 문자열이라 이름만으로는
+어느 언어의 만료일인지 구분이 안 되는 특이한 구조라, 이해한 내용을 먼저
+설명하고 확인 문답을 거친 뒤 구현했다.
+
+**사용자가 확정한 사항**:
+1. 원본 컬럼 구조 — A열 사번, B~Y열 무관, Z열부터 "{언어} 회화, 발급일,
+   만료일, {언어} 필기, 발급일, 만료일" 6컬럼씩 반복(필기는 안 씀). 만료일은
+   "{언어} 회화" 컬럼 위치 기준 +2번째 컬럼(발급일 다음)에 있음.
+2. "{언어} 회화" 셀 값 자체에 등급이 이미 포함돼 있음(예: "2등급") — 별도
+   가공 안 함.
+3. processed CSV 스키마는 (A) long 포맷 — `researcher_id, language,
+   speak_grade, expiration_date`(사람당 보유 언어 수만큼 여러 행,
+   core_technology.csv와 동일한 패턴).
+4. 여러 언어 보유 시 프로필 표시는 콤마가 아니라 줄바꿈으로 나열.
+5. 인쇄 카드(A4)에도 포함.
+6. 엑셀 다운로드는 다른 옵트인 컬럼(특허/논문/직무 등)과 동일하게 기본
+   해제된 체크박스로.
+7. 누적 안 함 — 매번 파일 전체로 통째 교체(이번 업로드에 없는 사람의 기존
+   어학 데이터는 사라짐, 다른 대부분 테이블의 "이번 파일에 없어도 보존"
+   원칙과 다름 — 의도된 동작).
+8. AI 검색(자연어 질문)에서도 조회 가능하게.
+9. 웹 업로드뿐 아니라 CLI(`data/raw/`, DRM 제거 파이프라인) 경로도 함께 지원.
+10. 사번(researcher_id) 없는 행은 제외.
+
+**신규 `pipeline/process_language_qualification.py`**: `_find_language_specs()`
+가 헤더를 순회하며 "{언어} 회화"로 끝나는 컬럼을 전부 찾아(언어명, 회화
+컬럼 위치, 만료일 컬럼 위치=+2)로 등록한다 — "필기" 컬럼은 애초에 "회화"로
+끝나지 않아 이 스캔에서 자동으로 제외된다. 만료일 컬럼 값은 반드시
+`.iloc[:, 위치]`(위치 기반)로만 읽는다 — pandas가 중복 헤더("만료일")를
+자동으로 "만료일"/"만료일.1"/... 로 구분해 주지만, 이름 기반 조회는 어느
+쪽이든 여전히 모호할 수 있어 처음부터 위치로만 접근했다. 그 위치의 실제
+헤더가 "만료일"로 시작하지 않으면(오프셋 가정이 어긋났을 가능성) 값은
+그대로 신뢰해 쓰되 `[WARN]`을 남긴다. `write_merged()` 업서트 대신
+`result.to_csv()`로 매번 전체 교체(사용자 확정 7번). `raw_dir` 매개변수를
+받아 CLI(`source_reader.read_source()`)/웹 업로드(`find_latest()` 와일드카드)
+양쪽 경로를 모두 지원(다른 대부분 process_*.py와 동일한 패턴).
+
+**`pipeline/sources.py`**: `('language_qualification', '어학자격 *.xlsx', 0)`
+등록(사용자 확정 9번, CLI 경로). ⚠️ **헤더 행 번호(0)는 실제 원본 파일을
+확인하지 못해 임시값이다** — 배포 전 반드시 실제 파일의 헤더 위치로
+`process_language_qualification.py` 상단의 `_HEADER_ROW`와
+`pipeline/sources.py`의 이 줄을 함께 수정해야 한다.
+
+**부수 발견·수정**: `pipeline/sources.py`를 손보다가 `pipeline/load_raw_to_db.py`
+의 `for name, _filename, _header_row in SOURCES:`가 `researchers`처럼
+4-tuple(추가로 multi 플래그가 있는) 항목을 만나면 `ValueError: too many
+values to unpack`로 죽는 기존 버그를 발견했다 — `DATABASE_URL`이 설정된
+환경에서만 실행되는 경로라 이 샌드박스(DB 미설정)에서는 지금까지 재현된
+적이 없었을 뿐 실제 운영 환경에서 DB를 쓰고 있었다면 이미 깨져 있었을
+코드다. `*_rest`로 나머지를 흡수하도록 고쳐 3-tuple/4-tuple 모두 안전하게
+처리되도록 수정.
+
+**`pipeline/run_pipeline.py`**: "9-7. 어학자격" 단계로 `process_language_
+qualification()` 호출 추가(폴백 없음, work_objective/tasks와 동일한
+패턴) — CLI 전체 파이프라인 실행 시 함께 돈다.
+
+**신규 `services/language_qualification.py`**: `read_rows(researcher_id)`/
+`format_lines(rows)`/`format_block(researcher_id, label='어학')` — 프로필
+화면·인쇄 카드·엑셀 다운로드가 공유하는 단일 표시 로직(services/evaluations.py
+와 동일한 목적). `format_block()`은 "어학 : {첫 언어}\n{둘째 언어}..."
+형태(사용자 확정 4번 — 줄바꿈, 콤마 아님)를 만들고, 데이터가 전혀 없으면
+`None`(호출부가 줄 자체를 생략).
+
+**`components/profile_sections.py`**: `photo_block()`의 "재직상태" 줄
+바로 아래에 어학 줄 추가(`language_block_text(rid)`, 데이터 없으면 생략).
+`photo_block()`은 라이브 프로필 화면과 A4 인쇄 카드가 공유하는 함수라
+코드 변경 없이 양쪽에 동시 반영된다(사용자 확정 5번 — 인쇄 카드 포함).
+`white-space: pre-line`으로 `\n`이 실제 줄바꿈으로 렌더링되게 함.
+⚠️ 인쇄 카드는 지난 세션들에서 1페이지 높이 예산(약 937px)을 여러 차례
+정밀 조정해 왔는데, 이번에 추가한 어학 줄이 그 예산에 미치는 영향은
+실제 브라우저로 재검증하지 못했다 — 보유 언어가 많은 사람의 인쇄 결과가
+2페이지로 넘치지 않는지 확인 필요.
+
+**`services/researcher_profile_export.py`**: `_col_language()` +
+`_LANGUAGE_COLUMNS`/`_LANGUAGE_COLUMN_WIDTH` 신규, `_load_tables()`/
+`_researcher_row_context()`에 `language_qualification` 테이블 추가.
+`build_profile_workbook(..., include_language=False)` — 기본 해제
+(사용자 확정 6번), 다른 옵트인 컬럼(특허/논문/직무/직무이력/재직상태)과
+동일한 방식으로 맨 끝(보유 전문성 앞)에 추가.
+
+**`pages/researcher_list.py`**: 엑셀 옵션 체크리스트에 "어학 포함"
+(`value='language'`) 추가, `download_excel()` 콜백에
+`include_language='language' in excel_options` 전달.
+
+**`services/web_pipeline_runner.py`**: MANIFEST에 `language_qualification`
+항목 추가(`mode='wildcard'`, `needs_valid_date` 없음 — 사용자 확정 7번,
+시점보호/백필 대상 아님). 관리자 "데이터 업데이트" 탭은 매니페스트를
+그대로 순회하는 제너릭 구조라 UI 코드 변경 불필요(team_refer 추가 때와
+동일).
+
+**`config/auth_config.py`**: `TABLE_PERMISSIONS`에 `'language_qualification':
+None` 추가(사용자 확정 8번 — AI 검색에서 권한 제한 없이 조회 가능).
+`services/open_data_query.py`의 `_discover_csv_tables()`가 `data/processed/*.csv`
+를 매 질의 시점에 자동 스캔하므로 이 화이트리스트 등록만으로 AI 검색
+대상에 포함된다(코드 변경 불필요).
+
+**`services/data_labels.py`**: `language`/`speak_grade`/`expiration_date`
+한글 라벨(언어/회화등급/만료일) 추가(AI 검색 결과 표 헤더용).
+
+**`pipeline/load_to_db.py`**: `TABLES`에 `language_qualification` 추가(DB
+반영 시에도 CSV와 동일하게 매번 전체 교체됨 — 다른 테이블과 적재 방식은
+동일).
+
+**검증**: `_find_language_specs()`/`process()`를 사용자가 설명한 구조 그대로
+(A=사번, B~Y 필러 24컬럼, Z부터 영어/일본어/중국어 각 회화·필기 블록)
+합성 xlsx로 직접 실행 — 필기 컬럼은 완전히 무시되고, 회화 등급("2등급"
+등)과 만료일이 정확한 언어에 매칭되는 것(오프셋이 실제로 올바르게
+동작하는지가 이번 기능의 가장 중요한 위험 포인트), 사번 없는 행이
+제외되는 것, 회화 값이 없는 언어는 결과에서 빠지는 것을 확인. 웹 업로드
+경로(`web_pipeline_runner.save_upload()`/`run_one()`) 전체를 실제로
+실행해 원본 아카이브·CSV 저장까지 end-to-end 확인, 두 번째 실행이 첫
+실행 결과를 업서트가 아니라 완전히 대체하는지(사용자 확정 7번)도 확인.
+`services.language_qualification.format_block()`/`researcher_profile_export.
+_col_language()` 둘 다 같은 합성 데이터로 호출해 "어학 : 영어 2등급(만료일
+2026-12-31)\n일본어 3등급(만료일 2027-06-30)" 형태(줄바꿈, 콤마 아님)가
+정확히 나오는 것, 데이터 없으면 각각 `None`/`'-'`로 안전하게 처리되는 것
+확인. `pages.admin._data_update_row()`에 `web_pipeline_runner.snapshot()`이
+만든 실제 language_qualification 행을 넣어 렌더링 오류 없음 확인.
+`dash.Dash(use_pages=True)` 컨텍스트에서 admin/researcher_list/
+researcher_profile 등 관련 페이지 전체 임포트까지 재확인(무관한 기존
+`dash_cytoscape` 미설치 문제 제외). 변경/신규 파일 전부 `py_compile` 통과.
+테스트로 생성된 `data/raw_archive/language_qualification/`,
+`data/processed/web_pipeline_runs.csv`는 정리(둘 다 `.gitignore` 대상이라
+커밋에는 영향 없었음).
+
+**미검증 / 후속 확인 필요**:
+- **헤더 행 번호**: 실제 원본 파일이 없어 `_HEADER_ROW`/`sources.py`의
+  헤더 행을 0(임시값)으로 넣어뒀다 — 실제 파일로 반드시 확인·수정 필요.
+- **A4 인쇄 카드 1페이지 높이 예산**: 어학 줄 추가가 기존에 정밀 조정된
+  페이지 예산에 미치는 실제 영향을 브라우저로 확인 못 했다.
+- 실제 원본 파일로 웹 업로드 → 명단/프로필 화면 렌더링까지 브라우저
+  end-to-end 확인 필요.

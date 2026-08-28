@@ -74,4 +74,8 @@ SOURCES = [
     ('project_confl_address', '과제별컨플.xlsx', 0),     # 1번째 행
     ('job_profile_info_standard', '직무정보_표준.xlsx', 0),  # 1번째 행
     ('job_profile_info_sait', '직무정보_부서.xlsx', 0),  # 1번째 행
+    # 헤더 행 번호는 실제 원본 파일을 확인하지 못해 임시로 0(1번째 행)을
+    # 넣어뒀다 — process_language_qualification.py 상단의 _HEADER_ROW를
+    # 실제 파일에 맞게 반드시 확인/수정할 것(2026-08-29 추가).
+    ('language_qualification', '어학자격 *.xlsx', 0),
 ]

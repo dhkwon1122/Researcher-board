@@ -112,6 +112,11 @@ COLUMN_LABELS = {
     'tech_name': '기술명',
     'tech_grade': '기술등급',
 
+    # 어학자격 (language_qualification.csv)
+    'language': '언어',
+    'speak_grade': '회화등급',
+    'expiration_date': '만료일',
+
     # 과제 수행이력 (tasks.csv)
     'task_name': '과제(수행)명',
     'task_code': '과제코드(내부)',

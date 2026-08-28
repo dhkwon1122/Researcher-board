@@ -13,6 +13,7 @@ from services.data_store import ASSETS_DIR, PHOTO_DIR, RAW_DIR
 from services.evaluations import (
     competency_column, first_half_column, format_evaluation_cell, salary_grade_column, second_half_column,
 )
+from services.language_qualification import format_block as language_block_text
 
 DEGREE_ORDER = ['박사', '석사', '학사', '전문대', '고교']
 GRADE_COLOR = {
@@ -152,6 +153,17 @@ def photo_block(rid: str, name: str, row=None, current_year: int = 2026, *,
             sub_lines.append(html.P(
                 f'재직상태 : {employment_status}', className='text-muted text-center mb-0',
                 style={'fontSize': '0.78rem'},
+            ))
+
+        # 어학 — 재직상태 줄 바로 아래. 여러 언어를 보유하면 줄바꿈으로
+        # 나열한다(사용자 확정 — 콤마 아님). 데이터가 전혀 없으면 줄 자체를
+        # 생략(재직상태와 동일한 관례). 화면·A4 인쇄 카드가 이 함수를
+        # 공유하므로 둘 다에 함께 반영된다(사용자 확정 — 인쇄 카드에도 포함).
+        language_text = language_block_text(rid)
+        if language_text:
+            sub_lines.append(html.P(
+                language_text, className='text-muted text-center mb-0',
+                style={'fontSize': '0.78rem', 'whiteSpace': 'pre-line'},
             ))
     else:
         sub_lines = [html.P(name, className='fw-bold mt-2 mb-0 text-center small')]

@@ -75,6 +75,10 @@ TABLES = [
     # 렌더링되므로(온디맨드 렌더링, data/processed/CLAUDE.md 2026-08-19 참고),
     # DB에도 넣어야 CSV 파일이 없는 배포 환경에서도 조직도가 정상 표시된다.
     'team_refer',
+    # 어학자격(2026-08-29) — 다른 테이블과 달리 누적하지 않고 매번 파일
+    # 전체로 통째 교체되는 테이블(pipeline/process_language_qualification.py
+    # 참고)이지만, DB 반영 방식(전체 replace)은 다른 테이블과 동일하다.
+    'language_qualification',
 ]
 
 # (테이블명, data/processed/ 안의 JSON 파일명, 각 항목에서 키로 쓸 필드명).
