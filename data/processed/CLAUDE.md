@@ -5780,3 +5780,123 @@ period[1])` — (49)번에서 고친 `process_tp_evaluation.py`와 동일한 원
 **미검증**: 실제 사내 LLM을 통한 기간 지정 질문의 실제 SQL 생성(이
 프롬프트 힌트가 실제로 LLM의 컬럼 선택을 개선하는지는 사내 LLM 서버
 접근 환경에서 확인 필요), 실제 브라우저에서의 조작.
+
+## 2026-08-29: 나이 "-" 표시 버그 수정 + T&P(평가) 역량 필드 추가 + 상하반기업적 값 제한 제거
+
+세 가지 요청을 처리했다.
+
+### 1) 엑셀 다운로드/AI 검색 결과의 "나이"가 전부 "-"로 나오던 버그
+
+**원인**: `services/data_store.read_processed()`가 CSV를 읽을 때
+`researcher_id`만 문자열로 강제하고 나머지 컬럼은 dtype을 지정하지 않는다
+— `birth_year`가 하나라도 비어있는(NaN) 행이 있으면 pandas가 컬럼 전체를
+float로 추론해, 정상 값(예: 1990)도 파이썬에서 `1990.0`으로 들어온다.
+`str(1990.0)`은 `"1990.0"`이고 `"1990.0".isdigit()`은 `False`라서, 나이가
+있는 사람까지 전부 "-"로 나왔다.
+
+**수정**: `services/researcher_profile_export.py`에 `_birth_year_int(v)`
+신규 — `int(float(s))`로 소수점 붙은 문자열도 안전하게 정수로 파싱한다.
+`_col_name_gender_age()`(엑셀 "성명(성별/나이)" 컬럼)와 `person_base_table()`
+(AI 검색 결과 표의 나이 컬럼) 둘 다 이 헬퍼로 교체.
+
+**같은 버그를 쓰던 다른 2곳도 함께 발견·수정**(사용자가 지목한 범위 밖이지만
+동일한 `.isdigit()` 패턴이라 손대는 김에 같이 고침, 명시적으로 알림):
+- `pages/researcher_profile.py`: 연구원 프로필 화면 상단의 "OOOO년생" 표시
+  (`birth_date`가 없어 `birth_year`로 폴백하는 경우만 해당).
+- `services/nl_query.py`의 `_age()`: AI 검색의 나이 범위 필터(`age_min`/
+  `age_max`)가 이 버그로 정상적인 출생연도를 가진 사람까지 결과에서
+  조용히 빠뜨리고 있었다(표시 문제가 아니라 검색 결과 누락이라 더
+  심각한 케이스).
+
+### 2) 팀/리더 참조 — 기간 지정 조회 시 팀/리더 참조 기준 확인 (질문 답변, 코드 변경 없음)
+
+사용자 질문: "검색 기준을 누적으로 할 때 해당 시기의 팀/리더 참조를
+기준으로 찾아주는 걸까?" — 확인 결과 **아니오**. `services/similarity_map.py`
+의 `org_code_label_maps()`/`org_codes_for_dep_names()` 등은 전부
+`pipeline.rd_specialist_markdown.read_team_refer()`를 호출하는데, 이
+함수는 항상 dep_id별 "가장 최근 날짜" 행만 반환한다(기간 인자 자체가
+없음). 즉 명단 화면에서 "누적기준 + 2023-05~2024-03" 같은 기간을 지정해도,
+그 사람의 부서/과제(파트) 라벨은 **그 시점 당시가 아니라 항상 오늘 기준
+team_refer**로 매핑된다 — 조직명이 그 사이 바뀌었거나 org_code 자체가
+지금 team_refer에 없어졌으면(조직 개편 등) 라벨이 그 시점과 어긋나거나
+원본 코드값 그대로 표시될 수 있다. team_refer.csv 자체는 날짜 기반으로
+누적돼 있어 기술적으로는 과거 시점 조회가 가능한 데이터지만, 그 경로가
+아직 연결돼 있지 않다는 뜻. 사용자가 "확인만" 요청해 코드는 변경하지
+않았다 — 필요해지면 `evaluations_history`처럼 team_refer에도 기간 조회
+경로를 추가할 수 있다.
+
+### 3) T&P(평가) — 역량(competency) 필드 추가 + 상/하반기업적 값 제한 제거
+
+**배경**: 원본 T&P 파일에 연도별로 "{YYYY} 역량" 컬럼이 추가로 있을 수
+있음(선택 항목, 모든 연도에 있는 건 아님)을 확인. 연봉등급이 있는 해에는
+기존에 상반기업적과 짝지어 표시하던 것을, 역량과 짝짓는 것으로 교체해야
+한다는 요청과, 상/하반기업적 값을 EM/ES/MT로 제한하지 말고 원본 그대로
+받으라는 요청.
+
+**`services/evaluations.py`**: `competency_column(year)` 신규(`{year}_
+competency_grade`). `format_evaluation_cell()`/`format_half_display()`에
+`competency` 매개변수 추가(필수) — 연봉등급이 있으면 이제 (역량, 하반기업적)
+중 있는 것만 슬래시로 이어붙이고(기존엔 상반기업적과 짝지었음), **연봉등급이
+없을 때의 동작은 그대로 유지**(사용자 확정 — "감싸기 없이 기존처럼",
+상/하반기업적을 `format_half_pair()`로 그대로 표시). `HALF_GRADES` 상수는
+더 이상 값 검증에 쓰지 않아 삭제(다른 참조 없음, 확인 후 제거).
+
+**`pipeline/process_tp_evaluation.py`**: `_extract()`에
+`valid_values: tuple | None`(None이면 값 제한 없이 공백만 정리해 원본
+그대로 저장)와 `warn_if_missing: bool = True`(False면 컬럼 자체가 없어도
+경고 안 남김) 두 매개변수 추가. 추출 루프를 half_years마다 상반기업적/
+하반기업적(제한 없음, 컬럼 없으면 경고)에 이어 "{year} 역량"도 추출(제한
+없음, 컬럼 없어도 조용히 빈 값 — `warn_if_missing=False`)하도록 확장.
+연봉등급(SALARY_GRADES)은 기존처럼 허용값 검증 그대로 유지(사용자 확정 —
+"연봉등급은 항상 동일").
+
+**적용 범위**(연구원 프로필 화면·인쇄 카드의 통합 셀·엑셀 다운로드 평가
+컬럼 전부, 사용자 확정):
+- `components/profile_sections.py`의 `_eval_cell()` — `competency_column
+  (year-1)`을 함께 읽어 `format_evaluation_cell()`에 전달
+  (`evaluation_incentive_block()`(프로필 화면 표)와
+  `evaluation_incentive_summary_text()`(A4 인쇄 카드 통합 셀 텍스트)가
+  이 함수를 공유하므로 두 화면 모두 한 번에 반영됨).
+- `services/researcher_profile_export.py`의 `_col_evaluation()` — 엑셀
+  "평가" 컬럼 둘째 줄 조립 시 `evaluations.competency_column(y)`을 함께
+  읽어 `format_half_display()`에 전달.
+- `services/open_data_query.py`의 `_evaluation_period_hint()`(직전
+  2026-08-28(50) 항목에서 추가한 AI 검색 프롬프트 힌트)에도 competency_grade
+  컬럼명을 함께 안내하도록 갱신(역량은 선택 항목이라 없을 수 있다는 점도
+  명시) — 요청 범위 밖이지만 같은 로직을 다루는 곳이라 함께 갱신.
+
+**기존 저장 데이터에 소급 반영(사용자 확정)**: `pipeline/merge_utils.py`의
+`write_merged_with_valid_period()`는 같은(또는 더 최신) 시점 재업로드를
+막지 않는다(과거 시점보다 "이전"일 때만 건너뜀, 같음/이후는 항상 반영) —
+즉 이미 저장된 값(예: EM/ES/MT 제한으로 비워졌던 값)을 되살리려면, 그
+시점의 원본 T&P 파일(웹 업로드라면 `data/raw_archive/evaluations*`에
+보관돼 있음)을 **같은 기준 연/월로 다시 업로드**하면 새 로직으로
+재추출되어 현재값(evaluations.csv)이 통째로 덮어써진다 — 별도의 데이터
+마이그레이션 스크립트를 만들지 않고 기존 재업로드 경로를 그대로 재사용하는
+방식(실제로 같은 기준 연/월 재업로드가 값을 덮어쓰는 것을 테스트로 확인).
+과거 기준 연/월 자체를 소급하려면(예: 2023-05 시점 원본을 새로 반영)
+기존 대량 백필 업로드 기능(`_YYYYMM` 파일명)을 그대로 쓰면 된다 — 이
+경우엔 evaluations_history에는 반영되고, evaluations.csv(현재값)는 이미
+더 최신 시점이 저장돼 있으면 갱신되지 않는다(기존 설계 그대로, 현재값은
+항상 최신 시점을 반영한다는 원칙 유지). 이 세션에는 실제 원본 T&P 파일이
+없어 사용자가 실제 파일로 재업로드해야 한다.
+
+**검증**: `process_tp_evaluation.py`를 합성 T&P 파일(EM/ES/MT 외
+VG/T/NM/MS/GD 값 포함, 2025년만 역량 컬럼 있고 2024/2023엔 역량 컬럼
+자체가 없음)로 직접 실행 — (1) 역량 컬럼이 있는 해만 정상 추출되고 없는
+해는 경고 없이 조용히 빈 값 처리되는지, (2) 상/하반기업적에 EM/ES/MT
+밖의 값(VG, T, NM, MS, GD)이 전부 그대로 저장되는지(더 이상 걸러지지
+않음), (3) 연봉등급은 여전히 가/나/다/라/마만 허용되는지 확인. 같은
+기준 연/월로 값을 바꿔 재업로드해 현재값이 정상적으로 덮어써지는지(소급
+반영 메커니즘) 확인. `format_evaluation_cell()`/`format_half_display()`를
+사용자가 준 4가지 예시로 직접 호출해 "나(ES)"/"나(VG/VG)"/"-/ES"(감싸기
+없음)/"ES/ES"가 정확히 일치하는지 확인. `_birth_year_int()`를 float/
+float-string/정수문자열/NaN/빈값 5가지로 직접 호출해 기대값과 일치하는지,
+`_col_name_gender_age()`를 float birth_year를 가진 합성 행으로 호출해
+"36세"가 정상적으로 나오는지 확인. 변경된 7개 파일 모두 `py_compile`
+통과, `dash.Dash(use_pages=True)` 컨텍스트에서 `pages.researcher_profile`/
+`pages.researcher_list` 임포트까지 재확인(모듈 로드 자체가 깨지지 않음).
+
+**미검증**: 실제 T&P 원본 파일로 재업로드해 이미 저장된 데이터가 실제로
+소급 반영되는지(이 세션엔 실제 원본 파일이 없음 — 운영 환경에서 사용자가
+직접 확인 필요), 실제 브라우저에서의 평가 셀/엑셀 렌더링.

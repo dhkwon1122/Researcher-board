@@ -52,6 +52,24 @@ def _or_dash(v) -> str:
     return s if s else '-'
 
 
+def _birth_year_int(v) -> int | None:
+    """researchers.csv의 birth_year를 정수로 안전하게 파싱한다.
+    data_store.read_processed()가 researcher_id 외 컬럼은 dtype을 지정하지
+    않고 CSV를 읽는데, birth_year가 하나라도 비어있는(NaN) 행이 있으면
+    pandas가 컬럼 전체를 float로 추론해 정상 값도 "1990.0"처럼 소수점이
+    붙어 들어온다(2026-08-29 발견 — 엑셀 다운로드/AI 검색 결과의 나이가
+    전부 "-"로 나오던 원인). 단순 `.isdigit()` 체크는 "1990.0"을 숫자로
+    인정하지 않아 실패하므로, float로 한 번 변환한 뒤 int로 반올림 없이
+    잘라 정수를 얻는다."""
+    s = _s(v)
+    if not s:
+        return None
+    try:
+        return int(float(s))
+    except (TypeError, ValueError):
+        return None
+
+
 def _yy(date_str) -> str:
     s = _s(date_str)
     if len(s) >= 4 and s[:4].isdigit():
@@ -130,8 +148,8 @@ def _col_name_gender_age(_rid, rows):
         return '-'
     name = _or_dash(r.get('name'))
     gender = _s(r.get('gender')) or '-'
-    birth_year = _s(r.get('birth_year'))
-    age = f'{datetime.now().year - int(birth_year)}세' if birth_year.isdigit() else '-'
+    birth_year = _birth_year_int(r.get('birth_year'))
+    age = f'{datetime.now().year - birth_year}세' if birth_year is not None else '-'
     return f'{name}\n({gender}/{age})'
 
 
@@ -179,11 +197,13 @@ def _col_education(_rid, rows):
 
 def _col_evaluation(_rid, rows):
     """평가 — 연봉등급 3개년을 첫 줄에 "다/다/다", 그에 대응하는(각 연봉등급
-    연도 - 1) 상/하반기업적 3개년을 둘째 줄에 "(MT/MT, MT/MT, MT/MT)"로 표시.
-    둘째 줄의 각 항목은 evaluations.format_half_display()로 만드는데, 그 해
-    연봉등급이 있으면 있는 반기만 보여주고(예: 상반기 없음/하반기만 있음 →
-    "EM"만, "-/EM"처럼 빈 자리를 표시하지 않음 — 사용자 확정), 연봉등급
-    자체가 없으면 기존대로 반기 두 자리를 항상 표시한다(빈 자리는 '-').
+    연도 - 1) 역량/하반기업적 3개년을 둘째 줄에 "(VG/MT, VG/MT, VG/MT)"로
+    표시. 둘째 줄의 각 항목은 evaluations.format_half_display()로 만드는데,
+    그 해 연봉등급이 있으면 역량/하반기업적 중 있는 것만 보여주고(예: 역량
+    없음/하반기만 있음 → "MT"만, "-/MT"처럼 빈 자리를 표시하지 않음 —
+    2026-08-29 확정, 예전엔 상반기업적과 짝지었으나 역량으로 교체), 연봉등급
+    자체가 없으면 기존대로 상/하반기업적 두 자리를 항상 표시한다(빈 자리는
+    '-').
 
     화면(pages/*.py)이 view_evaluation 권한 없는 역할에는 평가등급을 아예
     안 보여주는 것과 동일한 기준을 여기 엑셀 다운로드에도 적용한다 — 권한
@@ -199,6 +219,7 @@ def _col_evaluation(_rid, rows):
             _s(eva.get(evaluations.salary_grade_column(y + 1))),
             _s(eva.get(evaluations.first_half_column(y))),
             _s(eva.get(evaluations.second_half_column(y))),
+            _s(eva.get(evaluations.competency_column(y))),
         )
         for y in _EVAL_HALF_YEARS
     ) + ')'
@@ -518,8 +539,8 @@ def person_base_table(researcher_ids: list) -> dict:
             department = _or_dash(r.get('department'))
             org_code = _or_dash(r.get('org_code'))
             position_year = _col_position_year(rid, {'researcher': r})
-            birth_year = _s(r.get('birth_year'))
-            age = str(current_year - int(birth_year)) if birth_year.isdigit() else '-'
+            birth_year = _birth_year_int(r.get('birth_year'))
+            age = str(current_year - birth_year) if birth_year is not None else '-'
         else:
             name = department = org_code = position_year = age = '-'
         out[rid] = [rid, name, department, org_code, position_year, degree_major, age]

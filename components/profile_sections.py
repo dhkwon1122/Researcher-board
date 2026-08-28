@@ -10,7 +10,9 @@ from dash import html
 
 from components.detail_tabs import plain_indent_list
 from services.data_store import ASSETS_DIR, PHOTO_DIR, RAW_DIR
-from services.evaluations import first_half_column, format_evaluation_cell, salary_grade_column, second_half_column
+from services.evaluations import (
+    competency_column, first_half_column, format_evaluation_cell, salary_grade_column, second_half_column,
+)
 
 DEGREE_ORDER = ['박사', '석사', '학사', '전문대', '고교']
 GRADE_COLOR = {
@@ -258,7 +260,8 @@ def _eval_cell(eva, year) -> tuple[str, str]:
     salary = _clean_str(eva.get(salary_grade_column(year)))
     first_half = _clean_str(eva.get(first_half_column(year - 1)))
     second_half = _clean_str(eva.get(second_half_column(year - 1)))
-    display = format_evaluation_cell(salary, first_half, second_half)
+    competency = _clean_str(eva.get(competency_column(year - 1)))
+    display = format_evaluation_cell(salary, first_half, second_half, competency)
     return salary, display
 
 
@@ -274,8 +277,9 @@ def _eval_incentive_rows(eva_df, inc_df, rid: str):
 
 def evaluation_incentive_block(eva_df, inc_df, rid: str, years: list[int]):
     """years: 연봉등급 연도 리스트(오름차순, 예: [2024,2025,2026]) — 각 연도
-    열은 그 해 연봉등급과, 대응하는 전년도(연도-1) 상/하반기업적을 합쳐
-    services.evaluations.format_evaluation_cell()로 한 셀에 표시한다(예:
+    열은 그 해 연봉등급과, 대응하는 전년도(연도-1) 역량/하반기업적(연봉등급이
+    없으면 상/하반기업적)을 합쳐 services.evaluations.format_evaluation_cell()로
+    한 셀에 표시한다(예:
     "다(EM/EM)")."""
     inc, eva = _eval_incentive_rows(eva_df, inc_df, rid)
 

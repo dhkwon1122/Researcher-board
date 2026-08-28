@@ -1049,8 +1049,17 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
         bd = date.fromisoformat(birth_date_str[:10])
         birth_label = f'{bd.year}년 {bd.month}월 {bd.day}일'
     else:
-        birth_year = str(researcher.get('birth_year', '') or '').strip()
-        birth_label = f'{birth_year}년생' if birth_year.isdigit() else '-'
+        # birth_year는 researchers.csv를 read_processed()로 읽을 때
+        # researcher_id 외 dtype을 지정하지 않아, 다른 사람 행에 NaN이
+        # 하나라도 있으면 컬럼 전체가 float로 추론돼 "1990.0"처럼 소수점이
+        # 붙어 들어온다 — str(v).isdigit()는 이걸 숫자로 인정하지 않으므로
+        # int(float(...))로 안전하게 파싱한다(2026-08-29, researcher_profile_
+        # export.py의 _birth_year_int()와 동일한 원인/해결).
+        birth_year_raw = str(researcher.get('birth_year', '') or '').strip()
+        try:
+            birth_label = f'{int(float(birth_year_raw))}년생' if birth_year_raw else '-'
+        except (TypeError, ValueError):
+            birth_label = '-'
     current_task = _current_task_label(tables['tasks'], rid)
 
     info_rows = [

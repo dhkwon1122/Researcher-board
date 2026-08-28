@@ -63,7 +63,7 @@ from services import query_settings  # noqa: E402
 from services import researcher_profile_export as rpe  # noqa: E402
 from services import text2sql  # noqa: E402
 from services.evaluations import (  # noqa: E402
-    evaluation_years, first_half_column, salary_grade_column, second_half_column,
+    competency_column, evaluation_years, first_half_column, salary_grade_column, second_half_column,
 )
 from services.llm import LLMError  # noqa: E402
 
@@ -304,7 +304,8 @@ def _evaluation_period_hint(period: tuple[str, str]) -> str:
     salary_years, half_years = evaluation_years(today=target_date)
     salary_cols = ', '.join(f'"{salary_grade_column(y)}" (FY{y})' for y in sorted(salary_years))
     half_cols = ', '.join(
-        f'"{first_half_column(y)}"/"{second_half_column(y)}" (FY{y})' for y in sorted(half_years)
+        f'"{first_half_column(y)}"/"{second_half_column(y)}"/"{competency_column(y)}" (FY{y})'
+        for y in sorted(half_years)
     )
     return (
         "\n- If the question is about evaluations/evaluations_history for this "
@@ -312,9 +313,12 @@ def _evaluation_period_hint(period: tuple[str, str]) -> str:
         "valid_month >= 3 else valid_year - 1 (fiscal year starts every March). "
         f"For the end of the requested period ({period[1]}), the actual salary "
         f"grade columns to use are: {salary_cols}. The half-year performance "
-        f"grade columns are: {half_cols}. Pick the exact column name from this "
-        "list that matches the year the question asks about — do not guess a "
-        "column name yourself."
+        "grade columns (first_half_grade/second_half_grade) and competency "
+        f"grade columns (competency_grade) are: {half_cols} — note "
+        "competency_grade may be empty/absent for a given year (it's an "
+        "optional field), unlike the other two. Pick the exact column name "
+        "from this list that matches the year the question asks about — do "
+        "not guess a column name yourself."
     )
 
 

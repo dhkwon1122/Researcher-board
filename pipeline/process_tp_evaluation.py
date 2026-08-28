@@ -7,15 +7,19 @@ T&P 기본 인사 정보 파일에서 연봉등급/상·하반기업적(평가)�
 
 추출 항목:
   - evaluations.csv : researcher_id당 1행(wide) — 연봉등급 3개년 +
-                      상/하반기업적 3개년(services.evaluations.evaluation_years()가
+                      상/하반기업적/역량 3개년(services.evaluations.evaluation_years()가
                       정한 회계연도 기준, 매년 3월 시작). 점수 환산은 하지 않는다
                       (사용자 확정 — 원본 등급 문자만 저장).
   - researchers     : 이름, 성별, 생년월일(출생연도) → 반환 DataFrame으로 제공
                       (호출자가 기존 researchers DataFrame에 병합)
 
-등급 체계: 연봉등급 가(최우수) > 나 > 다 > 라 > 마(최하) / 상·하반기업적 EM·ES·MT
-(services.evaluations.SALARY_GRADES/HALF_GRADES 참고 — 어느 값도 순위/점수를
-매기지 않고 유효값 체크에만 쓴다).
+등급 체계: 연봉등급 가(최우수) > 나 > 다 > 라 > 마(최하)로 고정 허용값을
+검증한다(services.evaluations.SALARY_GRADES). 상/하반기업적·역량은 값을
+제한하지 않는다(2026-08-29 확정) — 원본 파일마다 표기 체계가 다를 수 있어
+(EM/ES/MT 외에 T/MS/NM/VG/EX/GD/NG 등도 실제로 쓰임) 공백만 정리하고
+원본 값을 그대로 저장한다. 역량은 원본에 그 해 컬럼 자체가 없을 수 있어
+(선택 항목) 컬럼이 없어도 경고를 남기지 않는다 — 상/하반기업적은 컬럼이
+항상 있을 것으로 기대하므로 없으면 그대로 경고한다.
 """
 
 import os
@@ -45,7 +49,7 @@ from source_reader import read_source  # noqa: E402
 
 sys.path.insert(0, BASE_DIR)
 from services.evaluations import (  # noqa: E402
-    HALF_GRADES, SALARY_GRADES, evaluation_years,
+    SALARY_GRADES, competency_column, evaluation_years,
     first_half_column, salary_grade_column, second_half_column,
 )
 
@@ -142,9 +146,9 @@ def process(raw_dir: str = RAW_DIR, valid_date: date | None = None):
         print('  [INFO] 이름/성별/생년월일 컬럼을 찾지 못했습니다.')
         res_update = None
 
-    # ── 2. 연봉등급/상·하반기업적(평가) 추출 — researcher_id당 1행(wide) ──────
+    # ── 2. 연봉등급/상·하반기업적·역량(평가) 추출 — researcher_id당 1행(wide) ──
     # 회계연도(매년 3월 시작) 기준 최근 3개년. 연봉등급은 [FY,FY-1,FY-2],
-    # 상/하반기업적은 그보다 항상 1년 이른 [FY-1,FY-2,FY-3](services.evaluations
+    # 상/하반기업적·역량은 그보다 항상 1년 이른 [FY-1,FY-2,FY-3](services.evaluations
     # 참고 — 두 로직이 늘 어긋나지 않도록 그 모듈의 evaluation_years() 하나만 쓴다).
     #
     # valid_date 기준으로 계산해야 한다(2026-08-28 발견·수정) — 실제 오늘
@@ -160,26 +164,36 @@ def process(raw_dir: str = RAW_DIR, valid_date: date | None = None):
     result = pd.DataFrame({'researcher_id': df['_rid']})
     filled_cols = []
 
-    def _extract(col_name: str, out_col: str, valid_values: tuple, label: str):
+    def _extract(col_name: str, out_col: str, valid_values: tuple | None, label: str, *,
+                 warn_if_missing: bool = True):
+        """valid_values가 None이면 값을 제한하지 않고(공백만 정리) 원본 그대로
+        저장한다(역량/상하반기업적, 2026-08-29 확정) — 연봉등급만 여전히
+        고정 허용값으로 검증한다. warn_if_missing=False면 컬럼 자체가 없어도
+        경고를 남기지 않는다(역량처럼 있을 수도/없을 수도 있는 선택 항목)."""
         if col_name not in df.columns:
-            print(f'  [WARN] "{col_name}" 컬럼 없음 — {out_col} 비워둠')
+            if warn_if_missing:
+                print(f'  [WARN] "{col_name}" 컬럼 없음 — {out_col} 비워둠')
             result[out_col] = ''
             return
         values = df[col_name].astype(str).str.strip()
         values = values.where(values != 'nan', '')
-        valid = values.isin(valid_values) | (values == '')
-        skipped = (~valid).sum()
-        if skipped:
-            print(f'  [WARN] "{col_name}" — 유효하지 않은 {label} {skipped}건 제외 '
-                  f'(허용값: {list(valid_values)})')
-        result[out_col] = values.where(valid, '')
+        if valid_values is None:
+            result[out_col] = values
+        else:
+            valid = values.isin(valid_values) | (values == '')
+            skipped = (~valid).sum()
+            if skipped:
+                print(f'  [WARN] "{col_name}" — 유효하지 않은 {label} {skipped}건 제외 '
+                      f'(허용값: {list(valid_values)})')
+            result[out_col] = values.where(valid, '')
         filled_cols.append(out_col)
 
     for year in salary_years:
         _extract(f'{year} 연봉등급', salary_grade_column(year), SALARY_GRADES, '연봉등급')
     for year in half_years:
-        _extract(f'{year} 상반기업적', first_half_column(year), HALF_GRADES, '상반기업적')
-        _extract(f'{year} 하반기업적', second_half_column(year), HALF_GRADES, '하반기업적')
+        _extract(f'{year} 상반기업적', first_half_column(year), None, '상반기업적')
+        _extract(f'{year} 하반기업적', second_half_column(year), None, '하반기업적')
+        _extract(f'{year} 역량', competency_column(year), None, '역량', warn_if_missing=False)
 
     if not filled_cols:
         print('[SKIP] 추출된 평가 데이터가 없습니다.')

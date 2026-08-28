@@ -439,8 +439,18 @@ def find_researchers_by_criteria(age_min: int | None = None, age_max: int | None
     current_year = datetime.now().year
     if age_min is not None or age_max is not None:
         def _age(birth_year):
+            # birth_year가 read_processed()에서 float로 추론돼 "1990.0"처럼
+            # 들어올 수 있어(다른 행에 빈 값이 섞이면 컬럼 전체가 float화됨)
+            # 단순 isdigit() 체크는 실패한다 — int(float(...))로 안전하게
+            # 파싱한다(2026-08-29, researcher_profile_export.py의
+            # _birth_year_int()와 동일한 원인/해결).
             s = str(birth_year).strip()
-            return current_year - int(s) if s.isdigit() else None
+            if not s:
+                return None
+            try:
+                return current_year - int(float(s))
+            except (TypeError, ValueError):
+                return None
         ages = candidates['birth_year'].apply(_age)
         if age_min is not None:
             candidates = candidates[ages.apply(lambda a: a is not None and a >= age_min)]
