@@ -14,6 +14,8 @@ from services.evaluations import (
     competency_column, first_half_column, format_evaluation_cell, salary_grade_column, second_half_column,
 )
 from services.language_qualification import format_block as language_block_text
+from services.task_history import merge_task_rows
+from services.task_history import sort_key as _task_sort_key
 from services.work_experience import format_line as _work_exp_format_line
 
 DEGREE_ORDER = ['박사', '석사', '학사', '전문대', '고교']
@@ -526,30 +528,35 @@ def _fmt_period(start_raw, end_raw) -> str:
 def tasks_block(task_df, rid: str, *, limit: int | None = None):
     """과제 수행 이력 테이블 (tasks.csv 기반). 투입률 0도 포함하고, 참여기간
     (종료일-시작일)이 30일 이하인 과제만 제외한다(타임라인 스파인과 동일 기준).
+    같은 과제명으로 여러 줄 참여 이력이 있으면 services.task_history.
+    merge_task_rows()로 하나로 합친다(엑셀 다운로드 _col_tasks()와 동일한
+    병합 규칙 공유 — 사용자 요청 2026-08-31 "화면에도 동일하게 반영").
+    진행중('현재')인 과제가 맨 위에 오도록 정렬한다. 병합된 구간의 투입률은
+    구간마다 다를 수 있어 "가장 최근 구간"(진행중이면 그 진행중 구간,
+    아니면 가장 최근에 끝난 구간) 값만 보여준다(사용자 확정 2026-08-31).
     limit이 주어지면(예: A4 인쇄 요약) 최신순 상위 limit건만 표에 담고, 잘린
     나머지 건수를 표 아래 한 줄로 안내한다 — 기본값 None은 화면 그대로 전체 표시."""
-    rows = (task_df[task_df['researcher_id'] == rid]
-            .sort_values('start_date', ascending=False)
-            if not task_df.empty else pd.DataFrame())
+    rows = task_df[task_df['researcher_id'] == rid] if not task_df.empty else pd.DataFrame()
     if not rows.empty:
         rows = rows[rows.apply(lambda r: _has_min_duration(r.get('start_date'), r.get('end_date')), axis=1)]
     if rows.empty:
         return html.Div('과제 수행 이력 없음', className='text-muted small')
 
-    total = len(rows)
+    merged = merge_task_rows(rows.to_dict('records'))
+    merged.sort(key=_task_sort_key)
+
+    total = len(merged)
     if limit:
-        rows = rows.head(limit)
+        merged = merged[:limit]
 
     table_rows = []
-    for _, row in rows.iterrows():
-        period = _fmt_period(row.get('start_date'), row.get('end_date'))
-        rate   = _fmt_rate(row.get('input_rate'))
-        # the_task_name(참여 당시 실제 과제명, pipeline/process_tasks.py 보정)이
-        # 있으면 그걸, 없으면(구버전 CSV/매핑 실패 폴백) 원본 task_name.
-        the_name = _clean_str(row.get('the_task_name', ''))
-        name = the_name or str(row.get('task_name', '') or '').strip() or '-'
+    for m in merged:
+        period = _fmt_period(m['start_row'].get('start_date'),
+                              None if m['current'] else m['end_row'].get('end_date'))
+        rate_row = m['current_row'] if m['current'] else m['end_row']
+        rate = _fmt_rate(rate_row.get('input_rate'))
         table_rows.append(html.Tr([
-            html.Td(name, className='small', style={'wordBreak': 'break-word'}),
+            html.Td(m['name'], className='small', style={'wordBreak': 'break-word'}),
             html.Td(period, className='small text-muted', style={'wordBreak': 'break-word'}),
             html.Td(rate, className='small text-center', style={'wordBreak': 'break-word'}),
         ]))
