@@ -1338,17 +1338,69 @@ def _record_search_history(rid, history):
     Input('researcher-search-history', 'data'),
 )
 def _render_history_chips(history):
+    """각 이력 칩은 "이름 선택"과 "이 칩만 삭제"를 분리된 형제 엘리먼트로
+    둔다 — 삭제 아이콘을 칩(Badge) 안쪽 자식으로 넣으면 클릭 이벤트가
+    DOM을 타고 올라가 부모 Badge의 n_clicks(_select_from_history, 그
+    사람을 선택)까지 같이 발생해버려("삭제"를 눌렀는데 그 사람이 선택되는
+    버그) — 형제로 분리하면 이 문제가 없다."""
     history = history or []
     if not history:
         return html.Span('아직 검색 이력이 없습니다.', className='text-muted small')
-    return [
-        dbc.Badge(
-            h['label'], id={'type': 'researcher-history-chip', 'rid': h['rid']},
-            color='light', text_color='dark', className='me-1 mb-1 border',
-            style={'cursor': 'pointer', 'fontWeight': 'normal'},
-        )
+    chips = [
+        html.Span([
+            html.Span(
+                h['label'],
+                id={'type': 'researcher-history-chip', 'rid': h['rid']},
+                style={'cursor': 'pointer'},
+            ),
+            html.I(
+                className='bi bi-x ms-1',
+                id={'type': 'researcher-history-chip-delete', 'rid': h['rid']},
+                title='검색 이력에서 삭제',
+                **{'aria-label': '검색 이력에서 삭제', 'role': 'button'},
+                style={'cursor': 'pointer'},
+            ),
+        ], className='badge bg-light text-dark border fw-normal me-1 mb-1')
         for h in history if h.get('rid')
     ]
+    chips.append(
+        dbc.Button(
+            '전체 삭제', id='researcher-history-clear-all',
+            color='link', size='sm', className='text-muted small p-0 ms-1 align-baseline',
+        )
+    )
+    return chips
+
+
+@callback(
+    Output('researcher-search-history', 'data', allow_duplicate=True),
+    Input({'type': 'researcher-history-chip-delete', 'rid': dash.ALL}, 'n_clicks'),
+    State({'type': 'researcher-history-chip-delete', 'rid': dash.ALL}, 'id'),
+    State('researcher-search-history', 'data'),
+    prevent_initial_call=True,
+)
+def _delete_history_entry(n_clicks_list, ids, history):
+    """이력 칩 하나만 삭제 — researcher-select 값 자체는 건드리지 않는다
+    (지금 보고 있는 프로필은 그대로 유지, 이력에서만 뺀다)."""
+    triggered_id = dash.ctx.triggered_id
+    if not triggered_id:
+        return no_update
+    idx = next((i for i, d in enumerate(ids) if d == triggered_id), None)
+    if idx is None or not n_clicks_list[idx]:
+        return no_update
+    rid = triggered_id['rid']
+    return [h for h in (history or []) if h.get('rid') != rid]
+
+
+@callback(
+    Output('researcher-search-history', 'data', allow_duplicate=True),
+    Input('researcher-history-clear-all', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def _clear_history(n_clicks):
+    if not n_clicks:
+        return no_update
+    return []
 
 
 @callback(

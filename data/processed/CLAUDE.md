@@ -6742,3 +6742,34 @@ permission_filter()`: 부서 예외 대상 행만 평가등급 값이 비워지�
 멀티셀렉트 UI 상호작용), 실제 로그인 세션으로 People팀 연구원 프로필을
 열어 잠금 아이콘이 실제로 바뀌는지, PostgreSQL 백엔드에서의 실제 컬럼
 마이그레이션(이 세션엔 `DATABASE_URL`이 없어 JSON 백엔드로만 검증).
+
+## 2026-08-31: 연구원 개별 프로필 "최근 검색" 이력에 개별/전체 삭제 기능 추가
+
+사용자 요청: 연구원 개별 프로필 화면의 "최근 검색" 칩(`researcher-
+search-history`, `dcc.Store(storage_type='local')` — 브라우저
+localStorage에 최대 8개 유지)에서 원하는 항목을 지울 수 있게.
+
+**`pages/researcher_profile.py`**: `_render_history_chips()`가 만들던
+칩 구조를 바꿨다 — 기존엔 `dbc.Badge` 하나 자체가 클릭 대상(그 사람
+선택, `_select_from_history()`)이었는데, 그 안에 삭제 아이콘을 자식으로
+넣으면 클릭 이벤트가 DOM을 타고 부모 Badge까지 올라가 "삭제"를 눌러도
+그 사람이 같이 선택되는 버그가 생긴다(Dash n_clicks는 DOM 이벤트 버블링을
+그대로 따름). 그래서 칩을 "이름(선택용, 기존과 동일한 `researcher-
+history-chip` 패턴 ID)"과 "× 아이콘(삭제용, 새 `researcher-history-
+chip-delete` 패턴 ID)"을 형제 엘리먼트로 감싸는 구조로 바꿔 이 문제를
+피했다. 새 콜백 2개: `_delete_history_entry()`(칩 하나만 이력에서 제거 —
+지금 보고 있는 프로필/`researcher-select` 값은 건드리지 않음),
+`_clear_history()`(칩 목록 끝에 항상 붙는 "전체 삭제" 링크 버튼,
+`researcher-history-clear-all` — 이력이 있을 때만 렌더링되므로 비어있을
+땐 안 보임). 기존 `_select_from_history()`(칩 클릭 → 그 사람 선택)는
+그대로 유지.
+
+검증: 콜백 함수를 직접 호출(Dash 콜백 컨텍스트는 `dash.ctx.triggered_id`만
+모킹) — 이력 3개 중 특정 rid 삭제 시 그 항목만 빠지는 것, "전체 삭제"가
+빈 리스트를 반환하는 것, `_render_history_chips()`가 빈 이력/채워진
+이력 둘 다 예외 없이 렌더링(칩 개수 = 이력 수 + "전체 삭제" 버튼 1개)
+되는 것 확인. `py_compile` 통과.
+
+**미검증**: 실제 브라우저에서 삭제 아이콘 클릭 시 부모 칩 선택이 정말
+같이 발생하지 않는지(형제 구조로 설계상 막았지만 실제 클릭 이벤트로는
+미확인), localStorage 반영/새로고침 후 유지 여부.
