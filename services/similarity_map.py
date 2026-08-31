@@ -493,6 +493,38 @@ def org_code_dep_id_map(period: tuple | None = None) -> dict:
     return result
 
 
+PEOPLE_TEAM_DEP_NAME = 'People팀'
+
+
+def people_team_dep_ids() -> set:
+    """"People팀"으로 태그된 조직도 노드(dep_name 기준)와 그 하위 전체
+    과제/파트의 dep_id 집합 — 평가등급 열람 제외 체크박스(pages/admin.py,
+    2026-08-31 — "People팀 평가등급 제외"만 지원하도록 단순화)가 이 값을
+    그대로 eval_excluded_dep_ids에 저장한다.
+
+    dep_name은 조직도 트리 구조(dep_id/upper_dep_id)와 무관한 평면 태그라
+    (org_codes_for_dep_names() 주석 참고) 하위 과제/파트 행이 자동으로
+    같은 dep_name을 갖지 않는다 — 그래서 단순 dep_name 매칭이 아니라
+    조직도 트리를 걸어, dep_name이 "People팀"인 노드를 찾은 뒤 그 노드의
+    하위 전체(_collect_org_codes(..., include_children=True), researchers_
+    under_departments()가 쓰는 것과 동일한 헬퍼)를 모아야 한다(사용자 확정
+    2026-08-31 — "부서가 People팀일 경우 하위 과제/파트가 포함되도록")."""
+    org_codes: set = set()
+
+    def _walk(nodes):
+        for node in nodes:
+            if (node.get('dep_name') or '').strip() == PEOPLE_TEAM_DEP_NAME:
+                org_codes.update(_collect_org_codes(node, include_children=True))
+            else:
+                _walk(node.get('children') or [])
+
+    _walk(_org_tree())
+    if not org_codes:
+        return set()
+    dep_id_map = org_code_dep_id_map()
+    return {dep_id_map[oc] for oc in org_codes if oc in dep_id_map}
+
+
 def individual_search_options() -> list:
     """개인별 검색 드롭다운 옵션 — "이름 [부서] (사번)" 형식(동명이인 구분,
     pages/researcher_profile.py 검색 드롭다운과 동일한 표기 규칙)."""

@@ -11,7 +11,7 @@ import dash_bootstrap_components as dbc
 from dash import ALL, Input, Output, State, callback, dash_table, dcc, html, no_update
 
 from config.auth_config import ROLE_LABELS, ROLE_PERMISSIONS
-from services import similarity_map, team_refer_store
+from services import team_refer_store
 from services import web_pipeline_runner as wpr
 
 dash.register_page(__name__, path='/admin', name='관리자', title='사용자/권한 관리')
@@ -118,16 +118,29 @@ def _user_modal():
                     dbc.Label('개별 권한 (역할 기본값을 계정 단위로 재정의 — 미체크해도 삭제되지 않고, '
                               '저장 시점 값이 이 계정에 고정됩니다)', size='sm', className='fw-semibold'),
                     dbc.Checklist(
-                        id='modal-permissions',
-                        options=[{'label': f' {label}', 'value': key}
-                                 for key, label in _PERMISSION_LABELS.items()],
-                        value=[], switch=True, className='mb-2 small',
+                        id='modal-permissions-eval',
+                        options=[{'label': f' {_PERMISSION_LABELS["view_evaluation"]}',
+                                  'value': 'view_evaluation'}],
+                        value=[], switch=True, className='small',
                     ),
-                    dbc.Label('평가등급 열람 제외 부서 (체크해도 이 부서 소속 연구원의 평가만은 가립니다)',
-                              html_for='modal-eval-excluded-depts', size='sm'),
-                    dcc.Dropdown(
-                        id='modal-eval-excluded-depts', options=similarity_map.org_tree_options(), value=[],
-                        multi=True, placeholder='제외할 부서 없음', className='small mb-2',
+                    # People팀 평가등급 제외(2026-08-31, 사용자 확정 — 여러 부서를
+                    # 고르는 드롭다운 대신 People팀 하나만 지원하도록 단순화) — 평가등급
+                    # 열람 바로 아래 들여써서 그 하위 옵션임을 보여준다. 체크하면
+                    # services.similarity_map.people_team_dep_ids()(People팀 노드 +
+                    # 조직도 트리 기준 하위 과제/파트 전부)를 그대로 eval_excluded_dep_ids
+                    # 로 저장한다.
+                    dbc.Checklist(
+                        id='modal-exclude-people-team',
+                        options=[{'label': ' People팀 평가등급 제외 (People팀·하위 과제/파트 '
+                                            '소속 연구원의 평가등급만 가림)',
+                                  'value': 'exclude'}],
+                        value=[], switch=True, className='small ps-4',
+                    ),
+                    dbc.Checklist(
+                        id='modal-permissions-rest',
+                        options=[{'label': f' {label}', 'value': key}
+                                 for key, label in _PERMISSION_LABELS.items() if key != 'view_evaluation'],
+                        value=[], switch=True, className='mb-2 small',
                     ),
                 ],
                 id='modal-permissions-section',
@@ -719,8 +732,9 @@ def refresh_user_table(_counter):
     Output('modal-pw-label', 'children', allow_duplicate=True),
     Output('modal-is-admin', 'value', allow_duplicate=True),
     Output('modal-permissions-section', 'style', allow_duplicate=True),
-    Output('modal-permissions', 'value', allow_duplicate=True),
-    Output('modal-eval-excluded-depts', 'value', allow_duplicate=True),
+    Output('modal-permissions-eval', 'value', allow_duplicate=True),
+    Output('modal-exclude-people-team', 'value', allow_duplicate=True),
+    Output('modal-permissions-rest', 'value', allow_duplicate=True),
     Output('modal-password-section', 'style', allow_duplicate=True),
     Output('modal-new-password-note', 'children', allow_duplicate=True),
     Output('user-modal-alert', 'children', allow_duplicate=True),
@@ -742,7 +756,7 @@ def open_add_modal(_):
         # 만든 뒤 "수정"에서 조정한다(계정을 만들면서 바로 고정값을 심지
         # 않기 위해, 이 섹션 자체를 새 계정 추가 시에는 숨긴다).
         {'display': 'none'},
-        [], [],
+        [], [], [],
         # 비밀번호 입력란은 신규 추가 시 숨기고(관리자가 직접 입력하지 않음
         # — 사용자 확정 2026-08-31), 고정 임시 비밀번호 안내만 보여준다.
         {'display': 'none'},
@@ -768,8 +782,9 @@ def open_add_modal(_):
     Output('modal-pw-label', 'children', allow_duplicate=True),
     Output('modal-is-admin', 'value', allow_duplicate=True),
     Output('modal-permissions-section', 'style', allow_duplicate=True),
-    Output('modal-permissions', 'value', allow_duplicate=True),
-    Output('modal-eval-excluded-depts', 'value', allow_duplicate=True),
+    Output('modal-permissions-eval', 'value', allow_duplicate=True),
+    Output('modal-exclude-people-team', 'value', allow_duplicate=True),
+    Output('modal-permissions-rest', 'value', allow_duplicate=True),
     Output('modal-password-section', 'style', allow_duplicate=True),
     Output('modal-new-password-note', 'children', allow_duplicate=True),
     Output('user-modal-alert', 'children', allow_duplicate=True),
@@ -780,7 +795,7 @@ def open_add_modal(_):
 def open_edit_modal(n_clicks_list, users):
     from dash import ctx
     from services.auth import MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH
-    n_outputs = 18
+    n_outputs = 19
     if not any(n for n in n_clicks_list if n):
         return [no_update] * n_outputs
     triggered = ctx.triggered_id
@@ -800,6 +815,15 @@ def open_edit_modal(n_clicks_list, users):
         key for key in _PERMISSION_KEYS
         if (overrides.get(key) if overrides.get(key) is not None else role_defaults.get(key, False))
     ]
+    perm_eval_value = [k for k in perm_values if k == 'view_evaluation']
+    perm_rest_value = [k for k in perm_values if k != 'view_evaluation']
+    # People팀 제외 체크박스는 "지금까지 뭐든 제외 설정이 있었는지"만 본다
+    # (사용자 확정 2026-08-31로 이 UI가 지원하는 유일한 예외가 People팀이라
+    # — 값이 있으면 그때 People팀을 체크해서 저장한 것이다. 조직도가 그
+    # 뒤에 바뀌어(하위 과제/파트 추가 등) 저장된 dep_id 집합이 지금 계산되는
+    # people_team_dep_ids()와 완전히 같지 않을 수 있어도, 다시 저장하면
+    # 항상 최신 집합으로 갱신되므로 "비어있지 않으면 체크"로 충분하다).
+    exclude_value = ['exclude'] if u.get('eval_excluded_dep_ids') else []
     return (
         True, '사용자 수정', u['user_id'],
         u['user_id'], True,              # user_id readonly
@@ -810,8 +834,7 @@ def open_edit_modal(n_clicks_list, users):
         f'새 비밀번호 (변경 시에만 입력 — {MIN_PASSWORD_LENGTH}~{MAX_PASSWORD_LENGTH}자, 영문/숫자/특수문자 조합)',
         ['admin'] if u.get('is_admin') else [],
         {},
-        perm_values,
-        list(u.get('eval_excluded_dep_ids') or []),
+        perm_eval_value, exclude_value, perm_rest_value,
         {},   # modal-password-section: 수정 화면에서는 보이도록
         '',   # modal-new-password-note: 수정 때는 안 씀
         [],
@@ -833,13 +856,15 @@ def open_edit_modal(n_clicks_list, users):
     State('modal-password', 'value'),
     State('modal-password-confirm', 'value'),
     State('modal-is-admin', 'value'),
-    State('modal-permissions', 'value'),
-    State('modal-eval-excluded-depts', 'value'),
+    State('modal-permissions-eval', 'value'),
+    State('modal-exclude-people-team', 'value'),
+    State('modal-permissions-rest', 'value'),
     State('user-refresh-counter', 'data'),
     prevent_initial_call=True,
 )
 def save_user(_, editing_id, user_id, display_name, role, email, password, pw_confirm,
-              is_admin_value, permissions_value, excluded_depts_value, counter):
+              is_admin_value, permissions_eval_value, exclude_people_team_value,
+              permissions_rest_value, counter):
     from services.auth import (
         DEFAULT_TEMP_PASSWORD, can, change_password, create_user, get_current_user,
         password_validation_error, update_permissions, update_user,
@@ -891,9 +916,15 @@ def save_user(_, editing_id, user_id, display_name, role, email, password, pw_co
         # update_permissions 독스트링 참고). 새로 만드는 계정(is_new)은 이
         # 섹션 자체가 숨겨져 있어 여기로 오지 않는다 — 역할 기본값을 그대로
         # 따르는 상태(NULL)로 남는다.
-        permissions_value = permissions_value or []
+        permissions_value = (permissions_eval_value or []) + (permissions_rest_value or [])
         permissions = {key: (key in permissions_value) for key in _PERMISSION_KEYS}
-        update_permissions(editing_id, permissions, excluded_depts_value or [])
+        # People팀 제외 체크박스(2026-08-31, 사용자 확정 — 부서 드롭다운
+        # 대신 People팀 하나만 지원) — 체크돼 있으면 지금 조직도 기준으로
+        # People팀 및 그 하위 과제/파트 전체의 dep_id를 다시 계산해 저장한다
+        # (조직도가 바뀌었어도 저장할 때마다 항상 최신 집합으로 갱신됨).
+        from services.similarity_map import people_team_dep_ids
+        excluded_dep_ids = list(people_team_dep_ids()) if 'exclude' in (exclude_people_team_value or []) else []
+        update_permissions(editing_id, permissions, excluded_dep_ids)
 
     return [], False, (counter or 0) + 1
 

@@ -7044,3 +7044,80 @@ include_*=True를 강제로 넘겨도 컬럼 자체가 전혀 생기지 않는 �
 볼 수 없어 미확인), PostgreSQL 백엔드에서의 실제 계정 생성(JSON 백엔드
 경로로만 로직 검증, DB 백엔드는 create_user() 내부 분기 자체는 이전
 세션에 이미 검증됨).
+
+## 2026-08-31: "평가등급 열람 제외 부서" 드롭다운을 "People팀 평가등급 제외"
+체크박스로 단순화(하위 과제/파트 자동 포함)
+
+사용자 요청: 사용자 수정 모달의 "평가등급 열람 제외 부서"가 여러 부서를
+고르는 드롭다운으로 돼 있는데, 부서를 직접 고르게 하지 말고 "부서가
+People팀일 경우"에만 제외할 수 있는 체크박스로 바꾸고, "개별 권한"의
+평가등급 열람과 인센티브(핵심이력) 열람 사이에 넣어달라는 것. 추가로
+"org_code 맵핑으로 인한 '부서'가 People팀이면 하위 '과제/파트'가
+포함되도록" — 즉 People팀 자체만이 아니라 그 아래 조직도 트리 전체가
+제외 대상이어야 한다는 요청.
+
+**핵심 함정**: team_refer의 dep_name(‘부서’)은 조직도 트리 구조(dep_id/
+upper_dep_id)와 무관한 평면(flat) 태그다(services/similarity_map.py
+기존 주석, org_codes_for_dep_names() 참고) — 부서 아래 과제/파트 행이
+자동으로 같은 dep_name을 갖지 않는다. 그래서 단순히
+`org_codes_for_dep_names('People팀')`(평면 매칭)만 쓰면 People팀
+루트 노드 자신의 org_code만 잡히고, 그 아래 과제/파트들은 놓친다 —
+사용자가 "하위 과제/파트가 포함되도록"이라고 콕 집어 요청한 이유가
+바로 이것.
+
+**`services/similarity_map.py`**: `people_team_dep_ids()` 신설 —
+조직도 트리(`_org_tree()`)를 걸어 dep_name이 "People팀"인 노드를 찾은
+뒤, 그 노드의 하위 전체를 `_collect_org_codes(node, include_children=True)`
+(부서 하위 인원 조회 `researchers_under_departments()`가 이미 쓰던
+헬퍼 재사용)로 모으고, `org_code_dep_id_map()`으로 dep_id 집합까지
+변환해 반환한다. 이렇게 하면 People팀 산하에 몇 단계로 중첩된 과제/파트가
+있어도 전부 자동으로 포함된다.
+
+**`pages/admin.py`**: "사용자 추가/수정" 모달의 "개별 권한" 섹션 구조를
+바꿨다 — 기존엔 `modal-permissions`(4개 권한 한 Checklist) +
+`modal-eval-excluded-depts`(부서 다중 선택 Dropdown, `similarity_map.
+org_tree_options()` 사용)였는데, dbc.Checklist 하나로는 옵션 사이에
+다른 컴포넌트를 끼워 넣을 수 없어 Checklist를 둘로 쪼갰다:
+`modal-permissions-eval`(평가등급 열람 하나만) → 그 바로 아래 들여쓴
+`modal-exclude-people-team`(새 체크박스, "People팀 평가등급 제외") →
+`modal-permissions-rest`(인센티브/코멘트/리더십 3개) — 요청한 순서
+그대로. 저장(`save_user()`)은 두 Checklist의 값을 합쳐 기존과 동일한
+4개 권한 dict를 만들고, People팀 체크박스가 켜져 있으면
+`similarity_map.people_team_dep_ids()`를 **저장 시점에 다시 계산**해
+`eval_excluded_dep_ids`로 저장한다(조직도가 그 사이 바뀌었어도 저장할
+때마다 항상 최신 집합으로 갱신됨 — dep_id를 고정 키로 쓰는 기존 설계
+그대로 유지, 아래 참고). 수정 모달을 열 때(`open_edit_modal()`) 체크박스
+초기값은 "그 계정에 `eval_excluded_dep_ids`가 하나라도 있으면 체크"로
+판정한다 — 이 UI가 지원하는 예외가 이제 People팀 하나뿐이라, 예전에
+저장된 정확한 dep_id 집합과 지금 다시 계산한 집합이 조직도 변경으로
+약간 달라져 있어도(예: 그 사이 하위 과제가 하나 더 생김) 문제없다(다시
+저장하면 항상 최신 집합으로 덮어씀).
+
+**바꾸지 않은 것(설계 재사용)**: `eval_excluded_dep_ids`를 dep_id
+리스트로 저장하는 기존 스키마(services/user_store.py, services/auth.py),
+그리고 이를 소비하는 `auth.can_view_evaluation()`/`eval_excluded_dep_ids()`/
+`can_table()`, 화면(`pages/researcher_list.py`의 행 단위 마스킹,
+`pages/researcher_profile.py`의 잠금 아이콘/일괄 인쇄), 엑셀 다운로드
+(`services/researcher_profile_export.py`의 `_eval_dept_excluded()`,
+3개 옵트인 평가 컬럼) — 이 전부 그대로 둘 수 있었다. 관리자 화면이
+dep_id 집합을 "어떻게 고르는지"만 바꿨고(드롭다운 → People팀 자동 계산),
+그 집합을 "어떻게 쓰는지"는 손대지 않아 회귀 위험을 최소화했다.
+
+검증: `people_team_dep_ids()`를 합성 team_refer 데이터(People팀 루트
+아래 파트A, 그 아래 파트A-1까지 3단 중첩, dep_name은 루트만 "People팀"
+이고 하위는 빈 문자열/다른 값 — 실제 데이터와 동일한 "평면 태그" 조건)로
+직접 호출해 3단 전부의 dep_id가 포함되는 것, 매칭이 아예 없을 때 빈
+집합을 반환하는 것 확인. `pages/admin.py`는 콜백을 직접 호출(모킹)해 —
+`open_add_modal()`이 3개 권한 관련 출력(eval/exclude/rest) 전부 빈
+리스트로 시작하는 것, `open_edit_modal()`이 `eval_excluded_dep_ids`가
+있던 계정은 체크박스를 체크된 상태로, 없던 계정은 해제된 상태로 보여주는
+것, `save_user()`가 체크박스 on일 때 `people_team_dep_ids()`(모킹된 값)를
+그대로 `update_permissions()`에 넘기고 off일 때 빈 리스트를 넘기는 것,
+4개 권한 dict가 쪼개진 두 Checklist 값을 정확히 합쳐 만들어지는 것까지
+확인. 기존 행 단위 마스킹/엑셀 다운로드 회귀 테스트(이전 커밋에서 작성한
+것)도 다시 돌려 영향이 없음을 재확인. `py_compile` 통과, 전체 페이지
+임포트 확인.
+
+**미검증**: 실제 브라우저에서 체크박스 조작 및 화면 배치(들여쓰기로
+"평가등급 열람의 하위 옵션"처럼 보이는지) 육안 확인, 실제 team_refer
+데이터로 People팀 하위 과제/파트 구조를 대입했을 때 결과.
