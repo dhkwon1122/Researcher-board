@@ -55,43 +55,12 @@ if BASE_DIR not in sys.path:
 
 from config.auth_config import ROLE_LABELS  # noqa: E402
 from services.auth import create_user, list_users, password_validation_error  # noqa: E402
-
-_COL_ALIASES = {
-    'user_id': ('아이디', 'user_id', '사번'),
-    'display_name': ('이름', 'display_name', '성명'),
-    'email': ('이메일', 'email'),
-    'role': ('권한', 'role', '역할'),
-    'is_admin': ('관리자', 'is_admin', '관리자여부'),
-}
-
-_TRUTHY = {'y', 'yes', 'true', '1', 'o', '예', '관리자'}
-
-_ROLE_CODE_BY_LABEL = {v: k for k, v in ROLE_LABELS.items()}
-
-
-def _find_col(df: pd.DataFrame, key: str) -> str | None:
-    for alias in _COL_ALIASES[key]:
-        if alias in df.columns:
-            return alias
-    return None
-
-
-def _parse_bool(raw: str) -> bool:
-    return str(raw or '').strip().lower() in _TRUTHY
+from services.bulk_user_import import parse_rows, read_upload  # noqa: E402
 
 
 def _read_input(path: str) -> pd.DataFrame:
-    ext = os.path.splitext(path)[1].lower()
-    if ext in ('.xlsx', '.xls'):
-        return pd.read_excel(path, dtype=str)
-    return pd.read_csv(path, encoding='utf-8-sig', dtype=str)
-
-
-def _normalize_role(raw: str) -> str | None:
-    raw = (raw or '').strip()
-    if raw in ROLE_LABELS:
-        return raw
-    return _ROLE_CODE_BY_LABEL.get(raw)
+    with open(path, 'rb') as f:
+        return read_upload(f.read(), path)
 
 
 def main():
@@ -110,47 +79,17 @@ def main():
         sys.exit(1)
 
     df = _read_input(args.input_file)
-    col_uid = _find_col(df, 'user_id')
-    col_name = _find_col(df, 'display_name')
-    col_email = _find_col(df, 'email')
-    col_role = _find_col(df, 'role')
-    col_admin = _find_col(df, 'is_admin')
+    existing_ids = {u['user_id'] for u in list_users()}
+    result = parse_rows(df, existing_ids)
 
-    missing = [k for k, c in [('아이디', col_uid), ('이름', col_name), ('권한', col_role)] if c is None]
-    if missing:
-        print(f'[오류] 필수 컬럼을 찾을 수 없습니다: {", ".join(missing)}')
+    if result['missing_columns']:
+        print(f"[오류] 필수 컬럼을 찾을 수 없습니다: {', '.join(result['missing_columns'])}")
         print(f'  파일의 컬럼: {list(df.columns)}')
         sys.exit(1)
 
-    existing_ids = {u['user_id'] for u in list_users()}
-
-    created, skipped_existing, skipped_invalid = [], [], []
-    seen_in_file = set()
-
-    for _, row in df.iterrows():
-        uid = str(row.get(col_uid, '')).strip()
-        name = str(row.get(col_name, '')).strip()
-        email = str(row.get(col_email, '') or '').strip() if col_email else ''
-        role_raw = str(row.get(col_role, '')).strip()
-        is_admin = _parse_bool(row.get(col_admin, '')) if col_admin else False
-
-        if not uid or not name:
-            skipped_invalid.append((uid or '(빈 아이디)', '아이디/이름 누락'))
-            continue
-        role = _normalize_role(role_raw)
-        if role is None:
-            skipped_invalid.append((uid, f'알 수 없는 권한 "{role_raw}" '
-                                          f'(허용값: {", ".join(ROLE_LABELS)} 또는 그 한글 라벨)'))
-            continue
-        if uid in existing_ids:
-            skipped_existing.append(uid)
-            continue
-        if uid in seen_in_file:
-            skipped_invalid.append((uid, '입력 파일 안에서 아이디 중복'))
-            continue
-        seen_in_file.add(uid)
-        created.append({'user_id': uid, 'display_name': name, 'email': email, 'role': role,
-                        'is_admin': is_admin})
+    created = result['rows']
+    skipped_existing = result['skipped_existing']
+    skipped_invalid = result['skipped_invalid']
 
     print(f'입력 {len(df)}행 → 생성 대상 {len(created)}명, '
           f'이미 존재해서 건너뜀 {len(skipped_existing)}명, '

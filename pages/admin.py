@@ -133,18 +133,29 @@ def _user_modal():
                 id='modal-permissions-section',
             ),
             html.Hr(className='my-2'),
-            dbc.Row([
-                dbc.Col([
-                    dbc.Label(id='modal-pw-label', size='sm'),
-                    dbc.Input(id='modal-password', type='password',
-                              autocomplete='new-password', size='sm'),
-                ], md=6),
-                dbc.Col([
-                    dbc.Label('비밀번호 확인', html_for='modal-password-confirm', size='sm'),
-                    dbc.Input(id='modal-password-confirm', type='password',
-                              autocomplete='new-password', size='sm'),
-                ], md=6),
-            ], className='mb-2'),
+            # 신규 계정(추가)은 비밀번호를 관리자가 입력하지 않는다 — 항상
+            # DEFAULT_TEMP_PASSWORD로 시작하고 최초 로그인 시 강제로 바꾸게
+            # 한다(사용자 확정 2026-08-31). 이 섹션은 "수정" 때만 보여서
+            # 필요하면 기존 계정의 비밀번호를 관리자가 재설정할 수 있다
+            # (그 경우엔 지금 정책 그대로 검증됨 — save_user() 참고).
+            html.Div(
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Label(id='modal-pw-label', size='sm'),
+                        dbc.Input(id='modal-password', type='password',
+                                  autocomplete='new-password', size='sm'),
+                    ], md=6),
+                    dbc.Col([
+                        dbc.Label('비밀번호 확인', html_for='modal-password-confirm', size='sm'),
+                        dbc.Input(id='modal-password-confirm', type='password',
+                                  autocomplete='new-password', size='sm'),
+                    ], md=6),
+                ], className='mb-2'),
+                id='modal-password-section',
+            ),
+            html.Div(
+                id='modal-new-password-note', className='small text-muted mb-2',
+            ),
             html.Div(id='user-modal-alert'),
         ]),
         dbc.ModalFooter([
@@ -206,6 +217,60 @@ def _delete_modal():
     ], id='delete-modal', is_open=False)
 
 
+def _bulk_user_upload_modal():
+    """엑셀/CSV로 초기 사용자를 한 번에 추가하는 모달(2026-08-31 신설).
+    컬럼 스키마·검증은 services/bulk_user_import.py를 그대로 쓴다(CLI
+    스크립트 scripts/bulk_create_users.py와 동일 기준 — REQUIRED_COLUMNS/
+    OPTIONAL_COLUMNS도 거기서 가져와 안내문과 어긋나지 않게 한다).
+    업로드하면 바로 만들지 않고 미리보기(생성될 계정/건너뛸 항목)를 먼저
+    보여준 뒤 "생성"을 눌러야 실제로 만든다 — 여러 계정을 한 번에
+    만드는 동작이라 되돌리기 어려우므로 확인 단계를 둔다."""
+    from services.bulk_user_import import OPTIONAL_COLUMNS, REQUIRED_COLUMNS
+
+    return dbc.Modal([
+        dbc.ModalHeader(dbc.ModalTitle('엑셀로 사용자 일괄 추가')),
+        dbc.ModalBody([
+            dbc.Alert([
+                html.Div([html.Strong('필수 컬럼: '), ', '.join(REQUIRED_COLUMNS)]),
+                html.Div([
+                    html.Strong('선택 컬럼: '), ', '.join(OPTIONAL_COLUMNS),
+                    ' (관리자는 예/아니오, 비워두면 아니오)',
+                ], className='mt-1'),
+                html.Div(
+                    '권한 컬럼에는 정해진 역할명만 입력할 수 있습니다 — 아래 템플릿을 '
+                    '내려받으면 드롭다운으로 고를 수 있습니다. 이미 있는 아이디는 '
+                    '건너뜁니다(수정은 "수정" 버튼으로 개별 진행).',
+                    className='mt-1',
+                ),
+            ], color='light', className='small border py-2'),
+            dbc.Button(
+                [html.I(className='bi bi-download me-1'), '템플릿 다운로드'],
+                id='btn-download-user-template', color='secondary', outline=True, size='sm',
+                className='mb-3',
+            ),
+            dcc.Download(id='user-template-download'),
+            dcc.Upload(
+                id='bulk-user-upload',
+                children=html.Div([
+                    html.I(className='bi bi-cloud-arrow-up me-1'),
+                    '클릭 또는 드래그해 엑셀/CSV 업로드',
+                ], className='small text-muted'),
+                style={
+                    'padding': '20px', 'border': '1px dashed #adb5bd', 'borderRadius': '4px',
+                    'textAlign': 'center', 'cursor': 'pointer',
+                },
+                multiple=False,
+            ),
+            dcc.Store(id='bulk-user-upload-parsed', data=None),
+            html.Div(id='bulk-user-upload-preview', className='mt-3'),
+        ]),
+        dbc.ModalFooter([
+            dbc.Button('닫기', id='btn-bulk-upload-cancel', color='secondary', size='sm'),
+            dbc.Button('생성', id='btn-bulk-upload-confirm', color='primary', size='sm', disabled=True),
+        ]),
+    ], id='bulk-user-upload-modal', is_open=False, backdrop='static', size='lg')
+
+
 # ── 레이아웃 ──────────────────────────────────────────────────────────────────
 
 def _user_management_tab() -> html.Div:
@@ -241,10 +306,17 @@ def _user_management_tab() -> html.Div:
                         className='d-flex align-items-center',
                     ),
                     dbc.Col(
-                        dbc.Button(
-                            [html.I(className='bi bi-person-plus me-1'), '사용자 추가'],
-                            id='btn-add-user', color='primary', size='sm',
-                        ),
+                        dbc.ButtonGroup([
+                            dbc.Button(
+                                [html.I(className='bi bi-file-earmark-excel me-1'), '엑셀로 추가'],
+                                id='btn-open-bulk-upload', color='secondary', outline=True, size='sm',
+                                title='엑셀/CSV 명단으로 초기 사용자를 한 번에 추가',
+                            ),
+                            dbc.Button(
+                                [html.I(className='bi bi-person-plus me-1'), '사용자 추가'],
+                                id='btn-add-user', color='primary', size='sm',
+                            ),
+                        ]),
                         className='text-end',
                     ),
                 ], align='center'),
@@ -258,6 +330,7 @@ def _user_management_tab() -> html.Div:
 
         _user_modal(),
         _delete_modal(),
+        _bulk_user_upload_modal(),
     ], className='pt-3')
 
 
@@ -648,26 +721,33 @@ def refresh_user_table(_counter):
     Output('modal-permissions-section', 'style', allow_duplicate=True),
     Output('modal-permissions', 'value', allow_duplicate=True),
     Output('modal-eval-excluded-depts', 'value', allow_duplicate=True),
+    Output('modal-password-section', 'style', allow_duplicate=True),
+    Output('modal-new-password-note', 'children', allow_duplicate=True),
     Output('user-modal-alert', 'children', allow_duplicate=True),
     Input('btn-add-user', 'n_clicks'),
     prevent_initial_call=True,
 )
 def open_add_modal(_):
-    from services.auth import MIN_PASSWORD_LENGTH, MAX_PASSWORD_LENGTH
+    from services.auth import DEFAULT_TEMP_PASSWORD
     return (
         True, '사용자 추가', None,
         '', False,          # user_id, disabled
         '',                 # display_name
         _ROLES[0]['value'], # role default
         '',                 # email
-        '', '',             # passwords
-        f'비밀번호 * ({MIN_PASSWORD_LENGTH}~{MAX_PASSWORD_LENGTH}자, 영문/숫자/특수문자 조합)',
+        '', '',             # passwords(안 씀 — 아래 modal-password-section 자체를 숨김)
+        '',                 # modal-pw-label(안 보이므로 내용 무의미)
         [],                 # is_admin: 기본 미부여
         # 새 계정은 역할 기본값을 그대로 따르는 상태(NULL)로 시작 — 개별 권한은
         # 만든 뒤 "수정"에서 조정한다(계정을 만들면서 바로 고정값을 심지
         # 않기 위해, 이 섹션 자체를 새 계정 추가 시에는 숨긴다).
         {'display': 'none'},
         [], [],
+        # 비밀번호 입력란은 신규 추가 시 숨기고(관리자가 직접 입력하지 않음
+        # — 사용자 확정 2026-08-31), 고정 임시 비밀번호 안내만 보여준다.
+        {'display': 'none'},
+        f'신규 계정은 임시 비밀번호 "{DEFAULT_TEMP_PASSWORD}"로 생성되며, '
+        f'최초 로그인 후 반드시 새 비밀번호로 변경해야 합니다.',
         [],
     )
 
@@ -690,6 +770,8 @@ def open_add_modal(_):
     Output('modal-permissions-section', 'style', allow_duplicate=True),
     Output('modal-permissions', 'value', allow_duplicate=True),
     Output('modal-eval-excluded-depts', 'value', allow_duplicate=True),
+    Output('modal-password-section', 'style', allow_duplicate=True),
+    Output('modal-new-password-note', 'children', allow_duplicate=True),
     Output('user-modal-alert', 'children', allow_duplicate=True),
     Input({'type': 'btn-edit', 'index': ALL}, 'n_clicks'),
     State('user-list-store', 'data'),
@@ -697,7 +779,8 @@ def open_add_modal(_):
 )
 def open_edit_modal(n_clicks_list, users):
     from dash import ctx
-    n_outputs = 16
+    from services.auth import MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH
+    n_outputs = 18
     if not any(n for n in n_clicks_list if n):
         return [no_update] * n_outputs
     triggered = ctx.triggered_id
@@ -724,11 +807,13 @@ def open_edit_modal(n_clicks_list, users):
         u.get('role', _ROLES[0]['value']),
         u.get('email', ''),
         '', '',
-        '새 비밀번호 (변경 시에만 입력)',
+        f'새 비밀번호 (변경 시에만 입력 — {MIN_PASSWORD_LENGTH}~{MAX_PASSWORD_LENGTH}자, 영문/숫자/특수문자 조합)',
         ['admin'] if u.get('is_admin') else [],
         {},
         perm_values,
         list(u.get('eval_excluded_dep_ids') or []),
+        {},   # modal-password-section: 수정 화면에서는 보이도록
+        '',   # modal-new-password-note: 수정 때는 안 씀
         [],
     )
 
@@ -756,8 +841,8 @@ def open_edit_modal(n_clicks_list, users):
 def save_user(_, editing_id, user_id, display_name, role, email, password, pw_confirm,
               is_admin_value, permissions_value, excluded_depts_value, counter):
     from services.auth import (
-        can, change_password, create_user, get_current_user, password_validation_error,
-        update_permissions, update_user,
+        DEFAULT_TEMP_PASSWORD, can, change_password, create_user, get_current_user,
+        password_validation_error, update_permissions, update_user,
     )
     if not can('manage_users'):
         return _alert('권한이 없습니다.', 'danger'), no_update, no_update
@@ -777,15 +862,15 @@ def save_user(_, editing_id, user_id, display_name, role, email, password, pw_co
     if is_new:
         if not user_id:
             return _alert('아이디는 필수입니다.', 'warning'), no_update, no_update
-        if not password:
-            return _alert('비밀번호는 필수입니다.', 'warning'), no_update, no_update
-        password_error = password_validation_error(password)
-        if password_error:
-            return _alert(password_error, 'warning'), no_update, no_update
-        if password != pw_confirm:
-            return _alert('비밀번호가 일치하지 않습니다.', 'warning'), no_update, no_update
+        # 신규 계정은 항상 고정 임시 비밀번호로 시작하고(관리자가 직접
+        # 입력하지 않음 — 사용자 확정 2026-08-31) must_change_password=True로
+        # 잠근다. 이 값 자체는 비밀번호 정책을 만족하지 않으므로
+        # password_validation_error() 검증을 여기서는 건너뛴다 — 정책은
+        # 계정 소유자가 최초 로그인 후 본인 비밀번호로 바꿀 때부터 적용된다
+        # (app.py의 /change-password, DEFAULT_TEMP_PASSWORD 독스트링 참고).
         try:
-            create_user(user_id, password, display_name, role, email, is_admin=is_admin)
+            create_user(user_id, DEFAULT_TEMP_PASSWORD, display_name, role, email,
+                        must_change_password=True, is_admin=is_admin)
         except ValueError as exc:
             return _alert(str(exc), 'danger'), no_update, no_update
     else:
@@ -884,6 +969,168 @@ def confirm_delete(_, user_id, counter):
 )
 def cancel_delete(_):
     return False
+
+
+# ── 콜백: 엑셀로 사용자 일괄 추가 ─────────────────────────────────────────────
+
+def _bulk_upload_row_table(rows: list, columns: list) -> dbc.Table:
+    return dbc.Table([
+        html.Thead(html.Tr([html.Th(c) for c in columns])),
+        html.Tbody([html.Tr([html.Td(str(v)) for v in r]) for r in rows]),
+    ], bordered=True, hover=True, size='sm', className='mb-2')
+
+
+def _bulk_upload_preview(result: dict) -> list:
+    """업로드 파싱 결과(services.bulk_user_import.parse_rows 반환값)를
+    "생성될 계정 / 이미 존재해 건너뜀 / 형식 오류로 건너뜀" 3단으로
+    요약한다 — 아직 계정을 만들지 않은 상태의 미리보기 화면."""
+    from config.auth_config import ROLE_LABELS
+
+    parts = []
+    rows = result['rows']
+    if rows:
+        parts.append(html.Div(f'생성될 계정 {len(rows)}명', className='fw-semibold small mb-1'))
+        parts.append(_bulk_upload_row_table(
+            [[u['user_id'], u['display_name'], ROLE_LABELS.get(u['role'], u['role']),
+              u['email'] or '-', '예' if u['is_admin'] else '']
+             for u in rows],
+            ['아이디', '이름', '역할', '이메일', '관리자'],
+        ))
+    else:
+        parts.append(_alert('생성할 계정이 없습니다 — 아래 건너뜀 목록을 확인하세요.', 'warning'))
+
+    if result['skipped_existing']:
+        parts.append(html.Div(
+            f"이미 존재해서 건너뜀 ({len(result['skipped_existing'])}명): "
+            f"{', '.join(result['skipped_existing'])}",
+            className='small text-muted mb-1',
+        ))
+    if result['skipped_invalid']:
+        parts.append(html.Div('형식 오류로 건너뜀:', className='small text-muted mb-1'))
+        parts.append(html.Ul([
+            html.Li(f'{uid}: {reason}', className='small text-muted')
+            for uid, reason in result['skipped_invalid']
+        ], className='mb-1'))
+    return parts
+
+
+@callback(
+    Output('bulk-user-upload-modal', 'is_open', allow_duplicate=True),
+    Input('btn-open-bulk-upload', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def open_bulk_upload_modal(_):
+    return True
+
+
+@callback(
+    Output('bulk-user-upload-modal', 'is_open', allow_duplicate=True),
+    Output('bulk-user-upload', 'contents'),
+    Output('bulk-user-upload-parsed', 'data', allow_duplicate=True),
+    Output('bulk-user-upload-preview', 'children', allow_duplicate=True),
+    Output('btn-bulk-upload-confirm', 'disabled', allow_duplicate=True),
+    Input('btn-bulk-upload-cancel', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def close_bulk_upload_modal(_):
+    # 업로드 상태를 전부 비워서, 다음에 다시 열었을 때 이전 파일의 미리보기가
+    # 남아있지 않게 한다.
+    return False, None, None, None, True
+
+
+@callback(
+    Output('user-template-download', 'data'),
+    Input('btn-download-user-template', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def download_user_template(n_clicks):
+    from services.auth import can
+    if not n_clicks or not can('manage_users'):
+        return no_update
+    from services.bulk_user_import import build_template_bytes
+    return dcc.send_bytes(build_template_bytes(), '사용자_일괄추가_템플릿.xlsx')
+
+
+@callback(
+    Output('bulk-user-upload-parsed', 'data', allow_duplicate=True),
+    Output('bulk-user-upload-preview', 'children', allow_duplicate=True),
+    Output('btn-bulk-upload-confirm', 'disabled', allow_duplicate=True),
+    Input('bulk-user-upload', 'contents'),
+    State('bulk-user-upload', 'filename'),
+    prevent_initial_call=True,
+)
+def parse_bulk_upload(contents, filename):
+    from services.auth import can, list_users
+    if not can('manage_users'):
+        return None, _alert('권한이 없습니다.', 'danger'), True
+    if not contents:
+        return None, None, True
+
+    try:
+        _header, b64data = contents.split(',', 1)
+        file_bytes = base64.b64decode(b64data, validate=True)
+    except (ValueError, TypeError):
+        return None, _alert('파일을 읽지 못했습니다.', 'danger'), True
+
+    from services.bulk_user_import import MAX_UPLOAD_BYTES, parse_rows, read_upload
+    if len(file_bytes) > MAX_UPLOAD_BYTES:
+        limit_mb = MAX_UPLOAD_BYTES // (1024 * 1024)
+        return None, _alert(f'파일이 너무 큽니다(최대 {limit_mb}MB).', 'danger'), True
+
+    try:
+        df = read_upload(file_bytes, filename or '')
+    except Exception as exc:
+        return None, _alert(f'파일을 읽지 못했습니다: {exc}', 'danger'), True
+
+    existing_ids = {u['user_id'] for u in list_users()}
+    result = parse_rows(df, existing_ids)
+
+    if result['missing_columns']:
+        msg = f"필수 컬럼을 찾을 수 없습니다: {', '.join(result['missing_columns'])}"
+        return None, _alert(msg, 'danger'), True
+
+    return result, _bulk_upload_preview(result), not result['rows']
+
+
+@callback(
+    Output('bulk-user-upload-preview', 'children', allow_duplicate=True),
+    Output('user-refresh-counter', 'data', allow_duplicate=True),
+    Output('btn-bulk-upload-confirm', 'disabled', allow_duplicate=True),
+    Input('btn-bulk-upload-confirm', 'n_clicks'),
+    State('bulk-user-upload-parsed', 'data'),
+    State('user-refresh-counter', 'data'),
+    prevent_initial_call=True,
+)
+def confirm_bulk_create(n_clicks, parsed, counter):
+    from services.auth import DEFAULT_TEMP_PASSWORD, can, create_user
+    if not can('manage_users'):
+        return _alert('권한이 없습니다.', 'danger'), no_update, True
+    if not parsed or not parsed.get('rows'):
+        return no_update, no_update, True
+
+    # 여기서도(화면 미리보기 이후) 다시 아이디 중복 등을 걸러낸다 —
+    # create_user() 자체가 생성 시점에 다시 확인하므로 미리보기 이후
+    # 다른 관리자가 같은 아이디를 먼저 만들었어도 안전하게 건너뛴다.
+    ok, failed = [], []
+    for u in parsed['rows']:
+        try:
+            create_user(u['user_id'], DEFAULT_TEMP_PASSWORD, u['display_name'], u['role'],
+                        u['email'], must_change_password=True, is_admin=u['is_admin'])
+            ok.append(u['user_id'])
+        except Exception as exc:
+            failed.append((u['user_id'], str(exc)))
+
+    parts = [_alert(
+        f'{len(ok)}명 생성 완료. 임시 비밀번호 "{DEFAULT_TEMP_PASSWORD}"를 안전한 방법으로 '
+        f'전달하세요 — 최초 로그인 시 반드시 새 비밀번호로 변경해야 합니다.',
+        'success' if ok else 'warning',
+    )]
+    if failed:
+        parts.append(html.Div('생성 실패:', className='small text-muted mb-1'))
+        parts.append(html.Ul([
+            html.Li(f'{uid}: {err}', className='small text-muted') for uid, err in failed
+        ]))
+    return parts, (counter or 0) + 1, True
 
 
 # ── 콜백: 과제 전문성 분석 리포트 메일 발송 ──────────────────────────────────

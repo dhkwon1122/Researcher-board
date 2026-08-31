@@ -53,6 +53,18 @@ _USERS_FILE = os.path.join(
 MIN_PASSWORD_LENGTH = int(os.environ.get('MIN_PASSWORD_LENGTH', '8'))
 MAX_PASSWORD_LENGTH = int(os.environ.get('MAX_PASSWORD_LENGTH', '12'))
 
+# 관리자가 화면(pages/admin.py)에서 신규 계정을 만들 때(단일 추가·엑셀
+# 일괄 추가 둘 다) 항상 이 고정값으로 시작한다(사용자 확정 2026-08-31 —
+# 관리자가 매번 비밀번호를 직접 입력/전달할 필요 없이). 이 값 자체는
+# 위 정책(영문/숫자/특수문자 조합)을 만족하지 않으므로 계정 생성 시점에는
+# password_validation_error() 검증을 건너뛴다 — 대신 반드시
+# must_change_password=True로 만들어서, 계정 소유자가 처음 로그인해
+# 본인 비밀번호로 바꾸는 순간부터(app.py의 /change-password) 그 정책이
+# 적용된다. 고정값이 코드에 그대로 노출돼 있어도 안전한 이유는 이 강제
+# 변경 절차가 유일한 방어선이라는 뜻이므로, must_change_password를 끄고
+# 이 값으로 계정을 만드는 일은 없어야 한다.
+DEFAULT_TEMP_PASSWORD = '12345678'
+
 
 def password_validation_error(password: str) -> str | None:
     """조직 계정에 적용할 비밀번호 정책. 오류가 없으면 None."""
