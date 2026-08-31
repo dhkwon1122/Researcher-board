@@ -86,10 +86,19 @@ def _locked_block(label: str = '', *, icon_only: bool = False):
     )
 
 
-def _opt(row):
-    dept = str(row.get('department', '') or '').strip()
-    org = str(row.get('org_code', '') or '').strip()
-    tag = ' · '.join(v for v in (dept, org) if v)
+def _opt(row, dep_map: dict, pjt_map: dict):
+    """부서/과제 표시는 "연구원 명단" 화면(services.similarity_map.
+    org_code_label_maps())과 완전히 동일한 규칙을 쓴다 — org_code로
+    team_refer(dep_name/pjt_part_name)를 우선 찾고, 매핑이 없으면(신규
+    입사자 등 아직 팀/리더 참조에 등록 안 된 조직) 부서는 researchers.csv
+    원본 department, 과제는 원본 org_code 코드값으로 그대로 폴백한다
+    (사용자 확정 2026-08-31 — 이전엔 이 함수가 team_refer 매핑을 아예
+    시도하지 않고 항상 원본 department/org_code만 보여줘, 명단 화면과
+    서로 다른 부서/과제 표기가 나오는 문제가 있었다)."""
+    org_code = str(row.get('org_code', '') or '').strip()
+    dept = dep_map.get(org_code) or str(row.get('department', '') or '').strip()
+    proj = pjt_map.get(org_code) or org_code
+    tag = ' · '.join(v for v in (dept, proj) if v)
     tag_suffix = f' [{tag}]' if tag else ''
     not_current = str(row.get('is_current', 'Y')) == 'N'
     suffix = ' — 현재 미소속' if not_current else ''
@@ -108,14 +117,17 @@ def _load_selector_data(current_only: bool = True):
     부서 목록/그룹핑은 researchers.csv의 원본 department 컬럼이 아니라
     services.similarity_map(team_refer 기반, "연구원 명단" 화면의 '부서'
     필터와 동일한 기준)을 그대로 쓴다 — 두 화면의 '부서' 옵션·데이터가
-    항상 같은 원천을 보도록 하기 위함(사용자 확정)."""
+    항상 같은 원천을 보도록 하기 위함(사용자 확정). 옵션 라벨의 부서/과제
+    표기(_opt())도 동일한 team_refer 매핑(dep_map/pjt_map, 배치당 한 번만
+    계산 — org_code_label_maps()의 기존 관례)을 쓴다."""
     try:
         full_df = read_processed('researchers')
         if full_df.empty:
             return [], [], {}
         res_df = filter_current(full_df, current_only)
+        dep_map, pjt_map = similarity_map.org_code_label_maps()
 
-        all_opts = [_opt(row) for _, row in res_df.sort_values(['department', 'name']).iterrows()]
+        all_opts = [_opt(row, dep_map, pjt_map) for _, row in res_df.sort_values(['department', 'name']).iterrows()]
 
         dept_opts = similarity_map.department_filter_options()
         by_dept = {}
@@ -123,7 +135,7 @@ def _load_selector_data(current_only: bool = True):
             dep_name = opt['value']
             org_codes = similarity_map.org_codes_for_dep_names([dep_name])
             grp = res_df[res_df['org_code'].isin(org_codes)] if 'org_code' in res_df.columns else res_df.iloc[0:0]
-            by_dept[dep_name] = [_opt(row) for _, row in grp.sort_values(['department', 'name']).iterrows()]
+            by_dept[dep_name] = [_opt(row, dep_map, pjt_map) for _, row in grp.sort_values(['department', 'name']).iterrows()]
         dept_opts = [{'label': '전체', 'value': ''}] + dept_opts
 
         return dept_opts, all_opts, by_dept
@@ -1041,7 +1053,13 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     # 성별/나이·직급-년차는 사진 아래 캡션(photo_block())에 이미 나오므로
     # 기본정보 표에서는 중복 표시하지 않는다.
     name = str(researcher.get('name', '') or '')
-    dept = str(researcher.get('department', '') or '-')
+    # 부서 표기는 검색 드롭다운(_opt())·연구원 명단 화면과 동일하게 team_refer
+    # 매핑 우선, 없으면 원본 department로 폴백(사용자 확정 2026-08-31).
+    dept = (
+        similarity_map.dep_name_for_org_code(str(researcher.get('org_code', '')))
+        or str(researcher.get('department', '') or '')
+        or '-'
+    )
     knox_id = str(researcher.get('knox_id', '') or '-')
     nationality = str(researcher.get('nationality', '') or '').strip() or '-'
     # birth_date(YYYY-MM-DD, pipeline/process_researchers.py가 법적생년월일성별
@@ -1298,7 +1316,13 @@ def _record_search_history(rid, history):
     match = res_df[res_df['researcher_id'] == rid]
     if not match.empty:
         row = match.iloc[0]
-        dept = str(row.get('department', '') or '').strip()
+        # 부서 표기는 검색 드롭다운(_opt())·연구원 명단 화면과 동일하게
+        # team_refer 매핑 우선, 없으면 원본 department로 폴백(사용자 확정
+        # 2026-08-31).
+        dept = (
+            similarity_map.dep_name_for_org_code(str(row.get('org_code', '')))
+            or str(row.get('department', '') or '').strip()
+        )
         name = str(row.get('name', '') or '') or rid
         label = f'{name} [{dept}]' if dept else name
     else:

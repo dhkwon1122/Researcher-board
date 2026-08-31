@@ -6559,3 +6559,51 @@ Dropdown 조작과 백그라운드 실행 중 실제 3초 폴링 UX, gunicorn �
 워커 환경에서의 실제 락 공유(파일 기반이라 이론상 안전하지만 실기
 검증은 못 함 — web_pipeline_runner.py와 동일한 인프라를 그대로
 재사용했으므로 위험도는 낮다고 판단).
+
+## 2026-08-31: 연구원 개별 프로필 검색 드롭다운 부서/과제 표기를
+연구원 명단과 동일한 team_refer 기준으로 통일
+
+사용자 질문: "연구원 개별 프로필 검색(이름[부서 - 과제] (사번) - CL)의
+부서/과제가 연구원 명단 검색의 부서/과제와 다른 데이터라면 통일하고
+싶다." 확인 결과 실제로 달랐다 — 연구원 명단(`pages/researcher_list.py`)
+은 `services.similarity_map.org_code_label_maps()`로 team_refer.csv의
+`dep_name`/`pjt_part_name`을 `researchers.csv`의 `org_code`로 매핑해
+보여주고(매핑 없으면 원본 `department`/`org_code`로 폴백)있었는데,
+연구원 개별 프로필의 검색 드롭다운(`pages/researcher_profile.py`의
+`_opt()`)은 이 매핑을 전혀 시도하지 않고 항상 원본 `department`/
+`org_code`만 보여주고 있었다. 확인 과정에서 같은 화면 안에 동일한
+문제(항상 원본값 사용)가 2곳 더 있는 것도 발견해 함께 알렸고, 사용자가
+3곳 모두 통일 + team_refer 매핑이 없을 때는 명단과 동일하게 원본값으로
+폴백하는 것으로 확정했다.
+
+**`pages/researcher_profile.py`**:
+- `_opt(row)` → `_opt(row, dep_map, pjt_map)`로 변경 — `org_code`로
+  `dep_map`/`pjt_map`(둘 다 `similarity_map.org_code_label_maps()`가
+  반환하는 dict, `researcher_list.py`가 쓰는 것과 동일한 함수)을 먼저
+  찾고, 없으면 원본 `department`/`org_code`로 폴백(연구원 명단의
+  `'부서': dep_label_map.get(org_code) or str(r.get('department', ''))`/
+  `'과제': pjt_label_map.get(org_code) or org_code`와 완전히 동일한 규칙).
+- `_load_selector_data()`가 `dep_map, pjt_map = similarity_map.
+  org_code_label_maps()`를 배치당 한 번만 계산해 `_opt()` 호출 시마다
+  넘겨준다(연구원 명단이 이미 쓰던 것과 동일한 "한 번만 계산해 재사용"
+  관례 — 사람 수만큼 team_refer를 반복 스캔하지 않도록).
+- 인쇄 카드(A4) 기본정보 표의 `dept`(`_print_profile_content()`)도
+  `similarity_map.dep_name_for_org_code(org_code) or 원본 department`로
+  교체(과제/org_code는 이 표에 애초에 없어 부서만 해당).
+- "최근 검색" 이력 칩 라벨(`_record_search_history()`)의 `dept`도
+  동일하게 교체.
+- 부서 드롭다운 *기본 선택값*을 정하는 기존 2곳(`layout()`의 `id=` 딥링크
+  처리, `_select_from_history()`)은 이미 `dep_name_for_org_code()`를
+  쓰고 있어 이번 변경 대상이 아니었다(이미 명단과 같은 기준).
+
+검증: 매핑되는 org_code 1개 + 매핑 안 되는 org_code 1개를 가진 합성
+`researchers.csv`/`team_refer.csv`로 `_opt()`를 직접 호출해 — 매핑되는
+쪽은 "이름 [MappedDept · MappedProject] (사번) — CL"로, 매핑 안 되는
+쪽은 "이름 [RAW_DEPT · ORG_CODE] (사번) — CL"(원본 그대로)로 정확히
+나오는 것을 확인. 인쇄 카드 부서 로직과 `_record_search_history()`도
+같은 두 케이스로 직접 호출해 동일한 폴백 규칙이 적용되는 것을 확인.
+`py_compile` 통과.
+
+**미검증**: 실제 브라우저에서 검색 드롭다운/인쇄 카드/최근 검색 칩을
+직접 눈으로 비교(이 세션엔 실제 team_refer.csv 데이터가 있는 배포 환경이
+없어 합성 데이터로만 검증).
