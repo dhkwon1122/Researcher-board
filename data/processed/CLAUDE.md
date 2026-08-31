@@ -6871,3 +6871,72 @@ b) 같은 과제명이 여러 줄로 나뉘어 있을 때, 한 구간이 가장 
 
 **미검증**: 실제 브라우저에서 화면 "과제 수행 이력" 표를 열어 직접 눈으로
 확인(합성 데이터로 함수 직접 호출만 검증).
+
+## 2026-08-31: 엑셀 다운로드 "평가" 컬럼을 기본 포함 → view_evaluation
+권한자 전용 옵트인 3종으로 전환·세분화
+
+사용자 요청 2가지:
+1. 항상 포함되던 "평가('24~'26)" 컬럼을 다른 옵트인 항목(특허/논문 등)
+   처럼 추가 선택 항목으로 바꾸고, view_evaluation 권한이 있는 사용자만
+   선택할 수 있게.
+2. "평가"를 3개로 세분화 — a) 종합(기존 표기 그대로), b) 연봉등급(최근
+   3개년을 "2024 연봉등급"/"2025 연봉등급"/"2026 연봉등급" 개별 컬럼으로),
+   c) 업적(역량)평가(최근 3개년 상/하반기업적 컬럼 사이에, 그 해 역량
+   컬럼이 evaluations.csv에 실제로 존재하면 "{연도} 역량"을 끼워 넣음).
+
+구현 전 이해한 내용과 우려사항을 먼저 설명하고(사용자가 명시적으로
+요청), AskUserQuestion으로 3가지를 확인받은 뒤 구현: (1) "종합" 항목의
+실제 엑셀 컬럼 헤더는 체크박스 라벨("평가(종합 - 최근 3년)")과 별개로
+기존 표기("평가\n('24~'26)") 그대로 유지, (2) 부서 단위 평가 제외(People팀
+등, eval_excluded_dep_ids)는 3개 항목 전부 동일하게 적용, (3)
+view_evaluation 권한이 없는 사용자에게는 팝오버에서 이 3개 체크박스를
+아예 숨김.
+
+**`services/researcher_profile_export.py`**:
+- `_eval_dept_excluded(rows)` 신설 — 기존 `_col_evaluation()` 안에 있던
+  부서 제외 판정을 뽑아내 3개 컬럼 함수가 공유하도록 함.
+- `_col_evaluation()`(종합)은 로직 그대로, `_COLUMNS`(기본 포함)에서 빼서
+  `_EVAL_SUMMARY_COLUMNS`(옵트인)로 옮김 — `_COLUMN_WIDTHS`도 그만큼
+  조정.
+- `_col_eval_field(field_key)` 신설 — evaluations.csv의 특정 와이드
+  컬럼(예: `'2024_salary_grade'`) 하나를 그대로 보여주는 컬럼 함수를
+  만드는 팩토리(권한/부서 제외 판정 공유). `_EVAL_SALARY_COLUMNS`(연봉등급
+  3개, `_EVAL_SALARY_YEARS` 기준 정적 목록)에 사용.
+- `_eval_half_columns(evaluations_df)` 신설 — "업적(역량)평가" 그룹은
+  그 해 역량(competency_grade) 컬럼이 **실제 evaluations 데이터에
+  존재하는지**(선택 항목이라 매년 있다는 보장이 없음 — services/
+  evaluations.py 참고) 봐야 컬럼 구성이 정해져서, 모듈 임포트 시점에
+  정적으로 만들 수 없다 — `build_profile_workbook()`이 evaluations
+  테이블을 로드한 뒤 요청마다 한 번씩 만든다.
+- `build_profile_workbook()`에 `include_eval_summary`/`include_salary_grade`/
+  `include_eval_half` 3개 파라미터 추가, 전부 `permissions['view_evaluation']`
+  으로 다시 한번 게이트 — 다운로드 화면이 체크박스를 숨겨도, 요청 자체를
+  조작해 True를 보내면 우회될 수 있으므로 서버 쪽에서 한번 더 확인(각
+  컬럼 함수 자체도 `rows['permissions']`로 세 번째로 확인 — 3중 방어).
+
+**`pages/researcher_list.py`**: "추가 항목 선택" 팝오버의 체크리스트에
+`view_evaluation` 권한이 있을 때만(`show_eval`, `layout()` 최상단에서 이미
+계산됨) 3개 옵션(`eval_summary`/`salary_grade`/`eval_half`)을 목록 맨
+앞에 붙인다. `download_excel()` 콜백이 이 3개 값을 `build_profile_workbook()`
+의 새 파라미터로 그대로 전달(실제 방어는 서비스 쪽에 있으므로 여기서
+다시 `can()`을 확인할 필요는 없음).
+
+검증: (1) `_eval_half_columns()`를 합성 DataFrame으로 직접 호출 — 역량
+컬럼이 특정 연도에만 있을 때 그 연도만 상/하반기 사이에 "역량" 컬럼이
+끼워지고, 하나도 없을 때는 전혀 안 끼워지는 것 확인. (2)
+`build_profile_workbook()`을 `_load_tables()`/`auth.can`/
+`auth.eval_excluded_dep_ids`를 모킹해 종단 호출, 실제 xlsx를 열어(openpyxl)
+— 권한 있음+3종 전부 요청 시 헤더·값이 정확히 나오는 것, **권한 없이
+include_*=True를 강제로 넘겨도 컬럼 자체가 전혀 생기지 않는 것**(요청
+조작 방어 확인), People팀 부서 예외가 종합/연봉등급/업적(역량)평가
+3종 전부에서 해당 연구원만 '-'로 가려지는 것(다른 부서 연구원은 정상
+노출), 옵트인 미선택(기본값) 시 평가 관련 컬럼이 아예 없는 것(더 이상
+기본 포함이 아님)까지 확인. (3) `pages/researcher_list.py`의 `layout()`을
+`services.auth.can`을 모킹해 두 번 렌더링 — 권한 있을 때만 체크리스트에
+3개 옵션이 나타나는 것을 컴포넌트 트리에서 직접 확인. `py_compile` 통과,
+전체 페이지 임포트 확인.
+
+**미검증**: 실제 브라우저에서 팝오버 체크박스를 눌러 실제 다운로드 결과를
+열어보는 것(합성 데이터로 함수 직접 호출/컴포넌트 트리 검증만 수행),
+`services/similarity_map.py`의 별도(조직도 기반) 다운로드 경로는 평가
+데이터를 다루지 않아 이번 변경과 무관함을 코드 확인으로만 검증.

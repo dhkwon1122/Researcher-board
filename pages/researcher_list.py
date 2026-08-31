@@ -526,7 +526,20 @@ def layout():
                         dbc.Popover(
                             dbc.Checklist(
                                 id='list-excel-options-check',
-                                options=[
+                                # 평가 관련 3개 항목(eval_summary/salary_grade/eval_half,
+                                # 2026-08-31)은 view_evaluation 권한이 있을 때만 이 목록
+                                # 맨 앞에 붙인다(사용자 확정 — 권한 없는 사용자에게는
+                                # 팝오버에서 아예 숨김). build_profile_workbook()이
+                                # 요청을 다시 한번 권한으로 걸러내므로(services/
+                                # researcher_profile_export.py 참고) 여기서 숨기는 건
+                                # UX일 뿐, 실제 방어는 서버 쪽에 있다.
+                                options=(
+                                    [
+                                        {'label': '평가(종합 - 최근 3년) 포함', 'value': 'eval_summary'},
+                                        {'label': '연봉등급(최근 3년) 포함', 'value': 'salary_grade'},
+                                        {'label': '업적(역량)평가(최근 3년) 포함', 'value': 'eval_half'},
+                                    ] if show_eval else []
+                                ) + [
                                     {'label': '보유 전문성 포함', 'value': 'expertise'},
                                     {'label': '특허 포함', 'value': 'patents'},
                                     {'label': '논문 포함', 'value': 'publications'},
@@ -920,6 +933,13 @@ def download_excel(n_clicks, virtual_data, excel_options):
         include_employment_status='employment_status' in excel_options,
         include_language='language' in excel_options,
         include_work_experience='work_experience' in excel_options,
+        # 평가 관련 3종(2026-08-31) — 체크박스는 view_evaluation 권한이
+        # 없으면 팝오버에 아예 안 뜨지만, build_profile_workbook() 쪽에서도
+        # 권한을 다시 확인하므로(services/researcher_profile_export.py 참고)
+        # 여기서 굳이 can()을 또 확인할 필요는 없다.
+        include_eval_summary='eval_summary' in excel_options,
+        include_salary_grade='salary_grade' in excel_options,
+        include_eval_half='eval_half' in excel_options,
     )
     return dcc.send_bytes(data, researcher_profile_export.default_filename())
 
