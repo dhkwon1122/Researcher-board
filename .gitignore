@@ -26,9 +26,10 @@ config/.flask_secret_key
 # 컨텍스트 문서(CLAUDE.md)는 세션 간 지식 연속성을 위해 형상관리에 포함
 !data/processed/CLAUDE.md
 
-# docs/ 안의 문서용 xlsx는 실제 인사 데이터가 아니라 파이프라인 구조를 설명하는
-# 참고 문서라 위 *.xlsx 규칙과 무관하게 형상관리에 포함(PII 없음)
+# docs/ 안의 문서용 xlsx는 실제 인사 데이터가 아니라 파이프라인 구조/권한 체계를
+# 설명하는 참고 문서라 위 *.xlsx 규칙과 무관하게 형상관리에 포함(PII 없음)
 !docs/데이터_계보_등록부.xlsx
+!docs/권한관리_등록부.xlsx
 
 # 사내 CA 인증서 및 리버스 프록시용 서버 인증서/키는 커밋하지 않음
 # (README.md / .gitkeep 은 유지)
