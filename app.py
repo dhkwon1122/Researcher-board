@@ -319,7 +319,9 @@ def auth_login():
 # ── 초기 설정 (첫 관리자 계정 생성) ──────────────────────────────────────────
 @app.server.route('/setup', methods=['GET', 'POST'])
 def setup_page():
-    from services.auth import create_user, has_any_user, password_validation_error
+    from services.auth import (
+        MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH, create_user, has_any_user, password_validation_error,
+    )
     # PostgreSQL을 사용하는 운영 배포에서는 DB 장애/초기화 직후 외부 사용자가
     # 첫 관리자 계정을 선점하지 못하도록 웹 초기 설정을 기본 차단한다. 최초
     # 계정은 scripts/bulk_create_users.py로 만들고, 정말 필요한 경우에만
@@ -372,7 +374,7 @@ def setup_page():
                  placeholder="예: 홍길동" required>
         </div>
         <div class="mb-2">
-          <label class="form-label small fw-semibold">비밀번호 (12자 이상, 문자 조합)</label>
+          <label class="form-label small fw-semibold">비밀번호 ({MIN_PASSWORD_LENGTH}~{MAX_PASSWORD_LENGTH}자, 영문/숫자/특수문자 조합)</label>
           <input type="password" class="form-control form-control-sm" name="password" required>
         </div>
         <div class="mb-4">
@@ -400,7 +402,10 @@ def logout():
 # 페이지로 못 가게 막는다. 여기서 새 비밀번호를 설정하면 그 상태가 풀린다.
 @app.server.route('/change-password', methods=['GET', 'POST'])
 def change_password_page():
-    from services.auth import authenticate, change_password, get_current_user, password_validation_error
+    from services.auth import (
+        MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH, authenticate, change_password,
+        get_current_user, password_validation_error,
+    )
 
     user = get_current_user()
     if user is None:
@@ -443,7 +448,7 @@ def change_password_page():
                autocomplete="current-password" required autofocus>
       </div>
       <div class="mb-2">
-        <label class="form-label small fw-semibold">새 비밀번호 (12자 이상, 문자 조합)</label>
+        <label class="form-label small fw-semibold">새 비밀번호 ({MIN_PASSWORD_LENGTH}~{MAX_PASSWORD_LENGTH}자, 영문/숫자/특수문자 조합)</label>
         <input type="password" class="form-control form-control-sm" name="password"
                autocomplete="new-password" required>
       </div>

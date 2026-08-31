@@ -221,9 +221,20 @@ def _col_evaluation(_rid, rows):
     화면(pages/*.py)이 view_evaluation 권한 없는 역할에는 평가등급을 아예
     안 보여주는 것과 동일한 기준을 여기 엑셀 다운로드에도 적용한다 — 권한
     없으면 평가 데이터를 셀에 채우지 않는다(권한은 build_profile_workbook()이
-    행마다 다시 확인하지 않도록 rows['permissions']로 한 번만 계산해 전달)."""
+    행마다 다시 확인하지 않도록 rows['permissions']로 한 번만 계산해 전달).
+
+    view_evaluation이 있어도 부서 단위 평가 제외(2026-08-31, rows의
+    'eval_excluded_dep_ids'/'org_code_dep_id_map')에 해당하는 연구원이면
+    화면(researcher_profile.py/researcher_list.py)과 동일하게 이 행만 가린다."""
     if not rows['permissions']['view_evaluation']:
         return '-'
+    excluded_dep_ids = rows.get('eval_excluded_dep_ids')
+    if excluded_dep_ids:
+        researcher = rows.get('researcher') or {}
+        org_code = _s(researcher.get('org_code'))
+        dep_id = (rows.get('org_code_dep_id_map') or {}).get(org_code, '')
+        if dep_id in excluded_dep_ids:
+            return '-'
     eva_rows = rows['evaluations']
     eva = eva_rows[0] if eva_rows else {}
     salary_line = '/'.join(_s(eva.get(evaluations.salary_grade_column(y))) or '-' for y in _EVAL_SALARY_YEARS)
@@ -469,10 +480,16 @@ _COLUMNS = [
 
 
 def _researcher_row_context(researcher_id: str, tables: dict, permissions: dict,
-                             dep_pjt_maps: tuple | None = None) -> dict:
+                             dep_pjt_maps: tuple | None = None,
+                             eval_excluded_dep_ids: set | None = None,
+                             org_code_dep_id_map: dict | None = None) -> dict:
     researcher_rows = _rows_for(tables['researchers'], researcher_id)
     return {
         'dep_pjt_maps': dep_pjt_maps,
+        # 부서 단위 평가 제외(2026-08-31) — _col_evaluation 참고. 요청 단위로
+        # 한 번만 계산해 전달받는다(dep_pjt_maps와 같은 이유).
+        'eval_excluded_dep_ids': eval_excluded_dep_ids,
+        'org_code_dep_id_map': org_code_dep_id_map,
         'researcher': researcher_rows[0] if researcher_rows else None,
         'education': _rows_for(tables['education'], researcher_id),
         'evaluations': _rows_for(tables['evaluations'], researcher_id),
@@ -621,6 +638,11 @@ def build_profile_workbook(
     # 임포트하므로(순환 임포트 방지) 여기서는 지연 임포트로 가져온다.
     from services import similarity_map
     dep_pjt_maps = similarity_map.org_code_label_maps()
+    # 부서 단위 평가 제외(2026-08-31) — view_evaluation은 있어도 특정 부서
+    # 소속 연구원의 평가만 가리는 사용자를 위해 화면(researcher_list.py/
+    # researcher_profile.py)과 동일한 기준을 엑셀에도 적용한다.
+    eval_excluded_dep_ids = auth.eval_excluded_dep_ids()
+    org_code_dep_id_map = similarity_map.org_code_dep_id_map() if eval_excluded_dep_ids else {}
 
     columns = list(_COLUMNS)
     widths = list(_COLUMN_WIDTHS)
@@ -668,7 +690,8 @@ def build_profile_workbook(
         cell.alignment = wrap_center
 
     for row_idx, rid in enumerate(researcher_ids, start=2):
-        ctx = _researcher_row_context(rid, tables, permissions, dep_pjt_maps)
+        ctx = _researcher_row_context(rid, tables, permissions, dep_pjt_maps,
+                                       eval_excluded_dep_ids, org_code_dep_id_map)
         for col_idx, (_header, fn) in enumerate(columns, start=1):
             value = fn(rid, ctx)
             cell = ws.cell(row=row_idx, column=col_idx, value=value)

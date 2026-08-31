@@ -9,6 +9,7 @@ web/db.py와 동일한 SQLAlchemy Core 테이블 정의 방식을 따름). DB �
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, Column, DateTime, MetaData, String, Table, delete, select, text, update
@@ -16,6 +17,15 @@ from sqlalchemy import Boolean, Column, DateTime, MetaData, String, Table, delet
 from services.db import get_engine
 
 metadata = MetaData()
+
+# 계정별 권한 재정의(2026-08-31) — NULL이면 "역할 기본값을 따른다"는 뜻이고,
+# True/False가 명시적으로 저장돼 있으면 역할이 바뀌어도 그 값을 그대로
+# 유지한다(사용자 확정 — 관리자가 개별 조정해 둔 값은 역할 변경과 무관하게
+# 유지). pages/admin.py의 "사용자/권한 관리" 탭이 저장할 때는 4개 모두 항상
+# 명시적 값을 쓴다(그 화면에서 한 번이라도 저장하면 그 뒤로는 역할 기본값을
+# 자동으로 따라가지 않는다는 뜻) — 한 번도 손대지 않은 계정만 NULL로 남아
+# 역할 기본값을 계속 따른다.
+PERMISSION_COLUMNS = ('view_evaluation', 'view_incentive', 'view_comments', 'view_grade')
 
 # 다른 데이터 테이블(researchers 등)과 이름이 겹치지 않도록 app_users로 둔다.
 users = Table(
@@ -35,6 +45,18 @@ users = Table(
     # 부여한다(config/auth_config.py 상단 설명 참고) — 같은 역할이라도
     # 필요한 사람에게만 개별적으로 관리자 권한을 줄 수 있게 하기 위함이다.
     Column('is_admin', Boolean, nullable=False, server_default='false'),
+    # 역할 기본 권한(config/auth_config.py의 ROLE_PERMISSIONS)을 계정 단위로
+    # 재정의한 값 — NULL은 "역할 기본값 사용"을 뜻한다(위 PERMISSION_COLUMNS
+    # 설명 참고).
+    Column('perm_view_evaluation', Boolean),
+    Column('perm_view_incentive', Boolean),
+    Column('perm_view_comments', Boolean),
+    Column('perm_view_grade', Boolean),
+    # view_evaluation이 있어도 특정 부서(team_refer의 dep_id) 소속 연구원의
+    # 평가만은 못 보게 하는 예외 목록 — JSON 배열 문자열(예: '["D-003"]').
+    # dep_name(표시 라벨)이 아니라 dep_id를 쓰는 이유는 services/similarity_map.py
+    # org_code_dep_id_map() 참고(부서명이 나중에 바뀌어도 예외가 계속 유효해야 함).
+    Column('eval_excluded_dep_ids', String),
     Column('created_at', DateTime(timezone=True), nullable=False),
 )
 
@@ -79,6 +101,12 @@ def available() -> bool:
                             "is_admin BOOLEAN NOT NULL DEFAULT FALSE",
                             backfill_sql="UPDATE app_users SET is_admin = TRUE "
                                          "WHERE role = 'executive_org'")
+            # 계정별 권한 재정의 컬럼(2026-08-31) — 전부 NULL 허용(기본값 없음)이라
+            # 기존 계정은 컬럼이 새로 생겨도 전부 NULL로 시작해 그대로 역할 기본값을
+            # 따른다(백필 불필요).
+            for col in PERMISSION_COLUMNS:
+                _ensure_column(engine, f'perm_{col}', f'perm_{col} BOOLEAN')
+            _ensure_column(engine, 'eval_excluded_dep_ids', 'eval_excluded_dep_ids TEXT')
             _table_ready = True
         except Exception as exc:
             print(f'[user_store] app_users 테이블 준비 실패, JSON으로 폴백: {exc}')
@@ -87,6 +115,12 @@ def available() -> bool:
 
 
 def _row_to_dict(row) -> dict:
+    try:
+        excluded = json.loads(row.get('eval_excluded_dep_ids') or '[]')
+        if not isinstance(excluded, list):
+            excluded = []
+    except (TypeError, ValueError):
+        excluded = []
     return {
         'user_id': row['user_id'],
         'password_hash': row['password_hash'],
@@ -95,6 +129,9 @@ def _row_to_dict(row) -> dict:
         'email': row.get('email') or '',
         'must_change_password': bool(row.get('must_change_password')),
         'is_admin': bool(row.get('is_admin')),
+        # None이면 "역할 기본값 사용" — services/auth.py의 can()이 판정.
+        'permissions': {col: row.get(f'perm_{col}') for col in PERMISSION_COLUMNS},
+        'eval_excluded_dep_ids': [str(d) for d in excluded if str(d).strip()],
     }
 
 
@@ -175,6 +212,28 @@ def update_fields(user_id: str, display_name: str | None = None,
             return result.rowcount > 0
     except Exception as exc:
         print(f'[user_store] update_fields 실패: {exc}')
+        return False
+
+
+def update_permissions(user_id: str, permissions: dict, eval_excluded_dep_ids: list) -> bool:
+    """"사용자/권한 관리" 탭이 저장 버튼을 누를 때 쓴다 — permissions의 4개
+    키(PERMISSION_COLUMNS)를 전부 명시적 True/False로 저장한다(이 함수를
+    한 번이라도 거치면 그 계정은 이후 역할이 바뀌어도 이 값을 그대로 유지
+    — 사용자 확정). eval_excluded_dep_ids는 view_evaluation이 True일 때만
+    의미가 있지만, False로 저장하는 경우에도 목록 자체는 그대로 보존한다
+    (나중에 다시 True로 바꿀 때 이전에 골라둔 부서 목록이 남아있도록)."""
+    if not available():
+        return False
+    values = {f'perm_{col}': permissions.get(col) for col in PERMISSION_COLUMNS}
+    values['eval_excluded_dep_ids'] = json.dumps(list(eval_excluded_dep_ids or []), ensure_ascii=False)
+    try:
+        with get_engine().begin() as conn:
+            result = conn.execute(
+                update(users).where(users.c.user_id == user_id).values(**values)
+            )
+            return result.rowcount > 0
+    except Exception as exc:
+        print(f'[user_store] update_permissions 실패: {exc}')
         return False
 
 

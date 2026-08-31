@@ -6607,3 +6607,138 @@ Dropdown 조작과 백그라운드 실행 중 실제 3초 폴링 UX, gunicorn �
 **미검증**: 실제 브라우저에서 검색 드롭다운/인쇄 카드/최근 검색 칩을
 직접 눈으로 비교(이 세션엔 실제 team_refer.csv 데이터가 있는 배포 환경이
 없어 합성 데이터로만 검증).
+
+## 2026-08-31: 평가 열람 권한에 부서 단위 예외 추가 + 비밀번호 정책 변경 +
+관리자 화면 "사용자/권한 관리" 탭에서 계정별 권한 직접 편집
+
+사용자 요청 3가지:
+1. `view_evaluation` 권한이 있는 역할이라도, 특정 부서(예: People팀)
+   소속 연구원의 평가만은 계정 단위로 더 가릴 수 있게. 예시: 인력운영
+   담당자(workforce_mng)는 역할상 `view_evaluation=True`지만, People팀
+   소속 연구원의 평가는 볼 수 없도록 개별 조정이 필요하다는 구체적
+   시나리오.
+2. 최초 로그인 임시 비밀번호 → 개인 비밀번호 변경 시 규칙을 "12자
+   이상"에서 "영문자+숫자+특수문자 모두 포함, 8~12자"로 변경.
+3. 관리자 화면 "사용자 관리" 탭을 "사용자/권한 관리" 탭으로 바꾸고,
+   `view_evaluation`/`view_incentive`/`view_comments`/`view_grade`
+   4개 권한(1번의 People팀 부서 예외 포함)을 사용자별로 화면에서 직접
+   수정할 수 있게.
+
+구현 전 확인한 설계 결정(AskUserQuestion, 사용자 확정):
+- 부서 예외는 `dep_name`(표시 라벨, team_refer 화면에서 나중에 바뀔 수
+  있음)이 아니라 `dep_id`(고정 키) 기준으로 저장.
+- 이 부서 예외는 우선 화면(명단/프로필)+엑셀 다운로드에만 적용하고,
+  AI 자연어 검색까지는 이번엔 확장하지 않음(row-level 필터링 복잡도가
+  높아 별도 단계로 미룸) — 대신 AI 검색이 우회로가 되지 않도록, 부서
+  예외가 하나라도 있는 사용자는 `evaluations`/`evaluations_history`
+  테이블 전체를 AI 검색에서 막는 "fail closed" 안전장치를 둠.
+- 비밀번호는 영문자/숫자/특수문자 3종류 모두 필수, 최대 12자 그대로
+  유지(관리자가 이례적으로 확정한 제약 — 통상적인 보안 관행과 다르다는
+  점은 사전에 알렸음).
+- 관리자가 계정별로 권한을 개별 조정해 둔 뒤 그 계정의 역할(role)이
+  바뀌어도, 개별 조정 값은 유지("개별 설정 유지").
+
+**`services/user_store.py`**: `app_users` 테이블에 컬럼 6개 추가
+(`perm_view_evaluation`/`perm_view_incentive`/`perm_view_comments`/
+`perm_view_grade` BOOLEAN, `eval_excluded_dep_ids` TEXT — JSON 배열
+문자열) — 전부 NULL 허용, 서버 기본값 없음. `_ensure_column()`(기존
+`is_admin`/`must_change_password` 추가 때 쓴 것과 동일한 패턴)으로
+마이그레이션. `NULL` = "역할 기본값을 따른다", 명시적 `True`/`False`는
+역할이 바뀌어도 유지되는 개별 재정의. `update_permissions(user_id,
+permissions, eval_excluded_dep_ids)` 신설 — 관리자 화면이 저장을 누르면
+이 함수를 거치는데, 이때 4개 권한 전부 반드시 명시적 값으로 저장한다
+(이 함수를 한 번이라도 거친 계정은 이후로 역할 기본값을 자동으로 따라
+가지 않음 — 한 번도 손대지 않은 계정만 NULL로 남아 역할 기본값을 계속
+따름).
+
+**`services/similarity_map.py`**: `org_code_dep_id_map()` 신설 — 기존
+`org_code_label_maps()`(org_code → dep_name/pjt_part_name)와 같은
+구조로, org_code → dep_id를 반환. 부서 예외를 org_code 기준 데이터
+(researchers.csv)와 dep_id 기준 설정(관리자가 고른 부서) 사이에서
+매칭하는 데 쓴다.
+
+**`services/auth.py`**: `can(permission)`을 "역할 기본값 → 계정별
+override가 있으면 그 값으로 대체"로 재작성. 새 함수 3개: `eval_excluded_
+dep_ids()`(현재 로그인 사용자의 부서 예외 집합, `view_evaluation` 자체가
+없으면 빈 집합), `can_view_evaluation(org_code, org_code_dep_id_map)`
+(특정 연구원 1명에 대해 지금 볼 수 있는지 — 역할/개별 권한 + 부서 예외
+전부 반영), `update_permissions(...)`(DB/JSON 두 백엔드 공용 저장 진입점,
+DB가 없으면 `config/users.json`에 직접 씀). `can_table()`에 위 "fail
+closed" 안전장치 추가. `set_session()`/`get_current_user()`가 새 필드
+2개(`permissions`, `eval_excluded_dep_ids`)도 세션에 싣고 꺼낸다(기존
+role/is_admin과 동일하게 로그인 시점에 캐시 — 관리자가 바꾼 값은 그
+사용자의 다음 로그인부터 반영, 기존에도 있던 지연 동작과 동일).
+비밀번호 검증(`password_validation_error`)은 `MIN_PASSWORD_LENGTH`(기본
+8)/`MAX_PASSWORD_LENGTH`(기본 12) 둘 다 강제 + 영문자/숫자/특수문자
+3종류 전부 필수로 교체(기존: 12자 이상 + 대문자/소문자/숫자/특수문자
+중 3종 이상). `app.py`의 `/setup`(최초 관리자 계정 생성) · `/change-
+password`(임시 비밀번호 강제 교체 — 사용자가 요청한 그 화면) 두 화면의
+안내 문구("12자 이상, 문자 조합")도 새 정책("{MIN}~{MAX}자, 영문/숫자/
+특수문자 조합")으로 갱신, `scripts/bulk_create_users.py`의 도움말/입력
+프롬프트 문구도 동일하게 갱신(기능은 이미 `password_validation_error()`를
+그대로 재사용하고 있어 로직 변경은 불필요했음 — 문구만 새 정책과
+일치하지 않아 수정).
+
+**`pages/researcher_profile.py`**: `update_profile()` 콜백이 이제 뷰어의
+역할 권한만이 아니라 **지금 보고 있는 연구원의 소속 부서**까지 반영해
+`show_eval`을 계산한다(`auth.can_view_evaluation(researcher['org_code'],
+similarity_map.org_code_dep_id_map())`) — People팀 연구원 프로필을 열면
+그 사람만 잠기고, 다른 부서 연구원은 그대로 보인다. 평가/인센티브
+블록의 잠금 아이콘(`eval-lock-icon`, 기존엔 id가 없어 최초 페이지
+로드 시점(뷰어 역할만 반영, 특정 연구원 선택 전) 딱 한 번만 정해지고
+이후 연구원을 바꿔도 갱신되지 않던 잠재 버그 — 역할 전용 권한일 때는
+뷰어 불변값이라 문제가 안 됐지만, 부서 예외가 생기면서 실제 버그가 됨)에
+`id`를 부여하고 콜백 `Output`으로 편입해 연구원을 바꿀 때마다 갱신되게
+고침. 일괄 인쇄 콜백(`_append_bulk_print_block()`)도 틱마다(그 사람의
+`org_code` 기준으로) 다시 판정하도록 수정 — 기존엔 인쇄 대상 전원에게
+같은 `show_eval` 값을 한 번만 계산해 썼음(부서가 섞인 명단을 일괄
+인쇄하면 잘못된 결과가 나올 수 있었음).
+
+**`pages/researcher_list.py`**: `_apply_permission_filter()`가 기존
+"권한 없으면 평가등급 컬럼 전체 삭제(role-level, all-or-nothing)"에 더해
+"권한은 있어도 부서 예외 대상이면 그 행(연구원)만 값을 비운다"를
+지원하도록 확장 — 같은 화면에 "볼 수 있는 사람"과 "볼 수 없는 사람"이
+컬럼은 유지한 채 섞여야 하므로 컬럼 삭제로는 표현할 수 없었음. 명단에
+이미 있던 내부 전용 컬럼 `_org_code`(화면엔 안 보이고 부서/과제 필터가
+쓰던 것)를 그대로 재사용해 판정.
+
+**`services/researcher_profile_export.py`**: `_col_evaluation()`이 배치
+단위로 한 번만 계산되던 `rows['permissions']['view_evaluation']` 체크에
+더해, 행(연구원)마다 `org_code`가 부서 예외에 걸리는지까지 확인하도록
+확장. `build_profile_workbook()`이 요청당 한 번 `auth.eval_excluded_
+dep_ids()`/`similarity_map.org_code_dep_id_map()`을 계산해 `_researcher_
+row_context()`를 통해 각 행에 전달(기존 `dep_pjt_maps`와 동일한 "배치당
+한 번만 계산" 관례).
+
+**`pages/admin.py`**: 탭 라벨 "사용자 관리" → "사용자/권한 관리"(페이지
+`title`도 동일하게 변경). 사용자 추가/수정 겸용 모달에 권한 섹션 신설 —
+4개 권한 스위치(`view_evaluation`/`view_incentive`/`view_comments`/
+`view_grade`) + "평가등급 열람 제외 부서" 멀티셀렉트(`similarity_map.
+org_tree_options()` 재사용, value는 dep_id). 신규 계정 추가(`사용자
+추가`) 시에는 이 섹션을 아예 숨긴다 — 계정을 만들면서 곧바로 역할
+기본값을 명시값으로 고정시키지 않기 위해(만든 뒤 "수정"에서 조정).
+수정 모달을 열 때는 체크박스가 "지금 이 계정에 실제로 적용되는 값"
+(override가 있으면 그 값, 없으면 역할 기본값)을 보여주되, 저장을 누르면
+`auth.update_permissions()`를 거쳐 4개 전부 명시값으로 고정된다(설계
+결정 그대로). 비밀번호 라벨도 새 정책 문구로 교체.
+
+검증: 각 파일 `py_compile` 통과, 전체 페이지(`dash.Dash(use_pages=True,
+pages_folder=...)`)가 예외 없이 임포트되는 것 확인(7개 페이지 전부).
+합성 데이터로 직접 함수 호출 검증 — (1) `researcher_list._apply_
+permission_filter()`: 부서 예외 대상 행만 평가등급 값이 비워지고
+인센티브 등 무관한 컬럼/다른 부서 행은 그대로 남는 것, 예외가 없으면
+아무것도 안 바뀌는 것, role 자체가 없으면 기존처럼 컬럼 전체가 삭제되는
+것 3가지 케이스 확인. (2) `researcher_profile_export._col_evaluation()`:
+부서 예외 대상이면 '-', 아니면 정상 값, `view_evaluation` 자체가 없으면
+'-' 3가지 케이스 확인. (3) `admin.py` 권한 체크박스 기본값 계산 로직 —
+`workforce_mng` 역할 기본값(`view_evaluation=True`)을 override 없이는
+그대로 보여주고, 명시적 `False` override가 있으면 역할 기본값을 이기는
+것, 체크박스 선택 목록 → 저장 payload dict 변환 로직 확인. 이 세션에서
+`services/auth.py` 자체(역할 기본값 폴백/override/부서 예외 판정/
+`can_table` 안전장치/비밀번호 정책)는 Flask 테스트 요청 컨텍스트로 이미
+별도 검증 완료(위 커밋들 참고).
+
+**미검증**: 실제 브라우저에서 관리자 화면 모달 조작(체크박스/부서
+멀티셀렉트 UI 상호작용), 실제 로그인 세션으로 People팀 연구원 프로필을
+열어 잠금 아이콘이 실제로 바뀌는지, PostgreSQL 백엔드에서의 실제 컬럼
+마이그레이션(이 세션엔 `DATABASE_URL`이 없어 JSON 백엔드로만 검증).

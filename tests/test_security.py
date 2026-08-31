@@ -45,7 +45,13 @@ def test_password_policy_rejects_weak_passwords(password):
 
 
 def test_password_policy_accepts_mixed_password():
-    assert auth.password_validation_error('Correct-Horse-42') is None
+    # 8~12자 + 영문/숫자/특수문자 3종류 전부 포함(2026-08-31 정책 변경 —
+    # 기존 12자 이상 정책과 달리 최대 길이도 12자로 제한됨).
+    assert auth.password_validation_error('Correct-9') is None
+
+
+def test_password_policy_rejects_too_long_password():
+    assert auth.password_validation_error('Correct-Horse-42!')
 
 
 def test_confluence_host_allowlist_and_https(monkeypatch):

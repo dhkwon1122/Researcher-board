@@ -476,6 +476,23 @@ def org_code_label_maps(period: tuple | None = None) -> tuple[dict, dict]:
     return dep_map, pjt_map
 
 
+def org_code_dep_id_map(period: tuple | None = None) -> dict:
+    """org_code_label_maps()와 같은 발상, 값만 dep_name/pjt_part_name이 아니라
+    dep_id — org_code → dep_id. 평가 열람 권한의 부서 단위 예외(사용자 확정
+    2026-08-31, "People팀 평가만 제외"처럼 특정 부서 소속 연구원의 평가만
+    가리는 기능)가 이 매핑을 쓴다. dep_name(표시 라벨)이 아니라 dep_id(고정
+    키)를 기준으로 삼는 이유: 관리자가 팀/리더 참조 화면에서 부서명을 나중에
+    바꿔도 이미 설정해 둔 제외 규칙이 그대로 유효해야 하기 때문."""
+    result: dict = {}
+    for r in read_team_refer(DATA_DIR, period=period):
+        org_code = (r.get('org_name_wd') or '').strip()
+        dep_id = (r.get('dep_id') or '').strip()
+        if not org_code or not dep_id:
+            continue
+        result.setdefault(org_code, dep_id)
+    return result
+
+
 def individual_search_options() -> list:
     """개인별 검색 드롭다운 옵션 — "이름 [부서] (사번)" 형식(동명이인 구분,
     pages/researcher_profile.py 검색 드롭다운과 동일한 표기 규칙)."""

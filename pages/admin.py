@@ -10,13 +10,23 @@ import dash
 import dash_bootstrap_components as dbc
 from dash import ALL, Input, Output, State, callback, dash_table, dcc, html, no_update
 
-from config.auth_config import ROLE_LABELS
-from services import team_refer_store
+from config.auth_config import ROLE_LABELS, ROLE_PERMISSIONS
+from services import similarity_map, team_refer_store
 from services import web_pipeline_runner as wpr
 
-dash.register_page(__name__, path='/admin', name='관리자', title='사용자 관리')
+dash.register_page(__name__, path='/admin', name='관리자', title='사용자/권한 관리')
 
 _ROLES = [{'label': v, 'value': k} for k, v in ROLE_LABELS.items()]
+
+# 계정별로 개별 조정 가능한 4개 권한(2026-08-31, config/auth_config.py의
+# ROLE_PERMISSIONS와 동일한 키) — 라벨은 사용자 관리 모달 체크박스에 쓴다.
+_PERMISSION_LABELS = {
+    'view_evaluation': '평가등급 열람',
+    'view_incentive':  '인센티브(핵심이력) 열람',
+    'view_comments':   '인물 코멘트 열람',
+    'view_grade':      '리더십/승계 열람(AI 검색)',
+}
+_PERMISSION_KEYS = list(_PERMISSION_LABELS.keys())
 
 # ── 공통 UI 조각 ─────────────────────────────────────────────────────────────
 
@@ -101,6 +111,26 @@ def _user_modal():
                 options=[{'label': ' 관리자 권한 부여 (사용자 관리 페이지 접근 — 역할과 무관하게 이 계정에만 적용)',
                           'value': 'admin'}],
                 value=[], switch=True, className='mb-2 small',
+            ),
+            html.Div(
+                [
+                    html.Hr(className='my-2'),
+                    dbc.Label('개별 권한 (역할 기본값을 계정 단위로 재정의 — 미체크해도 삭제되지 않고, '
+                              '저장 시점 값이 이 계정에 고정됩니다)', size='sm', className='fw-semibold'),
+                    dbc.Checklist(
+                        id='modal-permissions',
+                        options=[{'label': f' {label}', 'value': key}
+                                 for key, label in _PERMISSION_LABELS.items()],
+                        value=[], switch=True, className='mb-2 small',
+                    ),
+                    dbc.Label('평가등급 열람 제외 부서 (체크해도 이 부서 소속 연구원의 평가만은 가립니다)',
+                              html_for='modal-eval-excluded-depts', size='sm'),
+                    dcc.Dropdown(
+                        id='modal-eval-excluded-depts', options=similarity_map.org_tree_options(), value=[],
+                        multi=True, placeholder='제외할 부서 없음', className='small mb-2',
+                    ),
+                ],
+                id='modal-permissions-section',
             ),
             html.Hr(className='my-2'),
             dbc.Row([
@@ -571,7 +601,7 @@ def layout():
 
     return dbc.Container([
         dbc.Tabs([
-            dbc.Tab(_user_management_tab(), label='사용자 관리',
+            dbc.Tab(_user_management_tab(), label='사용자/권한 관리',
                     tab_id='tab-users', label_style={'fontWeight': '600'}),
             dbc.Tab(_team_refer_tab(), label='팀/리더 참조',
                     tab_id='tab-team-refer', label_style={'fontWeight': '600'}),
@@ -615,11 +645,15 @@ def refresh_user_table(_counter):
     Output('modal-password-confirm', 'value', allow_duplicate=True),
     Output('modal-pw-label', 'children', allow_duplicate=True),
     Output('modal-is-admin', 'value', allow_duplicate=True),
+    Output('modal-permissions-section', 'style', allow_duplicate=True),
+    Output('modal-permissions', 'value', allow_duplicate=True),
+    Output('modal-eval-excluded-depts', 'value', allow_duplicate=True),
     Output('user-modal-alert', 'children', allow_duplicate=True),
     Input('btn-add-user', 'n_clicks'),
     prevent_initial_call=True,
 )
 def open_add_modal(_):
+    from services.auth import MIN_PASSWORD_LENGTH, MAX_PASSWORD_LENGTH
     return (
         True, '사용자 추가', None,
         '', False,          # user_id, disabled
@@ -627,8 +661,13 @@ def open_add_modal(_):
         _ROLES[0]['value'], # role default
         '',                 # email
         '', '',             # passwords
-        '비밀번호 * (12자 이상, 문자 조합)',
+        f'비밀번호 * ({MIN_PASSWORD_LENGTH}~{MAX_PASSWORD_LENGTH}자, 영문/숫자/특수문자 조합)',
         [],                 # is_admin: 기본 미부여
+        # 새 계정은 역할 기본값을 그대로 따르는 상태(NULL)로 시작 — 개별 권한은
+        # 만든 뒤 "수정"에서 조정한다(계정을 만들면서 바로 고정값을 심지
+        # 않기 위해, 이 섹션 자체를 새 계정 추가 시에는 숨긴다).
+        {'display': 'none'},
+        [], [],
         [],
     )
 
@@ -648,6 +687,9 @@ def open_add_modal(_):
     Output('modal-password-confirm', 'value', allow_duplicate=True),
     Output('modal-pw-label', 'children', allow_duplicate=True),
     Output('modal-is-admin', 'value', allow_duplicate=True),
+    Output('modal-permissions-section', 'style', allow_duplicate=True),
+    Output('modal-permissions', 'value', allow_duplicate=True),
+    Output('modal-eval-excluded-depts', 'value', allow_duplicate=True),
     Output('user-modal-alert', 'children', allow_duplicate=True),
     Input({'type': 'btn-edit', 'index': ALL}, 'n_clicks'),
     State('user-list-store', 'data'),
@@ -655,15 +697,26 @@ def open_add_modal(_):
 )
 def open_edit_modal(n_clicks_list, users):
     from dash import ctx
+    n_outputs = 16
     if not any(n for n in n_clicks_list if n):
-        return [no_update] * 13
+        return [no_update] * n_outputs
     triggered = ctx.triggered_id
     if triggered is None:
-        return [no_update] * 13
+        return [no_update] * n_outputs
     idx = triggered['index']
     if idx >= len(users):
-        return [no_update] * 13
+        return [no_update] * n_outputs
     u = users[idx]
+    # 체크박스는 "지금 이 계정에 실제로 적용되는 값"을 보여준다 — 개별
+    # 재정의(override)가 있으면 그 값, 없으면(None) 역할 기본값(ROLE_PERMISSIONS)을
+    # 보여준다. 다만 저장을 누르면(save_user) 항상 명시값으로 고정된다
+    # (services/user_store.py update_permissions 독스트링 참고).
+    role_defaults = ROLE_PERMISSIONS.get(u.get('role', ''), {})
+    overrides = u.get('permissions') or {}
+    perm_values = [
+        key for key in _PERMISSION_KEYS
+        if (overrides.get(key) if overrides.get(key) is not None else role_defaults.get(key, False))
+    ]
     return (
         True, '사용자 수정', u['user_id'],
         u['user_id'], True,              # user_id readonly
@@ -673,6 +726,9 @@ def open_edit_modal(n_clicks_list, users):
         '', '',
         '새 비밀번호 (변경 시에만 입력)',
         ['admin'] if u.get('is_admin') else [],
+        {},
+        perm_values,
+        list(u.get('eval_excluded_dep_ids') or []),
         [],
     )
 
@@ -692,13 +748,16 @@ def open_edit_modal(n_clicks_list, users):
     State('modal-password', 'value'),
     State('modal-password-confirm', 'value'),
     State('modal-is-admin', 'value'),
+    State('modal-permissions', 'value'),
+    State('modal-eval-excluded-depts', 'value'),
     State('user-refresh-counter', 'data'),
     prevent_initial_call=True,
 )
 def save_user(_, editing_id, user_id, display_name, role, email, password, pw_confirm,
-              is_admin_value, counter):
+              is_admin_value, permissions_value, excluded_depts_value, counter):
     from services.auth import (
-        can, change_password, create_user, get_current_user, password_validation_error, update_user,
+        can, change_password, create_user, get_current_user, password_validation_error,
+        update_permissions, update_user,
     )
     if not can('manage_users'):
         return _alert('권한이 없습니다.', 'danger'), no_update, no_update
@@ -742,6 +801,14 @@ def save_user(_, editing_id, user_id, display_name, role, email, password, pw_co
                 return _alert('비밀번호가 일치하지 않습니다.', 'warning'), no_update, no_update
             change_password(editing_id, password)
         update_user(editing_id, display_name=display_name, role=role, email=email, is_admin=is_admin)
+        # 이 모달에서 저장을 누르는 순간 4개 권한 전부 명시값으로 고정된다
+        # (역할이 나중에 바뀌어도 유지 — 사용자 확정, services/user_store.py
+        # update_permissions 독스트링 참고). 새로 만드는 계정(is_new)은 이
+        # 섹션 자체가 숨겨져 있어 여기로 오지 않는다 — 역할 기본값을 그대로
+        # 따르는 상태(NULL)로 남는다.
+        permissions_value = permissions_value or []
+        permissions = {key: (key in permissions_value) for key in _PERMISSION_KEYS}
+        update_permissions(editing_id, permissions, excluded_depts_value or [])
 
     return [], False, (counter or 0) + 1
 

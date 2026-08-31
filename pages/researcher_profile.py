@@ -503,6 +503,7 @@ def _photo_info_card(show_eval: bool = True):
                     html.Hr(className='my-2'),
                     html.Div([
                         html.I(
+                            id='eval-lock-icon',
                             className='bi bi-lock-fill me-1 text-secondary',
                             style={} if not show_eval else {'display': 'none'},
                         ),
@@ -643,12 +644,13 @@ def _card(children, *, body_class='p-2', card_class='shadow-sm profile-card mb-2
     return dbc.Card(dbc.CardBody(children, className=body_class, style=body_style), className=card_class)
 
 
-def _empty_profile_output():
+def _empty_profile_output(show_eval: bool = False):
     prompt = html.Div('연구원을 선택하세요.', className='text-muted p-3')
     return (
         avatar('?'), html.Div(), html.Div(), html.Div(), html.Div(), html.Div(),
         [], None, html.Div(), prompt, prompt, prompt, html.Div(), html.Div(),
         True,  # print-ready — 인쇄할 내용은 없지만 대기할 것도 없다.
+        {} if not show_eval else {'display': 'none'},  # eval-lock-icon.style
     )
 
 
@@ -1415,32 +1417,39 @@ def _build_print_block(rid, tables, researchers, name_map, show_eval):
     Output('profile-current-status', 'children'),
     Output('profile-print-content', 'children'),
     Output('print-ready', 'data'),
+    Output('eval-lock-icon', 'style'),
     Input('researcher-select', 'value'),
 )
 def update_profile(rid):
     import sys
-    from services.auth import can, get_current_user
+    from services.auth import can, can_view_evaluation, get_current_user
 
     if get_current_user() is None:
         return _empty_profile_output()
 
-    show_eval = can('view_evaluation')
+    role_show_eval = can('view_evaluation')
     show_comments = can('view_comments')
 
     if not rid:
-        return _empty_profile_output()
+        return _empty_profile_output(role_show_eval)
 
     try:
         tables = read_profile_tables()
         researchers = tables['researchers']
         if researchers.empty:
-            return _empty_profile_output()
+            return _empty_profile_output(role_show_eval)
 
         rid = str(rid).zfill(8)
         rows = researchers[researchers['researcher_id'] == rid]
         if rows.empty:
-            return _empty_profile_output()
+            return _empty_profile_output(role_show_eval)
         researcher = rows.iloc[0]
+        # 역할 권한(role_show_eval)만으로는 부족하다 — People팀처럼 부서
+        # 단위로 평가를 제외해 둔 사용자라면, 지금 보고 있는 이 연구원이
+        # 그 제외 부서 소속인지까지 봐야 한다(사용자 요청, 2026-08-31).
+        show_eval = can_view_evaluation(
+            str(researcher.get('org_code', '')), similarity_map.org_code_dep_id_map()
+        )
         # 평가등급 표의 연도 열 — evaluations.csv가 생성될 때와 동일한 회계연도
         # 기준(매년 3월 시작, services.evaluations)이어야 CSV의 실제 컬럼과
         # 항상 맞아떨어진다(달력연도 CURRENT_YEAR를 그대로 쓰면 1~2월에 어긋남).
@@ -1481,6 +1490,7 @@ def update_profile(rid):
             current_status,
             _build_print_block(rid, tables, researchers, name_map, show_eval),
             True,
+            {} if not show_eval else {'display': 'none'},
         )
     except Exception as exc:
         import traceback
@@ -1494,6 +1504,7 @@ def update_profile(rid):
             avatar('?'), err_div, html.Div(), html.Div(), html.Div(),
             [], None, html.Div(), err_div, err_div, err_div, html.Div(), html.Div(),
             True,
+            {} if not role_show_eval else {'display': 'none'},
         )
 
 
@@ -1518,7 +1529,7 @@ def _append_bulk_print_block(_n_intervals, rid_list, progress):
     긴 동기 작업이라 브라우저가 "응답 없음"을 띄울 정도로 멈춘 것처럼
     보였다(사용자 리포트, 16명 테스트). 한 명씩 나눠 붙이면 그 사이사이
     브라우저가 다른 작업(그리기, 다음 요청)을 처리할 틈이 생긴다."""
-    from services.auth import can, get_current_user
+    from services.auth import can_view_evaluation, get_current_user
 
     fallback = (no_update, no_update, True, no_update, no_update, _BULK_BUILD_OVERLAY_HIDDEN_STYLE)
     if get_current_user() is None or not rid_list:
@@ -1529,7 +1540,6 @@ def _append_bulk_print_block(_n_intervals, rid_list, progress):
     if idx >= total:
         return (*fallback, True)
 
-    show_eval = can('view_evaluation')
     rid = rid_list[idx]
     try:
         tables = _cached_profile_tables()
@@ -1538,6 +1548,12 @@ def _append_bulk_print_block(_n_intervals, rid_list, progress):
             block = None
         else:
             name_map = researchers.set_index('researcher_id')['name'].to_dict()
+            # update_profile()과 같은 이유로 부서 단위 예외까지 반영해야 한다
+            # — 일괄 인쇄 대상마다 소속 부서가 다를 수 있으므로 틱마다(그
+            # 사람의 org_code로) 다시 판정한다.
+            rows = researchers[researchers['researcher_id'] == rid]
+            org_code = str(rows.iloc[0].get('org_code', '')) if not rows.empty else ''
+            show_eval = can_view_evaluation(org_code, similarity_map.org_code_dep_id_map())
             block = _build_print_block(rid, tables, researchers, name_map, show_eval)
     except Exception as exc:
         import sys
