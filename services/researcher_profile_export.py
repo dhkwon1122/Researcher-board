@@ -84,6 +84,69 @@ def _yy(date_str) -> str:
     return ''
 
 
+def _task_year(date_str) -> int | None:
+    """_yy()와 같은 기준(앞 4자리가 숫자면 연도)으로 파싱하되, 병합 로직에서
+    실제 정수 비교(포함/연결 판정)가 필요해 잘라낸 문자열 대신 int를 돌려준다."""
+    s = _s(date_str)
+    if len(s) >= 4 and s[:4].isdigit():
+        return int(s[:4])
+    return None
+
+
+def _merge_task_periods(items: list) -> list:
+    """같은 과제명(the_task_name 우선, 없으면 task_name)으로 참여 구간이
+    여러 줄이면 하나로 합친다(사용자 확정 2026-08-31) — 어떤 구간의
+    시작연도가 직전(더 이른 시작연도) 구간의 종료연도+1 이하면 "포함되거나
+    연결된다"고 보고 합친다(정확한 날짜가 아니라 연도 기준). 한 번이라도
+    종료일이 없는(진행중) 구간과 합쳐지면 그 그룹은 계속 '현재'로 남고,
+    그 뒤에 시작하는 어떤 구간과도 계속 이어붙는다(진행중이면 끝이 없으므로
+    이후 시작하는 구간은 전부 그 안에 포함됨 — 예3: '21~현재 뒤에 시작하는
+    '23~'24는 항상 그 안에 포함).
+
+    반환: [{'name', 'start_year'(int|None), 'end_year'(int|None), 'current'(bool)}, ...].
+    시작연도를 알 수 없는(원본 데이터 결측/파싱 불가) 행은 연도 비교 자체가
+    안 되므로 병합하지 않고 그대로 각각 하나씩 남긴다."""
+    by_name: dict = {}
+    order: list = []
+    for t in items:
+        name = _s(t.get('the_task_name')) or _s(t.get('task_name')) or '-'
+        by_name.setdefault(name, []).append(t)
+        if name not in order:
+            order.append(name)
+
+    result = []
+    for name in order:
+        intervals = [
+            {
+                'start': _task_year(t.get('start_date')),
+                'end': _task_year(t.get('end_date')),
+                'current': _task_year(t.get('end_date')) is None,
+            }
+            for t in by_name[name]
+        ]
+        known = sorted((iv for iv in intervals if iv['start'] is not None), key=lambda iv: iv['start'])
+        unknown = [iv for iv in intervals if iv['start'] is None]
+
+        groups: list = []
+        for iv in known:
+            if groups:
+                g = groups[-1]
+                g_end_cmp = math.inf if g['current'] else g['end']
+                if iv['start'] <= g_end_cmp + 1:
+                    g['current'] = g['current'] or iv['current']
+                    if not g['current']:
+                        g['end'] = max(g['end'], iv['end'])
+                    continue
+            groups.append(dict(iv))
+
+        for g in groups:
+            result.append({'name': name, 'start_year': g['start'], 'end_year': g['end'], 'current': g['current']})
+        for iv in unknown:
+            result.append({'name': name, 'start_year': None, 'end_year': iv['end'], 'current': iv['current']})
+
+    return result
+
+
 def _next_promotion_ref_date(today: date) -> date:
     """직급/년차 기준일 — 2027-03-01부터 시작해 오늘을 지나지 않은 첫 3/1."""
     ref = _PROMOTION_REF_BASE
@@ -269,16 +332,24 @@ def _col_position_title(_rid, rows):
 
 
 def _col_tasks(_rid, rows):
-    items = sorted(rows['tasks'], key=lambda t: _s(t.get('start_date')), reverse=True)
+    """과제수행이력 — the_task_name(참여 당시 실제 과제명, pipeline/
+    process_tasks.py가 tasks_information.csv 개명 이력으로 보정)이 있으면
+    그걸, 없으면(구버전 CSV/매핑 실패 폴백) 원본 task_name을 쓴다
+    (_merge_task_periods 내부에서 처리). 같은 과제명의 여러 참여 구간은
+    _merge_task_periods()가 연도 기준으로 포함/연결되는 것끼리 하나로
+    합친 뒤, (a) 진행중('현재')인 과제를 맨 위로, 그 다음은 최근 시작연도
+    순으로 정렬한다(사용자 확정 2026-08-31 — 종료일이 있어도 아직 그
+    과제가 이어지고 있는 게 더 눈에 띄어야 한다는 요청)."""
+    merged = _merge_task_periods(rows['tasks'])
+    merged.sort(key=lambda m: (
+        0 if m['current'] else 1,
+        -(m['start_year'] if m['start_year'] is not None else -9999),
+    ))
     lines = []
-    for t in items:
-        # the_task_name(참여 당시 실제 과제명, pipeline/process_tasks.py가
-        # tasks_information.csv 개명 이력으로 보정)이 있으면 그걸, 없으면
-        # (구버전 CSV/매핑 실패 폴백) 원본 task_name.
-        name = _s(t.get('the_task_name')) or _s(t.get('task_name')) or '-'
-        start = _yy(t.get('start_date')) or '-'
-        end = _yy(t.get('end_date')) or '현재'
-        lines.append(f'{name}({start} ~ {end})')
+    for m in merged:
+        start = f"'{m['start_year'] % 100:02d}" if m['start_year'] is not None else '-'
+        end = '현재' if m['current'] else (f"'{m['end_year'] % 100:02d}" if m['end_year'] is not None else '-')
+        lines.append(f"{m['name']}({start} ~ {end})")
     return '\n'.join(lines) if lines else '-'
 
 
