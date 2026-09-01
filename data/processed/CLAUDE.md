@@ -7754,3 +7754,99 @@ process()` 전체를 합성 xlsx 3개로 엔드투엔드 실행해 신버전 컬
 스키마일 가능성)에 대한 실제 이관 실행 결과, 실제 `내 리포트`/`구버전
 이력` 두 xlsx 파일을 이용한 직무이력 업로드 검증(합성 데이터로만 로직
 확인).
+
+## 2026-09-01 (4): 팀/리더 참조 조직코드 오름차순 + 데이터 업데이트 탭
+체크 컬럼 시인성 개선 + 앱 전체 디자인을 Ant Design 스타일로 전환
+
+사용자 요청 4건. 1~3번은 관리자 화면 개선, 4번은 대시보드 전체 리스킨.
+
+**1) 팀/리더 참조 — 조직코드 정렬 오름차순**: `services/team_refer_store.py`
+`list_editable_rows()`의 `sorted(..., reverse=True)`(내림차순, 과거 확정
+사항)를 `reverse=True` 제거로 오름차순으로 변경.
+
+**2) 데이터 업데이트 탭 — 체크 컬럼 시인성**: 첫 컬럼 헤더를 빈 문자열에서
+"체크"로(`pages/admin.py` `_data_update_table()`), 체크박스에
+`du-check-box` 클래스를 추가해 `assets/custom.css`에서 강조색(`--gs-accent`)
+테두리를 둘러 흐릿해 안 보이던 문제 해결.
+
+**3) 데이터 업데이트 탭 — 헤더 폰트/정렬**: 원인은 앱 전체 모든
+Bootstrap 표에 걸리는 전역 규칙(`.table thead th { font-size: 0.7rem }` vs
+`.table tbody td { font-size: 0.85rem }`)이었음. 사용자가 "데이터
+업데이트 탭만" 범위로 확정해, 전역 규칙은 그대로 두고 `.data-update-table`
+전용 클래스(표 자체에 `data-update-table` 클래스 추가)로 헤더 폰트를 셀과
+동일한 크기로 키우고 가운데 정렬만 이 표에 한해 오버라이드.
+
+**4) 대시보드 전체 디자인 전환 — Ant Design**: 애플(apple.com) 스타일에서
+Ant Design 스타일로 전환(사용자 요청 — 대중적 디자인 4개(Material Design 3
+/ Fluent Design / Ant Design / Notion·Linear류 미니멀)를 실제 화면 요소
+(내비/요약카드/데이터 업데이트 표) 목업 아티팩트로 비교해 제시했고,
+사용자가 "3번 Ant Design 스타일로 반영해줘"로 확정).
+
+- **핵심 토큰**(`assets/custom.css` `:root`): `--gs-bg/surface/border/
+  border-2/text/muted/label`을 Ant Design 팔레트로 교체(예: 강조색
+  `#0071e3`→`#1677ff`, 테두리 `#e8e8ed`→`#d9d9d9`, 배경 `#f5f5f7`→`#f5f5f5`).
+  새 토큰 2개 추가: `--gs-nav-bg:#001529`(Ant Design Pro 특유의 짙은
+  네이비 상단바), `--gs-header-bg:#fafafa`(Ant Table 특유의 옅은 회색
+  헤더). 반경도 애플 특유의 필(pill, 980px/999px)에서 Ant의 작은 반경
+  (`--gs-radius:14px→8px`, `--gs-radius-sm:10px→4px`)으로, 폰트도 Ant의
+  실제 폰트 스택(`-apple-system, 'Segoe UI', 'PingFang SC', ...`)으로,
+  애플 특유의 음수 자간(`letter-spacing:-0.011em` 등)도 제거.
+- **네비게이션**: `.app-navbar`의 반투명 블러(`backdrop-filter: blur`)를
+  제거하고 `--gs-nav-bg`(짙은 네이비) 평면 배경으로 — Ant는 그림자/블러
+  대신 테두리로 깊이를 표현하는 평평한(flat) 스타일이라 애플 특유의
+  프로스티드 글래스 효과와 안 맞음. `app.py`의 `dbc.Navbar(color=...)`도
+  `#1d1d1f`→`#001529`로 맞춤(단, 이 값은 위 CSS의 `!important` 배경
+  규칙에 실제로는 덮어써지므로 CSS 쪽이 진짜 반영 지점).
+- **버튼/뱃지**: `.btn`/`.badge`의 필 형태(`border-radius:980px/999px`)를
+  Ant Button/Tag 특유의 작은 반경(`--gs-radius-sm`)으로.
+- **표 헤더**: `.table thead th`에 `background-color: var(--gs-header-bg)`
+  추가(Ant Table의 옅은 회색 헤더 재현) — Dash `dash_table.DataTable`은
+  이 전역 CSS를 안 타므로(자체 렌더링) 하드코딩된 `style_header`를 가진
+  2곳(연구원 명단 `pages/researcher_list.py`, 팀/리더 참조
+  `pages/admin.py`)은 각각 직접 Ant 톤으로 교체.
+- **로그인/최초설정 페이지**(`app.py`의 순수 Flask HTML 템플릿, `custom.css`
+  미적용 별도 인라인 스타일): `.btn-brand`/`.brand-icon`을 기존 남색
+  `#1e3a5f`에서 Ant 프라이머리 `#1677ff`(hover `#0958d9`, Ant의 실제
+  active/pressed 톤)로. 배경 `#f0f2f5`는 Ant Design Pro 로그인 화면이
+  실제로 쓰는 배경색과 우연히 일치해 그대로 둠.
+- **옛 애플 토큰 하드코딩 정리**: `--gs-*` 변수를 안 쓰고 옛 애플 헥스값을
+  코드에 그대로 박아 쓰던 곳들(컴포넌트별 인라인 스타일)을 전부 새 Ant
+  값으로 교체 — `components/timeline_view.py`(이벤트 색상/그리드선/범례),
+  `components/detail_tabs.py`(패널 제목색/E_support 강조색),
+  `components/feedback_modal.py`, `pages/researcher_profile.py`(진행바/
+  텍스트 색), `pages/researcher_similarity_map.py`.
+- **별도 "브랜드 남색"(`#1e3a5f`, `--gs-*`와 무관하게 하드코딩) 정리**:
+  맥락별로 다르게 대응 — 프로필 아바타 배경(`components/
+  profile_sections.py`)은 구조적 서피스라 Ant 네이비(`#001529`)로,
+  리더십진단 레이더 차트 비교선은 데이터 강조색이라 Ant 프라이머리
+  (`#1677ff`)로, `pages/researcher_list.py`의 DataTable 헤더는 원래
+  "짙은 남색 배경+흰 글씨"였던 걸 실제 Ant Table 관례(옅은 회색 헤더+
+  진한 글씨, `#fafafa`/`#1f1f1f`)로 바꿈(전체폭 데이터 표 헤더를 통째로
+  네이비로 칠하는 건 Ant보다 옛 스타일에 더 가까워서), 필터 행 강조
+  테두리/배경은 Ant 프라이머리 계열 라이트 틴트로, 클릭 가능한 "이름"
+  셀 텍스트색은 Ant 프라이머리로, 선택된 행 강조(`state:'active'`)도
+  Ant 라이트 블루(`#bae0ff`)+프라이머리 테두리로.
+- 인쇄용(`@media print`) 조직 섹션 제목 밑줄(`#1e3a5f`)도 Ant 프라이머리로.
+
+검증: 위 색상 치환 후 전체 리포지토리를 대소문자 무관 재검색해 옛 애플
+토큰 헥스값(`#0071e3`/`#1d1d1f`/`#f5f5f7`/`#6e6e73`/`#86868b`/`#e8e8ed`/
+`#d2d2d7`)과 별도 브랜드 남색(`#1e3a5f`)이 하나도 안 남은 것을 확인.
+변경된 전체 파일 `py_compile` 통과. **실제로 서버를 띄우고(`python3
+app.py`, 포트 8501) Playwright로 로그인부터 끝까지 실제 브라우저
+구동 확인** — 최초 설정 페이지 생성 → 로그인 → `/`(연구원 프로필),
+`/researcher-list`(연구원 명단), `/admin`(관리자, "데이터 업데이트" 탭
+스크롤 포함) 3개 화면을 실제로 열어 스크린샷으로 확인: 상단바가 짙은
+네이비(`#001529`)로 바뀐 것, 버튼/라디오/링크가 전부 Ant 블루
+(`#1677ff`)인 것, 카드가 그림자 없이 얇은 테두리+작은 반경인 것,
+"데이터 업데이트" 표 헤더가 셀과 같은 크기로 가운데 정렬된 것,
+체크박스에 파란 테두리가 뚜렷이 보이는 것(확대 크롭으로 재확인),
+"업무목표24/25/26"·"① '18.5월 이전"/"② '18.5월 이후" 라벨이 이전
+반영분과 함께 정상 렌더링되는 것, 연/월 드롭다운이 연-왼쪽/월-오른쪽
+순서로 정상 표시되는 것을 모두 눈으로 확인. 로그인/최초설정 페이지도
+별도로 스크린샷해 브랜드 버튼 색이 반영된 것 확인. 테스트로 만든 로컬
+계정/서버 프로세스는 검증 후 정리(리포지토리에 흔적 없음, `git status`로
+확인).
+
+**미검증**: 실제 데이터가 채워진 화면(이 샌드박스는 DB가 비어 있어 대부분
+"데이터 없음" 상태로만 확인), 실제 다수 사용자가 동시 접속하는 프로덕션
+환경에서의 최종 육안 검수.

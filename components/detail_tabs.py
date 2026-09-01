@@ -13,7 +13,7 @@ from components.timeline_data import (
     share_sum,
 )
 
-_LEGEND_NEUTRAL = '#6e6e73'
+_LEGEND_NEUTRAL = '#8c8c8c'
 
 
 def publications_tab(pub_df, rid):
@@ -148,9 +148,9 @@ def patents_tab(pat_df, rid):
        style={'tableLayout': 'fixed', 'width': '100%'})])
 
 
-_PANEL_TITLE_STYLE = {'fontSize': '0.85rem', 'fontWeight': 600, 'color': '#1d1d1f'}
+_PANEL_TITLE_STYLE = {'fontSize': '0.85rem', 'fontWeight': 600, 'color': '#1f1f1f'}
 _GRADE_PILL_COLOR = '#3f8f57'
-_E_SUPPORT_COLOR = '#0071e3'
+_E_SUPPORT_COLOR = '#1677ff'
 
 _PRINT_SUB_HEADING_STYLE = {
     'display': 'inline-block',
@@ -160,7 +160,7 @@ _PRINT_SUB_HEADING_STYLE = {
     'padding': '1px 8px',
     'fontSize': '0.78rem',
     'fontWeight': 700,
-    'color': '#1d1d1f',
+    'color': '#1f1f1f',
 }
 
 

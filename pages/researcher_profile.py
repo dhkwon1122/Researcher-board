@@ -186,7 +186,7 @@ def _print_progress_overlay():
         html.Div(id='print-progress-text', className='small fw-semibold mb-2', children='인쇄 준비 중…'),
         html.Div(
             html.Div(id='print-progress-fill', style={
-                'height': '100%', 'width': '0%', 'backgroundColor': '#0071e3',
+                'height': '100%', 'width': '0%', 'backgroundColor': '#1677ff',
                 'borderRadius': '999px', 'transition': 'width 0.15s ease',
             }),
             style={
@@ -228,7 +228,7 @@ def _bulk_build_progress_overlay(total):
                   children=f'프로필 데이터 준비 중… (0 / {total})'),
         html.Div(
             html.Div(id='bulk-build-progress-fill', style={
-                'height': '100%', 'width': '0%', 'backgroundColor': '#0071e3',
+                'height': '100%', 'width': '0%', 'backgroundColor': '#1677ff',
                 'borderRadius': '999px', 'transition': 'width 0.15s ease',
             }),
             style={
@@ -531,7 +531,7 @@ def _owned_expertise_stack_card():
     return dbc.Card(
         dbc.CardBody([
             html.P('보유 전문성', style={'fontSize': '0.85rem', 'fontWeight': 600,
-                                      'color': '#1d1d1f'}, className='mb-2'),
+                                      'color': '#1f1f1f'}, className='mb-2'),
             html.Div(id='tab-expertise', style={'maxHeight': f'{TABS_CONTENT_HEIGHT}px', 'overflowY': 'auto'}),
         ]),
         className='shadow-sm profile-card h-100',
@@ -544,13 +544,13 @@ def _right_column():
             dbc.CardBody([
                 html.Div([
                     html.P('전문성 요약(LLM)', style={'fontSize': '0.85rem', 'fontWeight': 600,
-                                            'color': '#1d1d1f'}, className='mb-1'),
+                                            'color': '#1f1f1f'}, className='mb-1'),
                     html.Div(id='llm-summary-block', style={'maxHeight': f'{LLM_SUMMARY_HEIGHT - 28}px',
                                                              'overflowY': 'auto'}),
                 ], style={'flex': '0 0 auto', 'height': f'{LLM_SUMMARY_HEIGHT}px',
                           'overflow': 'hidden', 'marginBottom': '8px'}),
                 html.P('타임라인', style={'fontSize': '0.85rem', 'fontWeight': 600,
-                                       'color': '#1d1d1f', 'flex': '0 0 auto'}, className='mb-2'),
+                                       'color': '#1f1f1f', 'flex': '0 0 auto'}, className='mb-2'),
                 html.Div(id='tab-timeline', style={'flex': '1 1 auto', 'minHeight': '0', 'overflow': 'hidden'}),
             ], style={'height': '100%', 'display': 'flex', 'flexDirection': 'column'}),
             className='shadow-sm profile-card',
@@ -654,7 +654,7 @@ def _empty_profile_output(show_eval: bool = False):
     )
 
 
-_PRINT_BOX_BORDER = '1px solid #555555'  # 박스 테두리 색 — 기존 #1d1d1f(거의
+_PRINT_BOX_BORDER = '1px solid #555555'  # 박스 테두리 색 — 기존 #1f1f1f(거의
 # 검정)가 너무 진하다는 사용자 요청으로 짙은 회색으로 완화. _print_box()/
 # combined_box 등 모든 인쇄 박스 테두리가 이 상수 하나를 공유한다.
 _PRINT_BOX_DIVIDER = '1px solid #ddd'  # combined_box 내부 photo/info/tech
@@ -865,7 +865,7 @@ def _print_patent_summary(pat_df, rid):
 
 _PRINT_TABLE_TH_STYLE = {'padding': '3px 6px', 'borderBottom': f'1px solid {_PRINT_BOX_BORDER.split()[-1]}',
                           'textAlign': 'left', 'fontWeight': '600', 'whiteSpace': 'nowrap'}
-_PRINT_TABLE_TD_STYLE = {'padding': '3px 6px', 'borderBottom': '1px solid #d2d2d7', 'verticalAlign': 'top'}
+_PRINT_TABLE_TD_STYLE = {'padding': '3px 6px', 'borderBottom': '1px solid #bfbfbf', 'verticalAlign': 'top'}
 
 
 def _year_label(row, year_col='pub_year', date_col='pub_date'):
@@ -1627,7 +1627,7 @@ def _append_bulk_print_block(_n_intervals, rid_list, progress):
 
     fill_style = {
         'height': '100%', 'width': f'{round(new_idx / total * 100)}%',
-        'backgroundColor': '#0071e3', 'borderRadius': '999px', 'transition': 'width 0.15s ease',
+        'backgroundColor': '#1677ff', 'borderRadius': '999px', 'transition': 'width 0.15s ease',
     }
     overlay_style = _BULK_BUILD_OVERLAY_HIDDEN_STYLE if done else _BULK_BUILD_OVERLAY_VISIBLE_STYLE
     text = f'프로필 데이터 준비 중… ({new_idx} / {total})'

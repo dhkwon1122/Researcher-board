@@ -274,9 +274,9 @@ _GRADE_STYLES = _grade_styles_for(_EVAL_GRADE_COLUMNS)
 # 열 지정 없이 모든 셀에 적용되므로, 평가등급 색상(특정 열만 대상)보다
 # 먼저 와야 홀수행에서도 등급 색이 줄무늬 배경에 덮이지 않고 살아남는다.
 _BASE_STYLE_DATA_CONDITIONAL = [
-    {'if': {'row_index': 'odd'}, 'backgroundColor': '#f9fbfd'},
-    {'if': {'state': 'active'}, 'backgroundColor': '#dbeafe',
-     'border': '1px solid #3b82f6'},
+    {'if': {'row_index': 'odd'}, 'backgroundColor': '#fafafa'},
+    {'if': {'state': 'active'}, 'backgroundColor': '#bae0ff',
+     'border': '1px solid #1677ff'},
 ]
 
 
@@ -637,8 +637,8 @@ def layout():
                     style_as_list_view=True,
                     style_table={'overflowX': 'auto'},
                     style_header={
-                        'backgroundColor': '#1e3a5f',
-                        'color': 'white',
+                        'backgroundColor': '#fafafa',
+                        'color': '#1f1f1f',
                         'fontWeight': '600',
                         'fontSize': '0.8rem',
                         'textAlign': 'center',
@@ -647,10 +647,10 @@ def layout():
                     # 검색(필터) 행이라는 게 눈에 띄도록 배경/테두리를 뚜렷하게
                     # 준다(사용자 확정 — "검색 가능한 행이라는 걸 보여주면 좋겠다").
                     style_filter={
-                        'backgroundColor': '#eaf2fb',
+                        'backgroundColor': '#e6f4ff',
                         'fontSize': '0.75rem',
-                        'borderTop': '2px solid #1e3a5f',
-                        'borderBottom': '2px solid #cfe0f3',
+                        'borderTop': '2px solid #1677ff',
+                        'borderBottom': '2px solid #bae0ff',
                     },
                     style_cell={
                         'fontSize': '0.82rem',
@@ -663,7 +663,7 @@ def layout():
                     },
                     style_cell_conditional=[
                         {'if': {'column_id': '이름'}, 'textAlign': 'left', 'minWidth': '80px',
-                         'fontWeight': '600', 'cursor': 'pointer', 'color': '#1e3a5f'},
+                         'fontWeight': '600', 'cursor': 'pointer', 'color': '#1677ff'},
                         {'if': {'column_id': '부서'}, 'textAlign': 'left', 'minWidth': '100px'},
                         {'if': {'column_id': '과제'}, 'textAlign': 'left', 'minWidth': '100px'},
                     ],

@@ -492,7 +492,7 @@ def _team_refer_tab() -> html.Div:
                 'overflow': 'hidden', 'textOverflow': 'ellipsis',
             },
             style_cell_conditional=[{'if': {'column_id': '_no'}, 'width': '40px', 'textAlign': 'center'}],
-            style_header={'fontWeight': '600', 'backgroundColor': '#f1f3f5',
+            style_header={'fontWeight': '600', 'backgroundColor': '#fafafa',
                           'textAlign': 'center', 'fontSize': '0.72rem'},
             tooltip_delay=0,
             tooltip_duration=None,

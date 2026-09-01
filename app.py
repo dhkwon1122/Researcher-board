@@ -222,9 +222,9 @@ def _html_page(title: str, body: str) -> str:
             display:flex; align-items:center; justify-content:center; }}
     .auth-card {{ border:none; border-radius:12px;
                   box-shadow:0 4px 24px rgba(0,0,0,.1); max-width:420px; width:100%; }}
-    .btn-brand {{ background:#1e3a5f; border-color:#1e3a5f; }}
-    .btn-brand:hover {{ background:#163050; border-color:#163050; }}
-    .brand-icon {{ font-size:2.2rem; color:#1e3a5f; }}
+    .btn-brand {{ background:#1677ff; border-color:#1677ff; }}
+    .btn-brand:hover {{ background:#0958d9; border-color:#0958d9; }}
+    .brand-icon {{ font-size:2.2rem; color:#1677ff; }}
   </style>
 </head>
 <body>
@@ -502,7 +502,7 @@ navbar = dbc.Navbar(
                 [
                     dbc.Col(
                         html.I(className='bi bi-bar-chart-fill me-2',
-                               style={'fontSize': '1.4rem', 'color': '#0071e3'}),
+                               style={'fontSize': '1.4rem', 'color': '#1677ff'}),
                         width='auto',
                     ),
                     dbc.Col(
@@ -552,7 +552,7 @@ navbar = dbc.Navbar(
         ],
         fluid=True,
     ),
-    color='#1d1d1f',
+    color='#001529',
     dark=True,
     sticky='top',
     className='app-navbar',
@@ -569,7 +569,7 @@ app.layout = html.Div(
             className='px-4 py-3',
         ),
     ],
-    style={'minHeight': '100vh', 'backgroundColor': '#f5f5f7'},
+    style={'minHeight': '100vh', 'backgroundColor': '#f5f5f5'},
 )
 
 

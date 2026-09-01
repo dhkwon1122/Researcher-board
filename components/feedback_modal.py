@@ -25,7 +25,7 @@ def render() -> html.Div:
             '기능 관련 수정/추가/보완/기타 의견 제출하기',
             id='feedback-open-btn', n_clicks=0, size='sm', className='ms-3',
             color='warning',
-            style={'color': '#1d1d1f', 'fontWeight': 600},
+            style={'color': '#1f1f1f', 'fontWeight': 600},
         ),
         dbc.Modal([
             dbc.ModalHeader(dbc.ModalTitle('기능 관련 의견 제출하기')),

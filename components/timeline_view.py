@@ -69,10 +69,10 @@ _HR_ROW_HEIGHT = 32       # 인사발령 필 1건의 대략적 렌더 높이(px)
 
 # ── 색상 ──────────────────────────────────────────────────────────────────
 TASK_COLOR_PALETTE = ['#4a7fc1', '#7b6fb0', '#c46b6b', '#c07d97', '#c08a52']
-EVENT_COLORS = {'논문': '#c98a2e', '특허': '#3f8f57', '인사발령': '#0071e3'}
+EVENT_COLORS = {'논문': '#c98a2e', '특허': '#3f8f57', '인사발령': '#1677ff'}
 _SPINE_COLOR = '#c7c7cc'
-_GRIDLINE = '#e8e8ed'
-_LEGEND_NEUTRAL = '#6e6e73'
+_GRIDLINE = '#d9d9d9'
+_LEGEND_NEUTRAL = '#8c8c8c'
 _ICONS = {'논문': '📄', '특허': '💡', '인사발령': '🧭'}
 
 
@@ -278,7 +278,7 @@ def _hr_table(hr_rows):
 def _header_pills(task_count, hr_rows, pub_count, pat_count, pub_unlinked, pat_unlinked,
                    task_df, pub_df, pat_df, rid):
     kinds = [
-        ('과제', task_count, None, '#1d1d1f', '8px', tasks_block(task_df, rid)),
+        ('과제', task_count, None, '#1f1f1f', '8px', tasks_block(task_df, rid)),
         ('인사발령', len(hr_rows), None, EVENT_COLORS['인사발령'], '999px', _hr_table(hr_rows)),
         ('논문', pub_count, pub_unlinked, EVENT_COLORS['논문'], '999px', publications_tab(pub_df, rid)),
         ('특허', pat_count, pat_unlinked, EVENT_COLORS['특허'], '999px', patents_tab(pat_df, rid)),

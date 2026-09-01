@@ -413,7 +413,7 @@ def _render_historical_results(researcher_ids: list, valid_date: date):
         elif r.get('error'):
             alerts.append(dbc.Alert(f"{label}: {r['error']}", color='warning', className='small mb-1'))
         else:
-            meta = (f'<div style="color:#86868b;font-size:0.78rem;margin-bottom:4px;">'
+            meta = (f'<div style="color:#bfbfbf;font-size:0.78rem;margin-bottom:4px;">'
                     f'시점: {r.get("as_of", "")} · 분석: {r.get("computed_at", "")}</div>')
             card_parts.append(meta + _historical_card_html(r, name_map, anchor='', include_links=True))
 

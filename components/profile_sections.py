@@ -72,7 +72,7 @@ def avatar(name: str, size: int = 88):
         initial,
         style={
             'width': f'{size}px', 'height': f'{size}px', 'borderRadius': '50%',
-            'backgroundColor': '#1e3a5f', 'color': 'white',
+            'backgroundColor': '#001529', 'color': 'white',
             'display': 'flex', 'alignItems': 'center', 'justifyContent': 'center',
             'fontSize': f'{int(size * 0.45)}px', 'fontWeight': 'bold',
         },
@@ -746,8 +746,8 @@ def leadership_figure(lea_df, rid: str, year):
         r=my_vals + [my_vals[0]],
         theta=labels,
         fill='toself',
-        fillcolor='rgba(30,58,95,0.18)',
-        line=dict(color='#1e3a5f', width=2.5),
+        fillcolor='rgba(22,119,255,0.18)',
+        line=dict(color='#1677ff', width=2.5),
         name='타인평균',
         hovertemplate='%{theta}: %{r:.2f}<extra>타인평균</extra>',
     ))
