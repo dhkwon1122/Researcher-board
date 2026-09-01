@@ -54,6 +54,7 @@ sys.path.insert(0, os.path.abspath(_PIPELINE_DIR))
 from backfill_utils import parse_backfill_date  # noqa: E402
 from paths import BASE_DIR, OUT_DIR  # noqa: E402
 from raw_archive import archive_raw_bytes  # noqa: E402
+import pdf_reader  # noqa: E402
 
 WEB_UPDATES_DIR = os.path.join(BASE_DIR, 'data', 'web_updates')
 RUN_LOG_PATH = os.path.join(OUT_DIR, 'web_pipeline_runs.csv')
@@ -763,3 +764,76 @@ def start_db_load() -> bool:
 def is_db_load_running() -> bool:
     lock = lock_status()
     return bool(lock and lock.get('keys') == ['__db_load__'])
+
+
+# ── 과제별컨플 PDF 첨부(컨플 주소 없는 과제, 2026-09-01 추가) ──────────────────
+# project_confl_address.csv에 컨플 주소가 비어 있는 과제는 pipeline/
+# project_summary.py가 과제 전문성 분석(CLI, run_expertise.py) 실행 시
+# data/raw/conflue_MPR/{과제명}.pdf 를 대신 읽는다(pipeline/pdf_reader.py).
+# 지금까지는 그 폴더에 서버 파일시스템으로 직접 파일을 갖다 놓아야 했는데,
+# 이 4개 함수로 "데이터 업데이트" 탭에서 웹 업로드/조회/삭제할 수 있게 한다.
+# 다른 MANIFEST 항목과 달리 process_*.py로 "실행"할 대상이 없다(파일을 그
+# 자리에 두기만 하면 되고, 실제 소비는 나중에 별도로 실행되는 과제 전문성
+# 분석 CLI가 한다) — 그래서 MANIFEST/run_one() 흐름을 타지 않는 별도
+# 경로로 둔다.
+def list_confl_pdfs() -> list[dict]:
+    """data/raw/conflue_MPR/ 안의 PDF 목록(파일명순). 각 항목:
+    {filename, size_kb, uploaded_at}."""
+    d = pdf_reader.PDF_DIR
+    if not os.path.isdir(d):
+        return []
+    out = []
+    for fn in sorted(os.listdir(d)):
+        if not fn.lower().endswith('.pdf'):
+            continue
+        stat = os.stat(os.path.join(d, fn))
+        out.append({
+            'filename': fn,
+            'size_kb': round(stat.st_size / 1024, 1),
+            'uploaded_at': datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M'),
+        })
+    return out
+
+
+def save_confl_pdf(filename: str, content_bytes: bytes) -> None:
+    """PDF 한 개를 data/raw/conflue_MPR/에 저장한다. 파일명이 project_confl_
+    address.csv의 과제명(project_name)과 정확히 같아야 pdf_reader.py가 찾을 수
+    있다 — 원본 파일명을 그대로 쓰고(사용자가 과제명과 맞춰서 올려야 함),
+    디렉터리 구분자는 os.path.basename으로 제거해 경로 조작을 막는다."""
+    safe_name = os.path.basename(filename)
+    if not safe_name.lower().endswith('.pdf'):
+        raise ValueError('PDF 파일만 업로드할 수 있습니다.')
+    os.makedirs(pdf_reader.PDF_DIR, exist_ok=True)
+    with open(os.path.join(pdf_reader.PDF_DIR, safe_name), 'wb') as f:
+        f.write(content_bytes)
+    try:
+        archive_raw_bytes(content_bytes, safe_name, category='project_confl_pdf')
+    except OSError as exc:
+        print(f'[web_pipeline_runner] 컨플 PDF 아카이브 실패(무시하고 계속) {safe_name}: {exc}')
+
+
+def delete_confl_pdf(filename: str) -> bool:
+    """지정한 PDF 하나를 삭제한다. 성공하면 True, 파일이 없으면 False."""
+    path = os.path.join(pdf_reader.PDF_DIR, os.path.basename(filename))
+    if os.path.exists(path):
+        os.remove(path)
+        return True
+    return False
+
+
+def confl_projects_missing_pdf() -> list[str]:
+    """project_confl_address.csv에서 컨플 주소가 비어 있는 과제명 중, 아직
+    PDF가 없는 것들(오름차순) — 관리자가 뭘 더 올려야 하는지 바로 보여주기
+    위함. project_confl_address.csv가 없거나 필요한 컬럼이 없으면 빈 리스트."""
+    path = os.path.join(OUT_DIR, 'project_confl_address.csv')
+    if not os.path.exists(path):
+        return []
+    df = pd.read_csv(path, dtype=str).fillna('')
+    if 'confl_address' not in df.columns or 'project_name' not in df.columns:
+        return []
+    empty_projects = sorted({
+        p.strip() for p in df.loc[df['confl_address'].str.strip() == '', 'project_name']
+        if p.strip()
+    })
+    existing = {os.path.splitext(p['filename'])[0] for p in list_confl_pdfs()}
+    return [p for p in empty_projects if p not in existing]

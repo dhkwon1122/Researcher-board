@@ -705,6 +705,77 @@ def _db_status_view() -> html.Span:
     ])
 
 
+def _confl_pdf_upload_section():
+    """"과제별컨플"에서 컨플 주소가 없는 과제의 PDF 대체 첨부(2026-09-01,
+    사용자 요청) — 지금까지는 서버 파일시스템(data/raw/conflue_MPR/)에
+    직접 파일을 갖다 놓아야 했는데, 여기서 웹으로 올릴 수 있게 한다.
+    파일명이 project_confl_address.csv의 "과제명"과 정확히 같아야
+    pipeline/pdf_reader.py가 찾는다. 실제 소비(텍스트 추출·LLM 요약)는
+    과제 전문성 분석 CLI(run_expertise.py)가 나중에 별도로 하므로, 다른
+    MANIFEST 항목과 달리 이 섹션에는 "실행" 버튼이 없다 — 파일을 정확한
+    이름으로 두기만 하면 된다."""
+    pdfs = wpr.list_confl_pdfs()
+    missing = wpr.confl_projects_missing_pdf()
+
+    pdf_list_view = (
+        html.Div([
+            html.Div([
+                html.I(className='bi bi-file-earmark-pdf me-1 text-danger'),
+                html.Span(p['filename'], className='me-2'),
+                html.Span(f"{p['size_kb']}KB · {p['uploaded_at']}",
+                          className='text-muted', style={'fontSize': '0.7rem'}),
+                dbc.Button(html.I(className='bi bi-x'),
+                           id={'type': 'confl-pdf-delete', 'name': p['filename']},
+                           color='link', size='sm', className='p-0 ms-2 text-danger',
+                           title='삭제'),
+            ], className='d-flex align-items-center mb-1')
+            for p in pdfs
+        ]) if pdfs else html.Div('업로드된 PDF 없음', className='small text-muted')
+    )
+
+    missing_view = None
+    if missing:
+        preview = ', '.join(missing[:8]) + (f' 외 {len(missing) - 8}건' if len(missing) > 8 else '')
+        missing_view = html.Div(
+            [html.I(className='bi bi-exclamation-circle me-1'),
+             f'컨플 주소도 PDF도 없는 과제 {len(missing)}건: {preview}'],
+            className='small text-warning mt-2',
+        )
+
+    return dbc.Card(dbc.CardBody([
+        html.Div([
+            html.I(className='bi bi-file-earmark-pdf me-2 text-danger'),
+            html.Span('과제별컨플 — 컨플 주소 없는 과제 PDF 첨부', className='fw-semibold small'),
+            html.I(className='bi bi-question-circle ms-1', id='confl-pdf-hint-icon',
+                   style={'fontSize': '0.75rem', 'color': '#6c757d', 'cursor': 'help'}),
+            dbc.Tooltip(
+                '컨플 주소가 없는 과제는 여기 PDF(Monthly Report 등)를 올려두면 '
+                '과제 전문성 분석 때 컨플루언스 대신 이 내용을 씁니다. 파일명이 '
+                '과제별컨플의 "과제명"과 정확히 같아야 합니다(예: 지능형 물류 '
+                '시스템.pdf).',
+                target='confl-pdf-hint-icon', placement='right',
+            ),
+        ], className='mb-2'),
+        dbc.Row([
+            dbc.Col(
+                dcc.Upload(
+                    id='confl-pdf-upload',
+                    children=html.Div([
+                        html.I(className='bi bi-cloud-arrow-up me-1'),
+                        '클릭 또는 드래그해 PDF 업로드(여러 개 가능, 파일명 = 과제명)',
+                    ], className='small text-muted'),
+                    accept='.pdf', multiple=True,
+                    style={'padding': '8px', 'border': '1px dashed #adb5bd', 'borderRadius': '4px',
+                           'textAlign': 'center', 'cursor': 'pointer'},
+                ),
+                md=6,
+            ),
+            dbc.Col(pdf_list_view, md=6),
+        ], className='g-2'),
+        missing_view,
+    ]), className='shadow-sm mb-3')
+
+
 def _data_update_tab() -> html.Div:
     """매니페스트 등록 파일 중 20개(리더십진단·comments 제외)를 웹에서 직접
     업로드→실행할 수 있는 탭. 실제 실행/락/로그는 services/web_pipeline_runner.py.
@@ -740,6 +811,9 @@ def _data_update_tab() -> html.Div:
         html.Div(_db_status_view(), id='data-update-db-status', className='mb-2'),
 
         html.Div(_data_update_table(), id='data-update-table-container'),
+
+        html.Div(_confl_pdf_upload_section(), id='confl-pdf-section-container'),
+        html.Div(id='confl-pdf-status', className='mt-2'),
     ], className='pt-3')
 
 
@@ -1524,6 +1598,72 @@ def data_update_on_upload(all_contents, all_filenames, all_ids):
     if trig['key'] == 'team_refer':
         return _data_update_table(), no_update, _alert(msg, color)
     return _data_update_table(), _alert(msg, color), no_update
+
+
+# ── 콜백: 과제별컨플 — 컨플 주소 없는 과제 PDF 업로드/삭제 ──────────────────────
+# du-upload 패턴매칭 콜백(data_update_on_upload)과 별개다 — PDF는 MANIFEST의
+# save_upload()(data/web_updates/<key>/)가 아니라 data/raw/conflue_MPR/에
+# 원본 파일명 그대로 저장해야 하고(services.web_pipeline_runner.save_confl_pdf
+# 참고), "실행"할 process_*.py도 없기 때문이다.
+@callback(
+    Output('confl-pdf-section-container', 'children', allow_duplicate=True),
+    Output('confl-pdf-status', 'children', allow_duplicate=True),
+    Input('confl-pdf-upload', 'contents'),
+    State('confl-pdf-upload', 'filename'),
+    prevent_initial_call=True,
+)
+def confl_pdf_on_upload(all_contents, all_filenames):
+    from services.auth import can
+    if not can('manage_users'):
+        return no_update, _alert('관리자만 업로드할 수 있습니다.', 'danger')
+    if not all_contents:
+        return no_update, no_update
+
+    ok_count, errors = 0, []
+    for filename, contents in zip(all_filenames, all_contents):
+        try:
+            _header, b64data = contents.split(',', 1)
+            file_bytes = base64.b64decode(b64data, validate=True)
+        except (ValueError, TypeError):
+            errors.append(f'{filename}: 파일을 읽지 못했습니다.')
+            continue
+        if len(file_bytes) > wpr.MAX_UPLOAD_BYTES:
+            limit_mb = wpr.MAX_UPLOAD_BYTES // (1024 * 1024)
+            errors.append(f'{filename}: 파일이 너무 큽니다(최대 {limit_mb}MB).')
+            continue
+        try:
+            wpr.save_confl_pdf(filename, file_bytes)
+            ok_count += 1
+        except ValueError as exc:
+            errors.append(f'{filename}: {exc}')
+
+    if ok_count and not errors:
+        msg, color = f'{ok_count}개 PDF 업로드 완료.' if ok_count > 1 else f'{all_filenames[0]} 업로드 완료.', 'success'
+    elif ok_count and errors:
+        msg, color = f'{ok_count}개 업로드 완료, {len(errors)}개 실패({"; ".join(errors[:3])})', 'warning'
+    else:
+        msg, color = '; '.join(errors[:3]) or '업로드에 실패했습니다.', 'danger'
+
+    return _confl_pdf_upload_section(), _alert(msg, color)
+
+
+@callback(
+    Output('confl-pdf-section-container', 'children', allow_duplicate=True),
+    Output('confl-pdf-status', 'children', allow_duplicate=True),
+    Input({'type': 'confl-pdf-delete', 'name': ALL}, 'n_clicks'),
+    prevent_initial_call=True,
+)
+def confl_pdf_on_delete(n_clicks_list):
+    from services.auth import can
+    trig = dash.callback_context.triggered_id
+    if trig is None or not any(n_clicks_list):
+        return no_update, no_update
+    if not can('manage_users'):
+        return no_update, _alert('관리자만 삭제할 수 있습니다.', 'danger')
+
+    ok = wpr.delete_confl_pdf(trig['name'])
+    msg, color = (f"{trig['name']} 삭제했습니다.", 'success') if ok else ('파일을 찾지 못했습니다.', 'warning')
+    return _confl_pdf_upload_section(), _alert(msg, color)
 
 
 # ── 콜백: 데이터 업데이트 — 전체/선택 실행 ─────────────────────────────────────

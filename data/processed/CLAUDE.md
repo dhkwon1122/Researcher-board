@@ -7901,3 +7901,72 @@ API로 직접 검증. `getComputedStyle(body).fontFamily`도 로그인 페이지
 가변 폰트 렌더링 차이, 실제 사내망(외부 인터넷 완전 차단) 환경에서의
 로드 확인(이 폰트 파일은 리포지토리에 커밋돼 서버와 함께 배포되므로
 런타임에 외부 요청이 전혀 없다는 점은 코드상 확인됨).
+
+## 2026-09-01 (6): "데이터 업데이트" 탭 — 과제별컨플 컨플 주소 없는 과제
+PDF 웹 업로드 지원
+
+사용자 질문: "과제별컨플에서 컨플주소가 없는 값은 pdf로 대체를 하고
+있었는데, 웹 상에서도 컨플주소가 없는 값을 pdf 첨부할 수 있도록 가능할까?"
+
+기존 동작(`pipeline/project_summary.py`/`pipeline/pdf_reader.py`): 과제
+전문성 분석(CLI, `run_expertise.py`)이 `project_confl_address.csv`의
+`confl_address`가 빈 과제에 한해 `data/raw/conflue_MPR/{과제명}.pdf`를
+대신 읽는다. 지금까지 이 폴더는 서버 파일시스템에 직접 파일을 갖다 놓아야만
+채울 수 있었다(관리자 화면에 대응 UI 없음) — 이번 요청으로 웹 업로드
+경로를 새로 추가.
+
+**설계**: 다른 MANIFEST 항목(엑셀 업로드 → `process_*.py` 실행)과 근본적으로
+다르다 — PDF는 "실행"할 처리기가 없다(파일을 그 자리에 정확한 이름으로
+두기만 하면, 나중에 별도로 도는 과제 전문성 분석 CLI가 알아서 읽는다).
+그래서 기존 `du-upload` 패턴매칭 콜백/`save_upload()`(→
+`data/web_updates/<key>/`) 경로를 재사용하지 않고, 완전히 별도의 경로를
+새로 만들었다.
+
+- **`services/web_pipeline_runner.py`**: `pdf_reader` 모듈을 새로 임포트하고
+  4개 함수 추가.
+  - `list_confl_pdfs()`: `data/raw/conflue_MPR/`의 PDF 목록(파일명/용량/
+    업로드 시각).
+  - `save_confl_pdf(filename, content_bytes)`: 원본 파일명 그대로 저장
+    (과제명과 정확히 일치해야 `pdf_reader.py`가 찾음). `os.path.basename()`
+    으로 경로 조작(`../../evil.pdf` 같은 입력)을 막고, 다른 업로드와
+    동일하게 `archive_raw_bytes()`로 원본을 함께 아카이브.
+  - `delete_confl_pdf(filename)`: 파일 하나 삭제(관리자가 잘못 올린 걸
+    정리할 수 있게).
+  - `confl_projects_missing_pdf()`: `project_confl_address.csv`에서 컨플
+    주소가 비어 있는 과제명 중 아직 PDF가 없는 것들을 알려준다(관리자가
+    "뭘 더 올려야 하는지" 바로 확인하도록 — 요청에는 없었지만 구현하면서
+    바로 도움이 될 것 같아 추가한 부분, `_confl_pdf_upload_section()`의
+    경고 문구로 표시).
+- **`pages/admin.py`**: 새 `_confl_pdf_upload_section()`을 "데이터 업데이트"
+  탭의 표 바로 아래에 카드로 배치(`confl-pdf-section-container`) —
+  드래그앤드롭 다중 PDF 업로드(`accept='.pdf', multiple=True`), 현재 업로드된
+  PDF 목록(각 항목에 삭제 버튼), "컨플 주소도 PDF도 없는 과제 N건" 경고.
+  라벨 옆 호버 아이콘(다른 항목들과 동일한 패턴)으로 "파일명이 과제명과
+  정확히 같아야 한다"는 사용법 안내. 새 콜백 2개
+  (`confl_pdf_on_upload`/`confl_pdf_on_delete`) — 둘 다
+  `Output('confl-pdf-section-container', 'children')`(섹션 전체 갱신)과
+  `Output('confl-pdf-status', 'children')`(알림 메시지)로 나눠서 낸다 —
+  처음엔 상태 메시지를 섹션 안에 중첩해 넣으려다가, 같은 콜백에서 그
+  중첩 자리를 담은 컨테이너 전체를 동시에 교체하면 두 업데이트가 서로
+  덮어쓸 위험이 있어(Dash가 각 Output을 id로 독립 적용하는데, 그 id 자체가
+  매 렌더마다 새로 생성되는 트리 안에 있으면 타이밍이 꼬일 수 있음) 이미
+  검증된 기존 패턴(`data-update-status-msg`처럼 상태 메시지 자리를 형제
+  요소로 밖에 둠, `_data_update_tab()` 참고)을 그대로 따라 안전하게 분리.
+
+검증: `save_confl_pdf`/`list_confl_pdfs`/`delete_confl_pdf`/
+`confl_projects_missing_pdf`를 합성 `project_confl_address.csv`(과제 3개,
+그중 2개 컨플 주소 빈 값)로 직접 호출해 각각 기대대로 동작하는 것 확인 —
+특히 `../../evil.pdf`처럼 경로 조작을 시도하는 파일명을 넣어도
+`data/raw/conflue_MPR/evil.pdf`로 안전하게 갇히고 리포지토리 루트로
+탈출하지 않는 것을 직접 확인. 실제로 서버를 띄우고 Playwright로 로그인 →
+관리자 → "데이터 업데이트" 탭까지 이동해 **실제 파일 입력(input[type=file])
+에 진짜 PDF 파일을 넣어 브라우저 업로드 → 목록에 반영 → 삭제 버튼 클릭 →
+목록에서 제거**까지 전체 사이클을 스크린샷으로 확인(콜백 로직만이 아니라
+실제 브라우저 업로드 인코딩/콜백 트리거까지 검증). `py_compile` 통과.
+테스트 서버·파일은 검증 후 정리(`data/raw/`, `data/processed/*`는 애초에
+`.gitignore` 대상이라 리포지토리에도 흔적 없음).
+
+**미검증**: 실제 과제 전문성 분석 CLI(`run_expertise.py`)를 돌려서 여기서
+올린 PDF가 실제로 컨플루언스 대신 읽히는지(그 실행 자체는 LLM 호출이 있는
+무거운 배치라 이 세션에서 실행하지 않음 — 코드 경로(`pdf_reader.fetch_pdf_text`
+가 이 함수가 저장한 것과 동일한 `PDF_DIR`/파일명 규칙을 그대로 씀)만 확인).
