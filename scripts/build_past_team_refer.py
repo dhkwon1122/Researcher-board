@@ -51,6 +51,14 @@ data/raw/past_team_refer/ 안의 월별 "End of Month Headcount" 원본 엑셀�
 
 사용법:
   python scripts/build_past_team_refer.py
+
+읽기 요구사항: 원본 파일이 사내 DRM으로 보호돼 있으면(흔한 증상 —
+"Excel file format cannot be determined, you must specify an engine
+manually" 에러) pandas/openpyxl로 직접 못 열고 xlwings(실제 Excel COM
+자동화)로만 읽을 수 있다 — pipeline/excel_reader.read_xlsx()를 그대로
+쓴다. Windows PC에 Microsoft Excel이 설치돼 있어야 하며(pip install
+xlwings는 requirements.txt에 이미 포함), 없으면 자동으로 pandas
+방식으로 폴백한다(그 경우 원본이 DRM 파일이면 다시 같은 에러가 난다).
 """
 import glob
 import os
@@ -64,7 +72,19 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
+# xlwings(실제 Excel COM 자동화) 기반 리더 — 이 프로젝트의 다른 모든 원천
+# 처리기와 동일하게, 사내 DRM이 걸린 xlsx는 plain pandas/openpyxl로 못 열고
+# ("Excel file format cannot be determined" 에러) xlwings로 실제 Excel을
+# 띄워서 읽어야 한다(pipeline/excel_reader.py 독스트링 참고). xlwings/Excel이
+# 없는 환경(이 세션 같은 Linux 등)에서는 자동으로 pandas로 폴백한다.
+from pipeline.excel_reader import clean_str, read_xlsx  # noqa: E402
+
 RAW_DIR = os.path.join(BASE_DIR, 'data', 'raw', 'past_team_refer')
+
+# 원본 시트명 — 사용자가 제공한 원래 Excel 수식이 이 시트를 그대로 가리키고
+# 있었다('[...]인원실적 월말인원'!...). 혹시 실제 파일의 시트명이 다르면
+# 첫 번째 시트(인덱스 0)로 자동 폴백한다(_read_source() 참고).
+SHEET_NAME = '인원실적 월말인원'
 
 # 검증용으로 우선 4개월만 — 확인되면 201809~202606 전체(94개월) 리스트로 늘린다.
 MONTHS = ['201809', '201810', '201811', '201812']
@@ -100,9 +120,14 @@ def _find_source_file(yyyymm: str) -> str:
 
 
 def _read_source(path: str) -> pd.DataFrame:
-    """헤더는 2번째 행(1행 무시) — pandas header=1은 0번째 행을 건너뛰고
-    1번째 행(=파일의 2번째 행)을 헤더로 쓴다."""
-    df = pd.read_excel(path, header=1, dtype=str)
+    """헤더는 2번째 행(1행 무시) — read_xlsx()의 header_row는 0-based이므로
+    1을 넘기면 물리적 2번째 행이 헤더가 된다(1번째 행은 자동으로 무시)."""
+    try:
+        df = read_xlsx(path, sheet=SHEET_NAME, header_row=1)
+    except Exception as exc:
+        print(f'[경고] {os.path.basename(path)}: 시트 "{SHEET_NAME}"를 못 찾아 '
+              f'첫 번째 시트로 다시 시도합니다({exc}).', file=sys.stderr)
+        df = read_xlsx(path, sheet=0, header_row=1)
     if len(df.columns) != 162:
         raise ValueError(
             f'{os.path.basename(path)}: 헤더가 162개가 아니라 {len(df.columns)}개입니다 — '
@@ -119,13 +144,16 @@ def _col(df: pd.DataFrame, excel_col_1based: int) -> pd.Series:
 
 def _lookup_dict(keys: pd.Series, values: pd.Series) -> dict:
     """Excel MATCH(...,0)/VLOOKUP(...,0)과 동일하게 "처음 나온 값"만 남긴다
-    (키가 중복되면 첫 매칭 행을 쓰는 Excel 동작과 일치시키기 위함)."""
+    (키가 중복되면 첫 매칭 행을 쓰는 Excel 동작과 일치시키기 위함). read_xlsx()는
+    pandas의 dtype=str 강제 없이 원본 셀 타입(숫자/None 등)을 그대로 주므로,
+    clean_str()로 전부 문자열로 통일한다(excel_reader.py — None/NaN류도
+    빈 문자열로 안전하게 처리)."""
     out = {}
     for k, v in zip(keys, values):
-        k = (k or '').strip() if isinstance(k, str) else k
+        k = clean_str(k)
         if not k or k in out:
             continue
-        out[k] = v
+        out[k] = clean_str(v)
     return out
 
 
@@ -155,7 +183,8 @@ def build_team_refer(yyyymm: str) -> str:
     s_to_es = _lookup_dict(s_col, es_col)
 
     # 1) 비공식소속부서명 중복 제거(첫 등장 순서 유지 — Excel "중복된 항목 제거"와 동일)
-    informal_values = [v.strip() for v in informal_source.dropna() if str(v).strip()]
+    informal_values = [clean_str(v) for v in informal_source]
+    informal_values = [v for v in informal_values if v]
     seen, unique_informal = set(), []
     for v in informal_values:
         if v not in seen:
@@ -163,13 +192,15 @@ def build_team_refer(yyyymm: str) -> str:
             unique_informal.append(v)
 
     def _lookup_parent(current_dept: str) -> str:
+        # _lookup_dict()가 clean_str()로 값을 통일해 "못 찾음"과 "빈 값"이 둘 다
+        # falsy(None 또는 '')로 나온다 — 아래에서는 이 둘을 동일하게 취급한다.
         parent = ev_to_es.get(current_dept) if EV_MATCH_MODE == 'exact' else None
-        if EV_MATCH_MODE == 'prefix' or parent is None:
+        if EV_MATCH_MODE == 'prefix' or not parent:
             if EV_MATCH_MODE == 'prefix':
                 parent = next((v for k, v in ev_to_es.items() if k.startswith(current_dept)), None)
-            if parent is None:
+            if not parent:
                 parent = s_to_es.get(current_dept)
-        if parent in ROOT_MARKERS or parent is None:
+        if not parent or parent in ROOT_MARKERS:
             return current_dept
         return parent
 

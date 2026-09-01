@@ -7330,3 +7330,27 @@ PC 또는 사내망에서 실제 파일로 직접 실행해야 한다.
 사용자가 로컬/사내망에서 직접 실행해 확인해야 함), EV_MATCH_MODE='exact'
 기본값이 실제 데이터에서 충분히 매칭되는지(안 되면 'prefix'로 전환
 필요), 201811~202606까지 나머지 90개월 확장 실행.
+
+**후속 수정(같은 날)**: 사용자가 실제 파일로 실행해보니 4개월 전부
+`excel file format cannot be determined, you must specify an engine
+manually` 에러가 났다 — pandas가 파일 형식을 못 읽는 이 증상은 이
+프로젝트에서 이미 여러 번 겪은 "사내 DRM 걸린 xlsx" 문제와 정확히
+같다(dev_updates.py 최초 주차 항목이 바로 이 문제 대응용 xlwings 도입).
+원인은 스크립트가 `pd.read_excel()`을 직접 썼기 때문 — 이미 있는
+`pipeline/excel_reader.read_xlsx()`(xlwings로 실제 Excel을 열어 읽고,
+xlwings/Excel이 없으면 자동으로 pandas 폴백)를 안 쓰고 있었다.
+`read_xlsx(path, sheet='인원실적 월말인원', header_row=1)`로 교체했고,
+시트명이 실제로 다를 경우를 대비해 첫 번째 시트로 폴백하는 처리도
+추가했다. 이 전환으로 `dtype=str` 강제가 없어져 셀 값이 원본 타입
+그대로(숫자/None 등) 나올 수 있어, `_lookup_dict()`/중복 제거 로직의
+문자열 변환도 `excel_reader.clean_str()`(None/NaN류를 빈 문자열로
+안전하게 통일)로 다시 손봤다.
+
+검증: 합성 데이터로 전체 파이프라인을 다시 돌려 이전과 동일한 결과
+(team_change.xlsx 3건 — 변경 1/삭제 2)가 나오는 것을 재확인. 시트명이
+"인원실적 월말인원"이 아닐 때 경고를 찍고 첫 번째 시트로 정상 폴백하는
+것도 별도로 확인(시트명을 일부러 바꾼 합성 파일로 테스트). 이 세션에는
+xlwings/Excel이 없어(Linux 샌드박스) 이번에도 pandas 폴백 경로로만
+검증했다 — 사용자의 로컬 PC에서 xlwings가 실제로 DRM을 뚫고 여는지는
+직접 실행해서 확인이 필요하다(pip install xlwings는 requirements.txt에
+이미 있음, Windows + Microsoft Excel 설치가 전제 조건).
