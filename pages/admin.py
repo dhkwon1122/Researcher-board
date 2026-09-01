@@ -178,44 +178,6 @@ def _user_modal():
     ], id='user-modal', is_open=False, backdrop='static')
 
 
-def _mail_report_card():
-    """"과제 전문성 분석" 리포트는 앱 화면이 아니라 앱 밖(다른 부서 등)으로
-    공유해야 할 때가 있는데, data/processed에 완성된 HTML 파일로 남기지
-    않고(서버 파일시스템에 접근 가능한 누구나 열어볼 수 있는 사본이 되므로)
-    그때그때 다시 만들어 메일로만 보낸다(pipeline/process_project_expertise.py의
-    email_report(), pipeline/mailer.py). 사용자 관리와 마찬가지로 관리자만
-    접근 가능."""
-    return dbc.Card([
-        dbc.CardHeader(
-            html.Span([html.I(className='bi bi-envelope me-2'), '과제 전문성 분석 리포트 메일 발송']),
-        ),
-        dbc.CardBody([
-            html.P(
-                '이 리포트는 화면에 저장되지 않습니다 — 발송할 때마다 최신 분석 결과로 '
-                '새로 만들어 메일로만 보냅니다.',
-                className='small text-muted mb-2',
-            ),
-            dbc.Row([
-                dbc.Col(
-                    dbc.Input(
-                        id='mail-report-recipients', size='sm',
-                        placeholder='수신자 이메일(콤마로 구분, 비워두면 본인에게 발송)',
-                    ),
-                    md=9,
-                ),
-                dbc.Col(
-                    dbc.Button(
-                        [html.I(className='bi bi-send me-1'), '발송'],
-                        id='btn-mail-report', color='primary', size='sm', className='w-100',
-                    ),
-                    md=3,
-                ),
-            ], className='g-2'),
-            html.Div(id='mail-report-alert', className='mt-2'),
-        ]),
-    ], className='shadow-sm mt-3')
-
-
 def _delete_modal():
     return dbc.Modal([
         dbc.ModalHeader(dbc.ModalTitle('사용자 삭제')),
@@ -339,8 +301,6 @@ def _user_management_tab() -> html.Div:
 
         html.Div(id='admin-page-alert', className='mt-3'),
 
-        _mail_report_card(),
-
         _user_modal(),
         _delete_modal(),
         _bulk_user_upload_modal(),
@@ -414,9 +374,16 @@ def _team_refer_tab() -> html.Div:
                                id='team-refer-add-row-btn', color='secondary', outline=True, size='sm'),
                     dbc.Button([html.I(className='bi bi-save me-1'), '저장'],
                                id='team-refer-save-btn', color='primary', size='sm'),
+                    dbc.Button([html.I(className='bi bi-file-earmark-excel me-1'), '엑셀 다운로드'],
+                               id='team-refer-download-btn', color='success', outline=True, size='sm'),
                 ]),
+                html.Div(
+                    '엑셀 다운로드는 현재 화면의 편집 내용이 아니라 저장된 최신 값을 내려받습니다.',
+                    className='text-muted', style={'fontSize': '0.72rem'},
+                ),
             ], md='auto'),
         ], className='mb-2 align-items-end'),
+        dcc.Download(id='team-refer-download'),
 
         dash_table.DataTable(
             id='team-refer-table',
@@ -1164,45 +1131,6 @@ def confirm_bulk_create(n_clicks, parsed, counter):
     return parts, (counter or 0) + 1, True
 
 
-# ── 콜백: 과제 전문성 분석 리포트 메일 발송 ──────────────────────────────────
-
-@callback(
-    Output('mail-report-alert', 'children'),
-    Input('btn-mail-report', 'n_clicks'),
-    State('mail-report-recipients', 'value'),
-    prevent_initial_call=True,
-)
-def send_mail_report(_, recipients_raw):
-    from services.auth import can, current_user_mail_default
-    if not can('manage_users'):
-        return _alert('권한이 없습니다.', 'danger')
-
-    recipients = [addr.strip() for addr in (recipients_raw or '').split(',') if addr.strip()]
-    if not recipients:
-        # 수신자를 비워두면 로그인한 본인(로그인 ID@samsung.com)에게 보낸다.
-        self_mail = current_user_mail_default()
-        if not self_mail:
-            return _alert('수신자 이메일을 입력하세요.', 'warning')
-        recipients = [self_mail]
-
-    # process_project_expertise.py는 pipeline/ 디렉터리를 sys.path에 얹어
-    # bare `from mailer import MailError`로 읽으므로, 여기서 `pipeline.mailer`
-    # (dotted 경로)로 따로 import하면 이름은 같아도 다른 클래스 객체가 돼
-    # except가 안 걸린다 — 반드시 이 모듈이 실제로 쓰는 것과 동일한 참조를
-    # process_project_expertise 쪽에서 그대로 가져와야 한다.
-    from pipeline.process_project_expertise import MailError, email_report
-    try:
-        sent = email_report(recipients)
-    except MailError as exc:
-        return _alert(f'메일 발송 실패: {exc}', 'danger')
-    if not sent:
-        return _alert(
-            '분석 데이터가 없습니다. 먼저 python pipeline/process_project_expertise.py를 실행하세요.',
-            'warning',
-        )
-    return _alert(f"리포트를 발송했습니다 ({', '.join(recipients)})", 'success')
-
-
 # ── 콜백: 팀/리더 참조 — 행 추가 ─────────────────────────────────────────────
 # 클릭(선택)해둔 셀이 있으면 그 행 바로 다음에 삽입하고, 선택된 셀이 없으면
 # 맨 뒤에 추가한다(사용자 요청: 항상 맨 뒤가 아니라 원하는 위치에 끼워 넣기).
@@ -1348,6 +1276,23 @@ def team_refer_save(n_clicks, rows, valid_date_str, loaded_dep_ids):
 
     msg = dbc.Alert(body, color=alert_color, dismissable=True, className='py-2 small mb-0')
     return msg, sorted(current_dep_ids), bool(dupes), _dupe_modal_body(dupes)
+
+
+# ── 콜백: 팀/리더 참조 — 현재 기준 엑셀 다운로드 ──────────────────────────────
+# 그리드에 편집 중인(아직 저장 안 한) 내용이 아니라, 저장소에 이미 반영된
+# 최신 값(dep_id별 최신·비삭제 행)을 그대로 내려받는다(사용자 확정).
+@callback(
+    Output('team-refer-download', 'data'),
+    Input('team-refer-download-btn', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def team_refer_download(n_clicks):
+    from services.auth import can
+    if not n_clicks or not can('manage_users'):
+        return no_update
+    data = team_refer_store.current_snapshot_workbook_bytes()
+    fname = f"팀_리더_참조_{date.today().strftime('%Y%m%d')}.xlsx"
+    return dcc.send_bytes(data, fname)
 
 
 def _dupe_modal_body(dupes: list[dict]):

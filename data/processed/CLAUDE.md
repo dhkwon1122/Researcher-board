@@ -7396,3 +7396,146 @@ style" 경고 자체는 원본 소스 파일을 **읽는** 단계의 이슈이�
 이 경고들 자체가 더 안 나올 가능성이 높다 — 다만 이 세션은 실제 파일이
 없어 확인할 수 없으니, 사용자가 로컬에서 재실행해 실제로 경고가 사라지는지
 직접 확인해야 한다.
+
+**후속 진단(같은 날, csv로 바꿔도 여전히 안 열림)**: 사용자가 csv 버전도
+Excel에서 "마지막으로 열었을 때 오류가 발생했습니다. 그래도 이 문서를
+여시겠습니까?" 경고가 뜬다고 보고 — 이 경고는 실제 파일 손상이 아니라
+Excel이 그 **파일 경로**에 대해 예전 실패 이력을 캐시해 둔 것일 때
+뜨는 것으로 보였는데, 확인해보니 **손대지 않은 원본 xlsx도 동일한
+증상**이었다 — 즉 원인이 파일 형식/제 스크립트가 아니라 사용자의
+Excel/Windows 환경 쪽으로 좁혀졌다. 이 문제는 이번 세션에서(원격
+샌드박스라 사용자의 실제 PC에 접근 불가) 더 진행하지 못하고 사용자가
+직접 진단하도록 홀딩했다(최근 문서 아닌 파일탐색기로 열기/다른 폴더에
+복사 후 열기/Excel 안전모드/다른 PC에서 확인/백신 소프트웨어 확인 등을
+안내). `scripts/build_past_team_refer.py`의 CSV 출력 자체는 로직·형식
+모두 정상 검증된 상태 그대로 유지.
+
+## 2026-09-01: 네비게이션 순서 + 보유 전문성 탭 통합 + AI 검색 2건 + JOB Market
+문구 + 관리자 화면 2건(메일 카드 삭제/팀참조 엑셀 다운로드)
+
+사용자 요청 6건을 한 번에 처리.
+
+**1) 네비게이션 순서**: `app.py`의 상단 메뉴를 연구원 프로필 → 연구원 명단 →
+보유 전문성 → JOB Market 순으로 변경(기존: 연구원 프로필 → 보유 전문성 →
+연구원 명단 → JOB Market) — NavItem 2개의 위치만 교체.
+
+**2) "연구원"/"연구원 ↔ 연구원" 탭 통합**: 확인해보니 "누적기준"(이름/사번
+검색) 모드는 이미 두 탭이 `llm_summary_block()` 하나를 공유해 사실상
+통합돼 있었고, 분리된 건 "최신기준"(조직도 클릭) 모드의 두 독립 정적 HTML
+리포트(`build_html()`)뿐이었다. 이 둘을 합쳤다.
+
+- `pipeline/process_researcher_similarity.py`: `researcher_match_card_html()`
+  에서 카드 본문(뱃지+매칭 표) 부분을 `similar_researchers_block_html
+  (item, name_map, dept_map, org_map, include_links=True)`로 분리(이름
+  헤더/강점 칩 없이 kv-block 스타일로만 반환) — 기존 함수는 이 블록을
+  그대로 재사용하도록 리팩터링(동작 변화 없음, 독립 실행되는 자신의
+  `build_html()`/아카이브 스냅샷은 그대로 유지).
+- `pipeline/process_researcher_expertise.py`: `researcher_card_html()`에
+  `similarity_item`/`dept_map`/`org_map` 파라미터 추가 — 주어지면 카드
+  안에 `similar_researchers_block_html()`을 이어붙인다(로컬 bare import
+  `import process_researcher_similarity as _prs` — 이 파일이 이미 pipeline/
+  를 sys.path에 얹어 bare import하는 관례를 따름, dotted import와 섞이는
+  걸 피함). `build_html(results, researchers_df, similar_by_id=None)`에
+  `similar_by_id`(`read_similar_researchers()`의 반환값) 추가 — 주어지면
+  각 카드에 유사도 데이터를 매칭해 넘기고, 표시개수(3/5/10) 토글용 radio를
+  본문에 추가하고, sidebar tagline에 "+ 유사 연구원 매칭"을 덧붙인다.
+  `similar_by_id`가 없으면(파이프라인 미실행) 기존과 완전히 동일하게
+  동작(하위 호환 — `_archive_html()`/`render_html()`/이메일 리포트 등
+  다른 호출부는 인자를 안 넘겨 그대로 둠, 아카이브 스냅샷은 이번 통합
+  대상이 아님).
+- `pages/researcher_similarity_map.py`: `_REPORT_TABS`를 `('researcher',
+  'similarity')` → `('researcher',)`로, `_render_report_html()`/
+  `_iframe_tab()`에서 `report_key` 파라미터를 제거하고 항상 병합된
+  콘텐츠(`read_expertise_profiles()` + `read_similar_researchers()`)를
+  렌더링. `_cumulative_search_panel()`도 `report_key` 파라미터를 제거하고
+  패턴매칭 id(`{'type':...,'tab':...}`)를 평범한 id로 단순화(호출 지점이
+  하나뿐이라 `dash.MATCH` 불필요). `layout()`에서 "연구원 ↔ 연구원" 탭을
+  제거 — 전문성 MAP 탭이 이미 숨겨진 상태라(`_MAP_TAB_HIDDEN=True`) 탭이
+  하나만 남는데, `dbc.Tabs`를 `len(tabs) <= 1`이면 `style={'display':
+  'none'}`으로 숨기고 콘텐츠를 바로 보여주도록 했다(사용자 확정 — 탭
+  막대 자체 제거를 추천안대로 선택). 컴포넌트 자체(`expertise-tabs`,
+  `active_tab='researcher'`)는 그대로 둬서 지도/관계그래프 클릭 이동,
+  메일 딥링크 등 다른 콜백들의 배선을 안 건드렸다 — 전문성 MAP을 나중에
+  다시 열면 탭이 2개가 되어 자동으로 다시 보인다.
+- `pipeline/process_researcher_similarity.py`의 `build_html()`(그 모듈
+  자신의 독립 실행/아카이브용)은 전혀 손대지 않아 그대로 동작한다.
+  `services/similarity_map.py`의 `build_researcher_mail_html()`(개별
+  연구원 메일 — "보유 전문성"/"유사 연구원 매칭" 두 섹션으로 나눠 보여줌)
+  도 새로 추가한 파라미터들이 전부 기본값이라 영향 없음.
+
+검증: 합성 데이터로 `process_researcher_expertise.build_html()`을
+직접 호출해 — 유사도 데이터가 있는 사람은 카드 안에 매칭 표가, 유사도
+데이터 자체가 없는 사람(임원 등 제외 대상 시뮬레이션)은 그 섹션이 아예
+생략되는 것, 유사도 데이터는 있지만 매칭이 0건인 사람은 기존처럼 "비교할
+다른 연구원 데이터 없음" 문구가 나오는 것, `similar_by_id=None`일 때는
+표시개수 토글/유사 연구원 문구/과장된 tagline 문구가 전혀 안 나오고
+기존과 동일한 결과가 나오는 것을 확인. `process_researcher_similarity.
+researcher_match_card_html()`/`similar_researchers_block_html()`을
+직접 호출해 리팩터링 후에도 기존과 동일한 카드가 나오는 것 확인.
+`services.similarity_map.build_researcher_mail_html()`도 모킹 데이터로
+end-to-end 호출해 여전히 정상 동작하는 것 확인. `dash.Dash(use_pages=True)`
+컨텍스트에서 `pages.researcher_similarity_map.layout()`을 직접 호출해
+탭 막대가 `display:none`으로 숨겨지고 탭이 1개("연구원")뿐인 것,
+`_render_report_html()`/`_iframe_tab()`이 데이터 없는 이 세션 환경에서
+예외 없이 안내 Alert로 안전하게 폴백하는 것 확인. `app.py` 전체를
+임포트해 콜백 중복 등록 등 앱 레벨 문제가 없는 것도 확인.
+
+**3) AI 검색 3건**(`components/nl_query_bar.py`, `services/nl_query.py`):
+- 안내 문구 "자연어로 물어보면 아래 명단이 그 결과로 바뀝니다" →
+  "자연어 질문 시 결과가 아래에 명단으로 생성".
+- AI 답변을 서술형 → 개조식으로: `_ANSWER_SYSTEM_PROMPT`(결과 설명 LLM
+  호출)의 지시를 "완결된 문장이 아니라 항목당 한 줄, 하이픈("- ")으로
+  시작하는 개조식"으로 재작성. `components/nl_query_bar.py`의
+  `answer_block()`이 "- " 접두사가 붙은 줄만 있으면 실제 `html.Ul`
+  불릿 목록으로 렌더링하고, 그렇지 않으면(LLM이 지시를 안 따른 경우)
+  기존처럼 줄바꿈만 보존한 텍스트로 안전하게 폴백한다.
+- "의미 유사성으로 포함된 결과는 후순위로": `find_researchers_by_expertise`
+  (전문성 키워드로 찾기)의 정렬 기준을 매칭 개수만 보던 것에서, 검색어별
+  매칭 방식(`expand_term()`이 반환하는 'taxonomy'/'substring'(정확 표기)
+  vs 'embedding'(의미 유사도 대체 매칭))까지 반영하도록 확장 — 정확
+  표기로 매칭된 결과가 있는 사람을 먼저, 그 안에서는 매칭 개수 내림차순,
+  임베딩 대체 매칭으로만 걸린 사람은 항상 그 뒤로 정렬한다(적용 범위는
+  이 intent 하나뿐 — "유사 연구원 찾기"는 이미 유사도 점수 순, 개방형
+  질의는 정확/의미 결과가 애초에 섞여 나오지 않는 구조라 대상 아님,
+  사용자 확정).
+
+검증: `find_researchers_by_expertise()`를 `expand_term()` 모킹으로
+(taxonomy 매칭 2개 vs embedding 매칭 1개 + hit_count가 더 큰 경우) 직접
+호출해 정확 매칭 그룹이 매칭 개수와 무관하게 항상 먼저 오는 것 확인.
+`answer_block()`을 "- " 접두 텍스트/일반 서술형 텍스트 양쪽으로 호출해
+각각 `html.Ul`/`html.Div`로 갈리는 것 확인.
+
+**4) JOB Market 문구**(`pages/job_market.py`): "실제로 제외되는 건 아래
+"제외할 과제"에서 고른 과제뿐입니다 — 부서는..." → `"제외할 과제"만
+결과에 반영(부서는 결과에 영향 없음)`. 부서 드롭다운 placeholder
+"부서로 좁혀 찾기(선택, 결과엔 영향 없음)" → "부서". 과제 드롭다운
+placeholder "제외할 과제(복수 선택) — 실제로 제외되는 대상" → "제외할
+과제(복수 선택 가능)".
+
+**5) "과제 전문성 분석 리포트 메일 발송" 카드 삭제**(`pages/admin.py`):
+"사용자/권한 관리" 탭 맨 아래 있던 `_mail_report_card()` 함수와 그 콜백
+(`send_mail_report`)을 완전히 제거. `pipeline/process_project_expertise.py`
+의 `email_report()`/CLI(`--email=...`)는 그대로 남겨둬 커맨드라인으로는
+계속 발송 가능(요청이 화면 쪽 삭제였다고 판단).
+
+**6) 팀/리더 참조 — 현재 기준 엑셀 다운로드**(`services/team_refer_store.py`,
+`pages/admin.py`): 기존 `export_snapshot_xlsx()`(서버에 스냅샷 파일로
+저장)의 워크북 조립 로직을 `_build_workbook(records)`로 분리하고, 신규
+`current_snapshot_workbook_bytes()`가 `list_editable_rows()`(dep_id별
+저장된 최신·비삭제 행 — 그리드에 편집 중인 미저장 내용이 아니라 저장소에
+반영된 값, 사용자 확정)를 같은 컬럼 순서로 bytes로 반환한다. "행 추가"/
+"저장" 버튼 옆에 "엑셀 다운로드" 버튼 + `dcc.Download`를 추가하고, 클릭
+시 `team_refer_download()` 콜백이 `current_snapshot_workbook_bytes()`를
+`dcc.send_bytes()`로 내려준다(관리자 권한 체크 포함).
+
+검증: `current_snapshot_workbook_bytes()`를 합성 데이터로 직접 호출해
+openpyxl로 반환된 bytes를 다시 열어 헤더/값이 `KOREAN_COLUMNS` 순서
+그대로인 것을 확인. `pages/admin.py`/`pages/job_market.py`를
+`dash.Dash(use_pages=True)` 컨텍스트(admin은 Flask 테스트 요청 컨텍스트로
+로그인 세션을 흉내내)에서 `layout()`을 직접 호출해 두 화면 모두 예외
+없이 렌더링되는 것, `mail-report-*` 관련 id가 더 이상 어디에도 남아있지
+않은 것을 확인. 6개 항목 모두 변경된 파일 전부 `py_compile` 통과.
+
+**미검증**: 실제 브라우저에서 탭 통합 후의 조직도 클릭→카드 확장 애니메이션/
+스크롤, AI 검색 실제 LLM 응답이 정말 "- " 개조식으로 나오는지(이 세션에
+LLM 서버 없음), 팀/리더 참조 엑셀 다운로드 버튼의 실제 클릭 동작.

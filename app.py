@@ -521,12 +521,12 @@ navbar = dbc.Navbar(
                         href='/', active='exact', className='text-white',
                     )),
                     dbc.NavItem(dbc.NavLink(
-                        [html.I(className='bi bi-share-fill me-1'), '보유 전문성'],
-                        href='/researcher-similarity-map', active='exact', className='text-white',
-                    )),
-                    dbc.NavItem(dbc.NavLink(
                         [html.I(className='bi bi-table me-1'), '연구원 명단'],
                         href='/researcher-list', active='exact', className='text-white',
+                    )),
+                    dbc.NavItem(dbc.NavLink(
+                        [html.I(className='bi bi-share-fill me-1'), '보유 전문성'],
+                        href='/researcher-similarity-map', active='exact', className='text-white',
                     )),
                     dbc.NavItem(dbc.NavLink(
                         [html.I(className='bi bi-signpost-split me-1'), 'JOB Market'],

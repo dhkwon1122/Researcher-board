@@ -314,15 +314,14 @@ def layout(**_kwargs):
 
         html.Div('참여 가능한 과제에서 제외', className='fw-bold small mb-1 mt-2'),
         html.Div(
-            '실제로 제외되는 건 아래 "제외할 과제"에서 고른 과제뿐입니다 — 부서는 '
-            '과제를 부서별로 좁혀 찾기 위한 보조 필터로, 그 자체는 검색 결과에 영향을 주지 않습니다.',
+            '"제외할 과제"만 결과에 반영(부서는 결과에 영향 없음)',
             className='small text-muted mb-1',
         ),
         dbc.Row([
             dbc.Col(dcc.Dropdown(id='jm-exclude-dept', options=department_options,
-                                  placeholder='부서로 좁혀 찾기(선택, 결과엔 영향 없음)', multi=True), md=6),
+                                  placeholder='부서', multi=True), md=6),
             dbc.Col(dcc.Dropdown(id='jm-exclude-project', options=[],
-                                  placeholder='제외할 과제(복수 선택) — 실제로 제외되는 대상', multi=True), md=6),
+                                  placeholder='제외할 과제(복수 선택 가능)', multi=True), md=6),
         ], className='g-2 mb-3'),
 
         dbc.Button([html.I(className='bi bi-search me-1'), '검색'],
