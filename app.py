@@ -218,8 +218,19 @@ def _html_page(title: str, body: str) -> str:
   <link rel="stylesheet"
         href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
   <style>
+    /* 이 페이지는 assets/custom.css를 안 읽는 별도 Flask 라우트라(Dash 페이지가
+       아님) Pretendard를 여기서도 따로 걸어준다 — 파일 자체는 assets/custom.css와
+       동일한 것 하나를 공유(절대경로 /assets/... 로 참조, 이 서버가 그대로 서빙). */
+    @font-face {{
+      font-family: 'Pretendard Variable';
+      font-weight: 45 920;
+      font-style: normal;
+      font-display: swap;
+      src: url('/assets/fonts/PretendardVariable.woff2') format('woff2-variations');
+    }}
     body {{ background:#f0f2f5; min-height:100vh;
-            display:flex; align-items:center; justify-content:center; }}
+            display:flex; align-items:center; justify-content:center;
+            font-family:'Pretendard Variable', -apple-system, 'Segoe UI', 'Noto Sans KR', 'Malgun Gothic', sans-serif; }}
     .auth-card {{ border:none; border-radius:12px;
                   box-shadow:0 4px 24px rgba(0,0,0,.1); max-width:420px; width:100%; }}
     .btn-brand {{ background:#1677ff; border-color:#1677ff; }}

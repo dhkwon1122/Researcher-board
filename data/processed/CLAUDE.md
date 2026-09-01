@@ -7850,3 +7850,54 @@ app.py`, 포트 8501) Playwright로 로그인부터 끝까지 실제 브라우�
 **미검증**: 실제 데이터가 채워진 화면(이 샌드박스는 DB가 비어 있어 대부분
 "데이터 없음" 상태로만 확인), 실제 다수 사용자가 동시 접속하는 프로덕션
 환경에서의 최종 육안 검수.
+
+## 2026-09-01 (5): 폰트를 Pretendard로 전환(자체 내장, 사내망 대응)
+
+사용자가 "현재 웹 페이지의 폰트 명은 뭐야?"(당시엔 시스템 폰트 스택,
+고정 폰트 없음) → "사내망에서도 쓸 수 있는 다른 폰트는 뭐가 있을까(맑은
+고딕 제외)?" → Pretendard/Spoqa Han Sans Neo 두 후보를 실제 배포 폰트
+파일(GitHub 공식 저장소 woff2)을 그대로 내장한 실물 비교 아티팩트로
+제시 → "Pretendard로 반영해줘"로 확정.
+
+- **폰트 파일**: Pretendard 가변 폰트(Variable, 45~920 굵기 전 구간을
+  파일 1개로 커버) 공식 배포본을
+  `https://raw.githubusercontent.com/orioncactus/pretendard/main/
+  packages/pretendard/dist/web/variable/woff2/PretendardVariable.woff2`
+  에서 받아 `assets/fonts/PretendardVariable.woff2`로 리포지토리에
+  직접 커밋(2,057,688 bytes). 라이선스(OFL 1.1, 무료·상업적 사용 가능)
+  원문도 `assets/fonts/Pretendard-LICENSE.txt`로 같이 커밋(재배포 시
+  라이선스 동봉 요건).
+  정적 파일(Regular/Medium/SemiBold/Bold 등)을 여러 개 내장하는 대신
+  가변 폰트 1개를 쓴 이유: `--gs-font`가 실제로 쓰는 굵기(400/500/600/
+  700)가 전부 정확한 굵기로 렌더링되고(정적 파일 조합이면 없는 굵기는
+  브라우저가 가짜로 두껍게 합성 — CJK 글자는 이 합성 볼드가 특히 지저분해
+  보임), 용량도 4개 정적 파일 합보다 오히려 작음.
+- **`assets/custom.css`**: `@font-face`로 `'Pretendard Variable'`
+  선언(`font-weight: 45 920`, `url('fonts/PretendardVariable.woff2')
+  format('woff2-variations')` — custom.css가 assets/ 바로 밑에 있어
+  상대경로 `fonts/...`가 `/assets/fonts/...`로 풀림). `--gs-font` 맨
+  앞에 `'Pretendard Variable'` 추가(기존 시스템 폰트 스택은 그 뒤에
+  폴백으로 그대로 유지 — 혹시나 폰트 로드가 실패해도 이전과 동일하게
+  동작).
+- **`app.py`의 로그인/최초설정 페이지**: Dash 페이지가 아니라 별도
+  Flask 라우트라 `assets/custom.css`를 안 읽는다 — 같은 폰트 파일을
+  절대경로(`/assets/fonts/PretendardVariable.woff2`, 같은 서버가
+  그대로 서빙)로 참조하는 `@font-face`를 그 페이지 자체의 인라인
+  `<style>`에도 따로 추가하고 `body`의 `font-family`도 맞춤(안 그러면
+  로그인 화면만 예전 시스템 폰트로 남는 불일치가 생김).
+
+검증: 실제로 서버를 띄우고(`python3 app.py`) `curl`로 폰트 파일이
+`200 OK`(`content-type: font/woff2`)로 정상 서빙되는 것 확인. Playwright로
+로그인 → 대시보드까지 실제 로그인해 `document.fonts`를 직접 조회해
+`Pretendard Variable 45 920 status=loaded`(폰트가 실제로 다운로드·적용된
+상태)를 확인 — 폴백으로 조용히 안 넘어간 것을 텍스트가 아니라 브라우저
+API로 직접 검증. `getComputedStyle(body).fontFamily`도 로그인 페이지/
+대시보드 양쪽에서 `"Pretendard Variable"`이 맨 앞에 오는 것 확인.
+로그인 화면·연구원 명단 화면 스크린샷으로 실제 렌더링(자간/굵기)도
+육안 확인. `py_compile` 통과. 테스트 서버는 검증 후 종료(`git status`로
+리포지토리에 흔적 없음 재확인).
+
+**미검증**: 다양한 브라우저(이 세션은 Chromium만 확인)·다양한 OS에서의
+가변 폰트 렌더링 차이, 실제 사내망(외부 인터넷 완전 차단) 환경에서의
+로드 확인(이 폰트 파일은 리포지토리에 커밋돼 서버와 함께 배포되므로
+런타임에 외부 요청이 전혀 없다는 점은 코드상 확인됨).
