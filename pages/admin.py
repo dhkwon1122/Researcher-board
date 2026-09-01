@@ -508,9 +508,19 @@ def _data_update_row(row: dict) -> html.Tr:
          'API로 가져오기' if row['has_api'] else 'API 연동 예정'],
         id={'type': 'du-api', 'key': key},
         color='primary' if row['has_api'] else 'secondary',
-        outline=True, size='sm', className='mt-2 py-0 px-1',
+        outline=True, size='sm', className='py-0 px-1',
         style={'fontSize': '0.68rem'},
     )
+
+    # 업로드 파일 형식 안내는 구분 라벨 옆 호버 아이콘으로만 보여준다(2026-09-01,
+    # 사용자 확정) — 표에 항상 보이는 텍스트 줄 대신 필요할 때만 마우스 오버로.
+    hint_icon_id = f'du-hint-icon-{key}'
+    label_with_hint = html.Div([
+        html.Span(row['label'], className='fw-semibold'),
+        html.I(className='bi bi-question-circle ms-1', id=hint_icon_id,
+               style={'fontSize': '0.75rem', 'color': '#6c757d', 'cursor': 'help'}),
+        dbc.Tooltip(row['hint'], target=hint_icon_id, placement='right'),
+    ])
 
     # "현재상태" 성격 항목(evaluations/tech_ownership/job_profile/work_objective_*)은
     # 이번 업로드분이 어느 시점 기준인지(연/월) 지정해야 한다 — 과거 시점으로
@@ -531,19 +541,27 @@ def _data_update_row(row: dict) -> html.Tr:
         if row['needs_valid_date'] else None
     )
 
+    # 최종실행이력 — 실행 시각 + 이번 실행이 API였는지 업로드였는지(2026-09-01,
+    # 사용자 확정). 아직 한 번도 실행한 적 없으면(source 빈 문자열) 배지 자체를
+    # 안 보여준다.
+    source = row.get('source', '')
+    source_badge = (
+        dbc.Badge(source, color='info' if source == 'API' else 'secondary',
+                  className='mt-1', style={'fontSize': '0.62rem'})
+        if source else None
+    )
+
     return html.Tr([
         html.Td(dbc.Checkbox(id={'type': 'du-check', 'key': key}, value=False), className='align-middle text-center'),
-        html.Td([html.Div(row['label'], className='fw-semibold'),
-                 html.Div(row['hint'], className='text-muted', style={'fontSize': '0.72rem'}),
-                 api_btn, valid_date_picker],
-                className='align-middle'),
+        html.Td([label_with_hint, valid_date_picker], className='align-middle'),
         html.Td([upload_cell, filenames_view, backfill_view], className='align-middle', style={'minWidth': '220px'}),
         html.Td([
             dbc.Button(html.I(className='bi bi-download'), id={'type': 'du-download', 'key': key},
                        color='link', size='sm', disabled=not row['has_upload'], className='p-0'),
             html.Div(row['uploaded_at'] or '-', className='small text-muted'),
         ], className='align-middle text-center'),
-        html.Td(row['last_run_at'] or '-', className='align-middle small text-center'),
+        html.Td(api_btn, className='align-middle text-center'),
+        html.Td([row['last_run_at'] or '-', html.Div(source_badge)], className='align-middle small text-center'),
         html.Td([status_badge, html.Div(row['message'], className='small text-muted mt-1',
                                          title=row['message'])],
                 className='align-middle', style={'minWidth': '200px'}),
@@ -554,7 +572,7 @@ def _data_update_table() -> dbc.Table:
     rows = wpr.snapshot()
     header = html.Thead(html.Tr([
         html.Th('', style={'width': '36px'}), html.Th('구분'), html.Th('업로드'),
-        html.Th('이전 Data'), html.Th('최종실행이력'), html.Th('실행결과'),
+        html.Th('이전 Data'), html.Th('API 연동'), html.Th('최종실행이력'), html.Th('실행결과'),
     ]))
     body = html.Tbody([_data_update_row(r) for r in rows])
     return dbc.Table([header, body], bordered=True, hover=True, responsive=True, size='sm',
@@ -585,11 +603,8 @@ def _data_update_tab() -> html.Div:
         dbc.Alert(
             [
                 html.I(className='bi bi-info-circle me-2'),
-                '원본 엑셀이 사내 DRM으로 보호돼 있다면, 업로드 전 자신의 PC에서 '
-                'Excel로 열어 "다른 이름으로 저장"으로 DRM이 풀린 사본을 만들어 '
-                '올려주세요. "전체 업데이트"는 파일이 업로드된 항목만 실행합니다. '
-                '각 항목의 "API 연동 예정" 아이콘은 추후 사내 API 연동 시 사용할 '
-                '자리로, 현재는 눌러도 동작하지 않습니다.',
+                '엑셀 업로드 시 복호화(일반문서로 변환) 후 업로드 가능합니다. '
+                '"전체 업데이트"는 파일이 업로드된 항목만 실행합니다.',
             ],
             color='light', className='small border mb-3',
         ),

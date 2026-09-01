@@ -7539,3 +7539,80 @@ openpyxl로 반환된 bytes를 다시 열어 헤더/값이 `KOREAN_COLUMNS` 순�
 **미검증**: 실제 브라우저에서 탭 통합 후의 조직도 클릭→카드 확장 애니메이션/
 스크롤, AI 검색 실제 LLM 응답이 정말 "- " 개조식으로 나오는지(이 세션에
 LLM 서버 없음), 팀/리더 참조 엑셀 다운로드 버튼의 실제 클릭 동작.
+
+## 2026-09-01 (2): 관리자 "데이터 업데이트" 탭 — DRM 안내 문구 정리 + API 연동
+아이콘 별도 컬럼화 + 최종실행 방식 표시 + 업로드 형식 안내를 호버 아이콘으로 전환
+
+사용자 요청 3건(+ AI 검색 커버리지 확인 1건).
+
+**DRM 안내 문구**: "원본 엑셀이 사내 DRM으로 보호돼 있다면... 각 항목의 "API
+연동 예정" 아이콘은... 현재는 눌러도 동작하지 않습니다." → "엑셀 업로드 시
+복호화(일반문서로 변환) 후 업로드 가능합니다. "전체 업데이트"는 파일이
+업로드된 항목만 실행합니다."로 축약(사용자 확정 문구 그대로 반영, "전체
+업데이트" 동작 안내는 별개 정보라 유지).
+
+**API 연동 아이콘 → 별도 컬럼**: 기존엔 "구분" 셀 안에 라벨/업로드형식
+안내와 함께 뒤섞여 있던 "API로 가져오기"/"API 연동 예정" 버튼을 "이전
+Data"와 "최종실행이력" 사이의 새 "API 연동" 컬럼으로 분리(`pages/admin.py`
+`_data_update_table()` 헤더에 `html.Th('API 연동')` 추가, `_data_update_row()`
+가 그 자리에 `api_btn`만 담은 `html.Td`를 반환).
+
+**최종실행이력에 실행 방식(API/업로드) 표시**: `services/web_pipeline_runner.py`
+의 실행 로그(`web_pipeline_runs.csv`)에 `source` 컬럼을 추가(`_LOG_COLUMNS`).
+`_record_result(key, status, message, source=None)` — `source`를 안 넘기면
+기존 기록의 값을 그대로 유지(상태만 갱신하는 `start_run()`/`start_run_via_api()`
+의 "실행중" 표시 등에서 값을 잃지 않게). `run_one()`이 `via_api` 여부로
+`source = 'API' if via_api else '업로드'`를 계산해 그 실행에서 발생하는
+모든 `_record_result()` 호출(성공/실패/백필 포함)에 일관되게 전달.
+`snapshot()`의 각 행에 `source`를 포함시키고, `_data_update_row()`의
+"최종실행이력" 셀에 실행 시각 아래 작은 배지(API=info색/업로드=회색)로
+표시(한 번도 실행한 적 없으면 배지 생략).
+
+**업로드 파일 형식 안내를 호버 아이콘으로**: "구분" 셀에 항상 보이던
+`hint` 텍스트 줄(예: "예: 202608_That Month Headcount_*.xlsx...")을 없애고,
+라벨 오른쪽에 작은 물음표 아이콘(`bi-question-circle`, 행마다 고유
+`du-hint-icon-{key}` id)을 추가해 `dbc.Tooltip`으로 마우스 오버 시에만
+그 문구가 뜨도록 변경 — 다른 곳(예: `components/detail_tabs.py`의
+`_info_hover()`)에서 이미 쓰던 것과 동일한 패턴.
+
+검증: `services.web_pipeline_runner`의 경로 상수를 임시 디렉터리로 바꿔치기한
+뒤 `run_one(key, via_api=True)`(등록된 API 훅 없어 실패)와
+`run_one(key, via_api=False)`(업로드 파일 없어 실패)를 각각 실행 —
+`snapshot()`에서 두 키의 `source`가 정확히 'API'/'업로드'로 기록되는 것
+확인. `pages.admin._data_update_row()`를 합성 row(`source='API'`)로 직접
+렌더링해 반환된 `html.Tr`이 정확히 7개 `Td`(체크박스/구분/업로드/이전
+Data/API 연동/최종실행이력/실행결과)를 갖는 것, 호버 아이콘의 `id`와
+`dbc.Tooltip`의 `target`이 정확히 일치하는 것, `_data_update_table()`의
+헤더 7개 컬럼 라벨이 순서대로 정확한 것을 확인. Flask 테스트 요청
+컨텍스트(관리자 로그인 세션 흉내)로 `pages.admin.layout()` 전체가 예외
+없이 렌더링되는 것도 재확인. 변경된 두 파일 모두 `py_compile` 통과.
+
+**미검증**: 실제 브라우저에서 호버 아이콘에 마우스를 올렸을 때 툴팁이
+뜨는지, API 연동 컬럼의 실제 버튼 클릭 동작.
+
+**AI 검색 데이터 커버리지 확인(질문 답변, 코드 변경 없음)**: 사용자가
+"어학/근무경력 등 최근 추가한 데이터 외에 모든 입력 데이터 또는 LLM
+분석/임베딩 데이터도 다 검색되는지" 질문 — 코드(`services/open_data_query.py`
+의 `_discover_csv_tables()`/`_discover_json_tables()`, `config/auth_config.py`
+의 `TABLE_PERMISSIONS` 화이트리스트, `services/auth.py`의
+`filter_permitted_tables()`)를 확인해 답변만 전달, 코드는 변경하지 않음.
+- **검색됨**: `data/processed/*.csv` 원천 정제 테이블 전부(어학/근무경력
+  포함) + 이력 테이블 5종 + LLM 산출물 중 `expertise_profiles`(연구원
+  보유 전문성 분석)/`researcher_similarity`(유사도 판정) 2종.
+- **검색 안 됨**(TABLE_PERMISSIONS 화이트리스트에 없어 자동 제외 —
+  fail-closed 설계, `_read_json_records`로 발견은 되지만 응답 전에
+  걸러짐): `work_objective`(업무목표, 예전에 사용자가 이미 AI 검색
+  대상에서 빼기로 확정한 것), `project_expertise_analysis.json`(과제
+  문서 컨플루언스 분석 — 핵심기술/난제/배경 등)과 `project_personnel.csv`
+  (과제 문서 인력 매핑) — 이 둘은 지금까지 한 번도 AI 검색 대상으로
+  등록된 적이 없다(누락이라기보다 애초에 검토 대상이 아니었던 것으로
+  보임). 저널 권위도/strength_taxonomy/임베딩 캐시(`embedding_cache.json`)
+  같은 내부 캐시성 산출물도 등록 대상이 아니다(사람이 볼 데이터가
+  아니라 내부 계산용).
+- **임베딩 자체**: 벡터 값 자체는 SQL로 조회할 대상이 아니라서 테이블로
+  등록돼 있지 않지만, 이미 검색 로직 내부에서 폴백으로 쓰이고 있다 —
+  `find_researchers_by_expertise`(정확 표기가 없으면 BGE-M3 임베딩
+  유사도로 재매칭)와 `open_data_query`의 `_semantic_fallback`(SQL 결과가
+  0건이면 임베딩 유사도로 재시도) 둘 다 이미 임베딩을 쓴다.
+- 사용자에게 두 가지(업무목표 재개방 여부, 과제 문서 분석 신규 개방
+  여부)를 어떻게 할지 물어봄 — 다음 턴에서 결정되면 반영 예정.

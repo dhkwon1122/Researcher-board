@@ -321,7 +321,7 @@ def uploaded_at(key: str) -> str:
 
 # ── 실행 로그(CSV) ───────────────────────────────────────────────────────────
 
-_LOG_COLUMNS = ['key', 'last_run_at', 'status', 'message']
+_LOG_COLUMNS = ['key', 'last_run_at', 'status', 'message', 'source']
 
 
 def _read_log() -> dict[str, dict]:
@@ -341,19 +341,24 @@ def _write_log(log: dict[str, dict]) -> None:
             w.writerow({c: r.get(c, '') for c in _LOG_COLUMNS})
 
 
-def _record_result(key: str, status: str, message: str) -> None:
+def _record_result(key: str, status: str, message: str, source: str | None = None) -> None:
+    """source: 이번 실행이 'API'였는지 '업로드'였는지 — 관리자 화면 "최종실행이력"
+    칸에 표시한다(2026-09-01, 사용자 확정). None이면(호출부가 안 넘긴 경우)
+    기존 기록의 source를 그대로 유지한다 — 아직 실행 이력이 없으면 빈 문자열."""
     log = _read_log()
+    prev_source = log.get(key, {}).get('source', '')
     log[key] = {
         'key': key,
         'last_run_at': datetime.now().strftime('%y-%m-%d %H:%M'),
         'status': status,
         'message': message,
+        'source': source if source is not None else prev_source,
     }
     _write_log(log)
 
 
 def last_result(key: str) -> dict:
-    return _read_log().get(key, {'last_run_at': '', 'status': '', 'message': ''})
+    return _read_log().get(key, {'last_run_at': '', 'status': '', 'message': '', 'source': ''})
 
 
 # ── 동시 실행 방지 락(파일 기반 — 워커 프로세스 2개 간 공유) ──────────────────
@@ -474,18 +479,19 @@ def run_one(key: str, via_api: bool = False, valid_date: date | None = None) -> 
     item = _BY_KEY[key]
     raw_dir = _key_dir(key)
     buf = io.StringIO()
+    source = 'API' if via_api else '업로드'
     try:
         if via_api:
             fetch_fn = item.get('api_fetch')
             if fetch_fn is None:
                 _record_result(key, '실패', '아직 사내 API 연동이 준비되지 않았습니다 — '
-                                            '지금은 파일 업로드를 이용해주세요.')
+                                            '지금은 파일 업로드를 이용해주세요.', source)
                 return last_result(key)
             for filename, content, slot in fetch_fn(key):
                 save_upload(key, filename, content, slot=slot)
 
         if not has_upload(key):
-            _record_result(key, '실패', '업로드된 파일이 없습니다.')
+            _record_result(key, '실패', '업로드된 파일이 없습니다.', source)
             return last_result(key)
 
         backfill_results = []
@@ -519,20 +525,20 @@ def run_one(key: str, via_api: bool = False, valid_date: date | None = None) -> 
                 backfill_msg += f', {n_fail}건 실패({first_fail})'
             message = backfill_msg + (f' / 정규 업로드: {summary}' if summary is not None else '')
             overall_ok = (n_fail == 0) and (ok is not False)
-            _record_result(key, '성공' if overall_ok else '실패', message[:500])
+            _record_result(key, '성공' if overall_ok else '실패', message[:500], source)
             clear_backfill_files(key)
         elif has_regular_upload:
-            _record_result(key, '성공' if ok else '실패', summary[:500])
+            _record_result(key, '성공' if ok else '실패', summary[:500], source)
         else:
             # needs_upload 체크는 통과했지만(백필 폴더에 파일이 있었음) 배치가
             # 0건이었던 경우는 사실상 없다 — 방어적으로만 남겨둔다.
-            _record_result(key, '실패', '반영할 파일이 없습니다.')
+            _record_result(key, '실패', '반영할 파일이 없습니다.', source)
 
     except Exception as exc:  # noqa: BLE001 — 실행결과 칸에 그대로 보여줘야 함
         output = buf.getvalue()
         reason = _last_meaningful_line(output)
         message = f'{exc}' + (f' ({reason})' if reason else '')
-        _record_result(key, '실패', message[:500])
+        _record_result(key, '실패', message[:500], source)
 
     return last_result(key)
 
@@ -561,7 +567,7 @@ def start_run(keys: list[str], valid_dates: dict[str, date] | None = None) -> bo
     if not try_acquire_lock(keys):
         return False
     for key in keys:
-        _record_result(key, '실행중', '')
+        _record_result(key, '실행중', '', '업로드')
     t = threading.Thread(target=run_many, args=(keys,), kwargs={'valid_dates': valid_dates}, daemon=True)
     t.start()
     return True
@@ -577,7 +583,7 @@ def start_run_via_api(keys: list[str]) -> bool:
     if not try_acquire_lock(keys):
         return False
     for key in keys:
-        _record_result(key, '실행중', '')
+        _record_result(key, '실행중', '', 'API')
     t = threading.Thread(target=run_many, args=(keys,), kwargs={'via_api': True}, daemon=True)
     t.start()
     return True
@@ -614,6 +620,7 @@ def snapshot() -> list[dict]:
                 if item['needs_valid_date'] else []
             ),
             'last_run_at': result.get('last_run_at', ''),
+            'source': result.get('source', ''),
             'status': status,
             'message': result.get('message', ''),
         })
