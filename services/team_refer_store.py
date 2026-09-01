@@ -108,11 +108,12 @@ def _upsert_rows_to_db(rows_df: pd.DataFrame) -> bool:
 def list_editable_rows() -> list[dict]:
     """관리자 화면 그리드에 로드할 "현재" 팀참조 행 목록 — 엑셀 원본
     헤더명(KOREAN_COLUMNS)을 키로 쓴다(사용자 요청: 컬럼명은 xlsx 그대로).
-    조직코드(dep_code) 내림차순으로 정렬한다(사용자 확정).
+    조직코드(dep_code) 오름차순으로 정렬한다(2026-09-01, 사용자 확정 —
+    기존 내림차순에서 변경).
     pipeline.rd_specialist_markdown.read_team_refer()를 그대로 써서 dep_id별
     최신·비삭제 행만 가져온다(DB 우선, 없으면 CSV)."""
     rows = mmd.read_team_refer(OUT_DIR)
-    rows = sorted(rows, key=lambda r: str(r.get('dep_code') or ''), reverse=True)
+    rows = sorted(rows, key=lambda r: str(r.get('dep_code') or ''))
     return [
         {kor: r.get(eng, '') for eng, kor in _REVERSE_COL_MAP.items()}
         for r in rows

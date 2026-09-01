@@ -660,7 +660,8 @@ def _data_update_row(row: dict) -> html.Tr:
     )
 
     return html.Tr([
-        html.Td(dbc.Checkbox(id={'type': 'du-check', 'key': key}, value=False), className='align-middle text-center'),
+        html.Td(dbc.Checkbox(id={'type': 'du-check', 'key': key}, value=False,
+                              className='du-check-box'), className='align-middle text-center'),
         html.Td(label_with_hint, className='align-middle'),
         html.Td([upload_cell, filenames_view, backfill_view], className='align-middle', style={'minWidth': '220px'}),
         html.Td(valid_period_cell, className='align-middle text-center'),
@@ -682,13 +683,13 @@ def _data_update_table() -> dbc.Table:
     # 이동, 2026-09-01 사용자 확정)은 이 표에서 뺀다.
     rows = [r for r in wpr.snapshot() if not r['hidden_from_table']]
     header = html.Thead(html.Tr([
-        html.Th('', style={'width': '36px'}), html.Th('구분'), html.Th('업로드'),
+        html.Th('체크', style={'width': '48px'}), html.Th('구분'), html.Th('업로드'),
         html.Th('누적 시점(연/월)'), html.Th('이전 Data'), html.Th('API 연동'),
         html.Th('최종실행이력'), html.Th('실행결과'),
     ]))
     body = html.Tbody([_data_update_row(r) for r in rows])
     return dbc.Table([header, body], bordered=True, hover=True, responsive=True, size='sm',
-                      className='align-middle mb-0')
+                      className='align-middle mb-0 data-update-table')
 
 
 def _db_status_view() -> html.Span:

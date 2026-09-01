@@ -185,6 +185,27 @@ h1, h2, h3, h4, h5, h6 {
   border-color: var(--gs-border-2) !important;
 }
 
+/* 관리자 "데이터 업데이트" 탭 표 — 헤더 글씨가 셀 내용보다 작아 보이던 문제
+   해결(2026-09-01, 사용자 확정) + 헤더 가운데 정렬. 이 표 전용으로만
+   범위를 좁혀서(사용자 확정) 앱 전체 다른 표의 헤더 스타일(위 전역
+   .table thead th 규칙)은 그대로 둔다. */
+.data-update-table thead th {
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+/* "체크" 컬럼 체크박스 — 기본 부트스트랩 체크박스가 흐릿해 잘 안 보이던
+   문제 해결(2026-09-01, 사용자 확정): 테마 강조색 테두리를 둘러 눈에 띄게. */
+.du-check-box .form-check-input {
+  border: 2px solid var(--gs-accent);
+  width: 1.15em;
+  height: 1.15em;
+}
+.du-check-box .form-check-input:checked {
+  background-color: var(--gs-accent);
+  border-color: var(--gs-accent);
+}
+
 /* ── KPI 카드 ── */
 .card .bi {
   opacity: 0.9;
