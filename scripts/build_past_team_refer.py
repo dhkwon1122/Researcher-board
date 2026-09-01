@@ -3,9 +3,18 @@
 
 data/raw/past_team_refer/ 안의 월별 "End of Month Headcount" 원본 엑셀에서
 "비공식소속부서명" 목록을 뽑아 월별 상위부서명/현소속부서명/비공식소속부서명
-3단 매핑표(<원본파일명>_team_refer.xlsx)를 만들고, 연속된 두 달을 비교해
-조직 개편(변경/삭제만, 유지·신규는 기록 안 함)을 team_change.xlsx 하나에
+3단 매핑표(<원본파일명>_team_refer.csv)를 만들고, 연속된 두 달을 비교해
+조직 개편(변경/삭제만, 유지·신규는 기록 안 함)을 team_change.csv 하나에
 모아 기록한다.
+
+출력 형식은 xlsx가 아니라 CSV다(2026-08-31, DRM 해제 후 재실행 시 사용자가
+보고한 "생성은 됐지만 손상됐다며 안 열림" 증상 대응) — openpyxl로 새로
+만든 xlsx가 내부 XML 메타데이터(예: <dimension> 태그)가 실제 셀 범위와
+미세하게 어긋나면 Excel이 "복구" 팝업을 띄우며 파일을 손상된 것으로
+취급하는 경우가 있는데, CSV는 순수 텍스트라 이런 OOXML/zip 구조 자체가
+없어 이 종류의 손상이 구조적으로 발생할 수 없다. 한글이 Excel에서 바로
+깨지지 않도록 이 저장소의 기존 CSV 저장 관례(scripts/bulk_create_users.py
+등)와 동일하게 utf-8-sig(BOM 포함)로 저장한다.
 
 원본 파일명 패턴: {YYYYMM}_End of Month Headcount_*_{YYYYMM}.xlsx
 전체 대상은 201809~202606(94개월)이지만, 이 스크립트는 우선 처음 4개월
@@ -39,7 +48,7 @@ data/raw/past_team_refer/ 안의 월별 "End of Month Headcount" 원본 엑셀�
   5. 최종 컬럼 순서: 상위부서명(A) / 현소속부서명(B) / 비공식소속부서명(C)
   6. A→B→C 순 오름차순 정렬 후 저장
 
-월간 비교(team_change.xlsx, 사용자 확정 "A안"):
+월간 비교(team_change.csv, 사용자 확정 "A안"):
   두 달의 (상위부서명, 현소속부서명) 조합을 그룹으로 보고, 그 그룹 안의
   비공식소속부서명 집합을 비교한다.
     - 그룹 자체가 다음 달에 없어짐        → 그 그룹의 모든 행을 "삭제"로 기록
@@ -60,13 +69,12 @@ manually" 에러) pandas/openpyxl로 직접 못 열고 xlwings(실제 Excel COM
 xlwings는 requirements.txt에 이미 포함), 없으면 자동으로 pandas
 방식으로 폴백한다(그 경우 원본이 DRM 파일이면 다시 같은 에러가 난다).
 """
+import csv
 import glob
 import os
 import sys
 
 import pandas as pd
-from openpyxl import Workbook
-from openpyxl.styles import Font
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
@@ -158,7 +166,7 @@ def _lookup_dict(keys: pd.Series, values: pd.Series) -> dict:
 
 
 def build_team_refer(yyyymm: str) -> str:
-    """<원본파일명>_team_refer.xlsx를 만들고 그 경로를 반환한다."""
+    """<원본파일명>_team_refer.csv를 만들고 그 경로를 반환한다."""
     src_path = _find_source_file(yyyymm)
     df = _read_source(src_path)
 
@@ -213,26 +221,17 @@ def build_team_refer(yyyymm: str) -> str:
     # 10) C→B→A(=상위부서명→현소속부서명→비공식소속부서명) 오름차순 정렬
     rows.sort(key=lambda r: (r[0], r[1], r[2]))
 
-    out_path = src_path[:-len('.xlsx')] + '_team_refer.xlsx'
-    wb = Workbook()
-    ws = wb.active
-    ws.title = 'team_refer'
-    headers = ['상위부서명', '현소속부서명', '비공식소속부서명']
-    for col_idx, header in enumerate(headers, start=1):
-        cell = ws.cell(row=1, column=col_idx, value=header)
-        cell.font = Font(bold=True)
-    for row_idx, row in enumerate(rows, start=2):
-        for col_idx, value in enumerate(row, start=1):
-            ws.cell(row=row_idx, column=col_idx, value=value)
-    for col_idx, width in enumerate([30, 30, 30], start=1):
-        ws.column_dimensions[chr(ord('A') + col_idx - 1)].width = width
-    wb.save(out_path)
+    out_path = src_path[:-len('.xlsx')] + '_team_refer.csv'
+    with open(out_path, 'w', newline='', encoding='utf-8-sig') as f:
+        writer = csv.writer(f)
+        writer.writerow(['상위부서명', '현소속부서명', '비공식소속부서명'])
+        writer.writerows(rows)
     print(f'[OK] {os.path.basename(out_path)} 생성 ({len(rows)}행)')
     return out_path
 
 
 def _read_team_refer(path: str) -> list:
-    df = pd.read_excel(path, dtype=str).fillna('')
+    df = pd.read_csv(path, dtype=str, encoding='utf-8-sig').fillna('')
     return df.to_dict('records')
 
 
@@ -268,9 +267,9 @@ def diff_month(prev_rows: list, curr_rows: list) -> list:
 
 
 def build_team_change(team_refer_paths: dict) -> str:
-    """team_refer_paths: {yyyymm: team_refer.xlsx 경로} — MONTHS 순서대로
-    연속된 두 달씩 diff_month()로 비교해 전부 team_change.xlsx 한 파일에
-    모은다(달마다 별도 시트가 아니라, "비교 기준" 컬럼으로 구분되는 한 표)."""
+    """team_refer_paths: {yyyymm: team_refer.csv 경로} — MONTHS 순서대로
+    연속된 두 달씩 diff_month()로 비교해 전부 team_change.csv 한 파일에
+    모은다("비교 기준" 컬럼으로 구분되는 한 표)."""
     months_sorted = sorted(team_refer_paths)
     all_changes = []
     for prev_m, curr_m in zip(months_sorted, months_sorted[1:]):
@@ -281,21 +280,12 @@ def build_team_change(team_refer_paths: dict) -> str:
         print(f'[OK] {prev_m} -> {curr_m} 비교 완료 '
               f'({sum(1 for c in all_changes if c[0] == f"{prev_m}->{curr_m}")}건 변경/삭제)')
 
-    out_path = os.path.join(RAW_DIR, 'team_change.xlsx')
-    wb = Workbook()
-    ws = wb.active
-    ws.title = 'team_change'
-    headers = ['비교 기준(이전월->이후월)', '상태', '상위부서명', '현소속부서명',
-               '비공식소속부서명(이전)', '비공식소속부서명(이후)']
-    for col_idx, header in enumerate(headers, start=1):
-        cell = ws.cell(row=1, column=col_idx, value=header)
-        cell.font = Font(bold=True)
-    for row_idx, row in enumerate(all_changes, start=2):
-        for col_idx, value in enumerate(row, start=1):
-            ws.cell(row=row_idx, column=col_idx, value=value)
-    for col_idx, width in enumerate([18, 8, 26, 26, 26, 26], start=1):
-        ws.column_dimensions[chr(ord('A') + col_idx - 1)].width = width
-    wb.save(out_path)
+    out_path = os.path.join(RAW_DIR, 'team_change.csv')
+    with open(out_path, 'w', newline='', encoding='utf-8-sig') as f:
+        writer = csv.writer(f)
+        writer.writerow(['비교 기준(이전월->이후월)', '상태', '상위부서명', '현소속부서명',
+                          '비공식소속부서명(이전)', '비공식소속부서명(이후)'])
+        writer.writerows(all_changes)
     print(f'[OK] {os.path.basename(out_path)} 생성 (총 {len(all_changes)}건 변경/삭제)')
     return out_path
 
@@ -316,7 +306,7 @@ def main():
     if len(team_refer_paths) >= 2:
         build_team_change(team_refer_paths)
     else:
-        print('[안내] team_refer.xlsx가 2개 이상 만들어져야 team_change.xlsx 비교를 할 수 있습니다.')
+        print('[안내] team_refer.csv가 2개 이상 만들어져야 team_change.csv 비교를 할 수 있습니다.')
 
 
 if __name__ == '__main__':

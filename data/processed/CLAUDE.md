@@ -7354,3 +7354,45 @@ xlwings/Excel이 없어(Linux 샌드박스) 이번에도 pandas 폴백 경로로
 검증했다 — 사용자의 로컬 PC에서 xlwings가 실제로 DRM을 뚫고 여는지는
 직접 실행해서 확인이 필요하다(pip install xlwings는 requirements.txt에
 이미 있음, Windows + Microsoft Excel 설치가 전제 조건).
+
+**후속 수정 2(같은 날) — 출력 형식을 xlsx → csv로 전환**: xlwings 시도가
+COM 에러(`-2146827284`, Excel Protected View 팝업 등으로 자동화가 막힐 때
+흔한 증상)로 실패한 뒤 pandas 폴백으로 넘어가 "Workbook contains no
+default style, apply openpyxl's default" 경고와 함께 team_refer.xlsx가
+생성되긴 했지만, 그 결과 파일이 Excel에서 "손상됨"으로 뜨며 안 열린다는
+보고. 사용자가 직접 원인을 좁혀 소스 파일의 DRM은 이미 수동으로 해제해
+둔 상태였고("사내 DRM 문서를 복호화해서 일반 문서로 변경") CSV로 바꾸면
+해결되겠냐고 물어왔다 — 진단이 정확했다. 이 손상 증상은 openpyxl로 새로
+쓴 xlsx의 내부 XML 메타데이터(예: `<dimension>` 태그가 실제 셀 범위와
+어긋남)가 원인인 경우가 흔한, OOXML/zip 포맷 자체의 알려진 함정이고,
+xlwings/DRM 이슈(원본을 "읽는" 문제)와는 완전히 무관한 "내가 쓴 출력
+파일" 쪽 문제다. CSV는 순수 텍스트라 이런 zip/XML 구조 자체가 없어
+이 종류의 손상이 구조적으로 발생할 수 없다.
+
+`scripts/build_past_team_refer.py`의 `<원본파일명>_team_refer.xlsx`/
+`team_change.xlsx` 출력을 각각 `_team_refer.csv`/`team_change.csv`로
+교체 — `openpyxl.Workbook`/`Font` 의존성을 완전히 제거하고 표준 라이브러리
+`csv` 모듈로 직접 쓴다(`encoding='utf-8-sig'`, 이 저장소가 한글 CSV에
+이미 쓰던 관례 — `scripts/bulk_create_users.py` 등과 동일, Excel이 BOM을
+보고 UTF-8로 자동 인식해 한글이 안 깨짐). `_read_team_refer()`(스크립트가
+자기가 만든 team_refer 파일을 다시 읽어 두 달을 비교하는 부분)도
+`pd.read_excel()` → `pd.read_csv(..., encoding='utf-8-sig')`로 맞춰
+교체했다 — 이건 원본 DRM 소스가 아니라 방금 만든 내 출력을 다시 읽는
+것이라 xlwings/DRM과는 무관, 단순 포맷 일치.
+
+검증: 합성 데이터(기존 시나리오 그대로: 1:1 이름 변경/그룹 전체 삭제/
+그룹 내 단독 삭제/순수 추가)로 전체 파이프라인을 재실행 — CSV 출력이
+정상 생성되고 diff 결과(변경 1건 + 삭제 2건, 순수 추가는 기록 안 됨)가
+이전 xlsx 버전과 완전히 동일함을 재확인. 생성된 CSV 파일을 바이트
+단위로 열어 UTF-8 BOM(`ef bb bf`)이 정확히 붙어 있는 것, 한글 헤더/값이
+깨지지 않고 그대로 들어있는 것을 확인. CSV는 구조상 openpyxl 저장
+관련 손상 문제와 무관하므로 이 부분은 재현할 필요 자체가 없었다(원인이
+출력 파일 포맷에 있었으므로 포맷을 바꾼 것 자체가 해결책).
+
+**참고**: xlwings COM 에러(`-2146827284`)와 "Workbook contains no default
+style" 경고 자체는 원본 소스 파일을 **읽는** 단계의 이슈이고, 사용자가
+이미 그 소스 파일들의 DRM을 수동으로 해제해 뒀다고 알려왔으므로 다음
+실행부터는 xlwings 시도 자체가 필요 없어져(pandas 폴백만으로 정상 읽기)
+이 경고들 자체가 더 안 나올 가능성이 높다 — 다만 이 세션은 실제 파일이
+없어 확인할 수 없으니, 사용자가 로컬에서 재실행해 실제로 경고가 사라지는지
+직접 확인해야 한다.
