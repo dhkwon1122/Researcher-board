@@ -74,22 +74,25 @@ MANIFEST = [
          hint='예: 202608_That Month Headcount_*.xlsx 또는 *_End of Month Headcount_*.xlsx',
          mode='wildcard'),
     dict(key='evaluations', label='T&P(평가)', module='process_tp_evaluation',
-         hint='예: T&P 기본 인사 정보 *.xlsx', mode='wildcard', needs_valid_date=True),
+         hint='예: T&P 기본 인사 정보 *.xlsx', mode='wildcard', needs_valid_date=True,
+         pipeline_scope='dashboard'),
     dict(key='patents', label='특허', module='process_patents',
          hint='특허 리스트.xlsx', mode='exact', dest_filename='특허 리스트.xlsx'),
     dict(key='nurturing', label='양성이력', module='process_nurturing',
-         hint='양성_인력_현황.xlsx', mode='exact', dest_filename='양성_인력_현황.xlsx'),
+         hint='양성_인력_현황.xlsx', mode='exact', dest_filename='양성_인력_현황.xlsx',
+         pipeline_scope='dashboard'),
     dict(key='awards', label='시상이력', module='process_awards',
-         hint='예: 시상 세부사항 *.xlsx', mode='wildcard'),
+         hint='예: 시상 세부사항 *.xlsx', mode='wildcard', pipeline_scope='dashboard'),
     dict(key='education', label='학력', module='process_education',
          hint='예: 임직원 학력 *.xlsx', mode='wildcard'),
     dict(key='incentive_selection', label='핵심이력', module='process_incentive',
-         hint='핵심이력.xlsx', mode='exact', dest_filename='핵심이력.xlsx'),
+         hint='핵심이력.xlsx', mode='exact', dest_filename='핵심이력.xlsx',
+         pipeline_scope='dashboard'),
     dict(key='publications', label='논문', module='process_publications',
          hint='개인별논문현황_2016_2026.xlsx', mode='exact',
          dest_filename='개인별논문현황_2016_2026.xlsx'),
     dict(key='hr_orders', label='인사발령', module='process_personnel_orders',
-         hint='예: report_*.xlsx', mode='wildcard'),
+         hint='예: report_*.xlsx', mode='wildcard', pipeline_scope='dashboard'),
     dict(key='tasks_information', label='과제정보', module='process_task_information',
          hint='과제정보.xlsx', mode='exact', dest_filename='과제정보.xlsx'),
     dict(key='core_technology', label='핵심기술', module='process_core_technology',
@@ -131,19 +134,19 @@ MANIFEST = [
     # 시점보호 테이블과 동일하게 지원된다.
     dict(key='team_refer', label='팀/리더 참조', module='process_team_refer',
          hint='팀참조시트.xlsx', mode='exact', dest_filename='팀참조시트.xlsx', needs_valid_date=True,
-         hidden_from_table=True),
+         hidden_from_table=True, pipeline_scope='llm'),
     # 어학자격은 "현재 재직자 기준으로만 의미가 있는 자료"라(사용자 확정,
     # 2026-08-29) 다른 대부분 항목과 달리 업서트가 아니라 매번 파일 전체로
     # 통째로 교체한다 — needs_valid_date를 안 켜서(백필/시점보호 대상 아님)
     # "기준 연/월" 입력도, _YYYYMM 백필 업로드도 뜨지 않는다.
     dict(key='language_qualification', label='어학', module='process_language_qualification',
-         hint='예: 어학자격 *.xlsx', mode='wildcard'),
+         hint='예: 어학자격 *.xlsx', mode='wildcard', pipeline_scope='dashboard'),
     # 근무 경력은 한 사람이 여러 회사 이력(여러 행)을 가질 수 있어, 매
     # 업로드마다 그 사람의 기존 행 전체를 이번 내용으로 교체하는
     # group_replace_merge()를 쓴다(사용자 확정, 2026-08-29) — 시점 보호/
     # _YYYYMM 백필 대상이 아니라 needs_valid_date는 켜지 않는다.
     dict(key='work_experience', label='근무 경력', module='process_work_experience',
-         hint='예: 임직원 근무경력 *.xlsx', mode='wildcard'),
+         hint='예: 임직원 근무경력 *.xlsx', mode='wildcard', pipeline_scope='dashboard'),
 ]
 _BY_KEY = {item['key']: item for item in MANIFEST}
 
@@ -171,6 +174,13 @@ for _item in MANIFEST:
     _item.setdefault('api_fetch', None)
     _item.setdefault('needs_valid_date', False)
     _item.setdefault('hidden_from_table', False)
+    # pipeline_scope: 'common'(run_pipeline.py·run_expertise.py 둘 다 이
+    # 항목의 process_*.py를 호출) | 'dashboard'(run_pipeline.py만) |
+    # 'llm'(run_expertise.py만) — 두 파이프라인 스크립트의 실제 호출 그래프를
+    # 대조해 분류(2026-09-01, 사용자 확정 — "데이터 업데이트" 탭을 공용/
+    # 대시보드용/LLM분석용 3개 구간으로 나눠 보여주는 데 쓰인다). 명시적으로
+    # 지정 안 하면 'common'이 기본값(현재 MANIFEST 항목 대부분이 여기 해당).
+    _item.setdefault('pipeline_scope', 'common')
 
 
 def register_api_fetch(key: str, fetch_fn) -> None:
@@ -675,6 +685,7 @@ def snapshot() -> list[dict]:
             'mode': item['mode'],
             'needs_valid_date': item['needs_valid_date'],
             'hidden_from_table': item['hidden_from_table'],
+            'pipeline_scope': item['pipeline_scope'],
             'has_upload': has_upload(item['key']),
             'has_api': has_api(item['key']),
             'uploaded_at': uploaded_at(item['key']),

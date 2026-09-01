@@ -678,6 +678,27 @@ def _data_update_row(row: dict) -> html.Tr:
     ])
 
 
+_DATA_UPDATE_TABLE_COLSPAN = 8
+
+# 표시 순서: 공용(공용파일) → 대시보드용 → LLM분석용(2026-09-01, 사용자 확정
+# — 순서 그대로). 각 값은 run_pipeline.py(대시보드)와 run_expertise.py(LLM
+# 분석) 두 파이프라인 스크립트가 실제로 그 항목의 process_*.py를 호출하는지
+# 코드 호출 그래프를 대조해 web_pipeline_runner.MANIFEST의 pipeline_scope로
+# 이미 분류돼 있다(services/web_pipeline_runner.py 참고) — 여기서는 그 값
+# 기준으로 그룹만 나눈다.
+_DATA_UPDATE_SCOPES = [
+    ('common', '공용파일 (대시보드 · LLM분석 공통)'),
+    ('dashboard', '대시보드용'),
+    ('llm', 'LLM분석용'),
+]
+
+
+def _data_update_section_header(label: str) -> html.Tr:
+    return html.Tr(html.Td(label, colSpan=_DATA_UPDATE_TABLE_COLSPAN,
+                            className='fw-semibold small text-muted',
+                            style={'backgroundColor': 'var(--gs-header-bg)'}))
+
+
 def _data_update_table() -> dbc.Table:
     # hidden_from_table 항목(팀/리더 참조 — 그 탭 안에 별도 업로드 UI로
     # 이동, 2026-09-01 사용자 확정)은 이 표에서 뺀다.
@@ -687,7 +708,13 @@ def _data_update_table() -> dbc.Table:
         html.Th('누적 시점(연/월)'), html.Th('이전 Data'), html.Th('API 연동'),
         html.Th('최종실행이력'), html.Th('실행결과'),
     ]))
-    body = html.Tbody([_data_update_row(r) for r in rows])
+    body_rows: list = []
+    for scope_key, scope_label in _DATA_UPDATE_SCOPES:
+        # 그룹이 비어 있어도(현재 LLM분석용) 헤더는 항상 보여준다
+        # (2026-09-01, 사용자 확정 — "그룹 3개 유지, 비어있으면 그대로 비움").
+        body_rows.append(_data_update_section_header(scope_label))
+        body_rows.extend(_data_update_row(r) for r in rows if r['pipeline_scope'] == scope_key)
+    body = html.Tbody(body_rows)
     return dbc.Table([header, body], bordered=True, hover=True, responsive=True, size='sm',
                       className='align-middle mb-0 data-update-table')
 

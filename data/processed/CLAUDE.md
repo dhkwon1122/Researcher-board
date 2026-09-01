@@ -8127,3 +8127,52 @@ major 50건 + detail 59건 = 총 109건.
 검증: `py_compile` 통과. `services.dev_updates.WEEKS`를 직접 로드해
 주차 수/합계를 재계산해 확인. `pages.admin._dev_updates_tab()`을 직접
 렌더링해 예외 없이 정상 렌더되는 것 확인.
+
+## 2026-09-01 (10): "데이터 업데이트" 탭 표를 공용/대시보드용/LLM분석용
+3개 구간으로 그룹핑
+
+사용자 요청: "대시보드용 원천파일과 llm분석용 원천파일, 그리고 둘다에
+사용되는 파일을 구분해서 데이터 업데이트 탭에 표시되도록 해줘. 순서는
+공용파일, 대시보드용, llm분석용순으로." 확인 문답 2건으로 확정된 사항:
+(1) LLM분석용 그룹이 비어 있어도 그룹 헤더 3개는 항상 유지, (2)
+분류 기준은 코드 호출 그래프(`pipeline/run_pipeline.py`(대시보드)와
+`pipeline/run_expertise.py`(LLM 분석) 두 스크립트가 각 항목의
+`process_*.py`를 실제로 호출하는지) 그대로.
+
+**`services/web_pipeline_runner.py`**: MANIFEST 각 항목에
+`pipeline_scope`(`'common'|'dashboard'|'llm'`) 필드 추가 —
+`_item.setdefault('pipeline_scope', 'common')`으로 기본값을 두고, 두
+스크립트 중 `run_pipeline.py`에서만 불리는 7개 항목
+(evaluations/nurturing/awards/incentive_selection/hr_orders/
+language_qualification/work_experience)에만 명시적으로
+`pipeline_scope='dashboard'`를, `run_expertise.py`에서만 불리는
+`team_refer`(이미 `hidden_from_table=True`라 표에는 안 보임)에
+`pipeline_scope='llm'`을 지정했다. 나머지 14개(researchers/patents/
+education/publications/tasks_information/core_technology/job_profile/
+work_objective_1~3/tasks/project_confl_address/
+job_profile_info_standard/job_profile_info_sait)는 두 스크립트 모두가
+호출해 기본값 `'common'` 그대로 둔다. `snapshot()`의 행 dict에도
+`pipeline_scope`를 그대로 노출.
+
+**`pages/admin.py`**: `_data_update_table()`을 재작성 — 표 헤더는
+그대로 8컬럼(체크/구분/업로드/누적 시점(연/월)/이전 Data/API 연동/
+최종실행이력/실행결과)이고, `Tbody` 안에 `pipeline_scope` 순서
+(공용→대시보드용→LLM분석용, `_DATA_UPDATE_SCOPES`)대로 구간 제목 행
+(`_data_update_section_header()`, `colSpan=8`, 옅은 배경의 소제목 행 —
+"관리자 화면 리스킹" 세션에서 이미 쓰던 `--gs-header-bg` 토큰 재사용)을
+먼저 넣고 그 그룹에 속하는 `_data_update_row()`를 이어붙인다. 그룹이
+비어도(현재 LLM분석용) 제목 행만 남기고 데이터 행은 0개 — 사용자 확정
+그대로.
+
+검증: `services.web_pipeline_runner.MANIFEST`/`snapshot()`을 직접 로드해
+`pipeline_scope` 분포가 공용 14 / 대시보드 7 / LLM(team_refer, 숨김) 1건
+정확히 나오는 것 확인. `pages.admin._data_update_table()`을 Dash 앱
+컨텍스트에서 직접 렌더링해 — 헤더 8컬럼, 구간 제목 행 3개(공용파일/
+대시보드용/LLM분석용, 전부 `colSpan=8`)가 정확한 순서로 나오는 것,
+표에 실제로 보이는 데이터 행이 21개(공용 14 + 대시보드 7, `team_refer`는
+`hidden_from_table=True`라 이 표 자체에서 계속 빠짐 — 그리드 CRUD와
+"팀/리더 참조" 탭 전용 업로드 섹션은 그대로 유지)인 것, LLM분석용 구간에
+데이터 행이 0개인 것을 확인. `py_compile` 통과.
+
+**미검증**: 실제 브라우저에서 구간 제목 행의 배경색/여백이 실제로
+소제목처럼 눈에 띄는지 육안 확인.
