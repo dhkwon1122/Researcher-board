@@ -327,6 +327,91 @@ def _renumbered(rows: list) -> list:
     return rows
 
 
+def _team_refer_run_status_view(row: dict):
+    """팀/리더 참조 업로드 섹션의 "최종실행이력/실행결과" 미니 표시 —
+    초기 렌더와 폴링 갱신(team_refer_upload_poll) 양쪽이 공유."""
+    status = row['status']
+    status_badge = (
+        dbc.Badge([html.I(className='bi bi-arrow-repeat me-1'), '실행중'], color='info')
+        if status == '실행중'
+        else dbc.Badge(status or '-', color=_STATUS_COLORS.get(status, 'secondary'))
+    )
+    source = row.get('source', '')
+    source_badge = (
+        dbc.Badge(source, color='info' if source == 'API' else 'secondary',
+                  className='ms-1', style={'fontSize': '0.62rem'})
+        if source else None
+    )
+    return html.Div([
+        html.Div([html.Span(row['last_run_at'] or '-', className='small'), source_badge]),
+        html.Div([status_badge, html.Span(row['message'], className='small text-muted ms-2',
+                                           title=row['message'])], className='mt-1'),
+    ])
+
+
+def _team_refer_upload_section():
+    """"팀/리더 참조" 탭 안의 엑셀 업로드 UI(2026-09-01, 사용자 확정 — "데이터
+    업데이트" 탭에서 이동). 백엔드는 services/web_pipeline_runner.py의
+    'team_refer' 항목(hidden_from_table=True)을 그대로 재사용 — 업로드
+    저장/백필/실행 로그가 전부 "데이터 업데이트" 탭의 다른 항목과 동일한
+    경로를 탄다. 업로드 컴포넌트({'type':'du-upload','key':'team_refer',...})와
+    다운로드 버튼({'type':'du-download','key':'team_refer'})은 패턴매칭
+    콜백(data_update_on_upload/data_update_download)이 위치와 무관하게
+    그대로 처리하므로 이 탭 안에 있어도 새 콜백이 필요 없다 — "실행" 버튼만
+    이 탭 전용 콜백(team_refer_run_upload)이 따로 필요하다(이 항목이
+    hidden_from_table이라 "데이터 업데이트" 탭의 전체/선택 실행 대상에서
+    빠지므로)."""
+    row = next((r for r in wpr.snapshot() if r['key'] == 'team_refer'), None)
+    if row is None:
+        return None
+    today = date.today()
+    filenames = row['uploaded_filenames']
+    filenames_view = (
+        html.Div([html.Div(f, className='small') for f in filenames], className='mt-1')
+        if filenames else html.Div('업로드된 파일 없음', className='small text-muted mt-1')
+    )
+    backfill_view = None
+    if row.get('backfill_files'):
+        bf = row['backfill_files']
+        backfill_view = html.Div(
+            [html.I(className='bi bi-layers me-1'), f'백필 대기 {len(bf)}건 ({bf[0][1]} ~ {bf[-1][1]})'],
+            className='small text-info fw-semibold mt-1',
+        )
+
+    return dbc.Card(dbc.CardBody([
+        html.Div([
+            html.I(className='bi bi-file-earmark-excel me-2 text-success'),
+            html.Span('엑셀 파일로 한 번에 반영', className='fw-semibold small'),
+        ], className='mb-2'),
+        dbc.Row([
+            dbc.Col([
+                html.Div('업로드(팀참조시트.xlsx)', className='small text-muted mb-1'),
+                _upload_box('team_refer', 'single', multiple=True),
+                filenames_view, backfill_view,
+            ], md=5),
+            dbc.Col([
+                html.Div('누적 시점(연/월)', className='small text-muted mb-1'),
+                _valid_period_picker('team_refer', today.year, today.month),
+            ], md=3),
+            dbc.Col([
+                html.Div(' ', className='small mb-1'),
+                dbc.ButtonGroup([
+                    dbc.Button([html.I(className='bi bi-play-fill me-1'), '실행'],
+                               id='team-refer-run-upload-btn', color='primary', size='sm'),
+                    dbc.Button(html.I(className='bi bi-download'),
+                               id={'type': 'du-download', 'key': 'team_refer'},
+                               color='link', size='sm', disabled=not row['has_upload'],
+                               title='업로드한 원본 파일 다운로드'),
+                ]),
+            ], md=2),
+            dbc.Col([
+                html.Div('최종실행이력', className='small text-muted mb-1'),
+                html.Div(id='team-refer-upload-status', children=_team_refer_run_status_view(row)),
+            ], md=2),
+        ], className='g-2 align-items-start'),
+    ]), className='shadow-sm mb-3')
+
+
 def _team_refer_tab() -> html.Div:
     """팀/리더 참조 웹 CRUD 탭. 컬럼은 팀참조시트.xlsx 원본 헤더명을 그대로
     쓴다(pipeline.process_team_refer._COL_MAP 재사용, services.team_refer_store
@@ -354,6 +439,8 @@ def _team_refer_tab() -> html.Div:
             ],
             color='light', className='small border mb-3',
         ),
+
+        _team_refer_upload_section(),
 
         dbc.Row([
             dbc.Col([
@@ -460,14 +547,50 @@ def _upload_box(key: str, slot: str, small_label: str = '', multiple: bool = Fal
     )
 
 
+# 연도 드롭다운 범위 — 과거 백필(소급 반영)과 근시일 소급 입력을 모두 커버.
+_VALID_YEAR_SPAN_BACK = 6
+_VALID_YEAR_SPAN_FWD = 1
+
+
+def _valid_period_picker(key: str, year: int, month: int):
+    """"누적 시점(연/월)" 입력 — 일(day) 없이 연/월만, 연이 왼쪽/월이 오른쪽,
+    월은 숫자(1월~12월) 표기(2026-09-01, 사용자 확정). dcc.DatePickerSingle은
+    일 단위 선택만 지원하고 팝업 캘린더 헤더도 영문이라, 연/월 각각 별도
+    dcc.Dropdown 두 개로 대체했다."""
+    year_options = [{'label': f'{y}년', 'value': y}
+                     for y in range(year - _VALID_YEAR_SPAN_BACK, year + _VALID_YEAR_SPAN_FWD + 1)]
+    month_options = [{'label': f'{m}월', 'value': m} for m in range(1, 13)]
+    return dbc.Row([
+        dbc.Col(dcc.Dropdown(
+            id={'type': 'du-valid-year', 'key': key}, options=year_options, value=year,
+            clearable=False, searchable=False, style={'minWidth': '92px'},
+        ), width='auto'),
+        dbc.Col(dcc.Dropdown(
+            id={'type': 'du-valid-month', 'key': key}, options=month_options, value=month,
+            clearable=False, searchable=False, style={'minWidth': '76px'},
+        ), width='auto'),
+    ], className='g-1')
+
+
+def _api_button(key: str, has_api: bool):
+    return dbc.Button(
+        [html.I(className='bi bi-cloud-arrow-down me-1'),
+         'API로 가져오기' if has_api else 'API 연동 예정'],
+        id={'type': 'du-api', 'key': key},
+        color='primary' if has_api else 'secondary',
+        outline=True, size='sm', className='py-0 px-1',
+        style={'fontSize': '0.68rem'},
+    )
+
+
 def _data_update_row(row: dict) -> html.Tr:
     key = row['key']
 
     if row['mode'] == 'dual':
         upload_cell = html.Div([
-            html.Div('① 구버전 이력(선택, 최초 1회)', className='small text-muted mb-1'),
+            html.Div("① '18.5월 이전", className='small text-muted mb-1'),
             _upload_box(key, 'legacy', '업로드'),
-            html.Div('② 내 리포트(필수)', className='small text-muted mt-2 mb-1'),
+            html.Div("② '18.5월 이후", className='small text-muted mt-2 mb-1'),
             _upload_box(key, 'new', '업로드'),
         ])
     else:
@@ -503,14 +626,7 @@ def _data_update_row(row: dict) -> html.Tr:
         else dbc.Badge(status or '-', color=_STATUS_COLORS.get(status, 'secondary'))
     )
 
-    api_btn = dbc.Button(
-        [html.I(className='bi bi-cloud-arrow-down me-1'),
-         'API로 가져오기' if row['has_api'] else 'API 연동 예정'],
-        id={'type': 'du-api', 'key': key},
-        color='primary' if row['has_api'] else 'secondary',
-        outline=True, size='sm', className='py-0 px-1',
-        style={'fontSize': '0.68rem'},
-    )
+    api_btn = _api_button(key, row['has_api'])
 
     # 업로드 파일 형식 안내는 구분 라벨 옆 호버 아이콘으로만 보여준다(2026-09-01,
     # 사용자 확정) — 표에 항상 보이는 텍스트 줄 대신 필요할 때만 마우스 오버로.
@@ -522,23 +638,15 @@ def _data_update_row(row: dict) -> html.Tr:
         dbc.Tooltip(row['hint'], target=hint_icon_id, placement='right'),
     ])
 
-    # "현재상태" 성격 항목(evaluations/tech_ownership/job_profile/work_objective_*)은
-    # 이번 업로드분이 어느 시점 기준인지(연/월) 지정해야 한다 — 과거 시점으로
-    # 잘못 지정하면 process_*.py가 기존 최신 값을 보호하려고 그 사람 행을
-    # 건너뛴다(정상 동작, 실행결과 메시지로 안내). 기본값은 오늘.
-    valid_date_picker = (
-        html.Div([
-            dbc.Label('기준 연/월', className='small text-muted mb-0', style={'fontSize': '0.68rem'}),
-            dcc.DatePickerSingle(
-                id={'type': 'du-valid-date', 'key': key}, date=date.today().isoformat(),
-                display_format='YYYY-MM', className='d-block',
-            ),
-            html.Div(
-                '파일명이 "_YYYYMM"으로 끝나는 백필 업로드에는 적용되지 않습니다(파일명의 날짜를 그대로 씀).',
-                className='text-muted', style={'fontSize': '0.65rem'},
-            ),
-        ], className='mt-2')
-        if row['needs_valid_date'] else None
+    # "누적 시점(연/월)" — "현재상태" 성격 항목(evaluations/core_technology/
+    # job_profile/work_objective_*)만 별도 컬럼으로 보여준다(2026-09-01,
+    # 사용자 확정 — "구분" 셀에서 분리). 과거 시점으로 잘못 지정하면
+    # process_*.py가 기존 최신 값을 보호하려고 그 사람 행을 건너뛴다(정상
+    # 동작, 실행결과 메시지로 안내). 기본값은 오늘.
+    today = date.today()
+    valid_period_cell = (
+        _valid_period_picker(key, today.year, today.month)
+        if row['needs_valid_date'] else html.Span('-', className='text-muted')
     )
 
     # 최종실행이력 — 실행 시각 + 이번 실행이 API였는지 업로드였는지(2026-09-01,
@@ -553,8 +661,9 @@ def _data_update_row(row: dict) -> html.Tr:
 
     return html.Tr([
         html.Td(dbc.Checkbox(id={'type': 'du-check', 'key': key}, value=False), className='align-middle text-center'),
-        html.Td([label_with_hint, valid_date_picker], className='align-middle'),
+        html.Td(label_with_hint, className='align-middle'),
         html.Td([upload_cell, filenames_view, backfill_view], className='align-middle', style={'minWidth': '220px'}),
+        html.Td(valid_period_cell, className='align-middle text-center'),
         html.Td([
             dbc.Button(html.I(className='bi bi-download'), id={'type': 'du-download', 'key': key},
                        color='link', size='sm', disabled=not row['has_upload'], className='p-0'),
@@ -569,10 +678,13 @@ def _data_update_row(row: dict) -> html.Tr:
 
 
 def _data_update_table() -> dbc.Table:
-    rows = wpr.snapshot()
+    # hidden_from_table 항목(팀/리더 참조 — 그 탭 안에 별도 업로드 UI로
+    # 이동, 2026-09-01 사용자 확정)은 이 표에서 뺀다.
+    rows = [r for r in wpr.snapshot() if not r['hidden_from_table']]
     header = html.Thead(html.Tr([
         html.Th('', style={'width': '36px'}), html.Th('구분'), html.Th('업로드'),
-        html.Th('이전 Data'), html.Th('API 연동'), html.Th('최종실행이력'), html.Th('실행결과'),
+        html.Th('누적 시점(연/월)'), html.Th('이전 Data'), html.Th('API 연동'),
+        html.Th('최종실행이력'), html.Th('실행결과'),
     ]))
     body = html.Tbody([_data_update_row(r) for r in rows])
     return dbc.Table([header, body], bordered=True, hover=True, responsive=True, size='sm',
@@ -1354,6 +1466,7 @@ def team_refer_close_dupe_modal(n_clicks):
 @callback(
     Output('data-update-table-container', 'children', allow_duplicate=True),
     Output('data-update-status-msg', 'children', allow_duplicate=True),
+    Output('team-refer-upload-status', 'children', allow_duplicate=True),
     Input({'type': 'du-upload', 'key': ALL, 'slot': ALL}, 'contents'),
     State({'type': 'du-upload', 'key': ALL, 'slot': ALL}, 'filename'),
     State({'type': 'du-upload', 'key': ALL, 'slot': ALL}, 'id'),
@@ -1362,14 +1475,14 @@ def team_refer_close_dupe_modal(n_clicks):
 def data_update_on_upload(all_contents, all_filenames, all_ids):
     from services.auth import can
     if not can('manage_users'):
-        return no_update, _alert('관리자만 업로드할 수 있습니다.', 'danger')
+        return no_update, _alert('관리자만 업로드할 수 있습니다.', 'danger'), no_update
 
     trig = dash.callback_context.triggered_id
     if trig is None:
-        return no_update, no_update
+        return no_update, no_update, no_update
     idx = next((i for i, cid in enumerate(all_ids) if cid == trig), None)
     if idx is None or not all_contents[idx]:
-        return no_update, no_update
+        return no_update, no_update, no_update
 
     # needs_valid_date 항목의 대량 백필 업로드는 dcc.Upload(multiple=True)라
     # contents/filename이 리스트로 온다 — 그 외(기존 단일 업로드)는 문자열
@@ -1403,7 +1516,13 @@ def data_update_on_upload(all_contents, all_filenames, all_ids):
         msg, color = f'{ok_count}개 업로드 완료, {len(errors)}개 실패({"; ".join(errors[:3])})', 'warning'
     else:
         msg, color = '; '.join(errors[:3]) or '업로드에 실패했습니다.', 'danger'
-    return _data_update_table(), _alert(msg, color)
+
+    # team_refer는 "데이터 업데이트" 탭 표에서 숨겨져 있어(hidden_from_table),
+    # 그 탭의 상태 메시지 자리(data-update-status-msg)는 다른 탭이라 안 보인다
+    # — 대신 "팀/리더 참조" 탭 안의 전용 상태 자리로 알림을 보낸다.
+    if trig['key'] == 'team_refer':
+        return _data_update_table(), no_update, _alert(msg, color)
+    return _data_update_table(), _alert(msg, color), no_update
 
 
 # ── 콜백: 데이터 업데이트 — 전체/선택 실행 ─────────────────────────────────────
@@ -1414,11 +1533,13 @@ def data_update_on_upload(all_contents, all_filenames, all_ids):
     Input('data-update-selected-btn', 'n_clicks'),
     State({'type': 'du-check', 'key': ALL}, 'value'),
     State({'type': 'du-check', 'key': ALL}, 'id'),
-    State({'type': 'du-valid-date', 'key': ALL}, 'date'),
-    State({'type': 'du-valid-date', 'key': ALL}, 'id'),
+    State({'type': 'du-valid-year', 'key': ALL}, 'value'),
+    State({'type': 'du-valid-year', 'key': ALL}, 'id'),
+    State({'type': 'du-valid-month', 'key': ALL}, 'value'),
     prevent_initial_call=True,
 )
-def data_update_run(_all_clicks, _sel_clicks, check_values, check_ids, valid_dates, valid_date_ids):
+def data_update_run(_all_clicks, _sel_clicks, check_values, check_ids,
+                     valid_years, valid_year_ids, valid_months):
     from services.auth import can
     if not can('manage_users'):
         return _alert('관리자만 실행할 수 있습니다.', 'danger'), True
@@ -1440,18 +1561,47 @@ def data_update_run(_all_clicks, _sel_clicks, check_values, check_ids, valid_dat
     else:
         return no_update, no_update
 
-    # needs_valid_date 항목(evaluations/tech_ownership/job_profile/work_objective_*)만
-    # 화면에 기준 연/월 DatePicker가 렌더링되므로, id-value를 매칭해 그 항목만
-    # valid_dates 딕셔너리로 모은다. 지정 안 된 항목은 process_*.py 기본값(오늘).
+    # needs_valid_date 항목(evaluations/core_technology/job_profile/
+    # work_objective_*)만 화면에 "누적 시점(연/월)" 드롭다운이 렌더링되므로,
+    # id-value를 매칭해 그 항목만 valid_dates 딕셔너리로 모은다. 지정 안 된
+    # 항목은 process_*.py 기본값(오늘). 연/월 둘 다 값이 있어야 반영(항상
+    # 일=1일로 고정 — 일 단위는 이 화면에서 다루지 않음, 2026-09-01 사용자 확정).
     valid_dates_by_key = {}
-    for cid, d in zip(valid_date_ids, valid_dates):
-        if d:
-            valid_dates_by_key[cid['key']] = date.fromisoformat(d)
+    for cid, y, m in zip(valid_year_ids, valid_years, valid_months):
+        if y and m:
+            valid_dates_by_key[cid['key']] = date(int(y), int(m), 1)
 
     if not wpr.start_run(keys, valid_dates=valid_dates_by_key):
         return _alert('이미 다른 작업이 실행 중입니다. 잠시 후 다시 시도해주세요.', 'warning'), False
     return (_alert(f'{len(keys)}개 항목 실행을 시작했습니다. 브라우저를 닫아도 서버에서 계속 '
                     '진행되며, 화면은 자동으로 갱신됩니다.', 'info'), False)
+
+
+# ── 콜백: 팀/리더 참조 — 엑셀 업로드 실행 ─────────────────────────────────────
+# hidden_from_table 항목이라 "데이터 업데이트" 탭의 전체/선택 실행 버튼과
+# 무관한 이 탭 전용 실행 트리거가 필요하다.
+@callback(
+    Output('team-refer-upload-status', 'children', allow_duplicate=True),
+    Output('data-update-interval', 'disabled', allow_duplicate=True),
+    Input('team-refer-run-upload-btn', 'n_clicks'),
+    State({'type': 'du-valid-year', 'key': 'team_refer'}, 'value'),
+    State({'type': 'du-valid-month', 'key': 'team_refer'}, 'value'),
+    prevent_initial_call=True,
+)
+def team_refer_run_upload(n_clicks, year, month):
+    from services.auth import can
+    if not n_clicks:
+        return no_update, no_update
+    if not can('manage_users'):
+        return _alert('관리자만 실행할 수 있습니다.', 'danger'), True
+    if not wpr.has_upload('team_refer'):
+        return _alert('업로드된 파일이 없습니다.', 'warning'), True
+
+    valid_dates = {'team_refer': date(int(year), int(month), 1)} if year and month else {}
+    if not wpr.start_run(['team_refer'], valid_dates=valid_dates):
+        return _alert('이미 다른 작업이 실행 중입니다. 잠시 후 다시 시도해주세요.', 'warning'), False
+    return (_alert('실행을 시작했습니다. 브라우저를 닫아도 서버에서 계속 진행되며, '
+                    '화면은 자동으로 갱신됩니다.', 'info'), False)
 
 
 # ── 콜백: 데이터 업데이트 — 항목별 "API로 가져오기" 아이콘 ─────────────────────
@@ -1503,11 +1653,14 @@ def data_update_db_load(n_clicks):
     Output('data-update-table-container', 'children', allow_duplicate=True),
     Output('data-update-db-status', 'children', allow_duplicate=True),
     Output('data-update-interval', 'disabled', allow_duplicate=True),
+    Output('team-refer-upload-status', 'children', allow_duplicate=True),
     Input('data-update-interval', 'n_intervals'),
     prevent_initial_call=True,
 )
 def data_update_poll(_n):
-    return _data_update_table(), _db_status_view(), not wpr.any_running()
+    team_refer_row = next((r for r in wpr.snapshot() if r['key'] == 'team_refer'), None)
+    team_refer_status = _team_refer_run_status_view(team_refer_row) if team_refer_row else no_update
+    return _data_update_table(), _db_status_view(), not wpr.any_running(), team_refer_status
 
 
 # ── 콜백: 데이터 업데이트 — "이전 Data" 다운로드 ───────────────────────────────

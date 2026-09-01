@@ -82,8 +82,10 @@
   (업무목표·과제 수행 이력은 별도 _raw 폴백 없음, 아래 전용 파일 항목 참고)
 
 [업무목표] ★ 전용 원천 파일 3개에서 자동 추출 (별도 raw 불필요)
-  업무목표24.xlsx / 업무목표25.xlsx / 업무목표26.xlsx (사번, 목표명, 상세설명)
-    → data/processed/work_objective.csv (researcher_id, work_objective24~26)
+  업무목표NN.xlsx × 3(회계연도 기준 최근 3개년, 매년 3월 자동 롤링 —
+  process_work_objective.target_years() 참고. 예: 지금은 업무목표24/25/26.xlsx,
+  '27년 3월부터는 업무목표25/26/27.xlsx) (사번, 목표명, 상세설명)
+    → data/processed/work_objective.csv (researcher_id, work_objective{4자리 연도} × 3)
       한 연구원이 한 해에 목표를 여러 개 작성했으면 "- 목표명 - 상세설명" 줄로
       이어붙여 그 해 컬럼 하나에 담는다. process_researcher_expertise.py의
       8번째 입력 소스로 쓰인다(LLM 호출 없이 순수 엑셀 전처리만 수행).

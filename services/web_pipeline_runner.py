@@ -93,18 +93,23 @@ MANIFEST = [
          hint='과제정보.xlsx', mode='exact', dest_filename='과제정보.xlsx'),
     dict(key='core_technology', label='핵심기술', module='process_core_technology',
          hint='핵심기술.xlsx', mode='exact', dest_filename='핵심기술.xlsx', needs_valid_date=True),
-    dict(key='tech_ownership', label='보유기술', module='process_tech_ownership',
-         hint='보유기술.xlsx', mode='exact', dest_filename='보유기술.xlsx', needs_valid_date=True),
+    # 보유기술(tech_ownership)은 웹 업데이트 대상에서 제외한다(2026-09-01,
+    # 사용자 확정 — 업데이트가 불가능한 항목). 필요하면
+    # `python pipeline/process_tech_ownership.py`를 CLI로 직접 실행한다.
     dict(key='job_profile', label='직무이력', module='process_job_profile',
-         hint=f"① {JOB_PROFILE_LEGACY_FILE}(선택 — 최초 1회만 필요) "
-              "② 내 리포트 *.xlsx(필수, 매번 최신 파일)",
+         hint=f"① {JOB_PROFILE_LEGACY_FILE} ② 내 리포트 *.xlsx — 둘 다 항상 필요합니다.",
          mode='dual', needs_valid_date=True),
-    dict(key='work_objective_24', label='업무목표24', module='process_work_objective',
-         hint='업무목표24.xlsx', mode='exact', dest_filename='업무목표24.xlsx', needs_valid_date=True),
-    dict(key='work_objective_25', label='업무목표25', module='process_work_objective',
-         hint='업무목표25.xlsx', mode='exact', dest_filename='업무목표25.xlsx', needs_valid_date=True),
-    dict(key='work_objective_26', label='업무목표26', module='process_work_objective',
-         hint='업무목표26.xlsx', mode='exact', dest_filename='업무목표26.xlsx', needs_valid_date=True),
+    # 업무목표 3개 슬롯 — 회계연도(매년 3월 기준) 최근 3개년을 가리키는 자리로,
+    # label/hint/dest_filename은 여기 박아두지 않고 _resolve_item()이 호출
+    # 시점마다 실제 연도로 다시 계산해 채운다(2026-09-01, 사용자 확정 — 자세한
+    # 배경은 _resolve_item() 위 주석 참고). 지금(2026-09)은 24/25/26,
+    # '27년 3월부터는 25/26/27로 자동으로 밀린다.
+    dict(key='work_objective_1', label='업무목표', module='process_work_objective',
+         hint='(연도는 자동 계산)', mode='exact', dest_filename='', needs_valid_date=True),
+    dict(key='work_objective_2', label='업무목표', module='process_work_objective',
+         hint='(연도는 자동 계산)', mode='exact', dest_filename='', needs_valid_date=True),
+    dict(key='work_objective_3', label='업무목표', module='process_work_objective',
+         hint='(연도는 자동 계산)', mode='exact', dest_filename='', needs_valid_date=True),
     dict(key='tasks', label='과제참여이력', module='process_tasks',
          hint='개인별과제투입기간데이터_260114.xlsb', mode='exact',
          dest_filename='개인별과제투입기간데이터_260114.xlsb'),
@@ -114,15 +119,18 @@ MANIFEST = [
          hint='직무정보_표준.xlsx', mode='exact', dest_filename='직무정보_표준.xlsx'),
     dict(key='job_profile_info_sait', label='직무정보(SAIT자체)', module='process_job_profile_sait',
          hint='직무정보_부서.xlsx', mode='exact', dest_filename='직무정보_부서.xlsx'),
-    # 팀/리더 참조(team_refer)는 관리자 화면의 "팀/리더 참조" 탭(그리드
-    # CRUD, services/team_refer_store.py)으로도 계속 수정할 수 있다 — 이
-    # 항목은 그와 별개로 xlsx 파일 자체를 한 번에 대량 반영하고 싶을 때
-    # 쓰는 경로다(둘 다 같은 team_refer.csv에 같은 자연키로 upsert하므로
-    # 서로 충돌하지 않는다, 2026-08-29 추가). needs_valid_date=True라
-    # 관리자가 기준 연/월을 지정할 수 있고, "_YYYYMM" 파일명 대량 백필
-    # 업로드도 다른 시점보호 테이블과 동일하게 지원된다.
+    # 팀/리더 참조(team_refer)는 "데이터 업데이트" 탭 표에는 더 이상 나타나지
+    # 않는다(hidden_from_table=True, 2026-09-01 사용자 확정) — 대신 관리자
+    # 화면의 "팀/리더 참조" 탭(그리드 CRUD, services/team_refer_store.py) 안에
+    # 업로드 UI가 별도로 있다(pages/admin.py의 _team_refer_upload_section()).
+    # MANIFEST 등록 자체(run_one()/save_upload()/백필 등 백엔드 로직)는 그대로
+    # 유지 — 그리드 CRUD와 같은 team_refer.csv에 같은 자연키로 upsert하므로
+    # 서로 충돌하지 않는다(2026-08-29 추가). needs_valid_date=True라 관리자가
+    # 기준 연/월을 지정할 수 있고, "_YYYYMM" 파일명 대량 백필 업로드도 다른
+    # 시점보호 테이블과 동일하게 지원된다.
     dict(key='team_refer', label='팀/리더 참조', module='process_team_refer',
-         hint='팀참조시트.xlsx', mode='exact', dest_filename='팀참조시트.xlsx', needs_valid_date=True),
+         hint='팀참조시트.xlsx', mode='exact', dest_filename='팀참조시트.xlsx', needs_valid_date=True,
+         hidden_from_table=True),
     # 어학자격은 "현재 재직자 기준으로만 의미가 있는 자료"라(사용자 확정,
     # 2026-08-29) 다른 대부분 항목과 달리 업서트가 아니라 매번 파일 전체로
     # 통째로 교체한다 — needs_valid_date를 안 켜서(백필/시점보호 대상 아님)
@@ -161,6 +169,7 @@ MAX_UPLOAD_BYTES = int(os.environ.get('WEB_UPDATE_MAX_UPLOAD_BYTES', str(50 * 10
 for _item in MANIFEST:
     _item.setdefault('api_fetch', None)
     _item.setdefault('needs_valid_date', False)
+    _item.setdefault('hidden_from_table', False)
 
 
 def register_api_fetch(key: str, fetch_fn) -> None:
@@ -174,6 +183,44 @@ def register_api_fetch(key: str, fetch_fn) -> None:
 
 def has_api(key: str) -> bool:
     return _BY_KEY[key].get('api_fetch') is not None
+
+
+# ── 업무목표 롤링 슬롯(2026-09-01, 사용자 확정) ───────────────────────────────
+# 예전엔 work_objective_24/25/26이라는 "실제 연도가 그대로 박힌" 3개 키였는데,
+# 매년 3월 회계연도가 넘어가면 대상 3개년 자체가 밀려야 한다(예: '27년 3월부터는
+# 25/26/27) — 이 3개 슬롯 키(work_objective_1~3, 오래된→최신 순 고정 자리)는
+# 이름 자체엔 특정 연도를 담지 않고, 그 자리가 "지금" 가리키는 실제 연도를
+# _resolve_item()이 호출 시점마다 다시 계산해 label/hint/dest_filename에
+# 반영한다. MANIFEST(모듈 임포트 시 딱 한 번 평가)에 실제 연도를 그대로
+# 박아두면, 이 모듈을 계속 띄워 두는 gunicorn 워커가 회계연도 경계를 넘어가도
+# 재시작 전까지 예전 연도로 고정돼 있는 문제가 생기므로, 매번 다시 계산한다.
+_WORK_OBJECTIVE_SLOT_KEYS = ('work_objective_1', 'work_objective_2', 'work_objective_3')
+
+
+def _work_objective_slot_year(key: str):
+    """work_objective_1/_2/_3이 지금 이 순간 가리키는 실제 연도(회계연도 기준
+    최근 3개년 중 오래된→최신 순서로 매핑). 그 외 키는 None."""
+    if key not in _WORK_OBJECTIVE_SLOT_KEYS:
+        return None
+    import process_work_objective as pwo
+    return pwo.target_years()[_WORK_OBJECTIVE_SLOT_KEYS.index(key)]
+
+
+def _resolve_item(key: str) -> dict:
+    """_BY_KEY[key]를 그대로 반환하되, work_objective_1/_2/_3 3개 슬롯만
+    label/hint/dest_filename을 지금 이 순간의 회계연도 기준으로 다시 계산해
+    덮어쓴 사본을 반환한다. run_one()/save_upload()/has_upload()/snapshot()이
+    _BY_KEY[key]를 직접 읽는 대신 이 함수를 거친다."""
+    item = _BY_KEY[key]
+    year = _work_objective_slot_year(key)
+    if year is None:
+        return item
+    fname = f'업무목표{year % 100:02d}.xlsx'
+    patched = dict(item)
+    patched['label'] = f'업무목표{year % 100:02d}'
+    patched['hint'] = fname
+    patched['dest_filename'] = fname
+    return patched
 
 
 def _key_dir(key: str) -> str:
@@ -232,7 +279,7 @@ def save_upload(key: str, filename: str, content_bytes: bytes, slot: str | None 
     needs_valid_date 항목이면서 파일명이 "_YYYYMM"으로 끝나면(대량 백필,
     pipeline/backfill_utils.py) 정규 슬롯을 덮어쓰지 않고 별도 백필 폴더에
     계속 쌓아둔다 — 여러 달치를 한 번에 올려두고 한 번에 실행하기 위함."""
-    item = _BY_KEY[key]
+    item = _resolve_item(key)
 
     if item.get('needs_valid_date') and parse_backfill_date(filename):
         dest = os.path.join(_key_backfill_dir(key), filename)
@@ -298,13 +345,19 @@ def uploaded_files(key: str) -> list[str]:
 
 
 def has_upload(key: str) -> bool:
-    item = _BY_KEY[key]
+    item = _resolve_item(key)
     if item.get('needs_valid_date') and backfill_files(key):
         return True
     files = uploaded_files(key)
     if item['mode'] == 'dual':
-        # 최소한 '내 리포트 *.xlsx'(new)는 있어야 실행 가능 — legacy는 선택.
-        return any(os.path.basename(p) != JOB_PROFILE_LEGACY_FILE for p in files)
+        # ①'18.5월 이전(legacy)·②'18.5월 이후(new) 둘 다 있어야 실행 가능
+        # (2026-09-01, 사용자 확정 — 예전엔 legacy를 선택으로 취급했으나 둘 다
+        # 항상 필요한 데이터로 승격. legacy는 한 번 올리면 폴더에 계속 남아
+        # 재사용되므로, 매번 다시 올릴 필요는 없다 — 그 폴더에 남아있기만
+        # 하면 이 조건을 계속 만족한다).
+        has_legacy = any(os.path.basename(p) == JOB_PROFILE_LEGACY_FILE for p in files)
+        has_new = any(os.path.basename(p) != JOB_PROFILE_LEGACY_FILE for p in files)
+        return has_legacy and has_new
     return bool(files)
 
 
@@ -465,8 +518,9 @@ def run_one(key: str, via_api: bool = False, valid_date: date | None = None) -> 
     완전히 동일하다 — 아직 훅이 없으면(현재 전 항목이 그렇다) 바로
     "미연동" 실패로 기록하고 끝난다.
 
-    valid_date: needs_valid_date=True인 항목(evaluations/tech_ownership/
-    job_profile/work_objective_*)에서 이번 업로드분의 기준 연/월로 넘겨준다
+    valid_date: needs_valid_date=True인 항목(evaluations/core_technology/
+    job_profile/work_objective_*/team_refer)에서 이번 업로드분의 기준 연/월로
+    넘겨준다
     (관리자가 화면에서 지정, 기본값은 process_*.py 쪽에서 오늘로 처리).
 
     needs_valid_date 항목에 "_YYYYMM" 파일명 백필 업로드(2026-08-28,
@@ -476,7 +530,7 @@ def run_one(key: str, via_api: bool = False, valid_date: date | None = None) -> 
     (write_merged_with_valid_period)가 이미 순서 무관하게 안전하므로 두
     단계 순서가 바뀌어도 데이터는 항상 올바르지만, 건너뜀 경고를 줄이려고
     오래된 것부터 처리한다."""
-    item = _BY_KEY[key]
+    item = _resolve_item(key)
     raw_dir = _key_dir(key)
     buf = io.StringIO()
     source = 'API' if via_api else '업로드'
@@ -491,7 +545,11 @@ def run_one(key: str, via_api: bool = False, valid_date: date | None = None) -> 
                 save_upload(key, filename, content, slot=slot)
 
         if not has_upload(key):
-            _record_result(key, '실패', '업로드된 파일이 없습니다.', source)
+            if item['mode'] == 'dual':
+                msg = f"①{JOB_PROFILE_LEGACY_FILE}과 ② 내 리포트 *.xlsx가 둘 다 있어야 실행할 수 있습니다."
+            else:
+                msg = '업로드된 파일이 없습니다.'
+            _record_result(key, '실패', msg, source)
             return last_result(key)
 
         backfill_results = []
@@ -590,8 +648,11 @@ def start_run_via_api(keys: list[str]) -> bool:
 
 
 def runnable_keys() -> list[str]:
-    """'전체 실행' 대상 — 업로드된 파일이 있는 항목만(실패 방지)."""
-    return [item['key'] for item in MANIFEST if has_upload(item['key'])]
+    """'전체 실행' 대상 — 업로드된 파일이 있는 항목만(실패 방지). hidden_from_table
+    항목(팀/리더 참조 — 그 탭의 전용 실행 버튼으로만 돈다, 2026-09-01)은
+    "데이터 업데이트" 탭의 "전체 업데이트"에 섞이지 않게 뺀다."""
+    return [item['key'] for item in MANIFEST
+            if not item['hidden_from_table'] and has_upload(item['key'])]
 
 
 # ── 화면 렌더용 상태 스냅샷 ──────────────────────────────────────────────────
@@ -600,7 +661,8 @@ def snapshot() -> list[dict]:
     lock = lock_status()
     running_keys = set(lock['keys']) if lock else set()
     rows = []
-    for item in MANIFEST:
+    for base_item in MANIFEST:
+        item = _resolve_item(base_item['key'])
         result = last_result(item['key'])
         status = result.get('status', '')
         if item['key'] in running_keys:
@@ -611,6 +673,7 @@ def snapshot() -> list[dict]:
             'hint': item['hint'],
             'mode': item['mode'],
             'needs_valid_date': item['needs_valid_date'],
+            'hidden_from_table': item['hidden_from_table'],
             'has_upload': has_upload(item['key']),
             'has_api': has_api(item['key']),
             'uploaded_at': uploaded_at(item['key']),

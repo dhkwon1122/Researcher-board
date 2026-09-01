@@ -308,9 +308,10 @@ def _patents_text(pat_rows: pd.DataFrame) -> str:
 def _work_objective_text(row) -> str:
     if row is None:
         return '(데이터 없음)'
+    import process_work_objective as _pwo  # 회계연도 기준 대상 3개년(2026-09-01, 사용자 확정)
     lines = []
-    for year, col in (('2024', 'work_objective24'), ('2025', 'work_objective25'), ('2026', 'work_objective26')):
-        val = _clean(row.get(col, ''))
+    for year in _pwo.target_years():
+        val = _clean(row.get(f'work_objective{year}', ''))
         if val:
             lines.append(f'[{year}년]\n{val}')
     return '\n'.join(lines) if lines else '(데이터 없음)'

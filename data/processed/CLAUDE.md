@@ -7616,3 +7616,141 @@ Data/API 연동/최종실행이력/실행결과)를 갖는 것, 호버 아이콘
   0건이면 임베딩 유사도로 재시도) 둘 다 이미 임베딩을 쓴다.
 - 사용자에게 두 가지(업무목표 재개방 여부, 과제 문서 분석 신규 개방
   여부)를 어떻게 할지 물어봄 — 다음 턴에서 결정되면 반영 예정.
+
+## 2026-09-01 (3): "누적 시점(연/월)" 컬럼화 + 보유기술/팀·리더 참조 웹
+업데이트 제외·이동 + 직무이력 병칭 변경(+기능) + 업무목표 회계연도 롤링 스키마
+
+사용자 요청 4건(사전 질문 2건에 대한 답변 확정 후 진행 — 상세는 아래 각 항목).
+
+**1) "누적 시점(연/월)" 컬럼 신설 + 일(day) 제거 + 연/월 표기·순서 변경**:
+`needs_valid_date=True`인 항목(T&P/평가, 핵심기술, 직무이력, 업무목표
+3개)에 한해 "구분"/"업로드" 셀과 별개로 "누적 시점(연/월)" 컬럼을 새로
+추가(`pages/admin.py` `_data_update_table()` 헤더, `_data_update_row()`).
+기존 `dcc.DatePickerSingle`(일자까지 선택) 대신 `_valid_period_picker(key,
+year, month)`를 신설 — 연도 `dcc.Dropdown`(`{'type': 'du-valid-year', 'key':
+key}`, 올해 기준 -6년~+1년)과 월 `dcc.Dropdown`(`{'type': 'du-valid-month',
+'key': key}`, "1월"~"12월" 숫자 표기, `January` 등 영문 미사용)을 `dbc.Row`
+안에 연-왼쪽/월-오른쪽 순서로 배치(부연설명 문구 없음, 사용자 확정).
+`data_update_run()` 콜백의 `State`를 `du-valid-date`(단일 날짜)에서
+`du-valid-year`+`du-valid-month`(값+연도 id) 조합으로 바꾸고,
+`valid_dates_by_key`를 `date(year, month, 1)`로 구성.
+
+**2) 보유기술 웹 업데이트 제외 + 팀/리더 참조를 "데이터 업데이트" 탭에서
+"팀/리더 참조" 탭으로 이동**: `services/web_pipeline_runner.py`의
+MANIFEST에서 `tech_ownership` 항목을 완전히 삭제(주석으로 "필요 시
+`python pipeline/process_tech_ownership.py`를 CLI로 직접 실행" 안내만
+남김 — `pipeline/process_tech_ownership.py` 자체와 `tech_ownership.csv`는
+그대로 유지, 웹 업로드 등록에서만 뺌). `team_refer` 항목은 삭제하지 않고
+새 `hidden_from_table=True` 플래그를 추가(`MANIFEST`의 모든 항목에
+`setdefault`로 기본값 `False`)해 `_data_update_table()`의 렌더링에서만
+제외(`rows = [r for r in wpr.snapshot() if not r['hidden_from_table']]`)하고
+백엔드(`run_one()`/`save_upload()`/백필/실행이력)는 그대로 유지 — 이를
+재사용해 `pages/admin.py`에 `_team_refer_upload_section()`(업로드
+드롭존/백필 파일 목록/`_valid_period_picker('team_refer', ...)`/"실행"
+버튼/다운로드 버튼/전용 상태 영역 `team-refer-upload-status`)을 새로
+만들어 `_team_refer_tab()` 상단(안내 `Alert` 바로 아래, 기존 그리드
+CRUD용 "입력 날짜/행 추가/저장" 행 위)에 배치. 새 콜백
+`team_refer_run_upload()`(`team-refer-run-upload-btn` 클릭 →
+`wpr.start_run(['team_refer'], valid_dates=...)`)를 추가하고, 기존
+`data_update_on_upload()`/`data_update_poll()` 콜백에 3번째/4번째
+`Output`을 추가해 `team_refer` 관련 업로드·폴링 결과가 "데이터 업데이트"
+탭이 아니라 `team-refer-upload-status`로 라우팅되도록 분기 처리.
+
+**3) 직무이력 병칭 변경 — 라벨만이 아니라 기능도 변경(사용자 확정,
+"기능도 함께 변경")**: 라벨을 "① 구버전 이력(선택, 최초 1회)" / "②
+내 리포트" → "① '18.5월 이전" / "② '18.5월 이후"로 변경(`MANIFEST`의
+`job_profile` 항목 `label`/`hint`). 코드 조사 결과 기존엔 구버전 이력
+파일이 한 번 업로드되면 그 후 실행에서 다시 없어도 "실행 가능"으로
+간주됐는데(즉 "선택, 최초 1회"가 기능적으로는 이미 맞았음), 사용자가
+"② 내 리포트와 마찬가지로 항상 필요한 데이터"로 기능도 바꾸길 원해
+`has_upload()`의 `dual` 모드 판정을 "구버전 이력 파일과 신버전 파일이
+**둘 다** 있어야 함"으로 변경(`has_legacy and has_new`, 기존엔 사실상
+`has_new`만으로도 충분했음). `run_one()`이 파일 부족 시 주는 실패
+메시지도 "①임직원_직무이력('18.5월_이전).xlsx과 ② 내 리포트 *.xlsx가
+둘 다 있어야 실행할 수 있습니다."로 구체화.
+
+**4) 업무목표 회계연도 기준 3개년 롤링 — 스키마까지 전체 반영(사용자
+확정, "전체 반영(스키마도 실제 연도 기반으로 전환) — 추천")**: 기존
+`work_objective24/25/26`(실제 연도가 아니라 임의의 2자리 슬롯 번호,
+매년 안 밀림)을 `work_objective2024/2025/2026`처럼 실제 4자리 연도
+컬럼명으로 전환하고, 대상 3개년을 `services.evaluations.
+current_fiscal_year()`(3월 시작 회계연도, evaluations.csv가 이미 쓰던
+동일 규칙)로 매번 계산.
+- `pipeline/process_work_objective.py`에 `target_years(today=None) ->
+  [fy-2, fy-1, fy]`(회계연도 롤링 3개년 계산의 단일 소스)와 `_year_files()`
+  (연도→원본 파일명, 파일명은 실무 관행대로 2자리 접미사 유지: 예
+  `업무목표24.xlsx`)를 신설. `services/web_pipeline_runner.py`와
+  `pipeline/process_researcher_expertise.py` 둘 다 이 `target_years()`를
+  재사용(회계연도 계산 로직을 한 곳에서만 관리).
+- **레거시 자동 이관**: `_migrate_legacy_columns(df)` — 기존
+  `work_objective.csv`에 예전 컬럼명(`work_objective24` 등)이 남아있으면
+  `process()` 실행 시 자동으로 새 이름(`work_objective2024` 등)으로
+  이관(멱등적, 별도 마이그레이션 스크립트 불필요). **버그 발견 및 수정**:
+  최초 구현에서는 이 이관이 `process()` 내부 메모리상의 `existing`
+  변수에만 적용되고, `merge_utils.write_merged_with_valid_period()`가
+  내부적으로 `out_path`를 다시 직접 읽어(`read_existing()`) 예전
+  스키마를 그대로 다시 끌어오는 바람에, 저장된 최종 CSV에 신버전과
+  구버전 컬럼이 뒤섞여 남는 문제를 실제 합성 데이터로 재현해 확인함
+  (2024/2025 값은 구버전 컬럼에, 2026 값만 신버전 컬럼에 나뉘어 저장되고
+  두 컬럼 세트가 동시에 존재). 수정: `process()`가 이관 결과를 `existing`
+  컬럼명이 실제로 바뀐 경우에 한해 `out_path`에도 먼저 써 두어(`write_merged_
+  with_valid_period()` 호출 전), 그 함수의 내부 재읽기도 이미 이관된
+  스키마를 보게 함. 합성 데이터로 재검증(2026분만 새로 업로드 + 기존에
+  예전 스키마로 저장된 2명 데이터가 있는 상황)해 컬럼 중복 없이 정상
+  병합되는 것, 두 번째 실행도 안정적인 것(멱등성) 확인.
+- **`services/web_pipeline_runner.py`**: MANIFEST의 `work_objective_24/
+  _25/_26`(연도가 키 이름에 그대로 박혀 있던 예전 방식)을 연도와 무관한
+  고정 위치 키 `work_objective_1/_2/_3`(오래된 순)로 교체 — 장기 실행되는
+  Dash 서버 프로세스에서 MANIFEST는 import 시점 1회만 평가되므로, `label`/
+  `hint`/`dest_filename`을 모듈 import 시점에 고정해두면 회계연도가
+  바뀌어도 서버를 재시작하기 전까지 갱신되지 않는 문제가 생긴다 — 이를
+  피하려고 새 `_resolve_item(key)`가 `work_objective_1/_2/_3` 키에 한해
+  매 호출마다(`save_upload()`/`has_upload()`/`run_one()`/`snapshot()`)
+  현재 회계연도 기준으로 `label`(예: "업무목표24")/`hint`/`dest_filename`을
+  새로 계산해 반환한다. 기존 `_BY_KEY[key]` 직접 접근을 전부
+  `_resolve_item(key)`로 교체.
+- **`pipeline/sources.py`**: 정적 3개 튜플을 `_WORK_OBJECTIVE_SOURCES`(모듈
+  import 시점에 `current_fiscal_year()`로 계산한 동적 리스트, 파이썬
+  리스트 언패킹 `*_WORK_OBJECTIVE_SOURCES`로 `SOURCES`에 삽입)로 교체 —
+  이 스크립트는 1회성 CLI 실행에서만 쓰여 import 시점 계산이 안전하다
+  (장기 실행 서버가 아님, `web_pipeline_runner.py`와의 차이).
+- **`services/data_labels.py` 버그 수정**: `label_for()`의 업무목표 컬럼
+  라벨링 로직이 `work_objective24`처럼 항상 2자리 접미사라고 가정하고
+  `f'업무목표 20{suffix}'`로 "20"을 붙여 4자리를 만들었는데, 새 스키마는
+  컬럼명 자체가 이미 4자리 실제 연도(`work_objective2024`)라 그대로
+  적용하면 "업무목표 202024"처럼 잘못 표시되는 버그를 발견해 수정
+  (`suffix`가 4자리면 그대로, 2자리(예전 미이관 데이터 안전장치)면 "20"을
+  붙이도록 분기). `label_for('work_objective2024')` 등으로 직접 호출해
+  "업무목표 2024"/"업무목표 2025"로 정확히 나오는 것 확인.
+- `pipeline/backfill_utils.py`, `pipeline/run_pipeline.py`의 관련 예시/설명
+  주석도 새 키 이름(`work_objective_1~3`)·스키마(`work_objective{4자리
+  연도}`) 기준으로 갱신.
+
+검증: `services.evaluations.current_fiscal_year()` 규칙대로
+`target_years()`가 오늘(2026-09) `[2024, 2025, 2026]`, 아직 FY2026인
+2027-02 `[2024, 2025, 2026]`, FY2027로 넘어간 2027-03 `[2025, 2026, 2027]`을
+정확히 반환하는 것을 직접 실행으로 확인(사용자가 든 예시 "'27년 3월부터는
+업무목표25, 26, 27"과 일치). `wpr.snapshot()`을 직접 호출해
+`work_objective_1/_2/_3`가 오늘 기준 "업무목표24"/"25"/"26"으로 정확히
+라벨링되는 것, `tech_ownership`이 MANIFEST에서 완전히 빠진 것, `team_refer`가
+`hidden_from_table=True`인 것, 화면에 보이는 행 수가 23개 중 2개(보유기술/
+팀·리더 참조) 제외한 21개인 것을 확인. `pages.admin._data_update_table()`/
+`_team_refer_upload_section()`을 실제 Dash 앱 인스턴스(`use_pages` 등록 포함)
+로 직접 렌더링해 업무목표 3개 행 라벨/파일명 힌트, "① '18.5월 이전"/"②
+'18.5월 이후" 라벨, 연도 드롭다운(올해 기준 2020~2027, 왼쪽)/월 드롭다운
+("1월"~"12월", 오른쪽, 기본값이 오늘 연/월과 일치)이 모두 정확히 렌더링되는
+것을 확인. `_migrate_legacy_columns()`를 합성 구버전 스키마 DataFrame으로
+호출해 정확히 이관되고 재호출 시 멱등적인 것, `process_work_objective.
+process()` 전체를 합성 xlsx 3개로 엔드투엔드 실행해 신버전 컬럼만 있는
+정상 결과·재실행 안정성·구버전 데이터 병존 상황에서의 정상 이관(위 버그
+수정 후)을 모두 확인. 변경된 전체 파일(`pages/admin.py`,
+`services/web_pipeline_runner.py`, `pipeline/process_work_objective.py`,
+`pipeline/sources.py`, `pipeline/process_researcher_expertise.py`,
+`services/data_labels.py`, `pipeline/backfill_utils.py`,
+`pipeline/run_pipeline.py`) `py_compile` 통과.
+
+**미검증**: 실제 브라우저에서 새 연/월 드롭다운 조작, 팀/리더 참조 탭의
+실제 업로드→실행→상태 갱신 흐름, 실제 프로덕션 `work_objective.csv`(구버전
+스키마일 가능성)에 대한 실제 이관 실행 결과, 실제 `내 리포트`/`구버전
+이력` 두 xlsx 파일을 이용한 직무이력 업로드 검증(합성 데이터로만 로직
+확인).
