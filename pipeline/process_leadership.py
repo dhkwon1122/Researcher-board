@@ -153,6 +153,23 @@ def process(raw_dir: str = RAW_DIR) -> bool:
         print(f'[WARN] Knox ID 매칭 실패 {len(unmatched)}건(제외): {shown}{more}')
     df = df[df['researcher_id'] != ''].copy()
 
+    # 매칭 실패가 전부(또는 사실상 전부)라 남은 행이 하나도 없으면, 아래
+    # groupby/점수 계산이 빈 리스트로 DataFrame을 만들다 컬럼 자체가 없어져
+    # 'evaluator_group' KeyError로 죽던 버그가 있었다(2026-09-01, 실제
+    # 프로덕션에서 재현·확인). Knox ID/researcher_id가 안 맞는 것 자체는
+    # "그 사람 데이터를 지금 못 붙인다"는 데이터 이슈일 뿐, 파이프라인
+    # 전체가 죽을 이유는 아니다(사용자 확정 — 매칭은 나중에 다시 시도해도
+    # 됨) — 기존 leadership.csv/leadership_comments.csv는 그대로 두고 이번
+    # 파일은 안전하게 건너뛴다.
+    if df.empty:
+        print(
+            '[WARN] Knox ID가 researchers.csv의 knox_id와 하나도 매칭되지 않아 '
+            '이번 리더십진단 파일을 반영하지 못했습니다(기존 leadership.csv는 그대로 유지).\n'
+            '  확인: 리더십진단.xlsx의 "진단대상자ID" 값이 researchers.csv(인력현황)의 '
+            'knox_id 컬럼과 형식이 같은지 점검하세요.'
+        )
+        return False
+
     # 연도
     if COL_YEAR and COL_YEAR in df.columns:
         df['year'] = pd.to_numeric(df[COL_YEAR], errors='coerce').fillna(DEFAULT_YEAR).astype(int)
