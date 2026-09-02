@@ -103,6 +103,25 @@ pipeline/excel_reader.read_xlsx()를 그대로 쓴다 — Windows PC에 Excel이
 RAW_DIR을 CLI 인자로 오버라이드할 수 있게 했다 — 출력은 항상 저장소 안
 OUT_DIR(data/processed/past_team_refer/)로 저장된다(원본 폴더 위치와 무관).
 
+이전 버전과의 차이(6차, 이번 수정) — 저장 후 A열(1단계부서명) 백필 단계 추가:
+같은 원본 파일에서 "1단계부서명"/"2단계부서명" 2개 헤더로 보조 매핑표("을":
+2단계부서명 → 1단계부서명, `_build_upper_level_lookup()`)를 하나 더 만들고,
+이미 정렬·저장 대상으로 확정된 3열 데이터("갑")의 빈 A열을 채운다
+(`_fill_upper_level()`, 사용자 확정 2026-09-02):
+  - A가 비어 있고 B(현소속부서명)가 "종합기술원"/"SAIT"(이전 버전의
+    ROOT_MARKERS와 동일 개념 — 이미 최상위)면 을 조회 없이 바로 A=B.
+  - 그 외 A가 비어 있으면 을에서 B(현소속부서명)로 2단계부서명을 찾아,
+    일치하면 그 1단계부서명을 A로, 못 찾으면 A=B(현소속부서명 그대로).
+  - (원래부터 A가 채워져 있던 행 포함, 모든 행 대상) A가
+    "대표이사"/"종합기술원"/"SAIT"면 B 값으로 교체.
+"2단계부서명" 헤더가 원본에 없어 을을 못 만들면 이 백필 단계만 건너뛰고
+3열 추출·저장(기존 흐름)은 그대로 진행한다(사용자 확정) — 이 경우 결과
+줄에 "A열 백필 생략" 비고가 함께 출력된다. 을 자체는 파일로 저장하지
+않고(사용자 확정) 조회용으로만 잠깐 만들어 쓴다. 백필로 A 값이 바뀌면
+최종 정렬(A 1순위/B 2순위/C 3순위)이 깨지지 않도록 재정렬하고, 두 행이
+백필 후 완전히 같아졌을 수 있어 중복도 다시 제거한 뒤 저장한다(기존
+<원본파일명>_team_refer.csv를 그대로 덮어씀, 사용자 확정 — 별도 파일 안 만듦).
+
 사용법:
   python scripts/build_past_team_refer.py
   python scripts/build_past_team_refer.py "C:\\경로\\원본이_정상적으로_열리는_폴더"
@@ -135,6 +154,18 @@ HEADERS = [
 ]
 HEADER_TEXTS = [h for h, _ in HEADERS]
 
+# 저장(6) 이후 A열(1단계부서명) 백필 단계(사용자 확정 2026-09-02)에서 쓰는
+# 보조 매핑표("을")의 원본 헤더 — 같은 원본 파일에서 위 HEADER_TEXTS와는
+# 다른 헤더 쌍을 한 번 더 찾는다.
+UPPER_HEADERS = ['1단계부서명', '2단계부서명']
+
+# "이미 최상위" 마커(이전 버전 스크립트의 ROOT_MARKERS와 동일 개념).
+# f) 갑의 B(현소속부서명)가 이 값이면 을 조회 없이 바로 A=B.
+_ROOT_MARKERS_B = {'종합기술원', 'SAIT'}
+# g) 갑의 A(1단계부서명)가 이 값이면(원래부터 채워져 있던 행 포함, 모든 행
+# 대상) B 값으로 교체 — '대표이사'까지 포함해 f보다 대상이 하나 더 많다.
+_ROOT_MARKERS_A = {'대표이사', '종합기술원', 'SAIT'}
+
 
 _OUTPUT_SUFFIX = '_team_refer.csv'
 
@@ -162,21 +193,85 @@ def _read_source(path: str):
     return read_xlsx(path, header_row=1)
 
 
+def _build_upper_level_lookup(path: str) -> dict | None:
+    """같은 원본 파일에서 "1단계부서명"/"2단계부서명" 2개 헤더로 보조 매핑표
+    ("을": 2단계부서명 → 1단계부서명)를 만든다(사용자 확정 2026-09-02, a~c).
+    두 헤더 중 하나라도 없으면 None을 반환 — 호출부(process_file)가 이
+    경우 백필 단계 자체를 건너뛴다(3열 추출/저장은 정상 진행, 사용자 확정).
+    "을" 자체는 파일로 저장하지 않고 이 함수 안에서만 만들어 조회용 dict로
+    돌려준다(사용자 확정)."""
+    try:
+        df = _read_source(path)
+    except Exception:
+        return None
+    df.columns = [str(c).strip() for c in df.columns]
+    if any(h not in df.columns for h in UPPER_HEADERS):
+        return None
+
+    rows = []
+    seen = set()
+    for _, row in df[UPPER_HEADERS].iterrows():
+        vals = tuple(clean_str(row[h]) for h in UPPER_HEADERS)
+        if not any(vals):          # A+B 전부 빈 행은 제외(일부만 빈 행은 유지, b)
+            continue
+        if vals in seen:           # A+B 조합 중복 제거(먼저 나온 행 유지, b)
+            continue
+        seen.add(vals)
+        rows.append(vals)
+
+    # 안정 정렬을 B→A 순으로 연쇄 적용 → 최종 A 1순위/B 2순위 오름차순(c).
+    rows.sort(key=lambda r: r[1])
+    rows.sort(key=lambda r: r[0])
+
+    # 조회용 dict(2단계부서명 → 1단계부서명) — 같은 B가 서로 다른 A에 걸려
+    # 있는 드문 경우, 위에서 A 오름차순으로 정렬해뒀으므로 사전식으로 가장
+    # 앞선(작은) A가 우선 채택된다(setdefault로 첫 값만 유지).
+    lookup: dict = {}
+    for a, b in rows:
+        lookup.setdefault(b, a)
+    return lookup
+
+
+def _fill_upper_level(rows: list, upper_lookup: dict) -> list:
+    """갑(A=1단계부서명, B=현소속부서명, C=비공식소속부서명)의 빈 A열을
+    upper_lookup("을": 2단계부서명 → 1단계부서명)으로 채운다(사용자 확정
+    2026-09-02, d~g).
+      f) A가 비어 있고 B가 이미 최상위 마커(_ROOT_MARKERS_B)면 을 조회 없이
+         바로 A=B(을 조회보다 먼저 체크).
+      d) A가 비어 있고 위 f에 해당하지 않으면 을에서 B를 찾아 있으면 그
+         1단계부서명(을의 A)을 갑의 A로.
+      e) 을에서도 못 찾으면 A=B(현소속부서명 그대로).
+      g) (원래부터 A가 채워져 있던 행 포함) A가 최상위 마커(_ROOT_MARKERS_A)
+         면 B 값으로 교체 — 모든 행에 적용."""
+    filled = []
+    for a, b, c in rows:
+        if not a:
+            if b in _ROOT_MARKERS_B:
+                a = b                          # f
+            else:
+                a = upper_lookup.get(b, b)     # d(찾음) / e(못 찾음 → B 그대로)
+        if a in _ROOT_MARKERS_A:
+            a = b                              # g
+        filled.append((a, b, c))
+    return filled
+
+
 def process_file(path: str) -> tuple:
-    """한 원본 파일을 처리해 (성공 여부, 출력 경로 또는 None, 행 수, 에러 메시지) 반환.
-    read_xlsx()의 header_row는 0-based이므로 1을 넘기면 물리적 2번째 행이
-    헤더가 된다(1번째 행은 자동으로 무시). pipeline/process_researchers.py가
-    원본 xlsx를 직접 읽는 경로와 동일하게 읽은 직후 컬럼명을 한 번 더 strip한다."""
+    """한 원본 파일을 처리해 (성공 여부, 출력 경로 또는 None, 행 수, 에러 메시지,
+    비고) 반환. read_xlsx()의 header_row는 0-based이므로 1을 넘기면 물리적
+    2번째 행이 헤더가 된다(1번째 행은 자동으로 무시).
+    pipeline/process_researchers.py가 원본 xlsx를 직접 읽는 경로와 동일하게
+    읽은 직후 컬럼명을 한 번 더 strip한다."""
     try:
         df = _read_source(path)
     except Exception as exc:
-        return False, None, 0, f'파일 읽기 실패: {exc}'
+        return False, None, 0, f'파일 읽기 실패: {exc}', None
 
     df.columns = [str(c).strip() for c in df.columns]
 
     missing = [h for h in HEADER_TEXTS if h not in df.columns]
     if missing:
-        return False, None, 0, f'헤더 없음: {", ".join(missing)}'
+        return False, None, 0, f'헤더 없음: {", ".join(missing)}', None
 
     # 3개 컬럼 값을 그대로 뽑는다(가공 없음) — clean_str()으로 None/NaN류만
     # 빈 문자열로 통일(excel_reader.py 공통 관례).
@@ -196,6 +291,30 @@ def process_file(path: str) -> tuple:
     rows.sort(key=lambda r: r[1])
     rows.sort(key=lambda r: r[0])
 
+    # 저장(6) 이후 A열(1단계부서명) 백필 단계(사용자 확정 2026-09-02, d~g) —
+    # "2단계부서명" 헤더가 없어 을을 못 만들면 이 단계만 건너뛰고 3열 결과는
+    # 그대로 저장한다(사용자 확정).
+    note = None
+    upper_lookup = _build_upper_level_lookup(path)
+    if upper_lookup is None:
+        note = 'A열 백필 생략("2단계부서명" 헤더 없음)'
+    else:
+        rows = _fill_upper_level(rows, upper_lookup)
+        # 백필로 A값이 바뀐 행이 있으므로 최종 오름차순(A 1순위/B 2순위/C
+        # 3순위)이 깨지지 않도록 다시 정렬하고, 백필 후 (A,B,C)가 서로
+        # 겹치게 된 행이 생겼을 수 있어 중복도 다시 제거한다.
+        rows.sort(key=lambda r: r[2])
+        rows.sort(key=lambda r: r[1])
+        rows.sort(key=lambda r: r[0])
+        dedup_rows = []
+        seen = set()
+        for r in rows:
+            if r in seen:
+                continue
+            seen.add(r)
+            dedup_rows.append(r)
+        rows = dedup_rows
+
     os.makedirs(OUT_DIR, exist_ok=True)
     base = os.path.splitext(os.path.basename(path))[0]
     out_path = os.path.join(OUT_DIR, f'{base}_team_refer.csv')
@@ -206,7 +325,7 @@ def process_file(path: str) -> tuple:
     out_df = pd.DataFrame(rows, columns=HEADER_TEXTS)
     out_df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
 
-    return True, out_path, len(rows), None
+    return True, out_path, len(rows), None, note
 
 
 def main(raw_dir: str = RAW_DIR):
@@ -220,10 +339,11 @@ def main(raw_dir: str = RAW_DIR):
     fail = 0
     for path in files:
         name = os.path.basename(path)
-        ok, out_path, n_rows, err = process_file(path)
+        ok, out_path, n_rows, err, note = process_file(path)
         if ok:
             success += 1
-            print(f'[OK]   {name} → {os.path.basename(out_path)} ({n_rows}행)')
+            suffix = f' — {note}' if note else ''
+            print(f'[OK]   {name} → {os.path.basename(out_path)} ({n_rows}행){suffix}')
         else:
             fail += 1
             print(f'[실패] {name}: {err}', file=sys.stderr)
