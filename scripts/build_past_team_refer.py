@@ -28,15 +28,28 @@ researchers.csv를 비롯한 이 저장소의 다른 모든 csv 산출물은 헤
 바로 있으므로, "동일하게"라는 요청에 맞춰 이 스크립트의 출력도 1행 헤더로
 통일한다.
 
-읽기 쪽 비교 — pipeline/process_researchers.py와 다른 점 없음(그대로 유지):
-researchers.csv는 평소엔 원본 xlsx를 직접 안 읽고 사전에 DRM을 제거해 둔
-data/raw_csv/researchers.csv(또는 DB)를 읽지만, 관리자 웹 업로드로 원본
-xlsx를 직접 받을 때는 `find_latest()`로 파일을 찾은 뒤
+읽기 쪽 비교 — pipeline/process_researchers.py와 호출 파라미터는 동일(그대로
+유지): researchers.csv는 평소엔 원본 xlsx를 직접 안 읽고 사전에 DRM을
+제거해 둔 data/raw_csv/researchers.csv(또는 DB)를 읽지만, 관리자 웹 업로드로
+원본 xlsx를 직접 받을 때는 `find_latest()`로 파일을 찾은 뒤
 `read_xlsx(path, header_row=_RESEARCHERS_HEADER_ROW)`로 읽고 바로 이어서
 `df.columns = [str(c).strip() for c in df.columns]`로 컬럼명을 한 번 더
-정리한다 — 이 스크립트가 원본 DRM xlsx를 직접 읽는 유일한 경로도 정확히
-이 방식과 같다(read_xlsx()가 내부적으로 헤더를 이미 strip하지만, 만일을
-대비해 동일하게 한 번 더 strip한다).
+정리한다 — 이 스크립트도 header_row/컬럼 재-strip은 정확히 이 방식과 같다.
+
+이전 버전과의 차이(3차, 이번 수정) — 읽기 실패(COM 예외) 대응, visible=True:
+"researchers.csv 처리방식과 동일하게" 요청에 맞춰 위와 같이 호출 파라미터를
+전부 대조했지만 차이가 없었는데도, 실제로 "Excel file format cannot be
+determined, you must specify an engine manually"(pandas 폴백 실패)와
+"(-2147352567, '예외가 발생했습니다.', (0, 'Microsoft Excel', ...)"(xlwings
+COM 자동화 자체의 실패)가 함께 보고됐다 — 이 COM 예외 계열은 이 스크립트가
+2026-08-31에 이미 한 번 겪은 것과 같은 부류다("Excel Protected View 팝업
+등으로 자동화가 막힐 때 흔한 증상", data/processed/CLAUDE.md 참고): DRM
+파일 중 일부는 열 때 상호작용이 필요한 팝업이 뜨는데, xlwings가 기본으로
+쓰는 숨김(백그라운드) Excel 창에서는 그 팝업을 사용자가 볼 수도 닫을 수도
+없어 자동화 자체가 막힌다. pipeline/excel_reader.read_xlsx()에 `visible`
+매개변수를 새로 추가(다른 모든 기존 호출부는 기본값 False라 동작 그대로,
+이 스크립트만 명시적으로 True 전달)해 Excel 창을 화면에 띄운 채로 열도록
+했다 — 팝업이 뜨더라도 사용자가 직접 보고 처리할 수 있다.
 
 입력: data/raw/past_team_refer/ 안의 모든 .xlsx (Excel이 파일을 열어 두었을 때
 생기는 임시 잠금 파일 "~$*.xlsx"는 제외). 각 파일은 2번째 행이 헤더이고 1번째
@@ -110,7 +123,15 @@ def process_file(path: str) -> tuple:
     원본 xlsx를 직접 읽는 경로와 동일하게 read_xlsx() 직후 컬럼명을 한 번 더
     strip한다."""
     try:
-        df = read_xlsx(path, sheet=0, header_row=1)
+        # visible=True — 이 폴더의 파일들이 xlwings 백그라운드(숨김) 자동화로는
+        # "Excel file format cannot be determined"(pandas 폴백)와 COM 예외
+        # (-2147352567 등, Excel 쪽에서 "예외가 발생했습니다")로 열기 자체가
+        # 실패하는 것을 실사용에서 확인(2026-09-02) — DRM 관련 팝업 등 상호작용이
+        # 필요한 경우 숨김 창으로는 자동화가 막히는 것으로 보인다. Excel 창을
+        # 화면에 띄워 열면(pipeline/excel_reader.read_xlsx()의 visible 옵션,
+        # 이번에 추가) 필요시 사용자가 직접 팝업을 처리할 수 있어 이 문제를
+        # 피할 수 있다.
+        df = read_xlsx(path, sheet=0, header_row=1, visible=True)
     except Exception as exc:
         return False, None, 0, f'파일 읽기 실패: {exc}'
 

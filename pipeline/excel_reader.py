@@ -112,7 +112,8 @@ def _first_nonblank_row(rows: list[list]) -> int:
     return 0
 
 
-def read_xlsx(file_path: str, sheet: int | str = 0, header_row: int | str = 0) -> pd.DataFrame:
+def read_xlsx(file_path: str, sheet: int | str = 0, header_row: int | str = 0,
+              visible: bool = False) -> pd.DataFrame:
     """
     xlwings를 사용하여 xlsx 파일을 DataFrame으로 읽습니다.
 
@@ -126,6 +127,17 @@ def read_xlsx(file_path: str, sheet: int | str = 0, header_row: int | str = 0) -
         header_row: 헤더 행 인덱스(0-based). 기본값 0 = 첫 번째 행.
                     'auto' 를 넘기면 앞쪽 공란 행을 건너뛰고 실제 값이 있는
                     첫 행을 헤더로 자동 인식합니다 (엑셀 절대 행 기준).
+        visible: True면 xlwings가 Excel 창을 화면에 띄운 채로 연다(기본값
+                 False = 백그라운드/숨김). DRM 파일 중 일부는 Protected
+                 View 등 상호작용이 필요한 팝업이 자동화(headless)로는
+                 렌더링/해제되지 않아 COM 예외(예: -2146827284,
+                 -2147352567 계열, "예외가 발생했습니다")로 열기 자체가
+                 실패하는 경우가 있다(scripts/build_past_team_refer.py,
+                 2026-09-02 실사용 확인) — 이럴 때 visible=True로 창을
+                 보이게 하면 그런 팝업이 뜨더라도(필요시 사용자가 직접
+                 닫아줄 수 있어) 자동화가 막히지 않을 수 있다. 기본값은
+                 기존 호출부(대부분 서버에서 무인 배치 실행) 동작을 그대로
+                 유지하기 위해 False로 둔다.
 
     Returns:
         pandas DataFrame
@@ -138,7 +150,7 @@ def read_xlsx(file_path: str, sheet: int | str = 0, header_row: int | str = 0) -
     app = None
     wb = None
     try:
-        app = xw.App(visible=False, add_book=False)
+        app = xw.App(visible=visible, add_book=False)
         wb = app.books.open(str(file_path))
 
         if isinstance(sheet, int):
