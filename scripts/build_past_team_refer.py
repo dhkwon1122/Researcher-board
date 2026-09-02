@@ -36,24 +36,40 @@ researchers.csv를 비롯한 이 저장소의 다른 모든 csv 산출물은 헤
 `df.columns = [str(c).strip() for c in df.columns]`로 컬럼명을 한 번 더
 정리한다 — 이 스크립트도 header_row/컬럼 재-strip은 정확히 이 방식과 같다.
 
-이전 버전과의 차이(3차, 이번 수정) — 읽기 실패(COM 예외) 대응, visible=True:
+이전 버전과의 차이(3차) — visible=True 시도했으나 동일 실패, 되돌림:
 "researchers.csv 처리방식과 동일하게" 요청에 맞춰 위와 같이 호출 파라미터를
 전부 대조했지만 차이가 없었는데도, 실제로 "Excel file format cannot be
 determined, you must specify an engine manually"(pandas 폴백 실패)와
 "(-2147352567, '예외가 발생했습니다.', (0, 'Microsoft Excel', ...)"(xlwings
-COM 자동화 자체의 실패)가 함께 보고됐다 — 이 COM 예외 계열은 이 스크립트가
-2026-08-31에 이미 한 번 겪은 것과 같은 부류다("Excel Protected View 팝업
-등으로 자동화가 막힐 때 흔한 증상", data/processed/CLAUDE.md 참고): DRM
-파일 중 일부는 열 때 상호작용이 필요한 팝업이 뜨는데, xlwings가 기본으로
-쓰는 숨김(백그라운드) Excel 창에서는 그 팝업을 사용자가 볼 수도 닫을 수도
-없어 자동화 자체가 막힌다. pipeline/excel_reader.read_xlsx()에 `visible`
-매개변수를 새로 추가(다른 모든 기존 호출부는 기본값 False라 동작 그대로,
-이 스크립트만 명시적으로 True 전달)해 Excel 창을 화면에 띄운 채로 열도록
-했다 — 팝업이 뜨더라도 사용자가 직접 보고 처리할 수 있다.
+COM 자동화 자체의 실패)가 보고됐다. pipeline/excel_reader.read_xlsx()에
+`visible` 매개변수를 추가해 Excel 창을 화면에 띄운 채로 열어봤지만(2026-09-02
+1차 수정) 사용자가 로컬에서 재현한 결과 여전히 동일한 에러 — 즉 창이
+보이는지 여부와 무관하게 xlwings의 `app.books.open()` 호출 자체가 이
+파일들에 대해 곧바로 실패한다. 이는 (팝업이 안 떠서가 아니라) xlwings/COM
+자동화가 이 DRM 파일의 셸(탐색기/더블클릭) 기반 복호화 후킹을 아예 거치지
+못해서일 가능성이 높다 — 이 경우 코드로는 해결할 수 없고, 파일을 먼저
+수동으로(탐색기에서 열어 DRM 복호화 → 다른 이름으로 저장) 평문으로 만들어야
+한다.
 
-입력: data/raw/past_team_refer/ 안의 모든 .xlsx (Excel이 파일을 열어 두었을 때
-생기는 임시 잠금 파일 "~$*.xlsx"는 제외). 각 파일은 2번째 행이 헤더이고 1번째
-행은 무시한다. 시트는 항상 첫 번째 시트만 쓴다(사용자 확정).
+이전 버전과의 차이(4차, 이번 수정) — 이미 복호화된 .csv도 입력으로 허용:
+위 진단에 따라, 사용자가 각 원본을 Excel에서 수동으로 열어(DRM 복호화)
+"다른 이름으로 저장"으로 .csv로 저장해 두면 이 스크립트가 xlwings/read_xlsx()
+를 아예 거치지 않고 그 .csv를 바로 읽도록 지원을 추가했다 —
+`pipeline/source_reader.read_source()`가 (DB 다음으로) raw_csv를 읽는 방식과
+정확히 동일하게 `pd.read_csv(path, encoding='utf-8-sig', dtype=str).fillna('')`
+로 읽는다(이 경로는 xlwings/Excel/COM이 전혀 필요 없어 DRM 자동화 문제와
+무관 — "researchers.csv 처리방식과 동일하게"에 가장 가깝게 맞춘 부분).
+.xlsx는 기존처럼 read_xlsx()로 시도하되 visible 인자는 빼서(효과가 없었으므로)
+xlsx_to_raw_csv.py의 실제 호출과 다시 완전히 동일하게 맞췄다.
+
+입력: data/raw/past_team_refer/ 안의 모든 .xlsx 또는 .csv (Excel이 파일을
+열어 두었을 때 생기는 임시 잠금 파일 "~$*.xlsx"와 이 스크립트 자신이 만든
+출력 파일 패턴 "*_team_refer.csv"는 제외). .xlsx는 2번째 행이 헤더이고
+1번째 행은 무시, 시트는 항상 첫 번째 시트만 쓴다. 이미 DRM이 제거된 .csv는
+1번째 행을 헤더로 그대로 읽는다(엑셀에서 "다른 이름으로 저장"한 결과는
+보통 헤더가 그대로 1행에 있다 — 만약 원본처럼 2행에 헤더가 있는 형태로
+저장했다면 이 스크립트가 헤더를 못 찾아 실패 처리되니 1행 헤더로 저장해야
+한다).
 
 출력: data/processed/past_team_refer/<원본파일명>_team_refer.csv (utf-8-sig,
 researchers.csv와 동일한 pandas to_csv 저장 방식)
@@ -109,29 +125,39 @@ HEADERS = [
 HEADER_TEXTS = [h for h, _ in HEADERS]
 
 
+_OUTPUT_SUFFIX = '_team_refer.csv'
+
+
 def _list_source_files() -> list:
-    """RAW_DIR 안의 모든 .xlsx — Excel이 파일을 열어 둔 동안 생기는 임시
-    잠금 파일("~$"로 시작)은 제외한다."""
-    all_xlsx = glob.glob(os.path.join(RAW_DIR, '*.xlsx'))
-    return sorted(p for p in all_xlsx if not os.path.basename(p).startswith('~$'))
+    """RAW_DIR 안의 모든 .xlsx/.csv — Excel이 파일을 열어 둔 동안 생기는 임시
+    잠금 파일("~$"로 시작)과 이 스크립트 자신이 만든 출력 파일(재실행 시
+    자기 출력을 다시 원본으로 잘못 집어먹지 않도록)은 제외한다."""
+    candidates = glob.glob(os.path.join(RAW_DIR, '*.xlsx')) + glob.glob(os.path.join(RAW_DIR, '*.csv'))
+    return sorted(
+        p for p in candidates
+        if not os.path.basename(p).startswith('~$') and not p.endswith(_OUTPUT_SUFFIX)
+    )
+
+
+def _read_source(path: str):
+    """.xlsx는 read_xlsx()(xlwings, DRM 파일용)로, 이미 DRM이 제거된 .csv는
+    xlwings/Excel 없이 pipeline/source_reader.read_source()와 정확히 동일한
+    방식(`pd.read_csv(path, encoding='utf-8-sig', dtype=str).fillna('')`)으로
+    읽는다 — csv 경로는 DRM 자동화 문제와 아예 무관하다."""
+    if path.lower().endswith('.csv'):
+        return pd.read_csv(path, encoding='utf-8-sig', dtype=str).fillna('')
+    # xlsx_to_raw_csv.py의 실제 호출(`read_xlsx(src_path, header_row=header_row)`)과
+    # 정확히 동일 — sheet 인자도 생략해 기본값(0)을 그대로 쓴다.
+    return read_xlsx(path, header_row=1)
 
 
 def process_file(path: str) -> tuple:
     """한 원본 파일을 처리해 (성공 여부, 출력 경로 또는 None, 행 수, 에러 메시지) 반환.
     read_xlsx()의 header_row는 0-based이므로 1을 넘기면 물리적 2번째 행이
     헤더가 된다(1번째 행은 자동으로 무시). pipeline/process_researchers.py가
-    원본 xlsx를 직접 읽는 경로와 동일하게 read_xlsx() 직후 컬럼명을 한 번 더
-    strip한다."""
+    원본 xlsx를 직접 읽는 경로와 동일하게 읽은 직후 컬럼명을 한 번 더 strip한다."""
     try:
-        # visible=True — 이 폴더의 파일들이 xlwings 백그라운드(숨김) 자동화로는
-        # "Excel file format cannot be determined"(pandas 폴백)와 COM 예외
-        # (-2147352567 등, Excel 쪽에서 "예외가 발생했습니다")로 열기 자체가
-        # 실패하는 것을 실사용에서 확인(2026-09-02) — DRM 관련 팝업 등 상호작용이
-        # 필요한 경우 숨김 창으로는 자동화가 막히는 것으로 보인다. Excel 창을
-        # 화면에 띄워 열면(pipeline/excel_reader.read_xlsx()의 visible 옵션,
-        # 이번에 추가) 필요시 사용자가 직접 팝업을 처리할 수 있어 이 문제를
-        # 피할 수 있다.
-        df = read_xlsx(path, sheet=0, header_row=1, visible=True)
+        df = _read_source(path)
     except Exception as exc:
         return False, None, 0, f'파일 읽기 실패: {exc}'
 
