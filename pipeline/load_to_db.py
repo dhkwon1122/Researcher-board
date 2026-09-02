@@ -108,10 +108,10 @@ def _lock_down_file(path: str, name: str) -> None:
         print(f'[load_to_db] 권한 변경 실패(무시하고 계속) {name}: {exc}')
 
 
-def _load_csv_tables(engine) -> int:
+def _load_csv_tables(engine, tables: list[str] | None = None) -> int:
     from sqlalchemy import Text
     loaded = 0
-    for name in TABLES:
+    for name in (tables if tables is not None else TABLES):
         path = os.path.join(DATA_DIR, f'{name}.csv')
         if not os.path.exists(path):
             print(f'[load_to_db] CSV 없음, 건너뜀: {name}')
@@ -191,7 +191,14 @@ def _apply_post_load_ddl(engine):
     print('[load_to_db] 인덱스/유니크 적용 완료')
 
 
-def load():
+def load(tables: list[str] | None = None):
+    """DATABASE_URL의 PostgreSQL로 CSV/JSON을 적재한다.
+
+    tables를 주면(예: ['team_refer']) 그 테이블들만 적재한다(관리자 화면의
+    "팀/리더 참조" 탭처럼 특정 테이블 하나만 즉시 DB에 반영하고 싶을 때,
+    2026-09-02 추가) — JSON_TABLES는 건드리지 않는다(CSV 테이블 전용
+    기능이라). 생략하면(기본값) 지금까지처럼 TABLES + JSON_TABLES 전체를
+    적재한다(기존 동작 그대로)."""
     engine = get_engine()
     if engine is None:
         from services.db import ENV_PATH
@@ -205,8 +212,9 @@ def load():
               '3) pip install -r requirements.txt 실행했는지')
         return
 
-    loaded = _load_csv_tables(engine)
-    loaded += _load_json_tables(engine)
+    loaded = _load_csv_tables(engine, tables=tables)
+    if tables is None:
+        loaded += _load_json_tables(engine)
 
     _apply_post_load_ddl(engine)
     print(f'[load_to_db] 완료 — {loaded}개 테이블 적재')

@@ -461,14 +461,19 @@ def _team_refer_tab() -> html.Div:
                                id='team-refer-save-btn', color='primary', size='sm'),
                     dbc.Button([html.I(className='bi bi-file-earmark-excel me-1'), '엑셀 다운로드'],
                                id='team-refer-download-btn', color='success', outline=True, size='sm'),
+                    dbc.Button(html.I(className='bi bi-database-up'),
+                               id='team-refer-db-load-btn', color='info', outline=True, size='sm',
+                               title='team_refer 테이블만 DB에 바로 반영(저장된 최신 값 기준)'),
                 ]),
                 html.Div(
-                    '엑셀 다운로드는 현재 화면의 편집 내용이 아니라 저장된 최신 값을 내려받습니다.',
+                    '엑셀 다운로드는 현재 화면의 편집 내용이 아니라 저장된 최신 값을 내려받습니다. '
+                    'DB 반영도 마찬가지로 저장된 최신 값을 반영합니다(화면 편집 중인 내용 아님).',
                     className='text-muted', style={'fontSize': '0.72rem'},
                 ),
             ], md='auto'),
         ], className='mb-2 align-items-end'),
         dcc.Download(id='team-refer-download'),
+        html.Div(id='team-refer-db-load-msg'),
 
         dash_table.DataTable(
             id='team-refer-table',
@@ -1538,6 +1543,29 @@ def team_refer_download(n_clicks):
     data = team_refer_store.current_snapshot_workbook_bytes()
     fname = f"팀_리더_참조_{date.today().strftime('%Y%m%d')}.xlsx"
     return dcc.send_bytes(data, fname)
+
+
+# ── 콜백: 팀/리더 참조 — team_refer 테이블만 DB 반영 ──────────────────────────
+# "저장" 버튼(그리드 편집분)은 team_refer_store.save_snapshot()이 CSV와 함께
+# DB도 이미 반영하지만, "엑셀 파일로 한번에 반영"(대량 업로드,
+# pipeline/process_team_refer.py의 process())은 CSV만 쓰고 DB는 건드리지
+# 않는다 — 그 경로로 반영한 뒤에는 DB가 CSV보다 뒤처진 채로 남는다. 이
+# 버튼으로 저장된 최신 team_refer.csv를 그 자리에서 바로 DB에 반영할 수
+# 있다(2026-09-02 추가, 아이콘 버튼).
+@callback(
+    Output('team-refer-db-load-msg', 'children'),
+    Input('team-refer-db-load-btn', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def team_refer_db_load(n_clicks):
+    from services.auth import can
+    if not can('manage_users'):
+        return _alert('관리자만 DB에 반영할 수 있습니다.', 'danger')
+    if not n_clicks:
+        return no_update
+    ok, msg = wpr.run_team_refer_db_load()
+    return _alert(f'DB 반영 완료 — {msg}' if ok else f'DB 반영 실패 — {msg}',
+                  'success' if ok else 'danger')
 
 
 def _dupe_modal_body(dupes: list[dict]):

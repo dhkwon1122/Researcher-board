@@ -777,6 +777,73 @@ def is_db_load_running() -> bool:
     return bool(lock and lock.get('keys') == ['__db_load__'])
 
 
+# ── 테이블 단위 DB 반영("팀/리더 참조" 탭 전용 아이콘, 2026-09-02 추가) ──────────
+# 관리자가 team_refer.csv 하나만 바로 DB에 올리고 싶을 때(전체 30여개 테이블을
+# 다 훑는 "데이터 업데이트" 탭의 전체 DB 반영 버튼을 기다릴 필요 없이) 쓴다.
+# load_to_db.load(tables=[...])로 그 테이블 하나만 적재 — 같은 LOCK_PATH를
+# 그대로 재사용해(try_acquire_lock은 키 값과 무관하게 파일 하나뿐인 전역
+# 락이라) team_refer 원본 반영(pipeline 실행)이나 전체 DB 반영과 동시에
+# 실행되는 것을 그대로 막는다. 상태 로그는 전체 DB 반영과 뒤섞이지 않도록
+# 별도 파일에 기록한다.
+
+TEAM_REFER_DB_LOG_PATH = os.path.join(OUT_DIR, 'web_db_load_team_refer_runs.csv')
+
+
+def _record_team_refer_db_result(status: str, message: str) -> None:
+    os.makedirs(OUT_DIR, exist_ok=True)
+    with open(TEAM_REFER_DB_LOG_PATH, 'w', newline='', encoding='utf-8-sig') as f:
+        w = csv.DictWriter(f, fieldnames=['last_run_at', 'status', 'message'],
+                            quoting=csv.QUOTE_NONNUMERIC)
+        w.writeheader()
+        w.writerow({
+            'last_run_at': datetime.now().strftime('%y-%m-%d %H:%M'),
+            'status': status,
+            'message': message[:500],
+        })
+
+
+def team_refer_db_load_status() -> dict:
+    if not os.path.exists(TEAM_REFER_DB_LOG_PATH):
+        return {'last_run_at': '', 'status': '', 'message': ''}
+    df = pd.read_csv(TEAM_REFER_DB_LOG_PATH, encoding='utf-8-sig', dtype=str).fillna('')
+    return df.iloc[0].to_dict() if len(df) else {'last_run_at': '', 'status': '', 'message': ''}
+
+
+def run_team_refer_db_load() -> tuple[bool, str]:
+    """team_refer 테이블만 DB에 반영 — team_refer.csv 하나만 읽어 적재하는
+    가벼운 작업이라(전체 DB 반영과 달리 30여개 테이블을 다 훑지 않음) 백그라운드
+    스레드 없이 콜백 안에서 동기로 바로 실행한다("저장" 버튼과 동일한 방식).
+    이미 다른 파이프라인 실행이나 전체 DB 반영이 진행 중이면 (False, 안내 문구).
+    반환: (성공 여부, 화면에 보여줄 메시지)."""
+    if not try_acquire_lock(['__db_load_team_refer__']):
+        return False, '다른 작업이 진행 중입니다 — 잠시 후 다시 시도해주세요.'
+    _record_team_refer_db_result('실행중', '')
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            import load_to_db
+            importlib.reload(load_to_db)
+            load_to_db.load(tables=['team_refer'])
+        output = buf.getvalue()
+        if 'DATABASE_URL 미설정' in output:
+            msg = 'DATABASE_URL 미설정 — DB 연결 정보가 없어 반영하지 못했습니다.'
+            _record_team_refer_db_result('실패', msg)
+            return False, msg
+        if 'CSV 없음' in output:
+            msg = 'team_refer.csv가 없습니다 — 먼저 저장하거나 엑셀을 반영하세요.'
+            _record_team_refer_db_result('실패', msg)
+            return False, msg
+        msg = _last_meaningful_line(output) or '완료'
+        _record_team_refer_db_result('성공', msg)
+        return True, msg
+    except Exception as exc:  # noqa: BLE001
+        msg = f'{exc}'[:500]
+        _record_team_refer_db_result('실패', msg)
+        return False, msg
+    finally:
+        release_lock()
+
+
 # ── 과제별컨플 PDF 첨부(컨플 주소 없는 과제, 2026-09-01 추가) ──────────────────
 # project_confl_address.csv에 컨플 주소가 비어 있는 과제는 pipeline/
 # project_summary.py가 과제 전문성 분석(CLI, run_expertise.py) 실행 시
