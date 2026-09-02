@@ -1,22 +1,52 @@
 """
 과거 조직 원본 엑셀에서 "1단계부서명"/"현소속부서명"/"비공식소속부서명" 3개
-헤더 컬럼만 그대로 뽑아 <원본파일명>_team_refer.xlsx로 저장하는 스크립트
+헤더 컬럼만 그대로 뽑아 <원본파일명>_team_refer.csv로 저장하는 스크립트
 (2026-09-02, 사용자 확정 — 이 파일의 이전 버전을 완전히 대체).
 
-이전 버전과의 차이: 이전 버전은 "End of Month Headcount" 162컬럼 고정 포맷을
-전제로 BF/S/EV/ES 등 고정 열 위치 + VLOOKUP 방식 상위부서명 계산 + 월별
-team_change.csv 비교까지 했다. 이번 버전은 그런 계산이 전혀 없다 — 헤더
-텍스트로 3개 컬럼을 찾아 있는 그대로 복사하고, 중복 제거·정렬만 한다(원본
-파일마다 열 위치가 달라도 헤더 텍스트만 맞으면 동작).
+이전 버전과의 차이(1차): 이전 버전은 "End of Month Headcount" 162컬럼 고정
+포맷을 전제로 BF/S/EV/ES 등 고정 열 위치 + VLOOKUP 방식 상위부서명 계산 +
+월별 team_change.csv 비교까지 했다. 이번 버전은 그런 계산이 전혀 없다 —
+헤더 텍스트로 3개 컬럼을 찾아 있는 그대로 복사하고, 중복 제거·정렬만 한다
+(원본 파일마다 열 위치가 달라도 헤더 텍스트만 맞으면 동작).
+
+이전 버전과의 차이(2차, 이번 수정) — 출력 형식을 xlsx → csv로 재전환:
+이 스크립트는 원래 2026-08-31 세션에서 xlsx로 출력했다가 openpyxl로 새로 쓴
+xlsx의 내부 XML 메타데이터(예: <dimension> 태그가 실제 셀 범위와 어긋남)
+때문에 Excel이 "손상됨"으로 인식해 못 여는 문제를 겪고, 그때 이미 csv로
+바꿔서 해결한 이력이 있다(data/processed/CLAUDE.md 2026-08-31 참고). 그런데
+직후 세션에서 "신규 엑셀파일 생성"이라는 요청을 문자 그대로 받아 다시 xlsx
+출력(openpyxl)으로 되돌렸고, 그 결과 사용자가 "지난번과 마찬가지 사유"로
+또 실패했다고 보고 — 바로 이 xlsx 출력 자체의 구조적 손상 위험이 재발한
+것으로 판단해 다시 csv로 되돌린다. researchers.csv를 만드는
+pipeline/process_researchers.py(→ pipeline/merge_utils.write_merged_with_
+valid_period() → `df.to_csv(out_path, index=False, encoding='utf-8-sig',
+quoting=csv.QUOTE_NONNUMERIC)`)와 정확히 동일한 저장 방식을 그대로 쓴다
+(사용자 요청 "researchers.csv 파일과 동일하게") — CSV는 순수 텍스트라
+OOXML/zip 구조 자체가 없어 이런 손상이 구조적으로 발생할 수 없다.
+이에 맞춰 "1행은 비우고 2행에 헤더"라는 이전 xlsx 전용 스펙도 버렸다 —
+researchers.csv를 비롯한 이 저장소의 다른 모든 csv 산출물은 헤더가 1행에
+바로 있으므로, "동일하게"라는 요청에 맞춰 이 스크립트의 출력도 1행 헤더로
+통일한다.
+
+읽기 쪽 비교 — pipeline/process_researchers.py와 다른 점 없음(그대로 유지):
+researchers.csv는 평소엔 원본 xlsx를 직접 안 읽고 사전에 DRM을 제거해 둔
+data/raw_csv/researchers.csv(또는 DB)를 읽지만, 관리자 웹 업로드로 원본
+xlsx를 직접 받을 때는 `find_latest()`로 파일을 찾은 뒤
+`read_xlsx(path, header_row=_RESEARCHERS_HEADER_ROW)`로 읽고 바로 이어서
+`df.columns = [str(c).strip() for c in df.columns]`로 컬럼명을 한 번 더
+정리한다 — 이 스크립트가 원본 DRM xlsx를 직접 읽는 유일한 경로도 정확히
+이 방식과 같다(read_xlsx()가 내부적으로 헤더를 이미 strip하지만, 만일을
+대비해 동일하게 한 번 더 strip한다).
 
 입력: data/raw/past_team_refer/ 안의 모든 .xlsx (Excel이 파일을 열어 두었을 때
 생기는 임시 잠금 파일 "~$*.xlsx"는 제외). 각 파일은 2번째 행이 헤더이고 1번째
 행은 무시한다. 시트는 항상 첫 번째 시트만 쓴다(사용자 확정).
 
-출력: data/processed/past_team_refer/<원본파일명>_team_refer.xlsx
-  - A열 = 1단계부서명(dep_name), B열 = 현소속부서명(middle_dep_name),
-    C열 = 비공식소속부서명(pjt_part_name) — 헤더 텍스트는 원본 그대로 유지.
-  - 헤더는 새 파일의 2행에 위치, 1행은 원본과 동일하게 비워둔다.
+출력: data/processed/past_team_refer/<원본파일명>_team_refer.csv (utf-8-sig,
+researchers.csv와 동일한 pandas to_csv 저장 방식)
+  - 1열 = 1단계부서명(dep_name), 2열 = 현소속부서명(middle_dep_name),
+    3열 = 비공식소속부서명(pjt_part_name) — 헤더 텍스트는 원본 그대로 유지,
+    1행에 바로 위치(researchers.csv 등과 동일한 관례).
   - A~C 조합 기준 중복 제거(먼저 나온 행 유지), A~C가 전부 빈 행은 제외하되
     일부만 빈 행은 그대로 유지한다(사용자 확정).
   - 정렬: 안정 정렬을 C→B→A 순서로 연쇄 적용해, 최종적으로 A(1단계부서명)가
@@ -37,11 +67,12 @@ pipeline/excel_reader.read_xlsx()를 그대로 쓴다 — Windows PC에 Excel이
 사용법:
   python scripts/build_past_team_refer.py
 """
+import csv
 import glob
 import os
 import sys
 
-from openpyxl import Workbook
+import pandas as pd
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
@@ -56,7 +87,7 @@ from pipeline.excel_reader import clean_str, read_xlsx  # noqa: E402
 RAW_DIR = os.path.join(BASE_DIR, 'data', 'raw', 'past_team_refer')
 OUT_DIR = os.path.join(BASE_DIR, 'data', 'processed', 'past_team_refer')
 
-# (원본 헤더 텍스트, 의미상 영문 이름) — 순서 그대로 출력 A/B/C열이 된다.
+# (원본 헤더 텍스트, 의미상 영문 이름) — 순서 그대로 출력 컬럼 순서가 된다.
 HEADERS = [
     ('1단계부서명', 'dep_name'),
     ('현소속부서명', 'middle_dep_name'),
@@ -75,11 +106,15 @@ def _list_source_files() -> list:
 def process_file(path: str) -> tuple:
     """한 원본 파일을 처리해 (성공 여부, 출력 경로 또는 None, 행 수, 에러 메시지) 반환.
     read_xlsx()의 header_row는 0-based이므로 1을 넘기면 물리적 2번째 행이
-    헤더가 된다(1번째 행은 자동으로 무시)."""
+    헤더가 된다(1번째 행은 자동으로 무시). pipeline/process_researchers.py가
+    원본 xlsx를 직접 읽는 경로와 동일하게 read_xlsx() 직후 컬럼명을 한 번 더
+    strip한다."""
     try:
         df = read_xlsx(path, sheet=0, header_row=1)
     except Exception as exc:
         return False, None, 0, f'파일 읽기 실패: {exc}'
+
+    df.columns = [str(c).strip() for c in df.columns]
 
     missing = [h for h in HEADER_TEXTS if h not in df.columns]
     if missing:
@@ -105,18 +140,13 @@ def process_file(path: str) -> tuple:
 
     os.makedirs(OUT_DIR, exist_ok=True)
     base = os.path.splitext(os.path.basename(path))[0]
-    out_path = os.path.join(OUT_DIR, f'{base}_team_refer.xlsx')
+    out_path = os.path.join(OUT_DIR, f'{base}_team_refer.csv')
 
-    wb = Workbook()
-    ws = wb.active
-    ws.title = 'team_refer'
-    # 1행은 원본과 동일하게 비워두고, 헤더는 2행에 원본 텍스트 그대로.
-    for col_idx, header in enumerate(HEADER_TEXTS, start=1):
-        ws.cell(row=2, column=col_idx, value=header)
-    for r_idx, vals in enumerate(rows, start=3):
-        for col_idx, v in enumerate(vals, start=1):
-            ws.cell(row=r_idx, column=col_idx, value=v)
-    wb.save(out_path)
+    # researchers.csv와 정확히 동일한 저장 방식(pipeline/merge_utils.py
+    # write_merged_with_valid_period() 참고) — CSV는 순수 텍스트라 xlsx
+    # 저장 때 겪은 OOXML 구조 손상이 애초에 발생할 수 없다.
+    out_df = pd.DataFrame(rows, columns=HEADER_TEXTS)
+    out_df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
 
     return True, out_path, len(rows), None
 
