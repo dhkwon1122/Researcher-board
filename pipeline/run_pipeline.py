@@ -411,7 +411,8 @@ def run():
                skip_hint='어학자격 *.xlsx 없음')
 
     # ── 9-8. 근무 경력: 임직원 근무경력 *.xlsx (LLM 호출 없음, 폴백 없음,
-    # researcher_id 단위 그룹 교체로 누적 — process_work_experience.py 참고) ──
+    # 자연키(researcher_id+company_name+work_start_date) upsert로 누적,
+    # 2026-09-02부터 — process_work_experience.py 참고) ──────────────────
     from process_work_experience import process as process_work_experience
     _run_step('work_experience', process_work_experience, results,
                skip_hint='임직원 근무경력 *.xlsx 없음')

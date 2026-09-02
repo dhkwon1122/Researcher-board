@@ -40,6 +40,15 @@ TABLE_KEYS: dict[str, list[str]] = {
     'transfers':            ['researcher_id', 'date', 'type'],
     'certifications':       ['researcher_id', 'cert_name', 'date_obtained'],
     'succession':           ['researcher_id', 'org_code', 'rank_type', 'nominated_year'],
+    # 근무경력(work_experience.csv) — 2026-08-29엔 "본인 경력을 사후에 고칠
+    # 수 있다"고 보고 researcher_id 단위 그룹 교체(GROUP_REPLACE_KEYS 참고)를
+    # 썼으나, 재검토(2026-09-02, 사용자 확정) 결과 (a) 본인 경력은 스스로
+    # 수정할 일이 거의 없고 (b) 전배·퇴직으로 이번 원본 파일에서 통째로
+    # 빠진 사람의 경력도 보존하고 싶다는 요구가 있어, 다른 이력형 테이블과
+    # 동일하게 자연키 upsert로 전환 — (researcher_id, company_name,
+    # work_start_date)가 같으면 그 행만 갱신(정정), 다르면 그대로 누적되고,
+    # 이번 파일에 없는 사람(전배·퇴직 등)의 기존 행은 삭제되지 않고 보존된다.
+    'work_experience':      ['researcher_id', 'company_name', 'work_start_date'],
     'tasks_information':    ['task_name'],
     'project_confl_address': ['dep_name', 'project_name'],
     # 날짜 기반 누적 테이블 — dep_id별로 valid_year/month/day가 다르면 별개
@@ -74,14 +83,8 @@ GROUP_REPLACE_KEYS: dict[str, list[str]] = {
     # 실제 컬럼명과 반드시 일치해야 한다.
     'leadership_comments': ['researcher_id', 'year', 'commenter_type'],
 
-    # 근무경력(work_experience.csv, 2026-08-29) — 한 사람이 여러 회사 경력을
-    # 가질 수 있는(researcher_id당 여러 행) 이력형 테이블이지만, 개별 행을
-    # 구분할 자연키(회사명+시작일 등)로 upsert하면 원본에서 삭제/수정된
-    # 경력이 옛 행으로 계속 남는다 — 사용자 확정: "기존 researcher_id가
-    # 있으면 덮어쓰고"를 "그 사람의 경력 전체를 이번 업로드 내용으로
-    # 교체"로 해석해 researcher_id 단위 그룹 교체를 쓴다(이번 업로드에
-    # 없는 사람은 기존 행 그대로 보존).
-    'work_experience': ['researcher_id'],
+    # work_experience는 2026-09-02부터 TABLE_KEYS(자연키 upsert)로 전환 —
+    # 위 TABLE_KEYS['work_experience'] 주석 참고.
 }
 
 
