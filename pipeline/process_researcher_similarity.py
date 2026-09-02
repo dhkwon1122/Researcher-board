@@ -633,9 +633,17 @@ def build_html(results: list, researchers_df: pd.DataFrame, profile_by_id: dict)
     org_tree = mmd.build_org_tree(mmd.read_team_refer(OUT_DIR))
     if org_tree:
         def _leaf_researchers(node):
+            # 그 조직(부서/과제·파트)의 직책자(node['researcher_id'], 예:
+            # "A과제(PM 홍길동)"의 홍길동)를 목록 맨 위에, 나머지는
+            # 가나다순으로 정렬한다(사용자 확정 2026-09-02).
+            leader_rid = node.get('researcher_id', '')
+            rids = sorted(
+                analyzed_rids_by_org.get(node.get('org_name_wd', ''), []),
+                key=lambda rid: (rid != leader_rid, name_map.get(rid, rid)),
+            )
             items = [
                 (f'#{anchor_of[rid]}', name_map.get(rid, rid), count_of.get(rid))
-                for rid in analyzed_rids_by_org.get(node.get('org_name_wd', ''), [])
+                for rid in rids
             ]
             return mmd.nav_items_html(items)
 

@@ -884,7 +884,11 @@ def layout(highlight_researcher=None, mail_rid=None, **_kwargs):
                 options=[
                     {'label': '최신기준 (조직도 탐색)', 'value': 'current'},
                     {'label': '누적기준 (이름/사번 검색만)', 'value': 'all'},
-                    {'label': '과거 시점 조회 (온디맨드 분석)', 'value': 'historical'},
+                    # '과거 시점 조회(온디맨드 분석)' 옵션은 화면에서만 숨긴다(사용자
+                    # 확정 2026-09-02) — value='historical' 처리 로직(아래
+                    # _toggle_download_panel, _render_historical_results 등)은
+                    # 그대로 남겨둔다. 화면에서 이 라디오 옵션이 없어졌으므로
+                    # mode는 이제 'current'/'all'만 나온다.
                 ],
                 value='current', inline=True, className='small mb-2',
             ),

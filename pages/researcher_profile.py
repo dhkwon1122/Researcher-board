@@ -273,7 +273,12 @@ def layout(id=None, ids=None, **_kwargs):
 
     default_mode = 'current'
     dept_opts, all_opts, by_dept = _load_selector_data(current_only=True)
-    default_rid = all_opts[0]['value'] if all_opts else None
+    # 딥링크(id 없음)로 처음 들어오면 아무도 선택하지 않은 빈 화면으로 시작한다
+    # (2026-09-02, 사용자 확정 — 예전엔 이름순 첫 번째 사람이 자동으로 열렸음).
+    # update_profile() 콜백은 이미 rid가 없을 때 "연구원을 선택하세요." 빈
+    # 화면을 반환하므로 그대로 재사용된다. id가 주어진 딥링크(아래 블록)는
+    # 그대로 해당 인물을 연다.
+    default_rid = None
     default_dept = ''
     res_opts = all_opts
 

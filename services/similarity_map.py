@@ -493,6 +493,39 @@ def org_code_dep_id_map(period: tuple | None = None) -> dict:
     return result
 
 
+def org_code_dep_code_map(period: tuple | None = None) -> dict:
+    """org_code_dep_id_map()과 같은 발상, 값만 dep_id가 아니라 dep_code(조직코드)
+    — org_code → dep_code. 연구원 명단 엑셀 다운로드에서 조직코드 기준
+    오름차순 정렬을 지원하기 위한 매핑(사용자 확정 2026-09-02)."""
+    result: dict = {}
+    for r in read_team_refer(DATA_DIR, period=period):
+        org_code = (r.get('org_name_wd') or '').strip()
+        # dep_code는 순수 숫자 문자열("1010" 등)이라 DB/CSV를 거치며 pandas가
+        # int로 잘못 추론할 수 있다(dep_id는 "D01"처럼 문자가 섞여 있어
+        # 안 겪는 문제) — str()로 한 번 감싸 방어한다.
+        dep_code = str(r.get('dep_code') or '').strip()
+        if not org_code or not dep_code:
+            continue
+        result.setdefault(org_code, dep_code)
+    return result
+
+
+def org_code_leader_map(period: tuple | None = None) -> dict:
+    """org_code → 그 조직(부서/과제·파트)의 직책자 researcher_id. team_refer
+    행 중 조직장급만 researcher_id가 채워져 있다(title_by_researcher_id()
+    참고) — 그 값을 org_code 기준으로 뒤집은 매핑. 연구원 프로필 엑셀
+    다운로드에서 부서/과제·파트의 직책자를 부서원보다 상단에 정렬하기
+    위한 용도(사용자 확정 2026-09-02)."""
+    result: dict = {}
+    for r in read_team_refer(DATA_DIR, period=period):
+        org_code = (r.get('org_name_wd') or '').strip()
+        rid = (r.get('researcher_id') or '').strip()
+        if not org_code or not rid:
+            continue
+        result.setdefault(org_code, rid)
+    return result
+
+
 PEOPLE_TEAM_DEP_NAME = 'People팀'
 
 

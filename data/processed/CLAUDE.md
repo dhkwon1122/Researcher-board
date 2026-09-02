@@ -8176,3 +8176,117 @@ job_profile_info_standard/job_profile_info_sait)는 두 스크립트 모두가
 
 **미검증**: 실제 브라우저에서 구간 제목 행의 배경색/여백이 실제로
 소제목처럼 눈에 띄는지 육안 확인.
+
+## 2026-09-02 (11): UI/UX/데이터 11건 일괄 반영(연구원 프로필·명단·보유
+전문성·관리자 화면)
+
+사용자가 한 메시지로 요청한 11건(설명·확인질문 3건을 먼저 거쳐 확정) —
+번호는 사용자 원문 순서 그대로.
+
+**1) 연구원 개별 프로필 — 검색 전 빈 화면**: `pages/researcher_profile.py`
+`layout()`의 `default_rid = all_opts[0]['value'] if all_opts else None`을
+`default_rid = None`으로 변경(딥링크로 `id`가 넘어온 경우의 기존 분기는
+그대로 유지) — 이전엔 화면 진입 시 이름 오름차순 첫 번째 사람의 프로필이
+자동으로 나왔는데, 이제는 검색해서 고르기 전까지 빈 화면.
+
+**2) 전문성 요약(LLM) 박스 — 시니어/주니어 범례**:
+`components/detail_tabs.py`의 "유사 연구원" 라벨 줄에 `legend_dot` 헬퍼로
+"● 시니어 ● 주니어"(파란색/하늘색 점, 기존 배지 색과 동일)를 인라인으로
+추가 — 색 구분 기준이 뭔지 안내가 없던 문제 해결.
+
+**3-4) 연구원 명단 검색기준 — 최신/누적 UI 토글 + 문구 축소**:
+`pages/researcher_list.py`. 확인 질문(3건 중 1건)으로 "기간을 지정하면
+부서/과제 필터 재활성화"라는 기존 동작은 유지하기로 확정 — 다만 지금까지는
+`disabled` 속성만 바뀌고 컨트롤 자체는 항상 화면에 남아 있었다(비활성화된
+채로 계속 보임). `list-period-range`(+`list-period-hint`)를 새
+`html.Div(id='list-period-range-wrap')`로, 부서/과제·파트 `dbc.Col`에
+각각 `id='filter-dept-col'`/`id='filter-project-col'`을 추가하고,
+`toggle_org_filters()` 콜백에 `Output('list-period-range-wrap','style')`/
+`Output('filter-dept-col','style')`/`Output('filter-project-col','style')`
+3개를 새로 붙여 최신기준일 때는 시작일/종료일 박스를 아예 숨기고
+부서/과제·파트만 보이게, 누적기준일 때는 반대(기간을 지정하면 부서/과제도
+다시 보임)로 완전히 화면에서 사라지게 했다. 라디오 아래 문구는
+"누적기준: 이름/사번 검색 중심 (부서·과제·직급·직책 필터 비활성화)"에서
+괄호 설명을 빼 "누적기준: 이름/사번 검색 중심"으로 축소.
+
+**5) 엑셀 다운로드 — A열 조직코드 + 자동 정렬**:
+`services/similarity_map.py`에 `org_code_dep_code_map()`(org_code→dep_code,
+기존 `org_code_dep_id_map()`과 동일 패턴)과 `org_code_leader_map()`
+(org_code→그 조직 직책자 researcher_id, team_refer 행 중 researcher_id가
+채워진 조직장급 행만)을 추가. `services/researcher_profile_export.py`:
+`_COLUMNS` A열에 `('조직코드', _col_org_code)`를 새로 얹고(원본 컬럼 수
+12→9로 줄고 조직코드 1 + 아래 6) 항목 옵트인 전환), `_researcher_row_context()`에
+`org_code_dep_code_map` 파라미터/키 추가. 확인 질문(2건 중 1건)으로
+"조직코드 기준 자동 정렬"로 확정 — `build_profile_workbook()`이 행을 쓰기
+전에 `researcher_ids`를 `(dep_code, 그 조직 직책자 여부 아님, 이름)` 키로
+정렬(직책자는 `org_code_leader_map()`으로 판정, 같은 조직 안에서는
+직책자가 먼저 오고 나머지는 가나다순). 실사용 표본 데이터(team_refer 2개
+조직, 연구원 4명)로 직접 `build_profile_workbook()`을 호출해 조직코드
+오름차순 + 직책자 우선 + 가나다순이 정확히 나오는 것 확인.
+
+**6) 엑셀 다운로드 — 4개 항목 옵트인 전환 + 버튼 문구**:
+같은 파일에서 과제수행이력/양성이력/핵심이력/보유기술을 `_COLUMNS`에서
+빼 `_TASKS_COLUMNS`/`_NURTURING_COLUMNS`/`_INCENTIVE_COLUMNS`/
+`_TECH_OWNERSHIP_COLUMNS`(각 1컬럼짜리 옵트인 그룹)로 옮기고,
+`build_profile_workbook()`에 `include_tasks`/`include_nurturing`/
+`include_incentive`/`include_tech_ownership`(기본값 전부 `False`) 4개
+파라미터 추가 — 이제 기본 다운로드에는 안 들어가고 체크해야 포함된다.
+`pages/researcher_list.py`의 `list-excel-options-check` 체크리스트에
+4개 옵션("과제수행이력 포함" 등)을 추가하고 `download_excel()` 콜백에서
+`build_profile_workbook()` 호출부에 대응하는 4개 인자를 연결. 버튼
+title도 "추가 항목 선택(보유 전문성, 직무, 재직상태 등)"에서
+"추가 선택 항목(과제수행이력, 보유 전문성, 직무 등)"으로 변경.
+
+**7) 보유 전문성 탭 — "과거 시점 조회(온디맨드 분석)" 화면에서만 숨김**:
+`pages/researcher_similarity_map.py`의 `expertise-search-mode`
+RadioItems에서 `{'value': 'historical', ...}` 옵션만 제거 — 확인 질문
+(3건 중 1건)으로 "화면에서만 숨김(백엔드 코드는 그대로 유지)"로 확정,
+이 앱의 기존 hide-not-delete 관례(조직별 비교/전문성 MAP 탭 등과 동일)를
+그대로 적용한 것 — `_render_historical_results()`/관련 콜백/
+`_toggle_download_panel()`의 `mode != 'historical'` 분기 등은 손대지
+않았다(라디오에 그 값이 더 이상 없으니 실질적으로 도달 불가능해질 뿐).
+
+**8) 보유 전문성 탭 조직도 — 하위 조직 클릭 시 직책자 상단 정렬**:
+`pipeline/process_researcher_expertise.py`/`process_researcher_similarity.py`의
+`build_html()` 안 `_leaf_researchers(node)` 클로저 둘 다에 동일하게 —
+`node.get('researcher_id')`(그 조직의 직책자, 예: "A과제(PM 홍길동)"의
+홍길동은 team_refer에서 그 org_code 행에 이미 사번이 채워져 있다)를
+목록 맨 위로, 나머지는 이름 가나다순으로 정렬하는 `sorted(..., key=lambda
+rid: (rid != leader_rid, name_map.get(rid, rid)))`를 추가. 실사용 표본
+데이터로 `build_html()`을 직접 호출해 조직 섹션의 인원 순서가 "직책자
+먼저 → 가나다순"으로 정확히 나오는 것 확인(예: 정재원(PL)이 강동현/
+이성민/장승우보다 앞).
+
+**9) 관리자 화면 팀/리더 참조 탭 — "엑셀 파일로 한번에 반영" 카드를
+탭 최하단으로**: `pages/admin.py`의 `_team_refer_tab()`에서
+`_team_refer_upload_section()` 호출 위치를 안내 Alert 바로 아래(맨 위)에서
+`team-refer-save-msg` Div 다음(부서ID 중복 Modal 앞, 탭 최하단)으로 이동.
+표 위 편집 흐름이 주 동선이고 엑셀 일괄 반영은 보조 수단이라는 게 이유.
+
+**10-11) 데이터 업데이트 탭 표 — 3개 컬럼 가운데 정렬 + 컬럼 크기 조절**:
+`pages/admin.py`. (10) "체크"/"구분"/"누적 시점(연/월)" 3개 컬럼 내용이
+왼쪽으로 치우쳐 보이던 원인은 부트스트랩의 `text-align`이 인라인 요소만
+가운데로 모으고, `dbc.Checkbox`(블록 레벨 `.form-check` div)와
+`dbc.Row`(flex, 기본 `justify-content-start`)에는 안 먹기 때문 — 체크
+Td는 `dbc.Checkbox`를 `html.Div(..., className='d-flex
+justify-content-center')`로 감싸고, 구분 Td에 `text-center`를 추가하고
+(`label_with_hint`의 내용은 인라인이라 이제 먹는다), `_valid_period_picker()`가
+반환하는 `dbc.Row`에 `justify-content-center` 클래스를 추가해 3개 모두
+가운데 정렬로 고쳤다. (11) 이 표는 `dash_table.DataTable`이 아니라 일반
+`dbc.Table`이라(팀/리더 참조 표와 달리) 컬럼 너비 드래그 조절 기능이
+원래 없었다 — 헤더 라벨을 `html.Span(..., className='du-th-resize')`로
+감싸고, `assets/custom.css`에 `.data-update-table .du-th-resize { display:
+inline-block; resize: horizontal; overflow: auto; min-width: 40px;
+max-width: 400px; }`를 추가해(팀/리더 참조 표의 `.column-header-name`
+CSS 트릭과 같은 방식) 우측 하단 모서리 드래그로 너비를 조절할 수 있게
+했다.
+
+검증: 11건 모두 코드 리뷰 + `py_compile`/`ast.parse` 통과, `import app`으로
+전체 Dash 앱(콜백 Output 중복 등) 정상 로드 확인. 5번/8번은 team_refer
+샘플 CSV(조직 2개, 그중 1개에 직책자)를 임시로 만들어
+`build_profile_workbook()`/`build_html()`을 직접 호출해 정렬 결과가
+기대대로 나오는 것을 실제로 확인(테스트용 CSV는 검증 후 삭제 — `data/`는
+`.gitignore` 대상이라 커밋에는 애초에 안 잡힘). **미검증**: 실제
+브라우저에서 3/4/10/11번의 화면 표시(토글 애니메이션, 리사이즈 핸들
+드래그 동작, 체크박스/셀 가운데 정렬 육안) — 서버를 띄워 직접 조작해
+보지는 못했다.

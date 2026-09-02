@@ -147,6 +147,15 @@ def _df_for(df, researcher_id: str):
     return df[df['researcher_id'] == researcher_id]
 
 
+def _col_org_code(_rid, rows):
+    r = rows['researcher']
+    if not r:
+        return '-'
+    org_code = str(r.get('org_code') or '').strip()
+    dep_code_map = rows.get('org_code_dep_code_map') or {}
+    return _or_dash(dep_code_map.get(org_code))
+
+
 def _col_id(rid, _rows):
     return rid
 
@@ -531,7 +540,12 @@ _EVAL_SALARY_COLUMNS = [
 
 
 # (헤더, 값 계산 함수) — 순서 = 엑셀 컬럼 순서
+# 조직코드(A열)는 팀/리더 참조(team_refer)의 dep_code — 조직코드 기준
+# 오름차순 정렬을 가능하게 하기 위해 추가(사용자 확정 2026-09-02).
+# 과제수행이력/양성이력/핵심이력/보유기술은 추가 선택(옵트인) 항목으로
+# 전환(사용자 확정 2026-09-02) — _TASKS_COLUMNS 등 아래 옵트인 컬럼 그룹 참고.
 _COLUMNS = [
+    ('조직코드', _col_org_code),
     ('사번', _col_id),
     ('Knox ID', _col_knox),
     ('성명\n(성별/나이)', _col_name_gender_age),
@@ -540,17 +554,19 @@ _COLUMNS = [
     ('학력', _col_education),
     ('CL/년차', _col_position_year),
     ('직책', _col_position_title),
-    ('과제수행이력', _col_tasks),
-    ('양성이력', _col_nurturing),
-    ('핵심이력', _col_incentive),
-    ('보유기술', _col_tech_ownership),
 ]
+
+_TASKS_COLUMNS = [('과제수행이력', _col_tasks)]
+_NURTURING_COLUMNS = [('양성이력', _col_nurturing)]
+_INCENTIVE_COLUMNS = [('핵심이력', _col_incentive)]
+_TECH_OWNERSHIP_COLUMNS = [('보유기술', _col_tech_ownership)]
 
 
 def _researcher_row_context(researcher_id: str, tables: dict, permissions: dict,
                              dep_pjt_maps: tuple | None = None,
                              eval_excluded_dep_ids: set | None = None,
-                             org_code_dep_id_map: dict | None = None) -> dict:
+                             org_code_dep_id_map: dict | None = None,
+                             org_code_dep_code_map: dict | None = None) -> dict:
     researcher_rows = _rows_for(tables['researchers'], researcher_id)
     return {
         'dep_pjt_maps': dep_pjt_maps,
@@ -558,6 +574,9 @@ def _researcher_row_context(researcher_id: str, tables: dict, permissions: dict,
         # 한 번만 계산해 전달받는다(dep_pjt_maps와 같은 이유).
         'eval_excluded_dep_ids': eval_excluded_dep_ids,
         'org_code_dep_id_map': org_code_dep_id_map,
+        # 조직코드(A열, _col_org_code) 표시용 — org_code → dep_code(사용자
+        # 확정 2026-09-02).
+        'org_code_dep_code_map': org_code_dep_code_map,
         'researcher': researcher_rows[0] if researcher_rows else None,
         'education': _rows_for(tables['education'], researcher_id),
         'evaluations': _rows_for(tables['evaluations'], researcher_id),
@@ -667,7 +686,11 @@ def person_base_table(researcher_ids: list) -> dict:
     return out
 
 
-_COLUMN_WIDTHS = [12, 14, 16, 18, 12, 26, 12, 10, 34, 30, 22, 30]
+_COLUMN_WIDTHS = [10, 12, 14, 16, 18, 12, 26, 12, 10]
+_TASKS_COLUMN_WIDTH = 34
+_NURTURING_COLUMN_WIDTH = 30
+_INCENTIVE_COLUMN_WIDTH = 22
+_TECH_OWNERSHIP_COLUMN_WIDTH = 30
 _EMPLOYMENT_STATUS_COLUMN_WIDTH = 12
 _EXPERTISE_COLUMN_WIDTH = 26
 _PATENT_COLUMN_WIDTH = 40
@@ -693,6 +716,10 @@ def build_profile_workbook(
     include_eval_summary: bool = False,
     include_salary_grade: bool = False,
     include_eval_half: bool = False,
+    include_tasks: bool = False,
+    include_nurturing: bool = False,
+    include_incentive: bool = False,
+    include_tech_ownership: bool = False,
 ) -> bytes:
     """선택된 researcher_id 목록으로 엑셀(xlsx) 바이트를 만들어 반환한다.
     양식: 바탕체 11pt, 전체 검정 테두리, 헤더만 볼드, 줄바꿈 셀은 자동 줄바꿈.
@@ -724,9 +751,23 @@ def build_profile_workbook(
     # researcher_profile.py)과 동일한 기준을 엑셀에도 적용한다.
     eval_excluded_dep_ids = auth.eval_excluded_dep_ids()
     org_code_dep_id_map = similarity_map.org_code_dep_id_map() if eval_excluded_dep_ids else {}
+    # 조직코드(A열) 표시 + 정렬(아래 참고) 모두에 필요 — 항상 계산.
+    org_code_dep_code_map = similarity_map.org_code_dep_code_map()
 
     columns = list(_COLUMNS)
     widths = list(_COLUMN_WIDTHS)
+    if include_tasks:
+        columns.extend(_TASKS_COLUMNS)
+        widths.extend([_TASKS_COLUMN_WIDTH] * len(_TASKS_COLUMNS))
+    if include_nurturing:
+        columns.extend(_NURTURING_COLUMNS)
+        widths.extend([_NURTURING_COLUMN_WIDTH] * len(_NURTURING_COLUMNS))
+    if include_incentive:
+        columns.extend(_INCENTIVE_COLUMNS)
+        widths.extend([_INCENTIVE_COLUMN_WIDTH] * len(_INCENTIVE_COLUMNS))
+    if include_tech_ownership:
+        columns.extend(_TECH_OWNERSHIP_COLUMNS)
+        widths.extend([_TECH_OWNERSHIP_COLUMN_WIDTH] * len(_TECH_OWNERSHIP_COLUMNS))
     if include_eval_summary and permissions['view_evaluation']:
         columns.extend(_EVAL_SUMMARY_COLUMNS)
         widths.extend([_EVAL_SUMMARY_COLUMN_WIDTH] * len(_EVAL_SUMMARY_COLUMNS))
@@ -780,9 +821,30 @@ def build_profile_workbook(
         cell.border = _BORDER
         cell.alignment = wrap_center
 
+    # 조직코드(dep_code) 오름차순 → 같은 조직 안에서는 직책자(부서/과제·파트
+    # 리더)가 먼저 → 그다음 가나다순(이름) 순서로 정렬한다(사용자 확정
+    # 2026-09-02). 리더 판정은 team_refer에서 그 org_code에 researcher_id가
+    # 채워진 행(=조직장급) 기준(org_code_leader_map()).
+    researchers_df = tables['researchers']
+    if not researchers_df.empty and 'researcher_id' in researchers_df.columns:
+        org_code_by_rid = dict(zip(researchers_df['researcher_id'], researchers_df.get('org_code', '')))
+        name_by_rid = dict(zip(researchers_df['researcher_id'], researchers_df.get('name', '')))
+    else:
+        org_code_by_rid, name_by_rid = {}, {}
+    org_code_leader_map = similarity_map.org_code_leader_map()
+
+    def _export_sort_key(rid: str):
+        org_code = str(org_code_by_rid.get(rid) or '').strip()
+        dep_code = org_code_dep_code_map.get(org_code, '')
+        is_not_leader = org_code_leader_map.get(org_code) != rid
+        return (dep_code, is_not_leader, str(name_by_rid.get(rid) or ''))
+
+    researcher_ids = sorted(researcher_ids, key=_export_sort_key)
+
     for row_idx, rid in enumerate(researcher_ids, start=2):
         ctx = _researcher_row_context(rid, tables, permissions, dep_pjt_maps,
-                                       eval_excluded_dep_ids, org_code_dep_id_map)
+                                       eval_excluded_dep_ids, org_code_dep_id_map,
+                                       org_code_dep_code_map)
         for col_idx, (_header, fn) in enumerate(columns, start=1):
             value = fn(rid, ctx)
             cell = ws.cell(row=row_idx, column=col_idx, value=value)

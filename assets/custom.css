@@ -208,6 +208,20 @@ h1, h2, h3, h4, h5, h6 {
   text-align: center;
 }
 
+/* "데이터 업데이트" 표 컬럼 크기 조절(2026-09-02, 사용자 확정) — 이 표는
+   dash_table.DataTable이 아니라 일반 dbc.Table이라 컬럼 너비 드래그 조절
+   기능이 없다. 헤더 라벨을 감싼 span에 브라우저 네이티브 CSS resize를
+   적용해 우측 하단 모서리를 드래그해 너비를 조절할 수 있게 한다(팀/리더
+   참조 표의 .column-header-name 방식과 동일한 발상). */
+.data-update-table .du-th-resize {
+  display: inline-block;
+  resize: horizontal;
+  overflow: auto;
+  min-width: 40px;
+  max-width: 400px;
+  vertical-align: bottom;
+}
+
 /* "체크" 컬럼 체크박스 — 기본 부트스트랩 체크박스가 흐릿해 잘 안 보이던
    문제 해결(2026-09-01, 사용자 확정): 테마 강조색 테두리를 둘러 눈에 띄게. */
 .du-check-box .form-check-input {

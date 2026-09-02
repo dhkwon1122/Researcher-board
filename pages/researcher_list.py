@@ -468,7 +468,7 @@ def layout():
                             className='small',
                         ),
                         html.Div(
-                            '누적기준: 이름/사번 검색 중심 (부서·과제·직급·직책 필터 비활성화)',
+                            '누적기준: 이름/사번 검색 중심',
                             className='text-muted', style={'fontSize': '0.72rem'},
                         ),
                         # 누적기준에서 기간(시작~종료)을 지정하면, 그 기간 동안
@@ -477,31 +477,36 @@ def layout():
                         # 부서/과제/직급/직책도 그 시점 값이라 필터를 다시
                         # 켠다(toggle_org_filters 콜백 참고). 기간을 비워두면
                         # 기존과 동일하게 "한 번이라도 있었던 전체 인원"만 보임.
-                        dcc.DatePickerRange(
-                            id='list-period-range',
-                            start_date_placeholder_text='시작일',
-                            end_date_placeholder_text='종료일',
-                            display_format='YYYY-MM-DD',
-                            disabled=True,
-                            className='mt-1',
-                            style={'fontSize': '0.72rem'},
-                        ),
-                        html.Div(
-                            '기간 지정 시 그 기간 내 마지막 상태 기준으로 조회(부서·과제·직급·직책 필터 다시 사용 가능)',
-                            id='list-period-hint',
-                            className='text-muted', style={'fontSize': '0.68rem', 'display': 'none'},
-                        ),
+                        # 최신기준일 때는 아예 안 보이게, 누적기준일 때만 보이게
+                        # 감싼다(2026-09-02, 사용자 확정 — 기존엔 비활성화만
+                        # 되고 항상 화면에 남아 있었음).
+                        html.Div([
+                            dcc.DatePickerRange(
+                                id='list-period-range',
+                                start_date_placeholder_text='시작일',
+                                end_date_placeholder_text='종료일',
+                                display_format='YYYY-MM-DD',
+                                disabled=True,
+                                className='mt-1',
+                                style={'fontSize': '0.72rem'},
+                            ),
+                            html.Div(
+                                '기간 지정 시 그 기간 내 마지막 상태 기준으로 조회(부서·과제·직급·직책 필터 다시 사용 가능)',
+                                id='list-period-hint',
+                                className='text-muted', style={'fontSize': '0.68rem', 'display': 'none'},
+                            ),
+                        ], id='list-period-range-wrap', style={'display': 'none'}),
                     ], md=3),
                     dbc.Col([
                         dbc.Label('부서', className='small fw-semibold text-muted mb-1'),
                         dcc.Dropdown(id='filter-dept', options=dept_opts, multi=True,
                                      placeholder='전체', clearable=True),
-                    ], md=3),
+                    ], md=3, id='filter-dept-col'),
                     dbc.Col([
                         dbc.Label('과제/파트', className='small fw-semibold text-muted mb-1'),
                         dcc.Dropdown(id='filter-project', options=project_opts, multi=True,
                                      placeholder='전체', clearable=True),
-                    ], md=3),
+                    ], md=3, id='filter-project-col'),
                     dbc.Col([
                         dbc.Label(' ', className='small d-block mb-1'),  # 라벨 줄 높이 맞춤
                         dbc.ButtonGroup([
@@ -514,7 +519,7 @@ def layout():
                                        color='success', title='엑셀 다운로드(현재 화면에 보이는 대상)'),
                             dbc.Button(html.I(className='bi bi-sliders'), id='list-excel-options-btn',
                                        color='secondary', outline=True,
-                                       title='추가 항목 선택(보유 전문성, 직무, 재직상태 등)'),
+                                       title='추가 선택 항목(과제수행이력, 보유 전문성, 직무 등)'),
                             dbc.Button(html.I(className='bi bi-printer'), id='list-bulk-print-btn',
                                        color='info',
                                        title='프로필 일괄 인쇄(체크한 사람, 없으면 현재 화면에 보이는 전체)'),
@@ -540,6 +545,13 @@ def layout():
                                         {'label': '업적(역량)평가(최근 3년) 포함', 'value': 'eval_half'},
                                     ] if show_eval else []
                                 ) + [
+                                    # 과제수행이력/양성이력/핵심이력/보유기술은 원래 항상
+                                    # 자동 포함이었으나 추가 선택(옵트인) 항목으로 전환
+                                    # (사용자 확정 2026-09-02).
+                                    {'label': '과제수행이력 포함', 'value': 'tasks'},
+                                    {'label': '양성이력 포함', 'value': 'nurturing'},
+                                    {'label': '핵심이력 포함', 'value': 'incentive'},
+                                    {'label': '보유기술 포함', 'value': 'tech_ownership'},
                                     {'label': '보유 전문성 포함', 'value': 'expertise'},
                                     {'label': '특허 포함', 'value': 'patents'},
                                     {'label': '논문 포함', 'value': 'publications'},
@@ -744,6 +756,9 @@ def update_project_options(dept, mode, period_start, period_end):
     Output('filter-title', 'value', allow_duplicate=True),
     Output('list-period-range', 'disabled'),
     Output('list-period-hint', 'style'),
+    Output('list-period-range-wrap', 'style'),
+    Output('filter-dept-col', 'style'),
+    Output('filter-project-col', 'style'),
     Input('list-search-mode', 'value'),
     Input('list-period-range', 'start_date'),
     Input('list-period-range', 'end_date'),
@@ -755,14 +770,21 @@ def toggle_org_filters(mode, period_start, period_end):
     has_period = period is not None
     hint_style = {'fontSize': '0.68rem', 'display': 'block' if has_period else 'none'}
     dept_options = similarity_map.department_filter_options(period=period)
+    # 최신기준일 때는 부서/과제 드롭박스만 보이고 시작일/종료일 박스는 숨김,
+    # 누적기준일 때는 반대(기간을 지정하면 부서/과제도 다시 보임) — 사용자
+    # 확정(2026-09-02). 이전엔 disabled 처리만 하고 항상 화면에 남아 있었다.
+    period_wrap_style = {'display': 'block' if is_cumulative else 'none'}
+    show_org_cols = (not is_cumulative) or has_period
+    org_col_style = {} if show_org_cols else {'display': 'none'}
 
     if has_period:
         return (False, False, False, False, dept_options, None, None, no_update, no_update,
-                False, hint_style)
+                False, hint_style, period_wrap_style, org_col_style, org_col_style)
     if is_cumulative:
-        return True, True, True, True, dept_options, None, None, None, None, False, hint_style
+        return (True, True, True, True, dept_options, None, None, None, None, False, hint_style,
+                period_wrap_style, org_col_style, org_col_style)
     return (False, False, False, False, dept_options, no_update, no_update, no_update, no_update,
-            True, hint_style)
+            True, hint_style, period_wrap_style, org_col_style, org_col_style)
 
 
 # ── 콜백 2: 검색 버튼(필터 적용) / 필터 초기화 버튼 → 테이블 데이터 갱신 ──────
@@ -925,6 +947,12 @@ def download_excel(n_clicks, virtual_data, excel_options):
     excel_options = excel_options or []
     data = researcher_profile_export.build_profile_workbook(
         researcher_ids,
+        # 과제수행이력/양성이력/핵심이력/보유기술 — 추가 선택(옵트인) 항목으로
+        # 전환(사용자 확정 2026-09-02, 원래는 항상 자동 포함이었다).
+        include_tasks='tasks' in excel_options,
+        include_nurturing='nurturing' in excel_options,
+        include_incentive='incentive' in excel_options,
+        include_tech_ownership='tech_ownership' in excel_options,
         include_expertise='expertise' in excel_options,
         include_patents='patents' in excel_options,
         include_publications='publications' in excel_options,

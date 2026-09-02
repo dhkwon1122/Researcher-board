@@ -440,8 +440,6 @@ def _team_refer_tab() -> html.Div:
             color='light', className='small border mb-3',
         ),
 
-        _team_refer_upload_section(),
-
         dbc.Row([
             dbc.Col([
                 dbc.Label('입력 날짜', className='small fw-semibold text-muted mb-1'),
@@ -508,6 +506,11 @@ def _team_refer_tab() -> html.Div:
 
         html.Div(id='team-refer-save-msg', className='mt-2'),
 
+        # "엑셀 파일로 한번에 반영" 카드는 탭 맨 아래로 이동(사용자 확정
+        # 2026-09-02) — 위 표로 직접 편집하는 것이 주 흐름이고, 엑셀 일괄
+        # 반영은 보조 수단이라 화면 아래쪽에 두는 것이 자연스럽다.
+        _team_refer_upload_section(),
+
         # 저장한 행들 안에 부서ID(dep_id)가 중복되면(업서트 자연키 충돌로
         # 일부 행이 조용히 사라지는 원인) 별도 창으로 바로 보여준다(사용자
         # 요청) — data/processed/CLAUDE.md 참고.
@@ -569,7 +572,7 @@ def _valid_period_picker(key: str, year: int, month: int):
             id={'type': 'du-valid-month', 'key': key}, options=month_options, value=month,
             clearable=False, searchable=False, style={'minWidth': '76px'},
         ), width='auto'),
-    ], className='g-1')
+    ], className='g-1 justify-content-center')
 
 
 def _api_button(key: str, has_api: bool):
@@ -660,9 +663,14 @@ def _data_update_row(row: dict) -> html.Tr:
     )
 
     return html.Tr([
-        html.Td(dbc.Checkbox(id={'type': 'du-check', 'key': key}, value=False,
-                              className='du-check-box'), className='align-middle text-center'),
-        html.Td(label_with_hint, className='align-middle'),
+        # dbc.Checkbox는 블록 레벨 .form-check div로 렌더링되어(inline 요소가
+        # 아니라서) 부모 Td의 text-center가 먹지 않는다 — flex로 직접
+        # 가운데 정렬한다(사용자 확정 2026-09-02).
+        html.Td(html.Div(dbc.Checkbox(id={'type': 'du-check', 'key': key}, value=False,
+                                       className='du-check-box'),
+                          className='d-flex justify-content-center'),
+                className='align-middle text-center'),
+        html.Td(label_with_hint, className='align-middle text-center'),
         html.Td([upload_cell, filenames_view, backfill_view], className='align-middle', style={'minWidth': '220px'}),
         html.Td(valid_period_cell, className='align-middle text-center'),
         html.Td([
@@ -703,10 +711,18 @@ def _data_update_table() -> dbc.Table:
     # hidden_from_table 항목(팀/리더 참조 — 그 탭 안에 별도 업로드 UI로
     # 이동, 2026-09-01 사용자 확정)은 이 표에서 뺀다.
     rows = [r for r in wpr.snapshot() if not r['hidden_from_table']]
+    # 표 자체가 dash_table.DataTable이 아니라 일반 dbc.Table이라 컬럼 너비
+    # 드래그 조절 기능이 없다 — 헤더 텍스트를 감싸는 span에 브라우저 네이티브
+    # CSS resize를 적용해 우측 하단 모서리를 드래그해 조절할 수 있게 한다
+    # (팀/리더 참조 표의 .column-header-name과 같은 방식, assets/custom.css
+    # 의 .data-update-table .du-th-resize 참고, 사용자 확정 2026-09-02).
+    def _th(label: str, style: dict | None = None) -> html.Th:
+        return html.Th(html.Span(label, className='du-th-resize'), style=style)
+
     header = html.Thead(html.Tr([
-        html.Th('체크', style={'width': '48px'}), html.Th('구분'), html.Th('업로드'),
-        html.Th('누적 시점(연/월)'), html.Th('이전 Data'), html.Th('API 연동'),
-        html.Th('최종실행이력'), html.Th('실행결과'),
+        _th('체크', style={'width': '48px'}), _th('구분'), _th('업로드'),
+        _th('누적 시점(연/월)'), _th('이전 Data'), _th('API 연동'),
+        _th('최종실행이력'), _th('실행결과'),
     ]))
     body_rows: list = []
     for scope_key, scope_label in _DATA_UPDATE_SCOPES:
