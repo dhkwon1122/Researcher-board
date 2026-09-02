@@ -93,8 +93,19 @@ pipeline/excel_reader.read_xlsx()를 그대로 쓴다 — Windows PC에 Excel이
 처리하고 다음 파일로 넘어간다(부분 헤더로 어설프게 만들지 않음, 사용자
 확정). 마지막에 총 파일 수/성공/실패 개수를 요약해 출력한다.
 
+이전 버전과의 차이(5차, 이번 수정) — 원본 폴더를 인자로 지정 가능:
+탐색기에서 직접 더블클릭해도 안 열리는 것까지 확인했는데(2026-09-02),
+"다른 폴더에서는 동일한 파일이 잘 열린다"는 것도 함께 확인됨 — 파일
+내용이 아니라 **경로 자체**를 DRM/보안 프로그램이 신뢰 여부 판단에 쓰는
+정책일 가능성이 높다(이 git 저장소의 data/ 폴더가 신뢰 목록에 없을 수
+있음). 이 경우 저장소 data/ 폴더가 승인될 때까지 기다릴 필요 없이, 파일이
+실제로 열리는 그 폴더를 그대로 원본 위치로 지정해 실행할 수 있도록
+RAW_DIR을 CLI 인자로 오버라이드할 수 있게 했다 — 출력은 항상 저장소 안
+OUT_DIR(data/processed/past_team_refer/)로 저장된다(원본 폴더 위치와 무관).
+
 사용법:
   python scripts/build_past_team_refer.py
+  python scripts/build_past_team_refer.py "C:\\경로\\원본이_정상적으로_열리는_폴더"
 """
 import csv
 import glob
@@ -128,11 +139,11 @@ HEADER_TEXTS = [h for h, _ in HEADERS]
 _OUTPUT_SUFFIX = '_team_refer.csv'
 
 
-def _list_source_files() -> list:
-    """RAW_DIR 안의 모든 .xlsx/.csv — Excel이 파일을 열어 둔 동안 생기는 임시
+def _list_source_files(raw_dir: str = RAW_DIR) -> list:
+    """raw_dir 안의 모든 .xlsx/.csv — Excel이 파일을 열어 둔 동안 생기는 임시
     잠금 파일("~$"로 시작)과 이 스크립트 자신이 만든 출력 파일(재실행 시
     자기 출력을 다시 원본으로 잘못 집어먹지 않도록)은 제외한다."""
-    candidates = glob.glob(os.path.join(RAW_DIR, '*.xlsx')) + glob.glob(os.path.join(RAW_DIR, '*.csv'))
+    candidates = glob.glob(os.path.join(raw_dir, '*.xlsx')) + glob.glob(os.path.join(raw_dir, '*.csv'))
     return sorted(
         p for p in candidates
         if not os.path.basename(p).startswith('~$') and not p.endswith(_OUTPUT_SUFFIX)
@@ -198,13 +209,13 @@ def process_file(path: str) -> tuple:
     return True, out_path, len(rows), None
 
 
-def main():
-    if not os.path.isdir(RAW_DIR) or not _list_source_files():
-        os.makedirs(RAW_DIR, exist_ok=True)
-        print(f'[안내] {RAW_DIR} 에 원본 엑셀 파일을 먼저 넣어주세요.')
+def main(raw_dir: str = RAW_DIR):
+    if not os.path.isdir(raw_dir) or not _list_source_files(raw_dir):
+        os.makedirs(raw_dir, exist_ok=True)
+        print(f'[안내] {raw_dir} 에 원본 엑셀 파일을 먼저 넣어주세요.')
         return
 
-    files = _list_source_files()
+    files = _list_source_files(raw_dir)
     success = 0
     fail = 0
     for path in files:
@@ -221,4 +232,15 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    # 원본 폴더를 CLI 인자로 넘길 수 있다(2026-09-02 추가) — 사용자가 같은
+    # 파일을 data/raw/past_team_refer/에 두면 열기 자체가 안 되고(탐색기
+    # 더블클릭도 실패), 다른 폴더에 두면 정상적으로 열린다고 확인 — DRM/보안
+    # 프로그램(NASCA 등)이 파일 내용이 아니라 "신뢰된 경로" 여부로 복호화를
+    # 판단하는 정책일 가능성이 높다(이 git 저장소의 data/ 폴더는 그런 신뢰
+    # 목록에 없을 수 있음). 이 경우 저장소 data/ 폴더의 IT 승인을 기다리는
+    # 대신, 파일이 실제로 열리는 그 폴더를 그대로 원본 위치로 지정해 쓰면
+    # 된다 — 출력은 항상 OUT_DIR(data/processed/past_team_refer/, 저장소 안)
+    # 로 저장된다.
+    #   python scripts/build_past_team_refer.py                 (기본: data/raw/past_team_refer/)
+    #   python scripts/build_past_team_refer.py "C:\경로\원본폴더"  (다른 폴더 지정)
+    main(sys.argv[1] if len(sys.argv) > 1 else RAW_DIR)
