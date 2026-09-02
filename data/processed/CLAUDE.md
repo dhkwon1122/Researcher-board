@@ -8290,3 +8290,110 @@ CSS 트릭과 같은 방식) 우측 하단 모서리 드래그로 너비를 조�
 브라우저에서 3/4/10/11번의 화면 표시(토글 애니메이션, 리사이즈 핸들
 드래그 동작, 체크박스/셀 가운데 정렬 육안) — 서버를 띄워 직접 조작해
 보지는 못했다.
+
+## 2026-09-02: `scripts/build_past_team_refer.py` 재작성 + DRM 읽기 실패
+디버깅(최종 원인: 파일이 아니라 "폴더 경로"가 DRM 신뢰 여부를 가른다)
+
+**요청 배경**: `data/raw/past_data/`(이후 사용자 확정으로 기존과 동일하게
+`data/raw/past_team_refer/`로 유지) 안의 여러 원본 엑셀에서 "1단계부서명"/
+"현소속부서명"/"비공식소속부서명" 3개 헤더 컬럼만 그대로 뽑아
+`<원본파일명>_team_refer.xlsx`를 만들어달라는 요청. 헤더 확인 → 신규 파일
+생성 → 데이터 복사 → A~C 조합 중복 제거 → C→B→A 순 안정 정렬 연쇄 적용
+(최종 A 1순위/B 2순위/C 3순위 오름차순) → 저장, 5가지 순서를 확인 문답
+(헤더 일부만 있는 파일은 실패 처리하고 다음 파일로, 총/성공/실패 개수 요약
+표시 / 대상은 폴더 안 .xlsx 전부, 임시 잠금 파일 제외, 첫 번째 시트만 /
+출력은 `data/processed/past_team_refer/` / 행 전체가 빈 경우만 제외, 일부만
+빈 셀은 유지)로 확정 후 `scripts/build_past_team_refer.py`(2026-08-31에
+이미 존재하던, "End of Month Headcount" 162컬럼 고정 포맷 + VLOOKUP
+상위부서명 계산 + 월별 `team_change.csv` 비교를 하던 이전 버전)를 완전히
+대체하는 방식으로 새로 작성 — 헤더 텍스트로 3개 컬럼을 찾아 그대로 복사만
+하고 계산은 하지 않는 훨씬 단순한 버전.
+
+**이후 로컬 실행 → 실패 → 진단의 반복(총 5차 수정)**:
+
+1. **1차(출력 포맷)**: 처음엔 사용자 요청 문구("신규 엑셀파일 생성")를
+   그대로 받아 xlsx(openpyxl)로 출력했다가, "지난번과 마찬가지 사유"로
+   실패했다는 보고 — 확인해보니 이 스크립트는 2026-08-31에 이미 정확히
+   같은 문제(openpyxl로 새로 쓴 xlsx의 OOXML 메타데이터가 실제 셀 범위와
+   어긋나면 Excel이 "손상됨"으로 인식해 못 여는 구조적 함정)를 겪고 그때
+   이미 csv로 바꿔 해결한 이력이 있었다. researchers.csv가
+   `pipeline/merge_utils.write_merged_with_valid_period()` →
+   `df.to_csv(out_path, index=False, encoding='utf-8-sig',
+   quoting=csv.QUOTE_NONNUMERIC)`로 저장하는 것과 정확히 동일한 방식으로
+   되돌리고, "1행 공백+2행 헤더"였던 xlsx 전용 레이아웃도 버려 다른 csv
+   산출물처럼 헤더를 1행에 바로 두도록 통일.
+
+2. **2차(읽기 파라미터 비교, 차이 없음 확인)**: "인력현황 → researchers.csv
+   처리 방식과 비교해서 동일하게 해달라"는 요청에 따라
+   `pipeline/process_researchers.py`가 원본 xlsx를 직접 읽는 유일한 경로
+   (관리자 웹 업로드 시 `find_latest()` + `read_xlsx(path,
+   header_row=_RESEARCHERS_HEADER_ROW)` + `df.columns = [str(c).strip()
+   for c in df.columns]`)와 `pipeline/sources.py`의 `researchers` SOURCES
+   엔트리(`header_row=1`)까지 전부 대조 — 파라미터 수준에서는 완전히
+   동일함을 확인(차이 없음). 그런데도 실제로는 "Excel file format cannot
+   be determined, you must specify an engine manually"(pandas 폴백
+   실패)와 "(-2147352567, '예외가 발생했습니다.', (0, 'Microsoft Excel',
+   ...)"(xlwings COM 자동화 자체의 실패)가 보고됨.
+
+3. **3차(visible=True 시도, 효과 없음)**: 2026-08-31 당시 문서화된 "Excel
+   Protected View 팝업 등으로 자동화가 막힐 때 흔한 증상"이라는 선례에
+   따라, `pipeline/excel_reader.read_xlsx()`에 `visible: bool = False`
+   매개변수를 새로 추가(기존 호출부 30여 곳은 전부 기본값 그대로라 영향
+   없음, 이 스크립트만 `visible=True`로 xlwings가 Excel 창을 화면에 띄운
+   채로 열도록 호출)해 팝업이 있어도 자동화가 막히지 않게 시도. 사용자가
+   로컬에서 재현한 결과 **완전히 동일한 에러** — 창이 보이는지 여부와
+   무관하게 `app.books.open()` 호출 자체가 곧바로 실패한다는 뜻이라, 이
+   가설(팝업이 안 떠서 막힘)은 기각. `visible` 인자는 효과가 없어 이후
+   호출에서 다시 제거(매개변수 자체는 향후 디버깅에 쓸 수 있어
+   `excel_reader.py`에 남겨둠).
+
+4. **4차(xlsx_to_raw_csv.py 경유 여부 문의 → 코드 비교로 답변, csv 입력
+   지원 추가)**: 사용자가 "인력현황 → researchers.csv 변환도
+   `xlsx_to_raw_csv.py`를 거치는데 같은 흐름이 효과 있겠냐"고 문의 —
+   `xlsx_to_raw_csv.py`의 실제 호출(`read_xlsx(src_paths[0],
+   header_row=header_row)`)도 완전히 동일한 함수이므로 경유해도 실패
+   지점(파일 열기 자체)은 달라지지 않을 것이라고 코드 근거로 답변(+
+   `researchers` SOURCES가 `multi=True`라 이 과거 파일들을 `data/raw/`에
+   두면 현재 `researchers.csv`에 옛 데이터가 섞여 들어갈 위험이 있어
+   권장하지 않는다고 경고). 대신 "DRM이 이미 제거된 .csv"도 입력으로
+   받도록 확장 — `pipeline/source_reader.read_source()`가 raw_csv를 읽는
+   방식과 정확히 동일한 `pd.read_csv(path, encoding='utf-8-sig',
+   dtype=str).fillna('')`로 읽어 xlwings/Excel/COM을 아예 안 거치는
+   경로를 추가(사용자가 파일을 Excel에서 수동으로 열어 "다른 이름으로
+   저장"한 결과를 바로 처리 가능). 자기 자신이 만든
+   `<이름>_team_refer.csv` 출력을 재실행 시 원본으로 잘못 집어먹지 않게
+   접미사 제외 처리도 함께 추가.
+
+5. **진단 확정 → 5차(원본 폴더를 인자로 지정 가능하게)**: 순차적으로
+   (1) `xlsx_to_raw_csv.py` 실행 시 `인력현황.xlsx`는 정상적으로
+   `researchers.csv`로 변환된다(→ 이 PC에서 xlwings/COM 자체는 정상
+   동작), (2) `data/raw/past_team_refer/` 안의 파일을 탐색기에서
+   더블클릭해도(수동 열기, 자동화와 무관) 안 열리고 오류 메시지가
+   뜬다(→ DRM 권한/파일 손상 문제로 좁혀짐)까지 확인한 뒤, 마지막으로
+   사용자가 "**같은 파일을 다른 폴더에 두면 정상적으로 열린다**"는 것을
+   발견 — 파일 내용/사용자 권한이 아니라 **파일이 위치한 경로 자체**를
+   DRM/보안 프로그램(NASCA 등)이 신뢰 여부 판단 기준으로 쓰는 정책일
+   가능성이 매우 높다는 결론(이 git 저장소의 `data/` 폴더가 그런 신뢰
+   경로 목록에 없을 수 있음 — 스크립트가 파일을 읽기만 하고 쓰지 않으므로
+   실행 중 원본이 손상됐을 가능성은 낮고, 항상 "열기" 단계 자체에서 실패한
+   것도 이 결론과 부합). 저장소 `data/` 폴더가 IT 승인을 받을 때까지
+   기다리지 않아도 되도록, `RAW_DIR`을 선택적 CLI 인자로 오버라이드할 수
+   있게 `main(raw_dir=...)`로 리팩터링 — 출력은 원본 폴더 위치와 무관하게
+   항상 저장소 안 `data/processed/past_team_refer/`로 저장된다.
+   ```
+   python scripts/build_past_team_refer.py                    (기본 폴더)
+   python scripts/build_past_team_refer.py "C:\경로\원본폴더"   (다른 폴더 지정)
+   ```
+   사용자가 실제로 파일이 정상적으로 열리는 폴더를 인자로 넘겨 재실행 →
+   **정상 동작 확인**(2026-09-02).
+
+**교훈**: "Excel file format cannot be determined"/COM 예외(-2147352567
+등)로 xlsx 읽기가 실패할 때, 원인은 (a) 코드/파라미터 차이, (b) 자동화의
+숨김 창 vs 화면 표시(Protected View), (c) 파일 자체의 DRM 권한/손상뿐
+아니라 — **(d) 파일이 위치한 폴더 경로 자체가 DRM/보안 프로그램의 신뢰
+목록에 있는지**도 반드시 확인 대상이다. 특히 "다른 폴더에서는 같은 파일이
+잘 열린다"는 증상이 나오면 거의 확실히 (d)다. 이런 경우 파이썬 코드를
+더 고치는 것보다, **원본을 읽는 폴더를 신뢰된 위치로 옮기거나 스크립트가
+그 폴더를 가리키게(예: CLI 인자로 경로 오버라이드)** 하는 쪽이 실질적인
+해결책이고, 저장소 `data/` 폴더 자체를 신뢰 목록에 올리는 건 코드가 아니라
+IT/보안팀 승인이 필요한 조직 정책 영역이다.
