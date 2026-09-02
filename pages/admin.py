@@ -4,6 +4,7 @@ manage_users 권한이 있는 계정만 접근 가능.
 """
 import base64
 import os
+import re
 from datetime import date
 
 import dash
@@ -1381,9 +1382,29 @@ def confirm_bulk_create(n_clicks, parsed, counter):
     return parts, (counter or 0) + 1, True
 
 
+_DEP_ID_SUFFIX_RE = re.compile(r'^(.*?)(\d+)$')
+
+
+def _suggest_next_dep_id(prev_dep_id: str) -> str:
+    """부서ID 끝의 숫자를 1 증가시켜 다음 값을 제안한다(예: "T1-PRT-01" →
+    "T1-PRT-02") — 자릿수(zero-padding)는 그대로 유지. 끝에 숫자가 없으면
+    (패턴을 못 찾으면) 제안하지 않고 빈 문자열(사용자 확정 2026-09-02,
+    "행 추가" 시 바로 위 행의 부서ID를 참고 — 결과는 그대로 채워지지만
+    셀은 계속 편집 가능해 틀리면 바로 고칠 수 있다)."""
+    prev_dep_id = (prev_dep_id or '').strip()
+    m = _DEP_ID_SUFFIX_RE.match(prev_dep_id)
+    if not m:
+        return ''
+    prefix, digits = m.group(1), m.group(2)
+    return f'{prefix}{str(int(digits) + 1).zfill(len(digits))}'
+
+
 # ── 콜백: 팀/리더 참조 — 행 추가 ─────────────────────────────────────────────
 # 클릭(선택)해둔 셀이 있으면 그 행 바로 다음에 삽입하고, 선택된 셀이 없으면
 # 맨 뒤에 추가한다(사용자 요청: 항상 맨 뒤가 아니라 원하는 위치에 끼워 넣기).
+# 새 행의 부서ID는 바로 위 행(삽입 위치 기준)의 부서ID 끝 숫자를 1 증가시켜
+# 자동 제안해 채운다(2026-09-02 추가) — 위 행이 없거나 끝이 숫자가 아니면
+# 빈 칸으로 둔다. 어차피 편집 가능한 셀이라 제안이 틀리면 바로 고치면 된다.
 @callback(
     Output('team-refer-table', 'data', allow_duplicate=True),
     Input('team-refer-add-row-btn', 'n_clicks'),
@@ -1397,6 +1418,8 @@ def team_refer_add_row(n_clicks, rows, active_cell):
     rows = list(rows or [])
     new_row = {col: '' for col in team_refer_store.KOREAN_COLUMNS}
     insert_at = active_cell['row'] + 1 if active_cell else len(rows)
+    if 0 < insert_at <= len(rows):
+        new_row['부서ID'] = _suggest_next_dep_id(rows[insert_at - 1].get('부서ID', ''))
     rows.insert(insert_at, new_row)
     return _renumbered(rows)
 
