@@ -385,9 +385,21 @@ def _judge_recommendations(profile_text: str, shortlist: list) -> tuple:
         cand = by_name.get(name)
         if not cand:
             return None  # 후보 목록에 없는 이름은 할루시네이션으로 간주하고 버림
+        reason = str(r.get('reason') or '').strip()
+        if not reason:
+            # reason이 비어 있으면(LLM이 프롬프트의 "1~2문장 사유" 지시를 안
+            # 지킨 경우) 근거 없이 프로젝트명만 있는 것 — 화면(pages/job_market.py
+            # _recommendation_row 등)이 "(근거 없음)"으로 보여주면서도 그
+            # 추천 자체는 그대로 "참여 가능 과제" 목록·재배치율 통계·엑셀
+            # 다운로드에 남아 있던 문제(2026-09-03 사용자 보고 — 근거가 없는데도
+            # 참여 가능 과제에 포함됨). project_name 할루시네이션과 마찬가지로
+            # 신뢰할 수 없는 출력으로 보고 여기서 버린다 — recommendations는
+            # 그냥 빠지고, must_place는 버려진 뒤 _fallback_must_place()로
+            # 대체되며, closest_non_match는 None(참여 가능한 과제 없음 처리)이 된다.
+            return None
         return {
             'project_name': name, 'dep_name': cand['dep_name'],
-            'reason': str(r.get('reason') or '').strip(),
+            'reason': reason,
             'score_a': cand['score_a'], 'score_b': cand['score_b'],
         }
 
