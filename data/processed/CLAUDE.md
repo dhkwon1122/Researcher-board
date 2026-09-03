@@ -8594,3 +8594,150 @@ T1-PRT-01 이면 T1-PRT-02 제안".
 정상적으로 빈 채로 유지). `py_compile` 통과. 테스트 서버·계정·합성
 CSV는 검증 후 정리(`data/`, `config/users.json` 모두 `.gitignore`
 대상이라 커밋에는 애초에 안 잡힘).
+
+## 2026-09-03: 팀/리더 참조 그리드 — 자동채움 가이드(드롭다운) + 클릭 위치
+커서 이동 + F2로 키보드만 정밀 편집
+
+바로 앞 항목("다음 번호 자동 제안")에 이어 사용자가 3가지를 추가 요청:
+(1) 처음부터 미뤄뒀던 "자동채움 가이드(드롭다운 방식)"를 구체화, (2)
+부서ID 셀을 더블클릭한 뒤 마우스로 텍스트 중간을 클릭하면 커서가 그
+자리로 가지 않고 항상 끝에서부터 수정해야 하는 문제, (3) F2가 안 먹혀서
+키보드만으로는 정밀 수정이 불가능한 문제. dash_table(dash==4.4.1 내장
+`dash.dash_table`)의 실제 편집 동작을 소스(`async-table.js`, 압축돼
+있지만 grep으로 함수 단위 추적)까지 뜯어봐야 정확한 원인을 알 수 있어
+꽤 깊게 조사했다.
+
+### 1) 자동채움 가이드(드롭다운)
+
+dash_table 자체에도 컬럼별 드롭다운 편집 기능(`dropdown`/
+`dropdown_conditional` + `columns[i].presentation='dropdown'`)이 있지만,
+소스를 확인해보니 이건 내부적으로 react-select의 일반 `Select`(비
+creatable)를 그대로 쓴다 — **목록에 있는 값만 선택 가능하고, 목록 밖
+값은 아예 입력할 수 없다**(react-select 번들 안에 `CreatableSelect`가
+있긴 하지만 dash_table의 실제 셀 편집기는 그걸 안 쓰고 그냥 `Select`를
+씀, 소스에서 `o().createElement(ni, {..., options:n, ...})`로 직접
+확인). 이러면 "가이드"가 아니라 "제한"이 되어 새 부서/과제를 추가하는
+흐름과 정면으로 충돌한다(사용자가 원한 건 "위 행들을 참고해 제안"이지
+"이미 있는 값만 강제"가 아님).
+
+대신 브라우저 네이티브 `<input list="...">` + `<datalist>`(자동완성 —
+목록에 없는 값도 자유롭게 입력 가능)를 신규 `assets/team_refer_grid.js`
+로 구현했다. 대상 컬럼 7개(비공식소속부서명/구분/부서/과제·파트/조직코드/
+상위부서ID/조직 레벨) — 부서ID(고유키, 이미 "다음 번호" 자동 제안이
+있음)·사번/성명/직책(개인 식별 정보, 반복 참고값이 아님)은 제외.
+
+- **`pages/admin.py`**: `_AUTOFILL_GUIDE_COLUMNS` + `_build_autofill_suggestions
+  (rows)` 신규 — 대부분 "그 컬럼 자체에 이미 쓰인 값"을 후보로 주지만,
+  **상위부서ID만 예외로 '부서ID' 컬럼 값**을 후보로 준다(상위부서ID에
+  실제로 입력해야 하는 값이 다른 행의 부서ID이므로 — "위 행들을 참고해서
+  자동채움을 가이드해달라"는 최초 요청 그대로). 조직 레벨(team_layer,
+  조직도 깊이 1~4)/구분(work_type, "R&D"만 분석 대상)은 데이터가 적어도
+  후보가 비어 보이지 않게 고정값(`1~4`, `R&D`)을 항상 포함하고 실제 쓰인
+  값과 합집합. 새 `dcc.Store(id='team-refer-suggestions')`에 이 결과를
+  담고, `team_refer_sync_suggestions()` 콜백(`Input('team-refer-table',
+  'data')`, tooltip 동기화 콜백과 같은 패턴)이 data가 바뀔 때마다 다시
+  계산한다. `clientside_callback`(신규, 더미 Output
+  `team-refer-grid-dummy`)이 Store 변화를 받아
+  `window.__syncTeamReferSuggestions()`를 호출.
+- **`assets/team_refer_grid.js`**(신규): `rebuildDatalists()`가
+  `document.body`에 컬럼당 `<datalist id="du-datalist::{컬럼명}">`을
+  만들고, `MutationObserver`(그리드 래퍼 `#team-refer-grid-wrap`을
+  지켜봄, 아래 참고)가 새로 생기는 편집용 `<input>`마다 그 셀의
+  `data-dash-column`을 읽어 해당 datalist를 `list` 속성으로 연결한다.
+
+### 2) 클릭 위치로 커서 이동
+
+원인을 소스에서 정확히 특정: `async-table.js`의 `zr` 함수(편집용
+`<input>`의 `onMouseUp` 핸들러)가 **셀이 새로 활성화되는 모든 클릭에서**
+`e.preventDefault()` 후 `input.setSelectionRange(0, 전체길이)`(전체
+선택)를 강제로 실행한다 — 클릭 좌표가 어디든 무관하게 항상 이 코드가
+나중에 실행돼 브라우저의 원래 클릭-위치-캐럿 배치를 덮어써 버린다.
+
+`<input>`은 실제 텍스트가 DOM 텍스트 노드로 노출되지 않아(폼 컨트롤
+내부 렌더링이라) `caretRangeFromPoint`류 API로 클릭 좌표→글자 인덱스
+변환이 불가능하다 — 대신 캔버스(`canvas.getContext('2d').measureText`)로
+그 input과 동일한 폰트를 적용해 각 글자 폭을 재 누적하며 클릭 x좌표에
+해당하는 글자 인덱스를 추정한다(`caretIndexFromClick()`). dash_table의
+강제 전체선택이 먼저 실행되게 두고, 그 다음 macrotask(`setTimeout(fn,
+0)`)에서 계산한 위치로 다시 덮어쓴다 — 같은 이벤트 처리 흐름 안에서
+순서를 역전시킬 방법이 없어(dash_table 핸들러가 React 합성 이벤트로
+동기 실행됨) 한 틱 늦게 재보정하는 방식을 택했다.
+
+### 3) F2로 키보드만 정밀 편집
+
+**핵심 발견**: 이 dash_table은 셀이 활성화되면(클릭이든 Tab/Enter로
+옮겨오든) **항상** 편집용 `<input>`을 보여준다 — "선택만 되고 편집은
+아직 아닌" 상태가 화면상 따로 없다. 하지만 방향키가 "텍스트 안에서
+커서 이동"으로 동작하는지 "옆 셀로 이동"으로 동작하는지, Backspace가
+"글자 하나만 삭제"인지 "셀 전체를 지움"인지는 dash_table 내부의
+**`is_focused`라는 테이블 전체 단위 상태값**에 전적으로 달려 있다(둘 다
+화면엔 똑같이 input이 보여서 구분이 안 됨) — 이 값은 `async-table.js`의
+`handleKeyDown`(테이블 컨테이너의 keydown 핸들러) 로직을 직접 해석해서
+알아냈다: `is_focused=false`(Tab/Enter로 옮겨온 직후 기본값)일 땐
+방향키=`switchCell()`(셀 이동), Backspace/Delete=`deleteCell()`(선택된
+셀 전체를 빈 문자열로 교체) — `is_focused=true`일 땐 방향키/Backspace
+모두 아무 것도 안 하고 브라우저 네이티브 입력 동작에 맡긴다(정상적인
+글자 단위 편집). **더블클릭만이 이 값을 true로 바꾸는 유일한 경로**이고,
+F2는 dash_table에 아예 구현돼 있지 않다(`async-table.js`에 "F2" 문자열
+자체가 없음, 직접 확인). `is_focused`는 Dash 컴포넌트 내부 React state라
+JS에서 직접 조작할 공개 수단이 없다.
+
+**해결**: F2를 누르면 실제 더블클릭과 최대한 비슷한 합성 이벤트 시퀀스
+(`mousedown→mouseup→click`을 두 번 반복한 뒤 `dblclick`)를 활성 셀
+(`<td data-dash-column>`)에 직접 발생시켜, dash_table 스스로 자신의
+정상적인 더블클릭 처리 경로를 통해 `is_focused=true`로 전환하게
+만든다(우리가 상태를 흉내 내지 않고 dash_table의 진짜 코드 경로를
+그대로 트리거하는 방식이라 안정적). 그 다음 `requestAnimationFrame`으로
+한 틱 기다렸다가 커서를 텍스트 맨 끝으로 옮긴다(엑셀의 F2와 동일한
+관례 — 이후 방향키로 원하는 위치까지 이동, Backspace/Delete/타이핑
+전부 dash_table의 정상 "편집 모드" 동작을 그대로 따른다). 별도의
+`stopPropagation` 가로채기 같은 건 전혀 필요 없다 — is_focused가
+올바르게 true가 되면 dash_table 스스로 방향키/Backspace를 올바르게
+처리해주기 때문(처음엔 방향키를 직접 가로채는 방식으로 구현했다가
+Backspace를 눌렀을 때 셀 전체가 지워지는 회귀를 실제로 재현해 발견,
+`is_focused`를 흉내 내지 않고 진짜로 전환시키는 이 방식으로 교체).
+
+**공용 래퍼**: 위 3가지 기능 모두
+`pages/admin.py`의 `_team_refer_tab()`에서 `dash_table.DataTable(...)`을
+`html.Div(id='team-refer-grid-wrap', children=[...])`로 감싸(dash_table이
+내부 DOM을 재렌더링해도 이 래퍼 id 자체는 유지) `assets/
+team_refer_grid.js`가 이 안에서만 이벤트를 지켜보게 했다.
+
+**검증**: Playwright로 실제 서버(임시 관리자 계정, 합성 `team_refer.csv`
+2행, dep_id 오름차순/상위부서ID 포함)에서 전부 확인 —
+1. 비공식소속부서명 셀 더블클릭 → `list` 속성이 `du-datalist::
+   비공식소속부서명`으로 정확히 걸리고, 그 datalist의 옵션이 실제
+   시트에 있는 두 값(ORG01, ORG02)과 일치. 상위부서ID 셀도 마찬가지로
+   확인했는데 옵션이 그 컬럼 자체 값이 아니라 **부서ID 컬럼 값**
+   (T1-PRT-01, T1-PRT-02)인 것까지 정확히 확인(설계 의도대로).
+2. 부서ID 셀("T1-PRT-01", 9글자) 더블클릭 후 셀 폭의 정중앙을 클릭 →
+   커서가 위치 7(끝에서 2번째)로 이동 — 클릭한 좌표가 실제 텍스트보다
+   오른쪽의 여백까지 포함된 셀 폭 기준 중앙이라 텍스트 자체의 정중앙
+   (약 4~5)보다 뒤에 오는 것은 기대한 대로(클릭 지점이 실제 글자 폭
+   기준으로 계산되고 있다는 증거).
+3. 사번 셀("00000001") 진입 후: F2 이전엔 ArrowRight를 누르면 실제로
+   옆 컬럼(성명)으로 이동(기존 방향키-셀이동 동작이 그대로 살아있음을
+   재확인) → F2를 누르면 커서가 정확히 [8,8](맨 끝)로 이동 → 그 상태에서
+   ArrowLeft를 두 번 누르면 **같은 셀에 그대로 머문 채** 커서만 [6,6]으로
+   이동(더 이상 옆 셀로 안 넘어감) → Backspace를 누르면 정확히 그
+   위치의 글자 한 개만 지워지고(`0000001`, 8자→7자) 셀 전체가 지워지지
+   않음 → `X`를 입력하면 그 위치에 정확히 삽입됨(`00000X01`) — 완전한
+   키보드만의 정밀 편집 성공을 실제 값 문자열로 확인.
+4. 별도의 부서ID 셀("T1-PRT-01")로 재현: 클릭 한 번(마우스로 더블클릭
+   없이) → F2 → 커서 [9,9](맨 끝) → ArrowLeft 두 번 → [7,7](같은 셀
+   유지) → Backspace(`T1-PRT01`, 하이픈 한 글자만 삭제) → `9` 입력
+   (`T1-PRT901`) — 두 번째 셀에서도 동일하게 재현되어 우연이 아님을
+   확인.
+5. **회귀 확인**: 단일 클릭 후 바로 타이핑하면 기존처럼 전체가 교체되는
+   것(성명 셀, "테스트이름"으로 전체 교체 확인), 기존에 이미 검증돼
+   있던 더블클릭+End+Backspace+숫자 워크플로우도 그대로 정상 동작하는
+   것(`T1-PRT-02` → `T1-PRT-09`)을 재확인 — 이번 변경이 기존 동작을
+   깨지 않았음을 확인. 페이지 콘솔/자바스크립트 에러 없음.
+
+`py_compile`/`node --check` 둘 다 통과. 테스트 서버·임시 계정·합성
+`team_refer.csv`는 검증 후 전부 정리(`data/`, `config/users.json` 모두
+`.gitignore` 대상이라 커밋에는 애초에 안 잡힘).
+
+**미검증**: 실제 원본 데이터(부서 수십~수백 개) 규모에서 datalist
+후보가 너무 많아질 때의 브라우저 자동완성 UX(성능/가독성), 다른
+브라우저(Chromium만 확인)에서의 동일 동작.
