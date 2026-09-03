@@ -9,7 +9,9 @@ from datetime import date
 
 import dash
 import dash_bootstrap_components as dbc
-from dash import ALL, Input, Output, State, callback, dash_table, dcc, html, no_update
+from dash import (
+    ALL, Input, Output, State, callback, clientside_callback, dash_table, dcc, html, no_update,
+)
 
 from config.auth_config import ROLE_LABELS, ROLE_PERMISSIONS
 from services import team_refer_store
@@ -413,6 +415,50 @@ def _team_refer_upload_section():
     ]), className='shadow-sm mb-3')
 
 
+# ── 팀/리더 참조 그리드 — 자동채움 가이드(드롭다운/자동완성) ─────────────────────
+# dash_table 자체의 dropdown(presentation='dropdown')은 react-select 기반이라
+# 목록에 없는 값은 아예 입력할 수 없다(선택 전용) — "가이드"가 아니라
+# "제한"이 되어 새 부서/과제를 추가하는 흐름과 맞지 않는다. 대신 브라우저
+# 네이티브 <input list="..."> + <datalist>(자동완성, 목록 밖 값도 자유
+# 입력 가능)를 assets/team_refer_grid.js가 편집용 input에 걸어준다 — 여기서는
+# 그 후보 목록만 계산한다(2026-09-03 추가).
+#
+# 대상 컬럼: 반복되거나 참조되는 값이 많은 컬럼만 선정. 부서ID(고유키,
+# "다음 번호" 자동 제안이 이미 있음)·사번/성명/직책(개인 식별 정보, 참고할
+# 반복값이 아님)은 제외.
+_AUTOFILL_GUIDE_COLUMNS = [
+    '비공식소속부서명', '구분', '부서', '과제/파트', '조직코드', '상위부서ID', '조직 레벨',
+]
+# 조직 레벨(team_layer, 조직도 깊이 1~4)/구분(work_type, "R&D"만 분석 대상)은
+# 데이터가 적어도 후보가 비어 보이지 않도록 고정값을 항상 포함한다(그 외
+# 실제로 쓰인 값이 있으면 함께 보여줌).
+_TEAM_LAYER_FIXED_OPTIONS = ['1', '2', '3', '4']
+_WORK_TYPE_FIXED_OPTIONS = ['R&D']
+
+
+def _build_autofill_suggestions(rows: list) -> dict:
+    """가이드 대상 컬럼별 자동완성 후보 목록. 대부분 "그 컬럼 자체에 이미
+    쓰인 값"이지만, 상위부서ID만 예외로 '부서ID' 컬럼 값을 후보로 쓴다 —
+    상위부서ID에 실제로 입력해야 하는 값이 다른 행의 부서ID이므로(위
+    행들을 참고해서 자동채움을 가이드해 달라는 요청 그대로)."""
+    rows = rows or []
+
+    def _existing(col: str) -> list:
+        return sorted({str(r.get(col, '') or '').strip() for r in rows} - {''})
+
+    suggestions = {}
+    for col in _AUTOFILL_GUIDE_COLUMNS:
+        if col == '상위부서ID':
+            suggestions[col] = _existing('부서ID')
+        elif col == '조직 레벨':
+            suggestions[col] = sorted(set(_TEAM_LAYER_FIXED_OPTIONS) | set(_existing(col)))
+        elif col == '구분':
+            suggestions[col] = sorted(set(_WORK_TYPE_FIXED_OPTIONS) | set(_existing(col)))
+        else:
+            suggestions[col] = _existing(col)
+    return suggestions
+
+
 def _team_refer_tab() -> html.Div:
     """팀/리더 참조 웹 CRUD 탭. 컬럼은 팀참조시트.xlsx 원본 헤더명을 그대로
     쓴다(pipeline.process_team_refer._COL_MAP 재사용, services.team_refer_store
@@ -431,6 +477,14 @@ def _team_refer_tab() -> html.Div:
 
     return html.Div([
         dcc.Store(id='team-refer-loaded-dep-ids', data=loaded_dep_ids),
+        # 자동채움 가이드(드롭다운/자동완성) 후보 — team_refer_sync_suggestions
+        # 콜백이 data가 바뀔 때마다 다시 계산해 채운다. 여기 초기값은 페이지
+        # 최초 로드 시 클라이언트 스크립트(assets/team_refer_grid.js)가 바로
+        # 쓸 수 있게 미리 계산해 둔 것.
+        dcc.Store(id='team-refer-suggestions', data=_build_autofill_suggestions(rows)),
+        # clientside_callback 전용 더미 Output(화면에 표시할 내용 없음) —
+        # pages/researcher_profile.py의 profile-print-dummy와 동일한 패턴.
+        html.Div(id='team-refer-grid-dummy', style={'display': 'none'}),
 
         dbc.Alert(
             [
@@ -476,38 +530,45 @@ def _team_refer_tab() -> html.Div:
         dcc.Download(id='team-refer-download'),
         html.Div(id='team-refer-db-load-msg'),
 
-        dash_table.DataTable(
-            id='team-refer-table',
-            columns=columns,
-            data=rows,
-            editable=True,
-            row_deletable=True,
-            page_action='none',  # 페이지 나누지 않고 전체 행을 한 번에 표시
-            sort_action='custom',  # 헤더 클릭 정렬 — team_refer_sort 콜백이 처리(No.도 같이 갱신)
-            sort_by=[],
-            style_table={'overflowX': 'auto'},
-            # 전체 가운데 정렬 + 좁은 폭에서도 최대한 좌우 스크롤 없이 한 화면에
-            # 들어오도록 폰트/여백을 줄이고, 그래도 안 들어가는 내용은 말줄임
-            # 처리 후 마우스 오버로 전체를 보여준다(tooltip_data, 사용자 확정
-            # — 안 들어가면 스크롤이 남는 것도 허용).
-            style_cell={
-                'fontSize': '0.72rem', 'padding': '3px 6px', 'textAlign': 'center',
-                'minWidth': '55px', 'maxWidth': '160px',
-                'overflow': 'hidden', 'textOverflow': 'ellipsis',
-            },
-            style_cell_conditional=[{'if': {'column_id': '_no'}, 'width': '40px', 'textAlign': 'center'}],
-            style_header={'fontWeight': '600', 'backgroundColor': '#fafafa',
-                          'textAlign': 'center', 'fontSize': '0.72rem'},
-            tooltip_delay=0,
-            tooltip_duration=None,
-            # DataTable에는 컬럼 너비 드래그 조절 기능이 없어(구버전 dash_table),
-            # 헤더 텍스트를 감싸는 요소에 브라우저 네이티브 CSS resize를 적용해
-            # 우측 하단 모서리를 드래그해 너비를 조절할 수 있게 한다.
-            css=[{
-                'selector': '.column-header-name',
-                'rule': ('display: inline-block; resize: horizontal; overflow: auto; '
-                         'min-width: 40px; max-width: 600px; vertical-align: bottom;'),
-            }],
+        # id를 가진 고정 래퍼 — assets/team_refer_grid.js가 이 안에서만
+        # 이벤트를 지켜본다(자동채움 가이드/클릭 위치로 커서 이동/F2 편집
+        # 진입, 2026-09-03 추가). dash_table이 내부 DOM을 재렌더링해도
+        # 이 래퍼 자체의 id는 계속 유지된다.
+        html.Div(
+            dash_table.DataTable(
+                id='team-refer-table',
+                columns=columns,
+                data=rows,
+                editable=True,
+                row_deletable=True,
+                page_action='none',  # 페이지 나누지 않고 전체 행을 한 번에 표시
+                sort_action='custom',  # 헤더 클릭 정렬 — team_refer_sort 콜백이 처리(No.도 같이 갱신)
+                sort_by=[],
+                style_table={'overflowX': 'auto'},
+                # 전체 가운데 정렬 + 좁은 폭에서도 최대한 좌우 스크롤 없이 한 화면에
+                # 들어오도록 폰트/여백을 줄이고, 그래도 안 들어가는 내용은 말줄임
+                # 처리 후 마우스 오버로 전체를 보여준다(tooltip_data, 사용자 확정
+                # — 안 들어가면 스크롤이 남는 것도 허용).
+                style_cell={
+                    'fontSize': '0.72rem', 'padding': '3px 6px', 'textAlign': 'center',
+                    'minWidth': '55px', 'maxWidth': '160px',
+                    'overflow': 'hidden', 'textOverflow': 'ellipsis',
+                },
+                style_cell_conditional=[{'if': {'column_id': '_no'}, 'width': '40px', 'textAlign': 'center'}],
+                style_header={'fontWeight': '600', 'backgroundColor': '#fafafa',
+                              'textAlign': 'center', 'fontSize': '0.72rem'},
+                tooltip_delay=0,
+                tooltip_duration=None,
+                # DataTable에는 컬럼 너비 드래그 조절 기능이 없어(구버전 dash_table),
+                # 헤더 텍스트를 감싸는 요소에 브라우저 네이티브 CSS resize를 적용해
+                # 우측 하단 모서리를 드래그해 너비를 조절할 수 있게 한다.
+                css=[{
+                    'selector': '.column-header-name',
+                    'rule': ('display: inline-block; resize: horizontal; overflow: auto; '
+                             'min-width: 40px; max-width: 600px; vertical-align: bottom;'),
+                }],
+            ),
+            id='team-refer-grid-wrap',
         ),
 
         html.Div(id='team-refer-save-msg', className='mt-2'),
@@ -1478,6 +1539,35 @@ def team_refer_sync_tooltip(rows):
     if not rows:
         return []
     return [{k: str(v) if v is not None else '' for k, v in row.items()} for row in rows]
+
+
+# ── 콜백: 팀/리더 참조 — 자동채움 가이드 후보 갱신 ────────────────────────────
+# tooltip과 같은 이유로 data 하나만 지켜본다 — 행 추가/삭제/정렬/편집
+# 어디서 바뀌든 매번 최신 값 기준으로 후보를 다시 계산.
+@callback(
+    Output('team-refer-suggestions', 'data'),
+    Input('team-refer-table', 'data'),
+)
+def team_refer_sync_suggestions(rows):
+    return _build_autofill_suggestions(rows)
+
+
+# assets/team_refer_grid.js의 window.__syncTeamReferSuggestions()가 후보
+# 목록으로 <datalist>를 다시 만들고(자동채움 가이드), 최초 1회 이 그리드
+# 전용 이벤트(클릭 위치로 커서 이동/F2 편집 진입)를 등록한다 — 서버
+# 왕복 없이 클라이언트에서 바로 처리(2026-09-03 추가).
+clientside_callback(
+    """
+    function(suggestions) {
+        if (window.__syncTeamReferSuggestions) {
+            window.__syncTeamReferSuggestions(suggestions);
+        }
+        return '';
+    }
+    """,
+    Output('team-refer-grid-dummy', 'children'),
+    Input('team-refer-suggestions', 'data'),
+)
 
 
 # ── 콜백: 팀/리더 참조 — 저장 ─────────────────────────────────────────────────
