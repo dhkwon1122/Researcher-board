@@ -8787,3 +8787,71 @@ placeholder 문구는 그대로 남겨뒀다 — 이 수정 이전에 이미 저
 있을 수 있어(과거 데이터), 그런 옛 이력을 "보기"로 다시 열 때의 방어용
 폴백으로는 계속 유효하다. 새로 생성되는 결과부터는 이 문구가 나타날
 일이 없어야 정상이다.
+
+## 2026-09-03 (2): run_pipeline.py 어학/근무경력 포함 여부 확인 + 근무경력·
+어학 표시 NaN 누출 수정
+
+사용자 질문 2건: (1) `run_pipeline.py`에 어학 관련 데이터가 미포함돼
+있는지, (2) 근무경력이 "nan( ~ , nan)"으로 표시되는데 표시 로직을 알려
+주고 없는 경우엔 "없음"으로 표시해달라는 것.
+
+**(1) 확인 결과 — 이미 포함돼 있음**: `pipeline/run_pipeline.py`의
+"9-7. 어학자격"(`process_language_qualification`)/"9-8. 근무 경력"
+(`process_work_experience`) 단계가 이미 존재한다(2026-08-29 최초
+추가 시점부터). CLI로 전체 파이프라인을 돌리면 함께 처리된다 — 별도
+조치 불필요, 질문에 대한 답변만.
+
+**(2) 근무경력 "nan( ~ , nan)" 표시 — 실제 버그, 원인/수정**:
+`services/work_experience.py`의 `format_line()`이 `company_name`/
+`role_name`을 `str(row.get(...) or '').strip()`으로만 정리하고 있었다
+— `read_processed()`가 CSV를 읽을 때 그 컬럼에 빈 셀이 하나라도 섞여
+있으면 pandas가 컬럼 전체를 float로 추론해 빈 값이 `float('nan')`이
+되는데, 파이썬에서 NaN은 항상 참으로 평가되므로(`nan or ''` → `nan`
+그대로) `str(nan)` = 문자열 `"nan"`이 그대로 남아 화면에 새어나갔다
+— 이 프로젝트에서 여러 번 반복된 패턴(2026-08-29 나이 "-" 표시 버그
+— `birth_year` "1990.0" 이슈 — 와 동일한 근본 원인). 같은 함수 안
+날짜 필드(`_format_ym`)에는 이미 `'nan'`/`'none'`/`'nat'` 문자열 가드가
+있었는데 `company_name`/`role_name`에는 빠져 있던 것.
+
+**표시 로직 설명(사용자 질문 답변)**: `format_line(row)`이 한 행을
+`"회사명(시작'YY.MM ~ 종료'YY.MM, 직무명)"`으로 조립하고,
+`work_experience_block()`(components/profile_sections.py, 화면·인쇄
+카드·엑셀 다운로드 공용)이 이 함수를 사람별로 여러 번 불러 목록을
+만든다. 회사명이 없는 행은 애초에 `format_line()`이 `None`을 반환해
+건너뛴다(그 행 자체가 무의미하므로) — 이 필터링이 NaN 때문에 제대로
+안 걸려서 가비지 행이 그대로 새어나간 게 이번 버그. 종료일이 없으면
+"현재"로 채우지 않고 공란으로 두는 기존 규칙(2026-08-29 확정)은
+그대로 유지 — "없음"으로 바꾸지 않았다(공란=재직 중이라는 의미가
+있어 "없음"으로 바꾸면 오히려 정보가 왜곡됨).
+
+**수정**: `_clean_str(val)` 공용 헬퍼 신규(`components/profile_sections.py`
+의 동명 헬퍼와 동일한 처리 — `'nan'`/`'none'`/`'nat'` 문자열까지
+빈 값으로 취급) 추가해 `_format_ym`/`company`/`role` 셋 다 이 헬퍼로
+통일. 회사명이 실제로 없는(NaN 포함) 행은 여전히 건너뛰고, 그 결과
+한 사람의 근무 경력이 전부 걸러지면 **이미 있던**
+`work_experience_block()`의 "근무 경력 없음" 폴백(`show_empty_message`
+기본값 `True`)이 정상적으로 노출된다 — 새 "없음" 로직을 따로 만들
+필요 없이, 근본 버그(NaN이 진짜 빈 값으로 안 걸러지던 것)만 고치니
+기존에 이미 구현돼 있던 "없음" 표시가 저절로 도달 가능해졌다. 인쇄
+카드(`show_empty_message=False`)는 기존 설계대로 그대로 둠(지면
+제약으로 데이터 없으면 아예 표시 안 함, 이번 변경과 무관).
+
+**예방적으로 함께 수정**: `services/language_qualification.py`의
+`format_lines()`도 `language`/`speak_grade`가 같은 클래스의 버그에
+노출돼 있어(파이프라인이 항상 채워 저장하긴 하지만) 만료일에만 있던
+NaN 가드를 `_clean_str()` 공용 헬퍼로 추출해 language/speak_grade에도
+동일하게 적용 — 직접 보고된 버그는 아니었으나 같은 대화에서 다룬
+같은 패턴이라 함께 정리.
+
+**검증**: `services/work_experience.py`를 합성 데이터로 직접 호출해
+(1) 사용자가 겪은 정확한 케이스(company_name/role_name/날짜 전부
+NaN) → `format_line()`이 `None`(더 이상 "nan(...)" 안 새어나옴), (2)
+회사명은 정상이고 role_name만 NaN → `"Samsung('20.01 ~ )"`처럼 그
+부분만 자연스럽게 생략(공란, "없음" 아님), (3) 정상 케이스(전부
+채워짐) 회귀 없음을 확인. `components.profile_sections.work_experience_block()`
+을 가비지 행 1개짜리 DataFrame으로 직접 호출해 "근무 경력 없음"이
+정확히 렌더링되는 것도 확인. `language_qualification.py`도 정상/NaN
+케이스 각각 회귀 없이 동작 확인. `py_compile` 통과,
+`pages.researcher_profile`/`services.researcher_profile_export`
+모듈 임포트 확인(엑셀 다운로드의 `_col_work_experience()`도 같은
+`format_lines()`를 공유하므로 함께 수정됨).
