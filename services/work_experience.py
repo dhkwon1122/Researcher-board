@@ -28,10 +28,23 @@ def read_rows(researcher_id: str) -> list[dict]:
     return rows.to_dict('records')
 
 
+def _clean_str(val) -> str:
+    """read_processed()가 CSV를 읽을 때, 그 컬럼에 빈 셀이 하나라도 섞여
+    있으면 pandas가 컬럼 전체를 float로 추론해 정상 값도 NaN이 되고 빈
+    값은 float('nan')이 된다 — str(nan)이 문자열 "nan"이 되어(파이썬에서
+    NaN은 참으로 평가되므로 `or ''` 같은 처리로는 안 걸러짐) 그대로
+    화면에 "nan"으로 새어나가는 문제(2026-09-03, 근무경력이 "nan( ~ ,
+    nan)"으로 표시되는 문제로 실제 발견 — company_name/role_name 둘 다
+    이 가드가 없었음). components/profile_sections.py의 동명 헬퍼와
+    동일한 처리."""
+    s = str(val).strip() if val is not None else ''
+    return '' if s.lower() in ('', 'nan', 'none', 'nat') else s
+
+
 def _format_ym(date_str) -> str:
     """'YYYY-MM-DD' -> "'YY.MM". 빈 값/파싱 불가면 빈 문자열."""
-    s = str(date_str or '').strip()
-    if not s or s.lower() in ('nan', 'none', 'nat'):
+    s = _clean_str(date_str)
+    if not s:
         return ''
     parts = s.split('-')
     if len(parts) < 2:
@@ -44,13 +57,20 @@ def _format_ym(date_str) -> str:
 
 def format_line(row: dict) -> str | None:
     """행 하나를 "회사명(시작'YY.MM ~ 종료'YY.MM, 직무명)"로 변환.
-    회사명이 비어 있으면 None(표시할 게 없음)."""
-    company = str(row.get('company_name', '') or '').strip()
+    회사명이 비어 있으면 None(표시할 게 없음 — 그 행 자체를 건너뛴다).
+    회사명이 있는 행 안에서 직무명만 없으면(빈 값/NaN) 그 부분만 생략하고
+    "회사명(시작 ~ 종료)"로 표시한다 — 값이 없다고 "없음"을 억지로 채워
+    넣지는 않는다(종료일이 없을 때 "현재"로 채우지 않고 공란으로 두는
+    기존 규칙과 같은 원칙). 한 사람의 근무 경력 자체가 통째로 없는
+    경우(모든 행이 스킵돼 결과가 0건)는 이 함수가 아니라
+    components.profile_sections.work_experience_block()이 "근무 경력
+    없음"을 보여준다."""
+    company = _clean_str(row.get('company_name'))
     if not company:
         return None
     start = _format_ym(row.get('work_start_date'))
     end = _format_ym(row.get('work_end_date'))
-    role = str(row.get('role_name', '') or '').strip()
+    role = _clean_str(row.get('role_name'))
     line = f'{company}({start} ~ {end}'
     if role:
         line += f', {role}'

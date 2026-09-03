@@ -25,17 +25,29 @@ def read_rows(researcher_id: str) -> list[dict]:
     return rows.to_dict('records')
 
 
+def _clean_str(val) -> str:
+    """read_processed()로 CSV를 읽을 때 그 컬럼에 빈 셀이 섞여 있으면
+    pandas가 컬럼 전체를 float로 추론해 빈 값이 float('nan')이 되고,
+    str(nan)이 문자열 "nan"이 되어(파이썬에서 NaN은 참으로 평가되므로
+    `or ''` 처리로는 안 걸러짐) 그대로 "nan"으로 새어나갈 수 있다
+    (services/work_experience.py에서 근무경력이 "nan( ~ , nan)"으로
+    새던 것과 동일한 문제, 2026-09-03 — 여기 language/speak_grade는
+    실제로는 파이프라인이 항상 채워서 저장하지만, 만료일과 동일한
+    가드를 예방적으로 함께 적용)."""
+    s = str(val).strip() if val is not None else ''
+    return '' if s.lower() in ('', 'nan', 'none', 'nat') else s
+
+
 def format_lines(rows: list[dict]) -> list[str]:
     """행 목록을 "{언어} {등급}(만료일 {날짜})" 문자열 리스트로 변환한다.
     만료일이 없으면 그 부분을 생략한다(예: "영어 2등급")."""
     lines = []
     for r in rows:
-        language = str(r.get('language', '') or '').strip()
-        grade = str(r.get('speak_grade', '') or '').strip()
+        language = _clean_str(r.get('language'))
+        grade = _clean_str(r.get('speak_grade'))
         if not language or not grade:
             continue
-        expiration = str(r.get('expiration_date', '') or '').strip()
-        expiration = '' if expiration.lower() in ('', 'nan', 'none', 'nat') else expiration
+        expiration = _clean_str(r.get('expiration_date'))
         line = f'{language} {grade}'
         if expiration:
             line += f'(만료일 {expiration})'
