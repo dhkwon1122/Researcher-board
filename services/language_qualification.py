@@ -9,6 +9,8 @@
 읽어 표시 문자열로 조립하는 역할만 한다.
 """
 
+import re
+
 import pandas as pd
 
 from services import data_store
@@ -38,6 +40,26 @@ def _clean_str(val) -> str:
     return '' if s.lower() in ('', 'nan', 'none', 'nat') else s
 
 
+_DATE_ONLY_RE = re.compile(r'^(\d{4}-\d{2}-\d{2})(?:[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?)?$')
+
+
+def _clean_date(val) -> str:
+    """만료일처럼 날짜만 필요한 값에서 시분초를 뗀다. pipeline/
+    process_language_qualification.py가 excel_reader.parse_flexible_date()로
+    저장하는데, 그 함수는 pandas Timestamp 표현 범위(~2262년)를 벗어나는
+    "9999-12-31"류 "영구/만료없음" sentinel 날짜를 만나면(예외 발생 시
+    원본 문자열 그대로 반환) 시분초까지 포함된 "9999-12-31 00:00:00"을
+    그대로 저장할 수 있었다(2026-09-03 확인 — pipeline 쪽 근본 원인은
+    excel_reader.py에서 함께 수정). 이미 그렇게 저장된 CSV도 파이프라인
+    재실행 없이 바로 정상 표시되도록, 여기서도 한 번 더 날짜 부분만
+    뽑아낸다."""
+    s = _clean_str(val)
+    if not s:
+        return ''
+    m = _DATE_ONLY_RE.match(s)
+    return m.group(1) if m else s
+
+
 def format_lines(rows: list[dict]) -> list[str]:
     """행 목록을 "{언어} {등급}(만료일 {날짜})" 문자열 리스트로 변환한다.
     만료일이 없으면 그 부분을 생략한다(예: "영어 2등급")."""
@@ -47,7 +69,7 @@ def format_lines(rows: list[dict]) -> list[str]:
         grade = _clean_str(r.get('speak_grade'))
         if not language or not grade:
             continue
-        expiration = _clean_str(r.get('expiration_date'))
+        expiration = _clean_date(r.get('expiration_date'))
         line = f'{language} {grade}'
         if expiration:
             line += f'(만료일 {expiration})'

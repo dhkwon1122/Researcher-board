@@ -10,6 +10,8 @@ DRM 보호 파일도 정상적으로 읽을 수 있습니다.
   - `pip install xlwings` 가 완료되어 있어야 합니다.
 """
 
+import re
+
 import pandas as pd
 
 
@@ -70,10 +72,22 @@ def parse_yyyymmdd(val) -> str:
     return s
 
 
+_ISO_DATETIME_RE = re.compile(r'^(\d{4}-\d{2}-\d{2})(?:[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?)?$')
+
+
 def parse_flexible_date(val) -> str:
     """다양한 날짜 표기(YYYYMMDD, YYYY-MM-DD, YYYY/MM/DD 등)를 pandas가 인식하는
     한 자유롭게 파싱해 'YYYY-MM-DD'로 반환. 빈 값이면 빈 문자열, 파싱 실패 시
-    원본 문자열(strip만 적용)을 그대로 반환."""
+    원본 문자열(strip만 적용)을 그대로 반환.
+
+    pandas Timestamp는 연도 ~2262까지만 표현 가능해, "9999-12-31"처럼 일부
+    사내 시스템이 "영구/만료없음"을 뜻하는 sentinel로 쓰는 극단적인 날짜는
+    pd.to_datetime()이 예외를 던진다(2026-09-03 어학자격 만료일이
+    "9999-12-31 00:00:00"으로 시분초까지 새어나온 문제로 발견 — 엑셀 날짜
+    셀 값이 파이썬 datetime 객체로 읽히면 str()이 항상 시분초를 포함하는데,
+    pandas 파싱이 실패하면 그 문자열이 그대로 반환되기 때문). 이런 경우도
+    "YYYY-MM-DD[ HH:MM:SS]" 형태(ISO 유사)면 정규식으로 날짜 부분만 뽑아
+    반환 — 진짜 파싱 불가능한 값만 원본 그대로 폴백한다."""
     if val is None or (isinstance(val, float) and pd.isna(val)):
         return ''
     s = str(val).strip()
@@ -82,7 +96,8 @@ def parse_flexible_date(val) -> str:
     try:
         return pd.to_datetime(s).strftime('%Y-%m-%d')
     except Exception:
-        return s
+        m = _ISO_DATETIME_RE.match(s)
+        return m.group(1) if m else s
 
 
 _FORMULA_TRIGGER_CHARS = ('=', '+', '-', '@', '\t', '\r')
