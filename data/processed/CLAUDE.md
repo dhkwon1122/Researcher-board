@@ -8741,3 +8741,49 @@ team_refer_grid.js`가 이 안에서만 이벤트를 지켜보게 했다.
 **미검증**: 실제 원본 데이터(부서 수십~수백 개) 규모에서 datalist
 후보가 너무 많아질 때의 브라우저 자동완성 UX(성능/가독성), 다른
 브라우저(Chromium만 확인)에서의 동일 동작.
+
+## 2026-09-03: JOB Market — 근거(reason) 없는 추천도 그대로 목록에 남던
+버그 수정
+
+사용자 보고: "job market을 실행해보니 근거가 없음에도 참여 가능 과제에
+특정 인원이 들어간다"— 확인해보니 실제로 있는 버그였다.
+
+**원인**: `services/job_market.py`의 `_judge_recommendations()` 안
+`_attach()`가 LLM이 돌려준 추천을 코드에 붙일 때, `project_name`이
+임베딩 상위 후보(shortlist) 안에 실제로 있는지만 검증(할루시네이션
+방지)하고 **`reason`이 비어 있는지는 전혀 검사하지 않았다**. 그래서 LLM이
+"추천은 하지만 사유는 안 써서 반환"하는 경우에도 그 추천이 `recommendations`
+리스트에 그대로 들어갔다. `pages/job_market.py`의
+`_recommendation_row()`(62행)를 보면 이미 이 상황을 알고 있었던 흔적이
+있었다 — `rec.get('reason', '') or '(근거 없음)'`로 화면엔 "(근거 없음)"
+문구만 방어적으로 보여줄 뿐, **그 추천 자체(과제)는 여전히 "참여 가능
+과제" 목록에 남아 재배치율 통계(`_summary_stats`)·엑셀 다운로드
+(`build_result_workbook`)에도 그대로 반영되고 있었다** — 화면에 나온
+placeholder 문구를 사용자가 직접 보고서야 문제를 알아챈 상황.
+
+**수정**: `_attach()`에서 `project_name` 검증 직후 `reason`도 함께
+검증하도록 확장 — `str(r.get('reason') or '').strip()`이 빈 문자열이면
+`project_name` 할루시네이션과 동일하게 "신뢰할 수 없는 출력"으로 보고
+`None`을 반환(버림)한다. 세 호출부 모두 기존 안전망을 그대로 재사용해
+자연스럽게 처리된다: `recommendations`는 그 항목만 조용히 빠지고,
+`closest_non_match`는 `None`이 되어 화면이 "참여 가능한 과제를 찾지
+못했습니다"로 정상 폴백하며, `must_place`는 걸러진 뒤 기존
+`_fallback_must_place()`(임베딩 유사도 1순위 + 고정 사유 문구)로
+대체된다 — 이미 있던 세 갈래 안전망 위에 검증 조건 하나만 얹은 최소
+수정.
+
+**검증**: `llm_client.call_llm`을 모킹해 4가지 시나리오로 직접 확인 —
+(1) 추천 2건 중 1건만 reason이 빈 경우 그 1건만 정확히 걸러지고 나머지
+정상 추천은 그대로 남는 것, (2) `closest_non_match`의 reason이 비면
+`None`으로 처리되는 것, (3) `must_place`가 전부 reason 없이(공백 문자만)
+반환되면 `_fallback_must_place()`로 정확히 대체되는 것, (4) 셋 다
+정상적으로 reason이 채워진 기존 정상 케이스는 회귀 없이 그대로 동작하는
+것을 확인. `py_compile` 통과, `pages.job_market`/`services.job_market`
+모듈 임포트 확인.
+
+**참고**: 화면(`pages/job_market.py`)의 `'(근거 없음)'`/`'(사유 없음)'`
+placeholder 문구는 그대로 남겨뒀다 — 이 수정 이전에 이미 저장된 이력
+(`data/processed/job_market/` 스냅샷)에는 여전히 근거 없는 추천이 남아
+있을 수 있어(과거 데이터), 그런 옛 이력을 "보기"로 다시 열 때의 방어용
+폴백으로는 계속 유효하다. 새로 생성되는 결과부터는 이 문구가 나타날
+일이 없어야 정상이다.
