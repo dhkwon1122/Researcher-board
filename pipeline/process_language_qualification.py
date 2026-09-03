@@ -6,15 +6,19 @@
   (1단계 xlsx_to_raw_csv.py가 data/raw/어학자격 *.xlsx를 DRM 제거해 만든 사본)
 출력 파일: data/processed/language_qualification.csv
 
-원본 컬럼 구조(2026-08-29 사용자 확인): A열=사번, B~Y열은 이 기능과 무관한
-컬럼, Z열부터 언어별로 6컬럼씩 반복된다 — "{언어} 회화", 발급일, 만료일,
-"{언어} 필기", 발급일, 만료일, 다음 언어... 언어 종류는 고정돼 있지 않고
-새 언어를 취득한 사람이 생기면 그 언어의 6컬럼 블록이 파일에 새로 추가된다.
-"필기" 관련 값은 이번 기능에서 쓰지 않는다(사용자 확정).
+원본 컬럼 구조(2026-08-29 사용자 확인, 2026-09-03 헤더 표기 정정): A열=사번,
+B~Y열은 이 기능과 무관한 컬럼, Z열부터 언어별로 6컬럼씩 반복된다 —
+"[{언어} 회화]", 발급일, 만료일, "[{언어} 필기]", 발급일, 만료일, 다음
+언어... **회화/필기 헤더는 "{언어} 회화"가 아니라 대괄호로 감싼
+"[{언어} 회화]" 형태다**(예: "영어 회화"가 아니라 "[영어 회화]", "일본어
+회화"가 아니라 "[일본어 회화]" — 처음엔 대괄호 없이 확인했다가 실제 파일
+확인 후 정정). 언어 종류는 고정돼 있지 않고 새 언어를 취득한 사람이
+생기면 그 언어의 6컬럼 블록이 파일에 새로 추가된다. "필기" 관련 값은
+이번 기능에서 쓰지 않는다(사용자 확정).
 
 "발급일"/"만료일" 헤더 자체는 모든 언어 블록에서 똑같은 문자열이라(엑셀이
 파일을 읽을 때 자동으로 뒤에 .1/.2 등을 붙여 구분하긴 하지만) 이름만으로는
-어느 언어의 만료일인지 알 수 없다 — 그래서 이 모듈은 "{언어} 회화" 컬럼을
+어느 언어의 만료일인지 알 수 없다 — 그래서 이 모듈은 "[{언어} 회화]" 컬럼을
 이름으로 찾은 뒤, 그 컬럼의 위치(인덱스) + 2번째 컬럼을 그 언어의 만료일로
 읽는다(사용자 확정 — 회화, 발급일, 만료일 순서가 고정이라는 전제).
 이 위치 오프셋 규칙이 실제 파일과 어긋나면(예: 만료일 앞뒤로 컬럼이
@@ -23,7 +27,8 @@
 
 출력 스키마(long, 사람당 보유 언어 수만큼 여러 행):
   researcher_id, language, speak_grade, expiration_date
-  speak_grade는 원본 "{언어} 회화" 셀 값을 그대로 저장한다(예: "2등급" —
+  language는 대괄호를 뗀 언어명만 저장한다(예: "[영어 회화]" → "영어").
+  speak_grade는 원본 "[{언어} 회화]" 셀 값을 그대로 저장한다(예: "2등급" —
   등급 문자가 이미 포함돼 있어 이 모듈이 따로 가공하지 않는다, 사용자 확정).
 
 ── 누적하지 않음(사용자 확정) ────────────────────────────────────────────────
@@ -35,12 +40,13 @@
 그래서 evaluations/tech_ownership처럼 valid_year/valid_month 시점 보호나
 _history.csv도 두지 않는다.
 
-컬럼명이 다를 경우 파일 상단의 COL_ID/_EXPIRATION_OFFSET/_HEADER_ROW를
-실제 헤더에 맞게 수정하세요.
+컬럼명이 다를 경우 파일 상단의 COL_ID/_SPEAK_HEADER_RE/_EXPIRATION_OFFSET/
+_HEADER_ROW를 실제 헤더에 맞게 수정하세요.
 """
 
 import csv
 import os
+import re
 import sys
 
 import pandas as pd
@@ -49,8 +55,10 @@ LANG_PATTERN = '어학자격 *.xlsx'
 _HEADER_ROW = 6  # 사용자 확인(2026-08-29) — 실제 헤더는 7번째 행(1~6행 무시)
 
 COL_ID = '사번'
-_SPEAK_SUFFIX = ' 회화'
-_EXPIRATION_OFFSET = 2  # "{언어} 회화" 컬럼 기준 몇 번째 뒤 컬럼이 만료일인지
+# "[{언어} 회화]" 형태(대괄호 포함, 2026-09-03 정정 — 처음엔 대괄호 없이
+# "{언어} 회화"로 확인했었음). group(1)이 언어명("영어" 등)만 뽑아낸다.
+_SPEAK_HEADER_RE = re.compile(r'^\[(.+?)\s*회화\]$')
+_EXPIRATION_OFFSET = 2  # "[{언어} 회화]" 컬럼 기준 몇 번째 뒤 컬럼이 만료일인지
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
@@ -60,22 +68,28 @@ from source_reader import read_source  # noqa: E402
 
 
 def _find_language_specs(columns: list) -> list[tuple[str, int, int]]:
-    """"{언어} 회화" 컬럼을 전부 찾아 (언어명, 회화 컬럼 위치, 만료일 컬럼
+    """"[{언어} 회화]" 컬럼을 전부 찾아 (언어명, 회화 컬럼 위치, 만료일 컬럼
     위치) 리스트로 반환한다. 만료일 컬럼이 실제로 "만료일"이라는 이름이
     아니면(위치 오프셋 가정이 어긋났을 가능성) 경고만 남기고 그래도 그
     위치를 그대로 쓴다(사용자가 확정한 규칙이므로 값 자체는 신뢰)."""
     specs = []
     for idx, col in enumerate(columns):
-        if not col.endswith(_SPEAK_SUFFIX):
+        m = _SPEAK_HEADER_RE.match(col.strip())
+        if not m:
             continue
-        language = col[:-len(_SPEAK_SUFFIX)].strip()
+        language = m.group(1).strip()
         if not language:
             continue
         exp_idx = idx + _EXPIRATION_OFFSET
         if exp_idx >= len(columns):
             print(f'  [WARN] "{col}" 뒤에 만료일 컬럼이 없어(파일 끝) 이 언어는 건너뜀')
             continue
-        if not str(columns[exp_idx]).strip().startswith('만료일'):
+        # 만료일 헤더도 "[만료일]"처럼 대괄호로 감싸져 있을 수 있어(회화
+        # 헤더와 동일한 이유로 실물 확인 전까지는 확신할 수 없음) 대괄호를
+        # 뗀 뒤 비교한다 — 이 검사는 정보성 경고일 뿐 값 자체는 대괄호
+        # 여부와 무관하게 그대로 쓰므로, 형식이 달라도 기능에는 영향 없다.
+        exp_header = str(columns[exp_idx]).strip().strip('[]').strip()
+        if not exp_header.startswith('만료일'):
             print(f'  [WARN] "{col}"의 {_EXPIRATION_OFFSET}번째 뒤 컬럼("{columns[exp_idx]}")이 '
                   f'"만료일"이 아닙니다 — 그래도 그 위치 값을 만료일로 사용합니다. '
                   f'원본 파일 구조를 확인해주세요.')
@@ -117,7 +131,7 @@ def process(raw_dir: str = RAW_DIR) -> bool:
 
     language_specs = _find_language_specs(columns)
     if not language_specs:
-        print(f'[SKIP] "{{언어}}{_SPEAK_SUFFIX}" 형태의 컬럼을 찾지 못했습니다 — 헤더: '
+        print(f'[SKIP] "[{{언어}} 회화]" 형태의 컬럼을 찾지 못했습니다 — 헤더: '
               f'{", ".join(columns[:15])}...')
         return False
 
