@@ -166,7 +166,7 @@ COLUMN_LABELS = {
     'job_start_date': '직무 시작일',
     'job_end_date': '직무 종료일',
 
-    # 업무목표 (work_objective.csv) — work_objective24 등은 label_for()가 처리
+    # 업무목표 (work_objective.csv) — work_objective2024 등은 label_for()가 처리
     'work_objective': '업무목표',
 
     # 기술이전 (technology_transfer.csv)
@@ -210,7 +210,7 @@ COLUMN_LABELS = {
 
 def label_for(column: str) -> str:
     """컬럼명 -> 한글 라벨. 매핑에 없으면 원래 이름을 그대로 반환(폴백).
-    job_profile_name_1, work_objective24처럼 숫자 접미사가 붙는 동적 컬럼도
+    job_profile_name_1, work_objective2024처럼 숫자 접미사가 붙는 동적 컬럼도
     베이스 이름으로 매핑을 찾아 접미사를 붙여 돌려준다."""
     if column in COLUMN_LABELS:
         return COLUMN_LABELS[column]
@@ -219,7 +219,12 @@ def label_for(column: str) -> str:
             suffix = column[len(base):]
             return f'{COLUMN_LABELS[base.rstrip("_")]}{suffix}'
     if column.startswith('work_objective') and column[len('work_objective'):].isdigit():
-        return f'업무목표 20{column[len("work_objective"):]}'
+        suffix = column[len('work_objective'):]
+        # 새 스키마는 4자리 실제 연도(work_objective2024)를 그대로 쓴다(2026-09-01,
+        # 사용자 확정 — 회계연도 롤링 윈도우). 혹시 이관 전 예전 2자리 슬롯
+        # 번호(work_objective24)가 남아 있어도 안전하게 표시되도록 둘 다 처리.
+        year = suffix if len(suffix) == 4 else f'20{suffix}'
+        return f'업무목표 {year}'
     eval_match = _EVAL_COLUMN_RE.match(column)
     if eval_match:
         year, suffix = eval_match.groups()

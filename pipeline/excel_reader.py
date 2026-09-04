@@ -10,6 +10,8 @@ DRM 보호 파일도 정상적으로 읽을 수 있습니다.
   - `pip install xlwings` 가 완료되어 있어야 합니다.
 """
 
+import re
+
 import pandas as pd
 
 
@@ -70,10 +72,22 @@ def parse_yyyymmdd(val) -> str:
     return s
 
 
+_ISO_DATETIME_RE = re.compile(r'^(\d{4}-\d{2}-\d{2})(?:[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?)?$')
+
+
 def parse_flexible_date(val) -> str:
     """다양한 날짜 표기(YYYYMMDD, YYYY-MM-DD, YYYY/MM/DD 등)를 pandas가 인식하는
     한 자유롭게 파싱해 'YYYY-MM-DD'로 반환. 빈 값이면 빈 문자열, 파싱 실패 시
-    원본 문자열(strip만 적용)을 그대로 반환."""
+    원본 문자열(strip만 적용)을 그대로 반환.
+
+    pandas Timestamp는 연도 ~2262까지만 표현 가능해, "9999-12-31"처럼 일부
+    사내 시스템이 "영구/만료없음"을 뜻하는 sentinel로 쓰는 극단적인 날짜는
+    pd.to_datetime()이 예외를 던진다(2026-09-03 어학자격 만료일이
+    "9999-12-31 00:00:00"으로 시분초까지 새어나온 문제로 발견 — 엑셀 날짜
+    셀 값이 파이썬 datetime 객체로 읽히면 str()이 항상 시분초를 포함하는데,
+    pandas 파싱이 실패하면 그 문자열이 그대로 반환되기 때문). 이런 경우도
+    "YYYY-MM-DD[ HH:MM:SS]" 형태(ISO 유사)면 정규식으로 날짜 부분만 뽑아
+    반환 — 진짜 파싱 불가능한 값만 원본 그대로 폴백한다."""
     if val is None or (isinstance(val, float) and pd.isna(val)):
         return ''
     s = str(val).strip()
@@ -82,7 +96,8 @@ def parse_flexible_date(val) -> str:
     try:
         return pd.to_datetime(s).strftime('%Y-%m-%d')
     except Exception:
-        return s
+        m = _ISO_DATETIME_RE.match(s)
+        return m.group(1) if m else s
 
 
 _FORMULA_TRIGGER_CHARS = ('=', '+', '-', '@', '\t', '\r')
@@ -112,7 +127,8 @@ def _first_nonblank_row(rows: list[list]) -> int:
     return 0
 
 
-def read_xlsx(file_path: str, sheet: int | str = 0, header_row: int | str = 0) -> pd.DataFrame:
+def read_xlsx(file_path: str, sheet: int | str = 0, header_row: int | str = 0,
+              visible: bool = False) -> pd.DataFrame:
     """
     xlwings를 사용하여 xlsx 파일을 DataFrame으로 읽습니다.
 
@@ -126,6 +142,17 @@ def read_xlsx(file_path: str, sheet: int | str = 0, header_row: int | str = 0) -
         header_row: 헤더 행 인덱스(0-based). 기본값 0 = 첫 번째 행.
                     'auto' 를 넘기면 앞쪽 공란 행을 건너뛰고 실제 값이 있는
                     첫 행을 헤더로 자동 인식합니다 (엑셀 절대 행 기준).
+        visible: True면 xlwings가 Excel 창을 화면에 띄운 채로 연다(기본값
+                 False = 백그라운드/숨김). DRM 파일 중 일부는 Protected
+                 View 등 상호작용이 필요한 팝업이 자동화(headless)로는
+                 렌더링/해제되지 않아 COM 예외(예: -2146827284,
+                 -2147352567 계열, "예외가 발생했습니다")로 열기 자체가
+                 실패하는 경우가 있다(scripts/build_past_team_refer.py,
+                 2026-09-02 실사용 확인) — 이럴 때 visible=True로 창을
+                 보이게 하면 그런 팝업이 뜨더라도(필요시 사용자가 직접
+                 닫아줄 수 있어) 자동화가 막히지 않을 수 있다. 기본값은
+                 기존 호출부(대부분 서버에서 무인 배치 실행) 동작을 그대로
+                 유지하기 위해 False로 둔다.
 
     Returns:
         pandas DataFrame
@@ -138,7 +165,7 @@ def read_xlsx(file_path: str, sheet: int | str = 0, header_row: int | str = 0) -
     app = None
     wb = None
     try:
-        app = xw.App(visible=False, add_book=False)
+        app = xw.App(visible=visible, add_book=False)
         wb = app.books.open(str(file_path))
 
         if isinstance(sheet, int):

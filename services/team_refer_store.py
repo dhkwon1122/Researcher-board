@@ -108,11 +108,12 @@ def _upsert_rows_to_db(rows_df: pd.DataFrame) -> bool:
 def list_editable_rows() -> list[dict]:
     """관리자 화면 그리드에 로드할 "현재" 팀참조 행 목록 — 엑셀 원본
     헤더명(KOREAN_COLUMNS)을 키로 쓴다(사용자 요청: 컬럼명은 xlsx 그대로).
-    조직코드(dep_code) 내림차순으로 정렬한다(사용자 확정).
+    조직코드(dep_code) 오름차순으로 정렬한다(2026-09-01, 사용자 확정 —
+    기존 내림차순에서 변경).
     pipeline.rd_specialist_markdown.read_team_refer()를 그대로 써서 dep_id별
     최신·비삭제 행만 가져온다(DB 우선, 없으면 CSV)."""
     rows = mmd.read_team_refer(OUT_DIR)
-    rows = sorted(rows, key=lambda r: str(r.get('dep_code') or ''), reverse=True)
+    rows = sorted(rows, key=lambda r: str(r.get('dep_code') or ''))
     return [
         {kor: r.get(eng, '') for eng, kor in _REVERSE_COL_MAP.items()}
         for r in rows
@@ -162,17 +163,11 @@ def save_snapshot(records: list[dict], deleted_dep_ids: list[str], valid_date: d
     }
 
 
-def export_snapshot_xlsx(records: list[dict], valid_date: date) -> str:
-    """data/processed/team_leader_refer/팀_리더_참조_입력날짜(YYMMDD).xlsx로
-    이번 저장 시점의 그리드 스냅샷을 남긴다(엑셀 원본 헤더명 그대로).
-    파일명이 날짜(YYMMDD)까지만이라 같은 날 다시 저장하면 덮어써 마지막
-    저장이 그날의 유효값이 된다(사용자 확정)."""
+def _build_workbook(records: list[dict]):
+    """records(엑셀 원본 헤더명 키의 행 목록)를 KOREAN_COLUMNS 순서의 openpyxl
+    워크북으로 조립한다 — export_snapshot_xlsx()(서버 저장용)와
+    current_snapshot_workbook_bytes()(관리자 화면 다운로드 버튼용)가 공유."""
     import openpyxl
-
-    folder = os.path.join(OUT_DIR, 'team_leader_refer')
-    os.makedirs(folder, exist_ok=True)
-    fname = f"팀_리더_참조_입력날짜({valid_date.strftime('%y%m%d')}).xlsx"
-    path = os.path.join(folder, fname)
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -180,5 +175,30 @@ def export_snapshot_xlsx(records: list[dict], valid_date: date) -> str:
     ws.append(KOREAN_COLUMNS)
     for r in records:
         ws.append([r.get(c, '') for c in KOREAN_COLUMNS])
-    wb.save(path)
+    return wb
+
+
+def export_snapshot_xlsx(records: list[dict], valid_date: date) -> str:
+    """data/processed/team_leader_refer/팀_리더_참조_입력날짜(YYMMDD).xlsx로
+    이번 저장 시점의 그리드 스냅샷을 남긴다(엑셀 원본 헤더명 그대로).
+    파일명이 날짜(YYMMDD)까지만이라 같은 날 다시 저장하면 덮어써 마지막
+    저장이 그날의 유효값이 된다(사용자 확정)."""
+    folder = os.path.join(OUT_DIR, 'team_leader_refer')
+    os.makedirs(folder, exist_ok=True)
+    fname = f"팀_리더_참조_입력날짜({valid_date.strftime('%y%m%d')}).xlsx"
+    path = os.path.join(folder, fname)
+    _build_workbook(records).save(path)
     return path
+
+
+def current_snapshot_workbook_bytes() -> bytes:
+    """관리자 화면 "엑셀 다운로드" 버튼용 — 그리드에서 편집 중인(아직
+    저장하지 않은) 내용이 아니라, 저장소에 이미 반영된 최신 값
+    (list_editable_rows(), dep_id별 최신·비삭제 행)을 그대로 내려받는다
+    (사용자 확정 2026-09-01). export_snapshot_xlsx()와 달리 서버에 파일을
+    남기지 않고 바로 바이트로 반환한다."""
+    import io
+
+    buf = io.BytesIO()
+    _build_workbook(list_editable_rows()).save(buf)
+    return buf.getvalue()

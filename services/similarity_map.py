@@ -476,6 +476,88 @@ def org_code_label_maps(period: tuple | None = None) -> tuple[dict, dict]:
     return dep_map, pjt_map
 
 
+def org_code_dep_id_map(period: tuple | None = None) -> dict:
+    """org_code_label_maps()와 같은 발상, 값만 dep_name/pjt_part_name이 아니라
+    dep_id — org_code → dep_id. 평가 열람 권한의 부서 단위 예외(사용자 확정
+    2026-08-31, "People팀 평가만 제외"처럼 특정 부서 소속 연구원의 평가만
+    가리는 기능)가 이 매핑을 쓴다. dep_name(표시 라벨)이 아니라 dep_id(고정
+    키)를 기준으로 삼는 이유: 관리자가 팀/리더 참조 화면에서 부서명을 나중에
+    바꿔도 이미 설정해 둔 제외 규칙이 그대로 유효해야 하기 때문."""
+    result: dict = {}
+    for r in read_team_refer(DATA_DIR, period=period):
+        org_code = (r.get('org_name_wd') or '').strip()
+        dep_id = (r.get('dep_id') or '').strip()
+        if not org_code or not dep_id:
+            continue
+        result.setdefault(org_code, dep_id)
+    return result
+
+
+def org_code_dep_code_map(period: tuple | None = None) -> dict:
+    """org_code_dep_id_map()과 같은 발상, 값만 dep_id가 아니라 dep_code(조직코드)
+    — org_code → dep_code. 연구원 명단 엑셀 다운로드에서 조직코드 기준
+    오름차순 정렬을 지원하기 위한 매핑(사용자 확정 2026-09-02)."""
+    result: dict = {}
+    for r in read_team_refer(DATA_DIR, period=period):
+        org_code = (r.get('org_name_wd') or '').strip()
+        # dep_code는 순수 숫자 문자열("1010" 등)이라 DB/CSV를 거치며 pandas가
+        # int로 잘못 추론할 수 있다(dep_id는 "D01"처럼 문자가 섞여 있어
+        # 안 겪는 문제) — str()로 한 번 감싸 방어한다.
+        dep_code = str(r.get('dep_code') or '').strip()
+        if not org_code or not dep_code:
+            continue
+        result.setdefault(org_code, dep_code)
+    return result
+
+
+def org_code_leader_map(period: tuple | None = None) -> dict:
+    """org_code → 그 조직(부서/과제·파트)의 직책자 researcher_id. team_refer
+    행 중 조직장급만 researcher_id가 채워져 있다(title_by_researcher_id()
+    참고) — 그 값을 org_code 기준으로 뒤집은 매핑. 연구원 프로필 엑셀
+    다운로드에서 부서/과제·파트의 직책자를 부서원보다 상단에 정렬하기
+    위한 용도(사용자 확정 2026-09-02)."""
+    result: dict = {}
+    for r in read_team_refer(DATA_DIR, period=period):
+        org_code = (r.get('org_name_wd') or '').strip()
+        rid = (r.get('researcher_id') or '').strip()
+        if not org_code or not rid:
+            continue
+        result.setdefault(org_code, rid)
+    return result
+
+
+PEOPLE_TEAM_DEP_NAME = 'People팀'
+
+
+def people_team_dep_ids() -> set:
+    """"People팀"으로 태그된 조직도 노드(dep_name 기준)와 그 하위 전체
+    과제/파트의 dep_id 집합 — 평가등급 열람 제외 체크박스(pages/admin.py,
+    2026-08-31 — "People팀 평가등급 제외"만 지원하도록 단순화)가 이 값을
+    그대로 eval_excluded_dep_ids에 저장한다.
+
+    dep_name은 조직도 트리 구조(dep_id/upper_dep_id)와 무관한 평면 태그라
+    (org_codes_for_dep_names() 주석 참고) 하위 과제/파트 행이 자동으로
+    같은 dep_name을 갖지 않는다 — 그래서 단순 dep_name 매칭이 아니라
+    조직도 트리를 걸어, dep_name이 "People팀"인 노드를 찾은 뒤 그 노드의
+    하위 전체(_collect_org_codes(..., include_children=True), researchers_
+    under_departments()가 쓰는 것과 동일한 헬퍼)를 모아야 한다(사용자 확정
+    2026-08-31 — "부서가 People팀일 경우 하위 과제/파트가 포함되도록")."""
+    org_codes: set = set()
+
+    def _walk(nodes):
+        for node in nodes:
+            if (node.get('dep_name') or '').strip() == PEOPLE_TEAM_DEP_NAME:
+                org_codes.update(_collect_org_codes(node, include_children=True))
+            else:
+                _walk(node.get('children') or [])
+
+    _walk(_org_tree())
+    if not org_codes:
+        return set()
+    dep_id_map = org_code_dep_id_map()
+    return {dep_id_map[oc] for oc in org_codes if oc in dep_id_map}
+
+
 def individual_search_options() -> list:
     """개인별 검색 드롭다운 옵션 — "이름 [부서] (사번)" 형식(동명이인 구분,
     pages/researcher_profile.py 검색 드롭다운과 동일한 표기 규칙)."""

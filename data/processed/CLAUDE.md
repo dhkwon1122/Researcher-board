@@ -6559,3 +6559,2427 @@ Dropdown 조작과 백그라운드 실행 중 실제 3초 폴링 UX, gunicorn �
 워커 환경에서의 실제 락 공유(파일 기반이라 이론상 안전하지만 실기
 검증은 못 함 — web_pipeline_runner.py와 동일한 인프라를 그대로
 재사용했으므로 위험도는 낮다고 판단).
+
+## 2026-08-31: 연구원 개별 프로필 검색 드롭다운 부서/과제 표기를
+연구원 명단과 동일한 team_refer 기준으로 통일
+
+사용자 질문: "연구원 개별 프로필 검색(이름[부서 - 과제] (사번) - CL)의
+부서/과제가 연구원 명단 검색의 부서/과제와 다른 데이터라면 통일하고
+싶다." 확인 결과 실제로 달랐다 — 연구원 명단(`pages/researcher_list.py`)
+은 `services.similarity_map.org_code_label_maps()`로 team_refer.csv의
+`dep_name`/`pjt_part_name`을 `researchers.csv`의 `org_code`로 매핑해
+보여주고(매핑 없으면 원본 `department`/`org_code`로 폴백)있었는데,
+연구원 개별 프로필의 검색 드롭다운(`pages/researcher_profile.py`의
+`_opt()`)은 이 매핑을 전혀 시도하지 않고 항상 원본 `department`/
+`org_code`만 보여주고 있었다. 확인 과정에서 같은 화면 안에 동일한
+문제(항상 원본값 사용)가 2곳 더 있는 것도 발견해 함께 알렸고, 사용자가
+3곳 모두 통일 + team_refer 매핑이 없을 때는 명단과 동일하게 원본값으로
+폴백하는 것으로 확정했다.
+
+**`pages/researcher_profile.py`**:
+- `_opt(row)` → `_opt(row, dep_map, pjt_map)`로 변경 — `org_code`로
+  `dep_map`/`pjt_map`(둘 다 `similarity_map.org_code_label_maps()`가
+  반환하는 dict, `researcher_list.py`가 쓰는 것과 동일한 함수)을 먼저
+  찾고, 없으면 원본 `department`/`org_code`로 폴백(연구원 명단의
+  `'부서': dep_label_map.get(org_code) or str(r.get('department', ''))`/
+  `'과제': pjt_label_map.get(org_code) or org_code`와 완전히 동일한 규칙).
+- `_load_selector_data()`가 `dep_map, pjt_map = similarity_map.
+  org_code_label_maps()`를 배치당 한 번만 계산해 `_opt()` 호출 시마다
+  넘겨준다(연구원 명단이 이미 쓰던 것과 동일한 "한 번만 계산해 재사용"
+  관례 — 사람 수만큼 team_refer를 반복 스캔하지 않도록).
+- 인쇄 카드(A4) 기본정보 표의 `dept`(`_print_profile_content()`)도
+  `similarity_map.dep_name_for_org_code(org_code) or 원본 department`로
+  교체(과제/org_code는 이 표에 애초에 없어 부서만 해당).
+- "최근 검색" 이력 칩 라벨(`_record_search_history()`)의 `dept`도
+  동일하게 교체.
+- 부서 드롭다운 *기본 선택값*을 정하는 기존 2곳(`layout()`의 `id=` 딥링크
+  처리, `_select_from_history()`)은 이미 `dep_name_for_org_code()`를
+  쓰고 있어 이번 변경 대상이 아니었다(이미 명단과 같은 기준).
+
+검증: 매핑되는 org_code 1개 + 매핑 안 되는 org_code 1개를 가진 합성
+`researchers.csv`/`team_refer.csv`로 `_opt()`를 직접 호출해 — 매핑되는
+쪽은 "이름 [MappedDept · MappedProject] (사번) — CL"로, 매핑 안 되는
+쪽은 "이름 [RAW_DEPT · ORG_CODE] (사번) — CL"(원본 그대로)로 정확히
+나오는 것을 확인. 인쇄 카드 부서 로직과 `_record_search_history()`도
+같은 두 케이스로 직접 호출해 동일한 폴백 규칙이 적용되는 것을 확인.
+`py_compile` 통과.
+
+**미검증**: 실제 브라우저에서 검색 드롭다운/인쇄 카드/최근 검색 칩을
+직접 눈으로 비교(이 세션엔 실제 team_refer.csv 데이터가 있는 배포 환경이
+없어 합성 데이터로만 검증).
+
+## 2026-08-31: 평가 열람 권한에 부서 단위 예외 추가 + 비밀번호 정책 변경 +
+관리자 화면 "사용자/권한 관리" 탭에서 계정별 권한 직접 편집
+
+사용자 요청 3가지:
+1. `view_evaluation` 권한이 있는 역할이라도, 특정 부서(예: People팀)
+   소속 연구원의 평가만은 계정 단위로 더 가릴 수 있게. 예시: 인력운영
+   담당자(workforce_mng)는 역할상 `view_evaluation=True`지만, People팀
+   소속 연구원의 평가는 볼 수 없도록 개별 조정이 필요하다는 구체적
+   시나리오.
+2. 최초 로그인 임시 비밀번호 → 개인 비밀번호 변경 시 규칙을 "12자
+   이상"에서 "영문자+숫자+특수문자 모두 포함, 8~12자"로 변경.
+3. 관리자 화면 "사용자 관리" 탭을 "사용자/권한 관리" 탭으로 바꾸고,
+   `view_evaluation`/`view_incentive`/`view_comments`/`view_grade`
+   4개 권한(1번의 People팀 부서 예외 포함)을 사용자별로 화면에서 직접
+   수정할 수 있게.
+
+구현 전 확인한 설계 결정(AskUserQuestion, 사용자 확정):
+- 부서 예외는 `dep_name`(표시 라벨, team_refer 화면에서 나중에 바뀔 수
+  있음)이 아니라 `dep_id`(고정 키) 기준으로 저장.
+- 이 부서 예외는 우선 화면(명단/프로필)+엑셀 다운로드에만 적용하고,
+  AI 자연어 검색까지는 이번엔 확장하지 않음(row-level 필터링 복잡도가
+  높아 별도 단계로 미룸) — 대신 AI 검색이 우회로가 되지 않도록, 부서
+  예외가 하나라도 있는 사용자는 `evaluations`/`evaluations_history`
+  테이블 전체를 AI 검색에서 막는 "fail closed" 안전장치를 둠.
+- 비밀번호는 영문자/숫자/특수문자 3종류 모두 필수, 최대 12자 그대로
+  유지(관리자가 이례적으로 확정한 제약 — 통상적인 보안 관행과 다르다는
+  점은 사전에 알렸음).
+- 관리자가 계정별로 권한을 개별 조정해 둔 뒤 그 계정의 역할(role)이
+  바뀌어도, 개별 조정 값은 유지("개별 설정 유지").
+
+**`services/user_store.py`**: `app_users` 테이블에 컬럼 6개 추가
+(`perm_view_evaluation`/`perm_view_incentive`/`perm_view_comments`/
+`perm_view_grade` BOOLEAN, `eval_excluded_dep_ids` TEXT — JSON 배열
+문자열) — 전부 NULL 허용, 서버 기본값 없음. `_ensure_column()`(기존
+`is_admin`/`must_change_password` 추가 때 쓴 것과 동일한 패턴)으로
+마이그레이션. `NULL` = "역할 기본값을 따른다", 명시적 `True`/`False`는
+역할이 바뀌어도 유지되는 개별 재정의. `update_permissions(user_id,
+permissions, eval_excluded_dep_ids)` 신설 — 관리자 화면이 저장을 누르면
+이 함수를 거치는데, 이때 4개 권한 전부 반드시 명시적 값으로 저장한다
+(이 함수를 한 번이라도 거친 계정은 이후로 역할 기본값을 자동으로 따라
+가지 않음 — 한 번도 손대지 않은 계정만 NULL로 남아 역할 기본값을 계속
+따름).
+
+**`services/similarity_map.py`**: `org_code_dep_id_map()` 신설 — 기존
+`org_code_label_maps()`(org_code → dep_name/pjt_part_name)와 같은
+구조로, org_code → dep_id를 반환. 부서 예외를 org_code 기준 데이터
+(researchers.csv)와 dep_id 기준 설정(관리자가 고른 부서) 사이에서
+매칭하는 데 쓴다.
+
+**`services/auth.py`**: `can(permission)`을 "역할 기본값 → 계정별
+override가 있으면 그 값으로 대체"로 재작성. 새 함수 3개: `eval_excluded_
+dep_ids()`(현재 로그인 사용자의 부서 예외 집합, `view_evaluation` 자체가
+없으면 빈 집합), `can_view_evaluation(org_code, org_code_dep_id_map)`
+(특정 연구원 1명에 대해 지금 볼 수 있는지 — 역할/개별 권한 + 부서 예외
+전부 반영), `update_permissions(...)`(DB/JSON 두 백엔드 공용 저장 진입점,
+DB가 없으면 `config/users.json`에 직접 씀). `can_table()`에 위 "fail
+closed" 안전장치 추가. `set_session()`/`get_current_user()`가 새 필드
+2개(`permissions`, `eval_excluded_dep_ids`)도 세션에 싣고 꺼낸다(기존
+role/is_admin과 동일하게 로그인 시점에 캐시 — 관리자가 바꾼 값은 그
+사용자의 다음 로그인부터 반영, 기존에도 있던 지연 동작과 동일).
+비밀번호 검증(`password_validation_error`)은 `MIN_PASSWORD_LENGTH`(기본
+8)/`MAX_PASSWORD_LENGTH`(기본 12) 둘 다 강제 + 영문자/숫자/특수문자
+3종류 전부 필수로 교체(기존: 12자 이상 + 대문자/소문자/숫자/특수문자
+중 3종 이상). `app.py`의 `/setup`(최초 관리자 계정 생성) · `/change-
+password`(임시 비밀번호 강제 교체 — 사용자가 요청한 그 화면) 두 화면의
+안내 문구("12자 이상, 문자 조합")도 새 정책("{MIN}~{MAX}자, 영문/숫자/
+특수문자 조합")으로 갱신, `scripts/bulk_create_users.py`의 도움말/입력
+프롬프트 문구도 동일하게 갱신(기능은 이미 `password_validation_error()`를
+그대로 재사용하고 있어 로직 변경은 불필요했음 — 문구만 새 정책과
+일치하지 않아 수정).
+
+**`pages/researcher_profile.py`**: `update_profile()` 콜백이 이제 뷰어의
+역할 권한만이 아니라 **지금 보고 있는 연구원의 소속 부서**까지 반영해
+`show_eval`을 계산한다(`auth.can_view_evaluation(researcher['org_code'],
+similarity_map.org_code_dep_id_map())`) — People팀 연구원 프로필을 열면
+그 사람만 잠기고, 다른 부서 연구원은 그대로 보인다. 평가/인센티브
+블록의 잠금 아이콘(`eval-lock-icon`, 기존엔 id가 없어 최초 페이지
+로드 시점(뷰어 역할만 반영, 특정 연구원 선택 전) 딱 한 번만 정해지고
+이후 연구원을 바꿔도 갱신되지 않던 잠재 버그 — 역할 전용 권한일 때는
+뷰어 불변값이라 문제가 안 됐지만, 부서 예외가 생기면서 실제 버그가 됨)에
+`id`를 부여하고 콜백 `Output`으로 편입해 연구원을 바꿀 때마다 갱신되게
+고침. 일괄 인쇄 콜백(`_append_bulk_print_block()`)도 틱마다(그 사람의
+`org_code` 기준으로) 다시 판정하도록 수정 — 기존엔 인쇄 대상 전원에게
+같은 `show_eval` 값을 한 번만 계산해 썼음(부서가 섞인 명단을 일괄
+인쇄하면 잘못된 결과가 나올 수 있었음).
+
+**`pages/researcher_list.py`**: `_apply_permission_filter()`가 기존
+"권한 없으면 평가등급 컬럼 전체 삭제(role-level, all-or-nothing)"에 더해
+"권한은 있어도 부서 예외 대상이면 그 행(연구원)만 값을 비운다"를
+지원하도록 확장 — 같은 화면에 "볼 수 있는 사람"과 "볼 수 없는 사람"이
+컬럼은 유지한 채 섞여야 하므로 컬럼 삭제로는 표현할 수 없었음. 명단에
+이미 있던 내부 전용 컬럼 `_org_code`(화면엔 안 보이고 부서/과제 필터가
+쓰던 것)를 그대로 재사용해 판정.
+
+**`services/researcher_profile_export.py`**: `_col_evaluation()`이 배치
+단위로 한 번만 계산되던 `rows['permissions']['view_evaluation']` 체크에
+더해, 행(연구원)마다 `org_code`가 부서 예외에 걸리는지까지 확인하도록
+확장. `build_profile_workbook()`이 요청당 한 번 `auth.eval_excluded_
+dep_ids()`/`similarity_map.org_code_dep_id_map()`을 계산해 `_researcher_
+row_context()`를 통해 각 행에 전달(기존 `dep_pjt_maps`와 동일한 "배치당
+한 번만 계산" 관례).
+
+**`pages/admin.py`**: 탭 라벨 "사용자 관리" → "사용자/권한 관리"(페이지
+`title`도 동일하게 변경). 사용자 추가/수정 겸용 모달에 권한 섹션 신설 —
+4개 권한 스위치(`view_evaluation`/`view_incentive`/`view_comments`/
+`view_grade`) + "평가등급 열람 제외 부서" 멀티셀렉트(`similarity_map.
+org_tree_options()` 재사용, value는 dep_id). 신규 계정 추가(`사용자
+추가`) 시에는 이 섹션을 아예 숨긴다 — 계정을 만들면서 곧바로 역할
+기본값을 명시값으로 고정시키지 않기 위해(만든 뒤 "수정"에서 조정).
+수정 모달을 열 때는 체크박스가 "지금 이 계정에 실제로 적용되는 값"
+(override가 있으면 그 값, 없으면 역할 기본값)을 보여주되, 저장을 누르면
+`auth.update_permissions()`를 거쳐 4개 전부 명시값으로 고정된다(설계
+결정 그대로). 비밀번호 라벨도 새 정책 문구로 교체.
+
+검증: 각 파일 `py_compile` 통과, 전체 페이지(`dash.Dash(use_pages=True,
+pages_folder=...)`)가 예외 없이 임포트되는 것 확인(7개 페이지 전부).
+합성 데이터로 직접 함수 호출 검증 — (1) `researcher_list._apply_
+permission_filter()`: 부서 예외 대상 행만 평가등급 값이 비워지고
+인센티브 등 무관한 컬럼/다른 부서 행은 그대로 남는 것, 예외가 없으면
+아무것도 안 바뀌는 것, role 자체가 없으면 기존처럼 컬럼 전체가 삭제되는
+것 3가지 케이스 확인. (2) `researcher_profile_export._col_evaluation()`:
+부서 예외 대상이면 '-', 아니면 정상 값, `view_evaluation` 자체가 없으면
+'-' 3가지 케이스 확인. (3) `admin.py` 권한 체크박스 기본값 계산 로직 —
+`workforce_mng` 역할 기본값(`view_evaluation=True`)을 override 없이는
+그대로 보여주고, 명시적 `False` override가 있으면 역할 기본값을 이기는
+것, 체크박스 선택 목록 → 저장 payload dict 변환 로직 확인. 이 세션에서
+`services/auth.py` 자체(역할 기본값 폴백/override/부서 예외 판정/
+`can_table` 안전장치/비밀번호 정책)는 Flask 테스트 요청 컨텍스트로 이미
+별도 검증 완료(위 커밋들 참고).
+
+**미검증**: 실제 브라우저에서 관리자 화면 모달 조작(체크박스/부서
+멀티셀렉트 UI 상호작용), 실제 로그인 세션으로 People팀 연구원 프로필을
+열어 잠금 아이콘이 실제로 바뀌는지, PostgreSQL 백엔드에서의 실제 컬럼
+마이그레이션(이 세션엔 `DATABASE_URL`이 없어 JSON 백엔드로만 검증).
+
+## 2026-08-31: 연구원 개별 프로필 "최근 검색" 이력에 개별/전체 삭제 기능 추가
+
+사용자 요청: 연구원 개별 프로필 화면의 "최근 검색" 칩(`researcher-
+search-history`, `dcc.Store(storage_type='local')` — 브라우저
+localStorage에 최대 8개 유지)에서 원하는 항목을 지울 수 있게.
+
+**`pages/researcher_profile.py`**: `_render_history_chips()`가 만들던
+칩 구조를 바꿨다 — 기존엔 `dbc.Badge` 하나 자체가 클릭 대상(그 사람
+선택, `_select_from_history()`)이었는데, 그 안에 삭제 아이콘을 자식으로
+넣으면 클릭 이벤트가 DOM을 타고 부모 Badge까지 올라가 "삭제"를 눌러도
+그 사람이 같이 선택되는 버그가 생긴다(Dash n_clicks는 DOM 이벤트 버블링을
+그대로 따름). 그래서 칩을 "이름(선택용, 기존과 동일한 `researcher-
+history-chip` 패턴 ID)"과 "× 아이콘(삭제용, 새 `researcher-history-
+chip-delete` 패턴 ID)"을 형제 엘리먼트로 감싸는 구조로 바꿔 이 문제를
+피했다. 새 콜백 2개: `_delete_history_entry()`(칩 하나만 이력에서 제거 —
+지금 보고 있는 프로필/`researcher-select` 값은 건드리지 않음),
+`_clear_history()`(칩 목록 끝에 항상 붙는 "전체 삭제" 링크 버튼,
+`researcher-history-clear-all` — 이력이 있을 때만 렌더링되므로 비어있을
+땐 안 보임). 기존 `_select_from_history()`(칩 클릭 → 그 사람 선택)는
+그대로 유지.
+
+검증: 콜백 함수를 직접 호출(Dash 콜백 컨텍스트는 `dash.ctx.triggered_id`만
+모킹) — 이력 3개 중 특정 rid 삭제 시 그 항목만 빠지는 것, "전체 삭제"가
+빈 리스트를 반환하는 것, `_render_history_chips()`가 빈 이력/채워진
+이력 둘 다 예외 없이 렌더링(칩 개수 = 이력 수 + "전체 삭제" 버튼 1개)
+되는 것 확인. `py_compile` 통과.
+
+**미검증**: 실제 브라우저에서 삭제 아이콘 클릭 시 부모 칩 선택이 정말
+같이 발생하지 않는지(형제 구조로 설계상 막았지만 실제 클릭 이벤트로는
+미확인), localStorage 반영/새로고침 후 유지 여부.
+
+## 2026-08-31: 엑셀 다운로드 "과제수행이력" — 진행중 과제 최상단 노출 +
+같은 과제명 참여 구간 병합
+
+사용자 요청 2가지(둘 다 `services/researcher_profile_export.py`의
+`_col_tasks()` — 직전 질문에서 설명한 그 컬럼):
+a) `end_date`가 없는(진행중, "현재") 과제를 목록 맨 위로.
+b) 같은 과제명이 여러 줄로 나뉘어 있을 때, 한 구간이 가장 최근 구간에
+   "포함"되거나 "연결"되면(연도 기준) 하나로 합치기 — 예시 3개(AI Task
+   '24~현재 + '21~'23 → '21~현재, 완전히 같은 구간 2줄 → 1줄, 진행중
+   구간 안에 완전히 포함되는 구간 → 진행중 구간 하나만) 전부 제공됨.
+
+**구현**: `_merge_task_periods(items)` 신설 — 과제명(`the_task_name`
+우선, 없으면 `task_name`, 기존과 동일한 폴백)별로 참여 구간을 모아
+시작연도 오름차순 정렬 후, 표준 구간 병합(interval merge) 알고리즘을
+적용한다: 그룹의 "종료연도 기준값"(진행중이면 무한대, 아니면 실제
+종료연도)에 +1을 더한 값보다 다음 구간의 시작연도가 작거나 같으면
+"포함/연결"로 보고 합친다(정확한 날짜가 아니라 연도 단위 비교 — 사용자
+표현 "연결이 된다면(year 기준)"을 그대로 반영). 한 번이라도 진행중
+구간과 합쳐지면 그 그룹은 계속 진행중으로 남고, 이후 시작하는 어떤
+구간이 와도 무한대 비교 조건이 항상 참이라 자동으로 계속 흡수된다
+(예3처럼 진행중 구간 안에 완전히 포함되는 나중 구간을 자연스럽게
+처리). 시작연도를 파싱할 수 없는(결측/이상 형식) 행은 연도 비교 자체가
+불가능하므로 병합하지 않고 원본 그대로 남긴다(정보 유실 방지).
+
+`_col_tasks()`는 병합 결과를 (진행중 여부 → 최근 시작연도) 순으로
+정렬해 문자열로 조립한다 — 요청 (a)(진행중 최상단)와 기존의 "최근순"
+정렬 관례를 하나의 정렬 키로 합쳤다.
+
+검증: 사용자가 준 예시 3개를 합성 데이터로 그대로 재현해 정확히 일치하는
+출력을 확인(`AI Task('21 ~ 현재)`, `고효율 장수명 소재 개발('09 ~ '09)`,
+`초음파 물질 개발('21 ~ 현재)`). 추가로 (1) 진행중 과제가 다른 과제들
+사이에서도 항상 최상단에 오는지, (2) 연도 차이가 2년 이상 나 "연결"
+조건을 만족하지 않는 같은 과제명은 병합되지 않고 그대로 2줄 유지되는지
+(과도한 병합으로 실제로 다른 두 참여 시기를 하나로 합쳐 정보를 왜곡하지
+않는지 확인하는 케이스), (3) 시작연도를 알 수 없는 행이 예외 없이
+처리되는지, (4) 과제 이력이 아예 없을 때 기존과 동일하게 `'-'`를
+반환하는지까지 직접 함수 호출로 확인. `py_compile` 통과, 전체 페이지
+임포트 확인.
+
+**참고(적용 범위)**: 이번 변경은 엑셀 다운로드의 `_col_tasks()`에만
+적용했다. 화면에 있는 "과제 수행 이력" 표(`components/profile_sections.py`
+의 `tasks_block()`)는 형식이 달라(과제명/기간/투입률 3개 컬럼, 기간도
+"YYYY-MM ~ 현재"로 월까지 표시) 그대로 두었다 — 투입률이 구간마다 다를
+수 있어 병합 시 어느 값을 보여줄지 별도 확인이 필요해 보여 이번엔 손대지
+않음.
+
+**미검증**: 실제 브라우저에서 엑셀 다운로드 결과를 열어 직접 눈으로
+확인(합성 데이터로 함수 직접 호출만 검증).
+
+## 2026-08-31: 과제수행이력 병합 로직을 화면 "과제 수행 이력" 표에도 반영
+(services/task_history.py 공용 모듈로 분리)
+
+직전 커밋(30d404b)에서 엑셀 다운로드에만 넣었던 "진행중 과제 상단 노출
++ 동일 과제명 구간 병합" 로직을 화면에도 똑같이 적용해달라는 후속 요청.
+먼저 확인한 것: "같은 과제명이지만 목록 중간에 다른 과제명이 끼어 있으면
+병합이 안 되는가?" — 아니다. 병합은 과제명으로 먼저 전체를 그룹핑한
+뒤(원본 리스트 순서와 무관) 그 안에서 연도 비교를 하므로, 리스트에서
+멀리 떨어져 있어도 정확히 합쳐진다(합성 데이터로 직접 확인 후 답변).
+
+**리팩터링**: `services/researcher_profile_export.py` 안에 있던
+`_task_year()`/`_merge_task_periods()`를 새 공용 모듈
+`services/task_history.py`(`task_year()`, `task_display_name()`,
+`merge_task_rows()`, `sort_key()`)로 옮겼다 — 엑셀(`_col_tasks()`,
+연도만 필요)과 화면(`tasks_block()`, 연-월 + 투입률까지 필요)이 같은
+병합 판정 로직을 공유해야 하는데 필요한 부가 정보가 서로 달라서,
+`merge_task_rows()`는 연도만이 아니라 그룹의 "시작 원본 행"
+(`start_row`)/"종료 원본 행"(`end_row`, 진행중이면 None)/"진행중 상태를
+만든 원본 행"(`current_row`, 진행중이 아니면 None)을 통째로 반환하도록
+설계했다 — 호출부가 필요한 원본 필드(연-월 문자열, 투입률 등)를 그
+행에서 직접 꺼내 쓸 수 있게. `_col_tasks()`는 이 모듈을 임포트해 쓰도록
+교체(동작은 동일 — 회귀 테스트로 확인).
+
+**`components/profile_sections.py`의 `tasks_block()`**: 기존엔 개별
+행을 그대로(참여기간 30일 이하만 제외) `start_date` 내림차순으로 표에
+담았는데, 이제 그 필터링된 행들을 `merge_task_rows()`로 합친 뒤 진행중
+과제가 맨 위에 오도록 정렬한다. 화면 표는 "투입률" 컬럼이 따로 있어
+엑셀에는 없던 문제가 하나 있었다 — 병합된 구간들의 투입률이 서로 다르면
+뭘 보여줄지. 사용자에게 확인(AskUserQuestion): "가장 최근 구간 값만
+표시"로 확정 — 진행중이면 `current_row`(그 진행중 상태를 만든 행)의
+투입률, 아니면 `end_row`(그룹 내 가장 늦게 끝난 행)의 투입률을 그대로
+쓴다.
+
+검증: `tasks_block()`을 합성 DataFrame으로 직접 호출해 Dash 컴포넌트
+트리(Thead/Tbody)를 그대로 파싱 — (1) 진행중 구간 안에 완전히 포함되는
+나중 구간이 있는 과제명이 1줄로 합쳐지고 진행중 구간의 투입률(50%)이
+쓰이는 것, (2) 진행중이 아닌 두 구간이 합쳐질 때 더 늦게 끝난 구간의
+투입률이 쓰이는 것, (3) 병합 후에도 진행중 과제가 다른 과제보다 위에
+오는 정렬, (4) `limit` 파라미터(A4 인쇄 요약)가 병합된 개수 기준으로
+여전히 정상 동작(잘린 건수 안내 포함)하는 것, (5) 빈 이력일 때 기존과
+동일한 안내 문구를 보여주는 것까지 확인. `_col_tasks()`도 리팩터링 후
+기존 회귀 테스트(예시 3개 + 정렬/비연결/미상 케이스)를 다시 돌려 동일한
+출력을 재확인. `py_compile` 통과, 전체 페이지 임포트 확인.
+`components/timeline_view.py`의 `tasks_block(task_df, rid)` 호출부는
+시그니처 변경이 없어 그대로 동작.
+
+**미검증**: 실제 브라우저에서 화면 "과제 수행 이력" 표를 열어 직접 눈으로
+확인(합성 데이터로 함수 직접 호출만 검증).
+
+## 2026-08-31: 엑셀 다운로드 "평가" 컬럼을 기본 포함 → view_evaluation
+권한자 전용 옵트인 3종으로 전환·세분화
+
+사용자 요청 2가지:
+1. 항상 포함되던 "평가('24~'26)" 컬럼을 다른 옵트인 항목(특허/논문 등)
+   처럼 추가 선택 항목으로 바꾸고, view_evaluation 권한이 있는 사용자만
+   선택할 수 있게.
+2. "평가"를 3개로 세분화 — a) 종합(기존 표기 그대로), b) 연봉등급(최근
+   3개년을 "2024 연봉등급"/"2025 연봉등급"/"2026 연봉등급" 개별 컬럼으로),
+   c) 업적(역량)평가(최근 3개년 상/하반기업적 컬럼 사이에, 그 해 역량
+   컬럼이 evaluations.csv에 실제로 존재하면 "{연도} 역량"을 끼워 넣음).
+
+구현 전 이해한 내용과 우려사항을 먼저 설명하고(사용자가 명시적으로
+요청), AskUserQuestion으로 3가지를 확인받은 뒤 구현: (1) "종합" 항목의
+실제 엑셀 컬럼 헤더는 체크박스 라벨("평가(종합 - 최근 3년)")과 별개로
+기존 표기("평가\n('24~'26)") 그대로 유지, (2) 부서 단위 평가 제외(People팀
+등, eval_excluded_dep_ids)는 3개 항목 전부 동일하게 적용, (3)
+view_evaluation 권한이 없는 사용자에게는 팝오버에서 이 3개 체크박스를
+아예 숨김.
+
+**`services/researcher_profile_export.py`**:
+- `_eval_dept_excluded(rows)` 신설 — 기존 `_col_evaluation()` 안에 있던
+  부서 제외 판정을 뽑아내 3개 컬럼 함수가 공유하도록 함.
+- `_col_evaluation()`(종합)은 로직 그대로, `_COLUMNS`(기본 포함)에서 빼서
+  `_EVAL_SUMMARY_COLUMNS`(옵트인)로 옮김 — `_COLUMN_WIDTHS`도 그만큼
+  조정.
+- `_col_eval_field(field_key)` 신설 — evaluations.csv의 특정 와이드
+  컬럼(예: `'2024_salary_grade'`) 하나를 그대로 보여주는 컬럼 함수를
+  만드는 팩토리(권한/부서 제외 판정 공유). `_EVAL_SALARY_COLUMNS`(연봉등급
+  3개, `_EVAL_SALARY_YEARS` 기준 정적 목록)에 사용.
+- `_eval_half_columns(evaluations_df)` 신설 — "업적(역량)평가" 그룹은
+  그 해 역량(competency_grade) 컬럼이 **실제 evaluations 데이터에
+  존재하는지**(선택 항목이라 매년 있다는 보장이 없음 — services/
+  evaluations.py 참고) 봐야 컬럼 구성이 정해져서, 모듈 임포트 시점에
+  정적으로 만들 수 없다 — `build_profile_workbook()`이 evaluations
+  테이블을 로드한 뒤 요청마다 한 번씩 만든다.
+- `build_profile_workbook()`에 `include_eval_summary`/`include_salary_grade`/
+  `include_eval_half` 3개 파라미터 추가, 전부 `permissions['view_evaluation']`
+  으로 다시 한번 게이트 — 다운로드 화면이 체크박스를 숨겨도, 요청 자체를
+  조작해 True를 보내면 우회될 수 있으므로 서버 쪽에서 한번 더 확인(각
+  컬럼 함수 자체도 `rows['permissions']`로 세 번째로 확인 — 3중 방어).
+
+**`pages/researcher_list.py`**: "추가 항목 선택" 팝오버의 체크리스트에
+`view_evaluation` 권한이 있을 때만(`show_eval`, `layout()` 최상단에서 이미
+계산됨) 3개 옵션(`eval_summary`/`salary_grade`/`eval_half`)을 목록 맨
+앞에 붙인다. `download_excel()` 콜백이 이 3개 값을 `build_profile_workbook()`
+의 새 파라미터로 그대로 전달(실제 방어는 서비스 쪽에 있으므로 여기서
+다시 `can()`을 확인할 필요는 없음).
+
+검증: (1) `_eval_half_columns()`를 합성 DataFrame으로 직접 호출 — 역량
+컬럼이 특정 연도에만 있을 때 그 연도만 상/하반기 사이에 "역량" 컬럼이
+끼워지고, 하나도 없을 때는 전혀 안 끼워지는 것 확인. (2)
+`build_profile_workbook()`을 `_load_tables()`/`auth.can`/
+`auth.eval_excluded_dep_ids`를 모킹해 종단 호출, 실제 xlsx를 열어(openpyxl)
+— 권한 있음+3종 전부 요청 시 헤더·값이 정확히 나오는 것, **권한 없이
+include_*=True를 강제로 넘겨도 컬럼 자체가 전혀 생기지 않는 것**(요청
+조작 방어 확인), People팀 부서 예외가 종합/연봉등급/업적(역량)평가
+3종 전부에서 해당 연구원만 '-'로 가려지는 것(다른 부서 연구원은 정상
+노출), 옵트인 미선택(기본값) 시 평가 관련 컬럼이 아예 없는 것(더 이상
+기본 포함이 아님)까지 확인. (3) `pages/researcher_list.py`의 `layout()`을
+`services.auth.can`을 모킹해 두 번 렌더링 — 권한 있을 때만 체크리스트에
+3개 옵션이 나타나는 것을 컴포넌트 트리에서 직접 확인. `py_compile` 통과,
+전체 페이지 임포트 확인.
+
+**미검증**: 실제 브라우저에서 팝오버 체크박스를 눌러 실제 다운로드 결과를
+열어보는 것(합성 데이터로 함수 직접 호출/컴포넌트 트리 검증만 수행),
+`services/similarity_map.py`의 별도(조직도 기반) 다운로드 경로는 평가
+데이터를 다루지 않아 이번 변경과 무관함을 코드 확인으로만 검증.
+
+## 2026-08-31: 관리자 화면에 엑셀 업로드로 초기 사용자 일괄 추가 + 신규 계정
+임시 비밀번호를 고정값(12345678)으로 통일
+
+사용자 요청 2가지:
+1. 엑셀 업로드로 사용자를 추가하는 기능(초기 사용자 대상) — 필수 컬럼과
+   셀에 들어갈 수 있는 값을 정해서, 그 범위 밖은 못 넣게.
+2. 관리자가 "사용자 추가"로 신규 계정을 만들 때 임시 비밀번호를 항상
+   "12345678"로 고정 — 비밀번호 정책(8~12자, 영문/숫자/특수문자)은
+   계정 소유자가 최초 로그인 후 본인 비밀번호로 바꿀 때부터 적용.
+
+**`services/bulk_user_import.py`(신설)**: 사용자 업로드 파일의 컬럼
+스키마/검증 로직을 여기 하나로 모았다 — 기존 CLI 스크립트
+(`scripts/bulk_create_users.py`)와 이번에 새로 만드는 관리자 화면 업로드
+기능이 같은 기준(필수: 아이디/이름/권한, 선택: 이메일/관리자)으로
+동작해야 하기 때문(한쪽만 고치고 다른 쪽을 깜빡하는 걸 방지). 핵심 함수:
+- `read_upload(file_bytes, filename)`: 확장자로 xlsx/csv 판별해 읽음.
+  `keep_default_na=False, na_filter=False`를 반드시 줘야 한다 — 이게
+  없으면 빈 셀(이메일 등)이 NaN으로 읽혀, 이후 `str(v or '')` 변환에서
+  "nan"이라는 문자열이 돼버린다(NaN은 파이썬에서 참으로 평가됨). 이
+  버그는 실제로 원본 CLI 스크립트에도 이미 있던 것이었는데, 이번에
+  리팩터링하며 재현 테스트로 잡아 함께 고쳤다(아래 검증 참고) — 필수
+  컬럼이 빈 채로 "nan" 문자열이 들어가면 "값이 있다"고 착각해 누락 검사를
+  통과해버리는 더 심각한 부작용도 있었다.
+- `parse_rows(df, existing_ids)`: 필수 컬럼 존재 확인 → 행별 검증(빈 값/
+  알 수 없는 권한/이미 존재/파일 내 중복) → 생성 대상과 건너뜀 사유를
+  분리해 반환. `normalize_role()`은 역할 코드와 한글 라벨 둘 다 허용
+  (기존 CLI 스크립트와 동일).
+- `build_template_bytes()`: 업로드용 xlsx 템플릿 — 헤더 5개(아이디*/
+  이름*/권한*/이메일/관리자) + 권한·관리자 두 컬럼에 openpyxl
+  `DataValidation`(엑셀 드롭다운)을 200행까지 걸어서, "셀에 들어갈 수
+  있는 내용만 추가해서 정할 수 있도록"(사용자 요청) 실제로 그 값만
+  고를 수 있게 했다. 권한 드롭다운은 역할 코드가 아니라 한글 라벨
+  (ROLE_LABELS 값, 총 129자 — 엑셀 인라인 목록 255자 제한 안에 넉넉히
+  들어감)을 쓴다.
+
+**`scripts/bulk_create_users.py`**: 자체 구현하던 컬럼 별칭/파싱/검증
+로직을 전부 지우고 `services.bulk_user_import`를 그대로 쓰도록 리팩터링
+(동작은 동일 — 회귀 테스트로 확인). `--temp-password`로 관리자가 직접
+고르는 기존 흐름은 그대로 유지(대량 인사 이관처럼 공통 임시 비밀번호를
+사내 공지 등으로 미리 안내해야 하는 경우가 있어, 관리자 화면의 새 고정값
+방식과는 별개로 남겨둠 — 이번 요청은 "관리자 화면"에 한정됨).
+
+**`services/auth.py`**: `DEFAULT_TEMP_PASSWORD = '12345678'` 신설 — 관리자
+화면(단일 추가·엑셀 일괄 추가 둘 다)에서 신규 계정을 만들 때 이 값으로
+시작하고 항상 `must_change_password=True`로 잠근다. 이 값 자체는 비밀번호
+정책을 만족하지 않으므로(숫자만 8자) 생성 시점엔 `password_validation_error()`
+검증을 건너뛰지만, `must_change_password=True`가 유일한 방어선이라는 점을
+독스트링에 명시 — 이 값으로 계정을 만들면서 그 플래그를 끄는 일이 없도록.
+계정 소유자가 최초 로그인 후 `/change-password`에서 새 비밀번호로 바꾸는
+순간부터(app.py, 기존 로직 변경 없음) 정책이 그대로 적용된다.
+
+**`pages/admin.py`**:
+- "사용자 추가"(단일) 모달 — 신규 계정을 만들 때는 비밀번호 입력란
+  (`modal-password-section`)을 아예 숨기고, 대신 "임시 비밀번호는
+  12345678로 생성되며 최초 로그인 후 반드시 변경해야 합니다"라는 안내
+  문구(`modal-new-password-note`)를 보여준다. "수정" 모달을 열 때는
+  반대로 입력란을 보여주고 안내 문구는 비운다(기존 계정의 비밀번호를
+  관리자가 재설정하는 경우는 그대로 정책 검증이 적용됨 — 이번 요청은
+  "신규 추가"에 한정되므로 수정 흐름은 손대지 않았다). `save_user()`의
+  `is_new` 분기는 비밀번호 입력값 자체를 더 이상 보지 않고 항상
+  `DEFAULT_TEMP_PASSWORD` + `must_change_password=True`로 생성한다.
+- 새 모달 `_bulk_user_upload_modal()`("엑셀로 추가" 버튼, 사용자 목록
+  카드 헤더에 "사용자 추가" 옆) — 필수/선택 컬럼 안내, 템플릿 다운로드
+  버튼, `dcc.Upload` 드롭존, 미리보기 영역, "생성" 확인 버튼으로 구성.
+  업로드하자마자 계정을 만들지 않고 **먼저 미리보기를 보여준 뒤 "생성"을
+  눌러야** 실제로 만든다(여러 계정을 한 번에 만드는 되돌리기 어려운
+  작업이라 확인 단계를 둠 — team_refer 탭의 부서ID 중복 확인 모달과
+  같은 이유). 새 콜백 5개: `open_bulk_upload_modal`/`close_bulk_upload_modal`
+  (닫을 때 업로드 상태 전부 초기화), `download_user_template`,
+  `parse_bulk_upload`(업로드 즉시 파싱해 미리보기 렌더 + "생성" 버튼
+  활성화 여부 결정), `confirm_bulk_create`(실제 `create_user()` 호출 —
+  미리보기 이후 다른 관리자가 같은 아이디를 먼저 만들었어도
+  `create_user()` 자체의 중복 확인이 다시 걸러내므로 안전). 생성 성공/
+  실패 결과를 요약해 다시 미리보기 영역에 보여주고, `user-refresh-counter`
+  를 올려 뒤의 사용자 목록도 함께 갱신한다.
+
+검증: `services/bulk_user_import.py`를 합성 DataFrame으로 직접 호출 —
+정상 행/파일 내 중복/이미 존재/필수값 누락/알 수 없는 권한/완전히 빈 행
+6가지 케이스가 정확히 분류되는 것, 필수 컬럼이 아예 없는 파일이
+`missing_columns`를 채우고 `rows`는 비는 것, 빈 셀이 "nan" 문자열이 되던
+버그가 고쳐진 것(수정 전 재현 후 수정 후 재확인), 템플릿 xlsx의 헤더가
+정확한 것 확인. `scripts/bulk_create_users.py`는 리팩터링 후 합성 CSV로
+`--dry-run` 실행해 기존과 동일한 출력(생성 대상/이메일 표시 등) 확인.
+`pages/admin.py`는 콜백 함수를 직접 호출(Dash 콜백 컨텍스트는
+`dash.ctx.triggered_id`만 모킹, `services.auth.can`/`create_user`/
+`list_users`는 `unittest.mock.patch`로 모킹)해 — `open_add_modal()`이
+비밀번호 섹션을 숨기고 고정 임시 비밀번호 안내를 보여주는 것,
+`open_edit_modal()`은 반대로 섹션을 보여주고 안내는 비우는 것,
+`save_user()`의 신규 추가 경로가 비밀번호 입력값과 무관하게 항상
+`DEFAULT_TEMP_PASSWORD`+`must_change_password=True`로 생성 호출하는 것,
+엑셀 업로드(xlsx bytes를 openpyxl로 직접 만들어 base64 인코딩) → 파싱 →
+미리보기 → 확인 생성까지 전체 플로우가 두 명 모두 고정 임시 비밀번호로
+정확히 생성되는 것, 권한 없는 사용자의 업로드 시도가 거부되는 것,
+템플릿 다운로드 콜백과 미리보기 렌더링 헬퍼가 예외 없이 동작하는 것까지
+확인. `py_compile` 전부 통과, 전체 페이지 임포트 확인.
+
+**미검증**: 실제 브라우저에서 파일 업로드 드롭존 조작(드래그앤드롭/클릭
+업로드) 및 실제 엑셀 파일에서 드롭다운 데이터 유효성 검사가 정말 동작하는
+것(openpyxl로 만든 DataValidation 자체는 정상적으로 구성됨을 구조상
+확인했으나, 실제 Excel 프로그램에서 드롭다운이 뜨는지는 이 세션에서 열어
+볼 수 없어 미확인), PostgreSQL 백엔드에서의 실제 계정 생성(JSON 백엔드
+경로로만 로직 검증, DB 백엔드는 create_user() 내부 분기 자체는 이전
+세션에 이미 검증됨).
+
+## 2026-08-31: "평가등급 열람 제외 부서" 드롭다운을 "People팀 평가등급 제외"
+체크박스로 단순화(하위 과제/파트 자동 포함)
+
+사용자 요청: 사용자 수정 모달의 "평가등급 열람 제외 부서"가 여러 부서를
+고르는 드롭다운으로 돼 있는데, 부서를 직접 고르게 하지 말고 "부서가
+People팀일 경우"에만 제외할 수 있는 체크박스로 바꾸고, "개별 권한"의
+평가등급 열람과 인센티브(핵심이력) 열람 사이에 넣어달라는 것. 추가로
+"org_code 맵핑으로 인한 '부서'가 People팀이면 하위 '과제/파트'가
+포함되도록" — 즉 People팀 자체만이 아니라 그 아래 조직도 트리 전체가
+제외 대상이어야 한다는 요청.
+
+**핵심 함정**: team_refer의 dep_name(‘부서’)은 조직도 트리 구조(dep_id/
+upper_dep_id)와 무관한 평면(flat) 태그다(services/similarity_map.py
+기존 주석, org_codes_for_dep_names() 참고) — 부서 아래 과제/파트 행이
+자동으로 같은 dep_name을 갖지 않는다. 그래서 단순히
+`org_codes_for_dep_names('People팀')`(평면 매칭)만 쓰면 People팀
+루트 노드 자신의 org_code만 잡히고, 그 아래 과제/파트들은 놓친다 —
+사용자가 "하위 과제/파트가 포함되도록"이라고 콕 집어 요청한 이유가
+바로 이것.
+
+**`services/similarity_map.py`**: `people_team_dep_ids()` 신설 —
+조직도 트리(`_org_tree()`)를 걸어 dep_name이 "People팀"인 노드를 찾은
+뒤, 그 노드의 하위 전체를 `_collect_org_codes(node, include_children=True)`
+(부서 하위 인원 조회 `researchers_under_departments()`가 이미 쓰던
+헬퍼 재사용)로 모으고, `org_code_dep_id_map()`으로 dep_id 집합까지
+변환해 반환한다. 이렇게 하면 People팀 산하에 몇 단계로 중첩된 과제/파트가
+있어도 전부 자동으로 포함된다.
+
+**`pages/admin.py`**: "사용자 추가/수정" 모달의 "개별 권한" 섹션 구조를
+바꿨다 — 기존엔 `modal-permissions`(4개 권한 한 Checklist) +
+`modal-eval-excluded-depts`(부서 다중 선택 Dropdown, `similarity_map.
+org_tree_options()` 사용)였는데, dbc.Checklist 하나로는 옵션 사이에
+다른 컴포넌트를 끼워 넣을 수 없어 Checklist를 둘로 쪼갰다:
+`modal-permissions-eval`(평가등급 열람 하나만) → 그 바로 아래 들여쓴
+`modal-exclude-people-team`(새 체크박스, "People팀 평가등급 제외") →
+`modal-permissions-rest`(인센티브/코멘트/리더십 3개) — 요청한 순서
+그대로. 저장(`save_user()`)은 두 Checklist의 값을 합쳐 기존과 동일한
+4개 권한 dict를 만들고, People팀 체크박스가 켜져 있으면
+`similarity_map.people_team_dep_ids()`를 **저장 시점에 다시 계산**해
+`eval_excluded_dep_ids`로 저장한다(조직도가 그 사이 바뀌었어도 저장할
+때마다 항상 최신 집합으로 갱신됨 — dep_id를 고정 키로 쓰는 기존 설계
+그대로 유지, 아래 참고). 수정 모달을 열 때(`open_edit_modal()`) 체크박스
+초기값은 "그 계정에 `eval_excluded_dep_ids`가 하나라도 있으면 체크"로
+판정한다 — 이 UI가 지원하는 예외가 이제 People팀 하나뿐이라, 예전에
+저장된 정확한 dep_id 집합과 지금 다시 계산한 집합이 조직도 변경으로
+약간 달라져 있어도(예: 그 사이 하위 과제가 하나 더 생김) 문제없다(다시
+저장하면 항상 최신 집합으로 덮어씀).
+
+**바꾸지 않은 것(설계 재사용)**: `eval_excluded_dep_ids`를 dep_id
+리스트로 저장하는 기존 스키마(services/user_store.py, services/auth.py),
+그리고 이를 소비하는 `auth.can_view_evaluation()`/`eval_excluded_dep_ids()`/
+`can_table()`, 화면(`pages/researcher_list.py`의 행 단위 마스킹,
+`pages/researcher_profile.py`의 잠금 아이콘/일괄 인쇄), 엑셀 다운로드
+(`services/researcher_profile_export.py`의 `_eval_dept_excluded()`,
+3개 옵트인 평가 컬럼) — 이 전부 그대로 둘 수 있었다. 관리자 화면이
+dep_id 집합을 "어떻게 고르는지"만 바꿨고(드롭다운 → People팀 자동 계산),
+그 집합을 "어떻게 쓰는지"는 손대지 않아 회귀 위험을 최소화했다.
+
+검증: `people_team_dep_ids()`를 합성 team_refer 데이터(People팀 루트
+아래 파트A, 그 아래 파트A-1까지 3단 중첩, dep_name은 루트만 "People팀"
+이고 하위는 빈 문자열/다른 값 — 실제 데이터와 동일한 "평면 태그" 조건)로
+직접 호출해 3단 전부의 dep_id가 포함되는 것, 매칭이 아예 없을 때 빈
+집합을 반환하는 것 확인. `pages/admin.py`는 콜백을 직접 호출(모킹)해 —
+`open_add_modal()`이 3개 권한 관련 출력(eval/exclude/rest) 전부 빈
+리스트로 시작하는 것, `open_edit_modal()`이 `eval_excluded_dep_ids`가
+있던 계정은 체크박스를 체크된 상태로, 없던 계정은 해제된 상태로 보여주는
+것, `save_user()`가 체크박스 on일 때 `people_team_dep_ids()`(모킹된 값)를
+그대로 `update_permissions()`에 넘기고 off일 때 빈 리스트를 넘기는 것,
+4개 권한 dict가 쪼개진 두 Checklist 값을 정확히 합쳐 만들어지는 것까지
+확인. 기존 행 단위 마스킹/엑셀 다운로드 회귀 테스트(이전 커밋에서 작성한
+것)도 다시 돌려 영향이 없음을 재확인. `py_compile` 통과, 전체 페이지
+임포트 확인.
+
+**미검증**: 실제 브라우저에서 체크박스 조작 및 화면 배치(들여쓰기로
+"평가등급 열람의 하위 옵션"처럼 보이는지) 육안 확인, 실제 team_refer
+데이터로 People팀 하위 과제/파트 구조를 대입했을 때 결과.
+
+## 2026-08-31: "개발업데이트 이력" 탭 누락분 보강(profile-2nd/3rd-branch,
+profile-timeline-tab-qsx6ra, master)
+
+사용자 요청: "개발업데이트 이력을 보면 claude/profile-timeline-tab-qsx6ra
+브랜치에서 발생한 업데이트 이력은 많이 누락되어 있는 것 같은데, 현재
+브랜치(claude/profile-3rd-branch) 포함해서 정리/기재해줘" — 대상 브랜치
+4개(claude/profile-2rd-branch[=2nd-branch 오타로 판단], claude/profile-
+3rd-branch, claude/profile-timeline-tab-qsx6ra, master) 명시.
+
+**조사**: 이 세션의 로컬 클론이 shallow clone이라(`git rev-parse
+--is-shallow-repository` → true) 브랜치 간 `git merge-base`가 실패하고
+있었다 — `git fetch --unshallow`로 전체 히스토리(580커밋, 06.01~08.31)를
+확보한 뒤에야 정확한 브랜치 관계를 볼 수 있었다. 확인 결과:
+- `claude/profile-timeline-tab-qsx6ra`는 master 대비 **unique 커밋 0개**
+  — 이미 전부 master에 병합돼 있다(사용자가 말한 "누락"은 커밋 자체가
+  아니라 이 파일의 요약 콘텐츠가 그 병합된 작업을 반영 못 하고 있다는 뜻).
+- `claude/profile-2nd-branch`(사용자가 쓴 "2rd"는 이 브랜치로 판단)는
+  master 대비 unique 커밋 3개뿐이고, 그 내용("프로필 인쇄 A4 한 장 전면
+  개편")은 이미 '08.17 – 08.23' 항목에 반영돼 있어 추가 조치 불필요.
+- `claude/profile-3rd-branch`(현재 브랜치)는 master 대비 unique 커밋
+  12개 — 전부 이번 세션(2026-08-31)에 만든 것.
+- master 전체 히스토리를 주(월~일) 단위로 그룹핑해 커밋 수를 세어보니
+  **'07.27 – 08.02' 주가 이 파일에 항목 자체가 아예 없이 통째로 빠져
+  있었다**(실제로는 29개 커밋 — 보유 전문성 조직도 대개편, team_refer.csv
+  최초 도입 등 굵직한 작업). '08.03 – 08.09'/'08.10 – 08.16' 두 주(정확히
+  qsx6ra의 실제 작업 기간)는 항목은 있었지만 실제 커밋 대비 많이
+  축약/누락돼 있었다(예: "과제 직무/대상자 검증" 탭 신설 자체가 안
+  적혀 있었고, 사용자 역할 12종 확장·관리자 is_admin 분리·PostgreSQL
+  계정 저장·피플팀 계정 일괄생성 스크립트 같은 지금 권한 관리 기능의
+  토대가 된 굵직한 커밋들도 빠져 있었음). '08.24 – 08.30' 주도 마지막
+  5개 커밋(어학/근무 경력 신규 데이터, 유사도 학력 하드 파티션 등,
+  전부 profile-3rd-branch가 master에 PR #140으로 병합된 부분)이 빠져
+  있었다.
+
+**`services/dev_updates.py`** 수정:
+- 새 주 항목 `'08.31 – 09.06'`을 맨 앞에 추가 — 이번 세션에서 만든
+  사용자/권한 관리 확장(계정별 4개 권한 + People팀 평가 예외), 엑셀
+  업로드 사용자 일괄 추가 + 임시 비밀번호 고정, 엑셀 다운로드 평가
+  옵트인 3종 분리, 비밀번호 정책 변경, 과제수행이력 병합 등을 기재.
+- `'08.24 – 08.30'`에 어학/근무 경력 신규 데이터 2종, 유사도 학력 하드
+  파티션 + 과거 시점 온디맨드 분석, 평가 컬럼 연도 순서 버그 수정 3건
+  추가.
+- `'08.10 – 08.16'`에 역할 12종 확장(is_admin 분리), 피플팀 계정 일괄
+  생성 스크립트 + PostgreSQL 계정 저장, 보유 전문성 요약카드 정리·MAP
+  탭 숨김, 로그아웃 404 버그 수정 등 추가.
+- `'08.03 – 08.09'`에 "과제 직무/대상자 검증" 탭 신설(이후 비공개
+  전환), AI 검색 대폭 확장(유사 연구원 찾기/유사도 데이터 조회/커스텀
+  규칙 패널/전역 통합), 자연어 질문 결과 화면 전면 개편 + open_data_query
+  폴백, CLAUDE.md 신설, 학력/전공 필터 정리 등 major 3건 + detail 3건
+  추가.
+- 새 주 항목 `'07.27 – 08.02'`를 `'08.03 – 08.09'`와 `'07.20 – 07.26'`
+  사이에 신설 — team_refer.csv 기반 조직도 추가, 조직도 구조를 dep_id/
+  upper_dep_id 부모-자식 관계로 재구성, LLM 요약 박스, 유사도 지도
+  클러스터링/검색/줌, Strength Field/Keywords 표준화 착수 등 기재.
+- `'06.22 – 06.28'`은 실제로 그 주에 커밋이 0개(확인됨)라 원래부터
+  항목이 없는 게 맞음 — 건드리지 않음.
+
+이번 보강은 사용자가 명시한 4개 브랜치(및 그와 직접 연결된 실제 커밋
+간극)에 집중했다 — 06월 초~07월 중순 구간은 기존 항목이 이미 실제
+커밋 수와 대체로 맞아떨어져(스팟체크 결과) 전면 재검토는 하지 않았다.
+
+검증: `git fetch --unshallow` 후 `git merge-base`/날짜별 `git log`
+그룹핑으로 실제 커밋 데이터를 직접 확인하며 작성(추측 없이 커밋 메시지
+기반). `services/dev_updates.py` `py_compile` 통과, `WEEKS` 리스트를
+파이썬으로 직접 로드해 주차 수(13개)·정렬(최신순, 08.31→06.01, 빠진
+주 없음)·`pages/admin.py`의 `_dev_updates_tab()` 렌더링까지 예외 없이
+확인. 전체 페이지 임포트 확인.
+
+**미검증**: 실제 브라우저에서 "개발업데이트 이력" 탭을 열어 각 주 항목이
+읽기 좋게 표시되는지 육안 확인. 06월 초~07월 중순 구간의 세부 커밋
+대조는 스팟체크만 했고 전수 재검증은 하지 않았다(사용자가 명시한
+브랜치들의 실제 작업 기간 밖이라 범위 밖으로 판단).
+
+## 2026-08-31: "개발업데이트 이력" 06월 초~07월 중순 구간도 이어서 검증·보강
+
+직전 보강(같은 날짜, 위 항목)이 사용자가 명시한 4개 브랜치의 실제 작업
+기간(07.27~08.31)에 집중하고 "06월 초~07월 중순 구간은 스팟체크만 하고
+전면 재검토는 안 함"이라고 명시했었는데, 사용자가 "6월~7월 중순 구간도
+이어서 확인해줘"라고 후속 요청 — master 전체 히스토리(06.01~07.19,
+6개 주)를 실제 git 커밋과 하나하나 대조했다.
+
+**발견한 문제 2가지 유형**:
+1. **완전 누락**(특정 커밋들이 요약에 아예 없음) — '06.01–06.07'에 T&P
+   연봉등급/특허/양성이력 처리기 최초 도입이 안 적혀 있었고, '06.08–06.14'
+   (81커밋!)에는 연구원 목록 화면 최초 추가·과제 수행 이력 최초 추가·
+   논문 현황 파이프라인 최초 추가·LLM 종합요약 최초 구현처럼 지금 앱의
+   핵심 화면들의 "최초 등장"이 통째로 빠져 있었다. '07.06–07.12'에는
+   타임라인 탭 최초 추가와 "보유 전문성"의 전신인 과제 기반 전문성 분석
+   최초 도입이, '07.13–07.19'에는 "보유 전문성" 섹션 자체의 최초 도입
+   (핵심기술/보유기술)과 MIT10/컨플루언스 기반 분석 파이프라인, 프로필
+   Vercel 스타일 재구성, 타임라인 HTML/CSS 카드 오버레이 전면 재구축이
+   빠져 있었다.
+2. **날짜 오귀속**(내용은 있으나 엉뚱한 주에 적혀 있음, 새로 발견한 유형) —
+   기존 '06.15–06.21' 항목의 major "AD SSO 인증 + 역할 기반 데이터
+   접근 제어 최초 도입"은 실제로는 2026-07-24 커밋(`d49ffc6`/`1b64d09`/
+   `b52e913`)이라 '07.20–07.26' 항목에 **이미 정확하게** 다시 적혀
+   있었다 — 즉 같은 사실이 두 주에 중복 기재돼 있었고, 그중 하나는
+   날짜가 틀렸다. 마찬가지로 '07.13–07.19'의 major "Text2SQL 정확도
+   개선"도 실제 커밋(`dbc8ade`)이 2026-07-10이라 '07.06–07.12' 소속인데
+   '07.13–07.19'에 잘못 적혀 있었다. 둘 다 `git log -1 --format='%h %ci
+   %s' <해시>`로 정확한 커밋 날짜를 하나하나 확인해 잡아낸 것 — 이번
+   교차검증에서 얻은 새로운 교훈은, "이 major 문구가 그 주 커밋 목록에
+   실제로 있는가"뿐 아니라 "다른 주에 이미 똑같은 내용이 (더 정확한
+   날짜로) 있지 않은가"도 함께 확인해야 진짜 오류(단순 누락이 아니라
+   잘못된 배치)를 잡아낼 수 있다는 점.
+
+**`services/dev_updates.py`** 수정 — 6개 주 전부 손봄:
+- `'07.13 – 07.19'`: 오귀속된 "Text2SQL 정확도 개선"을 빼고, 실제
+  그 주 내용(프로필 Vercel 스타일 재구성, 타임라인 HTML/CSS 카드
+  오버레이 전면 재구축, "보유 전문성" 섹션 최초 도입 + MIT10/컨플루언스
+  분석 파이프라인, 코멘트 요약 LLM 온프레미스 전환)으로 major 4건 교체,
+  detail도 5건으로 보강.
+- `'07.06 – 07.12'`: "Text2SQL 정확도 개선"을 여기로 옮기고, 타임라인
+  탭 최초 추가, 과제 기반 전문성 분석 최초 도입(이후 임베딩 유사도
+  기반 CLOSE3/FAR3로 교체된 사실까지 명시)을 major에 추가.
+- `'06.29 – 07.05'`: 실제 커밋과 대조해보니 이미 정확해 손대지 않음.
+- `'06.15 – 06.21'`: 오귀속된 AD SSO 문구를 삭제(이미 '07.20–07.26'에
+  정확히 있으므로 중복 방지) — 이 주는 실제로 커밋 2건뿐이라 major를
+  빈 리스트로, detail만 유지(렌더러가 빈 major를 정상 처리하는 것
+  `_dev_update_week_card()`로 직접 확인).
+- `'06.08 – 06.14'`: 연구원 목록/과제 수행 이력/논문 현황/LLM 종합요약
+  "최초 추가" 4건을 major에 추가, 기존 major 문구에서 T&P/특허/
+  양성이력을 빼고(06.01–06.07 소속으로 이동) 리더십진단/시상/인센티브/
+  학력/과제 수행 이력/논문 현황으로 교체. detail에 사진 서빙 방식
+  전환·실적 탭 레이아웃 개편 추가.
+- `'06.01 – 06.07'`: T&P 연봉등급/특허/양성이력 처리기 최초 도입,
+  석세션 카드 레이아웃 최초 구현을 major에 추가. detail에 사번 8자리
+  통일·사진 자동 로드 추가.
+
+검증: `git log -1 --format='%h %ci %s' <해시>`로 옮기거나 추가한 항목
+전부의 정확한 날짜를 재확인(추측 없이 커밋 메타데이터 기준). `py_compile`
+통과, `WEEKS`를 파이썬으로 로드해 13개 주 전부 major/detail 개수 확인,
+`pages/admin.py`의 `_dev_updates_tab()`과 빈 major를 가진 `06.15–06.21`
+카드(`_dev_update_week_card()`)를 직접 렌더링해 예외 없음 확인. 전체
+페이지 임포트 확인.
+
+**미검증**: 실제 브라우저 육안 확인(빈 "주요 업데이트" 섹션이 생략되고
+"세부사항"만 나오는 06.15–06.21 카드의 실제 표시 포함). 06.22–06.28은
+직전 보강 때 이미 "그 주 커밋 0개"로 확인돼 있어 이번엔 재확인하지
+않았다.
+
+## 2026-08-31: 과거 월별 조직 개편 이력(team_refer) 산출 스크립트 신설
+(scripts/build_past_team_refer.py)
+
+사용자 요청: `data/raw/past_team_refer/`(신규 폴더)에 있는 월별 "End of
+Month Headcount" 원본 엑셀(201809~202606, 94개월)에서 "비공식소속부서명"
+목록을 뽑아 월별 상위부서명/현소속부서명/비공식소속부서명 3단 매핑표
+(`<원본파일명>_team_refer.xlsx`)를 만들고, 연속된 두 달을 비교해 조직
+개편(변경/삭제만, 유지·신규 추가는 기록 안 함)을 `team_change.xlsx`
+하나에 모아 기록. 이번 세션은 검증용으로 처음 4개월(201809~201812)만
+처리하도록 범위를 좁혀 스크립트를 작성.
+
+**중요한 제약**: 이 세션(원격 클라우드 환경)에는 원본 엑셀 파일이 전혀
+없다(`data/raw/`가 `.gitignore`로 이 저장소에 커밋되지 않는 폴더라 애초에
+사내 인사 데이터가 여기 존재한 적이 없음) — 그래서 실제 파일로 결과를
+검증하지 못했고, **합성(가짜) 데이터로 로직만 검증**했다. 사용자가 로컬
+PC 또는 사내망에서 실제 파일로 직접 실행해야 한다.
+
+**요청 검토 중 발견한 이슈**(구현 전 사용자에게 확인·확정받음):
+- "헤더는 2열에 있음" → 2번째 **행**(1행 무시)으로 확인(사용자 확정 1번).
+- B3/C3 셀의 Excel 수식(`INDEX`/`MATCH`/`VLOOKUP`, 다른 통합문서 참조
+  문법 `'[파일명]시트명'!...`)을 실제로 셀에 넣는 대신, 그 수식이 계산할
+  값을 파이썬으로 직접 계산해 정적 값으로 저장하기로 함(사용자 확정
+  2번 — 어차피 원 요청 9번 단계에서 수식→값 변환을 하므로 결과는 동일).
+- 컬럼 위치(BF=58번째/비공식소속부서명, S=19번째/현소속부서명,
+  EV=152번째/상위조직 조회 키, ES=149번째/상위부서명 값)는 94개 파일
+  전부 동일함을 사용자가 확인(3번) — 위치 기반 하드코딩이 안전하다고
+  판단해 그렇게 구현하되, "비공식소속부서명" 컬럼만은 BF 위치가 혹시
+  틀렸을 경우를 대비해 헤더 텍스트로 직접 찾도록 이중 방어(BF열과 헤더
+  텍스트로 찾은 열이 다르면 경고를 찍고 헤더 텍스트 쪽을 신뢰).
+- **원 수식의 실제 버그 발견**(7번 질문에 대한 답변) — 상위부서명 계산
+  수식에서 "SAIT/대표이사/종합기술원인지" 검사하는 3개 조건은 정확일치
+  (`B3&""`)를 쓰는데, 실제로 반환하는 값(4번째 자리)은 와일드카드
+  (`B3&"*"`)를 써서 검사와 반환이 서로 다른 매칭 규칙으로 어긋나 있었다.
+  정확일치로 통일하는 게 의도로 보여 그렇게 구현하되, `EV_MATCH_MODE`
+  상수 하나로 접두 일치(와일드카드)로 즉시 전환할 수 있게 만들어 뒀다
+  (실제 파일로 돌려보고 매칭이 잘 안 되면 이 값만 바꾸면 됨).
+- "SAIT"/"대표이사" 2개였던 최상위 정지 조건에 사용자가 "종합기술원"을
+  추가(6번 요청) — `ROOT_MARKERS` 집합에 반영.
+- 12/13번(월간 비교) 단계의 "변경 vs 삭제" 판정 기준 — 비공식소속부서명만
+  으로는 "이름만 바뀐 것"과 "삭제+새 조직 생성"을 텍스트만으로 구분할
+  방법이 없다는 점을 먼저 설명하고, 상위부서명+현소속부서명이 같은
+  그룹 안에서 없어진 값 1개·새로 생긴 값 1개가 정확히 1:1일 때만
+  "변경"으로, 그 외(그룹째 없어짐, 여러 개가 한꺼번에 바뀜)는 "삭제"로만
+  기록(추가는 기록 안 함)하는 "A안"을 제안 → 사용자가 그대로 채택(4번).
+
+**`scripts/build_past_team_refer.py`**: `build_team_refer(yyyymm)`(월 1개
+처리) + `diff_month(prev_rows, curr_rows)`(두 달 비교, A안 로직) +
+`build_team_change(...)`(전체 비교 결과를 team_change.xlsx 한 파일로
+합침) 구조. `MONTHS = ['201809','201810','201811','201812']`로 범위를
+좁혀 뒀고, 검증되면 201809~202606 전체 리스트로 늘리면 된다(주석에 명시).
+
+검증: 162컬럼·2행 헤더·S/BF/EV/ES 위치가 실제 스펙과 동일한 합성 xlsx
+2개월치(201809/201810)를 직접 만들어(가상의 부서 5개, 1:1 이름 변경 1건
+["기술1파트"→"기술1-1파트"], 그룹 전체 삭제 1건["경영지원팀" 그룹],
+그룹 내 단독 삭제 1건["기술2파트"], 순수 추가 1건["신규파트"] 포함)
+스크립트를 실제로 실행 — 결과 `team_refer.xlsx` 2개(각 4행/3행)와
+`team_change.xlsx`(3건: 변경 1 + 삭제 2, 순수 추가는 기록 안 됨을 확인)
+가 전부 기대한 그대로 나오는 것을 openpyxl/pandas로 직접 읽어 확인.
+없는 달(201811/201812)을 만났을 때 전체가 죽지 않고 그 달만 오류
+메시지를 남기고 계속 진행하는 것도 확인. 테스트에 쓴 합성 파일은
+검증 후 전부 삭제(data/raw/는 어차피 git에 안 잡히지만, 실제 파일을
+넣을 자리에 가짜 파일이 남아있으면 혼동을 줄 수 있어 정리함).
+
+**미검증**: 실제 원본 파일로 실행(이 세션엔 파일 자체가 없어 불가능 —
+사용자가 로컬/사내망에서 직접 실행해 확인해야 함), EV_MATCH_MODE='exact'
+기본값이 실제 데이터에서 충분히 매칭되는지(안 되면 'prefix'로 전환
+필요), 201811~202606까지 나머지 90개월 확장 실행.
+
+**후속 수정(같은 날)**: 사용자가 실제 파일로 실행해보니 4개월 전부
+`excel file format cannot be determined, you must specify an engine
+manually` 에러가 났다 — pandas가 파일 형식을 못 읽는 이 증상은 이
+프로젝트에서 이미 여러 번 겪은 "사내 DRM 걸린 xlsx" 문제와 정확히
+같다(dev_updates.py 최초 주차 항목이 바로 이 문제 대응용 xlwings 도입).
+원인은 스크립트가 `pd.read_excel()`을 직접 썼기 때문 — 이미 있는
+`pipeline/excel_reader.read_xlsx()`(xlwings로 실제 Excel을 열어 읽고,
+xlwings/Excel이 없으면 자동으로 pandas 폴백)를 안 쓰고 있었다.
+`read_xlsx(path, sheet='인원실적 월말인원', header_row=1)`로 교체했고,
+시트명이 실제로 다를 경우를 대비해 첫 번째 시트로 폴백하는 처리도
+추가했다. 이 전환으로 `dtype=str` 강제가 없어져 셀 값이 원본 타입
+그대로(숫자/None 등) 나올 수 있어, `_lookup_dict()`/중복 제거 로직의
+문자열 변환도 `excel_reader.clean_str()`(None/NaN류를 빈 문자열로
+안전하게 통일)로 다시 손봤다.
+
+검증: 합성 데이터로 전체 파이프라인을 다시 돌려 이전과 동일한 결과
+(team_change.xlsx 3건 — 변경 1/삭제 2)가 나오는 것을 재확인. 시트명이
+"인원실적 월말인원"이 아닐 때 경고를 찍고 첫 번째 시트로 정상 폴백하는
+것도 별도로 확인(시트명을 일부러 바꾼 합성 파일로 테스트). 이 세션에는
+xlwings/Excel이 없어(Linux 샌드박스) 이번에도 pandas 폴백 경로로만
+검증했다 — 사용자의 로컬 PC에서 xlwings가 실제로 DRM을 뚫고 여는지는
+직접 실행해서 확인이 필요하다(pip install xlwings는 requirements.txt에
+이미 있음, Windows + Microsoft Excel 설치가 전제 조건).
+
+**후속 수정 2(같은 날) — 출력 형식을 xlsx → csv로 전환**: xlwings 시도가
+COM 에러(`-2146827284`, Excel Protected View 팝업 등으로 자동화가 막힐 때
+흔한 증상)로 실패한 뒤 pandas 폴백으로 넘어가 "Workbook contains no
+default style, apply openpyxl's default" 경고와 함께 team_refer.xlsx가
+생성되긴 했지만, 그 결과 파일이 Excel에서 "손상됨"으로 뜨며 안 열린다는
+보고. 사용자가 직접 원인을 좁혀 소스 파일의 DRM은 이미 수동으로 해제해
+둔 상태였고("사내 DRM 문서를 복호화해서 일반 문서로 변경") CSV로 바꾸면
+해결되겠냐고 물어왔다 — 진단이 정확했다. 이 손상 증상은 openpyxl로 새로
+쓴 xlsx의 내부 XML 메타데이터(예: `<dimension>` 태그가 실제 셀 범위와
+어긋남)가 원인인 경우가 흔한, OOXML/zip 포맷 자체의 알려진 함정이고,
+xlwings/DRM 이슈(원본을 "읽는" 문제)와는 완전히 무관한 "내가 쓴 출력
+파일" 쪽 문제다. CSV는 순수 텍스트라 이런 zip/XML 구조 자체가 없어
+이 종류의 손상이 구조적으로 발생할 수 없다.
+
+`scripts/build_past_team_refer.py`의 `<원본파일명>_team_refer.xlsx`/
+`team_change.xlsx` 출력을 각각 `_team_refer.csv`/`team_change.csv`로
+교체 — `openpyxl.Workbook`/`Font` 의존성을 완전히 제거하고 표준 라이브러리
+`csv` 모듈로 직접 쓴다(`encoding='utf-8-sig'`, 이 저장소가 한글 CSV에
+이미 쓰던 관례 — `scripts/bulk_create_users.py` 등과 동일, Excel이 BOM을
+보고 UTF-8로 자동 인식해 한글이 안 깨짐). `_read_team_refer()`(스크립트가
+자기가 만든 team_refer 파일을 다시 읽어 두 달을 비교하는 부분)도
+`pd.read_excel()` → `pd.read_csv(..., encoding='utf-8-sig')`로 맞춰
+교체했다 — 이건 원본 DRM 소스가 아니라 방금 만든 내 출력을 다시 읽는
+것이라 xlwings/DRM과는 무관, 단순 포맷 일치.
+
+검증: 합성 데이터(기존 시나리오 그대로: 1:1 이름 변경/그룹 전체 삭제/
+그룹 내 단독 삭제/순수 추가)로 전체 파이프라인을 재실행 — CSV 출력이
+정상 생성되고 diff 결과(변경 1건 + 삭제 2건, 순수 추가는 기록 안 됨)가
+이전 xlsx 버전과 완전히 동일함을 재확인. 생성된 CSV 파일을 바이트
+단위로 열어 UTF-8 BOM(`ef bb bf`)이 정확히 붙어 있는 것, 한글 헤더/값이
+깨지지 않고 그대로 들어있는 것을 확인. CSV는 구조상 openpyxl 저장
+관련 손상 문제와 무관하므로 이 부분은 재현할 필요 자체가 없었다(원인이
+출력 파일 포맷에 있었으므로 포맷을 바꾼 것 자체가 해결책).
+
+**참고**: xlwings COM 에러(`-2146827284`)와 "Workbook contains no default
+style" 경고 자체는 원본 소스 파일을 **읽는** 단계의 이슈이고, 사용자가
+이미 그 소스 파일들의 DRM을 수동으로 해제해 뒀다고 알려왔으므로 다음
+실행부터는 xlwings 시도 자체가 필요 없어져(pandas 폴백만으로 정상 읽기)
+이 경고들 자체가 더 안 나올 가능성이 높다 — 다만 이 세션은 실제 파일이
+없어 확인할 수 없으니, 사용자가 로컬에서 재실행해 실제로 경고가 사라지는지
+직접 확인해야 한다.
+
+**후속 진단(같은 날, csv로 바꿔도 여전히 안 열림)**: 사용자가 csv 버전도
+Excel에서 "마지막으로 열었을 때 오류가 발생했습니다. 그래도 이 문서를
+여시겠습니까?" 경고가 뜬다고 보고 — 이 경고는 실제 파일 손상이 아니라
+Excel이 그 **파일 경로**에 대해 예전 실패 이력을 캐시해 둔 것일 때
+뜨는 것으로 보였는데, 확인해보니 **손대지 않은 원본 xlsx도 동일한
+증상**이었다 — 즉 원인이 파일 형식/제 스크립트가 아니라 사용자의
+Excel/Windows 환경 쪽으로 좁혀졌다. 이 문제는 이번 세션에서(원격
+샌드박스라 사용자의 실제 PC에 접근 불가) 더 진행하지 못하고 사용자가
+직접 진단하도록 홀딩했다(최근 문서 아닌 파일탐색기로 열기/다른 폴더에
+복사 후 열기/Excel 안전모드/다른 PC에서 확인/백신 소프트웨어 확인 등을
+안내). `scripts/build_past_team_refer.py`의 CSV 출력 자체는 로직·형식
+모두 정상 검증된 상태 그대로 유지.
+
+## 2026-09-01: 네비게이션 순서 + 보유 전문성 탭 통합 + AI 검색 2건 + JOB Market
+문구 + 관리자 화면 2건(메일 카드 삭제/팀참조 엑셀 다운로드)
+
+사용자 요청 6건을 한 번에 처리.
+
+**1) 네비게이션 순서**: `app.py`의 상단 메뉴를 연구원 프로필 → 연구원 명단 →
+보유 전문성 → JOB Market 순으로 변경(기존: 연구원 프로필 → 보유 전문성 →
+연구원 명단 → JOB Market) — NavItem 2개의 위치만 교체.
+
+**2) "연구원"/"연구원 ↔ 연구원" 탭 통합**: 확인해보니 "누적기준"(이름/사번
+검색) 모드는 이미 두 탭이 `llm_summary_block()` 하나를 공유해 사실상
+통합돼 있었고, 분리된 건 "최신기준"(조직도 클릭) 모드의 두 독립 정적 HTML
+리포트(`build_html()`)뿐이었다. 이 둘을 합쳤다.
+
+- `pipeline/process_researcher_similarity.py`: `researcher_match_card_html()`
+  에서 카드 본문(뱃지+매칭 표) 부분을 `similar_researchers_block_html
+  (item, name_map, dept_map, org_map, include_links=True)`로 분리(이름
+  헤더/강점 칩 없이 kv-block 스타일로만 반환) — 기존 함수는 이 블록을
+  그대로 재사용하도록 리팩터링(동작 변화 없음, 독립 실행되는 자신의
+  `build_html()`/아카이브 스냅샷은 그대로 유지).
+- `pipeline/process_researcher_expertise.py`: `researcher_card_html()`에
+  `similarity_item`/`dept_map`/`org_map` 파라미터 추가 — 주어지면 카드
+  안에 `similar_researchers_block_html()`을 이어붙인다(로컬 bare import
+  `import process_researcher_similarity as _prs` — 이 파일이 이미 pipeline/
+  를 sys.path에 얹어 bare import하는 관례를 따름, dotted import와 섞이는
+  걸 피함). `build_html(results, researchers_df, similar_by_id=None)`에
+  `similar_by_id`(`read_similar_researchers()`의 반환값) 추가 — 주어지면
+  각 카드에 유사도 데이터를 매칭해 넘기고, 표시개수(3/5/10) 토글용 radio를
+  본문에 추가하고, sidebar tagline에 "+ 유사 연구원 매칭"을 덧붙인다.
+  `similar_by_id`가 없으면(파이프라인 미실행) 기존과 완전히 동일하게
+  동작(하위 호환 — `_archive_html()`/`render_html()`/이메일 리포트 등
+  다른 호출부는 인자를 안 넘겨 그대로 둠, 아카이브 스냅샷은 이번 통합
+  대상이 아님).
+- `pages/researcher_similarity_map.py`: `_REPORT_TABS`를 `('researcher',
+  'similarity')` → `('researcher',)`로, `_render_report_html()`/
+  `_iframe_tab()`에서 `report_key` 파라미터를 제거하고 항상 병합된
+  콘텐츠(`read_expertise_profiles()` + `read_similar_researchers()`)를
+  렌더링. `_cumulative_search_panel()`도 `report_key` 파라미터를 제거하고
+  패턴매칭 id(`{'type':...,'tab':...}`)를 평범한 id로 단순화(호출 지점이
+  하나뿐이라 `dash.MATCH` 불필요). `layout()`에서 "연구원 ↔ 연구원" 탭을
+  제거 — 전문성 MAP 탭이 이미 숨겨진 상태라(`_MAP_TAB_HIDDEN=True`) 탭이
+  하나만 남는데, `dbc.Tabs`를 `len(tabs) <= 1`이면 `style={'display':
+  'none'}`으로 숨기고 콘텐츠를 바로 보여주도록 했다(사용자 확정 — 탭
+  막대 자체 제거를 추천안대로 선택). 컴포넌트 자체(`expertise-tabs`,
+  `active_tab='researcher'`)는 그대로 둬서 지도/관계그래프 클릭 이동,
+  메일 딥링크 등 다른 콜백들의 배선을 안 건드렸다 — 전문성 MAP을 나중에
+  다시 열면 탭이 2개가 되어 자동으로 다시 보인다.
+- `pipeline/process_researcher_similarity.py`의 `build_html()`(그 모듈
+  자신의 독립 실행/아카이브용)은 전혀 손대지 않아 그대로 동작한다.
+  `services/similarity_map.py`의 `build_researcher_mail_html()`(개별
+  연구원 메일 — "보유 전문성"/"유사 연구원 매칭" 두 섹션으로 나눠 보여줌)
+  도 새로 추가한 파라미터들이 전부 기본값이라 영향 없음.
+
+검증: 합성 데이터로 `process_researcher_expertise.build_html()`을
+직접 호출해 — 유사도 데이터가 있는 사람은 카드 안에 매칭 표가, 유사도
+데이터 자체가 없는 사람(임원 등 제외 대상 시뮬레이션)은 그 섹션이 아예
+생략되는 것, 유사도 데이터는 있지만 매칭이 0건인 사람은 기존처럼 "비교할
+다른 연구원 데이터 없음" 문구가 나오는 것, `similar_by_id=None`일 때는
+표시개수 토글/유사 연구원 문구/과장된 tagline 문구가 전혀 안 나오고
+기존과 동일한 결과가 나오는 것을 확인. `process_researcher_similarity.
+researcher_match_card_html()`/`similar_researchers_block_html()`을
+직접 호출해 리팩터링 후에도 기존과 동일한 카드가 나오는 것 확인.
+`services.similarity_map.build_researcher_mail_html()`도 모킹 데이터로
+end-to-end 호출해 여전히 정상 동작하는 것 확인. `dash.Dash(use_pages=True)`
+컨텍스트에서 `pages.researcher_similarity_map.layout()`을 직접 호출해
+탭 막대가 `display:none`으로 숨겨지고 탭이 1개("연구원")뿐인 것,
+`_render_report_html()`/`_iframe_tab()`이 데이터 없는 이 세션 환경에서
+예외 없이 안내 Alert로 안전하게 폴백하는 것 확인. `app.py` 전체를
+임포트해 콜백 중복 등록 등 앱 레벨 문제가 없는 것도 확인.
+
+**3) AI 검색 3건**(`components/nl_query_bar.py`, `services/nl_query.py`):
+- 안내 문구 "자연어로 물어보면 아래 명단이 그 결과로 바뀝니다" →
+  "자연어 질문 시 결과가 아래에 명단으로 생성".
+- AI 답변을 서술형 → 개조식으로: `_ANSWER_SYSTEM_PROMPT`(결과 설명 LLM
+  호출)의 지시를 "완결된 문장이 아니라 항목당 한 줄, 하이픈("- ")으로
+  시작하는 개조식"으로 재작성. `components/nl_query_bar.py`의
+  `answer_block()`이 "- " 접두사가 붙은 줄만 있으면 실제 `html.Ul`
+  불릿 목록으로 렌더링하고, 그렇지 않으면(LLM이 지시를 안 따른 경우)
+  기존처럼 줄바꿈만 보존한 텍스트로 안전하게 폴백한다.
+- "의미 유사성으로 포함된 결과는 후순위로": `find_researchers_by_expertise`
+  (전문성 키워드로 찾기)의 정렬 기준을 매칭 개수만 보던 것에서, 검색어별
+  매칭 방식(`expand_term()`이 반환하는 'taxonomy'/'substring'(정확 표기)
+  vs 'embedding'(의미 유사도 대체 매칭))까지 반영하도록 확장 — 정확
+  표기로 매칭된 결과가 있는 사람을 먼저, 그 안에서는 매칭 개수 내림차순,
+  임베딩 대체 매칭으로만 걸린 사람은 항상 그 뒤로 정렬한다(적용 범위는
+  이 intent 하나뿐 — "유사 연구원 찾기"는 이미 유사도 점수 순, 개방형
+  질의는 정확/의미 결과가 애초에 섞여 나오지 않는 구조라 대상 아님,
+  사용자 확정).
+
+검증: `find_researchers_by_expertise()`를 `expand_term()` 모킹으로
+(taxonomy 매칭 2개 vs embedding 매칭 1개 + hit_count가 더 큰 경우) 직접
+호출해 정확 매칭 그룹이 매칭 개수와 무관하게 항상 먼저 오는 것 확인.
+`answer_block()`을 "- " 접두 텍스트/일반 서술형 텍스트 양쪽으로 호출해
+각각 `html.Ul`/`html.Div`로 갈리는 것 확인.
+
+**4) JOB Market 문구**(`pages/job_market.py`): "실제로 제외되는 건 아래
+"제외할 과제"에서 고른 과제뿐입니다 — 부서는..." → `"제외할 과제"만
+결과에 반영(부서는 결과에 영향 없음)`. 부서 드롭다운 placeholder
+"부서로 좁혀 찾기(선택, 결과엔 영향 없음)" → "부서". 과제 드롭다운
+placeholder "제외할 과제(복수 선택) — 실제로 제외되는 대상" → "제외할
+과제(복수 선택 가능)".
+
+**5) "과제 전문성 분석 리포트 메일 발송" 카드 삭제**(`pages/admin.py`):
+"사용자/권한 관리" 탭 맨 아래 있던 `_mail_report_card()` 함수와 그 콜백
+(`send_mail_report`)을 완전히 제거. `pipeline/process_project_expertise.py`
+의 `email_report()`/CLI(`--email=...`)는 그대로 남겨둬 커맨드라인으로는
+계속 발송 가능(요청이 화면 쪽 삭제였다고 판단).
+
+**6) 팀/리더 참조 — 현재 기준 엑셀 다운로드**(`services/team_refer_store.py`,
+`pages/admin.py`): 기존 `export_snapshot_xlsx()`(서버에 스냅샷 파일로
+저장)의 워크북 조립 로직을 `_build_workbook(records)`로 분리하고, 신규
+`current_snapshot_workbook_bytes()`가 `list_editable_rows()`(dep_id별
+저장된 최신·비삭제 행 — 그리드에 편집 중인 미저장 내용이 아니라 저장소에
+반영된 값, 사용자 확정)를 같은 컬럼 순서로 bytes로 반환한다. "행 추가"/
+"저장" 버튼 옆에 "엑셀 다운로드" 버튼 + `dcc.Download`를 추가하고, 클릭
+시 `team_refer_download()` 콜백이 `current_snapshot_workbook_bytes()`를
+`dcc.send_bytes()`로 내려준다(관리자 권한 체크 포함).
+
+검증: `current_snapshot_workbook_bytes()`를 합성 데이터로 직접 호출해
+openpyxl로 반환된 bytes를 다시 열어 헤더/값이 `KOREAN_COLUMNS` 순서
+그대로인 것을 확인. `pages/admin.py`/`pages/job_market.py`를
+`dash.Dash(use_pages=True)` 컨텍스트(admin은 Flask 테스트 요청 컨텍스트로
+로그인 세션을 흉내내)에서 `layout()`을 직접 호출해 두 화면 모두 예외
+없이 렌더링되는 것, `mail-report-*` 관련 id가 더 이상 어디에도 남아있지
+않은 것을 확인. 6개 항목 모두 변경된 파일 전부 `py_compile` 통과.
+
+**미검증**: 실제 브라우저에서 탭 통합 후의 조직도 클릭→카드 확장 애니메이션/
+스크롤, AI 검색 실제 LLM 응답이 정말 "- " 개조식으로 나오는지(이 세션에
+LLM 서버 없음), 팀/리더 참조 엑셀 다운로드 버튼의 실제 클릭 동작.
+
+## 2026-09-01 (2): 관리자 "데이터 업데이트" 탭 — DRM 안내 문구 정리 + API 연동
+아이콘 별도 컬럼화 + 최종실행 방식 표시 + 업로드 형식 안내를 호버 아이콘으로 전환
+
+사용자 요청 3건(+ AI 검색 커버리지 확인 1건).
+
+**DRM 안내 문구**: "원본 엑셀이 사내 DRM으로 보호돼 있다면... 각 항목의 "API
+연동 예정" 아이콘은... 현재는 눌러도 동작하지 않습니다." → "엑셀 업로드 시
+복호화(일반문서로 변환) 후 업로드 가능합니다. "전체 업데이트"는 파일이
+업로드된 항목만 실행합니다."로 축약(사용자 확정 문구 그대로 반영, "전체
+업데이트" 동작 안내는 별개 정보라 유지).
+
+**API 연동 아이콘 → 별도 컬럼**: 기존엔 "구분" 셀 안에 라벨/업로드형식
+안내와 함께 뒤섞여 있던 "API로 가져오기"/"API 연동 예정" 버튼을 "이전
+Data"와 "최종실행이력" 사이의 새 "API 연동" 컬럼으로 분리(`pages/admin.py`
+`_data_update_table()` 헤더에 `html.Th('API 연동')` 추가, `_data_update_row()`
+가 그 자리에 `api_btn`만 담은 `html.Td`를 반환).
+
+**최종실행이력에 실행 방식(API/업로드) 표시**: `services/web_pipeline_runner.py`
+의 실행 로그(`web_pipeline_runs.csv`)에 `source` 컬럼을 추가(`_LOG_COLUMNS`).
+`_record_result(key, status, message, source=None)` — `source`를 안 넘기면
+기존 기록의 값을 그대로 유지(상태만 갱신하는 `start_run()`/`start_run_via_api()`
+의 "실행중" 표시 등에서 값을 잃지 않게). `run_one()`이 `via_api` 여부로
+`source = 'API' if via_api else '업로드'`를 계산해 그 실행에서 발생하는
+모든 `_record_result()` 호출(성공/실패/백필 포함)에 일관되게 전달.
+`snapshot()`의 각 행에 `source`를 포함시키고, `_data_update_row()`의
+"최종실행이력" 셀에 실행 시각 아래 작은 배지(API=info색/업로드=회색)로
+표시(한 번도 실행한 적 없으면 배지 생략).
+
+**업로드 파일 형식 안내를 호버 아이콘으로**: "구분" 셀에 항상 보이던
+`hint` 텍스트 줄(예: "예: 202608_That Month Headcount_*.xlsx...")을 없애고,
+라벨 오른쪽에 작은 물음표 아이콘(`bi-question-circle`, 행마다 고유
+`du-hint-icon-{key}` id)을 추가해 `dbc.Tooltip`으로 마우스 오버 시에만
+그 문구가 뜨도록 변경 — 다른 곳(예: `components/detail_tabs.py`의
+`_info_hover()`)에서 이미 쓰던 것과 동일한 패턴.
+
+검증: `services.web_pipeline_runner`의 경로 상수를 임시 디렉터리로 바꿔치기한
+뒤 `run_one(key, via_api=True)`(등록된 API 훅 없어 실패)와
+`run_one(key, via_api=False)`(업로드 파일 없어 실패)를 각각 실행 —
+`snapshot()`에서 두 키의 `source`가 정확히 'API'/'업로드'로 기록되는 것
+확인. `pages.admin._data_update_row()`를 합성 row(`source='API'`)로 직접
+렌더링해 반환된 `html.Tr`이 정확히 7개 `Td`(체크박스/구분/업로드/이전
+Data/API 연동/최종실행이력/실행결과)를 갖는 것, 호버 아이콘의 `id`와
+`dbc.Tooltip`의 `target`이 정확히 일치하는 것, `_data_update_table()`의
+헤더 7개 컬럼 라벨이 순서대로 정확한 것을 확인. Flask 테스트 요청
+컨텍스트(관리자 로그인 세션 흉내)로 `pages.admin.layout()` 전체가 예외
+없이 렌더링되는 것도 재확인. 변경된 두 파일 모두 `py_compile` 통과.
+
+**미검증**: 실제 브라우저에서 호버 아이콘에 마우스를 올렸을 때 툴팁이
+뜨는지, API 연동 컬럼의 실제 버튼 클릭 동작.
+
+**AI 검색 데이터 커버리지 확인(질문 답변, 코드 변경 없음)**: 사용자가
+"어학/근무경력 등 최근 추가한 데이터 외에 모든 입력 데이터 또는 LLM
+분석/임베딩 데이터도 다 검색되는지" 질문 — 코드(`services/open_data_query.py`
+의 `_discover_csv_tables()`/`_discover_json_tables()`, `config/auth_config.py`
+의 `TABLE_PERMISSIONS` 화이트리스트, `services/auth.py`의
+`filter_permitted_tables()`)를 확인해 답변만 전달, 코드는 변경하지 않음.
+- **검색됨**: `data/processed/*.csv` 원천 정제 테이블 전부(어학/근무경력
+  포함) + 이력 테이블 5종 + LLM 산출물 중 `expertise_profiles`(연구원
+  보유 전문성 분석)/`researcher_similarity`(유사도 판정) 2종.
+- **검색 안 됨**(TABLE_PERMISSIONS 화이트리스트에 없어 자동 제외 —
+  fail-closed 설계, `_read_json_records`로 발견은 되지만 응답 전에
+  걸러짐): `work_objective`(업무목표, 예전에 사용자가 이미 AI 검색
+  대상에서 빼기로 확정한 것), `project_expertise_analysis.json`(과제
+  문서 컨플루언스 분석 — 핵심기술/난제/배경 등)과 `project_personnel.csv`
+  (과제 문서 인력 매핑) — 이 둘은 지금까지 한 번도 AI 검색 대상으로
+  등록된 적이 없다(누락이라기보다 애초에 검토 대상이 아니었던 것으로
+  보임). 저널 권위도/strength_taxonomy/임베딩 캐시(`embedding_cache.json`)
+  같은 내부 캐시성 산출물도 등록 대상이 아니다(사람이 볼 데이터가
+  아니라 내부 계산용).
+- **임베딩 자체**: 벡터 값 자체는 SQL로 조회할 대상이 아니라서 테이블로
+  등록돼 있지 않지만, 이미 검색 로직 내부에서 폴백으로 쓰이고 있다 —
+  `find_researchers_by_expertise`(정확 표기가 없으면 BGE-M3 임베딩
+  유사도로 재매칭)와 `open_data_query`의 `_semantic_fallback`(SQL 결과가
+  0건이면 임베딩 유사도로 재시도) 둘 다 이미 임베딩을 쓴다.
+- 사용자에게 두 가지(업무목표 재개방 여부, 과제 문서 분석 신규 개방
+  여부)를 어떻게 할지 물어봄 — 다음 턴에서 결정되면 반영 예정.
+
+## 2026-09-01 (3): "누적 시점(연/월)" 컬럼화 + 보유기술/팀·리더 참조 웹
+업데이트 제외·이동 + 직무이력 병칭 변경(+기능) + 업무목표 회계연도 롤링 스키마
+
+사용자 요청 4건(사전 질문 2건에 대한 답변 확정 후 진행 — 상세는 아래 각 항목).
+
+**1) "누적 시점(연/월)" 컬럼 신설 + 일(day) 제거 + 연/월 표기·순서 변경**:
+`needs_valid_date=True`인 항목(T&P/평가, 핵심기술, 직무이력, 업무목표
+3개)에 한해 "구분"/"업로드" 셀과 별개로 "누적 시점(연/월)" 컬럼을 새로
+추가(`pages/admin.py` `_data_update_table()` 헤더, `_data_update_row()`).
+기존 `dcc.DatePickerSingle`(일자까지 선택) 대신 `_valid_period_picker(key,
+year, month)`를 신설 — 연도 `dcc.Dropdown`(`{'type': 'du-valid-year', 'key':
+key}`, 올해 기준 -6년~+1년)과 월 `dcc.Dropdown`(`{'type': 'du-valid-month',
+'key': key}`, "1월"~"12월" 숫자 표기, `January` 등 영문 미사용)을 `dbc.Row`
+안에 연-왼쪽/월-오른쪽 순서로 배치(부연설명 문구 없음, 사용자 확정).
+`data_update_run()` 콜백의 `State`를 `du-valid-date`(단일 날짜)에서
+`du-valid-year`+`du-valid-month`(값+연도 id) 조합으로 바꾸고,
+`valid_dates_by_key`를 `date(year, month, 1)`로 구성.
+
+**2) 보유기술 웹 업데이트 제외 + 팀/리더 참조를 "데이터 업데이트" 탭에서
+"팀/리더 참조" 탭으로 이동**: `services/web_pipeline_runner.py`의
+MANIFEST에서 `tech_ownership` 항목을 완전히 삭제(주석으로 "필요 시
+`python pipeline/process_tech_ownership.py`를 CLI로 직접 실행" 안내만
+남김 — `pipeline/process_tech_ownership.py` 자체와 `tech_ownership.csv`는
+그대로 유지, 웹 업로드 등록에서만 뺌). `team_refer` 항목은 삭제하지 않고
+새 `hidden_from_table=True` 플래그를 추가(`MANIFEST`의 모든 항목에
+`setdefault`로 기본값 `False`)해 `_data_update_table()`의 렌더링에서만
+제외(`rows = [r for r in wpr.snapshot() if not r['hidden_from_table']]`)하고
+백엔드(`run_one()`/`save_upload()`/백필/실행이력)는 그대로 유지 — 이를
+재사용해 `pages/admin.py`에 `_team_refer_upload_section()`(업로드
+드롭존/백필 파일 목록/`_valid_period_picker('team_refer', ...)`/"실행"
+버튼/다운로드 버튼/전용 상태 영역 `team-refer-upload-status`)을 새로
+만들어 `_team_refer_tab()` 상단(안내 `Alert` 바로 아래, 기존 그리드
+CRUD용 "입력 날짜/행 추가/저장" 행 위)에 배치. 새 콜백
+`team_refer_run_upload()`(`team-refer-run-upload-btn` 클릭 →
+`wpr.start_run(['team_refer'], valid_dates=...)`)를 추가하고, 기존
+`data_update_on_upload()`/`data_update_poll()` 콜백에 3번째/4번째
+`Output`을 추가해 `team_refer` 관련 업로드·폴링 결과가 "데이터 업데이트"
+탭이 아니라 `team-refer-upload-status`로 라우팅되도록 분기 처리.
+
+**3) 직무이력 병칭 변경 — 라벨만이 아니라 기능도 변경(사용자 확정,
+"기능도 함께 변경")**: 라벨을 "① 구버전 이력(선택, 최초 1회)" / "②
+내 리포트" → "① '18.5월 이전" / "② '18.5월 이후"로 변경(`MANIFEST`의
+`job_profile` 항목 `label`/`hint`). 코드 조사 결과 기존엔 구버전 이력
+파일이 한 번 업로드되면 그 후 실행에서 다시 없어도 "실행 가능"으로
+간주됐는데(즉 "선택, 최초 1회"가 기능적으로는 이미 맞았음), 사용자가
+"② 내 리포트와 마찬가지로 항상 필요한 데이터"로 기능도 바꾸길 원해
+`has_upload()`의 `dual` 모드 판정을 "구버전 이력 파일과 신버전 파일이
+**둘 다** 있어야 함"으로 변경(`has_legacy and has_new`, 기존엔 사실상
+`has_new`만으로도 충분했음). `run_one()`이 파일 부족 시 주는 실패
+메시지도 "①임직원_직무이력('18.5월_이전).xlsx과 ② 내 리포트 *.xlsx가
+둘 다 있어야 실행할 수 있습니다."로 구체화.
+
+**4) 업무목표 회계연도 기준 3개년 롤링 — 스키마까지 전체 반영(사용자
+확정, "전체 반영(스키마도 실제 연도 기반으로 전환) — 추천")**: 기존
+`work_objective24/25/26`(실제 연도가 아니라 임의의 2자리 슬롯 번호,
+매년 안 밀림)을 `work_objective2024/2025/2026`처럼 실제 4자리 연도
+컬럼명으로 전환하고, 대상 3개년을 `services.evaluations.
+current_fiscal_year()`(3월 시작 회계연도, evaluations.csv가 이미 쓰던
+동일 규칙)로 매번 계산.
+- `pipeline/process_work_objective.py`에 `target_years(today=None) ->
+  [fy-2, fy-1, fy]`(회계연도 롤링 3개년 계산의 단일 소스)와 `_year_files()`
+  (연도→원본 파일명, 파일명은 실무 관행대로 2자리 접미사 유지: 예
+  `업무목표24.xlsx`)를 신설. `services/web_pipeline_runner.py`와
+  `pipeline/process_researcher_expertise.py` 둘 다 이 `target_years()`를
+  재사용(회계연도 계산 로직을 한 곳에서만 관리).
+- **레거시 자동 이관**: `_migrate_legacy_columns(df)` — 기존
+  `work_objective.csv`에 예전 컬럼명(`work_objective24` 등)이 남아있으면
+  `process()` 실행 시 자동으로 새 이름(`work_objective2024` 등)으로
+  이관(멱등적, 별도 마이그레이션 스크립트 불필요). **버그 발견 및 수정**:
+  최초 구현에서는 이 이관이 `process()` 내부 메모리상의 `existing`
+  변수에만 적용되고, `merge_utils.write_merged_with_valid_period()`가
+  내부적으로 `out_path`를 다시 직접 읽어(`read_existing()`) 예전
+  스키마를 그대로 다시 끌어오는 바람에, 저장된 최종 CSV에 신버전과
+  구버전 컬럼이 뒤섞여 남는 문제를 실제 합성 데이터로 재현해 확인함
+  (2024/2025 값은 구버전 컬럼에, 2026 값만 신버전 컬럼에 나뉘어 저장되고
+  두 컬럼 세트가 동시에 존재). 수정: `process()`가 이관 결과를 `existing`
+  컬럼명이 실제로 바뀐 경우에 한해 `out_path`에도 먼저 써 두어(`write_merged_
+  with_valid_period()` 호출 전), 그 함수의 내부 재읽기도 이미 이관된
+  스키마를 보게 함. 합성 데이터로 재검증(2026분만 새로 업로드 + 기존에
+  예전 스키마로 저장된 2명 데이터가 있는 상황)해 컬럼 중복 없이 정상
+  병합되는 것, 두 번째 실행도 안정적인 것(멱등성) 확인.
+- **`services/web_pipeline_runner.py`**: MANIFEST의 `work_objective_24/
+  _25/_26`(연도가 키 이름에 그대로 박혀 있던 예전 방식)을 연도와 무관한
+  고정 위치 키 `work_objective_1/_2/_3`(오래된 순)로 교체 — 장기 실행되는
+  Dash 서버 프로세스에서 MANIFEST는 import 시점 1회만 평가되므로, `label`/
+  `hint`/`dest_filename`을 모듈 import 시점에 고정해두면 회계연도가
+  바뀌어도 서버를 재시작하기 전까지 갱신되지 않는 문제가 생긴다 — 이를
+  피하려고 새 `_resolve_item(key)`가 `work_objective_1/_2/_3` 키에 한해
+  매 호출마다(`save_upload()`/`has_upload()`/`run_one()`/`snapshot()`)
+  현재 회계연도 기준으로 `label`(예: "업무목표24")/`hint`/`dest_filename`을
+  새로 계산해 반환한다. 기존 `_BY_KEY[key]` 직접 접근을 전부
+  `_resolve_item(key)`로 교체.
+- **`pipeline/sources.py`**: 정적 3개 튜플을 `_WORK_OBJECTIVE_SOURCES`(모듈
+  import 시점에 `current_fiscal_year()`로 계산한 동적 리스트, 파이썬
+  리스트 언패킹 `*_WORK_OBJECTIVE_SOURCES`로 `SOURCES`에 삽입)로 교체 —
+  이 스크립트는 1회성 CLI 실행에서만 쓰여 import 시점 계산이 안전하다
+  (장기 실행 서버가 아님, `web_pipeline_runner.py`와의 차이).
+- **`services/data_labels.py` 버그 수정**: `label_for()`의 업무목표 컬럼
+  라벨링 로직이 `work_objective24`처럼 항상 2자리 접미사라고 가정하고
+  `f'업무목표 20{suffix}'`로 "20"을 붙여 4자리를 만들었는데, 새 스키마는
+  컬럼명 자체가 이미 4자리 실제 연도(`work_objective2024`)라 그대로
+  적용하면 "업무목표 202024"처럼 잘못 표시되는 버그를 발견해 수정
+  (`suffix`가 4자리면 그대로, 2자리(예전 미이관 데이터 안전장치)면 "20"을
+  붙이도록 분기). `label_for('work_objective2024')` 등으로 직접 호출해
+  "업무목표 2024"/"업무목표 2025"로 정확히 나오는 것 확인.
+- `pipeline/backfill_utils.py`, `pipeline/run_pipeline.py`의 관련 예시/설명
+  주석도 새 키 이름(`work_objective_1~3`)·스키마(`work_objective{4자리
+  연도}`) 기준으로 갱신.
+
+검증: `services.evaluations.current_fiscal_year()` 규칙대로
+`target_years()`가 오늘(2026-09) `[2024, 2025, 2026]`, 아직 FY2026인
+2027-02 `[2024, 2025, 2026]`, FY2027로 넘어간 2027-03 `[2025, 2026, 2027]`을
+정확히 반환하는 것을 직접 실행으로 확인(사용자가 든 예시 "'27년 3월부터는
+업무목표25, 26, 27"과 일치). `wpr.snapshot()`을 직접 호출해
+`work_objective_1/_2/_3`가 오늘 기준 "업무목표24"/"25"/"26"으로 정확히
+라벨링되는 것, `tech_ownership`이 MANIFEST에서 완전히 빠진 것, `team_refer`가
+`hidden_from_table=True`인 것, 화면에 보이는 행 수가 23개 중 2개(보유기술/
+팀·리더 참조) 제외한 21개인 것을 확인. `pages.admin._data_update_table()`/
+`_team_refer_upload_section()`을 실제 Dash 앱 인스턴스(`use_pages` 등록 포함)
+로 직접 렌더링해 업무목표 3개 행 라벨/파일명 힌트, "① '18.5월 이전"/"②
+'18.5월 이후" 라벨, 연도 드롭다운(올해 기준 2020~2027, 왼쪽)/월 드롭다운
+("1월"~"12월", 오른쪽, 기본값이 오늘 연/월과 일치)이 모두 정확히 렌더링되는
+것을 확인. `_migrate_legacy_columns()`를 합성 구버전 스키마 DataFrame으로
+호출해 정확히 이관되고 재호출 시 멱등적인 것, `process_work_objective.
+process()` 전체를 합성 xlsx 3개로 엔드투엔드 실행해 신버전 컬럼만 있는
+정상 결과·재실행 안정성·구버전 데이터 병존 상황에서의 정상 이관(위 버그
+수정 후)을 모두 확인. 변경된 전체 파일(`pages/admin.py`,
+`services/web_pipeline_runner.py`, `pipeline/process_work_objective.py`,
+`pipeline/sources.py`, `pipeline/process_researcher_expertise.py`,
+`services/data_labels.py`, `pipeline/backfill_utils.py`,
+`pipeline/run_pipeline.py`) `py_compile` 통과.
+
+**미검증**: 실제 브라우저에서 새 연/월 드롭다운 조작, 팀/리더 참조 탭의
+실제 업로드→실행→상태 갱신 흐름, 실제 프로덕션 `work_objective.csv`(구버전
+스키마일 가능성)에 대한 실제 이관 실행 결과, 실제 `내 리포트`/`구버전
+이력` 두 xlsx 파일을 이용한 직무이력 업로드 검증(합성 데이터로만 로직
+확인).
+
+## 2026-09-01 (4): 팀/리더 참조 조직코드 오름차순 + 데이터 업데이트 탭
+체크 컬럼 시인성 개선 + 앱 전체 디자인을 Ant Design 스타일로 전환
+
+사용자 요청 4건. 1~3번은 관리자 화면 개선, 4번은 대시보드 전체 리스킨.
+
+**1) 팀/리더 참조 — 조직코드 정렬 오름차순**: `services/team_refer_store.py`
+`list_editable_rows()`의 `sorted(..., reverse=True)`(내림차순, 과거 확정
+사항)를 `reverse=True` 제거로 오름차순으로 변경.
+
+**2) 데이터 업데이트 탭 — 체크 컬럼 시인성**: 첫 컬럼 헤더를 빈 문자열에서
+"체크"로(`pages/admin.py` `_data_update_table()`), 체크박스에
+`du-check-box` 클래스를 추가해 `assets/custom.css`에서 강조색(`--gs-accent`)
+테두리를 둘러 흐릿해 안 보이던 문제 해결.
+
+**3) 데이터 업데이트 탭 — 헤더 폰트/정렬**: 원인은 앱 전체 모든
+Bootstrap 표에 걸리는 전역 규칙(`.table thead th { font-size: 0.7rem }` vs
+`.table tbody td { font-size: 0.85rem }`)이었음. 사용자가 "데이터
+업데이트 탭만" 범위로 확정해, 전역 규칙은 그대로 두고 `.data-update-table`
+전용 클래스(표 자체에 `data-update-table` 클래스 추가)로 헤더 폰트를 셀과
+동일한 크기로 키우고 가운데 정렬만 이 표에 한해 오버라이드.
+
+**4) 대시보드 전체 디자인 전환 — Ant Design**: 애플(apple.com) 스타일에서
+Ant Design 스타일로 전환(사용자 요청 — 대중적 디자인 4개(Material Design 3
+/ Fluent Design / Ant Design / Notion·Linear류 미니멀)를 실제 화면 요소
+(내비/요약카드/데이터 업데이트 표) 목업 아티팩트로 비교해 제시했고,
+사용자가 "3번 Ant Design 스타일로 반영해줘"로 확정).
+
+- **핵심 토큰**(`assets/custom.css` `:root`): `--gs-bg/surface/border/
+  border-2/text/muted/label`을 Ant Design 팔레트로 교체(예: 강조색
+  `#0071e3`→`#1677ff`, 테두리 `#e8e8ed`→`#d9d9d9`, 배경 `#f5f5f7`→`#f5f5f5`).
+  새 토큰 2개 추가: `--gs-nav-bg:#001529`(Ant Design Pro 특유의 짙은
+  네이비 상단바), `--gs-header-bg:#fafafa`(Ant Table 특유의 옅은 회색
+  헤더). 반경도 애플 특유의 필(pill, 980px/999px)에서 Ant의 작은 반경
+  (`--gs-radius:14px→8px`, `--gs-radius-sm:10px→4px`)으로, 폰트도 Ant의
+  실제 폰트 스택(`-apple-system, 'Segoe UI', 'PingFang SC', ...`)으로,
+  애플 특유의 음수 자간(`letter-spacing:-0.011em` 등)도 제거.
+- **네비게이션**: `.app-navbar`의 반투명 블러(`backdrop-filter: blur`)를
+  제거하고 `--gs-nav-bg`(짙은 네이비) 평면 배경으로 — Ant는 그림자/블러
+  대신 테두리로 깊이를 표현하는 평평한(flat) 스타일이라 애플 특유의
+  프로스티드 글래스 효과와 안 맞음. `app.py`의 `dbc.Navbar(color=...)`도
+  `#1d1d1f`→`#001529`로 맞춤(단, 이 값은 위 CSS의 `!important` 배경
+  규칙에 실제로는 덮어써지므로 CSS 쪽이 진짜 반영 지점).
+- **버튼/뱃지**: `.btn`/`.badge`의 필 형태(`border-radius:980px/999px`)를
+  Ant Button/Tag 특유의 작은 반경(`--gs-radius-sm`)으로.
+- **표 헤더**: `.table thead th`에 `background-color: var(--gs-header-bg)`
+  추가(Ant Table의 옅은 회색 헤더 재현) — Dash `dash_table.DataTable`은
+  이 전역 CSS를 안 타므로(자체 렌더링) 하드코딩된 `style_header`를 가진
+  2곳(연구원 명단 `pages/researcher_list.py`, 팀/리더 참조
+  `pages/admin.py`)은 각각 직접 Ant 톤으로 교체.
+- **로그인/최초설정 페이지**(`app.py`의 순수 Flask HTML 템플릿, `custom.css`
+  미적용 별도 인라인 스타일): `.btn-brand`/`.brand-icon`을 기존 남색
+  `#1e3a5f`에서 Ant 프라이머리 `#1677ff`(hover `#0958d9`, Ant의 실제
+  active/pressed 톤)로. 배경 `#f0f2f5`는 Ant Design Pro 로그인 화면이
+  실제로 쓰는 배경색과 우연히 일치해 그대로 둠.
+- **옛 애플 토큰 하드코딩 정리**: `--gs-*` 변수를 안 쓰고 옛 애플 헥스값을
+  코드에 그대로 박아 쓰던 곳들(컴포넌트별 인라인 스타일)을 전부 새 Ant
+  값으로 교체 — `components/timeline_view.py`(이벤트 색상/그리드선/범례),
+  `components/detail_tabs.py`(패널 제목색/E_support 강조색),
+  `components/feedback_modal.py`, `pages/researcher_profile.py`(진행바/
+  텍스트 색), `pages/researcher_similarity_map.py`.
+- **별도 "브랜드 남색"(`#1e3a5f`, `--gs-*`와 무관하게 하드코딩) 정리**:
+  맥락별로 다르게 대응 — 프로필 아바타 배경(`components/
+  profile_sections.py`)은 구조적 서피스라 Ant 네이비(`#001529`)로,
+  리더십진단 레이더 차트 비교선은 데이터 강조색이라 Ant 프라이머리
+  (`#1677ff`)로, `pages/researcher_list.py`의 DataTable 헤더는 원래
+  "짙은 남색 배경+흰 글씨"였던 걸 실제 Ant Table 관례(옅은 회색 헤더+
+  진한 글씨, `#fafafa`/`#1f1f1f`)로 바꿈(전체폭 데이터 표 헤더를 통째로
+  네이비로 칠하는 건 Ant보다 옛 스타일에 더 가까워서), 필터 행 강조
+  테두리/배경은 Ant 프라이머리 계열 라이트 틴트로, 클릭 가능한 "이름"
+  셀 텍스트색은 Ant 프라이머리로, 선택된 행 강조(`state:'active'`)도
+  Ant 라이트 블루(`#bae0ff`)+프라이머리 테두리로.
+- 인쇄용(`@media print`) 조직 섹션 제목 밑줄(`#1e3a5f`)도 Ant 프라이머리로.
+
+검증: 위 색상 치환 후 전체 리포지토리를 대소문자 무관 재검색해 옛 애플
+토큰 헥스값(`#0071e3`/`#1d1d1f`/`#f5f5f7`/`#6e6e73`/`#86868b`/`#e8e8ed`/
+`#d2d2d7`)과 별도 브랜드 남색(`#1e3a5f`)이 하나도 안 남은 것을 확인.
+변경된 전체 파일 `py_compile` 통과. **실제로 서버를 띄우고(`python3
+app.py`, 포트 8501) Playwright로 로그인부터 끝까지 실제 브라우저
+구동 확인** — 최초 설정 페이지 생성 → 로그인 → `/`(연구원 프로필),
+`/researcher-list`(연구원 명단), `/admin`(관리자, "데이터 업데이트" 탭
+스크롤 포함) 3개 화면을 실제로 열어 스크린샷으로 확인: 상단바가 짙은
+네이비(`#001529`)로 바뀐 것, 버튼/라디오/링크가 전부 Ant 블루
+(`#1677ff`)인 것, 카드가 그림자 없이 얇은 테두리+작은 반경인 것,
+"데이터 업데이트" 표 헤더가 셀과 같은 크기로 가운데 정렬된 것,
+체크박스에 파란 테두리가 뚜렷이 보이는 것(확대 크롭으로 재확인),
+"업무목표24/25/26"·"① '18.5월 이전"/"② '18.5월 이후" 라벨이 이전
+반영분과 함께 정상 렌더링되는 것, 연/월 드롭다운이 연-왼쪽/월-오른쪽
+순서로 정상 표시되는 것을 모두 눈으로 확인. 로그인/최초설정 페이지도
+별도로 스크린샷해 브랜드 버튼 색이 반영된 것 확인. 테스트로 만든 로컬
+계정/서버 프로세스는 검증 후 정리(리포지토리에 흔적 없음, `git status`로
+확인).
+
+**미검증**: 실제 데이터가 채워진 화면(이 샌드박스는 DB가 비어 있어 대부분
+"데이터 없음" 상태로만 확인), 실제 다수 사용자가 동시 접속하는 프로덕션
+환경에서의 최종 육안 검수.
+
+## 2026-09-01 (5): 폰트를 Pretendard로 전환(자체 내장, 사내망 대응)
+
+사용자가 "현재 웹 페이지의 폰트 명은 뭐야?"(당시엔 시스템 폰트 스택,
+고정 폰트 없음) → "사내망에서도 쓸 수 있는 다른 폰트는 뭐가 있을까(맑은
+고딕 제외)?" → Pretendard/Spoqa Han Sans Neo 두 후보를 실제 배포 폰트
+파일(GitHub 공식 저장소 woff2)을 그대로 내장한 실물 비교 아티팩트로
+제시 → "Pretendard로 반영해줘"로 확정.
+
+- **폰트 파일**: Pretendard 가변 폰트(Variable, 45~920 굵기 전 구간을
+  파일 1개로 커버) 공식 배포본을
+  `https://raw.githubusercontent.com/orioncactus/pretendard/main/
+  packages/pretendard/dist/web/variable/woff2/PretendardVariable.woff2`
+  에서 받아 `assets/fonts/PretendardVariable.woff2`로 리포지토리에
+  직접 커밋(2,057,688 bytes). 라이선스(OFL 1.1, 무료·상업적 사용 가능)
+  원문도 `assets/fonts/Pretendard-LICENSE.txt`로 같이 커밋(재배포 시
+  라이선스 동봉 요건).
+  정적 파일(Regular/Medium/SemiBold/Bold 등)을 여러 개 내장하는 대신
+  가변 폰트 1개를 쓴 이유: `--gs-font`가 실제로 쓰는 굵기(400/500/600/
+  700)가 전부 정확한 굵기로 렌더링되고(정적 파일 조합이면 없는 굵기는
+  브라우저가 가짜로 두껍게 합성 — CJK 글자는 이 합성 볼드가 특히 지저분해
+  보임), 용량도 4개 정적 파일 합보다 오히려 작음.
+- **`assets/custom.css`**: `@font-face`로 `'Pretendard Variable'`
+  선언(`font-weight: 45 920`, `url('fonts/PretendardVariable.woff2')
+  format('woff2-variations')` — custom.css가 assets/ 바로 밑에 있어
+  상대경로 `fonts/...`가 `/assets/fonts/...`로 풀림). `--gs-font` 맨
+  앞에 `'Pretendard Variable'` 추가(기존 시스템 폰트 스택은 그 뒤에
+  폴백으로 그대로 유지 — 혹시나 폰트 로드가 실패해도 이전과 동일하게
+  동작).
+- **`app.py`의 로그인/최초설정 페이지**: Dash 페이지가 아니라 별도
+  Flask 라우트라 `assets/custom.css`를 안 읽는다 — 같은 폰트 파일을
+  절대경로(`/assets/fonts/PretendardVariable.woff2`, 같은 서버가
+  그대로 서빙)로 참조하는 `@font-face`를 그 페이지 자체의 인라인
+  `<style>`에도 따로 추가하고 `body`의 `font-family`도 맞춤(안 그러면
+  로그인 화면만 예전 시스템 폰트로 남는 불일치가 생김).
+
+검증: 실제로 서버를 띄우고(`python3 app.py`) `curl`로 폰트 파일이
+`200 OK`(`content-type: font/woff2`)로 정상 서빙되는 것 확인. Playwright로
+로그인 → 대시보드까지 실제 로그인해 `document.fonts`를 직접 조회해
+`Pretendard Variable 45 920 status=loaded`(폰트가 실제로 다운로드·적용된
+상태)를 확인 — 폴백으로 조용히 안 넘어간 것을 텍스트가 아니라 브라우저
+API로 직접 검증. `getComputedStyle(body).fontFamily`도 로그인 페이지/
+대시보드 양쪽에서 `"Pretendard Variable"`이 맨 앞에 오는 것 확인.
+로그인 화면·연구원 명단 화면 스크린샷으로 실제 렌더링(자간/굵기)도
+육안 확인. `py_compile` 통과. 테스트 서버는 검증 후 종료(`git status`로
+리포지토리에 흔적 없음 재확인).
+
+**미검증**: 다양한 브라우저(이 세션은 Chromium만 확인)·다양한 OS에서의
+가변 폰트 렌더링 차이, 실제 사내망(외부 인터넷 완전 차단) 환경에서의
+로드 확인(이 폰트 파일은 리포지토리에 커밋돼 서버와 함께 배포되므로
+런타임에 외부 요청이 전혀 없다는 점은 코드상 확인됨).
+
+## 2026-09-01 (6): "데이터 업데이트" 탭 — 과제별컨플 컨플 주소 없는 과제
+PDF 웹 업로드 지원
+
+사용자 질문: "과제별컨플에서 컨플주소가 없는 값은 pdf로 대체를 하고
+있었는데, 웹 상에서도 컨플주소가 없는 값을 pdf 첨부할 수 있도록 가능할까?"
+
+기존 동작(`pipeline/project_summary.py`/`pipeline/pdf_reader.py`): 과제
+전문성 분석(CLI, `run_expertise.py`)이 `project_confl_address.csv`의
+`confl_address`가 빈 과제에 한해 `data/raw/conflue_MPR/{과제명}.pdf`를
+대신 읽는다. 지금까지 이 폴더는 서버 파일시스템에 직접 파일을 갖다 놓아야만
+채울 수 있었다(관리자 화면에 대응 UI 없음) — 이번 요청으로 웹 업로드
+경로를 새로 추가.
+
+**설계**: 다른 MANIFEST 항목(엑셀 업로드 → `process_*.py` 실행)과 근본적으로
+다르다 — PDF는 "실행"할 처리기가 없다(파일을 그 자리에 정확한 이름으로
+두기만 하면, 나중에 별도로 도는 과제 전문성 분석 CLI가 알아서 읽는다).
+그래서 기존 `du-upload` 패턴매칭 콜백/`save_upload()`(→
+`data/web_updates/<key>/`) 경로를 재사용하지 않고, 완전히 별도의 경로를
+새로 만들었다.
+
+- **`services/web_pipeline_runner.py`**: `pdf_reader` 모듈을 새로 임포트하고
+  4개 함수 추가.
+  - `list_confl_pdfs()`: `data/raw/conflue_MPR/`의 PDF 목록(파일명/용량/
+    업로드 시각).
+  - `save_confl_pdf(filename, content_bytes)`: 원본 파일명 그대로 저장
+    (과제명과 정확히 일치해야 `pdf_reader.py`가 찾음). `os.path.basename()`
+    으로 경로 조작(`../../evil.pdf` 같은 입력)을 막고, 다른 업로드와
+    동일하게 `archive_raw_bytes()`로 원본을 함께 아카이브.
+  - `delete_confl_pdf(filename)`: 파일 하나 삭제(관리자가 잘못 올린 걸
+    정리할 수 있게).
+  - `confl_projects_missing_pdf()`: `project_confl_address.csv`에서 컨플
+    주소가 비어 있는 과제명 중 아직 PDF가 없는 것들을 알려준다(관리자가
+    "뭘 더 올려야 하는지" 바로 확인하도록 — 요청에는 없었지만 구현하면서
+    바로 도움이 될 것 같아 추가한 부분, `_confl_pdf_upload_section()`의
+    경고 문구로 표시).
+- **`pages/admin.py`**: 새 `_confl_pdf_upload_section()`을 "데이터 업데이트"
+  탭의 표 바로 아래에 카드로 배치(`confl-pdf-section-container`) —
+  드래그앤드롭 다중 PDF 업로드(`accept='.pdf', multiple=True`), 현재 업로드된
+  PDF 목록(각 항목에 삭제 버튼), "컨플 주소도 PDF도 없는 과제 N건" 경고.
+  라벨 옆 호버 아이콘(다른 항목들과 동일한 패턴)으로 "파일명이 과제명과
+  정확히 같아야 한다"는 사용법 안내. 새 콜백 2개
+  (`confl_pdf_on_upload`/`confl_pdf_on_delete`) — 둘 다
+  `Output('confl-pdf-section-container', 'children')`(섹션 전체 갱신)과
+  `Output('confl-pdf-status', 'children')`(알림 메시지)로 나눠서 낸다 —
+  처음엔 상태 메시지를 섹션 안에 중첩해 넣으려다가, 같은 콜백에서 그
+  중첩 자리를 담은 컨테이너 전체를 동시에 교체하면 두 업데이트가 서로
+  덮어쓸 위험이 있어(Dash가 각 Output을 id로 독립 적용하는데, 그 id 자체가
+  매 렌더마다 새로 생성되는 트리 안에 있으면 타이밍이 꼬일 수 있음) 이미
+  검증된 기존 패턴(`data-update-status-msg`처럼 상태 메시지 자리를 형제
+  요소로 밖에 둠, `_data_update_tab()` 참고)을 그대로 따라 안전하게 분리.
+
+검증: `save_confl_pdf`/`list_confl_pdfs`/`delete_confl_pdf`/
+`confl_projects_missing_pdf`를 합성 `project_confl_address.csv`(과제 3개,
+그중 2개 컨플 주소 빈 값)로 직접 호출해 각각 기대대로 동작하는 것 확인 —
+특히 `../../evil.pdf`처럼 경로 조작을 시도하는 파일명을 넣어도
+`data/raw/conflue_MPR/evil.pdf`로 안전하게 갇히고 리포지토리 루트로
+탈출하지 않는 것을 직접 확인. 실제로 서버를 띄우고 Playwright로 로그인 →
+관리자 → "데이터 업데이트" 탭까지 이동해 **실제 파일 입력(input[type=file])
+에 진짜 PDF 파일을 넣어 브라우저 업로드 → 목록에 반영 → 삭제 버튼 클릭 →
+목록에서 제거**까지 전체 사이클을 스크린샷으로 확인(콜백 로직만이 아니라
+실제 브라우저 업로드 인코딩/콜백 트리거까지 검증). `py_compile` 통과.
+테스트 서버·파일은 검증 후 정리(`data/raw/`, `data/processed/*`는 애초에
+`.gitignore` 대상이라 리포지토리에도 흔적 없음).
+
+**미검증**: 실제 과제 전문성 분석 CLI(`run_expertise.py`)를 돌려서 여기서
+올린 PDF가 실제로 컨플루언스 대신 읽히는지(그 실행 자체는 LLM 호출이 있는
+무거운 배치라 이 세션에서 실행하지 않음 — 코드 경로(`pdf_reader.fetch_pdf_text`
+가 이 함수가 저장한 것과 동일한 `PDF_DIR`/파일명 규칙을 그대로 씀)만 확인).
+
+## 2026-09-01 (7): pipeline/verify_transfer.py — 로컬→서버 수동 이관 검증
+스크립트 신설
+
+**배경(질의응답, 코드 변경 전)**: 사용자가 실제 운영 방식을 설명 —
+로컬 PC에서 원본(`data/raw`)부터 전처리(`data/processed/*.csv`)·LLM
+분석·임베딩(`data/processed/*.json`)까지 전부 로컬에서 끝내고, **로컬
+DB와 서버 DB가 분리돼 있어** 그 산출물을 통째로 서버에 수동으로 옮긴다고
+확인. 즉 자동 동기화가 전혀 없어 "몇 개 파일을 빠뜨렸다"/"옛날 파일을
+실수로 덮어썼다"/"파일은 옮겼는데 서버 DB 반영을 깜빡했다" 같은 실수를
+사람이 직접 눈으로 잡아야 하는 구조라는 걸 확인한 뒤, 사용자가 이관
+직후 서버에서 돌려 검증할 스크립트를 요청.
+
+**`pipeline/verify_transfer.py`(신규)**: `python pipeline/verify_transfer.py`
+로 서버에서 실행. 점검 항목:
+1. **존재 여부** — `pipeline/load_to_db.py`의 `TABLES`(csv 32개)/
+   `JSON_TABLES`(json 3개) 목록을 그대로 재사용(따로 파일 목록을 다시
+   적지 않아 그 목록이 바뀌어도 이 스크립트가 자동으로 따라감 — 이
+   세션 내내 지켜온 "한 곳에서만 정의" 원칙).
+2. **빈 파일 여부** — 0행/0건이면 경고.
+3. **자연키 컬럼 존재 여부** — `pipeline/merge_utils.py`의
+   `TABLE_KEYS`/`GROUP_REPLACE_KEYS`에 등록된 키 컬럼이 실제로 있는지
+   (없으면 구버전 스키마이거나 엉뚱한 파일을 잘못 옮겼을 가능성).
+4. **수정 시각** — 가장 최근 파일보다 24시간 이상 오래된 파일을 별도
+   섹션으로 모아 보여줌("이번 이관에서 빠졌을 가능성").
+5. **(DATABASE_URL이 서버에 설정돼 있으면) DB 반영 여부** — 파일
+   행수와 실제 DB 테이블 행수를 비교. 미설정이면 이 항목은 생략(파일
+   폴백만으로도 화면은 정상 동작하므로 실패로 취급하지 않음).
+결과는 `[OK]`/`[WARN]`/`[FAIL]` 목록 + 요약 건수로 출력하고, `FAIL`이
+하나라도 있으면 종료 코드 1(스크립트/cron에서 실패 감지에 활용 가능).
+
+검증: 합성 데이터로 5가지 케이스를 각각 만들어 직접 실행 확인 — 정상
+파일(OK), 빈 파일(WARN), 자연키 컬럼 누락(WARN, 누락된 컬럼명까지 정확히
+나열), 다른 파일보다 사흘 오래된 mtime(별도 "빠졌을 가능성" 섹션에 정확히
+포착), JSON 키 필드가 빈 항목(WARN), 파일이 아예 없는 경우(FAIL) — 전부
+기대대로 출력됨을 확인. DB 비교 로직은 실제 Postgres 없이 인메모리
+SQLite로 `get_engine()`을 임시 대체해 파일-DB 행수 일치/불일치 두 경우
+모두 정확히 판정하는 것을 확인. `DATABASE_URL` 미설정(이 샌드박스 기본
+상태)일 때 DB 비교 섹션을 조용히 생략하는 것도 확인. `py_compile` 통과.
+테스트로 만든 합성 파일은 검증 후 정리(`data/processed/*`가 `.gitignore`
+대상이라 애초에 리포지토리에도 흔적 없음).
+
+**미검증**: 실제 운영 환경(진짜 Postgres, 실제 로컬→서버 이관)에서의
+실행 — 인메모리 SQLite로 SQL 쿼리 로직만 확인했고, 실제 psycopg2 접속
+문자열/네트워크 조건까지는 이 샌드박스에서 검증 불가.
+
+## 2026-09-01 (8): run_pipeline.py 단계별 예외 격리 + 실행 요약 신설,
+process_leadership.py Knox ID 매칭 전멸 시 KeyError 크래시 버그 수정
+
+**계기**: 사용자가 실제 운영 중 `리더십진단.xlsx` 처리 단계에서
+`KeyError: 'evaluator_group'`로 `run_pipeline.py`가 죽는 걸 겪음. 재현해
+정확한 원인을 찾은 뒤(아래), "예상 못 한 예외가 나면 그 항목 뒤의 모든
+항목이 통째로 안 돌아간다"는 `run_pipeline.py`의 구조적 문제도 함께
+확인 → 두 가지 다 고쳐달라는 요청.
+
+**버그 1 — `process_leadership.py`: Knox ID 매칭이 전멸하면 크래시**
+(`pipeline/process_leadership.py`). 근본 원인을 재현으로 확정:
+1. `진단대상자ID`(Knox ID)를 `researchers.csv`의 `knox_id`와 대조해
+   `researcher_id`로 바꾸는데, 이번 파일이 하나도 안 맞으면(사용자가
+   실제로 겪은 상황 — "50건 knox id 매칭 실패") 매칭 실패 행을 걸러낸
+   뒤 `df`가 완전히 빈 DataFrame이 됨.
+2. 빈 `df`를 그룹화한 `agg`도 0행 → 점수 계산 루프가 한 번도 안 돌아
+   `score_rows = []`(빈 리스트).
+3. `pd.DataFrame([])`는 **행뿐 아니라 컬럼 자체가 없는** 완전히 빈
+   DataFrame이 됨(pandas 함정 — 딕셔너리가 하나도 없으면 컬럼 스키마를
+   추론할 근거가 없음).
+4. 바로 다음 줄 `scores['evaluator_group']`이 존재하지도 않는 컬럼을
+   찾다가 `KeyError: 'evaluator_group'`으로 죽음.
+합성 데이터(Knox ID가 하나도 안 맞는 리더십진단.xlsx)로 정확히 같은
+트레이스백을 재현해 확정.
+
+**수정**: Knox ID 매칭 후 `df`가 비면(전부 실패) 그 자리에서
+`[WARN]` 로그(리더십진단.xlsx의 진단대상자ID가 researchers.csv의
+knox_id와 형식이 같은지 확인하라는 안내 포함)만 남기고 `return False`
+— 사용자 확정("맵핑이 안 맞더라도 실행은 되어야 한다, 나중에
+researcher_id로 조회할 때 그냥 안 맞을 뿐 처음부터 에러가 나는 걸 피해야
+한다"). `write_merged()`는 새 데이터가 0행이면 기존 파일을 그대로
+보존하므로(`upsert_merge`의 `if len(new) == 0: return existing`), 이
+경로를 안 타게 조기 반환해도 기존 `leadership.csv`는 안전하게 유지됨
+— 데이터 손실 없음. 부분 매칭(일부만 실패)은 원래도 문제없이 동작했고
+지금도 그대로 동작함(회귀 테스트로 확인).
+
+**버그 2(구조적 설계 문제) — `run_pipeline.py`: 예외 하나가 뒤 항목
+전부를 막음**. 기존엔 `_run_with_fallback()`이 `process_fn()`의 반환값
+(`True`/`False`)만 보고 "파일 없음"류만 안전하게 넘어갔지, 실제
+예외(코드 버그, 손상 데이터 등)는 하나도 안 잡아서 그 자리에서 스크립트
+전체가 죽고 이후 목록의 모든 항목이 통째로 스킵됐음(missing 목록에도 안
+잡히고 그냥 실행이 안 됨 — 사용자에게 먼저 설명드린 내용).
+
+**수정**: `_run_with_fallback()`과 새 `_run_step()`(폴백 없는 단일
+단계용) 둘 다 각 단계 실행을 try/except로 감싸 예외가 나도 그 자리에서
+잡아 FAIL로 기록하고 **계속 진행**하도록 전면 개편. 폴백이 있는 항목은
+주 처리기 예외 → 폴백 시도 → 폴백도 실패하면 원래 예외 사유를 최종
+사유로 기록(단순 "원천 없음"과 구분). 폴백 자체(파일 읽기/저장)에서
+나는 예외도 별도로 잡음. 총 32개 데이터 항목(researchers~
+project_confl_address, 4개 raw 통과 테이블 포함) 전부 이 방식으로
+전환 — `missing: list`(사유 문자열만 쌓던 것)를 `results: list`(항목명/
+상태(OK·SKIP·FAIL)/사유를 구조화해 담는 딕셔너리 리스트)로 교체.
+DB 적재 2단계(`load_raw_to_db.py`/`load_to_db.py`)는 원래도 선택 인프라
+단계라 이미 자체 try/except로 보호돼 있어 그대로 둠(데이터 항목
+요약과는 분리).
+
+**새 `_print_summary()`**: 실행 맨 끝에 `[OK] 성공 N건`(이름 목록),
+`[SKIP] 건너뜀(원천 없음, 정상) N건`(항목별 사유), `[FAIL] 실패(예외
+발생, 확인 필요) N건`(항목별 예외 타입+메시지)을 구분해서 보여줌 —
+사용자 확정("어떤 항목이 성공했고 실패했는지 구분, 왜 실패했는지 사유").
+`FAIL`이 있으면 "그 항목만 다시 실행해도 된다"는 안내까지 마지막 줄에
+표시.
+
+검증: ① `process_leadership.py` — Knox ID 전멸(합성 데이터) 시 크래시
+없이 `[WARN]` 로그 후 `False` 반환 확인(재현 스크립트로 수정 전/후
+비교), 부분 매칭은 기존과 동일하게 정상 동작(1명만 매칭되는 합성
+데이터로 `leadership.csv` 정상 저장 확인, 회귀 없음). ② `run_pipeline.py`
+— 빈 샌드박스에서 전체 실행해 27개 항목이 크래시 없이 전부 SKIP/OK로
+분류되고 요약이 정확한 것 확인. `process_patents.process`를 강제로
+예외를 던지도록 몽키패치해 실제로 예외가 나는 상황을 재현 — `[ERROR]`
+로그(트레이스백 포함) 출력 후 **patents 하나만 FAIL로 기록되고, 그
+뒤의 hr_orders/nurturing/... 나머지 항목은 전부 정상적으로 계속
+실행됨**을 확인(가장 중요한 검증 포인트 — 예전이라면 여기서 전체가
+죽었을 시나리오). 최종 요약에 `[FAIL] 실패 1건: patents:
+RuntimeError: ...`가 정확한 사유와 함께 별도 섹션으로 표시되는 것도
+확인. `py_compile` 통과. 테스트로 만든 합성 파일/디렉터리는 전부 정리
+(`data/processed/*`는 `.gitignore` 대상).
+
+**미검증**: 실제 프로덕션 `리더십진단.xlsx`(사용자가 실제로 겪은 그
+파일)로 이 수정이 실제 문제를 해결하는지 — 이 샌드박스엔 그 파일이
+없어 동일한 매칭 실패 패턴을 인공적으로 재현한 합성 데이터로만
+검증함. 다른 process_*.py 항목에서 날 수 있는 다른 종류의 예외들이
+새 예외 처리 경로를 전부 올바르게 타는지(하나씩 다 강제로 예외를
+내보진 않음, patents 시나리오 하나로 메커니즘 자체만 확인).
+
+## 2026-09-01 (9): services/dev_updates.py — 오늘(09-01) 작업분을
+"08.31–09.06" 주차에 반영, 공유회 자료(pptx) 최신화 준비
+
+사용자가 "이전에 요청했던 공유회 자료 현재 자료 기준으로 다시 작성해줘"
+요청 — 스크래치패드에 8/27에 만든 `연구원보드_부서공유회.pptx`(pptxgenjs
+기반 12슬라이드, `build_deck.js`)가 있어, 그 이후(특히 오늘) 바뀐 내용을
+반영해 다시 만들기로 함.
+
+`services/dev_updates.py`의 `WEEKS`(관리자 "개발업데이트 이력" 탭 원본
+데이터, 슬라이드 11의 "누적 기능·개선 이력" 통계가 바로 이 데이터에서
+나옴)를 먼저 최신화하지 않으면 슬라이드 숫자 자체가 애초에 "현재
+자료"가 아니게 되므로, 오늘 이 세션에서 실제로 한 작업(Ant Design 리스킹
++Pretendard, 데이터 업데이트 탭 표준화(누적 시점 통합 UI)+업무목표
+회계연도 롤링, 보유기술 웹 제외+팀/리더 참조 탭 이동+컨플 PDF 업로드,
+run_pipeline.py 예외 격리+실행요약+이관검증스크립트, 직무이력 라벨/기능
+변경, 리더십진단 크래시 버그 수정, 체크박스 시인성, 조직코드 정렬)를
+이 파일 docstring이 정한 관례(major=굵직한 기능, detail=자잘한 개선)
+그대로 "08.31–09.06" 주차에 추가 반영(major 7건, detail 8건 추가) —
+이 파일이 원래 "매주 갱신 예정"인 파일이라 벗어난 작업이 아님.
+
+갱신 후 통계(추후 슬라이드 11에 그대로 사용): 13주(06.01–09.06),
+major 50건 + detail 59건 = 총 109건.
+
+검증: `py_compile` 통과. `services.dev_updates.WEEKS`를 직접 로드해
+주차 수/합계를 재계산해 확인. `pages.admin._dev_updates_tab()`을 직접
+렌더링해 예외 없이 정상 렌더되는 것 확인.
+
+## 2026-09-01 (10): "데이터 업데이트" 탭 표를 공용/대시보드용/LLM분석용
+3개 구간으로 그룹핑
+
+사용자 요청: "대시보드용 원천파일과 llm분석용 원천파일, 그리고 둘다에
+사용되는 파일을 구분해서 데이터 업데이트 탭에 표시되도록 해줘. 순서는
+공용파일, 대시보드용, llm분석용순으로." 확인 문답 2건으로 확정된 사항:
+(1) LLM분석용 그룹이 비어 있어도 그룹 헤더 3개는 항상 유지, (2)
+분류 기준은 코드 호출 그래프(`pipeline/run_pipeline.py`(대시보드)와
+`pipeline/run_expertise.py`(LLM 분석) 두 스크립트가 각 항목의
+`process_*.py`를 실제로 호출하는지) 그대로.
+
+**`services/web_pipeline_runner.py`**: MANIFEST 각 항목에
+`pipeline_scope`(`'common'|'dashboard'|'llm'`) 필드 추가 —
+`_item.setdefault('pipeline_scope', 'common')`으로 기본값을 두고, 두
+스크립트 중 `run_pipeline.py`에서만 불리는 7개 항목
+(evaluations/nurturing/awards/incentive_selection/hr_orders/
+language_qualification/work_experience)에만 명시적으로
+`pipeline_scope='dashboard'`를, `run_expertise.py`에서만 불리는
+`team_refer`(이미 `hidden_from_table=True`라 표에는 안 보임)에
+`pipeline_scope='llm'`을 지정했다. 나머지 14개(researchers/patents/
+education/publications/tasks_information/core_technology/job_profile/
+work_objective_1~3/tasks/project_confl_address/
+job_profile_info_standard/job_profile_info_sait)는 두 스크립트 모두가
+호출해 기본값 `'common'` 그대로 둔다. `snapshot()`의 행 dict에도
+`pipeline_scope`를 그대로 노출.
+
+**`pages/admin.py`**: `_data_update_table()`을 재작성 — 표 헤더는
+그대로 8컬럼(체크/구분/업로드/누적 시점(연/월)/이전 Data/API 연동/
+최종실행이력/실행결과)이고, `Tbody` 안에 `pipeline_scope` 순서
+(공용→대시보드용→LLM분석용, `_DATA_UPDATE_SCOPES`)대로 구간 제목 행
+(`_data_update_section_header()`, `colSpan=8`, 옅은 배경의 소제목 행 —
+"관리자 화면 리스킹" 세션에서 이미 쓰던 `--gs-header-bg` 토큰 재사용)을
+먼저 넣고 그 그룹에 속하는 `_data_update_row()`를 이어붙인다. 그룹이
+비어도(현재 LLM분석용) 제목 행만 남기고 데이터 행은 0개 — 사용자 확정
+그대로.
+
+검증: `services.web_pipeline_runner.MANIFEST`/`snapshot()`을 직접 로드해
+`pipeline_scope` 분포가 공용 14 / 대시보드 7 / LLM(team_refer, 숨김) 1건
+정확히 나오는 것 확인. `pages.admin._data_update_table()`을 Dash 앱
+컨텍스트에서 직접 렌더링해 — 헤더 8컬럼, 구간 제목 행 3개(공용파일/
+대시보드용/LLM분석용, 전부 `colSpan=8`)가 정확한 순서로 나오는 것,
+표에 실제로 보이는 데이터 행이 21개(공용 14 + 대시보드 7, `team_refer`는
+`hidden_from_table=True`라 이 표 자체에서 계속 빠짐 — 그리드 CRUD와
+"팀/리더 참조" 탭 전용 업로드 섹션은 그대로 유지)인 것, LLM분석용 구간에
+데이터 행이 0개인 것을 확인. `py_compile` 통과.
+
+**미검증**: 실제 브라우저에서 구간 제목 행의 배경색/여백이 실제로
+소제목처럼 눈에 띄는지 육안 확인.
+
+## 2026-09-02 (11): UI/UX/데이터 11건 일괄 반영(연구원 프로필·명단·보유
+전문성·관리자 화면)
+
+사용자가 한 메시지로 요청한 11건(설명·확인질문 3건을 먼저 거쳐 확정) —
+번호는 사용자 원문 순서 그대로.
+
+**1) 연구원 개별 프로필 — 검색 전 빈 화면**: `pages/researcher_profile.py`
+`layout()`의 `default_rid = all_opts[0]['value'] if all_opts else None`을
+`default_rid = None`으로 변경(딥링크로 `id`가 넘어온 경우의 기존 분기는
+그대로 유지) — 이전엔 화면 진입 시 이름 오름차순 첫 번째 사람의 프로필이
+자동으로 나왔는데, 이제는 검색해서 고르기 전까지 빈 화면.
+
+**2) 전문성 요약(LLM) 박스 — 시니어/주니어 범례**:
+`components/detail_tabs.py`의 "유사 연구원" 라벨 줄에 `legend_dot` 헬퍼로
+"● 시니어 ● 주니어"(파란색/하늘색 점, 기존 배지 색과 동일)를 인라인으로
+추가 — 색 구분 기준이 뭔지 안내가 없던 문제 해결.
+
+**3-4) 연구원 명단 검색기준 — 최신/누적 UI 토글 + 문구 축소**:
+`pages/researcher_list.py`. 확인 질문(3건 중 1건)으로 "기간을 지정하면
+부서/과제 필터 재활성화"라는 기존 동작은 유지하기로 확정 — 다만 지금까지는
+`disabled` 속성만 바뀌고 컨트롤 자체는 항상 화면에 남아 있었다(비활성화된
+채로 계속 보임). `list-period-range`(+`list-period-hint`)를 새
+`html.Div(id='list-period-range-wrap')`로, 부서/과제·파트 `dbc.Col`에
+각각 `id='filter-dept-col'`/`id='filter-project-col'`을 추가하고,
+`toggle_org_filters()` 콜백에 `Output('list-period-range-wrap','style')`/
+`Output('filter-dept-col','style')`/`Output('filter-project-col','style')`
+3개를 새로 붙여 최신기준일 때는 시작일/종료일 박스를 아예 숨기고
+부서/과제·파트만 보이게, 누적기준일 때는 반대(기간을 지정하면 부서/과제도
+다시 보임)로 완전히 화면에서 사라지게 했다. 라디오 아래 문구는
+"누적기준: 이름/사번 검색 중심 (부서·과제·직급·직책 필터 비활성화)"에서
+괄호 설명을 빼 "누적기준: 이름/사번 검색 중심"으로 축소.
+
+**5) 엑셀 다운로드 — A열 조직코드 + 자동 정렬**:
+`services/similarity_map.py`에 `org_code_dep_code_map()`(org_code→dep_code,
+기존 `org_code_dep_id_map()`과 동일 패턴)과 `org_code_leader_map()`
+(org_code→그 조직 직책자 researcher_id, team_refer 행 중 researcher_id가
+채워진 조직장급 행만)을 추가. `services/researcher_profile_export.py`:
+`_COLUMNS` A열에 `('조직코드', _col_org_code)`를 새로 얹고(원본 컬럼 수
+12→9로 줄고 조직코드 1 + 아래 6) 항목 옵트인 전환), `_researcher_row_context()`에
+`org_code_dep_code_map` 파라미터/키 추가. 확인 질문(2건 중 1건)으로
+"조직코드 기준 자동 정렬"로 확정 — `build_profile_workbook()`이 행을 쓰기
+전에 `researcher_ids`를 `(dep_code, 그 조직 직책자 여부 아님, 이름)` 키로
+정렬(직책자는 `org_code_leader_map()`으로 판정, 같은 조직 안에서는
+직책자가 먼저 오고 나머지는 가나다순). 실사용 표본 데이터(team_refer 2개
+조직, 연구원 4명)로 직접 `build_profile_workbook()`을 호출해 조직코드
+오름차순 + 직책자 우선 + 가나다순이 정확히 나오는 것 확인.
+
+**6) 엑셀 다운로드 — 4개 항목 옵트인 전환 + 버튼 문구**:
+같은 파일에서 과제수행이력/양성이력/핵심이력/보유기술을 `_COLUMNS`에서
+빼 `_TASKS_COLUMNS`/`_NURTURING_COLUMNS`/`_INCENTIVE_COLUMNS`/
+`_TECH_OWNERSHIP_COLUMNS`(각 1컬럼짜리 옵트인 그룹)로 옮기고,
+`build_profile_workbook()`에 `include_tasks`/`include_nurturing`/
+`include_incentive`/`include_tech_ownership`(기본값 전부 `False`) 4개
+파라미터 추가 — 이제 기본 다운로드에는 안 들어가고 체크해야 포함된다.
+`pages/researcher_list.py`의 `list-excel-options-check` 체크리스트에
+4개 옵션("과제수행이력 포함" 등)을 추가하고 `download_excel()` 콜백에서
+`build_profile_workbook()` 호출부에 대응하는 4개 인자를 연결. 버튼
+title도 "추가 항목 선택(보유 전문성, 직무, 재직상태 등)"에서
+"추가 선택 항목(과제수행이력, 보유 전문성, 직무 등)"으로 변경.
+
+**7) 보유 전문성 탭 — "과거 시점 조회(온디맨드 분석)" 화면에서만 숨김**:
+`pages/researcher_similarity_map.py`의 `expertise-search-mode`
+RadioItems에서 `{'value': 'historical', ...}` 옵션만 제거 — 확인 질문
+(3건 중 1건)으로 "화면에서만 숨김(백엔드 코드는 그대로 유지)"로 확정,
+이 앱의 기존 hide-not-delete 관례(조직별 비교/전문성 MAP 탭 등과 동일)를
+그대로 적용한 것 — `_render_historical_results()`/관련 콜백/
+`_toggle_download_panel()`의 `mode != 'historical'` 분기 등은 손대지
+않았다(라디오에 그 값이 더 이상 없으니 실질적으로 도달 불가능해질 뿐).
+
+**8) 보유 전문성 탭 조직도 — 하위 조직 클릭 시 직책자 상단 정렬**:
+`pipeline/process_researcher_expertise.py`/`process_researcher_similarity.py`의
+`build_html()` 안 `_leaf_researchers(node)` 클로저 둘 다에 동일하게 —
+`node.get('researcher_id')`(그 조직의 직책자, 예: "A과제(PM 홍길동)"의
+홍길동은 team_refer에서 그 org_code 행에 이미 사번이 채워져 있다)를
+목록 맨 위로, 나머지는 이름 가나다순으로 정렬하는 `sorted(..., key=lambda
+rid: (rid != leader_rid, name_map.get(rid, rid)))`를 추가. 실사용 표본
+데이터로 `build_html()`을 직접 호출해 조직 섹션의 인원 순서가 "직책자
+먼저 → 가나다순"으로 정확히 나오는 것 확인(예: 정재원(PL)이 강동현/
+이성민/장승우보다 앞).
+
+**9) 관리자 화면 팀/리더 참조 탭 — "엑셀 파일로 한번에 반영" 카드를
+탭 최하단으로**: `pages/admin.py`의 `_team_refer_tab()`에서
+`_team_refer_upload_section()` 호출 위치를 안내 Alert 바로 아래(맨 위)에서
+`team-refer-save-msg` Div 다음(부서ID 중복 Modal 앞, 탭 최하단)으로 이동.
+표 위 편집 흐름이 주 동선이고 엑셀 일괄 반영은 보조 수단이라는 게 이유.
+
+**10-11) 데이터 업데이트 탭 표 — 3개 컬럼 가운데 정렬 + 컬럼 크기 조절**:
+`pages/admin.py`. (10) "체크"/"구분"/"누적 시점(연/월)" 3개 컬럼 내용이
+왼쪽으로 치우쳐 보이던 원인은 부트스트랩의 `text-align`이 인라인 요소만
+가운데로 모으고, `dbc.Checkbox`(블록 레벨 `.form-check` div)와
+`dbc.Row`(flex, 기본 `justify-content-start`)에는 안 먹기 때문 — 체크
+Td는 `dbc.Checkbox`를 `html.Div(..., className='d-flex
+justify-content-center')`로 감싸고, 구분 Td에 `text-center`를 추가하고
+(`label_with_hint`의 내용은 인라인이라 이제 먹는다), `_valid_period_picker()`가
+반환하는 `dbc.Row`에 `justify-content-center` 클래스를 추가해 3개 모두
+가운데 정렬로 고쳤다. (11) 이 표는 `dash_table.DataTable`이 아니라 일반
+`dbc.Table`이라(팀/리더 참조 표와 달리) 컬럼 너비 드래그 조절 기능이
+원래 없었다 — 헤더 라벨을 `html.Span(..., className='du-th-resize')`로
+감싸고, `assets/custom.css`에 `.data-update-table .du-th-resize { display:
+inline-block; resize: horizontal; overflow: auto; min-width: 40px;
+max-width: 400px; }`를 추가해(팀/리더 참조 표의 `.column-header-name`
+CSS 트릭과 같은 방식) 우측 하단 모서리 드래그로 너비를 조절할 수 있게
+했다.
+
+검증: 11건 모두 코드 리뷰 + `py_compile`/`ast.parse` 통과, `import app`으로
+전체 Dash 앱(콜백 Output 중복 등) 정상 로드 확인. 5번/8번은 team_refer
+샘플 CSV(조직 2개, 그중 1개에 직책자)를 임시로 만들어
+`build_profile_workbook()`/`build_html()`을 직접 호출해 정렬 결과가
+기대대로 나오는 것을 실제로 확인(테스트용 CSV는 검증 후 삭제 — `data/`는
+`.gitignore` 대상이라 커밋에는 애초에 안 잡힘). **미검증**: 실제
+브라우저에서 3/4/10/11번의 화면 표시(토글 애니메이션, 리사이즈 핸들
+드래그 동작, 체크박스/셀 가운데 정렬 육안) — 서버를 띄워 직접 조작해
+보지는 못했다.
+
+## 2026-09-02: `scripts/build_past_team_refer.py` 재작성 + DRM 읽기 실패
+디버깅(최종 원인: 파일이 아니라 "폴더 경로"가 DRM 신뢰 여부를 가른다)
+
+**요청 배경**: `data/raw/past_data/`(이후 사용자 확정으로 기존과 동일하게
+`data/raw/past_team_refer/`로 유지) 안의 여러 원본 엑셀에서 "1단계부서명"/
+"현소속부서명"/"비공식소속부서명" 3개 헤더 컬럼만 그대로 뽑아
+`<원본파일명>_team_refer.xlsx`를 만들어달라는 요청. 헤더 확인 → 신규 파일
+생성 → 데이터 복사 → A~C 조합 중복 제거 → C→B→A 순 안정 정렬 연쇄 적용
+(최종 A 1순위/B 2순위/C 3순위 오름차순) → 저장, 5가지 순서를 확인 문답
+(헤더 일부만 있는 파일은 실패 처리하고 다음 파일로, 총/성공/실패 개수 요약
+표시 / 대상은 폴더 안 .xlsx 전부, 임시 잠금 파일 제외, 첫 번째 시트만 /
+출력은 `data/processed/past_team_refer/` / 행 전체가 빈 경우만 제외, 일부만
+빈 셀은 유지)로 확정 후 `scripts/build_past_team_refer.py`(2026-08-31에
+이미 존재하던, "End of Month Headcount" 162컬럼 고정 포맷 + VLOOKUP
+상위부서명 계산 + 월별 `team_change.csv` 비교를 하던 이전 버전)를 완전히
+대체하는 방식으로 새로 작성 — 헤더 텍스트로 3개 컬럼을 찾아 그대로 복사만
+하고 계산은 하지 않는 훨씬 단순한 버전.
+
+**이후 로컬 실행 → 실패 → 진단의 반복(총 5차 수정)**:
+
+1. **1차(출력 포맷)**: 처음엔 사용자 요청 문구("신규 엑셀파일 생성")를
+   그대로 받아 xlsx(openpyxl)로 출력했다가, "지난번과 마찬가지 사유"로
+   실패했다는 보고 — 확인해보니 이 스크립트는 2026-08-31에 이미 정확히
+   같은 문제(openpyxl로 새로 쓴 xlsx의 OOXML 메타데이터가 실제 셀 범위와
+   어긋나면 Excel이 "손상됨"으로 인식해 못 여는 구조적 함정)를 겪고 그때
+   이미 csv로 바꿔 해결한 이력이 있었다. researchers.csv가
+   `pipeline/merge_utils.write_merged_with_valid_period()` →
+   `df.to_csv(out_path, index=False, encoding='utf-8-sig',
+   quoting=csv.QUOTE_NONNUMERIC)`로 저장하는 것과 정확히 동일한 방식으로
+   되돌리고, "1행 공백+2행 헤더"였던 xlsx 전용 레이아웃도 버려 다른 csv
+   산출물처럼 헤더를 1행에 바로 두도록 통일.
+
+2. **2차(읽기 파라미터 비교, 차이 없음 확인)**: "인력현황 → researchers.csv
+   처리 방식과 비교해서 동일하게 해달라"는 요청에 따라
+   `pipeline/process_researchers.py`가 원본 xlsx를 직접 읽는 유일한 경로
+   (관리자 웹 업로드 시 `find_latest()` + `read_xlsx(path,
+   header_row=_RESEARCHERS_HEADER_ROW)` + `df.columns = [str(c).strip()
+   for c in df.columns]`)와 `pipeline/sources.py`의 `researchers` SOURCES
+   엔트리(`header_row=1`)까지 전부 대조 — 파라미터 수준에서는 완전히
+   동일함을 확인(차이 없음). 그런데도 실제로는 "Excel file format cannot
+   be determined, you must specify an engine manually"(pandas 폴백
+   실패)와 "(-2147352567, '예외가 발생했습니다.', (0, 'Microsoft Excel',
+   ...)"(xlwings COM 자동화 자체의 실패)가 보고됨.
+
+3. **3차(visible=True 시도, 효과 없음)**: 2026-08-31 당시 문서화된 "Excel
+   Protected View 팝업 등으로 자동화가 막힐 때 흔한 증상"이라는 선례에
+   따라, `pipeline/excel_reader.read_xlsx()`에 `visible: bool = False`
+   매개변수를 새로 추가(기존 호출부 30여 곳은 전부 기본값 그대로라 영향
+   없음, 이 스크립트만 `visible=True`로 xlwings가 Excel 창을 화면에 띄운
+   채로 열도록 호출)해 팝업이 있어도 자동화가 막히지 않게 시도. 사용자가
+   로컬에서 재현한 결과 **완전히 동일한 에러** — 창이 보이는지 여부와
+   무관하게 `app.books.open()` 호출 자체가 곧바로 실패한다는 뜻이라, 이
+   가설(팝업이 안 떠서 막힘)은 기각. `visible` 인자는 효과가 없어 이후
+   호출에서 다시 제거(매개변수 자체는 향후 디버깅에 쓸 수 있어
+   `excel_reader.py`에 남겨둠).
+
+4. **4차(xlsx_to_raw_csv.py 경유 여부 문의 → 코드 비교로 답변, csv 입력
+   지원 추가)**: 사용자가 "인력현황 → researchers.csv 변환도
+   `xlsx_to_raw_csv.py`를 거치는데 같은 흐름이 효과 있겠냐"고 문의 —
+   `xlsx_to_raw_csv.py`의 실제 호출(`read_xlsx(src_paths[0],
+   header_row=header_row)`)도 완전히 동일한 함수이므로 경유해도 실패
+   지점(파일 열기 자체)은 달라지지 않을 것이라고 코드 근거로 답변(+
+   `researchers` SOURCES가 `multi=True`라 이 과거 파일들을 `data/raw/`에
+   두면 현재 `researchers.csv`에 옛 데이터가 섞여 들어갈 위험이 있어
+   권장하지 않는다고 경고). 대신 "DRM이 이미 제거된 .csv"도 입력으로
+   받도록 확장 — `pipeline/source_reader.read_source()`가 raw_csv를 읽는
+   방식과 정확히 동일한 `pd.read_csv(path, encoding='utf-8-sig',
+   dtype=str).fillna('')`로 읽어 xlwings/Excel/COM을 아예 안 거치는
+   경로를 추가(사용자가 파일을 Excel에서 수동으로 열어 "다른 이름으로
+   저장"한 결과를 바로 처리 가능). 자기 자신이 만든
+   `<이름>_team_refer.csv` 출력을 재실행 시 원본으로 잘못 집어먹지 않게
+   접미사 제외 처리도 함께 추가.
+
+5. **진단 확정 → 5차(원본 폴더를 인자로 지정 가능하게)**: 순차적으로
+   (1) `xlsx_to_raw_csv.py` 실행 시 `인력현황.xlsx`는 정상적으로
+   `researchers.csv`로 변환된다(→ 이 PC에서 xlwings/COM 자체는 정상
+   동작), (2) `data/raw/past_team_refer/` 안의 파일을 탐색기에서
+   더블클릭해도(수동 열기, 자동화와 무관) 안 열리고 오류 메시지가
+   뜬다(→ DRM 권한/파일 손상 문제로 좁혀짐)까지 확인한 뒤, 마지막으로
+   사용자가 "**같은 파일을 다른 폴더에 두면 정상적으로 열린다**"는 것을
+   발견 — 파일 내용/사용자 권한이 아니라 **파일이 위치한 경로 자체**를
+   DRM/보안 프로그램(NASCA 등)이 신뢰 여부 판단 기준으로 쓰는 정책일
+   가능성이 매우 높다는 결론(이 git 저장소의 `data/` 폴더가 그런 신뢰
+   경로 목록에 없을 수 있음 — 스크립트가 파일을 읽기만 하고 쓰지 않으므로
+   실행 중 원본이 손상됐을 가능성은 낮고, 항상 "열기" 단계 자체에서 실패한
+   것도 이 결론과 부합). 저장소 `data/` 폴더가 IT 승인을 받을 때까지
+   기다리지 않아도 되도록, `RAW_DIR`을 선택적 CLI 인자로 오버라이드할 수
+   있게 `main(raw_dir=...)`로 리팩터링 — 출력은 원본 폴더 위치와 무관하게
+   항상 저장소 안 `data/processed/past_team_refer/`로 저장된다.
+   ```
+   python scripts/build_past_team_refer.py                    (기본 폴더)
+   python scripts/build_past_team_refer.py "C:\경로\원본폴더"   (다른 폴더 지정)
+   ```
+   사용자가 실제로 파일이 정상적으로 열리는 폴더를 인자로 넘겨 재실행 →
+   **정상 동작 확인**(2026-09-02).
+
+**교훈**: "Excel file format cannot be determined"/COM 예외(-2147352567
+등)로 xlsx 읽기가 실패할 때, 원인은 (a) 코드/파라미터 차이, (b) 자동화의
+숨김 창 vs 화면 표시(Protected View), (c) 파일 자체의 DRM 권한/손상뿐
+아니라 — **(d) 파일이 위치한 폴더 경로 자체가 DRM/보안 프로그램의 신뢰
+목록에 있는지**도 반드시 확인 대상이다. 특히 "다른 폴더에서는 같은 파일이
+잘 열린다"는 증상이 나오면 거의 확실히 (d)다. 이런 경우 파이썬 코드를
+더 고치는 것보다, **원본을 읽는 폴더를 신뢰된 위치로 옮기거나 스크립트가
+그 폴더를 가리키게(예: CLI 인자로 경로 오버라이드)** 하는 쪽이 실질적인
+해결책이고, 저장소 `data/` 폴더 자체를 신뢰 목록에 올리는 건 코드가 아니라
+IT/보안팀 승인이 필요한 조직 정책 영역이다.
+
+## 2026-09-02: `scripts/build_past_team_refer.py` — 저장 후 A열(1단계부서명)
+백필 단계 추가
+
+사용자가 처리 흐름을 설명해달라고 한 뒤, 저장(6번) 이후에 이어지는 후처리
+단계를 요청 — 확인 질문 4건(백필 결과 저장 방식/"을" 별도 저장 여부, 2단계
+부서명 헤더 없을 때 처리, 규칙 순서, 규칙 적용 범위)을 전부 추천안대로
+확정 후 구현.
+
+**로직**: 같은 원본 파일에서 `"1단계부서명"`/`"2단계부서명"` 2개 헤더로
+보조 매핑표("을": 2단계부서명 → 1단계부서명, `_build_upper_level_lookup()`
+— 추출·중복 제거·B→A 안정 정렬 연쇄는 기존 3열 추출과 동일한 패턴, 저장은
+안 하고 조회용 dict로만 반환)를 만들고, 이미 정렬까지 끝난 3열 결과("갑")의
+각 행에 `_fill_upper_level()`을 적용:
+- A가 비어 있고 B(현소속부서명)가 `"종합기술원"`/`"SAIT"`(이전 버전 스크립트
+  의 `ROOT_MARKERS`와 동일 개념 — 이미 최상위)면 을 조회 없이 바로 A=B.
+- 그 외 A가 비어 있으면 을에서 B로 2단계부서명을 찾아, 일치하면 그
+  1단계부서명을 A로, 못 찾으면 A=B(현소속부서명 그대로).
+- (원래부터 A가 채워져 있던 행 포함, 모든 행 대상) A가
+  `"대표이사"`/`"종합기술원"`/`"SAIT"`면 B 값으로 교체.
+
+`"2단계부서명"` 헤더가 원본에 없어 을을 못 만들면 이 백필 단계만 건너뛰고
+3열 추출·저장(기존 흐름)은 정상 진행(결과 줄에 "A열 백필 생략" 비고 출력).
+백필로 A 값이 바뀐 행이 있으면 최종 정렬(A 1순위/B 2순위/C 3순위)이 깨지지
+않도록 재정렬하고, 두 행이 백필 후 완전히 같아졌을 수 있어(예: 원래
+`(빈값,김구라,ORG50)`과 `(김구라,김구라,ORG50)`이 둘 다 최종
+`(김구라,김구라,ORG50)`으로 수렴) 중복도 다시 제거한 뒤, 기존
+`<원본파일명>_team_refer.csv`를 그대로 덮어써 저장(별도 파일 안 만듦,
+을도 저장 안 함 — 전부 사용자 확정).
+
+검증: 합성 xlsx 하나에 을 조회 성공(사용자가 든 예시 그대로: B="홍길동" →
+을에서 찾은 A="신동엽"), 을 조회 실패(fallback A=B), 규칙 f(B가
+종합기술원), 규칙 g(원래 A가 대표이사였던 행), 백필 후 두 행이 수렴해
+중복 제거되는 경우까지 한 파일에 모아 실행 — 손으로 계산한 기대값(7행 →
+백필 후 6행, 정렬 순서 포함)과 정확히 일치 확인. `"2단계부서명"` 헤더가
+없는 별도 파일로도 테스트해 3열 결과는 정상 저장되고 A열은 원본 그대로
+유지되며 비고가 붙는 것 확인.
+
+**같은 날 정정 — 규칙 g를 대표이사/종합기술원·SAIT로 분리**: 처음엔 A가
+"대표이사"/"종합기술원"/"SAIT" 셋 다 무조건 B 값으로 교체했는데, 사용자가
+"SAIT/종합기술원은 무조건 B로 덮지 말고, 갑의 B를 을에서 한 번 더 조회해
+찾은 A값을 넣어달라"고 정정 — 확인 질문(조회 실패 시 처리)을 거쳐 "규칙
+e와 동일하게 A=B로 폴백"으로 확정. `_ROOT_MARKER_CEO`(대표이사, 그대로
+B 교체)와 `_ROOT_MARKERS_ORG`(종합기술원/SAIT, d와 동일한 을 재조회 +
+실패 시 e 폴백)로 나눠 구현 — 블랭크 A가 규칙 f로 종합기술원/SAIT로
+채워진 뒤 이 새 g가 한 번 더 을을 조회해 더 정밀화하는 연쇄까지 발생
+가능(예: 을에 "종합기술원의 상위=SAIT" 행이 있으면 f가 채운 "종합기술원"
+이 g에서 "SAIT"로 한 단계 더 정밀해짐). 대표이사/종합기술원(조회
+성공·실패)/SAIT/블랭크+f+g 연쇄까지 5가지 시나리오를 합성 데이터로 검증 —
+손으로 계산한 기대값과 정확히 일치 확인.
+
+**같은 날 추가 — 규칙 g에 "삼성전자" 마커 추가**: 갑의 A열이 "삼성전자"면
+"대표이사"와 동일하게(을 조회 없이 그대로) B 값으로 교체하도록 요청 —
+`_ROOT_MARKER_CEO`(단일 문자열)를 `_ROOT_MARKERS_DIRECT`(집합)로 일반화해
+`{'대표이사', '삼성전자'}`를 담도록 확장. "종합기술원"/"SAIT"의 을 재조회
+동작은 그대로. 합성 데이터로 삼성전자/대표이사/종합기술원 3가지를 함께
+검증 — 삼성전자·대표이사 모두 B 값으로 정확히 교체되는 것 확인.
+
+## 2026-09-02: 근무경력(work_experience.csv) 누적 방식을 그룹 교체 →
+자연키 upsert로 재전환
+
+발단은 공유회 자료(11페이지 "원천파일마다 누적 방식도 다릅니다")를 설명하며
+사용자가 "근무경력이 왜 그룹 교체형인지" 되물은 것 — 2026-08-29 최초 도입
+당시엔 "자연키(회사명+시작일)로 upsert하면 원본에서 삭제·수정된 경력 행이
+계속 남는다"는 우려로 researcher_id 단위 그룹 교체(그 사람의 기존 행 전체를
+이번 업로드로 통째 교체)를 썼었다. 이 배경을 설명하자 사용자가 재검토 —
+(a) 본인 근무경력은 스스로 사후에 고칠 일이 거의 없고, (b) 오히려 전배·
+퇴직으로 이번 원본 파일에서 그 사람이 통째로 빠졌을 때도 기존 경력을
+보존하고 싶다(그룹 교체형은 그 경우 아무 영향 없음 — "이번 업로드에 그
+사람 행이 아예 없으면" 기존 행이 보존되므로 원래도 문제 없었음, 하지만
+"고칠 일이 없다"는 (a) 전제가 성립하면 애초에 그룹 교체형을 쓸 이유였던
+"삭제·수정 전파" 우려 자체가 없어짐)는 이유로 다른 이력형 테이블(특허·
+논문·인사발령 등)과 동일한 자연키 upsert로 바꿔달라고 요청.
+
+**`pipeline/merge_utils.py`**: `GROUP_REPLACE_KEYS['work_experience']`를
+제거하고 `TABLE_KEYS['work_experience'] = ['researcher_id', 'company_name',
+'work_start_date']`로 이동 — 다른 이력형 테이블(`hr_orders`/`tasks`/
+`publications`/`awards` 등)과 동일한 (사번+구분 필드+날짜) 3중 자연키
+패턴을 그대로 따랐다. 이 조합이 같은 행은 정정(덮어쓰기), 다르면 그대로
+누적, 이번 업로드에 없는 사람(전배·퇴직 등)의 기존 행은 삭제되지 않고
+보존된다.
+
+**`pipeline/process_work_experience.py`**: `GROUP_REPLACE_KEYS` →
+`TABLE_KEYS` import 변경, `write_merged(..., group_replace=True)` →
+`write_merged(out_path, result, TABLE_KEYS['work_experience'])`로 전환.
+"누적 방식" 독스트링 섹션을 재검토 배경까지 포함해 재작성. 저장 후 안내
+메시지도 그룹 교체 전제("N명 교체")에서 다른 이력형 테이블과 동일한
+문구("총 M행, 이번 파일 N행(K명분) 반영")로 통일.
+
+**`pipeline/load_to_db.py`/`pipeline/run_pipeline.py`**: work_experience를
+"researcher_id 단위 그룹 교체"로 설명하던 주석 2곳을 새 자연키 upsert
+방식으로 갱신(둘 다 주석뿐이라 동작 자체엔 영향 없음 — DB 반영은 최종 CSV
+전체를 그대로 replace하는 기존 방식 그대로).
+
+**공유회 자료(pptx) 반영**: 11페이지 "원천파일마다 누적 방식도 다릅니다"
+박스의 "그룹 교체형" 예시를 근무경력 → 리더십진단 주관식 코멘트
+(`leadership_comments.csv`, `GROUP_REPLACE_KEYS`에 유일하게 남은 테이블,
+평가자그룹 단위로 통째 교체)로 교체하고, 근무경력은 "이력형" 예시로 이동.
+
+검증: 합성 데이터로 2회 연속 업로드 시나리오 재현 — 1차 업로드(2명), 2차
+업로드(1명만, 자연키 동일 행의 직무명만 변경) 실행 후 (a) 2차에 없는
+사람의 기존 행이 그대로 보존되는 것, (b) 자연키가 일치한 행은 새 값(변경된
+직무명)으로 정확히 정정되는 것을 확인. `py_compile` 전체 통과, `import app`
+정상 로드 확인.
+
+## 2026-09-02: 팀/리더 참조 그리드 3건(셀 편집 방식 확인/DB 반영 아이콘/
+부서장 정보 미입력 처리 안내)
+
+사용자가 3가지를 한 번에 요청 — (1) 부서ID 셀을 더블클릭하면 전체 타이핑
+없이 커서 위치에서 정밀 수정 + 윗행 참고 자동채움, (2) team/리더 참조
+그리드에서 DB 업로드 아이콘 추가, (3) 부서장(사번/성명/직책)을 안 채우면
+어떻게 되는지.
+
+**(1) 확인 결과 — 이미 지원됨, 코드 변경 없음**: dash_table.DataTable(버전
+4.4.1)은 원래 단일 클릭 + 타이핑은 기존 값을 통째로 덮어쓰고, **더블클릭**
+(또는 Enter/F2)은 커서를 기존 텍스트 안에 두고 정밀 편집하는 두 모드를
+기본 제공한다. 실제로 로컬에 임시 관리자 계정(`qa.tester`, 테스트 후 원복)
+을 만들고 Playwright로 `team-refer-table`에서 재현 — 단일 클릭 후 "9" 입력
+→ "T1-PRT-01"이 "9"로 통째 교체(사용자가 겪던 문제 재현), 반면 더블클릭 →
+End → Backspace → "2" 입력 → 정확히 "T1-PRT-02"로 정밀 수정되는 것을
+확인했다. 즉 더블클릭 정밀 편집은 요청하신 그대로 이미 동작 — 다음부터는
+더블클릭(또는 Enter/F2)으로 진입하면 된다. "윗행을 참고한 자동채움 가이드"
+(예: 자동완성 드롭다운/고스트 텍스트)는 dash_table에 없는 기능이라 별도
+구현이 필요 — 정확히 어떤 UX를 원하시는지(어떤 컬럼에, 어떤 트리거로) 확인
+후 별도로 진행하기로 함(이번엔 보류).
+
+**(2) team_refer 전용 "DB 반영" 아이콘 추가**: 코드를 보니 그리드의 "저장"
+버튼(`team_refer_store.save_snapshot()`)은 CSV와 DB를 항상 함께 반영하지만,
+"엑셀 파일로 한번에 반영"(대량 업로드,
+`pipeline/process_team_refer.py.process()`)은 CSV만 쓰고 **DB는 건드리지
+않는** 실제 공백이 있었다 — 대량 업로드 경로를 쓰면 DB가 CSV보다 계속
+뒤처진 채로 남는다. 이 공백을 메우려고 team_refer 하나만 즉시 DB에 반영하는
+아이콘(`bi-database-up`)을 그리드 툴바(저장/엑셀 다운로드 옆)에 추가.
+- `pipeline/load_to_db.py`: `load()`에 `tables` 필터 매개변수 추가(생략하면
+  기존처럼 전체 30여개 테이블 + JSON 그대로 적재, 지정하면 그 CSV
+  테이블들만 — JSON_TABLES는 건드리지 않음).
+- `services/web_pipeline_runner.py`: `run_team_refer_db_load()` 신규 —
+  team_refer 하나만 CSV 몇백 행 수준이라 백그라운드 스레드 없이 콜백 안에서
+  동기 실행("저장" 버튼과 동일한 방식). 기존 전역 파이프라인 락
+  (`try_acquire_lock`)을 그대로 재사용해 다른 파이프라인 실행/전체 DB
+  반영과 동시 진행을 막는다. 결과는 전체 DB 반영 로그와 섞이지 않게
+  별도 파일(`web_db_load_team_refer_runs.csv`)에 기록.
+- `pages/admin.py`: `team-refer-db-load-btn` 아이콘 버튼 +
+  `team-refer-db-load-msg` 상태 영역, `team_refer_db_load()` 콜백(관리자
+  권한 확인 후 `wpr.run_team_refer_db_load()` 호출, 성공/실패 알럿 표시).
+
+**(3) 부서장(사번/성명/직책) 미입력 처리 — 코드 확인 후 답변**: 필수
+컬럼은 `team_layer`(조직 레벨)와 `dep_id`(부서ID)뿐이고
+(`pipeline/process_team_refer.py` 저장 필터), 사번/성명/직책은 완전히
+선택 항목이다 — 비워도 저장/조직도 생성 전부 에러 없이 정상 동작한다.
+다만 두 곳에 영향: (a) 조직도 노드 라벨(`rd_specialist_markdown._label()`)
+이 "{과제/파트명}(직책 성명)" 대신 "{과제/파트명}"만 표시(빈 값이면 괄호
+자체가 안 붙음), (b) "직책자 우선 정렬"(2026-09-02 앞서 구현한 8번 항목,
+엑셀 다운로드의 조직코드 정렬 포함) 대상에서 그 조직은 "직책자 없음"으로
+처리돼 소속 인원 전원이 가나다순으로만 정렬된다 — 과거 데이터에서 리더를
+못 찾은 조직은 이 정도 부작용만 있고 전체 기능은 안전하게 계속 동작한다.
+
+검증: (1)은 실제 로컬 서버 + Playwright로 재현 확인(캡처 스크린샷 포함,
+테스트 후 서버 종료·계정 원복). (2)는 Playwright로 버튼 클릭 → 콜백 →
+`load_to_db.load(tables=['team_refer'])` 실행 → `DATABASE_URL 미설정`
+경로까지 정상적으로 타는 것 확인(이 세션엔 실제 Postgres가 없어 성공
+케이스까지는 재현 못 함 — 기존에 이미 검증된 전체 DB 반영과 동일한
+`to_sql` 경로를 테이블만 좁혀 재사용하는 구조라 안전하다고 판단). (3)은
+코드 읽기로 확인(직접 실행 재현은 별도로 하지 않음). `py_compile`/`import
+app` 전체 통과. 테스트에 쓴 team_refer.csv/임시 계정/DB 반영 로그는 검증
+후 전부 원복·삭제(`data/`, `config/users.json` 모두 `.gitignore` 대상이라
+커밋에는 애초에 안 잡힘).
+
+## 2026-09-02 (2): 팀/리더 참조 그리드 — 행 추가 시 부서ID 다음 번호 자동 제안
+
+바로 앞 항목(팀/리더 참조 그리드 3건)의 (1)번 확인 후 사용자가 이어서
+요청: "다음 번호를 자동 제안해주는 기능을 넣어줘 예를 들어 위 행이
+T1-PRT-01 이면 T1-PRT-02 제안".
+
+**`pages/admin.py`**: `_DEP_ID_SUFFIX_RE = re.compile(r'^(.*?)(\d+)$')` +
+`_suggest_next_dep_id(prev_dep_id)` 신규 — 부서ID 문자열 끝의 연속된
+숫자를 찾아 1 증가시키되 자릿수(zero-padding)는 그대로 유지한다(예:
+`T1-PRT-01`→`T1-PRT-02`, `T1-PRT-09`→`T1-PRT-10`(자리올림),
+`T1-PRT-99`→`T1-PRT-100`(자릿수 늘어남도 허용)). 끝에 숫자가 없으면
+(패턴 매칭 실패) 제안하지 않고 빈 문자열 반환 — 사용자 확정. `import re`
+추가.
+`team_refer_add_row()` 콜백에서, 새 행을 삽입할 위치(`insert_at`)가
+기존 행 범위 안이면(맨 앞이 아니라 어떤 행 사이/뒤에 끼워 넣는 경우)
+바로 위 행(`rows[insert_at - 1]`)의 부서ID로 `_suggest_next_dep_id()`를
+호출해 새 행의 `'부서ID'`를 미리 채운다. 셀은 계속 편집 가능한 채로
+남아 있어, 제안이 틀리면(예: 새 조직이 다른 체계를 쓰는 경우) 바로
+고칠 수 있다.
+
+검증: 정규식 로직을 7가지 케이스(정상 증가/자리올림(09→10)/자릿수
+증가(99→100)/한 자리 증가/빈 문자열/숫자 없는 문자열/영숫자 혼합
+접두사)로 직접 호출해 전부 기대값과 일치 확인. Playwright로 실제
+서버(임시 관리자 계정, 합성 `team_refer.csv` 1행 `T1-PRT-01`)에서
+그 셀을 클릭한 뒤 "행 추가" 버튼을 눌러, 새로 생긴 다음 행의 부서ID가
+정확히 `T1-PRT-02`로 자동 채워지는 것을 스크린샷으로 확인(다른 컬럼은
+정상적으로 빈 채로 유지). `py_compile` 통과. 테스트 서버·계정·합성
+CSV는 검증 후 정리(`data/`, `config/users.json` 모두 `.gitignore`
+대상이라 커밋에는 애초에 안 잡힘).
+
+## 2026-09-03: 팀/리더 참조 그리드 — 자동채움 가이드(드롭다운) + 클릭 위치
+커서 이동 + F2로 키보드만 정밀 편집
+
+바로 앞 항목("다음 번호 자동 제안")에 이어 사용자가 3가지를 추가 요청:
+(1) 처음부터 미뤄뒀던 "자동채움 가이드(드롭다운 방식)"를 구체화, (2)
+부서ID 셀을 더블클릭한 뒤 마우스로 텍스트 중간을 클릭하면 커서가 그
+자리로 가지 않고 항상 끝에서부터 수정해야 하는 문제, (3) F2가 안 먹혀서
+키보드만으로는 정밀 수정이 불가능한 문제. dash_table(dash==4.4.1 내장
+`dash.dash_table`)의 실제 편집 동작을 소스(`async-table.js`, 압축돼
+있지만 grep으로 함수 단위 추적)까지 뜯어봐야 정확한 원인을 알 수 있어
+꽤 깊게 조사했다.
+
+### 1) 자동채움 가이드(드롭다운)
+
+dash_table 자체에도 컬럼별 드롭다운 편집 기능(`dropdown`/
+`dropdown_conditional` + `columns[i].presentation='dropdown'`)이 있지만,
+소스를 확인해보니 이건 내부적으로 react-select의 일반 `Select`(비
+creatable)를 그대로 쓴다 — **목록에 있는 값만 선택 가능하고, 목록 밖
+값은 아예 입력할 수 없다**(react-select 번들 안에 `CreatableSelect`가
+있긴 하지만 dash_table의 실제 셀 편집기는 그걸 안 쓰고 그냥 `Select`를
+씀, 소스에서 `o().createElement(ni, {..., options:n, ...})`로 직접
+확인). 이러면 "가이드"가 아니라 "제한"이 되어 새 부서/과제를 추가하는
+흐름과 정면으로 충돌한다(사용자가 원한 건 "위 행들을 참고해 제안"이지
+"이미 있는 값만 강제"가 아님).
+
+대신 브라우저 네이티브 `<input list="...">` + `<datalist>`(자동완성 —
+목록에 없는 값도 자유롭게 입력 가능)를 신규 `assets/team_refer_grid.js`
+로 구현했다. 대상 컬럼 7개(비공식소속부서명/구분/부서/과제·파트/조직코드/
+상위부서ID/조직 레벨) — 부서ID(고유키, 이미 "다음 번호" 자동 제안이
+있음)·사번/성명/직책(개인 식별 정보, 반복 참고값이 아님)은 제외.
+
+- **`pages/admin.py`**: `_AUTOFILL_GUIDE_COLUMNS` + `_build_autofill_suggestions
+  (rows)` 신규 — 대부분 "그 컬럼 자체에 이미 쓰인 값"을 후보로 주지만,
+  **상위부서ID만 예외로 '부서ID' 컬럼 값**을 후보로 준다(상위부서ID에
+  실제로 입력해야 하는 값이 다른 행의 부서ID이므로 — "위 행들을 참고해서
+  자동채움을 가이드해달라"는 최초 요청 그대로). 조직 레벨(team_layer,
+  조직도 깊이 1~4)/구분(work_type, "R&D"만 분석 대상)은 데이터가 적어도
+  후보가 비어 보이지 않게 고정값(`1~4`, `R&D`)을 항상 포함하고 실제 쓰인
+  값과 합집합. 새 `dcc.Store(id='team-refer-suggestions')`에 이 결과를
+  담고, `team_refer_sync_suggestions()` 콜백(`Input('team-refer-table',
+  'data')`, tooltip 동기화 콜백과 같은 패턴)이 data가 바뀔 때마다 다시
+  계산한다. `clientside_callback`(신규, 더미 Output
+  `team-refer-grid-dummy`)이 Store 변화를 받아
+  `window.__syncTeamReferSuggestions()`를 호출.
+- **`assets/team_refer_grid.js`**(신규): `rebuildDatalists()`가
+  `document.body`에 컬럼당 `<datalist id="du-datalist::{컬럼명}">`을
+  만들고, `MutationObserver`(그리드 래퍼 `#team-refer-grid-wrap`을
+  지켜봄, 아래 참고)가 새로 생기는 편집용 `<input>`마다 그 셀의
+  `data-dash-column`을 읽어 해당 datalist를 `list` 속성으로 연결한다.
+
+### 2) 클릭 위치로 커서 이동
+
+원인을 소스에서 정확히 특정: `async-table.js`의 `zr` 함수(편집용
+`<input>`의 `onMouseUp` 핸들러)가 **셀이 새로 활성화되는 모든 클릭에서**
+`e.preventDefault()` 후 `input.setSelectionRange(0, 전체길이)`(전체
+선택)를 강제로 실행한다 — 클릭 좌표가 어디든 무관하게 항상 이 코드가
+나중에 실행돼 브라우저의 원래 클릭-위치-캐럿 배치를 덮어써 버린다.
+
+`<input>`은 실제 텍스트가 DOM 텍스트 노드로 노출되지 않아(폼 컨트롤
+내부 렌더링이라) `caretRangeFromPoint`류 API로 클릭 좌표→글자 인덱스
+변환이 불가능하다 — 대신 캔버스(`canvas.getContext('2d').measureText`)로
+그 input과 동일한 폰트를 적용해 각 글자 폭을 재 누적하며 클릭 x좌표에
+해당하는 글자 인덱스를 추정한다(`caretIndexFromClick()`). dash_table의
+강제 전체선택이 먼저 실행되게 두고, 그 다음 macrotask(`setTimeout(fn,
+0)`)에서 계산한 위치로 다시 덮어쓴다 — 같은 이벤트 처리 흐름 안에서
+순서를 역전시킬 방법이 없어(dash_table 핸들러가 React 합성 이벤트로
+동기 실행됨) 한 틱 늦게 재보정하는 방식을 택했다.
+
+### 3) F2로 키보드만 정밀 편집
+
+**핵심 발견**: 이 dash_table은 셀이 활성화되면(클릭이든 Tab/Enter로
+옮겨오든) **항상** 편집용 `<input>`을 보여준다 — "선택만 되고 편집은
+아직 아닌" 상태가 화면상 따로 없다. 하지만 방향키가 "텍스트 안에서
+커서 이동"으로 동작하는지 "옆 셀로 이동"으로 동작하는지, Backspace가
+"글자 하나만 삭제"인지 "셀 전체를 지움"인지는 dash_table 내부의
+**`is_focused`라는 테이블 전체 단위 상태값**에 전적으로 달려 있다(둘 다
+화면엔 똑같이 input이 보여서 구분이 안 됨) — 이 값은 `async-table.js`의
+`handleKeyDown`(테이블 컨테이너의 keydown 핸들러) 로직을 직접 해석해서
+알아냈다: `is_focused=false`(Tab/Enter로 옮겨온 직후 기본값)일 땐
+방향키=`switchCell()`(셀 이동), Backspace/Delete=`deleteCell()`(선택된
+셀 전체를 빈 문자열로 교체) — `is_focused=true`일 땐 방향키/Backspace
+모두 아무 것도 안 하고 브라우저 네이티브 입력 동작에 맡긴다(정상적인
+글자 단위 편집). **더블클릭만이 이 값을 true로 바꾸는 유일한 경로**이고,
+F2는 dash_table에 아예 구현돼 있지 않다(`async-table.js`에 "F2" 문자열
+자체가 없음, 직접 확인). `is_focused`는 Dash 컴포넌트 내부 React state라
+JS에서 직접 조작할 공개 수단이 없다.
+
+**해결**: F2를 누르면 실제 더블클릭과 최대한 비슷한 합성 이벤트 시퀀스
+(`mousedown→mouseup→click`을 두 번 반복한 뒤 `dblclick`)를 활성 셀
+(`<td data-dash-column>`)에 직접 발생시켜, dash_table 스스로 자신의
+정상적인 더블클릭 처리 경로를 통해 `is_focused=true`로 전환하게
+만든다(우리가 상태를 흉내 내지 않고 dash_table의 진짜 코드 경로를
+그대로 트리거하는 방식이라 안정적). 그 다음 `requestAnimationFrame`으로
+한 틱 기다렸다가 커서를 텍스트 맨 끝으로 옮긴다(엑셀의 F2와 동일한
+관례 — 이후 방향키로 원하는 위치까지 이동, Backspace/Delete/타이핑
+전부 dash_table의 정상 "편집 모드" 동작을 그대로 따른다). 별도의
+`stopPropagation` 가로채기 같은 건 전혀 필요 없다 — is_focused가
+올바르게 true가 되면 dash_table 스스로 방향키/Backspace를 올바르게
+처리해주기 때문(처음엔 방향키를 직접 가로채는 방식으로 구현했다가
+Backspace를 눌렀을 때 셀 전체가 지워지는 회귀를 실제로 재현해 발견,
+`is_focused`를 흉내 내지 않고 진짜로 전환시키는 이 방식으로 교체).
+
+**공용 래퍼**: 위 3가지 기능 모두
+`pages/admin.py`의 `_team_refer_tab()`에서 `dash_table.DataTable(...)`을
+`html.Div(id='team-refer-grid-wrap', children=[...])`로 감싸(dash_table이
+내부 DOM을 재렌더링해도 이 래퍼 id 자체는 유지) `assets/
+team_refer_grid.js`가 이 안에서만 이벤트를 지켜보게 했다.
+
+**검증**: Playwright로 실제 서버(임시 관리자 계정, 합성 `team_refer.csv`
+2행, dep_id 오름차순/상위부서ID 포함)에서 전부 확인 —
+1. 비공식소속부서명 셀 더블클릭 → `list` 속성이 `du-datalist::
+   비공식소속부서명`으로 정확히 걸리고, 그 datalist의 옵션이 실제
+   시트에 있는 두 값(ORG01, ORG02)과 일치. 상위부서ID 셀도 마찬가지로
+   확인했는데 옵션이 그 컬럼 자체 값이 아니라 **부서ID 컬럼 값**
+   (T1-PRT-01, T1-PRT-02)인 것까지 정확히 확인(설계 의도대로).
+2. 부서ID 셀("T1-PRT-01", 9글자) 더블클릭 후 셀 폭의 정중앙을 클릭 →
+   커서가 위치 7(끝에서 2번째)로 이동 — 클릭한 좌표가 실제 텍스트보다
+   오른쪽의 여백까지 포함된 셀 폭 기준 중앙이라 텍스트 자체의 정중앙
+   (약 4~5)보다 뒤에 오는 것은 기대한 대로(클릭 지점이 실제 글자 폭
+   기준으로 계산되고 있다는 증거).
+3. 사번 셀("00000001") 진입 후: F2 이전엔 ArrowRight를 누르면 실제로
+   옆 컬럼(성명)으로 이동(기존 방향키-셀이동 동작이 그대로 살아있음을
+   재확인) → F2를 누르면 커서가 정확히 [8,8](맨 끝)로 이동 → 그 상태에서
+   ArrowLeft를 두 번 누르면 **같은 셀에 그대로 머문 채** 커서만 [6,6]으로
+   이동(더 이상 옆 셀로 안 넘어감) → Backspace를 누르면 정확히 그
+   위치의 글자 한 개만 지워지고(`0000001`, 8자→7자) 셀 전체가 지워지지
+   않음 → `X`를 입력하면 그 위치에 정확히 삽입됨(`00000X01`) — 완전한
+   키보드만의 정밀 편집 성공을 실제 값 문자열로 확인.
+4. 별도의 부서ID 셀("T1-PRT-01")로 재현: 클릭 한 번(마우스로 더블클릭
+   없이) → F2 → 커서 [9,9](맨 끝) → ArrowLeft 두 번 → [7,7](같은 셀
+   유지) → Backspace(`T1-PRT01`, 하이픈 한 글자만 삭제) → `9` 입력
+   (`T1-PRT901`) — 두 번째 셀에서도 동일하게 재현되어 우연이 아님을
+   확인.
+5. **회귀 확인**: 단일 클릭 후 바로 타이핑하면 기존처럼 전체가 교체되는
+   것(성명 셀, "테스트이름"으로 전체 교체 확인), 기존에 이미 검증돼
+   있던 더블클릭+End+Backspace+숫자 워크플로우도 그대로 정상 동작하는
+   것(`T1-PRT-02` → `T1-PRT-09`)을 재확인 — 이번 변경이 기존 동작을
+   깨지 않았음을 확인. 페이지 콘솔/자바스크립트 에러 없음.
+
+`py_compile`/`node --check` 둘 다 통과. 테스트 서버·임시 계정·합성
+`team_refer.csv`는 검증 후 전부 정리(`data/`, `config/users.json` 모두
+`.gitignore` 대상이라 커밋에는 애초에 안 잡힘).
+
+**미검증**: 실제 원본 데이터(부서 수십~수백 개) 규모에서 datalist
+후보가 너무 많아질 때의 브라우저 자동완성 UX(성능/가독성), 다른
+브라우저(Chromium만 확인)에서의 동일 동작.
+
+## 2026-09-03: JOB Market — 근거(reason) 없는 추천도 그대로 목록에 남던
+버그 수정
+
+사용자 보고: "job market을 실행해보니 근거가 없음에도 참여 가능 과제에
+특정 인원이 들어간다"— 확인해보니 실제로 있는 버그였다.
+
+**원인**: `services/job_market.py`의 `_judge_recommendations()` 안
+`_attach()`가 LLM이 돌려준 추천을 코드에 붙일 때, `project_name`이
+임베딩 상위 후보(shortlist) 안에 실제로 있는지만 검증(할루시네이션
+방지)하고 **`reason`이 비어 있는지는 전혀 검사하지 않았다**. 그래서 LLM이
+"추천은 하지만 사유는 안 써서 반환"하는 경우에도 그 추천이 `recommendations`
+리스트에 그대로 들어갔다. `pages/job_market.py`의
+`_recommendation_row()`(62행)를 보면 이미 이 상황을 알고 있었던 흔적이
+있었다 — `rec.get('reason', '') or '(근거 없음)'`로 화면엔 "(근거 없음)"
+문구만 방어적으로 보여줄 뿐, **그 추천 자체(과제)는 여전히 "참여 가능
+과제" 목록에 남아 재배치율 통계(`_summary_stats`)·엑셀 다운로드
+(`build_result_workbook`)에도 그대로 반영되고 있었다** — 화면에 나온
+placeholder 문구를 사용자가 직접 보고서야 문제를 알아챈 상황.
+
+**수정**: `_attach()`에서 `project_name` 검증 직후 `reason`도 함께
+검증하도록 확장 — `str(r.get('reason') or '').strip()`이 빈 문자열이면
+`project_name` 할루시네이션과 동일하게 "신뢰할 수 없는 출력"으로 보고
+`None`을 반환(버림)한다. 세 호출부 모두 기존 안전망을 그대로 재사용해
+자연스럽게 처리된다: `recommendations`는 그 항목만 조용히 빠지고,
+`closest_non_match`는 `None`이 되어 화면이 "참여 가능한 과제를 찾지
+못했습니다"로 정상 폴백하며, `must_place`는 걸러진 뒤 기존
+`_fallback_must_place()`(임베딩 유사도 1순위 + 고정 사유 문구)로
+대체된다 — 이미 있던 세 갈래 안전망 위에 검증 조건 하나만 얹은 최소
+수정.
+
+**검증**: `llm_client.call_llm`을 모킹해 4가지 시나리오로 직접 확인 —
+(1) 추천 2건 중 1건만 reason이 빈 경우 그 1건만 정확히 걸러지고 나머지
+정상 추천은 그대로 남는 것, (2) `closest_non_match`의 reason이 비면
+`None`으로 처리되는 것, (3) `must_place`가 전부 reason 없이(공백 문자만)
+반환되면 `_fallback_must_place()`로 정확히 대체되는 것, (4) 셋 다
+정상적으로 reason이 채워진 기존 정상 케이스는 회귀 없이 그대로 동작하는
+것을 확인. `py_compile` 통과, `pages.job_market`/`services.job_market`
+모듈 임포트 확인.
+
+**참고**: 화면(`pages/job_market.py`)의 `'(근거 없음)'`/`'(사유 없음)'`
+placeholder 문구는 그대로 남겨뒀다 — 이 수정 이전에 이미 저장된 이력
+(`data/processed/job_market/` 스냅샷)에는 여전히 근거 없는 추천이 남아
+있을 수 있어(과거 데이터), 그런 옛 이력을 "보기"로 다시 열 때의 방어용
+폴백으로는 계속 유효하다. 새로 생성되는 결과부터는 이 문구가 나타날
+일이 없어야 정상이다.
+
+## 2026-09-03 (2): run_pipeline.py 어학/근무경력 포함 여부 확인 + 근무경력·
+어학 표시 NaN 누출 수정
+
+사용자 질문 2건: (1) `run_pipeline.py`에 어학 관련 데이터가 미포함돼
+있는지, (2) 근무경력이 "nan( ~ , nan)"으로 표시되는데 표시 로직을 알려
+주고 없는 경우엔 "없음"으로 표시해달라는 것.
+
+**(1) 확인 결과 — 이미 포함돼 있음**: `pipeline/run_pipeline.py`의
+"9-7. 어학자격"(`process_language_qualification`)/"9-8. 근무 경력"
+(`process_work_experience`) 단계가 이미 존재한다(2026-08-29 최초
+추가 시점부터). CLI로 전체 파이프라인을 돌리면 함께 처리된다 — 별도
+조치 불필요, 질문에 대한 답변만.
+
+**(2) 근무경력 "nan( ~ , nan)" 표시 — 실제 버그, 원인/수정**:
+`services/work_experience.py`의 `format_line()`이 `company_name`/
+`role_name`을 `str(row.get(...) or '').strip()`으로만 정리하고 있었다
+— `read_processed()`가 CSV를 읽을 때 그 컬럼에 빈 셀이 하나라도 섞여
+있으면 pandas가 컬럼 전체를 float로 추론해 빈 값이 `float('nan')`이
+되는데, 파이썬에서 NaN은 항상 참으로 평가되므로(`nan or ''` → `nan`
+그대로) `str(nan)` = 문자열 `"nan"`이 그대로 남아 화면에 새어나갔다
+— 이 프로젝트에서 여러 번 반복된 패턴(2026-08-29 나이 "-" 표시 버그
+— `birth_year` "1990.0" 이슈 — 와 동일한 근본 원인). 같은 함수 안
+날짜 필드(`_format_ym`)에는 이미 `'nan'`/`'none'`/`'nat'` 문자열 가드가
+있었는데 `company_name`/`role_name`에는 빠져 있던 것.
+
+**표시 로직 설명(사용자 질문 답변)**: `format_line(row)`이 한 행을
+`"회사명(시작'YY.MM ~ 종료'YY.MM, 직무명)"`으로 조립하고,
+`work_experience_block()`(components/profile_sections.py, 화면·인쇄
+카드·엑셀 다운로드 공용)이 이 함수를 사람별로 여러 번 불러 목록을
+만든다. 회사명이 없는 행은 애초에 `format_line()`이 `None`을 반환해
+건너뛴다(그 행 자체가 무의미하므로) — 이 필터링이 NaN 때문에 제대로
+안 걸려서 가비지 행이 그대로 새어나간 게 이번 버그. 종료일이 없으면
+"현재"로 채우지 않고 공란으로 두는 기존 규칙(2026-08-29 확정)은
+그대로 유지 — "없음"으로 바꾸지 않았다(공란=재직 중이라는 의미가
+있어 "없음"으로 바꾸면 오히려 정보가 왜곡됨).
+
+**수정**: `_clean_str(val)` 공용 헬퍼 신규(`components/profile_sections.py`
+의 동명 헬퍼와 동일한 처리 — `'nan'`/`'none'`/`'nat'` 문자열까지
+빈 값으로 취급) 추가해 `_format_ym`/`company`/`role` 셋 다 이 헬퍼로
+통일. 회사명이 실제로 없는(NaN 포함) 행은 여전히 건너뛰고, 그 결과
+한 사람의 근무 경력이 전부 걸러지면 **이미 있던**
+`work_experience_block()`의 "근무 경력 없음" 폴백(`show_empty_message`
+기본값 `True`)이 정상적으로 노출된다 — 새 "없음" 로직을 따로 만들
+필요 없이, 근본 버그(NaN이 진짜 빈 값으로 안 걸러지던 것)만 고치니
+기존에 이미 구현돼 있던 "없음" 표시가 저절로 도달 가능해졌다. 인쇄
+카드(`show_empty_message=False`)는 기존 설계대로 그대로 둠(지면
+제약으로 데이터 없으면 아예 표시 안 함, 이번 변경과 무관).
+
+**예방적으로 함께 수정**: `services/language_qualification.py`의
+`format_lines()`도 `language`/`speak_grade`가 같은 클래스의 버그에
+노출돼 있어(파이프라인이 항상 채워 저장하긴 하지만) 만료일에만 있던
+NaN 가드를 `_clean_str()` 공용 헬퍼로 추출해 language/speak_grade에도
+동일하게 적용 — 직접 보고된 버그는 아니었으나 같은 대화에서 다룬
+같은 패턴이라 함께 정리.
+
+**검증**: `services/work_experience.py`를 합성 데이터로 직접 호출해
+(1) 사용자가 겪은 정확한 케이스(company_name/role_name/날짜 전부
+NaN) → `format_line()`이 `None`(더 이상 "nan(...)" 안 새어나옴), (2)
+회사명은 정상이고 role_name만 NaN → `"Samsung('20.01 ~ )"`처럼 그
+부분만 자연스럽게 생략(공란, "없음" 아님), (3) 정상 케이스(전부
+채워짐) 회귀 없음을 확인. `components.profile_sections.work_experience_block()`
+을 가비지 행 1개짜리 DataFrame으로 직접 호출해 "근무 경력 없음"이
+정확히 렌더링되는 것도 확인. `language_qualification.py`도 정상/NaN
+케이스 각각 회귀 없이 동작 확인. `py_compile` 통과,
+`pages.researcher_profile`/`services.researcher_profile_export`
+모듈 임포트 확인(엑셀 다운로드의 `_col_work_experience()`도 같은
+`format_lines()`를 공유하므로 함께 수정됨).
+
+## 2026-09-03 (3): 어학자격 전처리 — "회화" 헤더 컬럼명 정정
+
+바로 앞 항목에서 어학자격 전처리 로직(헤더명·처리방식)을 설명하자,
+사용자가 실제 원본 파일의 헤더 표기가 설명과 다르다고 정정 —
+2026-08-29에 "{언어} 회화"(예: "영어 회화")로 확인했던 것이 실제로는
+**대괄호로 감싼 "[{언어} 회화]"**(예: "[영어 회화]", "[일본어 회화]")
+형태였다.
+
+**수정**(`pipeline/process_language_qualification.py`): 문자열 suffix
+매칭이던 `_SPEAK_SUFFIX = ' 회화'` + `col.endswith(_SPEAK_SUFFIX)`를
+정규식 `_SPEAK_HEADER_RE = re.compile(r'^\[(.+?)\s*회화\]$')`로 교체 —
+`_find_language_specs()`가 대괄호로 감싼 헤더를 인식하고, 언어명은
+대괄호를 뗀 값만 추출한다(예: "[영어 회화]" → "영어", 저장되는
+`language` 컬럼 값도 대괄호 없이 "영어"). 만료일 컬럼의 이름 검증
+(정보성 경고 — 값 자체는 원래도 위치 기반이라 이 검증 결과와 무관하게
+그대로 씀)도 "[만료일]"처럼 대괄호가 있을 수 있는 경우까지 관용적으로
+처리하도록 대괄호를 뗀 뒤 비교하게 다듬었다(실제로 대괄호가 있는지는
+확인되지 않았지만, 있어도 불필요한 경고가 안 뜨게 하는 저비용
+안전장치). SKIP 안내 메시지·모듈 docstring·상수 참조 주석도 모두 새
+헤더 표기로 갱신.
+
+**검증**: 합성 xlsx(1~6행 무시 + 7번째 행 헤더, 대괄호 포함 영어/
+일본어 각각 회화·필기 6컬럼 블록, 사번 2명 중 1명만 어학 데이터
+있음)로 `process()` 전체를 raw_dir 오버라이드로 실행 — 대괄호 헤더가
+정상 인식되고 저장된 `language` 값에는 대괄호가 없는 것, "필기"
+컬럼은 여전히 무시되는 것, 어학 데이터가 없는 사람은 결과에서
+빠지는 것을 CSV로 직접 확인. `_find_language_specs()`를 별도로도
+호출해 대괄호 있는 헤더는 정상 매칭, 대괄호 없는 옛 표기("영어
+회화")는 더 이상 매칭되지 않는 것(실제 헤더가 대괄호 포함으로
+확정됐으므로 의도된 동작)을 확인. `py_compile` 통과. 테스트에 쓴
+합성 xlsx·생성된 `language_qualification.csv`는 검증 후 정리.
+
+**미검증**: 실제 원본 파일로 웹 업로드 또는 CLI 파이프라인을 돌려
+실물 데이터로 최종 확인(이 세션엔 실제 원본 파일이 없어 사용자가
+설명한 헤더 표기를 그대로 재현한 합성 데이터로만 검증).
+
+## 2026-09-03 (4): JOB Market — "..."처럼 실질적 내용이 없는 reason도
+근거 없는 것으로 간주하도록 검증 강화(2026-09-03 최초 수정 재보고)
+
+배경: 바로 앞(2026-09-03) "근거(reason) 없는 추천도 그대로 목록에 남던
+버그"를 고쳤는데도(`_attach()`가 `reason`이 완전한 빈 문자열이면 버리도록
+수정), 사용자가 "여전히 근거가 없이 참여 가능 과제가 있는 걸로 나온다"고
+재보고 — LLM이 reason 필드를 완전히 비워두는 대신 `"..."`처럼 문장부호
+뿐인 placeholder를 채워 넣는 경우가 있어, `if not reason:` 검사(공백만
+strip)로는 안 걸러졌다.
+
+**수정**(`services/job_market.py`): `_is_trivial_reason(reason)` 신규 —
+공백/문장부호(`.`, `-`, `–`, `—`, `…`, `·`, 쉼표·물음표·괄호 등)만
+제거한 뒤 남는 실질 글자 수가 `_MIN_REASON_CHARS`(6자) 미만이면
+"근거를 못 만든 것"으로 판정한다(완전한 빈 문자열/공백뿐 아니라
+`"..."`/`"-"`/`"모름"`/`"없음"`처럼 짧은 placeholder까지 함께 걸러짐).
+`_attach()`의 `if not reason:` 분기를 `if _is_trivial_reason(reason):`로
+교체 — recommendations/closest_non_match/must_place 세 갈래가 모두 이
+`_attach()`를 공유하므로 한 곳만 고치면 전부 반영된다. 추천이 전부
+걸러지고 `closest_non_match`의 reason도 trivial하면(둘 다 근거를 못 만든
+극단적 경우) `_person_card()`가 기존 폴백 그대로 "참여 가능한 과제를
+찾지 못했습니다."를 보여준다(사용자 확정 요청 — "LLM이 근거를 만들 수
+없다면 참여 가능 과제가 없는 걸로 반영해줘"). `must_place`(참고 정보,
+"반드시 배치해야 한다면")도 동일 기준으로 걸러지면 기존
+`_fallback_must_place()`(임베딩 유사도 1순위 + 고정 사유)로 대체된다 —
+새 코드 변경 없이 기존 안전망이 그대로 흡수.
+
+검증: `_is_trivial_reason()`을 11가지 입력(빈 문자열/공백/`"..."`/`"…"`/
+`"-"`/`"- - -"`/`"없음"`/`"모름"`/`"확인 필요"`/정상 문장 2개)으로 직접
+호출해 전부 기대값과 일치 확인. `_judge_recommendations()`를
+`llm_client.call_llm`/`extract_json` 모킹으로 2가지 시나리오 end-to-end
+확인 — (1) 추천 2건 중 1건은 `"..."`, 1건은 정상 문장 → `"..."` 항목만
+걸러지고 정상 문장 항목만 남는 것, (2) 추천/closest_non_match/must_place
+전부 trivial(`"-"`/`"모름"`/`".."`) → recommendations 빈 리스트,
+closest_non_match `None`(참여 가능한 과제 없음으로 정상 폴백),
+must_place는 `_fallback_must_place()`로 대체되는 것 확인. `py_compile`
+통과.
+
+**미검증**: 실제 사내 LLM으로 재현(이 세션에 LLM 서버 없음 — 사용자가
+보고한 실제 "..." 패턴을 그대로 재현한 모킹으로만 검증), 실제 브라우저
+화면에서의 최종 표시.
+
+## 2026-09-03 (5): 어학자격 만료일 표시 — "9999-12-31 00:00:00"(시분초 누출)
+버그 수정
+
+사용자 보고: 어학 표시에서 "만료일 9999-12-31 00:00:00"처럼 시분초가
+붙어 나오는데, 특정 등급(1등급)에서만 발생하고 다른 등급(2등급 이상)은
+정상("만료일 2027-06-30" 형태)이라는 것.
+
+**원인**: `pipeline/excel_reader.py`의 `parse_flexible_date()`가
+`pd.to_datetime(s).strftime('%Y-%m-%d')`로 날짜를 정규화하는데, pandas
+`Timestamp`는 연도 ~2262까지만 표현 가능하다 — "9999-12-31"처럼 일부
+사내 시스템이 "영구/만료없음"을 뜻하는 sentinel로 흔히 쓰는 극단적인
+날짜는 이 범위를 벗어나 `pd.to_datetime()`이 예외를 던진다. 예외
+발생 시(`except Exception: return s`) 원본 문자열을 그대로 반환하는데,
+엑셀 날짜 셀 값이 파이썬 `datetime.datetime` 객체로 읽히면
+`str(val)`이 자정이어도 항상 시분초까지 포함("9999-12-31 00:00:00")한
+문자열을 만들어, 그게 그대로 `language_qualification.csv`의
+`expiration_date`에 저장돼 있었다. 등급(1/2/3등급)과는 무관하고,
+그 사람의 실제 만료일 값이 pandas 표현 범위를 벗어나는지 여부에 따라
+갈리는 것 — 우연히 1등급 보유자의 만료일이 "9999-12-31"(영구)이고
+2등급 이상은 근시일 실제 날짜라 정상 파싱됐던 것.
+
+**수정**(2곳):
+1. `pipeline/excel_reader.py`의 `parse_flexible_date()` — pandas 파싱이
+   예외를 던지면, 그 문자열이 "YYYY-MM-DD[ HH:MM:SS]"(ISO 유사) 형태인지
+   정규식(`_ISO_DATETIME_RE`)으로 한 번 더 확인해 맞으면 날짜 부분만
+   반환하도록 근본 수정 — 앞으로 파이프라인을 재실행하면 처음부터 시분초
+   없이 저장된다. 이 함수는 `process_awards.py`/`process_nurturing.py`/
+   `process_work_experience.py`도 공유해, 같은 부류의 극단적 날짜(예:
+   영구 시상/양성 이력 등)가 있었다면 그쪽도 함께 정상화된다.
+2. `services/language_qualification.py`의 `format_lines()` — 신규
+   `_clean_date()` 헬퍼로 `expiration_date`에서 날짜 부분만 뽑아
+   표시하도록 방어 추가 — 이미 시분초가 붙은 채로 저장된 기존
+   `language_qualification.csv`도 파이프라인 재실행 없이 바로 정상
+   표시된다(1번 수정은 앞으로 재실행할 때부터만 효과가 있으므로, 지금
+   당장 보이는 문제는 이 표시 계층 수정이 해결). 이 함수를 공유하는
+   `services/researcher_profile_export.py`의 `_col_language()`(엑셀
+   다운로드 "어학" 컬럼)도 코드 변경 없이 함께 정상화됨.
+
+검증: `parse_flexible_date()`를 문자열/`datetime.datetime` 객체 양쪽
+입력(정상 범위 날짜, "9999-12-31" 극단값, 빈 값, 파싱 불가 문자열)으로
+직접 호출해 전부 기대값과 일치 확인. `_clean_date()`/`format_lines()`를
+"9999-12-31 00:00:00"이 저장된 것으로 가정한 합성 행으로 직접 호출해
+"영어 1등급(만료일 9999-12-31)"(시분초 없음)로 정확히 조립되는 것 확인.
+`py_compile` 통과, 관련 모듈 임포트 확인.
+
+**미검증**: 실제 서버에서 이미 저장된 `language_qualification.csv`(진짜
+"9999-12-31 00:00:00" 값)로 화면·엑셀 다운로드까지 브라우저로 최종
+확인(이 세션엔 실제 데이터가 없어 합성 데이터로만 검증) — 다만 표시
+계층 수정이 파일 재처리 없이 즉시 적용되므로 서버 재기동만으로 반영될
+것으로 예상.

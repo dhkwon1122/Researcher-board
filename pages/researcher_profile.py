@@ -86,10 +86,19 @@ def _locked_block(label: str = '', *, icon_only: bool = False):
     )
 
 
-def _opt(row):
-    dept = str(row.get('department', '') or '').strip()
-    org = str(row.get('org_code', '') or '').strip()
-    tag = ' · '.join(v for v in (dept, org) if v)
+def _opt(row, dep_map: dict, pjt_map: dict):
+    """부서/과제 표시는 "연구원 명단" 화면(services.similarity_map.
+    org_code_label_maps())과 완전히 동일한 규칙을 쓴다 — org_code로
+    team_refer(dep_name/pjt_part_name)를 우선 찾고, 매핑이 없으면(신규
+    입사자 등 아직 팀/리더 참조에 등록 안 된 조직) 부서는 researchers.csv
+    원본 department, 과제는 원본 org_code 코드값으로 그대로 폴백한다
+    (사용자 확정 2026-08-31 — 이전엔 이 함수가 team_refer 매핑을 아예
+    시도하지 않고 항상 원본 department/org_code만 보여줘, 명단 화면과
+    서로 다른 부서/과제 표기가 나오는 문제가 있었다)."""
+    org_code = str(row.get('org_code', '') or '').strip()
+    dept = dep_map.get(org_code) or str(row.get('department', '') or '').strip()
+    proj = pjt_map.get(org_code) or org_code
+    tag = ' · '.join(v for v in (dept, proj) if v)
     tag_suffix = f' [{tag}]' if tag else ''
     not_current = str(row.get('is_current', 'Y')) == 'N'
     suffix = ' — 현재 미소속' if not_current else ''
@@ -108,14 +117,17 @@ def _load_selector_data(current_only: bool = True):
     부서 목록/그룹핑은 researchers.csv의 원본 department 컬럼이 아니라
     services.similarity_map(team_refer 기반, "연구원 명단" 화면의 '부서'
     필터와 동일한 기준)을 그대로 쓴다 — 두 화면의 '부서' 옵션·데이터가
-    항상 같은 원천을 보도록 하기 위함(사용자 확정)."""
+    항상 같은 원천을 보도록 하기 위함(사용자 확정). 옵션 라벨의 부서/과제
+    표기(_opt())도 동일한 team_refer 매핑(dep_map/pjt_map, 배치당 한 번만
+    계산 — org_code_label_maps()의 기존 관례)을 쓴다."""
     try:
         full_df = read_processed('researchers')
         if full_df.empty:
             return [], [], {}
         res_df = filter_current(full_df, current_only)
+        dep_map, pjt_map = similarity_map.org_code_label_maps()
 
-        all_opts = [_opt(row) for _, row in res_df.sort_values(['department', 'name']).iterrows()]
+        all_opts = [_opt(row, dep_map, pjt_map) for _, row in res_df.sort_values(['department', 'name']).iterrows()]
 
         dept_opts = similarity_map.department_filter_options()
         by_dept = {}
@@ -123,7 +135,7 @@ def _load_selector_data(current_only: bool = True):
             dep_name = opt['value']
             org_codes = similarity_map.org_codes_for_dep_names([dep_name])
             grp = res_df[res_df['org_code'].isin(org_codes)] if 'org_code' in res_df.columns else res_df.iloc[0:0]
-            by_dept[dep_name] = [_opt(row) for _, row in grp.sort_values(['department', 'name']).iterrows()]
+            by_dept[dep_name] = [_opt(row, dep_map, pjt_map) for _, row in grp.sort_values(['department', 'name']).iterrows()]
         dept_opts = [{'label': '전체', 'value': ''}] + dept_opts
 
         return dept_opts, all_opts, by_dept
@@ -174,7 +186,7 @@ def _print_progress_overlay():
         html.Div(id='print-progress-text', className='small fw-semibold mb-2', children='인쇄 준비 중…'),
         html.Div(
             html.Div(id='print-progress-fill', style={
-                'height': '100%', 'width': '0%', 'backgroundColor': '#0071e3',
+                'height': '100%', 'width': '0%', 'backgroundColor': '#1677ff',
                 'borderRadius': '999px', 'transition': 'width 0.15s ease',
             }),
             style={
@@ -216,7 +228,7 @@ def _bulk_build_progress_overlay(total):
                   children=f'프로필 데이터 준비 중… (0 / {total})'),
         html.Div(
             html.Div(id='bulk-build-progress-fill', style={
-                'height': '100%', 'width': '0%', 'backgroundColor': '#0071e3',
+                'height': '100%', 'width': '0%', 'backgroundColor': '#1677ff',
                 'borderRadius': '999px', 'transition': 'width 0.15s ease',
             }),
             style={
@@ -261,7 +273,12 @@ def layout(id=None, ids=None, **_kwargs):
 
     default_mode = 'current'
     dept_opts, all_opts, by_dept = _load_selector_data(current_only=True)
-    default_rid = all_opts[0]['value'] if all_opts else None
+    # 딥링크(id 없음)로 처음 들어오면 아무도 선택하지 않은 빈 화면으로 시작한다
+    # (2026-09-02, 사용자 확정 — 예전엔 이름순 첫 번째 사람이 자동으로 열렸음).
+    # update_profile() 콜백은 이미 rid가 없을 때 "연구원을 선택하세요." 빈
+    # 화면을 반환하므로 그대로 재사용된다. id가 주어진 딥링크(아래 블록)는
+    # 그대로 해당 인물을 연다.
+    default_rid = None
     default_dept = ''
     res_opts = all_opts
 
@@ -491,6 +508,7 @@ def _photo_info_card(show_eval: bool = True):
                     html.Hr(className='my-2'),
                     html.Div([
                         html.I(
+                            id='eval-lock-icon',
                             className='bi bi-lock-fill me-1 text-secondary',
                             style={} if not show_eval else {'display': 'none'},
                         ),
@@ -518,7 +536,7 @@ def _owned_expertise_stack_card():
     return dbc.Card(
         dbc.CardBody([
             html.P('보유 전문성', style={'fontSize': '0.85rem', 'fontWeight': 600,
-                                      'color': '#1d1d1f'}, className='mb-2'),
+                                      'color': '#1f1f1f'}, className='mb-2'),
             html.Div(id='tab-expertise', style={'maxHeight': f'{TABS_CONTENT_HEIGHT}px', 'overflowY': 'auto'}),
         ]),
         className='shadow-sm profile-card h-100',
@@ -531,13 +549,13 @@ def _right_column():
             dbc.CardBody([
                 html.Div([
                     html.P('전문성 요약(LLM)', style={'fontSize': '0.85rem', 'fontWeight': 600,
-                                            'color': '#1d1d1f'}, className='mb-1'),
+                                            'color': '#1f1f1f'}, className='mb-1'),
                     html.Div(id='llm-summary-block', style={'maxHeight': f'{LLM_SUMMARY_HEIGHT - 28}px',
                                                              'overflowY': 'auto'}),
                 ], style={'flex': '0 0 auto', 'height': f'{LLM_SUMMARY_HEIGHT}px',
                           'overflow': 'hidden', 'marginBottom': '8px'}),
                 html.P('타임라인', style={'fontSize': '0.85rem', 'fontWeight': 600,
-                                       'color': '#1d1d1f', 'flex': '0 0 auto'}, className='mb-2'),
+                                       'color': '#1f1f1f', 'flex': '0 0 auto'}, className='mb-2'),
                 html.Div(id='tab-timeline', style={'flex': '1 1 auto', 'minHeight': '0', 'overflow': 'hidden'}),
             ], style={'height': '100%', 'display': 'flex', 'flexDirection': 'column'}),
             className='shadow-sm profile-card',
@@ -631,16 +649,17 @@ def _card(children, *, body_class='p-2', card_class='shadow-sm profile-card mb-2
     return dbc.Card(dbc.CardBody(children, className=body_class, style=body_style), className=card_class)
 
 
-def _empty_profile_output():
+def _empty_profile_output(show_eval: bool = False):
     prompt = html.Div('연구원을 선택하세요.', className='text-muted p-3')
     return (
         avatar('?'), html.Div(), html.Div(), html.Div(), html.Div(), html.Div(),
         [], None, html.Div(), prompt, prompt, prompt, html.Div(), html.Div(),
         True,  # print-ready — 인쇄할 내용은 없지만 대기할 것도 없다.
+        {} if not show_eval else {'display': 'none'},  # eval-lock-icon.style
     )
 
 
-_PRINT_BOX_BORDER = '1px solid #555555'  # 박스 테두리 색 — 기존 #1d1d1f(거의
+_PRINT_BOX_BORDER = '1px solid #555555'  # 박스 테두리 색 — 기존 #1f1f1f(거의
 # 검정)가 너무 진하다는 사용자 요청으로 짙은 회색으로 완화. _print_box()/
 # combined_box 등 모든 인쇄 박스 테두리가 이 상수 하나를 공유한다.
 _PRINT_BOX_DIVIDER = '1px solid #ddd'  # combined_box 내부 photo/info/tech
@@ -851,7 +870,7 @@ def _print_patent_summary(pat_df, rid):
 
 _PRINT_TABLE_TH_STYLE = {'padding': '3px 6px', 'borderBottom': f'1px solid {_PRINT_BOX_BORDER.split()[-1]}',
                           'textAlign': 'left', 'fontWeight': '600', 'whiteSpace': 'nowrap'}
-_PRINT_TABLE_TD_STYLE = {'padding': '3px 6px', 'borderBottom': '1px solid #d2d2d7', 'verticalAlign': 'top'}
+_PRINT_TABLE_TD_STYLE = {'padding': '3px 6px', 'borderBottom': '1px solid #bfbfbf', 'verticalAlign': 'top'}
 
 
 def _year_label(row, year_col='pub_year', date_col='pub_date'):
@@ -1041,7 +1060,13 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     # 성별/나이·직급-년차는 사진 아래 캡션(photo_block())에 이미 나오므로
     # 기본정보 표에서는 중복 표시하지 않는다.
     name = str(researcher.get('name', '') or '')
-    dept = str(researcher.get('department', '') or '-')
+    # 부서 표기는 검색 드롭다운(_opt())·연구원 명단 화면과 동일하게 team_refer
+    # 매핑 우선, 없으면 원본 department로 폴백(사용자 확정 2026-08-31).
+    dept = (
+        similarity_map.dep_name_for_org_code(str(researcher.get('org_code', '')))
+        or str(researcher.get('department', '') or '')
+        or '-'
+    )
     knox_id = str(researcher.get('knox_id', '') or '-')
     nationality = str(researcher.get('nationality', '') or '').strip() or '-'
     # birth_date(YYYY-MM-DD, pipeline/process_researchers.py가 법적생년월일성별
@@ -1298,7 +1323,13 @@ def _record_search_history(rid, history):
     match = res_df[res_df['researcher_id'] == rid]
     if not match.empty:
         row = match.iloc[0]
-        dept = str(row.get('department', '') or '').strip()
+        # 부서 표기는 검색 드롭다운(_opt())·연구원 명단 화면과 동일하게
+        # team_refer 매핑 우선, 없으면 원본 department로 폴백(사용자 확정
+        # 2026-08-31).
+        dept = (
+            similarity_map.dep_name_for_org_code(str(row.get('org_code', '')))
+            or str(row.get('department', '') or '').strip()
+        )
         name = str(row.get('name', '') or '') or rid
         label = f'{name} [{dept}]' if dept else name
     else:
@@ -1312,17 +1343,69 @@ def _record_search_history(rid, history):
     Input('researcher-search-history', 'data'),
 )
 def _render_history_chips(history):
+    """각 이력 칩은 "이름 선택"과 "이 칩만 삭제"를 분리된 형제 엘리먼트로
+    둔다 — 삭제 아이콘을 칩(Badge) 안쪽 자식으로 넣으면 클릭 이벤트가
+    DOM을 타고 올라가 부모 Badge의 n_clicks(_select_from_history, 그
+    사람을 선택)까지 같이 발생해버려("삭제"를 눌렀는데 그 사람이 선택되는
+    버그) — 형제로 분리하면 이 문제가 없다."""
     history = history or []
     if not history:
         return html.Span('아직 검색 이력이 없습니다.', className='text-muted small')
-    return [
-        dbc.Badge(
-            h['label'], id={'type': 'researcher-history-chip', 'rid': h['rid']},
-            color='light', text_color='dark', className='me-1 mb-1 border',
-            style={'cursor': 'pointer', 'fontWeight': 'normal'},
-        )
+    chips = [
+        html.Span([
+            html.Span(
+                h['label'],
+                id={'type': 'researcher-history-chip', 'rid': h['rid']},
+                style={'cursor': 'pointer'},
+            ),
+            html.I(
+                className='bi bi-x ms-1',
+                id={'type': 'researcher-history-chip-delete', 'rid': h['rid']},
+                title='검색 이력에서 삭제',
+                **{'aria-label': '검색 이력에서 삭제', 'role': 'button'},
+                style={'cursor': 'pointer'},
+            ),
+        ], className='badge bg-light text-dark border fw-normal me-1 mb-1')
         for h in history if h.get('rid')
     ]
+    chips.append(
+        dbc.Button(
+            '전체 삭제', id='researcher-history-clear-all',
+            color='link', size='sm', className='text-muted small p-0 ms-1 align-baseline',
+        )
+    )
+    return chips
+
+
+@callback(
+    Output('researcher-search-history', 'data', allow_duplicate=True),
+    Input({'type': 'researcher-history-chip-delete', 'rid': dash.ALL}, 'n_clicks'),
+    State({'type': 'researcher-history-chip-delete', 'rid': dash.ALL}, 'id'),
+    State('researcher-search-history', 'data'),
+    prevent_initial_call=True,
+)
+def _delete_history_entry(n_clicks_list, ids, history):
+    """이력 칩 하나만 삭제 — researcher-select 값 자체는 건드리지 않는다
+    (지금 보고 있는 프로필은 그대로 유지, 이력에서만 뺀다)."""
+    triggered_id = dash.ctx.triggered_id
+    if not triggered_id:
+        return no_update
+    idx = next((i for i, d in enumerate(ids) if d == triggered_id), None)
+    if idx is None or not n_clicks_list[idx]:
+        return no_update
+    rid = triggered_id['rid']
+    return [h for h in (history or []) if h.get('rid') != rid]
+
+
+@callback(
+    Output('researcher-search-history', 'data', allow_duplicate=True),
+    Input('researcher-history-clear-all', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def _clear_history(n_clicks):
+    if not n_clicks:
+        return no_update
+    return []
 
 
 @callback(
@@ -1391,32 +1474,39 @@ def _build_print_block(rid, tables, researchers, name_map, show_eval):
     Output('profile-current-status', 'children'),
     Output('profile-print-content', 'children'),
     Output('print-ready', 'data'),
+    Output('eval-lock-icon', 'style'),
     Input('researcher-select', 'value'),
 )
 def update_profile(rid):
     import sys
-    from services.auth import can, get_current_user
+    from services.auth import can, can_view_evaluation, get_current_user
 
     if get_current_user() is None:
         return _empty_profile_output()
 
-    show_eval = can('view_evaluation')
+    role_show_eval = can('view_evaluation')
     show_comments = can('view_comments')
 
     if not rid:
-        return _empty_profile_output()
+        return _empty_profile_output(role_show_eval)
 
     try:
         tables = read_profile_tables()
         researchers = tables['researchers']
         if researchers.empty:
-            return _empty_profile_output()
+            return _empty_profile_output(role_show_eval)
 
         rid = str(rid).zfill(8)
         rows = researchers[researchers['researcher_id'] == rid]
         if rows.empty:
-            return _empty_profile_output()
+            return _empty_profile_output(role_show_eval)
         researcher = rows.iloc[0]
+        # 역할 권한(role_show_eval)만으로는 부족하다 — People팀처럼 부서
+        # 단위로 평가를 제외해 둔 사용자라면, 지금 보고 있는 이 연구원이
+        # 그 제외 부서 소속인지까지 봐야 한다(사용자 요청, 2026-08-31).
+        show_eval = can_view_evaluation(
+            str(researcher.get('org_code', '')), similarity_map.org_code_dep_id_map()
+        )
         # 평가등급 표의 연도 열 — evaluations.csv가 생성될 때와 동일한 회계연도
         # 기준(매년 3월 시작, services.evaluations)이어야 CSV의 실제 컬럼과
         # 항상 맞아떨어진다(달력연도 CURRENT_YEAR를 그대로 쓰면 1~2월에 어긋남).
@@ -1457,6 +1547,7 @@ def update_profile(rid):
             current_status,
             _build_print_block(rid, tables, researchers, name_map, show_eval),
             True,
+            {} if not show_eval else {'display': 'none'},
         )
     except Exception as exc:
         import traceback
@@ -1470,6 +1561,7 @@ def update_profile(rid):
             avatar('?'), err_div, html.Div(), html.Div(), html.Div(),
             [], None, html.Div(), err_div, err_div, err_div, html.Div(), html.Div(),
             True,
+            {} if not role_show_eval else {'display': 'none'},
         )
 
 
@@ -1494,7 +1586,7 @@ def _append_bulk_print_block(_n_intervals, rid_list, progress):
     긴 동기 작업이라 브라우저가 "응답 없음"을 띄울 정도로 멈춘 것처럼
     보였다(사용자 리포트, 16명 테스트). 한 명씩 나눠 붙이면 그 사이사이
     브라우저가 다른 작업(그리기, 다음 요청)을 처리할 틈이 생긴다."""
-    from services.auth import can, get_current_user
+    from services.auth import can_view_evaluation, get_current_user
 
     fallback = (no_update, no_update, True, no_update, no_update, _BULK_BUILD_OVERLAY_HIDDEN_STYLE)
     if get_current_user() is None or not rid_list:
@@ -1505,7 +1597,6 @@ def _append_bulk_print_block(_n_intervals, rid_list, progress):
     if idx >= total:
         return (*fallback, True)
 
-    show_eval = can('view_evaluation')
     rid = rid_list[idx]
     try:
         tables = _cached_profile_tables()
@@ -1514,6 +1605,12 @@ def _append_bulk_print_block(_n_intervals, rid_list, progress):
             block = None
         else:
             name_map = researchers.set_index('researcher_id')['name'].to_dict()
+            # update_profile()과 같은 이유로 부서 단위 예외까지 반영해야 한다
+            # — 일괄 인쇄 대상마다 소속 부서가 다를 수 있으므로 틱마다(그
+            # 사람의 org_code로) 다시 판정한다.
+            rows = researchers[researchers['researcher_id'] == rid]
+            org_code = str(rows.iloc[0].get('org_code', '')) if not rows.empty else ''
+            show_eval = can_view_evaluation(org_code, similarity_map.org_code_dep_id_map())
             block = _build_print_block(rid, tables, researchers, name_map, show_eval)
     except Exception as exc:
         import sys
@@ -1535,7 +1632,7 @@ def _append_bulk_print_block(_n_intervals, rid_list, progress):
 
     fill_style = {
         'height': '100%', 'width': f'{round(new_idx / total * 100)}%',
-        'backgroundColor': '#0071e3', 'borderRadius': '999px', 'transition': 'width 0.15s ease',
+        'backgroundColor': '#1677ff', 'borderRadius': '999px', 'transition': 'width 0.15s ease',
     }
     overlay_style = _BULK_BUILD_OVERLAY_HIDDEN_STYLE if done else _BULK_BUILD_OVERLAY_VISIBLE_STYLE
     text = f'프로필 데이터 준비 중… ({new_idx} / {total})'

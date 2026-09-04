@@ -82,8 +82,10 @@
   (업무목표·과제 수행 이력은 별도 _raw 폴백 없음, 아래 전용 파일 항목 참고)
 
 [업무목표] ★ 전용 원천 파일 3개에서 자동 추출 (별도 raw 불필요)
-  업무목표24.xlsx / 업무목표25.xlsx / 업무목표26.xlsx (사번, 목표명, 상세설명)
-    → data/processed/work_objective.csv (researcher_id, work_objective24~26)
+  업무목표NN.xlsx × 3(회계연도 기준 최근 3개년, 매년 3월 자동 롤링 —
+  process_work_objective.target_years() 참고. 예: 지금은 업무목표24/25/26.xlsx,
+  '27년 3월부터는 업무목표25/26/27.xlsx) (사번, 목표명, 상세설명)
+    → data/processed/work_objective.csv (researcher_id, work_objective{4자리 연도} × 3)
       한 연구원이 한 해에 목표를 여러 개 작성했으면 "- 목표명 - 상세설명" 줄로
       이어붙여 그 해 컬럼 하나에 담는다. process_researcher_expertise.py의
       8번째 입력 소스로 쓰인다(LLM 호출 없이 순수 엑셀 전처리만 수행).
@@ -185,6 +187,7 @@
 import csv
 import os
 import sys
+import traceback
 
 import pandas as pd
 
@@ -217,15 +220,64 @@ def _read_raw(name: str) -> pd.DataFrame | None:
     return None
 
 
-def _run_with_fallback(process_fn, table: str, hint: str, missing: list) -> bool:
-    """전용 처리기(process_fn)를 실행하고, 실패하면 {table}_raw 폴백을 시도한다.
-    폴백까지 실패하면 missing에 '{table} ({hint})' 안내를 추가한다.
-    폴백 저장도 (등록돼 있으면) TABLE_KEYS 기준 업서트를 거친다 — 전용
-    처리기와 마찬가지로 이번 파일에 없는 기존 행을 지우지 않는다."""
-    if process_fn():
-        return True
-    df = _read_raw(table)
-    if df is not None:
+def _record(results: list, name: str, status: str, detail: str = '') -> None:
+    """한 항목의 결과(OK/SKIP/FAIL)를 results에 기록한다 — 실행 맨 끝에
+    _print_summary()가 이걸로 성공/건너뜀/실패를 한눈에 보여준다."""
+    results.append({'name': name, 'status': status, 'detail': detail})
+
+
+def _run_step(name: str, fn, results: list, *, skip_hint: str = '') -> bool:
+    """전용 폴백이 없는 단일 단계(fn)를 실행하고 결과를 results에 기록한다.
+    fn()이 예외를 던져도 여기서 잡아 FAIL로 기록만 하고 계속 진행한다 — 이
+    파이프라인 항목 하나가 죽어도 뒤 항목들은 전부 실행돼야 한다(사용자
+    확정, 2026-09-01 — process_leadership.py가 Knox ID 매칭 전멸로
+    KeyError를 던졌을 때 뒤 항목 전체가 안 돌아간 문제를 실제로 겪은 뒤
+    추가, data/processed/CLAUDE.md 참고)."""
+    try:
+        ok = fn()
+    except Exception as exc:
+        print(f'[ERROR] {name} 처리 중 예외 발생 — 건너뛰고 계속 진행합니다:')
+        traceback.print_exc()
+        _record(results, name, 'FAIL', f'{type(exc).__name__}: {exc}')
+        return False
+    if not ok:
+        print(f'  [SKIP] {name}: {skip_hint or "원천 파일 없음"}')
+    _record(results, name, 'OK' if ok else 'SKIP', '' if ok else (skip_hint or '원천 파일 없음'))
+    return bool(ok)
+
+
+def _run_with_fallback(process_fn, table: str, hint: str, results: list) -> bool:
+    """전용 처리기(process_fn)를 실행하고, 실패(False 반환 또는 예외)하면
+    {table}_raw 폴백을 시도한다. 폴백 저장도 (등록돼 있으면) TABLE_KEYS
+    기준 업서트를 거친다 — 전용 처리기와 마찬가지로 이번 파일에 없는 기존
+    행을 지우지 않는다. process_fn()이 예외를 던져도 여기서 잡아 FAIL로
+    기록하고 계속 진행한다(이 항목 하나가 죽어도 뒤 항목들은 전부 실행돼야
+    함 — 사용자 확정, _run_step() 참고)."""
+    primary_error = None
+    try:
+        if process_fn():
+            _record(results, table, 'OK')
+            return True
+    except Exception as exc:
+        primary_error = f'{type(exc).__name__}: {exc}'
+        print(f'[ERROR] {table} 처리 중 예외 발생 — {table}_raw 폴백을 시도합니다:')
+        traceback.print_exc()
+
+    try:
+        df = _read_raw(table)
+    except Exception as exc:
+        _record(results, table, 'FAIL',
+                primary_error or f'{table}_raw 폴백 읽기 실패: {type(exc).__name__}: {exc}')
+        return False
+
+    if df is None:
+        if primary_error:
+            _record(results, table, 'FAIL', primary_error)
+        else:
+            _record(results, table, 'SKIP', f'원천 없음({hint})')
+        return False
+
+    try:
         out_path = os.path.join(OUT_DIR, f'{table}.csv')
         keys = TABLE_KEYS.get(table)
         if keys and all(k in df.columns for k in keys):
@@ -234,17 +286,48 @@ def _run_with_fallback(process_fn, table: str, hint: str, missing: list) -> bool
         else:
             df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
             print(f'  [OK]   {table}.csv ({table}_raw 폴백, 전체 교체, {len(df)}행)')
+        _record(results, table, 'OK', f'{table}_raw 폴백 사용')
         return True
-    missing.append(f'{table} ({hint})')
-    return False
+    except Exception as exc:
+        _record(results, table, 'FAIL', f'{table}_raw 폴백 저장 실패: {type(exc).__name__}: {exc}')
+        return False
+
+
+def _print_summary(results: list) -> None:
+    """마지막에 전체 항목의 성공/건너뜀/실패를 사유와 함께 보여준다(사용자
+    확정, 2026-09-01)."""
+    ok = [r for r in results if r['status'] == 'OK']
+    skip = [r for r in results if r['status'] == 'SKIP']
+    fail = [r for r in results if r['status'] == 'FAIL']
+
+    print('\n[run_pipeline] 실행 요약:')
+    print(f'  [OK]   성공 {len(ok)}건: {", ".join(r["name"] for r in ok) or "-"}')
+    if skip:
+        print(f'  [SKIP] 건너뜀(원천 없음, 정상) {len(skip)}건:')
+        for r in skip:
+            print(f'    · {r["name"]}: {r["detail"]}')
+    if fail:
+        print(f'  [FAIL] 실패(예외 발생, 확인 필요) {len(fail)}건:')
+        for r in fail:
+            print(f'    · {r["name"]}: {r["detail"]}')
+
+    if fail:
+        print(f'\n[run_pipeline] {len(fail)}건이 예외로 실패했습니다 — 위 사유를 확인하고 '
+              f'해당 원천 파일/데이터를 점검한 뒤 그 항목만 다시 실행해도 됩니다 '
+              f'(다른 항목은 이번 실행에서 이미 정상 반영됨).')
+    elif skip:
+        print('\n개발용 더미 데이터를 사용하려면:  python pipeline/generate_sample_data.py')
+    else:
+        print('\n[run_pipeline] 전체 항목 정상 처리 완료 — data/processed/ 를 확인하세요.')
 
 
 def run():
     os.makedirs(OUT_DIR, exist_ok=True)
-    missing = []
+    results = []
 
     # ── -1. 2단계: raw CSV(1단계 산출물) → DB 스테이징 테이블 적재 ──────────
     # DATABASE_URL 미설정이면 아무 것도 하지 않음(3단계가 raw_csv를 직접 읽음).
+    # 선택 인프라 단계라 위 results 요약과는 별도로 자체 try/except로 보호한다.
     try:
         from load_raw_to_db import load as load_raw_to_db
         load_raw_to_db()
@@ -253,129 +336,134 @@ def run():
 
     # ── 0. 연구원 기본정보: 인력현황.xlsx 우선, 없으면 researchers_raw 폴백 ─
     from process_researchers import process as process_researchers
-    _run_with_fallback(process_researchers, 'researchers', '인력현황.xlsx 또는 researchers_raw', missing)
+    _run_with_fallback(process_researchers, 'researchers', '인력현황.xlsx 또는 researchers_raw', results)
 
     # ── 1. 평가 데이터: T&P 파일에서 추출, 없으면 evaluations_raw 폴백 ────
     from process_tp_evaluation import process as process_tp
     _run_with_fallback(lambda: process_tp()[0], 'evaluations',
-                        'T&P_기본_인사_정보.xlsx 또는 evaluations_raw', missing)
+                        'T&P_기본_인사_정보.xlsx 또는 evaluations_raw', results)
 
     # ── 2. 특허 데이터: 특허 리스트.xlsx 우선, 없으면 patents_raw 폴백 ──
     from process_patents import process as process_patents
-    _run_with_fallback(process_patents, 'patents', '특허 리스트.xlsx 또는 patents_raw', missing)
+    _run_with_fallback(process_patents, 'patents', '특허 리스트.xlsx 또는 patents_raw', results)
 
     # ── 3. 인사발령 이력: 인사발령이력.xlsx 우선, 없으면 hr_orders_raw 폴백 ─
     from process_personnel_orders import process as process_personnel_orders
-    _run_with_fallback(process_personnel_orders, 'hr_orders', '인사발령이력.xlsx 또는 hr_orders_raw', missing)
+    _run_with_fallback(process_personnel_orders, 'hr_orders', '인사발령이력.xlsx 또는 hr_orders_raw', results)
 
     # ── 4. 양성이력: 양성_인력_현황.xlsx 우선, 없으면 nurturing_raw 폴백 ──
     from process_nurturing import process as process_nurturing
-    _run_with_fallback(process_nurturing, 'nurturing', '양성_인력_현황.xlsx 또는 nurturing_raw', missing)
+    _run_with_fallback(process_nurturing, 'nurturing', '양성_인력_현황.xlsx 또는 nurturing_raw', results)
 
     # ── 5. 과제 정보: 과제정보.xlsx 우선, 없으면 tasks_information_raw 폴백 ─
     from process_task_information import process as process_task_information
     _run_with_fallback(process_task_information, 'tasks_information',
-                        '과제정보.xlsx 또는 tasks_information_raw', missing)
+                        '과제정보.xlsx 또는 tasks_information_raw', results)
 
     # ── 6. 시상이력: 시상 세부사항.xlsx 우선, 없으면 awards_raw 폴백 ────
     from process_awards import process as process_awards
-    _run_with_fallback(process_awards, 'awards', '시상 세부사항.xlsx 또는 awards_raw', missing)
+    _run_with_fallback(process_awards, 'awards', '시상 세부사항.xlsx 또는 awards_raw', results)
 
     # ── 7. 학력: 임직원_학력.xlsx 우선, 없으면 education_raw 폴백 ──────
     from process_education import process as process_education
-    _run_with_fallback(process_education, 'education', '임직원_학력.xlsx 또는 education_raw', missing)
+    _run_with_fallback(process_education, 'education', '임직원_학력.xlsx 또는 education_raw', results)
 
     # ── 8. 리더십 진단: 리더십진단.xlsx 우선, 없으면 leadership_raw 폴백 ─
     from process_leadership import process as process_leadership
-    _run_with_fallback(process_leadership, 'leadership', '리더십진단.xlsx 또는 leadership_raw', missing)
+    _run_with_fallback(process_leadership, 'leadership', '리더십진단.xlsx 또는 leadership_raw', results)
 
     # ── 9. 인센티브 선정 이력: 핵심이력.xlsx 우선, 없으면 incentive_selection_raw 폴백 ─
     from process_incentive import process as process_incentive
     _run_with_fallback(process_incentive, 'incentive_selection',
-                        '핵심이력.xlsx 또는 incentive_selection_raw', missing)
+                        '핵심이력.xlsx 또는 incentive_selection_raw', results)
 
     # ── 9-1. 핵심기술: 핵심기술.xlsx 우선, 없으면 core_technology_raw 폴백 ─
     from process_core_technology import process as process_core_technology
     _run_with_fallback(process_core_technology, 'core_technology',
-                        '핵심기술.xlsx 또는 core_technology_raw', missing)
+                        '핵심기술.xlsx 또는 core_technology_raw', results)
 
     # ── 9-2. 보유기술: 보유기술.xlsx 우선, 없으면 tech_ownership_raw 폴백 ─
     from process_tech_ownership import process as process_tech_ownership
     _run_with_fallback(process_tech_ownership, 'tech_ownership',
-                        '보유기술.xlsx 또는 tech_ownership_raw', missing)
+                        '보유기술.xlsx 또는 tech_ownership_raw', results)
 
     # ── 9-3. 직무이력: 임직원_직무이력.xlsx 우선, 없으면 job_profile_raw 폴백 ─
     from process_job_profile import process as process_job_profile
-    _run_with_fallback(process_job_profile, 'job_profile', '임직원_직무이력.xlsx 또는 job_profile_raw', missing)
+    _run_with_fallback(process_job_profile, 'job_profile', '임직원_직무이력.xlsx 또는 job_profile_raw', results)
 
     # ── 9-4. 업무목표: 업무목표24/25/26.xlsx (LLM 호출 없음, 폴백 없음) ──
     from process_work_objective import process as process_work_objective
-    if not process_work_objective():
-        missing.append('work_objective (업무목표24/25/26.xlsx)')
+    _run_step('work_objective', process_work_objective, results, skip_hint='업무목표NN.xlsx 없음')
 
     # ── 9-5. 논문 현황: 개인별논문현황_2016_2026.xlsx 우선, 없으면 publications_raw 폴백 ─
     from process_publications import process as process_publications
     _run_with_fallback(process_publications, 'publications',
-                        '개인별논문현황_2016_2026.xlsx 또는 publications_raw', missing)
+                        '개인별논문현황_2016_2026.xlsx 또는 publications_raw', results)
 
     # ── 9-6. 과제 수행 이력: 개인별과제투입기간데이터_260114.xlsb (LLM 호출 없음, 폴백 없음) ─
     from process_tasks import process as process_tasks
-    if not process_tasks():
-        missing.append('tasks (개인별과제투입기간데이터_260114.xlsb)')
+    _run_step('tasks', process_tasks, results, skip_hint='개인별과제투입기간데이터_260114.xlsb 없음')
 
     # ── 9-7. 어학자격: 어학자격 *.xlsx (LLM 호출 없음, 폴백 없음, 누적하지
     # 않고 매번 전체 교체 — process_language_qualification.py 참고) ──────
     from process_language_qualification import process as process_language_qualification
-    if not process_language_qualification():
-        missing.append('language_qualification (어학자격 *.xlsx)')
+    _run_step('language_qualification', process_language_qualification, results,
+               skip_hint='어학자격 *.xlsx 없음')
 
     # ── 9-8. 근무 경력: 임직원 근무경력 *.xlsx (LLM 호출 없음, 폴백 없음,
-    # researcher_id 단위 그룹 교체로 누적 — process_work_experience.py 참고) ──
+    # 자연키(researcher_id+company_name+work_start_date) upsert로 누적,
+    # 2026-09-02부터 — process_work_experience.py 참고) ──────────────────
     from process_work_experience import process as process_work_experience
-    if not process_work_experience():
-        missing.append('work_experience (임직원 근무경력 *.xlsx)')
+    _run_step('work_experience', process_work_experience, results,
+               skip_hint='임직원 근무경력 *.xlsx 없음')
 
     # ── 10. 나머지 테이블 (technology_transfer, transfers, certifications, succession) ──
     # 전용 처리기가 없어 _raw 파일만 지원한다. TABLE_KEYS에 등록된 키가 실제
     # 컬럼에 있으면 업서트(이번 파일에 없는 기존 행 보존), 없으면 예전처럼 전체 교체.
     for table in TABLES:
-        df = _read_raw(table)
-        if df is None:
-            missing.append(table)
-            print(f'  [SKIP] {table}_raw 파일 없음')
-            continue
-        out_path = os.path.join(OUT_DIR, f'{table}.csv')
-        keys = TABLE_KEYS.get(table)
-        if keys and all(k in df.columns for k in keys):
-            merged = write_merged(out_path, df, keys)
-            print(f'  [OK]   {table}.csv (업서트, 총 {len(merged)}행, 이번 파일 {len(df)}행 반영)')
-        else:
-            df.to_csv(out_path, index=False, encoding='utf-8-sig')
-            print(f'  [OK]   {table}.csv (전체 교체, {len(df)}행 — 키 컬럼 {keys} 없어 업서트 불가)')
+        def _passthrough(table=table):
+            df = _read_raw(table)
+            if df is None:
+                return False
+            out_path = os.path.join(OUT_DIR, f'{table}.csv')
+            keys = TABLE_KEYS.get(table)
+            if keys and all(k in df.columns for k in keys):
+                merged = write_merged(out_path, df, keys)
+                print(f'  [OK]   {table}.csv (업서트, 총 {len(merged)}행, 이번 파일 {len(df)}행 반영)')
+            else:
+                df.to_csv(out_path, index=False, encoding='utf-8-sig')
+                print(f'  [OK]   {table}.csv (전체 교체, {len(df)}행 — 키 컬럼 {keys} 없어 업서트 불가)')
+            return True
+        _run_step(table, _passthrough, results, skip_hint=f'{table}_raw.xlsx/csv 없음')
 
     # ── 11. 코멘트: 별도 처리 (LLM 요약 옵션 포함) ───────────────────────
+    # process_comments()는 성공 여부를 반환하지 않으므로(None) 예외만 없으면
+    # 성공으로 기록한다 — 예전 코드도 반환값을 확인하지 않았으니 동작은 그대로.
     from process_comments import process as process_comments
-    process_comments(use_llm=False)
+    _run_step('comments', lambda: process_comments(use_llm=False) or True, results)
 
     # ── 11-1. 직무정보 참조 데이터: 표준/부서 직무정의 JSON 변환 ──────────
     from process_job_profile_standard import process as process_job_profile_standard
-    process_job_profile_standard()
+    _run_step('job_profile_info_standard', process_job_profile_standard, results,
+               skip_hint='직무정보_표준.xlsx 없음')
     from process_job_profile_sait import process as process_job_profile_sait
-    process_job_profile_sait()
+    _run_step('job_profile_info_sait', process_job_profile_sait, results,
+               skip_hint='직무정보_부서.xlsx 없음')
 
     # ── 11-2. 등급/Lv 기준표(정적 참조 데이터) ────────────────────────────
     from process_rubrics import process as process_rubrics
-    process_rubrics()
+    _run_step('rubrics', process_rubrics, results)
 
     # ── 11-3. 과제별 컨플루언스 주소 ───────────────────────────────────────
     from process_project_confl import process as process_project_confl
-    process_project_confl()
+    _run_step('project_confl_address', process_project_confl, results, skip_hint='과제별컨플.xlsx 없음')
 
     # ※ 유사 기업/학계 탐색(사내 Confluence + 사내 LLM, process_project_search.py)은
     #   비용이 크고 Confluence 접속 설정이 필요해 자동 실행에 포함하지 않는다.
     #   준비가 끝나면 별도 실행: python pipeline/process_project_search.py
 
     # ── 12. DATABASE_URL 설정 시 PostgreSQL 적재 ────────────────────────
+    # 선택 인프라 단계라 위 results 요약과는 별도로 자체 try/except로 보호한다.
     try:
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         from services.db import db_enabled
@@ -386,11 +474,7 @@ def run():
     except Exception as exc:
         print(f'[run_pipeline] DB 적재 건너뜀: {exc}')
 
-    if missing:
-        print(f'\n누락된 원천 파일: {missing}')
-        print('개발용 더미 데이터를 사용하려면:  python pipeline/generate_sample_data.py')
-    else:
-        print('\n파이프라인 완료 — data/processed/ 를 확인하세요.')
+    _print_summary(results)
 
 
 if __name__ == '__main__':

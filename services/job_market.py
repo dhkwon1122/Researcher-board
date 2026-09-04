@@ -335,6 +335,23 @@ def _candidate_block(item: dict) -> str:
     return f"[{item['project_name']}] 소속: {item['dep_name']}\nA) 과제 분석 기반: {a}\nB) 유사 인력 기반: {b}"
 
 
+# 공백/문장부호(줄임표 "…"/"..." 포함)만 있거나, 그걸 다 떼고 남는 실질 글자
+# 수가 이 값 미만이면 "근거를 못 만든 것"으로 간주(2026-09-03 사용자 재보고 —
+# 완전한 빈 문자열만 걸러내던 최초 수정으로는 LLM이 "..."처럼 무의미한 텍스트를
+# reason에 채워 넣는 경우를 놓쳐, 근거 없는 과제가 여전히 "참여 가능 과제"로
+# 남아 있었음).
+_MIN_REASON_CHARS = 6
+_REASON_PUNCT_RE = re.compile(r'[\s.\-–—…·,;:!?"\'()\[\]]+')
+
+
+def _is_trivial_reason(reason: str) -> bool:
+    """reason이 비어 있거나, 문장부호/공백만으로 이뤄져 있거나, 그걸 다 뺀
+    실질 글자 수가 너무 적어 "근거"라 부를 수 없는 수준이면 True."""
+    if not reason:
+        return True
+    return len(_REASON_PUNCT_RE.sub('', reason)) < _MIN_REASON_CHARS
+
+
 def _fallback_must_place(shortlist: list) -> list:
     """LLM이 must_place 규칙을 못 지켰거나(빈 리스트) 호출/파싱 자체가
     실패했을 때 쓰는 안전망 — 임베딩 유사도 1순위 후보를 그대로 "반드시
@@ -385,9 +402,25 @@ def _judge_recommendations(profile_text: str, shortlist: list) -> tuple:
         cand = by_name.get(name)
         if not cand:
             return None  # 후보 목록에 없는 이름은 할루시네이션으로 간주하고 버림
+        reason = str(r.get('reason') or '').strip()
+        if _is_trivial_reason(reason):
+            # reason이 비어 있거나(LLM이 프롬프트의 "1~2문장 사유" 지시를 안
+            # 지킨 경우) "..."/"-"처럼 실질적인 내용이 없는 placeholder면
+            # 근거 없이 프로젝트명만 있는 것과 마찬가지 — 화면(pages/job_market.py
+            # _recommendation_row 등)이 "(근거 없음)"으로 보여주면서도 그
+            # 추천 자체는 그대로 "참여 가능 과제" 목록·재배치율 통계·엑셀
+            # 다운로드에 남아 있던 문제(2026-09-03 사용자 보고 — 근거가 없는데도
+            # 참여 가능 과제에 포함됨. 완전한 빈 문자열만 걸러내던 최초 수정으로는
+            # LLM이 "..." 같은 무의미한 텍스트를 채워 넣는 경우를 놓쳐 재발
+            # 보고됨 — 문장부호/공백만 있거나 실질 글자 수가 너무 적은 것까지
+            # 함께 걸러내도록 강화). project_name 할루시네이션과 마찬가지로
+            # 신뢰할 수 없는 출력으로 보고 여기서 버린다 — recommendations는
+            # 그냥 빠지고, must_place는 버려진 뒤 _fallback_must_place()로
+            # 대체되며, closest_non_match는 None(참여 가능한 과제 없음 처리)이 된다.
+            return None
         return {
             'project_name': name, 'dep_name': cand['dep_name'],
-            'reason': str(r.get('reason') or '').strip(),
+            'reason': reason,
             'score_a': cand['score_a'], 'score_b': cand['score_b'],
         }
 

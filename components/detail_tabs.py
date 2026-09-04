@@ -13,7 +13,7 @@ from components.timeline_data import (
     share_sum,
 )
 
-_LEGEND_NEUTRAL = '#6e6e73'
+_LEGEND_NEUTRAL = '#8c8c8c'
 
 
 def publications_tab(pub_df, rid):
@@ -148,9 +148,9 @@ def patents_tab(pat_df, rid):
        style={'tableLayout': 'fixed', 'width': '100%'})])
 
 
-_PANEL_TITLE_STYLE = {'fontSize': '0.85rem', 'fontWeight': 600, 'color': '#1d1d1f'}
+_PANEL_TITLE_STYLE = {'fontSize': '0.85rem', 'fontWeight': 600, 'color': '#1f1f1f'}
 _GRADE_PILL_COLOR = '#3f8f57'
-_E_SUPPORT_COLOR = '#0071e3'
+_E_SUPPORT_COLOR = '#1677ff'
 
 _PRINT_SUB_HEADING_STYLE = {
     'display': 'inline-block',
@@ -160,7 +160,7 @@ _PRINT_SUB_HEADING_STYLE = {
     'padding': '1px 8px',
     'fontSize': '0.78rem',
     'fontWeight': 700,
-    'color': '#1d1d1f',
+    'color': '#1f1f1f',
 }
 
 
@@ -303,8 +303,19 @@ def llm_summary_block(profile: dict | None, similar: list | None = None, name_ma
             rid = s.get('researcher_id', '')
             return dbc.Badge(name_map.get(rid, rid), color=color, className='me-1 mb-1')
 
+        # 시니어=파란색(primary)/주니어=하늘색(info) 배지 색 구분을 처음 보는
+        # 사람은 알 수 없어(2026-09-02, 사용자 확정) 라벨 옆에 색상이 일치하는
+        # 작은 범례(●시니어 ●주니어)를 함께 보여준다.
+        legend_dot = lambda color: html.Span(className=f'd-inline-block rounded-circle bg-{color}',
+                                              style={'width': '8px', 'height': '8px', 'marginRight': '3px'})
         children.append(html.Div([
-            html.Div('유사 연구원', className='small text-muted fw-semibold mt-2 mb-1'),
+            html.Div([
+                html.Span('유사 연구원', className='small text-muted fw-semibold'),
+                html.Span([
+                    legend_dot('primary'), '시니어',
+                    html.Span(legend_dot('info'), className='ms-2'), '주니어',
+                ], className='small text-muted ms-2 d-inline-flex align-items-center'),
+            ], className='d-flex align-items-center mt-2 mb-1'),
             html.Div([_badge(s, 'primary') for s in senior] + [_badge(s, 'info') for s in junior]),
         ]))
 

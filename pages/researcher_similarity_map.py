@@ -1,20 +1,28 @@
-"""화면: 보유 전문성 (연구원/연구원↔연구원/전문성 MAP 3개 탭)
+"""화면: 보유 전문성 ("연구원" 탭 + 전문성 MAP 탭)
 
-연구원/연구원↔연구원 2개 탭은 pipeline의 콘솔 스타일 HTML 리포트 렌더러
-(build_html())를 DB/CSV에서 읽은 데이터로 그때그때 호출해 iframe(srcDoc)으로
-띄운다 — data/processed에 누구나 열어볼 수 있는 완성된 리포트 사본을 미리
-만들어두지 않기 위함(역할별 접근 제어는 이 화면을 거칠 때만 적용되는
-애플리케이션 레벨이라, 파일로 저장해두면 그 보호를 우회해 원본을 그대로 볼
-수 있었다). 1500명 규모 벤치마크에서 렌더링이 각각 수십~수백 ms로 충분히
-빨라(탭을 열 때만 1회 계산되므로) 별도 캐싱은 두지 않았다 — 자세한 배경은
+"연구원" 탭은 pipeline의 콘솔 스타일 HTML 리포트 렌더러
+(process_researcher_expertise.build_html())를 DB/CSV에서 읽은 데이터로
+그때그때 호출해 iframe(srcDoc)으로 띄운다 — data/processed에 누구나 열어볼
+수 있는 완성된 리포트 사본을 미리 만들어두지 않기 위함(역할별 접근 제어는
+이 화면을 거칠 때만 적용되는 애플리케이션 레벨이라, 파일로 저장해두면 그
+보호를 우회해 원본을 그대로 볼 수 있었다). 1500명 규모 벤치마크에서
+렌더링이 각각 수십~수백 ms로 충분히 빨라(탭을 열 때만 1회 계산되므로)
+별도 캐싱은 두지 않았다 — 자세한 배경은
 pipeline/process_researcher_expertise.py의 build_html()/_archive_html() 주석
 참고. 전문성 MAP 탭은 UMAP 산점도와 관계 그래프(옵시디언 방식 노드-링크,
 dash_cytoscape) 두 서브뷰를 버튼으로 전환할 수 있다 — 둘 다 무거운 계산
 (UMAP은 numba JIT, 관계 그래프도 데이터 로딩)이 있어 실제 선택된 서브뷰만
 계산하도록 지연 렌더링한다.
 
-(예전에는 "연구원↔과제" 탭도 있었지만, 그 기반이 되던 과제↔연구원 매칭
-기능 자체가 제거되면서 함께 삭제됐다 — data/processed/CLAUDE.md 참고.)
+(예전에는 "연구원 ↔ 연구원"이라는 별도 탭도 있었지만, "누적기준" 검색
+모드는 애초부터 두 탭이 같은 컴포넌트(llm_summary_block())를 공유해 이미
+사실상 통합돼 있었던 데다, 사용자 피드백("탭 두 개를 굳이 운영할 필요가
+없다")에 따라 2026-09-01에 "연구원" 탭 하나로 합쳤다 — 조직도에서 연구원을
+클릭하면 그 사람의 보유 전문성 카드 아래에 유사 연구원 목록이 바로 이어져
+보인다(process_researcher_expertise.build_html()이 similar_by_id를 함께
+받아 카드 안에 그려 넣는다, data/processed/CLAUDE.md 참고). 그보다 더
+이전에는 "연구원↔과제" 탭도 있었지만, 그 기반이 되던 과제↔연구원 매칭
+기능 자체가 제거되면서 함께 삭제됐다.)
 """
 
 from datetime import date
@@ -32,7 +40,6 @@ from pipeline.process_researcher_expertise import (
     build_html as _build_researcher_html,
     researcher_card_html as _historical_card_html,
 )
-from pipeline.process_researcher_similarity import build_html as _build_similarity_html
 from pipeline.rd_specialist_markdown import mail_page as _historical_page_shell
 from services import expertise_ondemand
 from services.data_store import (
@@ -57,7 +64,7 @@ dash.register_page(__name__, path='/researcher-similarity-map', name='보유 전
 # 참고)로 진입해도 더 이상 map 탭으로 랜딩하지 않는다.
 _MAP_TAB_HIDDEN = True
 
-_REPORT_TABS = ('researcher', 'similarity')
+_REPORT_TABS = ('researcher',)
 
 
 def _missing_data_alert() -> dbc.Alert:
@@ -180,29 +187,28 @@ def _add_cluster_overlays(fig, df):
             fig.add_trace(t)
 
 
-def _render_report_html(report_key: str) -> str | None:
-    """DB(우선)/JSON 파일에서 읽은 데이터로 콘솔형 HTML 리포트를 그때그때
-    렌더링한다. 데이터가 없으면(해당 파이프라인 스크립트 미실행) None."""
+def _render_report_html() -> str | None:
+    """DB(우선)/JSON 파일에서 읽은 데이터로 콘솔형 HTML 리포트("연구원" 탭 —
+    보유 전문성 + 유사 연구원)를 그때그때 렌더링한다. 보유 전문성 데이터
+    자체가 없으면(process_researcher_expertise.py 미실행) None — 유사도
+    데이터(researcher_similarity.json)는 없어도(process_researcher_similarity.py
+    미실행이거나 임원처럼 애초에 제외된 사람만 있어도) 리포트 자체는
+    보여준다(그 경우 카드마다 유사 연구원 섹션만 생략됨)."""
     researchers_df = read_processed('researchers')
-    if report_key == 'researcher':
-        profiles = list(read_expertise_profiles().values())
-        if not profiles:
-            return None
-        return _build_researcher_html(profiles, researchers_df)
-    profile_by_id = read_expertise_profiles()
-    similar = list(read_similar_researchers().values())
-    if not similar:
+    profiles = list(read_expertise_profiles().values())
+    if not profiles:
         return None
-    return _build_similarity_html(similar, researchers_df, profile_by_id)
+    similar_by_id = read_similar_researchers()
+    return _build_researcher_html(profiles, researchers_df, similar_by_id or None)
 
 
-def _iframe_tab(report_key: str, scroll_to: str | None = None):
-    """지정된 리포트를 build_html()로 렌더링해 srcDoc으로 그대로 임베드.
-    데이터가 없으면(해당 파이프라인 스크립트 미실행) 안내 Alert만 보여준다.
-    scroll_to가 주어지면(예: 전문성 유사맵에서 점을 클릭해 이 탭으로 넘어온 경우)
-    로드 직후 해당 id 카드로 자동 스크롤하는 스크립트를 붙인다 — srcDoc은 URL이
+def _iframe_tab(scroll_to: str | None = None):
+    """"연구원" 리포트를 build_html()로 렌더링해 srcDoc으로 그대로 임베드.
+    데이터가 없으면(파이프라인 미실행) 안내 Alert만 보여준다. scroll_to가
+    주어지면(예: 전문성 유사맵에서 점을 클릭해 이 탭으로 넘어온 경우) 로드
+    직후 해당 id 카드로 자동 스크롤하는 스크립트를 붙인다 — srcDoc은 URL이
     아니라 인라인 문서라 #fragment로는 스크롤을 지정할 수 없어 스크립트로 처리."""
-    content = _render_report_html(report_key)
+    content = _render_report_html()
     if content is None:
         return dbc.Alert(
             '분석 리포트가 없습니다. 관련 pipeline 스크립트를 먼저 실행하세요.',
@@ -210,7 +216,7 @@ def _iframe_tab(report_key: str, scroll_to: str | None = None):
         )
     if scroll_to:
         import json as _json
-        # detail-view 리포트(연구원/연구원↔연구원 — rd_specialist_markdown.py의
+        # detail-view 리포트("연구원" — rd_specialist_markdown.py의
         # console_page(detail_view=True))는 조직도 클릭 전까지 카드를 전부
         # 숨겨 두므로, UMAP 점 클릭 등으로 특정 카드에 바로 스크롤해야 할 때는
         # 사이드바 클릭 핸들러(_CONSOLE_SCRIPT)와 동일하게 .detail-active를
@@ -257,17 +263,12 @@ def _cumulative_person_options() -> list:
     return options
 
 
-def _cumulative_search_panel(report_key: str):
+def _cumulative_search_panel():
     """누적기준: 정적 리포트(조직도 클릭 기반, 특정 파이프라인 실행 시점의
     "현재" 조직 구조를 전제로 함)를 그대로 재사용할 수 없어, 조직도 탐색
     대신 이름/사번 검색으로 고른 사람 한 명의 결과만 컴포넌트로 직접
-    렌더링한다. "연구원"/"연구원 ↔ 연구원" 두 탭 모두 강점 분야·키워드·
-    유사 연구원 배지를 함께 보여주는 llm_summary_block() 하나로 충분해
-    같은 렌더러를 공유한다(둘의 차이는 안내 문구뿐)."""
-    hint = (
-        '연구원 개인의 보유 전문성 요약을 봅니다.' if report_key == 'researcher'
-        else '연구원 개인의 보유 전문성과 함께, 그 사람과 유사한 연구원 목록도 함께 보여줍니다.'
-    )
+    렌더링한다. 강점 분야·키워드·유사 연구원 배지를 함께 보여주는
+    llm_summary_block() 하나면 충분하다."""
     return html.Div([
         dbc.Alert(
             '누적기준: 조직도 대신 이름/사번으로 검색합니다(전배·퇴사 등으로 '
@@ -275,15 +276,16 @@ def _cumulative_search_panel(report_key: str):
             '더 이상 유효하지 않을 수 있어, 이 모드에서는 조직도 탐색을 지원하지 않습니다.',
             color='secondary', className='small mb-3',
         ),
-        html.P(hint, className='text-muted small mb-2'),
+        html.P('연구원 개인의 보유 전문성과 함께, 그 사람과 유사한 연구원 목록도 함께 보여줍니다.',
+               className='text-muted small mb-2'),
         dcc.Dropdown(
-            id={'type': 'expertise-cumulative-search', 'tab': report_key},
+            id='expertise-cumulative-search',
             options=_cumulative_person_options(),
             placeholder='이름 또는 사번으로 검색',
             clearable=True, searchable=True, style={'maxWidth': '420px'},
             className='mb-3',
         ),
-        html.Div(id={'type': 'expertise-cumulative-result', 'tab': report_key}),
+        html.Div(id='expertise-cumulative-result'),
     ])
 
 
@@ -335,8 +337,8 @@ def _render_cumulative_result(rid: str | None):
 
 
 @callback(
-    Output({'type': 'expertise-cumulative-result', 'tab': dash.MATCH}, 'children'),
-    Input({'type': 'expertise-cumulative-search', 'tab': dash.MATCH}, 'value'),
+    Output('expertise-cumulative-result', 'children'),
+    Input('expertise-cumulative-search', 'value'),
 )
 def _update_cumulative_result(rid):
     return _render_cumulative_result(rid)
@@ -345,8 +347,9 @@ def _update_cumulative_result(rid):
 # ── 과거 시점 온디맨드 전문성 분석(2026-08-29) ──────────────────────────────
 # 기본은 process_researcher_expertise.py의 배치(현재 재직자 전체)만 자동
 # 분석하고, 과거 시점 분석은 여기서 필요할 때만 시점+사번을 입력해 요청한다
-# (사용자 확정). "연구원" 탭 전용 — "연구원 ↔ 연구원"(유사도)은 그 시점 기준
-# 전체 후보 재계산이 필요해 범위 밖이다(_render_expertise_tab 참고).
+# (사용자 확정). 유사도(그 시점 기준 전체 후보 재계산이 필요)는 범위 밖이라
+# 이 온디맨드 분석은 보유 전문성만 보여준다(2026-09-01 탭 통합 이후에도
+# 동일 — "연구원 ↔ 연구원" 탭이 따로 없어졌을 뿐 이 제약 자체는 그대로).
 
 def _historical_search_panel():
     return html.Div([
@@ -410,7 +413,7 @@ def _render_historical_results(researcher_ids: list, valid_date: date):
         elif r.get('error'):
             alerts.append(dbc.Alert(f"{label}: {r['error']}", color='warning', className='small mb-1'))
         else:
-            meta = (f'<div style="color:#86868b;font-size:0.78rem;margin-bottom:4px;">'
+            meta = (f'<div style="color:#bfbfbf;font-size:0.78rem;margin-bottom:4px;">'
                     f'시점: {r.get("as_of", "")} · 분석: {r.get("computed_at", "")}</div>')
             card_parts.append(meta + _historical_card_html(r, name_map, anchor='', include_links=True))
 
@@ -777,8 +780,8 @@ def _mail_researcher_modal(mail_rid: str | None = None, mail_rid_name: str = '')
 
 
 def _download_panel():
-    """"연구원"/"연구원 ↔ 연구원" 탭 아래(전문성 MAP 탭에서는 숨김)에 붙는
-    보유 전문성·유사 연구원 명단 엑셀 다운로드 패널. 개인별 검색 또는
+    """"연구원" 탭 아래(전문성 MAP 탭에서는 숨김)에 붙는 보유 전문성·유사
+    연구원 명단 엑셀 다운로드 패널. 개인별 검색 또는
     조직도 부서 단위(하위부서 포함 옵션)로 대상을 고른다 — 특허/논문
     다운로드(연구원 명단 탭)처럼 이 화면 안에서도 완결되는 별도 패널로 둔다."""
     return html.Div([
@@ -851,14 +854,21 @@ def layout(highlight_researcher=None, mail_rid=None, **_kwargs):
                 mail_rid_name = str(match.iloc[0].get('name', ''))
     initial_content = (
         _map_tab_content(highlighted_rid=highlight_researcher)
-        if default_tab == 'map' else _iframe_tab('researcher')
+        if default_tab == 'map' else _iframe_tab()
     )
     tabs = [
         dbc.Tab(label='연구원', tab_id='researcher'),
-        dbc.Tab(label='연구원 ↔ 연구원', tab_id='similarity'),
     ]
     if not _MAP_TAB_HIDDEN:
         tabs.append(dbc.Tab(label='전문성 MAP', tab_id='map'))
+    # "연구원 ↔ 연구원" 탭이 "연구원" 탭에 통합되면서(2026-09-01), 전문성 MAP
+    # 탭도 숨겨져 있는 동안은 탭이 하나뿐이라 탭 막대 자체가 무의미해진다 —
+    # 이 경우엔 탭 막대(dbc.Tabs)를 숨기고 바로 내용을 보여준다(사용자 확정).
+    # 컴포넌트 자체는 그대로 두어(안 보이게만) 이 컴포넌트를 참조하는 다른
+    # 콜백들(지도/관계그래프 클릭 이동, 메일 딥링크 등)의 배선은 그대로
+    # 유지한다 — 전문성 MAP을 나중에 다시 열면(_MAP_TAB_HIDDEN=False) 탭이
+    # 2개가 되어 자동으로 다시 보인다.
+    tabs_style = {'display': 'none'} if len(tabs) <= 1 else {}
     return html.Div([
         html.H5(
             [html.I(className='bi bi-share-fill me-2 text-primary'), '보유 전문성'],
@@ -866,7 +876,7 @@ def layout(highlight_researcher=None, mail_rid=None, **_kwargs):
         ),
         dbc.Tabs(
             tabs,
-            id='expertise-tabs', active_tab=default_tab, className='mb-3',
+            id='expertise-tabs', active_tab=default_tab, className='mb-3', style=tabs_style,
         ),
         html.Div(
             dbc.RadioItems(
@@ -874,7 +884,11 @@ def layout(highlight_researcher=None, mail_rid=None, **_kwargs):
                 options=[
                     {'label': '최신기준 (조직도 탐색)', 'value': 'current'},
                     {'label': '누적기준 (이름/사번 검색만)', 'value': 'all'},
-                    {'label': '과거 시점 조회 (온디맨드 분석, 연구원 탭 전용)', 'value': 'historical'},
+                    # '과거 시점 조회(온디맨드 분석)' 옵션은 화면에서만 숨긴다(사용자
+                    # 확정 2026-09-02) — value='historical' 처리 로직(아래
+                    # _toggle_download_panel, _render_historical_results 등)은
+                    # 그대로 남겨둔다. 화면에서 이 라디오 옵션이 없어졌으므로
+                    # mode는 이제 'current'/'all'만 나온다.
                 ],
                 value='current', inline=True, className='small mb-2',
             ),
@@ -911,16 +925,10 @@ def _render_expertise_tab(active_tab, mode, pending_highlight, scroll_target):
         return _map_tab_content(highlighted_rid=pending_highlight), dash.no_update
     if active_tab in _REPORT_TABS:
         if mode == 'historical':
-            if active_tab != 'researcher':
-                return (
-                    dbc.Alert('과거 시점 온디맨드 분석은 "연구원" 탭에서만 지원합니다.',
-                              color='secondary', className='mt-3'),
-                    dash.no_update,
-                )
             return _historical_search_panel(), dash.no_update
         if mode == 'all':
-            return _cumulative_search_panel(active_tab), dash.no_update
-        content = _iframe_tab(active_tab, scroll_to=scroll_target if active_tab == 'researcher' else None)
+            return _cumulative_search_panel(), dash.no_update
+        content = _iframe_tab(scroll_to=scroll_target)
         # 한 번 스크롤에 쓰고 나면 비워서, 이후 수동으로 탭을 다시 눌러도 매번
         # 같은 위치로 재스크롤되지 않게 한다.
         return content, (None if scroll_target else dash.no_update)
@@ -934,8 +942,8 @@ def _render_expertise_tab(active_tab, mode, pending_highlight, scroll_target):
     Input('expertise-search-mode', 'value'),
 )
 def _toggle_download_panel(active_tab, mode):
-    """다운로드 패널·검색기준 토글은 "연구원"/"연구원 ↔ 연구원" 탭에서만
-    의미가 있어(요청 범위) 전문성 MAP 탭에서는 숨긴다. 다운로드 패널은
+    """다운로드 패널·검색기준 토글은 "연구원" 탭에서만 의미가 있어(요청
+    범위) 전문성 MAP 탭에서는 숨긴다. 다운로드 패널은
     "과거 시점 조회" 모드에서도 숨긴다 — 그 패널이 내려받는 건 현재
     expertise_profiles/similar_researchers(배치 산출물)라 온디맨드 과거
     시점 결과와는 무관하기 때문(혼동 방지)."""

@@ -549,17 +549,14 @@ def _match_row_html(s: dict, name_map: dict, dept_map: dict, org_map: dict, incl
 </tr>'''
 
 
-def researcher_match_card_html(item: dict, name_map: dict, dept_map: dict, org_map: dict,
-                                profile_by_id: dict, anchor: str = '', include_links: bool = True) -> str:
-    """연구원 한 명의 유사 연구원 매칭 카드(강점 칩 + 매칭 표). build_html()의
-    조직도 카드 나열뿐 아니라, 개별 연구원 메일 발송(services/similarity_map.py의
-    build_researcher_mail_html())에서도 그대로 재사용한다 — anchor가 빈
-    문자열이면(메일 등 fragment 링크가 필요 없는 컨텍스트) id 속성 없이 렌더링.
-    include_links=False면 프로필/메일 링크(target="_top" 상대경로라 앱 밖
-    메일 본문에서는 깨짐 — 사용자 확인)를 카드 헤더와 매칭 표 각 행에서
-    모두 뺀다."""
-    rid = item['researcher_id']
-    name = html.escape(name_map.get(rid, rid))
+def similar_researchers_block_html(item: dict, name_map: dict, dept_map: dict, org_map: dict,
+                                    include_links: bool = True) -> str:
+    """유사 연구원 섹션(CL 시니어/주니어 뱃지 + 매칭 표 또는 "비교 대상 없음"
+    안내)만 kv-block 스타일로 반환한다 — 이름 헤더/강점 칩은 포함하지 않는다.
+    이 사람의 보유 전문성 카드(process_researcher_expertise.researcher_card_html())가
+    유사도 데이터를 함께 받았을 때 그 카드 안에 이어붙이기 위해 분리했다
+    ("연구원"/"연구원 ↔ 연구원" 탭 통합, 2026-09-01 사용자 확정) —
+    researcher_match_card_html()도 이 함수를 그대로 재사용한다."""
     tenure_badge = _tenure_badge_html(item.get('tenure_level', ''))
     if item['similar']:
         # 표시 개수(3/5/10) 토글이 "그룹당" 개수를 뜻하므로, Senior/Junior(및
@@ -582,17 +579,34 @@ def researcher_match_card_html(item: dict, name_map: dict, dept_map: dict, org_m
         )
     else:
         table = '<p class="empty">비교할 다른 연구원 데이터 없음</p>'
+    return f'''<div class="kv-block sim-block">
+  <div class="kv-title">유사 연구원 {tenure_badge}</div>
+  {table}
+</div>'''
+
+
+def researcher_match_card_html(item: dict, name_map: dict, dept_map: dict, org_map: dict,
+                                profile_by_id: dict, anchor: str = '', include_links: bool = True) -> str:
+    """연구원 한 명의 유사 연구원 매칭 카드(강점 칩 + 매칭 표). build_html()의
+    조직도 카드 나열뿐 아니라, 개별 연구원 메일 발송(services/similarity_map.py의
+    build_researcher_mail_html())에서도 그대로 재사용한다 — anchor가 빈
+    문자열이면(메일 등 fragment 링크가 필요 없는 컨텍스트) id 속성 없이 렌더링.
+    include_links=False면 프로필/메일 링크(target="_top" 상대경로라 앱 밖
+    메일 본문에서는 깨짐 — 사용자 확인)를 카드 헤더와 매칭 표 각 행에서
+    모두 뺀다."""
+    rid = item['researcher_id']
+    name = html.escape(name_map.get(rid, rid))
     icons_html = (
         f'<div class="card-icons">{mmd.profile_link_html(rid)}{mmd.mail_link_html(rid)}</div>'
         if include_links else ''
     )
     id_attr = f' id="{anchor}"' if anchor else ''
     return f'''<div class="card"{id_attr}>
-  <div class="card-top"><h3>{name}</h3>{tenure_badge}
+  <div class="card-top"><h3>{name}</h3>
     {icons_html}
   </div>
   {_chip_row_html(profile_by_id.get(rid, {}))}
-  {table}
+  {similar_researchers_block_html(item, name_map, dept_map, org_map, include_links)}
 </div>'''
 
 
@@ -619,9 +633,17 @@ def build_html(results: list, researchers_df: pd.DataFrame, profile_by_id: dict)
     org_tree = mmd.build_org_tree(mmd.read_team_refer(OUT_DIR))
     if org_tree:
         def _leaf_researchers(node):
+            # 그 조직(부서/과제·파트)의 직책자(node['researcher_id'], 예:
+            # "A과제(PM 홍길동)"의 홍길동)를 목록 맨 위에, 나머지는
+            # 가나다순으로 정렬한다(사용자 확정 2026-09-02).
+            leader_rid = node.get('researcher_id', '')
+            rids = sorted(
+                analyzed_rids_by_org.get(node.get('org_name_wd', ''), []),
+                key=lambda rid: (rid != leader_rid, name_map.get(rid, rid)),
+            )
             items = [
                 (f'#{anchor_of[rid]}', name_map.get(rid, rid), count_of.get(rid))
-                for rid in analyzed_rids_by_org.get(node.get('org_name_wd', ''), [])
+                for rid in rids
             ]
             return mmd.nav_items_html(items)
 

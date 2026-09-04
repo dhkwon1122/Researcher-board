@@ -39,7 +39,7 @@ def render() -> html.Div:
         html.Div([
             html.H5(
                 [html.I(className='bi bi-robot me-2 text-primary'), 'AI 검색',
-                 html.Small(' 자연어로 물어보면 아래 명단이 그 결과로 바뀝니다', className='text-muted fw-normal')],
+                 html.Small(' 자연어 질문 시 결과가 아래에 명단으로 생성', className='text-muted fw-normal')],
                 className='fw-bold mb-0 mt-1',
             ),
             dbc.Button(
@@ -99,14 +99,23 @@ def render() -> html.Div:
 
 
 def answer_block(answer: str):
-    """AI가 만든 자연어 답변 문장(예: "로봇 제어 전문가는 총 3명입니다")을
-    보여주는 알림 박스. researcher_list.py도 재사용하지 않는다 — 답변
-    렌더링은 이 모듈의 _render_nl_query_note 콜백이 전담하고, 명단 쪽은
-    표 데이터만 가져간다."""
+    """AI가 만든 답변(개조식 — 줄마다 "- "로 시작하는 짧은 문구, 왜 이런
+    결과가 나왔는지 설명)을 보여주는 알림 박스. "- " 접두사가 붙은 줄이
+    하나라도 있으면 실제 불릿 목록(html.Ul)으로 렌더링하고, 프롬프트
+    지시를 안 따른 경우(접두사 없음)는 줄바꿈만 보존해 그대로 보여준다
+    (LLM 출력 형식이 어긋나도 화면이 깨지지 않도록 하는 안전한 폴백).
+    researcher_list.py도 재사용하지 않는다 — 답변 렌더링은 이 모듈의
+    _render_nl_query_note 콜백이 전담하고, 명단 쪽은 표 데이터만 가져간다."""
+    lines = [ln.strip() for ln in answer.split('\n') if ln.strip()]
+    bullet_lines = [ln[1:].strip() for ln in lines if ln.startswith('-')]
+    if bullet_lines and len(bullet_lines) == len(lines):
+        body = html.Ul([html.Li(ln) for ln in bullet_lines], className='small mb-0 ps-3')
+    else:
+        body = html.Div(answer, className='small', style={'whiteSpace': 'pre-wrap'})
     return dbc.Alert([
         html.Div([html.I(className='bi bi-robot me-2'), html.Span('AI 답변', className='fw-semibold')],
                  className='mb-1'),
-        html.Div(answer, className='small', style={'whiteSpace': 'pre-wrap'}),
+        body,
     ], color='primary', className='mb-0')
 
 

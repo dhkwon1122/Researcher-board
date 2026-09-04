@@ -266,12 +266,17 @@ def find_researchers_by_expertise(terms: list, department_filter: str = '',
     expanded_terms = []
     for term in terms:
         matched_values, method = expand_term(term, taxonomy, raw_pool)
-        expanded_terms.append(matched_values)
+        expanded_terms.append((matched_values, method))
         if method == 'none':
             notes.append(f'"{term}"에 해당하는 표기를 찾지 못했습니다.')
         elif method == 'embedding':
             notes.append(f'"{term}"는 정확히 일치하는 표기가 없어 의미가 비슷한 표기로 찾았습니다.')
 
+    # 정확 표기(taxonomy/substring)로 매칭된 결과를 의미 유사성(embedding)
+    # 대체 매칭만으로 걸린 결과보다 항상 앞에 오도록 우선순위 그룹을 나눈다
+    # (사용자 확정 — 후자는 "정확한 검색어는 아니지만 의미가 비슷해 포함된"
+    # 낮은 확신도의 결과이므로 명단 후순위로 보여준다). 같은 그룹 안에서는
+    # 기존처럼 매칭 개수(hit_count) 내림차순으로 정렬한다.
     dept_filter = (department_filter or '').strip().lower()
     scored = []
     for rid, profile in profiles.items():
@@ -280,10 +285,11 @@ def find_researchers_by_expertise(terms: list, department_filter: str = '',
         if dept_filter and dept_filter not in str(dept_map.get(rid, '')).lower():
             continue
         rvals = set(profile.get('strength_fields') or []) | set(profile.get('strength_keywords') or [])
-        hit_count = sum(1 for mv in expanded_terms if mv & rvals)
-        if hit_count > 0:
-            scored.append((hit_count, rid))
-    scored.sort(key=lambda x: (-x[0], x[1]))
+        hit_methods = [method for mv, method in expanded_terms if mv & rvals]
+        if hit_methods:
+            has_exact = any(method in ('taxonomy', 'substring') for method in hit_methods)
+            scored.append((0 if has_exact else 1, len(hit_methods), rid))
+    scored.sort(key=lambda x: (x[0], -x[1], x[2]))
 
     items = [
         {
@@ -294,7 +300,7 @@ def find_researchers_by_expertise(terms: list, department_filter: str = '',
             'strength_keywords': profiles[rid].get('strength_keywords') or [],
             'matched_term_count': hit_count,
         }
-        for hit_count, rid in scored
+        for _priority, hit_count, rid in scored
     ]
     note = ' '.join(notes).strip()
     return _build_table_result(
@@ -682,19 +688,22 @@ _ANSWER_SYSTEM_PROMPT = """# Role
 
 # Goal
 사용자의 질문과, 이미 검색으로 찾아낸 결과 표(라벨과 값)를 보고 "왜 이런
-결과가 나왔는지"를 짧은 한국어 설명으로 답합니다.
+결과가 나왔는지"를 짧은 한국어 개조식(불릿 목록)으로 답합니다.
 
 # Guidelines & Constraints
 1. 반드시 주어진 표 데이터에 실제로 있는 내용만 근거로 쓰세요 — 표에 없는
    사실을 새로 만들어내거나 추측하지 마세요(당신은 새로 판단하는 역할이
    아니라, 이미 나온 결과를 설명하는 역할입니다).
 2. 인물을 한 명씩 전부 나열하지 말고, 전체적으로 어떤 공통 기준으로
-   찾아졌는지 2~4문장으로 요약하세요.
+   찾아졌는지 항목당 한 줄씩 2~4개의 짧은 문구로 요약하세요(완결된
+   문장/서술형 어미가 아니라 명사형·개조식으로 — 예: "OO 부서 소속 3명
+   포함", "정확히 일치하는 표기 없어 유사 표기로 검색됨").
 3. 표에 이미 판정 근거(예: evidence, matched_term_count 같은 컬럼)가
    있으면 그 내용을 활용해 설명하세요.
 4. 결과가 일부 조건과 정확히 안 맞을 수 있다면(예: 의미가 비슷한 표기로
    대체 검색된 경우) 그 점도 정직하게 언급하세요.
-5. 순수 텍스트로만 답하세요(JSON도, 마크다운 기호도 쓰지 마세요).
+5. 각 줄은 하이픈("- ")으로 시작하는 별도 줄로 쓰세요. JSON도, 마크다운
+   굵게/제목 기호도 쓰지 마세요 — 순수 텍스트 개조식 목록만 답하세요.
 """
 
 _ANSWER_MAX_ROWS = 20

@@ -308,9 +308,10 @@ def _patents_text(pat_rows: pd.DataFrame) -> str:
 def _work_objective_text(row) -> str:
     if row is None:
         return '(데이터 없음)'
+    import process_work_objective as _pwo  # 회계연도 기준 대상 3개년(2026-09-01, 사용자 확정)
     lines = []
-    for year, col in (('2024', 'work_objective24'), ('2025', 'work_objective25'), ('2026', 'work_objective26')):
-        val = _clean(row.get(col, ''))
+    for year in _pwo.target_years():
+        val = _clean(row.get(f'work_objective{year}', ''))
         if val:
             lines.append(f'[{year}년]\n{val}')
     return '\n'.join(lines) if lines else '(데이터 없음)'
@@ -381,14 +382,25 @@ def _list_block_html(title: str, items: list) -> str:
     return f'<div class="kv-block"><div class="kv-title">{title}</div><ul class="kv-list">{lis}</ul></div>'
 
 
-def researcher_card_html(item: dict, name_map: dict, anchor: str = '', include_links: bool = True) -> str:
+def researcher_card_html(item: dict, name_map: dict, anchor: str = '', include_links: bool = True,
+                          similarity_item: dict | None = None, dept_map: dict | None = None,
+                          org_map: dict | None = None) -> str:
     """연구원 한 명의 보유 전문성 카드(강점 칩 + 주요 역할·책임/전문지식 및
     역량). build_html()의 조직도 카드 나열뿐 아니라, 개별 연구원 메일 발송
     (services/similarity_map.py의 build_researcher_mail_html())에서도
     그대로 재사용한다 — anchor가 빈 문자열이면(메일 등 fragment 링크가
     필요 없는 컨텍스트) id 속성 없이 렌더링. include_links=False면
     프로필/메일 링크(target="_top" 상대경로라 앱 밖 메일 본문에서는 깨짐 —
-    사용자 확인)를 아예 뺀다."""
+    사용자 확인)를 아예 뺀다.
+
+    similarity_item이 주어지면(researcher_similarity.json의 그 사람 항목)
+    유사 연구원 섹션(process_researcher_similarity.similar_researchers_block_html())
+    도 같은 카드 안에 이어붙인다 — "연구원"/"연구원 ↔ 연구원" 두 탭을 하나로
+    통합하면서(2026-09-01, 사용자 확정) 이 카드 하나가 두 리포트의 내용을
+    모두 담게 됐다. 유사도 데이터가 아예 없는 사람(예: 임원 — 유사도
+    계산에서 제외됨)은 similarity_item이 None으로 넘어와 이 섹션 자체를
+    생략한다(build_researcher_mail_html()처럼 별도 섹션으로 나누지 않고,
+    한 카드 안에 이어붙이는 형태만 다르다)."""
     rid = item.get('researcher_id', '')
     name = name_map.get(rid, '')
 
@@ -402,6 +414,17 @@ def researcher_card_html(item: dict, name_map: dict, anchor: str = '', include_l
     )
     body_html = f'<div class="kv-grid">{kv_blocks}</div>' if kv_blocks else '<p class="empty">세부 항목 데이터 없음</p>'
 
+    similarity_html = ''
+    if similarity_item is not None:
+        # process_researcher_similarity.py는 이 파일과 마찬가지로 pipeline/를
+        # sys.path에 얹어 둔 상태에서 bare import되므로(모듈 상단 참고), 여기서도
+        # 같은 관례(bare import)로 가져와야 두 모듈이 서로 다른 이름(dotted vs
+        # bare)으로 중복 로드되는 걸 최소화한다.
+        import process_researcher_similarity as _prs
+        similarity_html = _prs.similar_researchers_block_html(
+            similarity_item, name_map, dept_map or {}, org_map or {}, include_links,
+        )
+
     icons_html = (
         f'<div class="card-icons">{mmd.profile_link_html(rid)}{mmd.mail_link_html(rid)}</div>'
         if include_links else ''
@@ -413,15 +436,23 @@ def researcher_card_html(item: dict, name_map: dict, anchor: str = '', include_l
   </div>
   {chip_row}
   {body_html}
+  {similarity_html}
 </div>'''
 
 
-def build_html(results: list, researchers_df: pd.DataFrame) -> str:
+def build_html(results: list, researchers_df: pd.DataFrame, similar_by_id: dict | None = None) -> str:
     """연구원 보유 전문성 분석.json → 사람이 보는 콘솔형 HTML 리포트.
 
     researchers.csv의 department(현소속부서명) → '플랫폼/팀', org_code(비공식
     소속부서명) → '과제/파트'로 라벨링해 좌측 사이드바·본문 모두 2단계로
-    그룹핑해 보여준다(JSON 구조 자체는 flat list 그대로 유지)."""
+    그룹핑해 보여준다(JSON 구조 자체는 flat list 그대로 유지).
+
+    similar_by_id가 주어지면(researcher_similarity.json을 researcher_id로
+    인덱싱한 dict, read_similar_researchers()의 반환값) 각 카드에 유사
+    연구원 섹션도 함께 그려 넣는다 — "연구원"/"연구원 ↔ 연구원" 탭 통합
+    (2026-09-01, 사용자 확정)으로 이 리포트 하나가 예전 두 리포트의
+    내용을 모두 담는다. 3/5/10명 표시 개수 토글은 유사 연구원 표가 있을
+    때만 의미가 있으므로 similar_by_id가 주어졌을 때만 함께 렌더링한다."""
     name_map, dept_map, org_map = {}, {}, {}
     if not researchers_df.empty:
         indexed = researchers_df.set_index('researcher_id')
@@ -440,9 +471,17 @@ def build_html(results: list, researchers_df: pd.DataFrame) -> str:
     org_tree = mmd.build_org_tree(mmd.read_team_refer(OUT_DIR))
     if org_tree:
         def _leaf_researchers(node):
+            # 그 조직(부서/과제·파트)의 직책자(node['researcher_id'], 예:
+            # "A과제(PM 홍길동)"의 홍길동)를 목록 맨 위에, 나머지는
+            # 가나다순으로 정렬한다(사용자 확정 2026-09-02).
+            leader_rid = node.get('researcher_id', '')
+            rids = sorted(
+                analyzed_rids_by_org.get(node.get('org_name_wd', ''), []),
+                key=lambda rid: (rid != leader_rid, name_map.get(rid, rid)),
+            )
             items = [
                 (f'#{anchor_of[rid]}', name_map.get(rid, rid), None)
-                for rid in analyzed_rids_by_org.get(node.get('org_name_wd', ''), [])
+                for rid in rids
             ]
             return mmd.nav_items_html(items)
 
@@ -471,15 +510,37 @@ def build_html(results: list, researchers_df: pd.DataFrame) -> str:
                 sections.append(f'<div class="org-heading">{html.escape(org)}</div>')
             for item in org_items:
                 rid = item.get('researcher_id', '')
-                sections.append(researcher_card_html(item, name_map, anchor_of[rid]))
+                sections.append(researcher_card_html(
+                    item, name_map, anchor_of[rid],
+                    similarity_item=(similar_by_id or {}).get(rid), dept_map=dept_map, org_map=org_map,
+                ))
 
+    tagline_suffix = ' + 유사 연구원 매칭' if similar_by_id else ''
     sidebar = (
         '<h1>연구원 전문성 콘솔</h1>'
-        '<p class="tagline">학력·과제이력·직무이력·기술·논문·특허 종합 분석 (R&amp;D Talent Profiling Agent)</p>'
+        f'<p class="tagline">학력·과제이력·직무이력·기술·논문·특허 종합 분석{tagline_suffix} '
+        '(R&amp;D Talent Profiling Agent)</p>'
         f'{mmd.org_search_input_html()}'
         f'{"".join(nav_groups)}'
     )
-    return mmd.console_page('연구원 보유 전문성 분석', sidebar, stats + ''.join(sections), detail_view=True)
+    # 3/5/10명 표시 개수 토글(연구원 ↔ 연구원 리포트에서 쓰던 것과 동일한 CSS
+    # 전용 라디오 — process_researcher_similarity.build_html() 참고) — 유사
+    # 연구원 표가 실제로 있을 때만 붙인다. 이 라디오가 body 안에서
+    # .sim-sections보다 앞에 나와야(형제 선택자) 표를 감싼 .sim-sections
+    # 안의 모든 match-table에 적용된다.
+    count_toggle = (
+        '<input type="radio" name="cnt" id="count-3" class="cnt-radio" checked>'
+        '<input type="radio" name="cnt" id="count-5" class="cnt-radio">'
+        '<input type="radio" name="cnt" id="count-10" class="cnt-radio">'
+        '<div class="count-bar">'
+        '<span>유사 연구원 표시 개수</span>'
+        '<label for="count-3">3명</label>'
+        '<label for="count-5">5명</label>'
+        '<label for="count-10">10명</label>'
+        '</div>'
+    ) if similar_by_id else ''
+    body = stats + count_toggle + f'<div class="sim-sections">{"".join(sections)}</div>'
+    return mmd.console_page('연구원 보유 전문성 분석', sidebar, body, detail_view=True)
 
 
 def _archive_html(results: list, researchers_df: pd.DataFrame):

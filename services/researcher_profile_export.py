@@ -22,6 +22,8 @@ from components.timeline_data import dedupe_patents, job_points
 from services import auth, data_store, evaluations
 from services import language_qualification as language_qual
 from services import work_experience as work_exp
+from services.task_history import merge_task_rows, task_year
+from services.task_history import sort_key as _task_sort_key
 
 _FONT_NAME = '바탕체'
 _FONT_SIZE = 11
@@ -84,6 +86,8 @@ def _yy(date_str) -> str:
     return ''
 
 
+
+
 def _next_promotion_ref_date(today: date) -> date:
     """직급/년차 기준일 — 2027-03-01부터 시작해 오늘을 지나지 않은 첫 3/1."""
     ref = _PROMOTION_REF_BASE
@@ -141,6 +145,15 @@ def _df_for(df, researcher_id: str):
     if df is None or df.empty or 'researcher_id' not in df.columns:
         return df.iloc[0:0] if df is not None else pd.DataFrame()
     return df[df['researcher_id'] == researcher_id]
+
+
+def _col_org_code(_rid, rows):
+    r = rows['researcher']
+    if not r:
+        return '-'
+    org_code = str(r.get('org_code') or '').strip()
+    dep_code_map = rows.get('org_code_dep_code_map') or {}
+    return _or_dash(dep_code_map.get(org_code))
 
 
 def _col_id(rid, _rows):
@@ -204,8 +217,23 @@ def _col_education(_rid, rows):
     return '\n'.join(lines) if lines else '-'
 
 
+def _eval_dept_excluded(rows) -> bool:
+    """view_evaluation은 있어도 부서 단위 평가 제외(2026-08-31, People팀
+    등)에 해당하는 연구원이면 True — 평가 관련 옵트인 컬럼 3종(종합/
+    연봉등급/업적(역량)평가) 전부 이 판정을 공유한다(사용자 확정
+    2026-08-31 — 3개 항목 모두 동일하게 적용). 화면(researcher_profile.py/
+    researcher_list.py)과 동일한 기준."""
+    excluded_dep_ids = rows.get('eval_excluded_dep_ids')
+    if not excluded_dep_ids:
+        return False
+    researcher = rows.get('researcher') or {}
+    org_code = _s(researcher.get('org_code'))
+    dep_id = (rows.get('org_code_dep_id_map') or {}).get(org_code, '')
+    return dep_id in excluded_dep_ids
+
+
 def _col_evaluation(_rid, rows):
-    """평가 — 연봉등급 3개년을 첫 줄에 헤더("'24~'26")와 같은 오름차순으로
+    """평가(종합) — 연봉등급 3개년을 첫 줄에 헤더("'24~'26")와 같은 오름차순으로
     "다/다/다", 그에 대응하는(각 연봉등급 연도 - 1) 역량/하반기업적 3개년을
     둘째 줄에 역시 오름차순으로 "(VG/MT, VG/MT, VG/MT)"로 표시(2026-08-29
     수정 — _EVAL_SALARY_YEARS/_EVAL_HALF_YEARS를 정렬 없이 그대로 써서
@@ -221,8 +249,14 @@ def _col_evaluation(_rid, rows):
     화면(pages/*.py)이 view_evaluation 권한 없는 역할에는 평가등급을 아예
     안 보여주는 것과 동일한 기준을 여기 엑셀 다운로드에도 적용한다 — 권한
     없으면 평가 데이터를 셀에 채우지 않는다(권한은 build_profile_workbook()이
-    행마다 다시 확인하지 않도록 rows['permissions']로 한 번만 계산해 전달)."""
-    if not rows['permissions']['view_evaluation']:
+    행마다 다시 확인하지 않도록 rows['permissions']로 한 번만 계산해 전달).
+
+    2026-08-31: "평가" 컬럼이 기본 포함에서 옵트인(추가 선택)으로
+    바뀌었다(사용자 확정) — view_evaluation 권한이 있는 사용자만 다운로드
+    화면에서 이 항목을 선택할 수 있고(pages/researcher_list.py), 선택
+    여부와 무관하게 build_profile_workbook()이 권한을 다시 확인해 컬럼
+    자체를 추가하지 않는다(요청을 조작해도 우회 불가)."""
+    if not rows['permissions']['view_evaluation'] or _eval_dept_excluded(rows):
         return '-'
     eva_rows = rows['evaluations']
     eva = eva_rows[0] if eva_rows else {}
@@ -237,6 +271,40 @@ def _col_evaluation(_rid, rows):
         for y in _EVAL_HALF_YEARS
     ) + ')'
     return f'{salary_line}\n{half_line}'
+
+
+def _col_eval_field(field_key: str):
+    """평가 세부 옵트인 컬럼("연봉등급(최근 3년)"/"업적(역량)평가(최근 3년)",
+    2026-08-31 사용자 확정) 하나를 만든다 — evaluations.csv의 특정 컬럼
+    (예: '2024_salary_grade') 값을 그대로 보여준다. 권한/부서 제외 판정은
+    _col_evaluation()과 동일하게 공유(_eval_dept_excluded)한다."""
+    def _col(_rid, rows):
+        if not rows['permissions']['view_evaluation'] or _eval_dept_excluded(rows):
+            return '-'
+        eva_rows = rows['evaluations']
+        eva = eva_rows[0] if eva_rows else {}
+        return _s(eva.get(field_key)) or '-'
+    return _col
+
+
+def _eval_half_columns(evaluations_df) -> list:
+    """"업적(역량)평가(최근 3년)" 옵트인 그룹(사용자 확정 2026-08-31) —
+    연도별 상반기업적/하반기업적 컬럼 사이에, 그 해 역량(competency_grade)
+    컬럼이 evaluations.csv에 실제로 존재하면(선택 항목이라 매년 있다는
+    보장이 없음 — services/evaluations.py 모듈 독스트링 참고) "{연도} 역량"
+    컬럼을 끼워 넣는다. 실제 데이터(evaluations_df의 컬럼 목록)를 봐야
+    판단할 수 있어 모듈 임포트 시점에 정적으로 만들 수 없고,
+    build_profile_workbook()이 요청마다(evaluations 테이블을 로드한 뒤)
+    한 번만 만든다."""
+    cols = set(evaluations_df.columns) if evaluations_df is not None else set()
+    result = []
+    for y in _EVAL_HALF_YEARS:
+        result.append((f'{y} 상반기업적', _col_eval_field(evaluations.first_half_column(y))))
+        competency_col = evaluations.competency_column(y)
+        if competency_col in cols:
+            result.append((f'{y} 역량', _col_eval_field(competency_col)))
+        result.append((f'{y} 하반기업적', _col_eval_field(evaluations.second_half_column(y))))
+    return result
 
 
 def _col_position_year(_rid, rows):
@@ -258,16 +326,23 @@ def _col_position_title(_rid, rows):
 
 
 def _col_tasks(_rid, rows):
-    items = sorted(rows['tasks'], key=lambda t: _s(t.get('start_date')), reverse=True)
+    """과제수행이력 — 같은 과제명(the_task_name 우선, 없으면 task_name)의
+    여러 참여 구간을 services.task_history.merge_task_rows()가 연도 기준
+    포함/연결 규칙으로 하나로 합친 뒤(화면 표 tasks_block()과 공유하는
+    로직 — 사용자 요청 2026-08-31 "화면에도 동일하게 반영"), 진행중('현재')
+    과제를 맨 위로, 그 다음은 최근 시작연도 순으로 정렬한다."""
+    merged = merge_task_rows(rows['tasks'])
+    merged.sort(key=_task_sort_key)
     lines = []
-    for t in items:
-        # the_task_name(참여 당시 실제 과제명, pipeline/process_tasks.py가
-        # tasks_information.csv 개명 이력으로 보정)이 있으면 그걸, 없으면
-        # (구버전 CSV/매핑 실패 폴백) 원본 task_name.
-        name = _s(t.get('the_task_name')) or _s(t.get('task_name')) or '-'
-        start = _yy(t.get('start_date')) or '-'
-        end = _yy(t.get('end_date')) or '현재'
-        lines.append(f'{name}({start} ~ {end})')
+    for m in merged:
+        start_year = task_year(m['start_row'].get('start_date'))
+        start = f"'{start_year % 100:02d}" if start_year is not None else '-'
+        if m['current']:
+            end = '현재'
+        else:
+            end_year = task_year(m['end_row'].get('end_date')) if m['end_row'] else None
+            end = f"'{end_year % 100:02d}" if end_year is not None else '-'
+        lines.append(f"{m['name']}({start} ~ {end})")
     return '\n'.join(lines) if lines else '-'
 
 
@@ -449,30 +524,59 @@ _EMPLOYMENT_STATUS_COLUMNS = [('재직상태', _col_employment_status)]
 _LANGUAGE_COLUMNS = [('어학', _col_language)]
 _WORK_EXPERIENCE_COLUMNS = [('근무 경력', _col_work_experience)]
 
+# 평가 관련 옵트인 컬럼 그룹 3종(2026-08-31 사용자 확정 — "평가" 컬럼을
+# 기본 포함에서 view_evaluation 권한자만 선택 가능한 옵트인으로 전환하며
+# 세분화). 다운로드 화면(pages/researcher_list.py)의 체크박스 라벨은
+# "평가(종합 - 최근 3년)"/"연봉등급(최근 3년)"/"업적(역량)평가(최근 3년)"
+# 이지만, 엑셀 컬럼 헤더 자체는 기존 표기를 그대로 유지한다(사용자 확정 —
+# 체크박스 라벨과 엑셀 헤더는 별개). _EVAL_SALARY_COLUMNS는 연도가 고정된
+# (모듈 임포트 시점 회계연도 기준) 정적 목록이지만, "업적(역량)평가"는 그 해
+# 역량 컬럼이 실제 데이터에 있는지 봐야 해서 _eval_half_columns()로 요청마다
+# 동적으로 만든다(build_profile_workbook() 참고).
+_EVAL_SUMMARY_COLUMNS = [(_EVAL_HEADER, _col_evaluation)]
+_EVAL_SALARY_COLUMNS = [
+    (f'{y} 연봉등급', _col_eval_field(evaluations.salary_grade_column(y))) for y in _EVAL_SALARY_YEARS
+]
+
 
 # (헤더, 값 계산 함수) — 순서 = 엑셀 컬럼 순서
+# 조직코드(A열)는 팀/리더 참조(team_refer)의 dep_code — 조직코드 기준
+# 오름차순 정렬을 가능하게 하기 위해 추가(사용자 확정 2026-09-02).
+# 과제수행이력/양성이력/핵심이력/보유기술은 추가 선택(옵트인) 항목으로
+# 전환(사용자 확정 2026-09-02) — _TASKS_COLUMNS 등 아래 옵트인 컬럼 그룹 참고.
 _COLUMNS = [
+    ('조직코드', _col_org_code),
     ('사번', _col_id),
     ('Knox ID', _col_knox),
     ('성명\n(성별/나이)', _col_name_gender_age),
     ('부서\n(과제)', _col_dept_task),
     ('입사일', _col_hire_date),
     ('학력', _col_education),
-    (_EVAL_HEADER, _col_evaluation),
     ('CL/년차', _col_position_year),
     ('직책', _col_position_title),
-    ('과제수행이력', _col_tasks),
-    ('양성이력', _col_nurturing),
-    ('핵심이력', _col_incentive),
-    ('보유기술', _col_tech_ownership),
 ]
+
+_TASKS_COLUMNS = [('과제수행이력', _col_tasks)]
+_NURTURING_COLUMNS = [('양성이력', _col_nurturing)]
+_INCENTIVE_COLUMNS = [('핵심이력', _col_incentive)]
+_TECH_OWNERSHIP_COLUMNS = [('보유기술', _col_tech_ownership)]
 
 
 def _researcher_row_context(researcher_id: str, tables: dict, permissions: dict,
-                             dep_pjt_maps: tuple | None = None) -> dict:
+                             dep_pjt_maps: tuple | None = None,
+                             eval_excluded_dep_ids: set | None = None,
+                             org_code_dep_id_map: dict | None = None,
+                             org_code_dep_code_map: dict | None = None) -> dict:
     researcher_rows = _rows_for(tables['researchers'], researcher_id)
     return {
         'dep_pjt_maps': dep_pjt_maps,
+        # 부서 단위 평가 제외(2026-08-31) — _col_evaluation 참고. 요청 단위로
+        # 한 번만 계산해 전달받는다(dep_pjt_maps와 같은 이유).
+        'eval_excluded_dep_ids': eval_excluded_dep_ids,
+        'org_code_dep_id_map': org_code_dep_id_map,
+        # 조직코드(A열, _col_org_code) 표시용 — org_code → dep_code(사용자
+        # 확정 2026-09-02).
+        'org_code_dep_code_map': org_code_dep_code_map,
         'researcher': researcher_rows[0] if researcher_rows else None,
         'education': _rows_for(tables['education'], researcher_id),
         'evaluations': _rows_for(tables['evaluations'], researcher_id),
@@ -582,7 +686,11 @@ def person_base_table(researcher_ids: list) -> dict:
     return out
 
 
-_COLUMN_WIDTHS = [12, 14, 16, 18, 12, 26, 22, 12, 10, 34, 30, 22, 30]
+_COLUMN_WIDTHS = [10, 12, 14, 16, 18, 12, 26, 12, 10]
+_TASKS_COLUMN_WIDTH = 34
+_NURTURING_COLUMN_WIDTH = 30
+_INCENTIVE_COLUMN_WIDTH = 22
+_TECH_OWNERSHIP_COLUMN_WIDTH = 30
 _EMPLOYMENT_STATUS_COLUMN_WIDTH = 12
 _EXPERTISE_COLUMN_WIDTH = 26
 _PATENT_COLUMN_WIDTH = 40
@@ -591,6 +699,8 @@ _JOB_FUNCTION_COLUMN_WIDTH = 14
 _JOB_PROFILE_COLUMN_WIDTH = 30
 _LANGUAGE_COLUMN_WIDTH = 26
 _WORK_EXPERIENCE_COLUMN_WIDTH = 30
+_EVAL_SUMMARY_COLUMN_WIDTH = 22
+_EVAL_DETAIL_COLUMN_WIDTH = 12  # 연봉등급/상반기업적/하반기업적/역량 — 등급 코드 하나만 담는 좁은 컬럼
 
 
 def build_profile_workbook(
@@ -603,15 +713,30 @@ def build_profile_workbook(
     include_employment_status: bool = False,
     include_language: bool = False,
     include_work_experience: bool = False,
+    include_eval_summary: bool = False,
+    include_salary_grade: bool = False,
+    include_eval_half: bool = False,
+    include_tasks: bool = False,
+    include_nurturing: bool = False,
+    include_incentive: bool = False,
+    include_tech_ownership: bool = False,
 ) -> bytes:
     """선택된 researcher_id 목록으로 엑셀(xlsx) 바이트를 만들어 반환한다.
     양식: 바탕체 11pt, 전체 검정 테두리, 헤더만 볼드, 줄바꿈 셀은 자동 줄바꿈.
     include_*가 True인 항목만 해당 옵트인 컬럼 그룹(_PATENT_COLUMNS/
     _PUBLICATION_COLUMNS/_JOB_FUNCTION_COLUMNS/_JOB_PROFILE_COLUMNS/
     _EMPLOYMENT_STATUS_COLUMNS/_LANGUAGE_COLUMNS/_WORK_EXPERIENCE_COLUMNS/
-    _EXPERTISE_COLUMNS)을 이 순서대로 맨 끝에
+    _EXPERTISE_COLUMNS/_EVAL_SUMMARY_COLUMNS/_EVAL_SALARY_COLUMNS/
+    _eval_half_columns())을 이 순서대로 맨 끝에
     추가한다 — 전부 기본값은 False(다운로드 화면 체크박스 기본 해제)이고,
-    켜져도 _COLUMNS 자체는 건드리지 않고 이 함수 안에서만 로컬 사본에 덧붙인다."""
+    켜져도 _COLUMNS 자체는 건드리지 않고 이 함수 안에서만 로컬 사본에 덧붙인다.
+
+    include_eval_summary/include_salary_grade/include_eval_half(평가 관련
+    3종, 2026-08-31)은 view_evaluation 권한이 있을 때만 실제로 추가한다
+    — 다운로드 화면(pages/researcher_list.py)이 권한 없는 사용자에게는
+    이 체크박스 자체를 숨기지만, 요청이 조작돼 True로 넘어와도 여기서
+    다시 확인하므로 권한 없이는 컬럼 자체가 생기지 않는다(각 컬럼 함수도
+    rows['permissions']로 한 번 더 확인 — 이중 방어)."""
     tables = _load_tables()
     # 로그인 사용자당 한 번만 계산 — _col_evaluation/_col_incentive가 매 행마다
     # auth.can()을 다시 호출하지 않도록 _researcher_row_context()에 실어 보낸다.
@@ -621,9 +746,38 @@ def build_profile_workbook(
     # 임포트하므로(순환 임포트 방지) 여기서는 지연 임포트로 가져온다.
     from services import similarity_map
     dep_pjt_maps = similarity_map.org_code_label_maps()
+    # 부서 단위 평가 제외(2026-08-31) — view_evaluation은 있어도 특정 부서
+    # 소속 연구원의 평가만 가리는 사용자를 위해 화면(researcher_list.py/
+    # researcher_profile.py)과 동일한 기준을 엑셀에도 적용한다.
+    eval_excluded_dep_ids = auth.eval_excluded_dep_ids()
+    org_code_dep_id_map = similarity_map.org_code_dep_id_map() if eval_excluded_dep_ids else {}
+    # 조직코드(A열) 표시 + 정렬(아래 참고) 모두에 필요 — 항상 계산.
+    org_code_dep_code_map = similarity_map.org_code_dep_code_map()
 
     columns = list(_COLUMNS)
     widths = list(_COLUMN_WIDTHS)
+    if include_tasks:
+        columns.extend(_TASKS_COLUMNS)
+        widths.extend([_TASKS_COLUMN_WIDTH] * len(_TASKS_COLUMNS))
+    if include_nurturing:
+        columns.extend(_NURTURING_COLUMNS)
+        widths.extend([_NURTURING_COLUMN_WIDTH] * len(_NURTURING_COLUMNS))
+    if include_incentive:
+        columns.extend(_INCENTIVE_COLUMNS)
+        widths.extend([_INCENTIVE_COLUMN_WIDTH] * len(_INCENTIVE_COLUMNS))
+    if include_tech_ownership:
+        columns.extend(_TECH_OWNERSHIP_COLUMNS)
+        widths.extend([_TECH_OWNERSHIP_COLUMN_WIDTH] * len(_TECH_OWNERSHIP_COLUMNS))
+    if include_eval_summary and permissions['view_evaluation']:
+        columns.extend(_EVAL_SUMMARY_COLUMNS)
+        widths.extend([_EVAL_SUMMARY_COLUMN_WIDTH] * len(_EVAL_SUMMARY_COLUMNS))
+    if include_salary_grade and permissions['view_evaluation']:
+        columns.extend(_EVAL_SALARY_COLUMNS)
+        widths.extend([_EVAL_DETAIL_COLUMN_WIDTH] * len(_EVAL_SALARY_COLUMNS))
+    if include_eval_half and permissions['view_evaluation']:
+        eval_half_columns = _eval_half_columns(tables['evaluations'])
+        columns.extend(eval_half_columns)
+        widths.extend([_EVAL_DETAIL_COLUMN_WIDTH] * len(eval_half_columns))
     if include_patents:
         columns.extend(_PATENT_COLUMNS)
         widths.extend([_PATENT_COLUMN_WIDTH] * len(_PATENT_COLUMNS))
@@ -667,8 +821,30 @@ def build_profile_workbook(
         cell.border = _BORDER
         cell.alignment = wrap_center
 
+    # 조직코드(dep_code) 오름차순 → 같은 조직 안에서는 직책자(부서/과제·파트
+    # 리더)가 먼저 → 그다음 가나다순(이름) 순서로 정렬한다(사용자 확정
+    # 2026-09-02). 리더 판정은 team_refer에서 그 org_code에 researcher_id가
+    # 채워진 행(=조직장급) 기준(org_code_leader_map()).
+    researchers_df = tables['researchers']
+    if not researchers_df.empty and 'researcher_id' in researchers_df.columns:
+        org_code_by_rid = dict(zip(researchers_df['researcher_id'], researchers_df.get('org_code', '')))
+        name_by_rid = dict(zip(researchers_df['researcher_id'], researchers_df.get('name', '')))
+    else:
+        org_code_by_rid, name_by_rid = {}, {}
+    org_code_leader_map = similarity_map.org_code_leader_map()
+
+    def _export_sort_key(rid: str):
+        org_code = str(org_code_by_rid.get(rid) or '').strip()
+        dep_code = org_code_dep_code_map.get(org_code, '')
+        is_not_leader = org_code_leader_map.get(org_code) != rid
+        return (dep_code, is_not_leader, str(name_by_rid.get(rid) or ''))
+
+    researcher_ids = sorted(researcher_ids, key=_export_sort_key)
+
     for row_idx, rid in enumerate(researcher_ids, start=2):
-        ctx = _researcher_row_context(rid, tables, permissions, dep_pjt_maps)
+        ctx = _researcher_row_context(rid, tables, permissions, dep_pjt_maps,
+                                       eval_excluded_dep_ids, org_code_dep_id_map,
+                                       org_code_dep_code_map)
         for col_idx, (_header, fn) in enumerate(columns, start=1):
             value = fn(rid, ctx)
             cell = ws.cell(row=row_idx, column=col_idx, value=value)

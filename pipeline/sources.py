@@ -42,7 +42,26 @@ job_profile은 원본 "내 리포트 *.xlsx"를 그대로 쓰지 않는다 — x
 ※ 전용 처리기가 없는 4개 테이블(technology_transfer/transfers/certifications/
   succession)은 원본 파일이 이미 최종 스키마 컬럼명으로 준비되므로 이 매니페스트에
   포함하지 않는다 — run_pipeline.py의 기존 `{table}_raw.xlsx/csv` 통과 로직을 그대로 사용한다.
+
+업무목표 3개 항목은 고정된 연도가 아니라 회계연도(매년 3월 기준, services.
+evaluations.current_fiscal_year()와 동일 규칙) 최근 3개년을 매번 계산해 넣는다
+(2026-09-01, 사용자 확정) — 이 스크립트가 실행될 때마다(항상 1회성 CLI 실행이라
+새로 계산해도 안전) 그 시점 회계연도로 다시 만들어진다. 예: 지금(2026-09)은
+work_objective_2024/2025/2026, '27년 3월부터는 work_objective_2025/2026/2027.
 """
+import os as _os
+import sys as _sys
+
+_BASE_DIR = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _BASE_DIR not in _sys.path:
+    _sys.path.insert(0, _BASE_DIR)
+from services.evaluations import current_fiscal_year as _current_fiscal_year
+
+_WO_FY = _current_fiscal_year()
+_WORK_OBJECTIVE_SOURCES = [
+    (f'work_objective_{_y}', f'업무목표{_y % 100:02d}.xlsx', 2)  # 3번째 행
+    for _y in (_WO_FY - 2, _WO_FY - 1, _WO_FY)
+]
 
 SOURCES = [
     # 헤드카운트 다운로드 파일명은 "YYYYMM_..." 접두사가 있지만 그 값 자체는
@@ -67,9 +86,7 @@ SOURCES = [
     ('core_technology', '핵심기술.xlsx', 0),             # 1번째 행
     ('tech_ownership', '보유기술.xlsx', 0),              # 1번째 행
     ('job_profile', '내 리포트 *_병합.xlsx', 5),         # 6번째 행 (병합 산출물, 위 참고)
-    ('work_objective_24', '업무목표24.xlsx', 2),         # 3번째 행
-    ('work_objective_25', '업무목표25.xlsx', 2),         # 3번째 행
-    ('work_objective_26', '업무목표26.xlsx', 2),         # 3번째 행
+    *_WORK_OBJECTIVE_SOURCES,                            # 업무목표(회계연도 기준 최근 3개년, 위 설명 참고)
     ('tasks', '개인별과제투입기간데이터_260114.xlsb', 0),  # 1번째 행 (xlsb)
     ('project_confl_address', '과제별컨플.xlsx', 0),     # 1번째 행
     ('job_profile_info_standard', '직무정보_표준.xlsx', 0),  # 1번째 행

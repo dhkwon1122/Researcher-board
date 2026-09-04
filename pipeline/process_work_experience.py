@@ -15,15 +15,19 @@
   (work_start_date/work_end_date는 'YYYY-MM-DD'로 정규화, 종료일이 원본에
   없으면 빈 문자열 그대로 — "현재"로 채우지 않는다, 사용자 확정)
 
-── 누적 방식: researcher_id 단위 그룹 교체(사용자 확정, 2026-08-29) ──────────
-한 사람이 여러 회사 경력(여러 행)을 가질 수 있어, 개별 행을 자연키(예:
-회사명+시작일)로 upsert하면 원본에서 삭제되거나 고쳐진 옛 경력 행이 계속
-남는 문제가 있다. 그래서 다른 대부분의 이력형 테이블(자연키 upsert)과 달리,
-"이번 업로드에 그 사람의 행이 하나라도 있으면 그 사람의 기존 행 전체를
-지우고 이번 업로드 내용으로 완전히 교체"하는 방식(merge_utils.
-group_replace_merge(), leadership_comments.csv와 동일한 인프라)을 쓴다.
-이번 업로드에 없는 사람은 기존 행이 그대로 보존된다. valid_year/valid_month
-시점 보호나 _history.csv는 두지 않는다(사용자가 이 방식으로 확정).
+── 누적 방식: 자연키 upsert(사용자 재확정, 2026-09-02) ──────────────────────
+2026-08-29 최초 도입 때는 "원본에서 삭제·수정된 경력 행이 자연키 upsert로는
+계속 남는다"는 우려로 researcher_id 단위 그룹 교체(그 사람 행 전체를 이번
+업로드로 통째 교체)를 썼다. 재검토 결과 (a) 본인 근무경력은 스스로 사후에
+고칠 일이 거의 없고, (b) 오히려 전배·퇴직으로 이번 원본 파일에서 그 사람이
+통째로 빠졌을 때도 기존 경력을 보존하고 싶다는 요구가 확인돼, 다른 이력형
+테이블(특허·논문·인사발령 등)과 동일한 자연키 upsert(merge_utils.
+upsert_merge())로 전환했다. 자연키는 (researcher_id, company_name,
+work_start_date) — 이 조합이 같은 행은 새 값으로 정정되고, 다르면 그대로
+누적되며, 이번 업로드에 없는 사람(전배·퇴직 등)의 기존 행도 삭제되지 않고
+그대로 보존된다. 다른 이력형 테이블처럼 valid_year/valid_month 시점 보호나
+_history.csv는 필요 없다(이력 자체가 삭제 없이 계속 쌓이는 구조라 이미
+"과거 시점의 값"이 보존됨).
 
 컬럼명이 다를 경우 파일 상단의 COL_* 상수를 수정하세요.
 """
@@ -45,7 +49,7 @@ COL_ROLE    = '직무명'
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import norm_id, parse_flexible_date, read_xlsx  # noqa: E402
-from merge_utils import GROUP_REPLACE_KEYS, write_merged  # noqa: E402
+from merge_utils import TABLE_KEYS, write_merged  # noqa: E402
 from source_files import find_latest  # noqa: E402
 from source_reader import read_source  # noqa: E402
 
@@ -98,10 +102,10 @@ def process(raw_dir: str = RAW_DIR) -> bool:
         ['researcher_id', 'work_start_date'], ascending=[True, False]).reset_index(drop=True)
 
     out_path = os.path.join(OUT_DIR, 'work_experience.csv')
-    merged = write_merged(out_path, result, GROUP_REPLACE_KEYS['work_experience'], group_replace=True)
+    merged = write_merged(out_path, result, TABLE_KEYS['work_experience'])
 
     n = result['researcher_id'].nunique() if not result.empty else 0
-    print(f'[OK]   work_experience.csv 저장 (이번 업로드 {len(result)}행, {n}명 교체 / 누적 총 {len(merged)}행)')
+    print(f'[OK]   work_experience.csv 저장 (총 {len(merged)}행, 이번 파일 {len(result)}행({n}명분) 반영)')
     return True
 
 

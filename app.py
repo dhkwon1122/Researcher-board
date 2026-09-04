@@ -218,13 +218,24 @@ def _html_page(title: str, body: str) -> str:
   <link rel="stylesheet"
         href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
   <style>
+    /* 이 페이지는 assets/custom.css를 안 읽는 별도 Flask 라우트라(Dash 페이지가
+       아님) Pretendard를 여기서도 따로 걸어준다 — 파일 자체는 assets/custom.css와
+       동일한 것 하나를 공유(절대경로 /assets/... 로 참조, 이 서버가 그대로 서빙). */
+    @font-face {{
+      font-family: 'Pretendard Variable';
+      font-weight: 45 920;
+      font-style: normal;
+      font-display: swap;
+      src: url('/assets/fonts/PretendardVariable.woff2') format('woff2-variations');
+    }}
     body {{ background:#f0f2f5; min-height:100vh;
-            display:flex; align-items:center; justify-content:center; }}
+            display:flex; align-items:center; justify-content:center;
+            font-family:'Pretendard Variable', -apple-system, 'Segoe UI', 'Noto Sans KR', 'Malgun Gothic', sans-serif; }}
     .auth-card {{ border:none; border-radius:12px;
                   box-shadow:0 4px 24px rgba(0,0,0,.1); max-width:420px; width:100%; }}
-    .btn-brand {{ background:#1e3a5f; border-color:#1e3a5f; }}
-    .btn-brand:hover {{ background:#163050; border-color:#163050; }}
-    .brand-icon {{ font-size:2.2rem; color:#1e3a5f; }}
+    .btn-brand {{ background:#1677ff; border-color:#1677ff; }}
+    .btn-brand:hover {{ background:#0958d9; border-color:#0958d9; }}
+    .brand-icon {{ font-size:2.2rem; color:#1677ff; }}
   </style>
 </head>
 <body>
@@ -319,7 +330,9 @@ def auth_login():
 # ── 초기 설정 (첫 관리자 계정 생성) ──────────────────────────────────────────
 @app.server.route('/setup', methods=['GET', 'POST'])
 def setup_page():
-    from services.auth import create_user, has_any_user, password_validation_error
+    from services.auth import (
+        MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH, create_user, has_any_user, password_validation_error,
+    )
     # PostgreSQL을 사용하는 운영 배포에서는 DB 장애/초기화 직후 외부 사용자가
     # 첫 관리자 계정을 선점하지 못하도록 웹 초기 설정을 기본 차단한다. 최초
     # 계정은 scripts/bulk_create_users.py로 만들고, 정말 필요한 경우에만
@@ -372,7 +385,7 @@ def setup_page():
                  placeholder="예: 홍길동" required>
         </div>
         <div class="mb-2">
-          <label class="form-label small fw-semibold">비밀번호 (12자 이상, 문자 조합)</label>
+          <label class="form-label small fw-semibold">비밀번호 ({MIN_PASSWORD_LENGTH}~{MAX_PASSWORD_LENGTH}자, 영문/숫자/특수문자 조합)</label>
           <input type="password" class="form-control form-control-sm" name="password" required>
         </div>
         <div class="mb-4">
@@ -400,7 +413,10 @@ def logout():
 # 페이지로 못 가게 막는다. 여기서 새 비밀번호를 설정하면 그 상태가 풀린다.
 @app.server.route('/change-password', methods=['GET', 'POST'])
 def change_password_page():
-    from services.auth import authenticate, change_password, get_current_user, password_validation_error
+    from services.auth import (
+        MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH, authenticate, change_password,
+        get_current_user, password_validation_error,
+    )
 
     user = get_current_user()
     if user is None:
@@ -443,7 +459,7 @@ def change_password_page():
                autocomplete="current-password" required autofocus>
       </div>
       <div class="mb-2">
-        <label class="form-label small fw-semibold">새 비밀번호 (12자 이상, 문자 조합)</label>
+        <label class="form-label small fw-semibold">새 비밀번호 ({MIN_PASSWORD_LENGTH}~{MAX_PASSWORD_LENGTH}자, 영문/숫자/특수문자 조합)</label>
         <input type="password" class="form-control form-control-sm" name="password"
                autocomplete="new-password" required>
       </div>
@@ -497,7 +513,7 @@ navbar = dbc.Navbar(
                 [
                     dbc.Col(
                         html.I(className='bi bi-bar-chart-fill me-2',
-                               style={'fontSize': '1.4rem', 'color': '#0071e3'}),
+                               style={'fontSize': '1.4rem', 'color': '#1677ff'}),
                         width='auto',
                     ),
                     dbc.Col(
@@ -516,12 +532,12 @@ navbar = dbc.Navbar(
                         href='/', active='exact', className='text-white',
                     )),
                     dbc.NavItem(dbc.NavLink(
-                        [html.I(className='bi bi-share-fill me-1'), '보유 전문성'],
-                        href='/researcher-similarity-map', active='exact', className='text-white',
-                    )),
-                    dbc.NavItem(dbc.NavLink(
                         [html.I(className='bi bi-table me-1'), '연구원 명단'],
                         href='/researcher-list', active='exact', className='text-white',
+                    )),
+                    dbc.NavItem(dbc.NavLink(
+                        [html.I(className='bi bi-share-fill me-1'), '보유 전문성'],
+                        href='/researcher-similarity-map', active='exact', className='text-white',
                     )),
                     dbc.NavItem(dbc.NavLink(
                         [html.I(className='bi bi-signpost-split me-1'), 'JOB Market'],
@@ -547,7 +563,7 @@ navbar = dbc.Navbar(
         ],
         fluid=True,
     ),
-    color='#1d1d1f',
+    color='#001529',
     dark=True,
     sticky='top',
     className='app-navbar',
@@ -564,7 +580,7 @@ app.layout = html.Div(
             className='px-4 py-3',
         ),
     ],
-    style={'minHeight': '100vh', 'backgroundColor': '#f5f5f7'},
+    style={'minHeight': '100vh', 'backgroundColor': '#f5f5f5'},
 )
 
 

@@ -54,6 +54,7 @@ sys.path.insert(0, os.path.abspath(_PIPELINE_DIR))
 from backfill_utils import parse_backfill_date  # noqa: E402
 from paths import BASE_DIR, OUT_DIR  # noqa: E402
 from raw_archive import archive_raw_bytes  # noqa: E402
+import pdf_reader  # noqa: E402
 
 WEB_UPDATES_DIR = os.path.join(BASE_DIR, 'data', 'web_updates')
 RUN_LOG_PATH = os.path.join(OUT_DIR, 'web_pipeline_runs.csv')
@@ -73,38 +74,46 @@ MANIFEST = [
          hint='예: 202608_That Month Headcount_*.xlsx 또는 *_End of Month Headcount_*.xlsx',
          mode='wildcard'),
     dict(key='evaluations', label='T&P(평가)', module='process_tp_evaluation',
-         hint='예: T&P 기본 인사 정보 *.xlsx', mode='wildcard', needs_valid_date=True),
+         hint='예: T&P 기본 인사 정보 *.xlsx', mode='wildcard', needs_valid_date=True,
+         pipeline_scope='dashboard'),
     dict(key='patents', label='특허', module='process_patents',
          hint='특허 리스트.xlsx', mode='exact', dest_filename='특허 리스트.xlsx'),
     dict(key='nurturing', label='양성이력', module='process_nurturing',
-         hint='양성_인력_현황.xlsx', mode='exact', dest_filename='양성_인력_현황.xlsx'),
+         hint='양성_인력_현황.xlsx', mode='exact', dest_filename='양성_인력_현황.xlsx',
+         pipeline_scope='dashboard'),
     dict(key='awards', label='시상이력', module='process_awards',
-         hint='예: 시상 세부사항 *.xlsx', mode='wildcard'),
+         hint='예: 시상 세부사항 *.xlsx', mode='wildcard', pipeline_scope='dashboard'),
     dict(key='education', label='학력', module='process_education',
          hint='예: 임직원 학력 *.xlsx', mode='wildcard'),
     dict(key='incentive_selection', label='핵심이력', module='process_incentive',
-         hint='핵심이력.xlsx', mode='exact', dest_filename='핵심이력.xlsx'),
+         hint='핵심이력.xlsx', mode='exact', dest_filename='핵심이력.xlsx',
+         pipeline_scope='dashboard'),
     dict(key='publications', label='논문', module='process_publications',
          hint='개인별논문현황_2016_2026.xlsx', mode='exact',
          dest_filename='개인별논문현황_2016_2026.xlsx'),
     dict(key='hr_orders', label='인사발령', module='process_personnel_orders',
-         hint='예: report_*.xlsx', mode='wildcard'),
+         hint='예: report_*.xlsx', mode='wildcard', pipeline_scope='dashboard'),
     dict(key='tasks_information', label='과제정보', module='process_task_information',
          hint='과제정보.xlsx', mode='exact', dest_filename='과제정보.xlsx'),
     dict(key='core_technology', label='핵심기술', module='process_core_technology',
          hint='핵심기술.xlsx', mode='exact', dest_filename='핵심기술.xlsx', needs_valid_date=True),
-    dict(key='tech_ownership', label='보유기술', module='process_tech_ownership',
-         hint='보유기술.xlsx', mode='exact', dest_filename='보유기술.xlsx', needs_valid_date=True),
+    # 보유기술(tech_ownership)은 웹 업데이트 대상에서 제외한다(2026-09-01,
+    # 사용자 확정 — 업데이트가 불가능한 항목). 필요하면
+    # `python pipeline/process_tech_ownership.py`를 CLI로 직접 실행한다.
     dict(key='job_profile', label='직무이력', module='process_job_profile',
-         hint=f"① {JOB_PROFILE_LEGACY_FILE}(선택 — 최초 1회만 필요) "
-              "② 내 리포트 *.xlsx(필수, 매번 최신 파일)",
+         hint=f"① {JOB_PROFILE_LEGACY_FILE} ② 내 리포트 *.xlsx — 둘 다 항상 필요합니다.",
          mode='dual', needs_valid_date=True),
-    dict(key='work_objective_24', label='업무목표24', module='process_work_objective',
-         hint='업무목표24.xlsx', mode='exact', dest_filename='업무목표24.xlsx', needs_valid_date=True),
-    dict(key='work_objective_25', label='업무목표25', module='process_work_objective',
-         hint='업무목표25.xlsx', mode='exact', dest_filename='업무목표25.xlsx', needs_valid_date=True),
-    dict(key='work_objective_26', label='업무목표26', module='process_work_objective',
-         hint='업무목표26.xlsx', mode='exact', dest_filename='업무목표26.xlsx', needs_valid_date=True),
+    # 업무목표 3개 슬롯 — 회계연도(매년 3월 기준) 최근 3개년을 가리키는 자리로,
+    # label/hint/dest_filename은 여기 박아두지 않고 _resolve_item()이 호출
+    # 시점마다 실제 연도로 다시 계산해 채운다(2026-09-01, 사용자 확정 — 자세한
+    # 배경은 _resolve_item() 위 주석 참고). 지금(2026-09)은 24/25/26,
+    # '27년 3월부터는 25/26/27로 자동으로 밀린다.
+    dict(key='work_objective_1', label='업무목표', module='process_work_objective',
+         hint='(연도는 자동 계산)', mode='exact', dest_filename='', needs_valid_date=True),
+    dict(key='work_objective_2', label='업무목표', module='process_work_objective',
+         hint='(연도는 자동 계산)', mode='exact', dest_filename='', needs_valid_date=True),
+    dict(key='work_objective_3', label='업무목표', module='process_work_objective',
+         hint='(연도는 자동 계산)', mode='exact', dest_filename='', needs_valid_date=True),
     dict(key='tasks', label='과제참여이력', module='process_tasks',
          hint='개인별과제투입기간데이터_260114.xlsb', mode='exact',
          dest_filename='개인별과제투입기간데이터_260114.xlsb'),
@@ -114,27 +123,30 @@ MANIFEST = [
          hint='직무정보_표준.xlsx', mode='exact', dest_filename='직무정보_표준.xlsx'),
     dict(key='job_profile_info_sait', label='직무정보(SAIT자체)', module='process_job_profile_sait',
          hint='직무정보_부서.xlsx', mode='exact', dest_filename='직무정보_부서.xlsx'),
-    # 팀/리더 참조(team_refer)는 관리자 화면의 "팀/리더 참조" 탭(그리드
-    # CRUD, services/team_refer_store.py)으로도 계속 수정할 수 있다 — 이
-    # 항목은 그와 별개로 xlsx 파일 자체를 한 번에 대량 반영하고 싶을 때
-    # 쓰는 경로다(둘 다 같은 team_refer.csv에 같은 자연키로 upsert하므로
-    # 서로 충돌하지 않는다, 2026-08-29 추가). needs_valid_date=True라
-    # 관리자가 기준 연/월을 지정할 수 있고, "_YYYYMM" 파일명 대량 백필
-    # 업로드도 다른 시점보호 테이블과 동일하게 지원된다.
+    # 팀/리더 참조(team_refer)는 "데이터 업데이트" 탭 표에는 더 이상 나타나지
+    # 않는다(hidden_from_table=True, 2026-09-01 사용자 확정) — 대신 관리자
+    # 화면의 "팀/리더 참조" 탭(그리드 CRUD, services/team_refer_store.py) 안에
+    # 업로드 UI가 별도로 있다(pages/admin.py의 _team_refer_upload_section()).
+    # MANIFEST 등록 자체(run_one()/save_upload()/백필 등 백엔드 로직)는 그대로
+    # 유지 — 그리드 CRUD와 같은 team_refer.csv에 같은 자연키로 upsert하므로
+    # 서로 충돌하지 않는다(2026-08-29 추가). needs_valid_date=True라 관리자가
+    # 기준 연/월을 지정할 수 있고, "_YYYYMM" 파일명 대량 백필 업로드도 다른
+    # 시점보호 테이블과 동일하게 지원된다.
     dict(key='team_refer', label='팀/리더 참조', module='process_team_refer',
-         hint='팀참조시트.xlsx', mode='exact', dest_filename='팀참조시트.xlsx', needs_valid_date=True),
+         hint='팀참조시트.xlsx', mode='exact', dest_filename='팀참조시트.xlsx', needs_valid_date=True,
+         hidden_from_table=True, pipeline_scope='llm'),
     # 어학자격은 "현재 재직자 기준으로만 의미가 있는 자료"라(사용자 확정,
     # 2026-08-29) 다른 대부분 항목과 달리 업서트가 아니라 매번 파일 전체로
     # 통째로 교체한다 — needs_valid_date를 안 켜서(백필/시점보호 대상 아님)
     # "기준 연/월" 입력도, _YYYYMM 백필 업로드도 뜨지 않는다.
     dict(key='language_qualification', label='어학', module='process_language_qualification',
-         hint='예: 어학자격 *.xlsx', mode='wildcard'),
+         hint='예: 어학자격 *.xlsx', mode='wildcard', pipeline_scope='dashboard'),
     # 근무 경력은 한 사람이 여러 회사 이력(여러 행)을 가질 수 있어, 매
     # 업로드마다 그 사람의 기존 행 전체를 이번 내용으로 교체하는
     # group_replace_merge()를 쓴다(사용자 확정, 2026-08-29) — 시점 보호/
     # _YYYYMM 백필 대상이 아니라 needs_valid_date는 켜지 않는다.
     dict(key='work_experience', label='근무 경력', module='process_work_experience',
-         hint='예: 임직원 근무경력 *.xlsx', mode='wildcard'),
+         hint='예: 임직원 근무경력 *.xlsx', mode='wildcard', pipeline_scope='dashboard'),
 ]
 _BY_KEY = {item['key']: item for item in MANIFEST}
 
@@ -161,6 +173,14 @@ MAX_UPLOAD_BYTES = int(os.environ.get('WEB_UPDATE_MAX_UPLOAD_BYTES', str(50 * 10
 for _item in MANIFEST:
     _item.setdefault('api_fetch', None)
     _item.setdefault('needs_valid_date', False)
+    _item.setdefault('hidden_from_table', False)
+    # pipeline_scope: 'common'(run_pipeline.py·run_expertise.py 둘 다 이
+    # 항목의 process_*.py를 호출) | 'dashboard'(run_pipeline.py만) |
+    # 'llm'(run_expertise.py만) — 두 파이프라인 스크립트의 실제 호출 그래프를
+    # 대조해 분류(2026-09-01, 사용자 확정 — "데이터 업데이트" 탭을 공용/
+    # 대시보드용/LLM분석용 3개 구간으로 나눠 보여주는 데 쓰인다). 명시적으로
+    # 지정 안 하면 'common'이 기본값(현재 MANIFEST 항목 대부분이 여기 해당).
+    _item.setdefault('pipeline_scope', 'common')
 
 
 def register_api_fetch(key: str, fetch_fn) -> None:
@@ -174,6 +194,44 @@ def register_api_fetch(key: str, fetch_fn) -> None:
 
 def has_api(key: str) -> bool:
     return _BY_KEY[key].get('api_fetch') is not None
+
+
+# ── 업무목표 롤링 슬롯(2026-09-01, 사용자 확정) ───────────────────────────────
+# 예전엔 work_objective_24/25/26이라는 "실제 연도가 그대로 박힌" 3개 키였는데,
+# 매년 3월 회계연도가 넘어가면 대상 3개년 자체가 밀려야 한다(예: '27년 3월부터는
+# 25/26/27) — 이 3개 슬롯 키(work_objective_1~3, 오래된→최신 순 고정 자리)는
+# 이름 자체엔 특정 연도를 담지 않고, 그 자리가 "지금" 가리키는 실제 연도를
+# _resolve_item()이 호출 시점마다 다시 계산해 label/hint/dest_filename에
+# 반영한다. MANIFEST(모듈 임포트 시 딱 한 번 평가)에 실제 연도를 그대로
+# 박아두면, 이 모듈을 계속 띄워 두는 gunicorn 워커가 회계연도 경계를 넘어가도
+# 재시작 전까지 예전 연도로 고정돼 있는 문제가 생기므로, 매번 다시 계산한다.
+_WORK_OBJECTIVE_SLOT_KEYS = ('work_objective_1', 'work_objective_2', 'work_objective_3')
+
+
+def _work_objective_slot_year(key: str):
+    """work_objective_1/_2/_3이 지금 이 순간 가리키는 실제 연도(회계연도 기준
+    최근 3개년 중 오래된→최신 순서로 매핑). 그 외 키는 None."""
+    if key not in _WORK_OBJECTIVE_SLOT_KEYS:
+        return None
+    import process_work_objective as pwo
+    return pwo.target_years()[_WORK_OBJECTIVE_SLOT_KEYS.index(key)]
+
+
+def _resolve_item(key: str) -> dict:
+    """_BY_KEY[key]를 그대로 반환하되, work_objective_1/_2/_3 3개 슬롯만
+    label/hint/dest_filename을 지금 이 순간의 회계연도 기준으로 다시 계산해
+    덮어쓴 사본을 반환한다. run_one()/save_upload()/has_upload()/snapshot()이
+    _BY_KEY[key]를 직접 읽는 대신 이 함수를 거친다."""
+    item = _BY_KEY[key]
+    year = _work_objective_slot_year(key)
+    if year is None:
+        return item
+    fname = f'업무목표{year % 100:02d}.xlsx'
+    patched = dict(item)
+    patched['label'] = f'업무목표{year % 100:02d}'
+    patched['hint'] = fname
+    patched['dest_filename'] = fname
+    return patched
 
 
 def _key_dir(key: str) -> str:
@@ -232,7 +290,7 @@ def save_upload(key: str, filename: str, content_bytes: bytes, slot: str | None 
     needs_valid_date 항목이면서 파일명이 "_YYYYMM"으로 끝나면(대량 백필,
     pipeline/backfill_utils.py) 정규 슬롯을 덮어쓰지 않고 별도 백필 폴더에
     계속 쌓아둔다 — 여러 달치를 한 번에 올려두고 한 번에 실행하기 위함."""
-    item = _BY_KEY[key]
+    item = _resolve_item(key)
 
     if item.get('needs_valid_date') and parse_backfill_date(filename):
         dest = os.path.join(_key_backfill_dir(key), filename)
@@ -298,13 +356,19 @@ def uploaded_files(key: str) -> list[str]:
 
 
 def has_upload(key: str) -> bool:
-    item = _BY_KEY[key]
+    item = _resolve_item(key)
     if item.get('needs_valid_date') and backfill_files(key):
         return True
     files = uploaded_files(key)
     if item['mode'] == 'dual':
-        # 최소한 '내 리포트 *.xlsx'(new)는 있어야 실행 가능 — legacy는 선택.
-        return any(os.path.basename(p) != JOB_PROFILE_LEGACY_FILE for p in files)
+        # ①'18.5월 이전(legacy)·②'18.5월 이후(new) 둘 다 있어야 실행 가능
+        # (2026-09-01, 사용자 확정 — 예전엔 legacy를 선택으로 취급했으나 둘 다
+        # 항상 필요한 데이터로 승격. legacy는 한 번 올리면 폴더에 계속 남아
+        # 재사용되므로, 매번 다시 올릴 필요는 없다 — 그 폴더에 남아있기만
+        # 하면 이 조건을 계속 만족한다).
+        has_legacy = any(os.path.basename(p) == JOB_PROFILE_LEGACY_FILE for p in files)
+        has_new = any(os.path.basename(p) != JOB_PROFILE_LEGACY_FILE for p in files)
+        return has_legacy and has_new
     return bool(files)
 
 
@@ -321,7 +385,7 @@ def uploaded_at(key: str) -> str:
 
 # ── 실행 로그(CSV) ───────────────────────────────────────────────────────────
 
-_LOG_COLUMNS = ['key', 'last_run_at', 'status', 'message']
+_LOG_COLUMNS = ['key', 'last_run_at', 'status', 'message', 'source']
 
 
 def _read_log() -> dict[str, dict]:
@@ -341,19 +405,24 @@ def _write_log(log: dict[str, dict]) -> None:
             w.writerow({c: r.get(c, '') for c in _LOG_COLUMNS})
 
 
-def _record_result(key: str, status: str, message: str) -> None:
+def _record_result(key: str, status: str, message: str, source: str | None = None) -> None:
+    """source: 이번 실행이 'API'였는지 '업로드'였는지 — 관리자 화면 "최종실행이력"
+    칸에 표시한다(2026-09-01, 사용자 확정). None이면(호출부가 안 넘긴 경우)
+    기존 기록의 source를 그대로 유지한다 — 아직 실행 이력이 없으면 빈 문자열."""
     log = _read_log()
+    prev_source = log.get(key, {}).get('source', '')
     log[key] = {
         'key': key,
         'last_run_at': datetime.now().strftime('%y-%m-%d %H:%M'),
         'status': status,
         'message': message,
+        'source': source if source is not None else prev_source,
     }
     _write_log(log)
 
 
 def last_result(key: str) -> dict:
-    return _read_log().get(key, {'last_run_at': '', 'status': '', 'message': ''})
+    return _read_log().get(key, {'last_run_at': '', 'status': '', 'message': '', 'source': ''})
 
 
 # ── 동시 실행 방지 락(파일 기반 — 워커 프로세스 2개 간 공유) ──────────────────
@@ -460,8 +529,9 @@ def run_one(key: str, via_api: bool = False, valid_date: date | None = None) -> 
     완전히 동일하다 — 아직 훅이 없으면(현재 전 항목이 그렇다) 바로
     "미연동" 실패로 기록하고 끝난다.
 
-    valid_date: needs_valid_date=True인 항목(evaluations/tech_ownership/
-    job_profile/work_objective_*)에서 이번 업로드분의 기준 연/월로 넘겨준다
+    valid_date: needs_valid_date=True인 항목(evaluations/core_technology/
+    job_profile/work_objective_*/team_refer)에서 이번 업로드분의 기준 연/월로
+    넘겨준다
     (관리자가 화면에서 지정, 기본값은 process_*.py 쪽에서 오늘로 처리).
 
     needs_valid_date 항목에 "_YYYYMM" 파일명 백필 업로드(2026-08-28,
@@ -471,21 +541,26 @@ def run_one(key: str, via_api: bool = False, valid_date: date | None = None) -> 
     (write_merged_with_valid_period)가 이미 순서 무관하게 안전하므로 두
     단계 순서가 바뀌어도 데이터는 항상 올바르지만, 건너뜀 경고를 줄이려고
     오래된 것부터 처리한다."""
-    item = _BY_KEY[key]
+    item = _resolve_item(key)
     raw_dir = _key_dir(key)
     buf = io.StringIO()
+    source = 'API' if via_api else '업로드'
     try:
         if via_api:
             fetch_fn = item.get('api_fetch')
             if fetch_fn is None:
                 _record_result(key, '실패', '아직 사내 API 연동이 준비되지 않았습니다 — '
-                                            '지금은 파일 업로드를 이용해주세요.')
+                                            '지금은 파일 업로드를 이용해주세요.', source)
                 return last_result(key)
             for filename, content, slot in fetch_fn(key):
                 save_upload(key, filename, content, slot=slot)
 
         if not has_upload(key):
-            _record_result(key, '실패', '업로드된 파일이 없습니다.')
+            if item['mode'] == 'dual':
+                msg = f"①{JOB_PROFILE_LEGACY_FILE}과 ② 내 리포트 *.xlsx가 둘 다 있어야 실행할 수 있습니다."
+            else:
+                msg = '업로드된 파일이 없습니다.'
+            _record_result(key, '실패', msg, source)
             return last_result(key)
 
         backfill_results = []
@@ -519,20 +594,20 @@ def run_one(key: str, via_api: bool = False, valid_date: date | None = None) -> 
                 backfill_msg += f', {n_fail}건 실패({first_fail})'
             message = backfill_msg + (f' / 정규 업로드: {summary}' if summary is not None else '')
             overall_ok = (n_fail == 0) and (ok is not False)
-            _record_result(key, '성공' if overall_ok else '실패', message[:500])
+            _record_result(key, '성공' if overall_ok else '실패', message[:500], source)
             clear_backfill_files(key)
         elif has_regular_upload:
-            _record_result(key, '성공' if ok else '실패', summary[:500])
+            _record_result(key, '성공' if ok else '실패', summary[:500], source)
         else:
             # needs_upload 체크는 통과했지만(백필 폴더에 파일이 있었음) 배치가
             # 0건이었던 경우는 사실상 없다 — 방어적으로만 남겨둔다.
-            _record_result(key, '실패', '반영할 파일이 없습니다.')
+            _record_result(key, '실패', '반영할 파일이 없습니다.', source)
 
     except Exception as exc:  # noqa: BLE001 — 실행결과 칸에 그대로 보여줘야 함
         output = buf.getvalue()
         reason = _last_meaningful_line(output)
         message = f'{exc}' + (f' ({reason})' if reason else '')
-        _record_result(key, '실패', message[:500])
+        _record_result(key, '실패', message[:500], source)
 
     return last_result(key)
 
@@ -561,7 +636,7 @@ def start_run(keys: list[str], valid_dates: dict[str, date] | None = None) -> bo
     if not try_acquire_lock(keys):
         return False
     for key in keys:
-        _record_result(key, '실행중', '')
+        _record_result(key, '실행중', '', '업로드')
     t = threading.Thread(target=run_many, args=(keys,), kwargs={'valid_dates': valid_dates}, daemon=True)
     t.start()
     return True
@@ -577,15 +652,18 @@ def start_run_via_api(keys: list[str]) -> bool:
     if not try_acquire_lock(keys):
         return False
     for key in keys:
-        _record_result(key, '실행중', '')
+        _record_result(key, '실행중', '', 'API')
     t = threading.Thread(target=run_many, args=(keys,), kwargs={'via_api': True}, daemon=True)
     t.start()
     return True
 
 
 def runnable_keys() -> list[str]:
-    """'전체 실행' 대상 — 업로드된 파일이 있는 항목만(실패 방지)."""
-    return [item['key'] for item in MANIFEST if has_upload(item['key'])]
+    """'전체 실행' 대상 — 업로드된 파일이 있는 항목만(실패 방지). hidden_from_table
+    항목(팀/리더 참조 — 그 탭의 전용 실행 버튼으로만 돈다, 2026-09-01)은
+    "데이터 업데이트" 탭의 "전체 업데이트"에 섞이지 않게 뺀다."""
+    return [item['key'] for item in MANIFEST
+            if not item['hidden_from_table'] and has_upload(item['key'])]
 
 
 # ── 화면 렌더용 상태 스냅샷 ──────────────────────────────────────────────────
@@ -594,7 +672,8 @@ def snapshot() -> list[dict]:
     lock = lock_status()
     running_keys = set(lock['keys']) if lock else set()
     rows = []
-    for item in MANIFEST:
+    for base_item in MANIFEST:
+        item = _resolve_item(base_item['key'])
         result = last_result(item['key'])
         status = result.get('status', '')
         if item['key'] in running_keys:
@@ -605,6 +684,8 @@ def snapshot() -> list[dict]:
             'hint': item['hint'],
             'mode': item['mode'],
             'needs_valid_date': item['needs_valid_date'],
+            'hidden_from_table': item['hidden_from_table'],
+            'pipeline_scope': item['pipeline_scope'],
             'has_upload': has_upload(item['key']),
             'has_api': has_api(item['key']),
             'uploaded_at': uploaded_at(item['key']),
@@ -614,6 +695,7 @@ def snapshot() -> list[dict]:
                 if item['needs_valid_date'] else []
             ),
             'last_run_at': result.get('last_run_at', ''),
+            'source': result.get('source', ''),
             'status': status,
             'message': result.get('message', ''),
         })
@@ -693,3 +775,143 @@ def start_db_load() -> bool:
 def is_db_load_running() -> bool:
     lock = lock_status()
     return bool(lock and lock.get('keys') == ['__db_load__'])
+
+
+# ── 테이블 단위 DB 반영("팀/리더 참조" 탭 전용 아이콘, 2026-09-02 추가) ──────────
+# 관리자가 team_refer.csv 하나만 바로 DB에 올리고 싶을 때(전체 30여개 테이블을
+# 다 훑는 "데이터 업데이트" 탭의 전체 DB 반영 버튼을 기다릴 필요 없이) 쓴다.
+# load_to_db.load(tables=[...])로 그 테이블 하나만 적재 — 같은 LOCK_PATH를
+# 그대로 재사용해(try_acquire_lock은 키 값과 무관하게 파일 하나뿐인 전역
+# 락이라) team_refer 원본 반영(pipeline 실행)이나 전체 DB 반영과 동시에
+# 실행되는 것을 그대로 막는다. 상태 로그는 전체 DB 반영과 뒤섞이지 않도록
+# 별도 파일에 기록한다.
+
+TEAM_REFER_DB_LOG_PATH = os.path.join(OUT_DIR, 'web_db_load_team_refer_runs.csv')
+
+
+def _record_team_refer_db_result(status: str, message: str) -> None:
+    os.makedirs(OUT_DIR, exist_ok=True)
+    with open(TEAM_REFER_DB_LOG_PATH, 'w', newline='', encoding='utf-8-sig') as f:
+        w = csv.DictWriter(f, fieldnames=['last_run_at', 'status', 'message'],
+                            quoting=csv.QUOTE_NONNUMERIC)
+        w.writeheader()
+        w.writerow({
+            'last_run_at': datetime.now().strftime('%y-%m-%d %H:%M'),
+            'status': status,
+            'message': message[:500],
+        })
+
+
+def team_refer_db_load_status() -> dict:
+    if not os.path.exists(TEAM_REFER_DB_LOG_PATH):
+        return {'last_run_at': '', 'status': '', 'message': ''}
+    df = pd.read_csv(TEAM_REFER_DB_LOG_PATH, encoding='utf-8-sig', dtype=str).fillna('')
+    return df.iloc[0].to_dict() if len(df) else {'last_run_at': '', 'status': '', 'message': ''}
+
+
+def run_team_refer_db_load() -> tuple[bool, str]:
+    """team_refer 테이블만 DB에 반영 — team_refer.csv 하나만 읽어 적재하는
+    가벼운 작업이라(전체 DB 반영과 달리 30여개 테이블을 다 훑지 않음) 백그라운드
+    스레드 없이 콜백 안에서 동기로 바로 실행한다("저장" 버튼과 동일한 방식).
+    이미 다른 파이프라인 실행이나 전체 DB 반영이 진행 중이면 (False, 안내 문구).
+    반환: (성공 여부, 화면에 보여줄 메시지)."""
+    if not try_acquire_lock(['__db_load_team_refer__']):
+        return False, '다른 작업이 진행 중입니다 — 잠시 후 다시 시도해주세요.'
+    _record_team_refer_db_result('실행중', '')
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            import load_to_db
+            importlib.reload(load_to_db)
+            load_to_db.load(tables=['team_refer'])
+        output = buf.getvalue()
+        if 'DATABASE_URL 미설정' in output:
+            msg = 'DATABASE_URL 미설정 — DB 연결 정보가 없어 반영하지 못했습니다.'
+            _record_team_refer_db_result('실패', msg)
+            return False, msg
+        if 'CSV 없음' in output:
+            msg = 'team_refer.csv가 없습니다 — 먼저 저장하거나 엑셀을 반영하세요.'
+            _record_team_refer_db_result('실패', msg)
+            return False, msg
+        msg = _last_meaningful_line(output) or '완료'
+        _record_team_refer_db_result('성공', msg)
+        return True, msg
+    except Exception as exc:  # noqa: BLE001
+        msg = f'{exc}'[:500]
+        _record_team_refer_db_result('실패', msg)
+        return False, msg
+    finally:
+        release_lock()
+
+
+# ── 과제별컨플 PDF 첨부(컨플 주소 없는 과제, 2026-09-01 추가) ──────────────────
+# project_confl_address.csv에 컨플 주소가 비어 있는 과제는 pipeline/
+# project_summary.py가 과제 전문성 분석(CLI, run_expertise.py) 실행 시
+# data/raw/conflue_MPR/{과제명}.pdf 를 대신 읽는다(pipeline/pdf_reader.py).
+# 지금까지는 그 폴더에 서버 파일시스템으로 직접 파일을 갖다 놓아야 했는데,
+# 이 4개 함수로 "데이터 업데이트" 탭에서 웹 업로드/조회/삭제할 수 있게 한다.
+# 다른 MANIFEST 항목과 달리 process_*.py로 "실행"할 대상이 없다(파일을 그
+# 자리에 두기만 하면 되고, 실제 소비는 나중에 별도로 실행되는 과제 전문성
+# 분석 CLI가 한다) — 그래서 MANIFEST/run_one() 흐름을 타지 않는 별도
+# 경로로 둔다.
+def list_confl_pdfs() -> list[dict]:
+    """data/raw/conflue_MPR/ 안의 PDF 목록(파일명순). 각 항목:
+    {filename, size_kb, uploaded_at}."""
+    d = pdf_reader.PDF_DIR
+    if not os.path.isdir(d):
+        return []
+    out = []
+    for fn in sorted(os.listdir(d)):
+        if not fn.lower().endswith('.pdf'):
+            continue
+        stat = os.stat(os.path.join(d, fn))
+        out.append({
+            'filename': fn,
+            'size_kb': round(stat.st_size / 1024, 1),
+            'uploaded_at': datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M'),
+        })
+    return out
+
+
+def save_confl_pdf(filename: str, content_bytes: bytes) -> None:
+    """PDF 한 개를 data/raw/conflue_MPR/에 저장한다. 파일명이 project_confl_
+    address.csv의 과제명(project_name)과 정확히 같아야 pdf_reader.py가 찾을 수
+    있다 — 원본 파일명을 그대로 쓰고(사용자가 과제명과 맞춰서 올려야 함),
+    디렉터리 구분자는 os.path.basename으로 제거해 경로 조작을 막는다."""
+    safe_name = os.path.basename(filename)
+    if not safe_name.lower().endswith('.pdf'):
+        raise ValueError('PDF 파일만 업로드할 수 있습니다.')
+    os.makedirs(pdf_reader.PDF_DIR, exist_ok=True)
+    with open(os.path.join(pdf_reader.PDF_DIR, safe_name), 'wb') as f:
+        f.write(content_bytes)
+    try:
+        archive_raw_bytes(content_bytes, safe_name, category='project_confl_pdf')
+    except OSError as exc:
+        print(f'[web_pipeline_runner] 컨플 PDF 아카이브 실패(무시하고 계속) {safe_name}: {exc}')
+
+
+def delete_confl_pdf(filename: str) -> bool:
+    """지정한 PDF 하나를 삭제한다. 성공하면 True, 파일이 없으면 False."""
+    path = os.path.join(pdf_reader.PDF_DIR, os.path.basename(filename))
+    if os.path.exists(path):
+        os.remove(path)
+        return True
+    return False
+
+
+def confl_projects_missing_pdf() -> list[str]:
+    """project_confl_address.csv에서 컨플 주소가 비어 있는 과제명 중, 아직
+    PDF가 없는 것들(오름차순) — 관리자가 뭘 더 올려야 하는지 바로 보여주기
+    위함. project_confl_address.csv가 없거나 필요한 컬럼이 없으면 빈 리스트."""
+    path = os.path.join(OUT_DIR, 'project_confl_address.csv')
+    if not os.path.exists(path):
+        return []
+    df = pd.read_csv(path, dtype=str).fillna('')
+    if 'confl_address' not in df.columns or 'project_name' not in df.columns:
+        return []
+    empty_projects = sorted({
+        p.strip() for p in df.loc[df['confl_address'].str.strip() == '', 'project_name']
+        if p.strip()
+    })
+    existing = {os.path.splitext(p['filename'])[0] for p in list_confl_pdfs()}
+    return [p for p in empty_projects if p not in existing]
