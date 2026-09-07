@@ -10,7 +10,8 @@ from datetime import date
 import dash
 import dash_bootstrap_components as dbc
 from dash import (
-    ALL, Input, Output, State, callback, clientside_callback, dash_table, dcc, html, no_update,
+    ALL, MATCH, Input, Output, State, callback, clientside_callback, ctx, dash_table, dcc, html,
+    no_update,
 )
 
 from config.auth_config import ROLE_LABELS, ROLE_PERMISSIONS
@@ -31,6 +32,81 @@ _PERMISSION_LABELS = {
 }
 _PERMISSION_KEYS = list(_PERMISSION_LABELS.keys())
 
+# 2026-09-04: 기본 표에 인라인 체크박스로 노출하는 6개 권한 관련 컬럼
+# (관리자 권한 1개 + 개별 권한 4개 + People팀 평가제외 1개) — 컬럼 헤더는
+# 좁은 표에 맞춰 짧게 쓰고, 전체 설명은 title 속성(네이티브 브라우저 툴팁)으로.
+_INLINE_PERM_COLUMNS = [
+    ('is_admin', '관리자', '관리자 권한 (사용자 관리 페이지 접근 — 역할과 무관하게 이 계정에만 적용)'),
+    ('view_evaluation', '평가등급', _PERMISSION_LABELS['view_evaluation']),
+    ('exclude_people_team', 'People제외',
+     'People팀 평가등급 제외 (People팀·하위 과제/파트 소속 연구원의 평가등급만 가림)'),
+    ('view_incentive', '인센티브', _PERMISSION_LABELS['view_incentive']),
+    ('view_comments', '코멘트', _PERMISSION_LABELS['view_comments']),
+    ('view_grade', '리더십', _PERMISSION_LABELS['view_grade']),
+]
+# 정렬 가능한 전체 컬럼(신분 정보 5개 + 권한 6개) — '관리' 액션 컬럼은 제외.
+_SORTABLE_COLUMNS = [
+    ('user_id', '아이디'), ('display_name', '이름'), ('role', '역할'),
+    ('email', '이메일'), ('status', '상태'),
+] + [(key, label) for key, label, _hint in _INLINE_PERM_COLUMNS]
+
+
+def _effective_permissions(user: dict) -> dict:
+    """이 계정에 지금 실제로 적용되는 권한 6개(관리자 + 개별 4개 +
+    People팀 제외 여부)를 계산한다 — 개별 권한은 계정별 재정의(override)가
+    있으면 그 값, 없으면(None) 역할 기본값(ROLE_PERMISSIONS)을 따른다
+    (기존 '수정' 모달이 체크박스 초기값을 계산하던 것과 동일한 규칙)."""
+    role_defaults = ROLE_PERMISSIONS.get(user.get('role', ''), {})
+    overrides = user.get('permissions') or {}
+    result = {
+        key: (overrides.get(key) if overrides.get(key) is not None else role_defaults.get(key, False))
+        for key in _PERMISSION_KEYS
+    }
+    result['is_admin'] = bool(user.get('is_admin'))
+    result['exclude_people_team'] = bool(user.get('eval_excluded_dep_ids'))
+    return result
+
+
+def _sort_key_value(user: dict, col: str):
+    if col == 'user_id':
+        return user.get('user_id', '').lower()
+    if col == 'display_name':
+        return user.get('display_name', '').lower()
+    if col == 'role':
+        return ROLE_LABELS.get(user.get('role', ''), user.get('role', '')).lower()
+    if col == 'email':
+        return (user.get('email') or '').lower()
+    if col == 'status':
+        return bool(user.get('must_change_password'))
+    return _effective_permissions(user).get(col, False)
+
+
+def _build_user_rows(users: list, sort_state: dict | None) -> list:
+    sort_state = sort_state or {}
+    col = sort_state.get('column')
+    if col:
+        users = sorted(users, key=lambda u: _sort_key_value(u, col),
+                        reverse=(sort_state.get('direction') == 'desc'))
+    return [_user_row(u) for u in users]
+
+
+def _sort_th(col: str, label: str, sort_state: dict | None, title_attr: str | None = None):
+    sort_state = sort_state or {}
+    active = sort_state.get('column') == col
+    direction = sort_state.get('direction') if active else None
+    icon_class = {'asc': 'bi-caret-up-fill', 'desc': 'bi-caret-down-fill'}.get(direction, 'bi-filter')
+    th_kwargs = {'title': title_attr} if title_attr else {}
+    return html.Th(
+        html.Span(
+            [label, html.I(className=f'bi {icon_class} ms-1',
+                            style={'fontSize': '0.7rem', 'opacity': '1' if active else '0.35'})],
+            id={'type': 'user-sort-th', 'col': col}, n_clicks=0,
+            style={'cursor': 'pointer', 'userSelect': 'none', 'whiteSpace': 'nowrap'},
+        ),
+        **th_kwargs,
+    )
+
+
 # ── 공통 UI 조각 ─────────────────────────────────────────────────────────────
 
 def _access_denied():
@@ -43,34 +119,64 @@ def _access_denied():
     )
 
 
-def _user_row(user: dict, idx: int):
+def _perm_checkbox_cell(user: dict, key: str, effective: dict):
+    """권한 관련 6개 컬럼 공용 셀 — 체크박스 하나 + (컬럼당 하나씩만) 저장
+    상태를 잠깐 보여주는 작은 아이콘(user_id로 그룹화된 콜백이 채움).
+
+    주의: row-admin-status/row-perm-status는 각각 관리자 콜백/개별권한
+    콜백의 유일한 Output이라 행(user_id)당 정확히 1개의 DOM 요소만 이 id를
+    가져야 한다 — 개별 권한 5개 컬럼(4개 권한 + People팀 제외) 전부에 이
+    상태 span을 넣으면 같은 id가 한 행에 5번 중복되어 Dash가 "이 MATCH
+    그룹에 Output 대상이 여럿"이라며 콜백 자체를 포기해버린다(직접
+    재현·확인한 버그, 2026-09-04) — 그래서 개별 권한 쪽은 대표로
+    view_evaluation 컬럼에만 상태 아이콘을 둔다."""
+    user_id = user['user_id']
+    value = bool(effective.get(key))
+    status = None
+    if key == 'is_admin':
+        checkbox_id = {'type': 'row-admin-check', 'user_id': user_id}
+        status = html.Span(id={'type': 'row-admin-status', 'user_id': user_id}, className='small')
+    elif key == 'exclude_people_team':
+        checkbox_id = {'type': 'row-perm-exclude', 'user_id': user_id}
+    else:
+        checkbox_id = {'type': 'row-perm-check', 'field': key, 'user_id': user_id}
+        if key == 'view_evaluation':
+            status = html.Span(id={'type': 'row-perm-status', 'user_id': user_id}, className='small')
+    children = [dbc.Checkbox(id=checkbox_id, value=value, className='du-check-box')]
+    if status is not None:
+        children.append(status)
+    return html.Td(
+        html.Div(children, className='d-flex align-items-center justify-content-center gap-1'),
+        className='align-middle text-center',
+    )
+
+
+def _user_row(user: dict):
     status = (
         dbc.Badge('임시 비밀번호', color='warning', text_color='dark', className='fw-normal')
         if user.get('must_change_password')
         else dbc.Badge('정상', color='light', text_color='secondary', className='fw-normal border')
     )
-    name_cell = [user['display_name']]
-    if user.get('is_admin'):
-        name_cell.append(dbc.Badge(
-            [html.I(className='bi bi-shield-lock-fill me-1'), '관리자'],
-            color='primary', className='fw-normal ms-2',
-        ))
+    effective = _effective_permissions(user)
+    user_id = user['user_id']
+    perm_cells = [_perm_checkbox_cell(user, key, effective) for key, _label, _hint in _INLINE_PERM_COLUMNS]
     return html.Tr([
-        html.Td(user['user_id'], className='align-middle font-monospace small'),
-        html.Td(name_cell, className='align-middle'),
+        html.Td(user_id, className='align-middle font-monospace small'),
+        html.Td(user['display_name'], className='align-middle'),
         html.Td(ROLE_LABELS.get(user['role'], user['role']), className='align-middle small'),
         html.Td(user.get('email', ''), className='align-middle small text-muted'),
         html.Td(status, className='align-middle'),
+        *perm_cells,
         html.Td(
             dbc.ButtonGroup([
                 dbc.Button(
                     [html.I(className='bi bi-pencil me-1'), '수정'],
-                    id={'type': 'btn-edit', 'index': idx},
+                    id={'type': 'btn-edit', 'user_id': user_id},
                     color='outline-primary', size='sm',
                 ),
                 dbc.Button(
                     [html.I(className='bi bi-trash me-1'), '삭제'],
-                    id={'type': 'btn-delete', 'index': idx},
+                    id={'type': 'btn-delete', 'user_id': user_id},
                     color='outline-danger', size='sm',
                 ),
             ]),
@@ -109,45 +215,10 @@ def _user_modal():
                               autocomplete='off', size='sm'),
                 ], md=6),
             ], className='mb-2'),
-            dbc.Checklist(
-                id='modal-is-admin',
-                options=[{'label': ' 관리자 권한 부여 (사용자 관리 페이지 접근 — 역할과 무관하게 이 계정에만 적용)',
-                          'value': 'admin'}],
-                value=[], switch=True, className='mb-2 small',
-            ),
-            html.Div(
-                [
-                    html.Hr(className='my-2'),
-                    dbc.Label('개별 권한 (역할 기본값을 계정 단위로 재정의 — 미체크해도 삭제되지 않고, '
-                              '저장 시점 값이 이 계정에 고정됩니다)', size='sm', className='fw-semibold'),
-                    dbc.Checklist(
-                        id='modal-permissions-eval',
-                        options=[{'label': f' {_PERMISSION_LABELS["view_evaluation"]}',
-                                  'value': 'view_evaluation'}],
-                        value=[], switch=True, className='small',
-                    ),
-                    # People팀 평가등급 제외(2026-08-31, 사용자 확정 — 여러 부서를
-                    # 고르는 드롭다운 대신 People팀 하나만 지원하도록 단순화) — 평가등급
-                    # 열람 바로 아래 들여써서 그 하위 옵션임을 보여준다. 체크하면
-                    # services.similarity_map.people_team_dep_ids()(People팀 노드 +
-                    # 조직도 트리 기준 하위 과제/파트 전부)를 그대로 eval_excluded_dep_ids
-                    # 로 저장한다.
-                    dbc.Checklist(
-                        id='modal-exclude-people-team',
-                        options=[{'label': ' People팀 평가등급 제외 (People팀·하위 과제/파트 '
-                                            '소속 연구원의 평가등급만 가림)',
-                                  'value': 'exclude'}],
-                        value=[], switch=True, className='small ps-4',
-                    ),
-                    dbc.Checklist(
-                        id='modal-permissions-rest',
-                        options=[{'label': f' {label}', 'value': key}
-                                 for key, label in _PERMISSION_LABELS.items() if key != 'view_evaluation'],
-                        value=[], switch=True, className='mb-2 small',
-                    ),
-                ],
-                id='modal-permissions-section',
-            ),
+            # 관리자 권한/개별 권한(2026-09-04)은 이 모달에서 뺐다 — 기본
+            # 테이블에 컬럼으로 노출된 체크박스로 그 자리에서 바로 켜고 끄며
+            # 즉시 저장하도록 변경(사용자 확정) — 이 모달은 신분 정보(아이디/
+            # 이름/역할/이메일)와 비밀번호 재설정만 담당한다.
             html.Hr(className='my-2'),
             # 신규 계정(추가)은 비밀번호를 관리자가 입력하지 않는다 — 항상
             # DEFAULT_TEMP_PASSWORD로 시작하고 최초 로그인 시 강제로 바꾸게
@@ -251,30 +322,34 @@ def _bulk_user_upload_modal():
 
 # ── 레이아웃 ──────────────────────────────────────────────────────────────────
 
+_DEFAULT_USER_SORT = {'column': None, 'direction': 'asc'}
+
+
 def _user_management_tab() -> html.Div:
     from services.auth import list_users
 
     users = list_users()
-    rows = [_user_row(u, i) for i, u in enumerate(users)]
+
+    # 권한 관련 6개 헤더는 title 속성(네이티브 브라우저 툴팁)으로 전체 설명을 붙인다.
+    perm_hint_by_col = {key: hint for key, _label, hint in _INLINE_PERM_COLUMNS}
+    header_cells = [
+        _sort_th(col, label, _DEFAULT_USER_SORT, title_attr=perm_hint_by_col.get(col))
+        for col, label in _SORTABLE_COLUMNS
+    ]
+    header_cells.append(html.Th('관리'))
 
     table = dbc.Table(
         [
-            html.Thead(html.Tr([
-                html.Th('아이디'),
-                html.Th('이름'),
-                html.Th('역할'),
-                html.Th('이메일'),
-                html.Th('상태'),
-                html.Th(''),
-            ])),
-            html.Tbody(rows, id='user-table-body'),
+            html.Thead(html.Tr(header_cells)),
+            html.Tbody(_build_user_rows(users, _DEFAULT_USER_SORT), id='user-table-body'),
         ],
-        bordered=True, hover=True, responsive=True, size='sm', className='mb-0',
+        bordered=True, hover=True, responsive=True, size='sm', className='mb-0 admin-table',
     )
 
     return html.Div([
         dcc.Store(id='user-refresh-counter', data=0),
         dcc.Store(id='user-list-store', data=users),
+        dcc.Store(id='user-sort-state', data=_DEFAULT_USER_SORT),
 
         dbc.Card([
             dbc.CardHeader(
@@ -782,7 +857,7 @@ def _data_update_table() -> dbc.Table:
     # 드래그 조절 기능이 없다 — 헤더 텍스트를 감싸는 span에 브라우저 네이티브
     # CSS resize를 적용해 우측 하단 모서리를 드래그해 조절할 수 있게 한다
     # (팀/리더 참조 표의 .column-header-name과 같은 방식, assets/custom.css
-    # 의 .data-update-table .du-th-resize 참고, 사용자 확정 2026-09-02).
+    # 의 .admin-table .du-th-resize 참고, 사용자 확정 2026-09-02).
     def _th(label: str, style: dict | None = None) -> html.Th:
         return html.Th(html.Span(label, className='du-th-resize'), style=style)
 
@@ -799,7 +874,7 @@ def _data_update_table() -> dbc.Table:
         body_rows.extend(_data_update_row(r) for r in rows if r['pipeline_scope'] == scope_key)
     body = html.Tbody(body_rows)
     return dbc.Table([header, body], bordered=True, hover=True, responsive=True, size='sm',
-                      className='align-middle mb-0 data-update-table')
+                      className='align-middle mb-0 admin-table')
 
 
 def _db_status_view() -> html.Span:
@@ -981,7 +1056,6 @@ def layout():
 # ── 콜백: 사용자 목록 갱신 ────────────────────────────────────────────────────
 
 @callback(
-    Output('user-table-body', 'children'),
     Output('user-list-store', 'data'),
     Input('user-refresh-counter', 'data'),
     prevent_initial_call=True,
@@ -989,10 +1063,39 @@ def layout():
 def refresh_user_table(_counter):
     from services.auth import can, list_users
     if not can('manage_users'):
-        return [], []
-    users = list_users()
-    rows = [_user_row(u, i) for i, u in enumerate(users)]
-    return rows, users
+        return []
+    return list_users()
+
+
+# ── 콜백: 정렬 헤더 클릭 ──────────────────────────────────────────────────────
+
+@callback(
+    Output('user-sort-state', 'data'),
+    Input({'type': 'user-sort-th', 'col': ALL}, 'n_clicks'),
+    State('user-sort-state', 'data'),
+    prevent_initial_call=True,
+)
+def toggle_user_sort(n_clicks_list, sort_state):
+    if not any(n for n in n_clicks_list if n):
+        return no_update
+    triggered = ctx.triggered_id
+    if not triggered:
+        return no_update
+    col = triggered['col']
+    sort_state = sort_state or {}
+    direction = 'desc' if sort_state.get('column') == col and sort_state.get('direction') == 'asc' else 'asc'
+    return {'column': col, 'direction': direction}
+
+
+# ── 콜백: 표 본문 렌더링(정렬 상태 또는 목록이 바뀔 때마다) ────────────────────
+
+@callback(
+    Output('user-table-body', 'children'),
+    Input('user-sort-state', 'data'),
+    Input('user-list-store', 'data'),
+)
+def render_user_table_body(sort_state, users):
+    return _build_user_rows(users or [], sort_state)
 
 
 # ── 콜백: 추가 버튼 → 모달 열기 ───────────────────────────────────────────────
@@ -1009,11 +1112,6 @@ def refresh_user_table(_counter):
     Output('modal-password', 'value', allow_duplicate=True),
     Output('modal-password-confirm', 'value', allow_duplicate=True),
     Output('modal-pw-label', 'children', allow_duplicate=True),
-    Output('modal-is-admin', 'value', allow_duplicate=True),
-    Output('modal-permissions-section', 'style', allow_duplicate=True),
-    Output('modal-permissions-eval', 'value', allow_duplicate=True),
-    Output('modal-exclude-people-team', 'value', allow_duplicate=True),
-    Output('modal-permissions-rest', 'value', allow_duplicate=True),
     Output('modal-password-section', 'style', allow_duplicate=True),
     Output('modal-new-password-note', 'children', allow_duplicate=True),
     Output('user-modal-alert', 'children', allow_duplicate=True),
@@ -1030,17 +1128,14 @@ def open_add_modal(_):
         '',                 # email
         '', '',             # passwords(안 씀 — 아래 modal-password-section 자체를 숨김)
         '',                 # modal-pw-label(안 보이므로 내용 무의미)
-        [],                 # is_admin: 기본 미부여
-        # 새 계정은 역할 기본값을 그대로 따르는 상태(NULL)로 시작 — 개별 권한은
-        # 만든 뒤 "수정"에서 조정한다(계정을 만들면서 바로 고정값을 심지
-        # 않기 위해, 이 섹션 자체를 새 계정 추가 시에는 숨긴다).
-        {'display': 'none'},
-        [], [], [],
         # 비밀번호 입력란은 신규 추가 시 숨기고(관리자가 직접 입력하지 않음
         # — 사용자 확정 2026-08-31), 고정 임시 비밀번호 안내만 보여준다.
+        # 관리자 권한/개별 권한(2026-09-04)은 이 모달에서 완전히 빠졌다 —
+        # 계정을 만든 뒤 기본 표의 체크박스로 그 자리에서 바로 설정한다.
         {'display': 'none'},
         f'신규 계정은 임시 비밀번호 "{DEFAULT_TEMP_PASSWORD}"로 생성되며, '
-        f'최초 로그인 후 반드시 새 비밀번호로 변경해야 합니다.',
+        f'최초 로그인 후 반드시 새 비밀번호로 변경해야 합니다. '
+        f'관리자 권한·개별 권한은 계정 생성 후 표에서 바로 설정할 수 있습니다.',
         [],
     )
 
@@ -1059,50 +1154,24 @@ def open_add_modal(_):
     Output('modal-password', 'value', allow_duplicate=True),
     Output('modal-password-confirm', 'value', allow_duplicate=True),
     Output('modal-pw-label', 'children', allow_duplicate=True),
-    Output('modal-is-admin', 'value', allow_duplicate=True),
-    Output('modal-permissions-section', 'style', allow_duplicate=True),
-    Output('modal-permissions-eval', 'value', allow_duplicate=True),
-    Output('modal-exclude-people-team', 'value', allow_duplicate=True),
-    Output('modal-permissions-rest', 'value', allow_duplicate=True),
     Output('modal-password-section', 'style', allow_duplicate=True),
     Output('modal-new-password-note', 'children', allow_duplicate=True),
     Output('user-modal-alert', 'children', allow_duplicate=True),
-    Input({'type': 'btn-edit', 'index': ALL}, 'n_clicks'),
+    Input({'type': 'btn-edit', 'user_id': ALL}, 'n_clicks'),
     State('user-list-store', 'data'),
     prevent_initial_call=True,
 )
 def open_edit_modal(n_clicks_list, users):
-    from dash import ctx
     from services.auth import MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH
-    n_outputs = 19
+    n_outputs = 14
     if not any(n for n in n_clicks_list if n):
         return [no_update] * n_outputs
     triggered = ctx.triggered_id
     if triggered is None:
         return [no_update] * n_outputs
-    idx = triggered['index']
-    if idx >= len(users):
+    u = next((x for x in (users or []) if x['user_id'] == triggered['user_id']), None)
+    if u is None:
         return [no_update] * n_outputs
-    u = users[idx]
-    # 체크박스는 "지금 이 계정에 실제로 적용되는 값"을 보여준다 — 개별
-    # 재정의(override)가 있으면 그 값, 없으면(None) 역할 기본값(ROLE_PERMISSIONS)을
-    # 보여준다. 다만 저장을 누르면(save_user) 항상 명시값으로 고정된다
-    # (services/user_store.py update_permissions 독스트링 참고).
-    role_defaults = ROLE_PERMISSIONS.get(u.get('role', ''), {})
-    overrides = u.get('permissions') or {}
-    perm_values = [
-        key for key in _PERMISSION_KEYS
-        if (overrides.get(key) if overrides.get(key) is not None else role_defaults.get(key, False))
-    ]
-    perm_eval_value = [k for k in perm_values if k == 'view_evaluation']
-    perm_rest_value = [k for k in perm_values if k != 'view_evaluation']
-    # People팀 제외 체크박스는 "지금까지 뭐든 제외 설정이 있었는지"만 본다
-    # (사용자 확정 2026-08-31로 이 UI가 지원하는 유일한 예외가 People팀이라
-    # — 값이 있으면 그때 People팀을 체크해서 저장한 것이다. 조직도가 그
-    # 뒤에 바뀌어(하위 과제/파트 추가 등) 저장된 dep_id 집합이 지금 계산되는
-    # people_team_dep_ids()와 완전히 같지 않을 수 있어도, 다시 저장하면
-    # 항상 최신 집합으로 갱신되므로 "비어있지 않으면 체크"로 충분하다).
-    exclude_value = ['exclude'] if u.get('eval_excluded_dep_ids') else []
     return (
         True, '사용자 수정', u['user_id'],
         u['user_id'], True,              # user_id readonly
@@ -1111,9 +1180,6 @@ def open_edit_modal(n_clicks_list, users):
         u.get('email', ''),
         '', '',
         f'새 비밀번호 (변경 시에만 입력 — {MIN_PASSWORD_LENGTH}~{MAX_PASSWORD_LENGTH}자, 영문/숫자/특수문자 조합)',
-        ['admin'] if u.get('is_admin') else [],
-        {},
-        perm_eval_value, exclude_value, perm_rest_value,
         {},   # modal-password-section: 수정 화면에서는 보이도록
         '',   # modal-new-password-note: 수정 때는 안 씀
         [],
@@ -1134,19 +1200,17 @@ def open_edit_modal(n_clicks_list, users):
     State('modal-email', 'value'),
     State('modal-password', 'value'),
     State('modal-password-confirm', 'value'),
-    State('modal-is-admin', 'value'),
-    State('modal-permissions-eval', 'value'),
-    State('modal-exclude-people-team', 'value'),
-    State('modal-permissions-rest', 'value'),
     State('user-refresh-counter', 'data'),
     prevent_initial_call=True,
 )
-def save_user(_, editing_id, user_id, display_name, role, email, password, pw_confirm,
-              is_admin_value, permissions_eval_value, exclude_people_team_value,
-              permissions_rest_value, counter):
+def save_user(_, editing_id, user_id, display_name, role, email, password, pw_confirm, counter):
+    # 관리자 권한/개별 권한(2026-09-04)은 이 모달이 더 이상 다루지 않는다 —
+    # 기본 표의 인라인 체크박스 콜백(save_row_admin/save_row_permissions)이
+    # 전담한다. 이 함수는 신분 정보(아이디/이름/역할/이메일)와 비밀번호
+    # 재설정만 처리.
     from services.auth import (
-        DEFAULT_TEMP_PASSWORD, can, change_password, create_user, get_current_user,
-        password_validation_error, update_permissions, update_user,
+        DEFAULT_TEMP_PASSWORD, can, change_password, create_user,
+        password_validation_error, update_user,
     )
     if not can('manage_users'):
         return _alert('권한이 없습니다.', 'danger'), no_update, no_update
@@ -1156,7 +1220,6 @@ def save_user(_, editing_id, user_id, display_name, role, email, password, pw_co
     email = (email or '').strip()
     password = password or ''
     pw_confirm = pw_confirm or ''
-    is_admin = 'admin' in (is_admin_value or [])
 
     if not display_name or not role:
         return _alert('이름과 역할은 필수입니다.', 'warning'), no_update, no_update
@@ -1172,16 +1235,13 @@ def save_user(_, editing_id, user_id, display_name, role, email, password, pw_co
         # password_validation_error() 검증을 여기서는 건너뛴다 — 정책은
         # 계정 소유자가 최초 로그인 후 본인 비밀번호로 바꿀 때부터 적용된다
         # (app.py의 /change-password, DEFAULT_TEMP_PASSWORD 독스트링 참고).
+        # is_admin은 항상 False로 시작 — 표의 "관리자" 체크박스로 나중에 부여.
         try:
             create_user(user_id, DEFAULT_TEMP_PASSWORD, display_name, role, email,
-                        must_change_password=True, is_admin=is_admin)
+                        must_change_password=True, is_admin=False)
         except ValueError as exc:
             return _alert(str(exc), 'danger'), no_update, no_update
     else:
-        current = get_current_user()
-        if current and current['user_id'] == editing_id and not is_admin:
-            return _alert('자기 자신의 관리자 권한은 해제할 수 없습니다. '
-                          '다른 관리자가 대신 해제해야 합니다.', 'warning'), no_update, no_update
         if password:
             password_error = password_validation_error(password)
             if password_error:
@@ -1189,21 +1249,7 @@ def save_user(_, editing_id, user_id, display_name, role, email, password, pw_co
             if password != pw_confirm:
                 return _alert('비밀번호가 일치하지 않습니다.', 'warning'), no_update, no_update
             change_password(editing_id, password)
-        update_user(editing_id, display_name=display_name, role=role, email=email, is_admin=is_admin)
-        # 이 모달에서 저장을 누르는 순간 4개 권한 전부 명시값으로 고정된다
-        # (역할이 나중에 바뀌어도 유지 — 사용자 확정, services/user_store.py
-        # update_permissions 독스트링 참고). 새로 만드는 계정(is_new)은 이
-        # 섹션 자체가 숨겨져 있어 여기로 오지 않는다 — 역할 기본값을 그대로
-        # 따르는 상태(NULL)로 남는다.
-        permissions_value = (permissions_eval_value or []) + (permissions_rest_value or [])
-        permissions = {key: (key in permissions_value) for key in _PERMISSION_KEYS}
-        # People팀 제외 체크박스(2026-08-31, 사용자 확정 — 부서 드롭다운
-        # 대신 People팀 하나만 지원) — 체크돼 있으면 지금 조직도 기준으로
-        # People팀 및 그 하위 과제/파트 전체의 dep_id를 다시 계산해 저장한다
-        # (조직도가 바뀌었어도 저장할 때마다 항상 최신 집합으로 갱신됨).
-        from services.similarity_map import people_team_dep_ids
-        excluded_dep_ids = list(people_team_dep_ids()) if 'exclude' in (exclude_people_team_value or []) else []
-        update_permissions(editing_id, permissions, excluded_dep_ids)
+        update_user(editing_id, display_name=display_name, role=role, email=email)
 
     return [], False, (counter or 0) + 1
 
@@ -1225,21 +1271,19 @@ def cancel_modal(_):
     Output('delete-modal', 'is_open', allow_duplicate=True),
     Output('deleting-user-id', 'data'),
     Output('delete-confirm-msg', 'children'),
-    Input({'type': 'btn-delete', 'index': ALL}, 'n_clicks'),
+    Input({'type': 'btn-delete', 'user_id': ALL}, 'n_clicks'),
     State('user-list-store', 'data'),
     prevent_initial_call=True,
 )
 def open_delete_modal(n_clicks_list, users):
-    from dash import ctx
     if not any(n for n in n_clicks_list if n):
         return no_update, no_update, no_update
     triggered = ctx.triggered_id
     if triggered is None:
         return no_update, no_update, no_update
-    idx = triggered['index']
-    if idx >= len(users):
+    u = next((x for x in (users or []) if x['user_id'] == triggered['user_id']), None)
+    if u is None:
         return no_update, no_update, no_update
-    u = users[idx]
     msg = [
         f"'{u['display_name']} ({u['user_id']})' 계정을 삭제하시겠습니까?",
         html.Br(),
@@ -1279,6 +1323,74 @@ def confirm_delete(_, user_id, counter):
 )
 def cancel_delete(_):
     return False
+
+
+# ── 콜백: 표 안 "관리자" 체크박스 — 클릭 즉시 저장 ─────────────────────────────
+
+@callback(
+    Output({'type': 'row-admin-status', 'user_id': MATCH}, 'children'),
+    Output({'type': 'row-admin-check', 'user_id': MATCH}, 'value', allow_duplicate=True),
+    Input({'type': 'row-admin-check', 'user_id': MATCH}, 'value'),
+    prevent_initial_call=True,
+)
+def save_row_admin(is_admin):
+    """"관리자" 컬럼 체크박스 — 클릭한 순간 바로 update_user()로 저장한다
+    (사용자 확정 2026-09-04, 모달의 "저장" 버튼을 거치지 않음). 표
+    재렌더링(정렬 클릭 등)으로 이 체크박스가 새로 마운트될 때도 같은
+    콜백이 한 번 더 불릴 수 있는데(이 코드베이스가 이미 여러 번 겪은
+    "패턴매칭 컴포넌트 재마운트 시 유령 트리거" 현상), 그때 넘어오는 값은
+    항상 방금 그 시점의 실제 값이라 다시 저장해도(멱등) 데이터가 틀어지지
+    않는다."""
+    from services.auth import can, get_current_user, update_user
+    user_id = ctx.outputs_list[0]['id']['user_id']
+    if not can('manage_users'):
+        return html.I(className='bi bi-x-circle text-danger', title='권한이 없습니다.'), no_update
+    current = get_current_user()
+    if current and current['user_id'] == user_id and not is_admin:
+        # 자기 자신의 관리자 권한은 스스로 해제할 수 없다(기존 모달 저장
+        # 로직에 있던 규칙을 그대로 유지) — 체크박스를 다시 켜진 상태로
+        # 되돌리고 이유를 보여준다.
+        return (
+            html.I(className='bi bi-exclamation-triangle text-warning',
+                   title='자기 자신의 관리자 권한은 해제할 수 없습니다. 다른 관리자가 대신 해제해야 합니다.'),
+            True,
+        )
+    update_user(user_id, is_admin=bool(is_admin))
+    return html.I(className='bi bi-check-circle text-success', title='저장되었습니다.'), no_update
+
+
+# ── 콜백: 표 안 개별 권한 체크박스(4개 + People팀 제외) — 클릭 즉시 저장 ────────
+
+@callback(
+    Output({'type': 'row-perm-status', 'user_id': MATCH}, 'children'),
+    Input({'type': 'row-perm-check', 'field': 'view_evaluation', 'user_id': MATCH}, 'value'),
+    Input({'type': 'row-perm-check', 'field': 'view_incentive', 'user_id': MATCH}, 'value'),
+    Input({'type': 'row-perm-check', 'field': 'view_comments', 'user_id': MATCH}, 'value'),
+    Input({'type': 'row-perm-check', 'field': 'view_grade', 'user_id': MATCH}, 'value'),
+    Input({'type': 'row-perm-exclude', 'user_id': MATCH}, 'value'),
+    prevent_initial_call=True,
+)
+def save_row_permissions(view_evaluation, view_incentive, view_comments, view_grade, exclude_people_team):
+    """개별 권한 4개 + People팀 평가제외 체크박스 — 하나라도 바뀌면 그 행의
+    5개 값을 한꺼번에 읽어(MATCH로 같은 user_id 그룹만) update_permissions()
+    로 즉시 저장한다. 이 API는 4개 권한을 부분 업데이트가 아니라 항상 전부
+    함께 저장해야 해서(services/auth.py update_permissions 독스트링 참고),
+    Input 5개를 한 콜백에 모아 매번 완전한 상태로 저장한다. save_row_admin과
+    동일한 이유로 재마운트에 의한 재실행도 멱등이라 안전하다."""
+    from services.auth import can, update_permissions
+    from services.similarity_map import people_team_dep_ids
+    user_id = ctx.outputs_list['id']['user_id']
+    if not can('manage_users'):
+        return html.I(className='bi bi-x-circle text-danger', title='권한이 없습니다.')
+    permissions = {
+        'view_evaluation': bool(view_evaluation),
+        'view_incentive': bool(view_incentive),
+        'view_comments': bool(view_comments),
+        'view_grade': bool(view_grade),
+    }
+    excluded_dep_ids = list(people_team_dep_ids()) if exclude_people_team else []
+    update_permissions(user_id, permissions, excluded_dep_ids)
+    return html.I(className='bi bi-check-circle text-success', title='저장되었습니다.')
 
 
 # ── 콜백: 엑셀로 사용자 일괄 추가 ─────────────────────────────────────────────

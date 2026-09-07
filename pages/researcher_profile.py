@@ -48,8 +48,8 @@ from services import similarity_map
 dash.register_page(
     __name__,
     path='/',
-    name='연구원 프로필',
-    title='연구원 개별 프로필',
+    name='SAIT 인력 프로필',
+    title='SAIT 인력 개별 프로필',
 )
 
 CURRENT_YEAR = datetime.now().year
@@ -305,7 +305,7 @@ def layout(id=None, ids=None, **_kwargs):
         dbc.Row([
             dbc.Col(
                 html.H5(
-                    [html.I(className='bi bi-person-badge-fill me-2 text-primary'), '연구원 개별 프로필'],
+                    [html.I(className='bi bi-person-badge-fill me-2 text-primary'), 'SAIT 인력 개별 프로필'],
                     className='fw-bold mb-0 mt-1',
                 ),
             ),
@@ -369,7 +369,7 @@ def _bulk_layout(ids_param):
             dbc.Col(
                 html.H5(
                     [html.I(className='bi bi-people-fill me-2 text-primary'),
-                     f'연구원 프로필 일괄 인쇄 ({len(rid_list)}명)'],
+                     f'SAIT 인력 프로필 일괄 인쇄 ({len(rid_list)}명)'],
                     className='fw-bold mb-0 mt-1',
                 ),
             ),

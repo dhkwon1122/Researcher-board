@@ -21,8 +21,8 @@ from services.period_snapshot import resolve_period_snapshot as _resolve_period_
 dash.register_page(
     __name__,
     path='/researcher-list',
-    name='연구원 명단',
-    title='연구원 명단',
+    name='SAIT 인력 명단',
+    title='SAIT 인력 명단',
 )
 
 _CURRENT_YEAR = datetime.now().year
@@ -430,7 +430,7 @@ def layout():
 
         dbc.Row([
             dbc.Col(
-                html.H5([html.I(className='bi bi-table me-2 text-primary'), '연구원 명단'],
+                html.H5([html.I(className='bi bi-table me-2 text-primary'), 'SAIT 인력 명단'],
                         className='fw-bold mb-0 mt-1'),
                 className='d-flex align-items-center',
             ),

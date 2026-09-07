@@ -15,8 +15,14 @@ app = dash.Dash(
     use_pages=True,
     external_stylesheets=[dbc.themes.BOOTSTRAP, dbc.icons.BOOTSTRAP],
     suppress_callback_exceptions=True,
-    title='연구원 대시보드',
+    title='SAIT in 360°',
 )
+
+# 브랜드명("SAIT in 360°")을 표시할 때 "AI" 부분만 파란색(#1677ff, 이 앱
+# 전역에서 쓰는 강조색)으로 칠하는 공용 헬퍼 — 네비게이션 바(흰 글씨 위)와
+# 로그인/초기설정 화면(기본 글자색 위) 둘 다 같은 문구를 재사용한다.
+def _brand_label(**span_kwargs):
+    return html.Span(['S', html.Span('AI', style={'color': '#1677ff'}), 'T in 360°'], **span_kwargs)
 
 
 def _get_or_create_secret_key() -> str:
@@ -212,7 +218,7 @@ def _html_page(title: str, body: str) -> str:
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{title} — 연구원 대시보드</title>
+  <title>{title} — SAIT in 360°</title>
   <link rel="stylesheet"
         href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
   <link rel="stylesheet"
@@ -242,7 +248,7 @@ def _html_page(title: str, body: str) -> str:
   <div class="auth-card card p-4 mx-3">
     <div class="text-center mb-4">
       <i class="bi bi-bar-chart-fill brand-icon"></i>
-      <h5 class="fw-bold mt-2 mb-1">연구원 대시보드</h5>
+      <h5 class="fw-bold mt-2 mb-1">S<span style="color:#1677ff">AI</span>T in 360&deg;</h5>
       <p class="text-muted small mb-0">피플팀 전용 시스템</p>
     </div>
     {body}
@@ -517,7 +523,7 @@ navbar = dbc.Navbar(
                         width='auto',
                     ),
                     dbc.Col(
-                        dbc.NavbarBrand('연구원 대시보드', className='fw-bold fs-5 mb-0'),
+                        dbc.NavbarBrand(_brand_label(), className='fw-bold fs-5 mb-0'),
                         width='auto',
                     ),
                     dbc.Col(feedback_modal.render(), width='auto'),
@@ -528,11 +534,11 @@ navbar = dbc.Navbar(
             dbc.Nav(
                 [
                     dbc.NavItem(dbc.NavLink(
-                        [html.I(className='bi bi-person-badge-fill me-1'), '연구원 프로필'],
+                        [html.I(className='bi bi-person-badge-fill me-1'), 'SAIT 인력 프로필'],
                         href='/', active='exact', className='text-white',
                     )),
                     dbc.NavItem(dbc.NavLink(
-                        [html.I(className='bi bi-table me-1'), '연구원 명단'],
+                        [html.I(className='bi bi-table me-1'), 'SAIT 인력 명단'],
                         href='/researcher-list', active='exact', className='text-white',
                     )),
                     dbc.NavItem(dbc.NavLink(
