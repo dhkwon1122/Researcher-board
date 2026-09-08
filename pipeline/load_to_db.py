@@ -83,6 +83,12 @@ TABLES = [
     # process_work_experience.py 참고). DB 반영 방식(전체 replace)은
     # 다른 테이블과 동일하다.
     'work_experience',
+    # 직무_직군_맵핑(2026-09-04 도입) — researcher_id 없는 순수 참조
+    # 테이블(job_function 텍스트 키)이지만, team_refer와 같은 이유로 DB에도
+    # 넣는다: 연구원 개별 프로필/전문성 MAP이 요청 시점에 이 테이블을
+    # data_store.read_processed()로 읽으므로, CSV 파일이 없는 배포
+    # 환경에서도 DS/SAIT직군 배지가 정상 표시되려면 DB 반영이 필요하다.
+    'mapping_job_function',
 ]
 
 # (테이블명, data/processed/ 안의 JSON 파일명, 각 항목에서 키로 쓸 필드명).

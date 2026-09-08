@@ -574,10 +574,11 @@ def _umap_subview_content(highlighted_rid: str | None = None):
     df = df.copy()
     df['strength_fields_str'] = df['strength_fields'].apply(lambda v: ', '.join(v) if v else '-')
     df['strength_keywords_str'] = df['strength_keywords'].apply(lambda v: ', '.join(v) if v else '-')
-    # E직군/R직군 표기는 components/detail_tabs.py의 _e_support_pill()과 동일한 규칙
-    # (원본 값이 'E'가 아니면 — 빈 값 포함 — 전부 'R직군')을 따른다.
-    e_support_label = df['e_support'].apply(lambda v: 'E직군' if str(v).strip().upper() == 'E' else 'R직군')
-    df['label'] = df['name'] + '(' + df['researcher_id'] + ')(' + e_support_label + ')'
+    # DS/SAIT 직군 표기 — components/detail_tabs.py의 owned_expertise_block()
+    # 배지와 동일하게 mapping_job_function.csv 기반 매칭(services.job_category)을
+    # 쓴다(2026-09-04, 기존 E_support 기반 R직군/E직군 표기 대체).
+    job_category_label = 'DS:' + df['job_category_ds'].astype(str) + '/SAIT:' + df['job_category_sait'].astype(str)
+    df['label'] = df['name'] + '(' + df['researcher_id'] + ')(' + job_category_label + ')'
     df['cluster_area'] = df['cluster_label'].replace('', '미분류(경계 없음)')
 
     fig = px.scatter(

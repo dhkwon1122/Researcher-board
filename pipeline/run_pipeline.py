@@ -107,6 +107,13 @@
   직무정보_부서.xlsx (직무, 세부직무, 정의)
     → data/processed/job_profile_info_sait.json 로 변환
     ※ 처리기: pipeline/process_job_profile_sait.py
+  직무_직군_맵핑.xlsx (직무, 직군(DS), 직군(SAIT))
+    → data/processed/mapping_job_function.csv 로 변환(job_function 텍스트
+      키 — researcher_id 없는 순수 참조 테이블). researchers.csv의
+      job_function과 매칭해 연구원 개별 프로필의 보유기술 DS/SAIT직군
+      배지(기존 R직군/E직군 대체, 2026-09-04)를 만드는 데 쓴다
+      (services/job_category.py).
+    ※ 처리기: pipeline/process_mapping_job_function.py
 
 [등급/Lv 기준표] ★ 원천 파일 없이 정적 데이터로 생성 (run_pipeline.py에서 자동 실행)
   → data/processed/core_technology_grade_info.json (핵심기술 등급 S/A/B 개요)
@@ -449,6 +456,9 @@ def run():
     from process_job_profile_sait import process as process_job_profile_sait
     _run_step('job_profile_info_sait', process_job_profile_sait, results,
                skip_hint='직무정보_부서.xlsx 없음')
+    from process_mapping_job_function import process as process_mapping_job_function
+    _run_step('mapping_job_function', process_mapping_job_function, results,
+               skip_hint='직무_직군_맵핑.xlsx 없음')
 
     # ── 11-2. 등급/Lv 기준표(정적 참조 데이터) ────────────────────────────
     from process_rubrics import process as process_rubrics

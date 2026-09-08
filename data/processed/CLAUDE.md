@@ -9109,3 +9109,104 @@ override와 People팀 제외가 이미 걸린 계정 1명) Playwright로 전체
 실제 dep_id 집합을 채우는지(이 샌드박스엔 team_refer 데이터가 없어
 `people_team_dep_ids()`가 항상 빈 집합을 반환 — 로직 자체는
 기존(2026-08-31) 구현을 그대로 재사용해 로직 변경 없음).
+
+## 2026-09-04 (2): 연구원 개별 프로필 "보유기술" R직군/E직군 배지 →
+직무_직군_맵핑 기반 DS/SAIT직군 배지로 교체
+
+사용자 요청: 새 원천 `직무_직군_맵핑.xlsx`(직무/직군(DS)/직군(SAIT))를
+`mapping_job_function.csv`로 전처리하고, `researchers.csv`의
+`job_function`과 텍스트로 매칭해 기존 `tech_ownership.csv`의 `E_support`
+기반 R직군/E직군 단일 배지를, "DS : {job_category_DS}직군"/
+"SAIT : {job_category_SAIT}직군" 두 개 배지로 바꿔달라는 것. 구현 전
+"이해한 내용 설명 + 확인 질문" 패턴(사용자가 최근 반복적으로 요구한
+워크플로)을 따라 4가지를 확인 후 진행: (1) 헤더는 1번째 행, (2) job_function
+매칭 자체가 실패(매핑표에 아예 없음)해도 값이 비어있는 경우와 동일하게
+"-"로 표시, (3) 이 변경을 연구원 개별 프로필뿐 아니라 R/E직군 개념을 쓰는
+다른 화면(전문성 MAP 유사 연구원 호버 라벨)에도 함께 적용, (4)
+`mapping_job_function`도 관리자 "데이터 업데이트" 탭(웹 업로드)에 등록.
+
+**신규 `pipeline/process_mapping_job_function.py`**: `job_profile_info_sait.py`
+와 같은 패턴(researcher_id 없는 순수 참조 테이블, 매 실행마다 파일 전체를
+새로 씀 — upsert 안 함)으로 원본 3개 컬럼(직무/직군(DS)/직군(SAIT))을
+`job_function`/`job_category_DS`/`job_category_SAIT`로 변환해
+`mapping_job_function.csv`에 저장. `job_function`이 빈 행은 제외,
+중복되면 첫 번째 행만 채택(경고 출력) — 이후 매칭이 항상 1:1이 되도록
+보장하기 위함. `pipeline/sources.py`(SOURCES에 헤더 0-based 0으로 등록)/
+`pipeline/run_pipeline.py`(직무정보 참조 데이터 섹션에 실행 단계 추가)/
+`pipeline/load_to_db.py`(TABLES에 추가 — team_refer와 동일한 이유: 앱이
+요청 시점에 이 테이블을 읽으므로 DB 전용 배포에서도 정상 표시되려면
+필요)에 반영.
+
+**신규 `services/job_category.py`**: 이 매칭의 유일한 창구.
+`job_category_for(rid, researchers_df, mapping_df)`(단건 조회, 연구원
+프로필 화면 2개 호출부가 사용)와 `build_job_category_map(researchers_df,
+mapping_df)`(배치 조회, 전문성 MAP처럼 여러 연구원을 순회할 때 매핑표를
+반복 조회하지 않도록)를 제공. 매칭 실패(job_function이 비었거나
+매핑표에 없음)와 매칭은 됐지만 DS/SAIT 값 자체가 빈 경우 모두 `('-', '-')`로
+통일(사용자 확정).
+
+**`components/detail_tabs.py`**: 옛 `_e_support_pill()`(단일 배지,
+`_E_SUPPORT_COLOR` 상수 포함)을 삭제하고 `_job_category_pills(ds, sait)`
+신규 — "DS : {ds}직군"(파란색 `#1677ff`)/"SAIT : {sait}직군"(보라색
+`#722ed1`) 두 배지를 나란히 보여준다. `owned_expertise_block()`에
+`job_category: tuple | None = None` 파라미터를 추가해, `tech_row`에서
+직접 `E_support`를 읽던 것 대신 호출부가 계산해 넘긴 `(DS, SAIT)` 값을
+그대로 배지로 그린다(`None`이면 배지 자체를 표시하지 않음 — 하위
+호환). `tech_ownership.csv`의 `E_support` 컬럼 자체와 처리기
+(`pipeline/process_tech_ownership.py`)는 그대로 유지(다른 곳에서 계속
+쓰일 수 있어 삭제하지 않음, 이번 변경은 "표시"만 교체).
+
+**`services/data_store.py`**: `read_profile_tables()`의 테이블 목록에
+`mapping_job_function` 추가(화면/인쇄 카드가 공유하는 `tables` dict에
+자동으로 포함됨).
+
+**`pages/researcher_profile.py`**: 화면 tech_box(1146행 부근)와 인쇄
+카드(1546행 부근) 두 `owned_expertise_block()` 호출부 모두
+`job_category=job_category.job_category_for(rid, tables['researchers'],
+tables['mapping_job_function'])`를 전달하도록 수정.
+
+**전문성 MAP 호버 라벨도 함께 전환**(사용자 확정 범위): `services/
+similarity_map.py`의 `load_similarity_map()`이 `tech_ownership.E_support`
+대신 `job_category.build_job_category_map()`으로 `job_category_ds`/
+`job_category_sait` 컬럼을 채우도록 교체. `pages/researcher_similarity_map.py`
+의 UMAP 산점도 호버 라벨을 `name(id)(E직군/R직군)`에서
+`name(id)(DS:{ds}/SAIT:{sait})` 형식으로 변경. 이 탭(`전문성 MAP`)은
+`_MAP_TAB_HIDDEN = True`로 화면에서는 숨겨진 상태지만(2026-08-13), 코드
+자체는 남아있어 재오픈 시 새 표기를 그대로 따른다.
+
+**`services/web_pipeline_runner.py`**: MANIFEST에 `mapping_job_function`
+항목 추가(`mode='exact'`, `dest_filename='직무_직군_맵핑.xlsx'`,
+`pipeline_scope='dashboard'`, `needs_valid_date` 없음 — 시점 개념 없는
+순수 참조 테이블). 관리자 "데이터 업데이트" 탭은 매니페스트를 그대로
+순회하는 제너릭 구조라 화면 코드 변경 없이 이 항목이 "공용파일"/
+"대시보드용" 구분 표에 자동으로 나타난다.
+
+**의도적으로 범위 밖으로 둔 것**: AI 검색(자연어 질문) 화이트리스트
+(`config/auth_config.py`의 `TABLE_PERMISSIONS`)에는 등록하지 않았다 —
+`job_profile_info_standard`/`job_profile_info_sait` 같은 다른 순수
+참조 테이블도 등록돼 있지 않은 기존 관례를 그대로 따름(사용자가 이번에
+명시적으로 요청하지도 않음). 필요해지면 이 화이트리스트에 한 줄만
+추가하면 된다.
+
+**검증**: `process_mapping_job_function.process()`를 합성 xlsx(정상
+2건 + 빈 job_function 1건 + 중복 job_function 1건)로 직접 실행해
+빈 행 제외/중복 첫 행 채택이 정확히 동작하는지 확인. `services/
+job_category.py`의 두 함수를 매칭 성공/실패/빈 값/빈 DataFrame 등
+경계 케이스로 직접 호출해 전부 `('-', '-')` 폴백이 정확한지 확인.
+`owned_expertise_block()`을 `job_category=('D','S')`/`None`/`('-','-')`
+세 가지로 직접 렌더링해 배지 유무·값·기존 "E직군"/"R직군" 문자열이
+전혀 안 남는 것을 확인. 호버 라벨 조립 로직을 합성 DataFrame으로
+직접 실행해 `"name(id)(DS:D/SAIT:S)"` 형식이 정확한지 확인.
+`services.web_pipeline_runner.save_upload()`→`run_one('mapping_job_function')`
+전체 웹 업로드 경로를 실제로 실행해(합성 xlsx) `mapping_job_function.csv`
+가 정상 생성되는 것을 확인(테스트로 만든 파일은 검증 후 정리 —
+`data/`는 `.gitignore` 대상이라 커밋에는 애초에 영향 없음). 변경/신규
+파일 전부 `py_compile` 통과, `dash.Dash(use_pages=True)` 컨텍스트에서
+`pages.researcher_profile`/`pages.researcher_similarity_map`/
+`services.similarity_map`/`services.job_category`/
+`services.web_pipeline_runner`/`services.data_store` 전체 임포트 확인.
+
+**미검증**: 실제 원본 `직무_직군_맵핑.xlsx`로 웹 업로드 → 화면 렌더링까지
+브라우저로 최종 확인(이 세션엔 실제 원본 파일이 없어 사용자가 설명한
+헤더 구조를 그대로 재현한 합성 데이터로만 검증), `pipeline/load_to_db.py`
+를 통한 실제 PostgreSQL 반영(DB 미설정 환경이라 CSV 경로로만 검증).
