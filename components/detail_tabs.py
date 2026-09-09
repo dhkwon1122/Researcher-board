@@ -150,7 +150,6 @@ def patents_tab(pat_df, rid):
 
 _PANEL_TITLE_STYLE = {'fontSize': '0.85rem', 'fontWeight': 600, 'color': '#1f1f1f'}
 _GRADE_PILL_COLOR = '#3f8f57'
-_E_SUPPORT_COLOR = '#1677ff'
 
 _PRINT_SUB_HEADING_STYLE = {
     'display': 'inline-block',
@@ -338,9 +337,21 @@ def _pill(text, bg, fg='#ffffff'):
     })
 
 
-def _e_support_pill(value):
-    v = str(value).strip().upper()
-    return _pill('E직군', _LEGEND_NEUTRAL) if v == 'E' else _pill('R직군', _E_SUPPORT_COLOR)
+_JOB_CATEGORY_DS_COLOR = '#1677ff'
+_JOB_CATEGORY_SAIT_COLOR = '#722ed1'
+
+
+def _job_category_pills(job_category_ds, job_category_sait):
+    """옛 R직군/E직군 단일 배지(_e_support_pill(), tech_ownership.csv의
+    E_support 기반)를 대체 — mapping_job_function.csv 기반 job_category_DS/
+    job_category_SAIT 두 값을 "DS : {값}직군"/"SAIT : {값}직군" 배지로
+    보여준다(2026-09-04, 사용자 확정). 값이 없으면(매칭 실패 포함) '-'."""
+    ds = str(job_category_ds or '').strip() or '-'
+    sait = str(job_category_sait or '').strip() or '-'
+    return html.Div([
+        _pill(f'DS : {ds}직군', _JOB_CATEGORY_DS_COLOR),
+        _pill(f'SAIT : {sait}직군', _JOB_CATEGORY_SAIT_COLOR),
+    ], className='d-flex gap-1')
 
 
 def _grade_circle(grade: str, *, size: int = 18):
@@ -520,23 +531,28 @@ def _tech_ownership_table(tech_row, *, show_index: bool = True, no_header: bool 
 
 
 def owned_expertise_block(core_df, tech_df, rid, *, stacked: bool = False, show_tech_index: bool = True,
-                           show_info_hover: bool = True, compact: bool = False):
+                           show_info_hover: bool = True, compact: bool = False, job_category=None):
     """보유 전문성 — 핵심기술(core_technology.csv) / 보유기술(tech_ownership.csv)을
     기본은 좌우로 나눠 표시(좌: 기술분야·핵심기술(등급 배지), 우: 전문분야별
-    Lv·보유율, 상단에 E/R 직군 배지). stacked=True면 좌우 대신 핵심기술 아래에
-    보유기술을 세로로 쌓는다(A4 인쇄처럼 가로 폭이 좁아 2단이 부담스러울 때).
-    show_tech_index=False면 보유기술 표의 "구분"(1~5 순번) 열을 뺀다.
-    show_info_hover=False면 "등급 개요"/"Lv 개요" 마우스 오버 안내(_info_hover())를
-    아예 뺀다 — 종이 인쇄본에는 호버가 없어 의미가 없고, 이 함수가 화면·인쇄본
-    양쪽에서 호출되면 같은 id를 가진 요소가 DOM에 중복되는 문제도 같이 없앤다.
-    compact=True면 표 헤더를 없앤다(사용자 요청, A4 인쇄본 전용) — 핵심기술은
-    표 대신 "(등급)분야 > 기술명" 텍스트 나열로, 보유기술은 헤더 없이 데이터
-    행만 바로 보여준다. "핵심기술"/"보유기술" 섹션 제목도 compact일 때는
-    `print_sub_heading()`(네모 박스로 감싼 중제목)으로 바뀐다(사용자 요청)."""
+    Lv·보유율, 상단에 DS/SAIT 직군 배지). stacked=True면 좌우 대신 핵심기술
+    아래에 보유기술을 세로로 쌓는다(A4 인쇄처럼 가로 폭이 좁아 2단이
+    부담스러울 때). show_tech_index=False면 보유기술 표의 "구분"(1~5 순번)
+    열을 뺀다. show_info_hover=False면 "등급 개요"/"Lv 개요" 마우스 오버
+    안내(_info_hover())를 아예 뺀다 — 종이 인쇄본에는 호버가 없어 의미가
+    없고, 이 함수가 화면·인쇄본 양쪽에서 호출되면 같은 id를 가진 요소가
+    DOM에 중복되는 문제도 같이 없앤다. compact=True면 표 헤더를 없앤다
+    (사용자 요청, A4 인쇄본 전용) — 핵심기술은 표 대신 "(등급)분야 > 기술명"
+    텍스트 나열로, 보유기술은 헤더 없이 데이터 행만 바로 보여준다.
+    "핵심기술"/"보유기술" 섹션 제목도 compact일 때는 `print_sub_heading()`
+    (네모 박스로 감싼 중제목)으로 바뀐다(사용자 요청).
+    job_category=(job_category_DS, job_category_SAIT) 튜플을 넘기면 "보유기술"
+    제목 옆에 DS/SAIT 직군 배지를 보여준다(mapping_job_function.csv 기반,
+    services.job_category — 2026-09-04, 기존 tech_ownership.csv의 E_support
+    기반 R직군/E직군 배지 대체). None이면(호출부가 계산해 넘기지 않으면)
+    배지 자체를 표시하지 않는다."""
     core = core_df[core_df['researcher_id'] == rid] if not core_df.empty else pd.DataFrame()
     tech = tech_df[tech_df['researcher_id'] == rid] if not tech_df.empty else pd.DataFrame()
     tech_row = tech.iloc[0] if not tech.empty else None
-    e_support = tech_row.get('E_support') if tech_row is not None else None
 
     left_title = html.Div(print_sub_heading('핵심기술'), className='mb-2') if compact \
         else html.P('핵심기술', style=_PANEL_TITLE_STYLE, className='mb-2')
@@ -553,8 +569,8 @@ def owned_expertise_block(core_df, tech_df, rid, *, stacked: bool = False, show_
         right_title_main,
         html.Span("('25년기준)", style={'fontSize': '0.68rem', 'color': _LEGEND_NEUTRAL, 'marginLeft': '3px'}),
     ]
-    if e_support is not None:
-        right_title_children.append(html.Div(_e_support_pill(e_support), className='ms-auto'))
+    if job_category is not None:
+        right_title_children.append(html.Div(_job_category_pills(*job_category), className='ms-auto'))
 
     right_children = [
         html.Div(right_title_children, className='d-flex align-items-center mb-2'),

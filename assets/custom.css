@@ -199,21 +199,23 @@ h1, h2, h3, h4, h5, h6 {
   border-color: var(--gs-border-2) !important;
 }
 
-/* 관리자 "데이터 업데이트" 탭 표 — 헤더 글씨가 셀 내용보다 작아 보이던 문제
-   해결(2026-09-01, 사용자 확정) + 헤더 가운데 정렬. 이 표 전용으로만
-   범위를 좁혀서(사용자 확정) 앱 전체 다른 표의 헤더 스타일(위 전역
-   .table thead th 규칙)은 그대로 둔다. */
-.data-update-table thead th {
+/* 관리자 화면의 dbc.Table 기반 표들("데이터 업데이트"/"사용자·권한 관리") —
+   헤더 글씨가 셀 내용보다 작아 보이던 문제 해결(2026-09-01, 사용자 확정) +
+   헤더 가운데 정렬. 이 클래스를 붙인 표로만 범위를 좁혀서(사용자 확정)
+   앱 전체 다른 표의 헤더 스타일(위 전역 .table thead th 규칙)은 그대로
+   둔다. 2026-09-04: 원래 "데이터 업데이트" 탭 전용이었던 이 클래스를
+   "사용자/권한 관리" 표(정렬 가능한 헤더 추가)에도 재사용하도록 일반화. */
+.admin-table thead th {
   font-size: 0.85rem;
   text-align: center;
 }
 
-/* "데이터 업데이트" 표 컬럼 크기 조절(2026-09-02, 사용자 확정) — 이 표는
-   dash_table.DataTable이 아니라 일반 dbc.Table이라 컬럼 너비 드래그 조절
-   기능이 없다. 헤더 라벨을 감싼 span에 브라우저 네이티브 CSS resize를
-   적용해 우측 하단 모서리를 드래그해 너비를 조절할 수 있게 한다(팀/리더
-   참조 표의 .column-header-name 방식과 동일한 발상). */
-.data-update-table .du-th-resize {
+/* "데이터 업데이트"/"사용자·권한 관리" 표 컬럼 크기 조절(2026-09-02, 사용자
+   확정) — 이 표들은 dash_table.DataTable이 아니라 일반 dbc.Table이라
+   컬럼 너비 드래그 조절 기능이 없다. 헤더 라벨을 감싼 span에 브라우저
+   네이티브 CSS resize를 적용해 우측 하단 모서리를 드래그해 너비를 조절할
+   수 있게 한다(팀/리더 참조 표의 .column-header-name 방식과 동일한 발상). */
+.admin-table .du-th-resize {
   display: inline-block;
   resize: horizontal;
   overflow: auto;

@@ -93,4 +93,6 @@ SOURCES = [
     ('job_profile_info_sait', '직무정보_부서.xlsx', 0),  # 1번째 행
     ('language_qualification', '어학자격 *.xlsx', 6),   # 7번째 행(사용자 확인, 1~6행 무시)
     ('work_experience', '임직원 근무경력 *.xlsx', 5),    # 6번째 행(사용자 확인, 1~5행 무시)
+    ('mapping_job_function', '직무_직군_맵핑.xlsx', 0),  # 1번째 행(사용자 확인)
+    ('exception_job_function', '직무_직군_맵핑_예외자.xlsx', 0),  # 1번째 행(사용자 확인)
 ]

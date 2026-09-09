@@ -16,7 +16,25 @@
   전문대: 전문대, 전문학사, Associate 등
   고교  : 고교, 고등학교, High School 등
 
-※ 연구원별 학사·석사·박사 학력이 있으면 고교·전문대는 제외
+※ 연구원별 "최종학력"(가진 학위 중 가장 높은 것, 박사>석사>학사>전문대>고교
+  우선순위) 기준으로, 아래 표대로 함께 보여줄 하위 학력만 남기고 나머지는
+  제외한다(2026-09-09, 사용자 확정 — 표시 화면 3곳(엑셀 다운로드/연구원
+  개별 프로필/A4 인쇄 카드)이 전부 이 education.csv 하나를 공유하므로,
+  화면마다 따로 거르지 않고 여기서 한 번만 정리한다):
+    최종학력 박사  → 박사, 석사, 학사
+    최종학력 석사  → 석사, 학사
+    최종학력 학사  → 학사, 전문대, 고교
+    최종학력 전문대 → 전문대, 고교
+    최종학력 고교  → 고교
+  (하위 학력 정보가 원본에 아예 없으면 그 줄은 그냥 없는 것 — 빈 값으로
+  채우지 않는다.) 5가지 표준 학위 중 어디에도 안 맞는 원본 표기(예:
+  "수료" 등)는 이 필터 대상이 아니며 항상 그대로 보존한다(기존 동작
+  유지 — 최종학력 판정 자체도 이 5가지 표준 학위만 대상으로 한다).
+  ⚠️ 이 규칙은 education.csv를 만드는 시점(파이프라인)에 적용되므로,
+  이미 처리돼 저장된 사람에게 반영하려면 원본 임직원 학력 파일로
+  다시 실행(재업로드 포함)해야 한다 — 이번 변경 이전에 이미 걸러져 저장된
+  하위 학력(예: 학사가 최종인데 전문대 이력이 있던 경우)은, 그 사람의
+  원본 파일이 다시 처리되기 전까지는 이미 사라진 상태 그대로다.
 
 컬럼명 설정은 파일 상단의 COL_* 상수에서 수정하세요.
 """
@@ -47,8 +65,17 @@ DEGREE_MAP = [
     (['고교', '고등학교', '고졸', 'high school', 'highschool', '고등학교졸업'], '고교'),
 ]
 
-HIGHER_DEGREES = {'박사', '석사', '학사'}
 DEG_ORDER = {'박사': 0, '석사': 1, '학사': 2, '전문대': 3, '고교': 4}
+
+# 최종학력(DEG_ORDER 기준 가장 높은 것)별로 함께 남길 하위 학력 집합
+# (2026-09-09, 사용자 확정 — 모듈 docstring 표 참고).
+_KEEP_MAP = {
+    '박사': {'박사', '석사', '학사'},
+    '석사': {'석사', '학사'},
+    '학사': {'학사', '전문대', '고교'},
+    '전문대': {'전문대', '고교'},
+    '고교': {'고교'},
+}
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
@@ -126,15 +153,19 @@ def process(raw_dir: str = RAW_DIR) -> bool:
 
     rows = []
     for rid, grp in df.groupby('researcher_id'):
-        has_higher    = grp['_degree_std'].isin(HIGHER_DEGREES).any()
-        has_associate = (grp['_degree_std'] == '전문대').any()
+        # 최종학력(DEG_ORDER 우선순위상 가장 높은 표준 학위) 판정 — DEG_ORDER의
+        # 키 순회 순서가 곧 박사>석사>학사>전문대>고교 우선순위다. 5가지 표준
+        # 학위 중 어디에도 안 맞는 원본 표기만 있으면(전부 매칭 실패) 최종학력을
+        # 판정할 수 없으므로 keep_set=None으로 두어 이 사람 행은 필터 없이
+        # 전부 통과시킨다(기존 동작 유지).
+        present = set(grp['_degree_std'])
+        final_degree = next((d for d in DEG_ORDER if d in present), None)
+        keep_set = _KEEP_MAP.get(final_degree) if final_degree else None
         for _, row in grp.iterrows():
             deg = row['_degree_std']
-            # 학사 이상이 있으면 전문대·고교 제외
-            if has_higher and deg in ('고교', '전문대'):
-                continue
-            # 전문대가 있으면 고교 제외 (전문대가 최종학력인 경우에만 전문대 표시)
-            if has_associate and deg == '고교':
+            # keep_set에 없는 표준 학위만 제외한다 — 표준 학위가 아닌 원본
+            # 표기(deg not in DEG_ORDER)는 이 필터 대상이 아니라 항상 통과.
+            if keep_set is not None and deg in DEG_ORDER and deg not in keep_set:
                 continue
             school = str(row.get(COL_SCHOOL, '')).strip() if COL_SCHOOL in df.columns else ''
             major  = str(row.get(COL_MAJOR,  '')).strip() if COL_MAJOR  in df.columns else ''

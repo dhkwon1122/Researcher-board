@@ -8983,3 +8983,426 @@ must_place는 `_fallback_must_place()`로 대체되는 것 확인. `py_compile`
 확인(이 세션엔 실제 데이터가 없어 합성 데이터로만 검증) — 다만 표시
 계층 수정이 파일 재처리 없이 즉시 적용되므로 서버 재기동만으로 반영될
 것으로 예상.
+
+## 2026-09-04: 브랜드명 "SAIT in 360°" 전환 + 관리자 "사용자/권한 관리"
+탭 — 컬럼 정렬 + 표 인라인 권한 편집(즉시 저장) + 모달 축소
+
+사용자 요청 2가지, 구현 전 4개 질문(AskUserQuestion)으로 세부 방식 확정.
+
+### 1) 좌측 상단 브랜드명 → "SAIT in 360°"
+
+"AI"만 파란색(#1677ff, 이 앱이 이미 쓰는 강조색)으로, 나머지는 원래
+글자색(네비게이션 바=흰색, 로그인/초기설정 카드=기본 검정) 유지. 확인
+질문에서 "전체(탭 제목·로그인 화면 포함)"로 확정, 추가로 사용자가
+"연구원 프로필"/"연구원 명단" 탭 이름도 "SAIT 인력 프로필"/"SAIT 인력
+명단"으로 바꿔달라고 요청.
+
+- `app.py`: 앱 레벨 `title`, 네비게이션 바 브랜드(`_brand_label()` 신규
+  헬퍼 — `html.Span(['S', html.Span('AI', style={'color':'#1677ff'}), 'T in 360°'])`),
+  로그인/초기설정 `_html_page()`의 `<title>` 접미사와 h5 브랜드 텍스트(원시
+  HTML 문자열이라 별도로 동일한 스타일을 인라인으로 작성), 두 개
+  NavLink 텍스트('연구원 프로필'→'SAIT 인력 프로필' 등) 전부 교체.
+- `pages/researcher_profile.py`/`pages/researcher_list.py`:
+  `dash.register_page()`의 `name`/`title`과 화면 상단 H5 제목(연구원
+  개별 프로필/연구원 명단/일괄 인쇄 제목)도 "SAIT 인력 ..." 형태로 통일
+  — 탭 이름과 브라우저 탭 제목·화면 제목이 어긋나지 않도록. 인쇄 문서
+  자체의 제목("연구원 프로필", A4 카드 상단)과 인쇄용 `document.title`
+  오버라이드는 대상에서 제외(공식 출력물 파일명/제목이라 보수적으로
+  유지 — 사용자가 명시적으로 요청한 범위가 아님).
+
+### 2) 관리자 "사용자/권한 관리" 탭 — 정렬 + 인라인 권한 편집 + 모달 축소
+
+확인 질문 4개로 확정: (1) 권한 표시는 컬럼을 6개 늘려 체크박스를 표에
+직접 노출(팝오버 방식 대신), (2) 체크박스 클릭 즉시 자동 저장, (3)
+정렬은 전체 컬럼(신분 정보 + 권한 컬럼 전부) 대상.
+
+**컬럼 정렬**: 이 표는 `dbc.Table`(badge/버튼이 든 셀이라
+`dash_table.DataTable` 네이티브 정렬을 못 씀)이라 직접 구현 —
+`_sort_th()`가 헤더를 클릭 가능한 `html.Span`(패턴매칭 id
+`{'type':'user-sort-th','col':...}`)으로 감싸고, `dcc.Store('user-sort-state')`
++ `toggle_user_sort()` 콜백(클릭할 때마다 오름차순↔내림차순 토글, 다른
+컬럼 클릭 시 오름차순부터 시작)으로 상태를 관리한다. `render_user_table_body()`
+가 `Input('user-sort-state')`+`Input('user-list-store')` 둘 다 구독해
+`_build_user_rows()`(정렬 적용 후 `_user_row()` 매핑)로 표 본문을 다시
+그린다.
+
+**⚠️ 정렬 도입에 따른 필수 선행 리팩터링**: 기존 수정/삭제 버튼이
+`{'type':'btn-edit','index':idx}`처럼 **표시 순서상의 위치**를 id로
+쓰고 있었는데, 정렬이 도입되면 화면에 보이는 순서와 `user-list-store`
+데이터의 실제 순서가 달라져 클릭한 행과 실제로 수정/삭제되는 계정이
+어긋나는 문제가 생긴다. 그래서 이번에 모든 행 단위 id를
+`{'...,'user_id': u['user_id']}`(안정적인 고유 식별자) 기준으로
+전환하고, `open_edit_modal()`/`open_delete_modal()`도 `users[idx]`
+위치 조회 대신 `next(u for u in users if u['user_id']==...)`로
+바꿨다 — 정렬 여부와 무관하게 항상 올바른 계정을 찾는다.
+
+**표에 6개 권한 컬럼 추가 + 인라인 즉시 저장**: `_INLINE_PERM_COLUMNS`
+(관리자/평가등급/People제외/인센티브/코멘트/리더십)를 신설해 각 컬럼에
+`dbc.Checkbox`를 배치(`_perm_checkbox_cell()`), 초기 체크 상태는
+`_effective_permissions()`(역할 기본값 vs 계정별 override, 기존 모달의
+초기값 계산 로직을 그대로 옮김)로 계산. 클릭 즉시 저장하는 콜백 2개:
+- `save_row_admin()` — `{'type':'row-admin-check','user_id':MATCH}`
+  하나짜리 Input, `update_user(user_id, is_admin=...)` 즉시 호출.
+  자기 자신의 관리자 권한 해제는 기존 모달 로직과 동일하게 차단(체크박스를
+  다시 켠 상태로 되돌리고 경고 아이콘 표시).
+- `save_row_permissions()` — 개별 권한 4개 + People팀 제외 체크박스
+  Input 5개를 `user_id: MATCH`로 한데 묶어, 하나라도 바뀌면 5개 값을
+  전부 모아 `update_permissions()`(4개 권한을 항상 전부 함께 저장해야
+  하는 API라 부분 업데이트가 안 됨)로 즉시 저장.
+
+**⚠️ 구현 중 발견·수정한 버그(실제 재현 후 수정)**: 처음엔 저장 상태
+표시용 작은 아이콘(`row-perm-status`)을 6개 권한 컬럼 셀마다 각각
+`_perm_checkbox_cell()` 호출 시 매번 새로 만들어 넣었는데, `save_row_permissions()`
+의 Output이 이 id 하나뿐인 단일 Output이라 — 같은 `user_id`를 가진
+`row-perm-status` DOM 요소가 한 행에 5개(개별 권한 4개 + People팀 제외
+컬럼 각각)나 동시에 존재하게 됐다. 실제 브라우저(Playwright)로 체크박스를
+클릭해보니 서버로 요청 자체가 전혀 안 나가는 것을 발견 — 콘솔에
+"Multiple objects were found for an `Output` of a callback that only
+takes one value"라는 dash-renderer 에러가 떠 있었다(화면에는 아무
+표시도 안 되고 조용히 실패해 처음엔 원인을 몰랐음 — `page.on('console')`
+으로 잡아냄). 원인은 MATCH 콜백의 Output에 해당하는 id를 가진 DOM
+요소가 한 그룹 안에 여러 개면 dash-renderer가 "어느 걸 갱신해야 할지
+모른다"며 그 콜백 실행 자체를 포기해버리는 것 — 체크박스 자체는
+브라우저 native 토글로 겉보기엔 정상 작동하는 것처럼 보여서(클릭하면
+체크 모양은 바뀜) 더 알아채기 어려웠다. **수정**: 상태 아이콘을 6개
+컬럼 중 대표 1곳(관리자 컬럼엔 `row-admin-status`, 개별 권한 5개 컬럼
+중에는 `view_evaluation` 컬럼 하나에만 `row-perm-status`)에만 두도록
+`_perm_checkbox_cell()`을 고쳐, 행(user_id)당 정확히 1개씩만 존재하게
+했다.
+
+**모달 축소**: "수정"/"추가" 모달에서 관리자 권한 체크박스
+(`modal-is-admin`)와 개별 권한 섹션(`modal-permissions-section` 전체 —
+평가등급/People팀 제외/나머지 3개 권한) 전부를 제거 — 이제 모달은
+아이디·이름·역할·이메일·(수정 시에만) 새 비밀번호·비밀번호 확인만
+남는다. `save_user()`에서도 관리자 권한/개별 권한 저장 로직을 전부
+제거(신규 계정은 항상 `is_admin=False`로 시작 — 관리자 권한 부여는
+생성 후 표 체크박스로). 자기 자신 관리자 해제 방지 로직도 모달에서
+빠지고 `save_row_admin()`으로 이동.
+
+**CSS 공유**: 표 헤더 폰트 크기·정렬을 맞추던 기존 `.data-update-table`
+클래스(2026-09-01, "데이터 업데이트" 탭 전용으로 도입)를 `.admin-table`로
+일반화해 이번에 새로 만든 "사용자/권한 관리" 표에도 재사용 — 두 표
+모두 `admin-table` 클래스를 붙인다(컬럼 리사이즈용 `.du-th-resize`,
+체크박스 시인성용 `.du-check-box`는 이름 그대로 재사용, 이미 범용적으로
+쓰이던 이름이라 변경 없음).
+
+**검증**: 실제로 로컬 서버를 띄우고(JSON 백엔드, `config/users.json`에
+합성 계정 3개 — 관리자 1명 + 역할 기본값만 쓰는 계정 1명 + 개별
+override와 People팀 제외가 이미 걸린 계정 1명) Playwright로 전체
+흐름을 확인: (1) 로그인 화면 브랜드("SAIT in 360°", "AI" 파란색) 렌더링,
+(2) 네비게이션 바 브랜드·탭 라벨("SAIT 인력 프로필"/"SAIT 인력 명단")
+확인, (3) 표 헤더 12개(신분 5 + 권한 6 + 관리)가 정확한 순서로 렌더링,
+(4) 3개 합성 계정의 6개 권한 체크박스 초기값이 `_effective_permissions()`
+로 손으로 계산한 값과 정확히 일치, (5) "아이디" 헤더 클릭 → 오름차순
+정렬 확인, 재클릭 → 내림차순 확인, (6) 개별 권한 체크박스 토글 →
+버그 발견·수정 후 재검증 → 클릭 즉시 저장되고 페이지 새로고침 후에도
+유지되는 것 확인, (7) 관리자 체크박스 토글(다른 계정) → 저장 확인,
+자기 자신 것은 해제 시도 시 원래대로 복구되고 실제로 안 바뀌는 것
+확인, (8) "수정"/"추가" 모달에 6개 필드만 남고 권한 관련 텍스트가
+없는 것 확인, (9) "데이터 업데이트"/"팀·리더 참조" 탭이 CSS 클래스명
+변경 후에도 정상 렌더링되는 것(회귀 없음) 확인. 테스트에 쓴 서버
+프로세스·합성 계정은 검증 후 모두 정리(`config/users.json`은
+`.gitignore` 대상이라 커밋에는 애초에 영향 없음).
+
+**미검증**: 실제 PostgreSQL 백엔드에서의 동작(JSON 폴백 경로로만
+검증), 실제 조직도 데이터가 있는 환경에서 People팀 제외 체크박스가
+실제 dep_id 집합을 채우는지(이 샌드박스엔 team_refer 데이터가 없어
+`people_team_dep_ids()`가 항상 빈 집합을 반환 — 로직 자체는
+기존(2026-08-31) 구현을 그대로 재사용해 로직 변경 없음).
+
+## 2026-09-04 (2): 연구원 개별 프로필 "보유기술" R직군/E직군 배지 →
+직무_직군_맵핑 기반 DS/SAIT직군 배지로 교체
+
+사용자 요청: 새 원천 `직무_직군_맵핑.xlsx`(직무/직군(DS)/직군(SAIT))를
+`mapping_job_function.csv`로 전처리하고, `researchers.csv`의
+`job_function`과 텍스트로 매칭해 기존 `tech_ownership.csv`의 `E_support`
+기반 R직군/E직군 단일 배지를, "DS : {job_category_DS}직군"/
+"SAIT : {job_category_SAIT}직군" 두 개 배지로 바꿔달라는 것. 구현 전
+"이해한 내용 설명 + 확인 질문" 패턴(사용자가 최근 반복적으로 요구한
+워크플로)을 따라 4가지를 확인 후 진행: (1) 헤더는 1번째 행, (2) job_function
+매칭 자체가 실패(매핑표에 아예 없음)해도 값이 비어있는 경우와 동일하게
+"-"로 표시, (3) 이 변경을 연구원 개별 프로필뿐 아니라 R/E직군 개념을 쓰는
+다른 화면(전문성 MAP 유사 연구원 호버 라벨)에도 함께 적용, (4)
+`mapping_job_function`도 관리자 "데이터 업데이트" 탭(웹 업로드)에 등록.
+
+**신규 `pipeline/process_mapping_job_function.py`**: `job_profile_info_sait.py`
+와 같은 패턴(researcher_id 없는 순수 참조 테이블, 매 실행마다 파일 전체를
+새로 씀 — upsert 안 함)으로 원본 3개 컬럼(직무/직군(DS)/직군(SAIT))을
+`job_function`/`job_category_DS`/`job_category_SAIT`로 변환해
+`mapping_job_function.csv`에 저장. `job_function`이 빈 행은 제외,
+중복되면 첫 번째 행만 채택(경고 출력) — 이후 매칭이 항상 1:1이 되도록
+보장하기 위함. `pipeline/sources.py`(SOURCES에 헤더 0-based 0으로 등록)/
+`pipeline/run_pipeline.py`(직무정보 참조 데이터 섹션에 실행 단계 추가)/
+`pipeline/load_to_db.py`(TABLES에 추가 — team_refer와 동일한 이유: 앱이
+요청 시점에 이 테이블을 읽으므로 DB 전용 배포에서도 정상 표시되려면
+필요)에 반영.
+
+**신규 `services/job_category.py`**: 이 매칭의 유일한 창구.
+`job_category_for(rid, researchers_df, mapping_df)`(단건 조회, 연구원
+프로필 화면 2개 호출부가 사용)와 `build_job_category_map(researchers_df,
+mapping_df)`(배치 조회, 전문성 MAP처럼 여러 연구원을 순회할 때 매핑표를
+반복 조회하지 않도록)를 제공. 매칭 실패(job_function이 비었거나
+매핑표에 없음)와 매칭은 됐지만 DS/SAIT 값 자체가 빈 경우 모두 `('-', '-')`로
+통일(사용자 확정).
+
+**`components/detail_tabs.py`**: 옛 `_e_support_pill()`(단일 배지,
+`_E_SUPPORT_COLOR` 상수 포함)을 삭제하고 `_job_category_pills(ds, sait)`
+신규 — "DS : {ds}직군"(파란색 `#1677ff`)/"SAIT : {sait}직군"(보라색
+`#722ed1`) 두 배지를 나란히 보여준다. `owned_expertise_block()`에
+`job_category: tuple | None = None` 파라미터를 추가해, `tech_row`에서
+직접 `E_support`를 읽던 것 대신 호출부가 계산해 넘긴 `(DS, SAIT)` 값을
+그대로 배지로 그린다(`None`이면 배지 자체를 표시하지 않음 — 하위
+호환). `tech_ownership.csv`의 `E_support` 컬럼 자체와 처리기
+(`pipeline/process_tech_ownership.py`)는 그대로 유지(다른 곳에서 계속
+쓰일 수 있어 삭제하지 않음, 이번 변경은 "표시"만 교체).
+
+**`services/data_store.py`**: `read_profile_tables()`의 테이블 목록에
+`mapping_job_function` 추가(화면/인쇄 카드가 공유하는 `tables` dict에
+자동으로 포함됨).
+
+**`pages/researcher_profile.py`**: 화면 tech_box(1146행 부근)와 인쇄
+카드(1546행 부근) 두 `owned_expertise_block()` 호출부 모두
+`job_category=job_category.job_category_for(rid, tables['researchers'],
+tables['mapping_job_function'])`를 전달하도록 수정.
+
+**전문성 MAP 호버 라벨도 함께 전환**(사용자 확정 범위): `services/
+similarity_map.py`의 `load_similarity_map()`이 `tech_ownership.E_support`
+대신 `job_category.build_job_category_map()`으로 `job_category_ds`/
+`job_category_sait` 컬럼을 채우도록 교체. `pages/researcher_similarity_map.py`
+의 UMAP 산점도 호버 라벨을 `name(id)(E직군/R직군)`에서
+`name(id)(DS:{ds}/SAIT:{sait})` 형식으로 변경. 이 탭(`전문성 MAP`)은
+`_MAP_TAB_HIDDEN = True`로 화면에서는 숨겨진 상태지만(2026-08-13), 코드
+자체는 남아있어 재오픈 시 새 표기를 그대로 따른다.
+
+**`services/web_pipeline_runner.py`**: MANIFEST에 `mapping_job_function`
+항목 추가(`mode='exact'`, `dest_filename='직무_직군_맵핑.xlsx'`,
+`pipeline_scope='dashboard'`, `needs_valid_date` 없음 — 시점 개념 없는
+순수 참조 테이블). 관리자 "데이터 업데이트" 탭은 매니페스트를 그대로
+순회하는 제너릭 구조라 화면 코드 변경 없이 이 항목이 "공용파일"/
+"대시보드용" 구분 표에 자동으로 나타난다.
+
+**의도적으로 범위 밖으로 둔 것**: AI 검색(자연어 질문) 화이트리스트
+(`config/auth_config.py`의 `TABLE_PERMISSIONS`)에는 등록하지 않았다 —
+`job_profile_info_standard`/`job_profile_info_sait` 같은 다른 순수
+참조 테이블도 등록돼 있지 않은 기존 관례를 그대로 따름(사용자가 이번에
+명시적으로 요청하지도 않음). 필요해지면 이 화이트리스트에 한 줄만
+추가하면 된다.
+
+**검증**: `process_mapping_job_function.process()`를 합성 xlsx(정상
+2건 + 빈 job_function 1건 + 중복 job_function 1건)로 직접 실행해
+빈 행 제외/중복 첫 행 채택이 정확히 동작하는지 확인. `services/
+job_category.py`의 두 함수를 매칭 성공/실패/빈 값/빈 DataFrame 등
+경계 케이스로 직접 호출해 전부 `('-', '-')` 폴백이 정확한지 확인.
+`owned_expertise_block()`을 `job_category=('D','S')`/`None`/`('-','-')`
+세 가지로 직접 렌더링해 배지 유무·값·기존 "E직군"/"R직군" 문자열이
+전혀 안 남는 것을 확인. 호버 라벨 조립 로직을 합성 DataFrame으로
+직접 실행해 `"name(id)(DS:D/SAIT:S)"` 형식이 정확한지 확인.
+`services.web_pipeline_runner.save_upload()`→`run_one('mapping_job_function')`
+전체 웹 업로드 경로를 실제로 실행해(합성 xlsx) `mapping_job_function.csv`
+가 정상 생성되는 것을 확인(테스트로 만든 파일은 검증 후 정리 —
+`data/`는 `.gitignore` 대상이라 커밋에는 애초에 영향 없음). 변경/신규
+파일 전부 `py_compile` 통과, `dash.Dash(use_pages=True)` 컨텍스트에서
+`pages.researcher_profile`/`pages.researcher_similarity_map`/
+`services.similarity_map`/`services.job_category`/
+`services.web_pipeline_runner`/`services.data_store` 전체 임포트 확인.
+
+**미검증**: 실제 원본 `직무_직군_맵핑.xlsx`로 웹 업로드 → 화면 렌더링까지
+브라우저로 최종 확인(이 세션엔 실제 원본 파일이 없어 사용자가 설명한
+헤더 구조를 그대로 재현한 합성 데이터로만 검증), `pipeline/load_to_db.py`
+를 통한 실제 PostgreSQL 반영(DB 미설정 환경이라 CSV 경로로만 검증).
+
+## 2026-09-09: SAIT직군 예외자 명단 추가 — mapping_job_function 매칭 결과를
+researcher_id 단위로 강제 override + 관리자 "직군 예외자" 웹 CRUD 탭 신설
+
+사용자 요청: 앞서(2026-09-04) DS/SAIT직군 배지로 바꾼 로직에 예외 처리가
+필요하다는 것 — 기존 로직대로면 특정 대상이 R직군(현재는 SAIT 직군 값
+자체로 표현)이어야 하지만, 예외자 명단에 있으면 다른 값(예: E직군)으로
+표기해야 한다. 4가지를 확인 후 진행: (1) 예외자 override는 기본 매칭
+성공/실패와 무관하게 항상 적용(job_function 자체가 mapping_job_function.csv
+에 없어 DS가 "-"인 사람도 SAIT는 예외값 표시), (2) 새 데이터는
+team_refer.csv처럼 시점(연/월/일) 이력을 쌓지 않고 researcher_id 기준
+"현재값만" 관리하는 단순 구조, (3) 적용 범위는 지난번과 동일하게 연구원
+프로필 + 전문성 MAP 호버 라벨 모두, (4) 관리자 "데이터 업데이트" 탭
+백엔드(web_pipeline_runner)에도 등록해 엑셀 일괄 업로드 섹션을 함께 둠.
+
+**신규 `pipeline/process_exception_job_function.py`**: `직무_직군_맵핑_예외자.xlsx`
+(사원번호/성명/직군예외) → `exception_job_function.csv`(researcher_id/name/
+exception_job_category). `process_mapping_job_function.py`와 동일하게
+`source_reader.read_source()` 경로(1~3단계 표준 파이프라인, 헤더 1행) +
+`raw_dir` 오버라이드(웹 업로드)를 지원하고, `process_team_refer.py`와 동일한
+설계로 `build_rows_from_records()`/`find_duplicate_researcher_ids()`를
+공개 함수로 분리해 관리자 화면 그리드 CRUD(아래 store)와 CLI/웹 업로드
+경로가 같은 컬럼 매핑/정제 기준을 공유하게 했다. researcher_id 빈 행 제외,
+중복은 첫 행만 채택(경고 출력). 시점 이력이 없어(사용자 확정 2번)
+`merge_utils` upsert를 쓰지 않고 매 처리마다 파일 전체를 새로 만든다
+(mapping_job_function.csv와 동일한 "현재값만" 패턴).
+
+**`pipeline/sources.py`/`run_pipeline.py`/`load_to_db.py`**: 표준 3곳에
+등록 — SOURCES에 헤더 0-based 0(사용자 확인)으로 추가, run_pipeline.py의
+"직무정보 참조 데이터" 섹션에 실행 단계 추가, load_to_db.py TABLES에
+추가(mapping_job_function과 동일한 이유 — 앱이 요청 시점에 이 테이블을
+읽으므로 DB 전용 배포에서도 정상 표시되려면 필요).
+
+**`services/job_category.py`**: `job_category_for()`/`build_job_category_map()`
+에 `exception_df` 파라미터 추가. 두 함수 모두 먼저 기존 로직대로 DS/SAIT를
+계산한 뒤(researchers.csv/mapping_job_function.csv 매칭, 실패 시 각각
+"-"), **그 결과와 완전히 무관하게** 마지막 단계에서 `exception_df`에
+`researcher_id`가 있으면 SAIT만 그 값으로 덮어쓴다(DS는 그대로) — 이
+순서 덕분에 기본 매칭이 실패해 DS가 "-"인 사람도 exception 등록만
+돼 있으면 SAIT는 예외값을 보여준다(사용자 확정 1번). `job_category_for()`
+는 기존에 여러 개의 조기 `return _BLANK, _BLANK` 분기가 있었는데, 이
+override를 모든 분기 이후 공통으로 한 번만 적용하도록 함수 흐름을
+재구성했다(개별 분기마다 override 로직을 반복하지 않기 위해).
+
+**호출부 3곳**: `services/data_store.py`의 `read_profile_tables()`
+테이블 목록에 `exception_job_function` 추가. `pages/researcher_profile.py`
+의 두 `owned_expertise_block()` 호출부(화면 tech_box, 인쇄 카드) 모두
+`job_category_for(..., tables['exception_job_function'])`로 전달.
+`services/similarity_map.py`의 `load_similarity_map()`이
+`read_processed('exception_job_function')`을 추가로 읽어
+`build_job_category_map()`에 함께 넘긴다 — 전문성 MAP 유사 연구원 호버
+라벨(`pages/researcher_similarity_map.py`, 코드는 있지만 탭 자체는
+`_MAP_TAB_HIDDEN=True`로 숨김)도 자동으로 override가 반영된다(사용자
+확정 3번, 코드 변경 불필요 — job_category 딕셔너리 값만 바뀜).
+
+**신규 `services/exception_job_function_store.py`**: `services/
+team_refer_store.py`를 단순화한 버전 — team_refer는 자연키
+`(dep_id, valid_year, valid_month, valid_day)` upsert + 삭제 톰스톤이
+필요하지만, 이 테이블은 "현재값만" 관리라 그런 장치가 전혀 없다.
+`list_editable_rows()`(researcher_id 오름차순 정렬), `save_snapshot(records)`
+(그리드의 현재 내용 전체로 CSV/DB를 **통째로 교체** — 자연키 upsert
+대신 매번 `DELETE` 후 `INSERT`, 그리드에서 지운 행은 다음 저장 결과에
+없으면 그만), `current_snapshot_workbook_bytes()`(엑셀 다운로드). DB
+테이블에 PK를 걸지 않았다(전체 교체 방식이라 ON CONFLICT가 필요 없고,
+`load_to_db.py`의 배치 적재가 어차피 테이블을 매번 plain하게 재생성해
+PK를 유지 못 하는 기존 제약이 team_refer에도 있어 — 이 테이블은 그
+문제 자체가 발생하지 않도록 설계).
+
+**`services/web_pipeline_runner.py`**: MANIFEST에 `exception_job_function`
+항목 추가(`mode='exact'`, `dest_filename='직무_직군_맵핑_예외자.xlsx'`,
+`hidden_from_table=True`, `pipeline_scope='dashboard'`, `needs_valid_date`
+없음 — team_refer와 동일하게 "데이터 업데이트" 탭 표에는 안 보이고
+그리드 CRUD 탭 안에 업로드 섹션으로만 노출).
+
+**`pages/admin.py`**: "팀/리더 참조"와 "데이터 업데이트" 탭 사이에 새
+"직군 예외자" 탭(`_exception_job_function_tab()`) 신설(사용자 확정 —
+탭 순서 그대로). team_refer 탭과 동일한 UX(그리드 CRUD + 엑셀 업로드
+섹션, `_exception_job_function_upload_section()`)이지만 시점 관련 UI는
+전부 뺐다 — 입력 날짜 선택기, 대량 백필(`_YYYYMM`) 업로드, 부서ID 중복
+전용 모달이 없다(중복 경고는 저장 알림 문구 안에 간단히 포함). 신규
+콜백 5개: `exception_job_function_add_row`/`_renumber_on_change`(행
+추가/삭제 후 No. 재번호, team_refer와 동일한 idempotent 패턴)/`_save`/
+`_download`/`_run_upload`. 기존 `data_update_on_upload`(파일 업로드
+라우팅)와 `data_update_poll`(진행 상황 폴링) 두 콜백은 Output을
+`team-refer-upload-status`와 동일한 방식으로 하나씩 더 늘려
+(`exception-job-function-upload-status`), `trig['key'] ==
+'exception_job_function'`일 때 그 전용 상태 자리로 알림이 가도록
+분기를 추가했다(team_refer 분기와 나란히).
+
+**검증**: `process_exception_job_function.process()`를 합성 xlsx(정상
+2건 + 빈 사번 1건 + 중복 사번 1건)로 직접 실행해 빈 행 제외/중복 첫
+행 채택 확인. `services/job_category.py`의 두 함수를 "기본 매칭
+성공+예외 있음"/"기본 매칭 실패(DS='-')+예외 있음"/"예외 없음" 3가지
+경계 케이스로 직접 호출해 DS 유지·SAIT override·override 미적용이 각각
+정확히 동작하는 것을 확인(가장 중요한 사용자 확정 1번 규칙). `owned_
+expertise_block()`을 override된 `(DS, SAIT)` 튜플로 렌더링해 배지에
+정확히 반영되는 것 확인. `services/exception_job_function_store.py`를
+실제 저장 경로(data/processed/exception_job_function.csv, 테스트 후
+삭제)로 저장→조회→재저장(값 변경)→중복 감지→엑셀 워크북 생성까지
+end-to-end 확인. `pages/admin.py`의 `_exception_job_function_tab()`
+렌더링(모든 컴포넌트 id 포함 확인), `add_row`/`renumber_on_change`/
+`save`(auth.can·store.save_snapshot 모킹)/`download`/`run_upload`
+(wpr.has_upload·start_run 모킹) 콜백 함수를 전부 직접 호출해 확인.
+`data_update_on_upload`/`data_update_poll`의 Output 개수와 return 튜플
+개수가 각각 4/5로 정확히 일치하는 것을 코드 검토로 확인(dash.callback_
+context를 테스트 환경에서 완전히 흉내 내기 어려워 실제 트리거 분기까지는
+실행 검증하지 못했지만, team_refer가 이미 쓰고 있는 것과 동일한 패턴을
+한 줄만 더 얹은 것이라 위험도는 낮다고 판단). 변경/신규 파일 전부
+`py_compile` 통과, `dash.Dash(use_pages=True)` 컨텍스트에서 전체 페이지
+임포트 확인. 테스트로 만든 `data/processed/exception_job_function.csv`는
+검증 후 삭제.
+
+**미검증**: 실제 브라우저에서 "직군 예외자" 탭 조작(행 추가/삭제/저장/
+엑셀 업로드/실행 버튼), `data_update_on_upload`/`data_update_poll`의
+실제 Dash 콜백 트리거 경로(dash.callback_context 목킹 한계로 함수
+내부 로직만 코드 검토로 확인), 실제 PostgreSQL에서의 DB 전체 교체
+(delete+insert) 동작(DB 미설정 환경이라 CSV 경로로만 검증).
+
+## 2026-09-09 (2): 학력 표기 — 최종학력별 "함께 보여줄 하위 학력" 규칙 도입
+(엑셀 다운로드 / 연구원 개별 프로필 / A4 인쇄 카드)
+
+사용자 요청: 최종학력에 따라 그 아래 하위 학력까지 함께 보여주는 규칙을
+명시적으로 도입 — 박사→박사·석사·학사, 석사→석사·학사, 학사→학사·전문대·
+고교, 전문대→전문대·고교, 고교→고교(정보 없으면 그 줄은 표시 안 함).
+
+**사전 조사로 확인한 것**: 학력 표시는 이 코드베이스에 사실 4곳의 독립
+구현이 있었다 — (a) 연구원 개별 프로필/A4 인쇄 카드
+(`components/profile_sections.py`의 `education_block()`, education.csv에
+있는 행을 박사~고교 5단계 순서로 전부 나열), (b) 엑셀 다운로드
+(`services/researcher_profile_export.py`의 `_col_education()`, 그동안
+**박/석/학 3단계만** 보여주고 전문대/고교는 무조건 제외), (c) 연구원
+명단 화면 "학력"/"전공" 2개 컬럼(`pages/researcher_list.py`, 최고
+학위 1건만), (d) AI 검색/유사도 매칭의 최종학력 판정(`highest_degree_row()`/
+`_highest_degree_str()`, 박사~고교 5단계 중 최고 1건만). 사용자가 이번에
+바꿔달라고 한 범위는 (a)+(b)뿐이고 (c)/(d)는 "최종학력 1건만" 보는
+방식이라 애초에 이번 변경과 무관(최종학력 자체는 안 바뀜 — 검증으로 재확인).
+
+**핵심 발견 — 화면 코드가 아니라 파이프라인이 진짜 원인**: 기존
+`pipeline/process_education.py`는 "학사 이상(박사/석사/학사 중 아무거나)이
+있으면 전문대·고교 행을 통째로 삭제, 전문대가 있으면 고교도 삭제"하는
+매우 거친 규칙으로 **education.csv를 만드는 시점에 이미 하위 학력 행을
+버리고 있었다**. 즉 최종학력이 학사인 사람의 전문대/고교 이력은 화면에
+닿기도 전에 원본 데이터에서 사라진 상태였다 — 그래서 이번 요청(특히
+"학사→학사,전문대,고교", "전문대→전문대,고교")은 표시 함수만 고쳐서는
+절대 만족시킬 수 없고, **파이프라인 자체를 고쳐야만** 하는 사안이었다.
+
+**`pipeline/process_education.py`**: `HIGHER_DEGREES`/`has_higher`/
+`has_associate` 두 플래그 방식을 없애고, 사용자가 준 표 그대로
+`_KEEP_MAP`(최종학력 → 함께 남길 학위 집합)을 도입 — 연구원별로
+`DEG_ORDER` 우선순위(박사>석사>학사>전문대>고교)로 최종학력을 먼저
+판정한 뒤, `_KEEP_MAP[최종학력]`에 없는 표준 학위 행만 제외한다. 5가지
+표준 학위 중 어디에도 안 맞는 원본 표기(예: "수료")는 이 필터 대상이
+아니며(최종학력 판정에도 안 씀) 항상 그대로 통과시킨다(기존 동작 유지).
+모듈 docstring에 새 규칙 표와 함께, **이미 저장된 education.csv에는
+파이프라인을 다시 실행(원본 임직원 학력 파일 재업로드 포함)해야 반영된다**
+는 점을 명시했다 — 이전에 이미 삭제된 하위 학력 행은 그 사람의 원본
+파일이 다시 처리되기 전까지는 되살아나지 않는다.
+
+**`services/researcher_profile_export.py`**: `_col_education()`이 그동안
+쓰던 좁은 `_DEGREE_ORDER`/`_DEGREE_CODE`(박/석/학 3단계 하드코딩)를 삭제하고,
+같은 파일에 이미 있던 `_DEGREE_ORDER_FULL`/`_DEGREE_CODE_FULL`(박사~고교
+5단계, `highest_degree_row()`가 쓰던 것)을 그대로 재사용하도록 교체 —
+이제 education.csv에 남아있는 행이면 전문대/고교도 엑셀에 표시된다.
+`education_block()`(프로필/인쇄 카드)은 애초에 이미 5단계 전부를 순회하고
+있어서 **코드 변경이 필요 없었다** — education.csv에 하위 학력 행이
+남아있게 되는 순간 자동으로 화면에 나타난다.
+
+검증: `process_education.py`를 사용자가 준 5가지 케이스 + 경계 케이스
+2개(하위 학력 정보 자체가 없는 학사 단독자, 5종 표준 학위 어디에도
+안 맞는 원본 표기)를 합성 xlsx로 직접 실행해 전부 정확히 일치하는
+결과를 확인(박사→박사·석사·학사, 석사→석사·학사, 학사→학사·전문대·고교,
+전문대→전문대·고교, 고교→고교, 정보 없으면 그 줄 자체가 안 생기는 것,
+비표준 표기는 필터 없이 항상 통과). `_col_education()`을 다단계 데이터로
+직접 호출해 엑셀에도 전문대/고교까지 정확히 표시되는 것 확인.
+`education_block()`을 화면(뱃지)/인쇄(plain_degree=True) 양쪽 모두
+다단계 데이터로 직접 렌더링해 3단계 전부 포함되는 것, 그 사람 학력
+정보가 없으면 "학력 정보 없음"으로 안전하게 처리되는 것 확인.
+`highest_degree_row()`/`_highest_degree_str()`(AI 검색/유사도 매칭이
+쓰는 최종학력 판정)를 같은 다단계 데이터로 재확인해 여전히 최고 학위
+1건만 정확히 골라내는 것(이번 변경으로 다른 화면에 회귀가 없음) 확인.
+`py_compile` 전체 통과, `dash.Dash(use_pages=True)` 컨텍스트에서
+`pages.researcher_profile`/`pages.researcher_list` 전체 임포트 확인.
+
+**참고(이번 범위 밖, 기존부터 있던 별개 이슈)**: `education_block()`은
+그 연구원의 education.csv 조회 결과가 아니라 **`edu_df` 인자 자체가
+완전히 0행**이면(즉 파일 전체가 비어 어떤 연구원 데이터도 없는 극단적
+상황) `KeyError: 'degree'`를 던진다(`edu_df.empty`일 때
+`edu_rows = pd.DataFrame()`로 컬럼 자체가 없는 빈 프레임을 만들기
+때문). 실제 배포에서는 education.csv가 다른 연구원 행이라도 있는 한
+발생하지 않는 경계 케이스이고, 이번 학력 표기 변경과 무관한 기존
+코드라 손대지 않았다.
+
+**미검증**: 실제 원본 `임직원 학력 *.xlsx`로 파이프라인을 재실행해
+실제 배포 데이터에 반영되는 것(이 세션엔 실제 원본 파일이 없어 사용자가
+설명한 케이스를 그대로 재현한 합성 데이터로만 검증), 실제 브라우저에서의
+최종 렌더링 확인.
