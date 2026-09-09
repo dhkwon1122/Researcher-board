@@ -42,9 +42,6 @@ _EVAL_SALARY_YEARS = sorted(evaluations.evaluation_years()[0])
 _EVAL_HALF_YEARS = sorted(evaluations.evaluation_years()[1])
 _EVAL_HEADER = f"평가\n('{str(_EVAL_SALARY_YEARS[0])[-2:]}~'{str(_EVAL_SALARY_YEARS[-1])[-2:]})"
 
-_DEGREE_ORDER = ['박사', '석사', '학사']
-_DEGREE_CODE = {'박사': '박', '석사': '석', '학사': '학'}
-
 _PROMOTION_REF_BASE = date(2027, 3, 1)
 
 
@@ -200,17 +197,24 @@ def _col_hire_date(_rid, rows):
 
 
 def _col_education(_rid, rows):
+    """education.csv에 남아있는 학력 행을 전부(박사~고교, 최대 3단계) 나열한다.
+    education.csv 자체가 이미 "최종학력 기준 함께 보여줄 하위 학력만" 담고
+    있으므로(pipeline/process_education.py의 _KEEP_MAP, 2026-09-09) 여기서는
+    추가로 걸러낼 필요 없이 있는 행을 순서대로 표시하기만 하면 된다 —
+    highest_degree_row()/_highest_degree_str()과 동일한 5단계 순서
+    (_DEGREE_ORDER_FULL/_DEGREE_CODE_FULL)를 그대로 재사용한다(예전엔 박/석/
+    학 3단계만 보여주는 별도의 좁은 목록을 썼었음)."""
     by_degree = {}
     for e in rows['education']:
         deg = _s(e.get('degree'))
-        if deg in _DEGREE_CODE:
+        if deg in _DEGREE_CODE_FULL:
             by_degree.setdefault(deg, e)
     lines = []
-    for deg in _DEGREE_ORDER:
+    for deg in _DEGREE_ORDER_FULL:
         e = by_degree.get(deg)
         if not e:
             continue
-        code = _DEGREE_CODE[deg]
+        code = _DEGREE_CODE_FULL[deg]
         school = _or_dash(e.get('school'))
         major = _or_dash(e.get('major'))
         lines.append(f'{code}){school} {major}')
@@ -620,11 +624,12 @@ def candidate_label(researcher_id: str, name_map: dict | None = None) -> str:
 # _col_position_year()를 그대로 재사용(예: "CL4-17", 승격기준일 없으면 "CL4").
 PERSON_BASE_COLUMNS = ['researcher_id', 'name', 'department', 'org_code', 'position_year', 'degree_major', 'age']
 
-# _highest_degree_str() 전용 — 엑셀 다운로드의 _col_education()(박/석/학사만,
-# 나머지 제외)과 달리 여기서는 전공만 필터에서 뺄 뿐 학력 자체는 전문대/고교
-# 까지 전부 인정한다(process_education.py의 DEG_ORDER와 동일한 5단계 우선순위
-# — education.csv 자체가 이미 "학사 이상이 있으면 전문대/고교 제외" 규칙으로
-# 정리돼 있어서, 여기 남아 있는 전문대/고교는 그게 그 사람의 최종 학력이라는 뜻).
+# _highest_degree_str()(최종학력 1건만) / _col_education()(education.csv에
+# 남은 행 전부, 최대 3단계) 공용 — 박사~고교 5단계 전부 인정한다
+# (process_education.py의 DEG_ORDER와 동일한 우선순위). education.csv
+# 자체가 이미 "최종학력 기준으로 함께 보여줄 하위 학력만" 담고 있으므로
+# (같은 파일의 _KEEP_MAP, 2026-09-09), 여기 남아 있는 전문대/고교 행은 그
+# 사람의 최종학력이거나 최종학력(학사/전문대)의 하위 이력이라는 뜻이다.
 _DEGREE_ORDER_FULL = ['박사', '석사', '학사', '전문대', '고교']
 _DEGREE_CODE_FULL = {'박사': '박', '석사': '석', '학사': '학', '전문대': '전', '고교': '고'}
 
