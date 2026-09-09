@@ -25,6 +25,14 @@
     → 등급 체계: 가/나/다/라/마
     ※ 처리기: pipeline/process_tp_evaluation.py
        (사번 컬럼명 등 설정은 해당 파일 상단에서 변경)
+  평가표기예외자.xlsx (사원번호, 이름)
+    → data/processed/evaluation_exception.csv 로 변환(researcher_id 키,
+      시점 이력 없이 현재값만 관리, 2026-09-09). services/evaluations.py의
+      평가 셀 공통 서식에서 연봉등급이 없는 사람의 표기를 결정하는 데
+      쓰인다 — 등록된 사람은 상/하반기업적 두 자리 대신 하반기업적만
+      표시한다. 관리자 "데이터 업데이트" 탭 엑셀 업로드만 지원(그리드
+      CRUD 없음).
+    ※ 처리기: pipeline/process_evaluation_exception.py
 
 [그 외 데이터] 아래 이름으로 xlsx 또는 csv 파일 준비
   researchers_raw     : researcher_id, name, gender, department, org_code,
@@ -469,6 +477,9 @@ def run():
     from process_exception_job_function import process as process_exception_job_function
     _run_step('exception_job_function', process_exception_job_function, results,
                skip_hint='직무_직군_맵핑_예외자.xlsx 없음')
+    from process_evaluation_exception import process as process_evaluation_exception
+    _run_step('evaluation_exception', process_evaluation_exception, results,
+               skip_hint='평가표기예외자.xlsx 없음')
 
     # ── 11-2. 등급/Lv 기준표(정적 참조 데이터) ────────────────────────────
     from process_rubrics import process as process_rubrics

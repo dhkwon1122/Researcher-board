@@ -1451,7 +1451,8 @@ def _build_print_block(rid, tables, researchers, name_map, show_eval):
     years = sorted(salary_years)
 
     print_eval_content = (
-        evaluation_incentive_summary_text(tables['evaluations'], tables['incentive_selection'], rid, years)
+        evaluation_incentive_summary_text(tables['evaluations'], tables['incentive_selection'],
+                                           tables['evaluation_exception'], rid, years)
         if show_eval
         else _locked_block(icon_only=True)
     )
@@ -1521,7 +1522,8 @@ def update_profile(rid):
         name_map = researchers.set_index('researcher_id')['name'].to_dict()
 
         eval_content = (
-            evaluation_incentive_block(tables['evaluations'], tables['incentive_selection'], rid, years)
+            evaluation_incentive_block(tables['evaluations'], tables['incentive_selection'],
+                                        tables['evaluation_exception'], rid, years)
             if show_eval
             else _locked_block()
         )

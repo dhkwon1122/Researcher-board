@@ -9406,3 +9406,131 @@ context를 테스트 환경에서 완전히 흉내 내기 어려워 실제 트�
 실제 배포 데이터에 반영되는 것(이 세션엔 실제 원본 파일이 없어 사용자가
 설명한 케이스를 그대로 재현한 합성 데이터로만 검증), 실제 브라우저에서의
 최종 렌더링 확인.
+
+## 2026-09-09 (3): T&P 평가 로직 개편 — 역량 제외, 원본 상/하반기업적 값
+그대로 표기, 연봉등급/예외자 공통 서식 3분기, A4·PDF 구분자 콤마+인센티브
+빈 줄 숨김 (원본처리 + 화면 + A4 인쇄 카드 + 엑셀 다운로드)
+
+사용자 요청 4가지: (1) 원본처리에서 역량 완전 제외, 상/하반기업적만 남김.
+(2) 상/하반기업적은 허용값 제한 없이 셀 값을 그대로 가져옴("M"이 "-"로
+바뀌던 문제) — 조사 결과 이미 2026-08-29에 코드상 고쳐져 있었고, 사용자도
+"예전에 처리된 옛 데이터일 가능성이 높음"을 확인(AskUserQuestion) — 코드
+변경 없음, 재처리로 해결되는 사안. (3) 공통 서식 로직을 "연봉등급
+있음(하반기업적만)/연봉등급 없음(상·하반기업적 두 자리)/연봉등급 없고
+예외자(하반기업적만)"의 3분기로 재정의, 새 예외자 명단
+`evaluation_exception.csv`(원본: `평가표기예외자.xlsx`) 도입. (4) A4 인쇄
+카드/PDF에서 연도 구분자를 "/"→", "로 통일(인센티브 줄도 포함, 사용자가
+AskUserQuestion에서 확정), 인센티브가 전 연도 미선정이면 그 줄 자체를
+표시하지 않음. 4가지 확인 질문(옛 데이터 여부/예외자 관리 방식/인센티브
+구분자 통일 여부/엑셀 개별 컬럼 예외 적용 여부)에 사용자가 모두 답변 —
+예외자는 그리드 CRUD 없이 "데이터 업데이트" 탭 엑셀 업로드만 지원, 엑셀의
+연봉등급/업적평가 "개별 컬럼"(원본 값 그대로 보여주는 옵트인 컬럼)에는
+예외자 가공을 적용하지 않음(원본 그대로).
+
+**`services/evaluations.py`**(공통 서식 모듈, pipeline·화면·엑셀 3곳이
+공유): `competency_column()` 삭제. `format_evaluation_cell()`/
+`format_half_display()`의 시그니처에서 `competency` 인자를 없애고
+`is_exception: bool = False`를 추가 — 새 3분기 로직: 연봉등급 있으면
+`"{연봉등급}({하반기업적})"`(하반기업적 없으면 연봉등급만, 상반기업적은
+이 분기에서 아예 안 씀 — 기존엔 역량과 짝지었던 자리를 아예 삭제),
+연봉등급 없고 예외자면 하반기업적만(없으면 "-"), 연봉등급 없고 예외자도
+아니면 `format_half_pair()`로 상/하반기업적 두 자리("MT/MT") — 단
+**둘 다 없으면 "-/-"가 아니라 "-" 하나만**(기존엔 항상 "-/-"였음, 이번에
+변경). `format_half_display()`는 이제 `format_evaluation_cell()`을
+그대로 위임하는 얇은 래퍼로 단순화(둘의 판단 로직이 완전히 같아짐 —
+역량이 있던 시절엔 "괄호 안" 표기가 살짝 달랐지만 역량이 없어지며 동일해짐).
+
+**`pipeline/process_tp_evaluation.py`**: 연도별 추출 루프에서
+`f'{year} 역량'` → `competency_column(year)` 줄을 완전히 삭제(더 이상
+`{연도}_competency_grade` 컬럼을 만들지 않음). 그 컬럼에만 쓰이던
+`_extract()`의 `warn_if_missing` 파라미터(선택 항목이라 컬럼 없어도
+경고 안 하던 용도)도 다른 호출부가 없어져 함께 제거. 모듈 docstring에서
+역량 관련 서술 전부 삭제.
+
+**신규 `pipeline/process_evaluation_exception.py`**: `평가표기예외자.xlsx`
+(헤더 1번째 행, 사원번호/이름)를 읽어 `evaluation_exception.csv`
+(researcher_id, name)로 변환 — `process_exception_job_function.py`와
+거의 동일한 구조(컬럼 매핑/정제, researcher_id 중복 시 첫 행만 채택 +
+경고, 시점 이력 없이 매번 전체 교체)지만, **그리드 CRUD 없이 엑셀
+업로드만 지원**한다는 점이 다르다(사용자 확정 — `build_rows_from_records()`/
+`find_duplicate_researcher_ids()`를 재사용할 별도 store 모듈을 만들지
+않음). `pipeline/sources.py`(`('evaluation_exception', '평가표기예외자.xlsx', 0)`)/
+`pipeline/run_pipeline.py`(`_run_step('evaluation_exception', ...)`)/
+`pipeline/load_to_db.py`(TABLES에 추가 — CSV 없는 배포 환경에서도 DB로
+반영되도록)/`services/web_pipeline_runner.py`(MANIFEST에
+`hidden_from_table` 없이 일반 항목으로 등록 — "데이터 업데이트" 탭 표에
+그대로 나타남, exception_job_function/team_refer와 다른 점) 4곳에 등록.
+
+**`services/data_store.py`**: `read_profile_tables()`의 테이블 목록에
+`'evaluation_exception'` 추가 — `pages/researcher_profile.py`의
+`tables['evaluation_exception']`으로 화면/A4 인쇄 카드 양쪽에서 조회.
+
+**`components/profile_sections.py`**: 신규 `_is_eval_exception(exc_df, rid)`
+헬퍼 추가. `_eval_cell(eva, year)` → `_eval_cell(eva, year, is_exception=False)`로
+확장(역량 조회 삭제, `format_evaluation_cell()` 호출에 `is_exception` 전달).
+`evaluation_incentive_block()`/`evaluation_incentive_summary_text()`
+시그니처에 `exc_df` 인자를 추가(`eva_df, inc_df, exc_df, rid, years` 순 —
+호출부 2곳, `pages/researcher_profile.py`의 화면 표/A4 인쇄 카드 텍스트
+빌더 둘 다 `tables['evaluation_exception']`을 전달하도록 수정)해 함수
+안에서 `is_exception`을 한 번만 계산해 `_eval_cell()`에 넘긴다.
+`evaluation_incentive_summary_text()`(A4 인쇄 카드 통합 셀 텍스트): 평가
+줄/인센티브 줄 구분자를 `'/'.join(...)` → `', '.join(...)`으로 변경(둘
+다, 사용자가 인센티브 줄도 콤마로 통일하기로 확정), 그 해 인센티브가
+있는 연도가 하나도 없으면(모든 연도가 `_inc_label()` == '-') 인센티브
+줄(`html.Div`) 자체를 아예 렌더링하지 않도록 변경 — 평가 줄은 항상
+표시, 인센티브 줄은 조건부.
+
+**`services/researcher_profile_export.py`**(엑셀 다운로드): `_load_tables()`에
+`'evaluation_exception'` 추가. `build_profile_workbook()`에서 요청 단위로
+한 번만 `evaluation_exception_ids`(researcher_id 집합)를 계산해
+`_researcher_row_context()`(새 인자 `evaluation_exception_ids`)를 거쳐
+`rows['evaluation_exception_ids']`로 각 행 컬럼 함수에 전달(다른
+요청 단위 값들 — `eval_excluded_dep_ids` 등 — 과 동일한 패턴). `_col_evaluation()`
+("종합" 컬럼): `_rid in rows['evaluation_exception_ids']`로 예외자
+여부를 판정해 `format_half_display()`에 `competency` 대신 `is_exception`을
+전달하도록 수정 — 화면/A4 인쇄 카드와 완전히 같은 3분기 로직을 공유.
+`_col_eval_field()`(연봉등급/업적평가 "개별 컬럼", 원본 값 그대로 표시):
+**의도적으로 변경하지 않음** — 사용자 확정(원본 값 그대로, 예외자 가공
+없음). 역량 컬럼을 조건부로 끼워 넣던 `_eval_half_columns(evaluations_df)`
+함수를 완전히 삭제하고, `_EVAL_SALARY_COLUMNS`와 나란히 정적 모듈 상수
+`_EVAL_HALF_COLUMNS`(상반기업적/하반기업적만, 역량 없음)로 교체 —
+더 이상 매 요청마다 evaluations.csv 컬럼 목록을 확인할 필요가 없어졌다
+(역량이 "있을 수도 없을 수도 있는" 선택 항목이었던 시절엔 동적 판단이
+필요했지만, 역량 자체가 없어지며 불필요해짐).
+
+**`services/open_data_query.py`**(자연어 질문 → SQL 생성 프롬프트):
+`_evaluation_period_hint()`가 LLM에게 실제 컬럼명을 알려줄 때 쓰던
+`competency_column(y)` 참조를 제거 — 상/하반기업적 컬럼명만 안내하도록
+프롬프트 텍스트 수정(역량 컬럼이 "있을 수도 없을 수도 있다"던 주의문도
+함께 삭제, 더 이상 해당 사항 없음). `pages/researcher_list.py`/
+`services/nl_query.py`는 연봉등급(`salary_grade_column`)만 쓰고
+있어 영향 없음(확인 완료).
+
+**`pages/researcher_list.py`**: 엑셀 다운로드 옵션 체크박스 라벨
+"업적(역량)평가(최근 3년) 포함" → "업적평가(최근 3년) 포함"(역량이
+빠졌으니 라벨에서도 제거). 그 외 이 화면의 평가 로직(연봉등급 컬럼만
+쓰는 명단 표, 기간 조회 시 `evaluations_history.csv` 사용)은 이번
+변경과 무관해 손대지 않음.
+
+검증: `services.evaluations.format_evaluation_cell()`/`format_half_display()`를
+연봉등급 있음(하반기 있음/없음)·연봉등급 없고 비예외자(둘 다 있음/한쪽만
+없음/둘 다 없음 → "-" 하나만인지)·연봉등급 없고 예외자(하반기 있음/없음)
+8개 조합 + 연봉등급이 있으면 예외자 여부가 결과에 영향 없는 것까지 직접
+호출해 전부 정확히 일치 확인. `pipeline/process_evaluation_exception.py`를
+`build_rows_from_records()`(정상/공백/중복 사원번호 혼합)와 `process()`
+(합성 xlsx → CSV, 임시 디렉터리로 실제 데이터 건드리지 않음) 양쪽으로
+직접 실행해 확인. `components/profile_sections.py`의
+`evaluation_incentive_summary_text()`/`_eval_cell()`/`_is_eval_exception()`을
+합성 DataFrame으로 직접 호출해 콤마 구분자, 인센티브 전무 시 줄 생략,
+예외자/비예외자 분기 전부 확인. `services/researcher_profile_export.py`의
+`_col_evaluation()`/`_col_eval_field()`를 합성 `rows` dict로 직접 호출해
+"종합" 컬럼엔 예외자 가공이 반영되고 개별 컬럼(`_col_eval_field`)엔
+반영되지 않는 것(원본 그대로) 확인. `services.web_pipeline_runner.snapshot()`으로
+`evaluation_exception` 항목이 `hidden_from_table: False`로 정상 등록된
+것 확인. `ast.parse`로 변경 파일 전체 구문 확인 + `import app`으로 앱
+전체(모든 페이지/서비스/파이프라인 임포트 체인) 정상 로드 확인.
+
+**미검증**: 실제 원본 `T&P 기본 인사 정보 *.xlsx`/`평가표기예외자.xlsx`로
+파이프라인을 재실행해 실제 배포 데이터에 반영되는 것(이 세션엔 실제 원본
+파일이 없어 합성 데이터로만 검증), 실제 브라우저에서의 최종 렌더링 확인
+(A4 인쇄 카드 레이아웃, 엑셀 파일을 직접 열어 컬럼 배치 확인 등).

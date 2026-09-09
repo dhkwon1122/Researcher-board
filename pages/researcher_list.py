@@ -542,7 +542,7 @@ def layout():
                                     [
                                         {'label': '평가(종합 - 최근 3년) 포함', 'value': 'eval_summary'},
                                         {'label': '연봉등급(최근 3년) 포함', 'value': 'salary_grade'},
-                                        {'label': '업적(역량)평가(최근 3년) 포함', 'value': 'eval_half'},
+                                        {'label': '업적평가(최근 3년) 포함', 'value': 'eval_half'},
                                     ] if show_eval else []
                                 ) + [
                                     # 과제수행이력/양성이력/핵심이력/보유기술은 원래 항상

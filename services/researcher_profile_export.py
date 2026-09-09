@@ -126,6 +126,7 @@ def _load_tables() -> dict:
         'job_profile': data_store.read_processed('job_profile'),
         'language_qualification': data_store.read_processed('language_qualification'),
         'work_experience': data_store.read_processed('work_experience'),
+        'evaluation_exception': data_store.read_processed('evaluation_exception'),
         'expertise_profiles': data_store.read_expertise_profiles(),
     }
 
@@ -224,7 +225,7 @@ def _col_education(_rid, rows):
 def _eval_dept_excluded(rows) -> bool:
     """view_evaluation은 있어도 부서 단위 평가 제외(2026-08-31, People팀
     등)에 해당하는 연구원이면 True — 평가 관련 옵트인 컬럼 3종(종합/
-    연봉등급/업적(역량)평가) 전부 이 판정을 공유한다(사용자 확정
+    연봉등급/업적평가) 전부 이 판정을 공유한다(사용자 확정
     2026-08-31 — 3개 항목 모두 동일하게 적용). 화면(researcher_profile.py/
     researcher_list.py)과 동일한 기준."""
     excluded_dep_ids = rows.get('eval_excluded_dep_ids')
@@ -238,17 +239,16 @@ def _eval_dept_excluded(rows) -> bool:
 
 def _col_evaluation(_rid, rows):
     """평가(종합) — 연봉등급 3개년을 첫 줄에 헤더("'24~'26")와 같은 오름차순으로
-    "다/다/다", 그에 대응하는(각 연봉등급 연도 - 1) 역량/하반기업적 3개년을
-    둘째 줄에 역시 오름차순으로 "(VG/MT, VG/MT, VG/MT)"로 표시(2026-08-29
-    수정 — _EVAL_SALARY_YEARS/_EVAL_HALF_YEARS를 정렬 없이 그대로 써서
+    "다/다/다", 그에 대응하는(각 연봉등급 연도 - 1) 상/하반기업적 3개년을
+    둘째 줄에 역시 오름차순으로 표시(2026-08-29 수정 —
+    _EVAL_SALARY_YEARS/_EVAL_HALF_YEARS를 정렬 없이 그대로 써서
     evaluation_years()의 내림차순(최신 연도가 먼저)이 그대로 노출돼 헤더와
     셀 값 순서가 어긋나 있었다). 둘째 줄의 각 항목은
-    evaluations.format_half_display()로 만드는데,
-    그 해 연봉등급이 있으면 역량/하반기업적 중 있는 것만 보여주고(예: 역량
-    없음/하반기만 있음 → "MT"만, "-/MT"처럼 빈 자리를 표시하지 않음 —
-    2026-08-29 확정, 예전엔 상반기업적과 짝지었으나 역량으로 교체), 연봉등급
-    자체가 없으면 기존대로 상/하반기업적 두 자리를 항상 표시한다(빈 자리는
-    '-').
+    evaluations.format_half_display()로 만든다 — 화면/A4 인쇄 카드와 동일한
+    공통 서식 로직(2026-09-09 확정, services/evaluations.py 참고):
+    연봉등급 있으면 하반기업적만("MT"), 연봉등급 없고 평가표기 예외자면
+    하반기업적만, 그 외에는 상/하반기업적 두 자리("MT/MT", 둘 다 없으면
+    "-").
 
     화면(pages/*.py)이 view_evaluation 권한 없는 역할에는 평가등급을 아예
     안 보여주는 것과 동일한 기준을 여기 엑셀 다운로드에도 적용한다 — 권한
@@ -264,13 +264,14 @@ def _col_evaluation(_rid, rows):
         return '-'
     eva_rows = rows['evaluations']
     eva = eva_rows[0] if eva_rows else {}
+    is_exception = _rid in rows.get('evaluation_exception_ids', set())
     salary_line = '/'.join(_s(eva.get(evaluations.salary_grade_column(y))) or '-' for y in _EVAL_SALARY_YEARS)
     half_line = '(' + ', '.join(
         evaluations.format_half_display(
             _s(eva.get(evaluations.salary_grade_column(y + 1))),
             _s(eva.get(evaluations.first_half_column(y))),
             _s(eva.get(evaluations.second_half_column(y))),
-            _s(eva.get(evaluations.competency_column(y))),
+            is_exception,
         )
         for y in _EVAL_HALF_YEARS
     ) + ')'
@@ -278,10 +279,12 @@ def _col_evaluation(_rid, rows):
 
 
 def _col_eval_field(field_key: str):
-    """평가 세부 옵트인 컬럼("연봉등급(최근 3년)"/"업적(역량)평가(최근 3년)",
+    """평가 세부 옵트인 컬럼("연봉등급(최근 3년)"/"업적평가(최근 3년)",
     2026-08-31 사용자 확정) 하나를 만든다 — evaluations.csv의 특정 컬럼
-    (예: '2024_salary_grade') 값을 그대로 보여준다. 권한/부서 제외 판정은
-    _col_evaluation()과 동일하게 공유(_eval_dept_excluded)한다."""
+    (예: '2024_salary_grade') 값을 원본 그대로 보여준다(2026-09-09 확정 —
+    _col_evaluation()의 "종합" 컬럼과 달리 평가표기 예외자 가공을 적용하지
+    않는다). 권한/부서 제외 판정은 _col_evaluation()과 동일하게 공유
+    (_eval_dept_excluded)한다."""
     def _col(_rid, rows):
         if not rows['permissions']['view_evaluation'] or _eval_dept_excluded(rows):
             return '-'
@@ -289,26 +292,6 @@ def _col_eval_field(field_key: str):
         eva = eva_rows[0] if eva_rows else {}
         return _s(eva.get(field_key)) or '-'
     return _col
-
-
-def _eval_half_columns(evaluations_df) -> list:
-    """"업적(역량)평가(최근 3년)" 옵트인 그룹(사용자 확정 2026-08-31) —
-    연도별 상반기업적/하반기업적 컬럼 사이에, 그 해 역량(competency_grade)
-    컬럼이 evaluations.csv에 실제로 존재하면(선택 항목이라 매년 있다는
-    보장이 없음 — services/evaluations.py 모듈 독스트링 참고) "{연도} 역량"
-    컬럼을 끼워 넣는다. 실제 데이터(evaluations_df의 컬럼 목록)를 봐야
-    판단할 수 있어 모듈 임포트 시점에 정적으로 만들 수 없고,
-    build_profile_workbook()이 요청마다(evaluations 테이블을 로드한 뒤)
-    한 번만 만든다."""
-    cols = set(evaluations_df.columns) if evaluations_df is not None else set()
-    result = []
-    for y in _EVAL_HALF_YEARS:
-        result.append((f'{y} 상반기업적', _col_eval_field(evaluations.first_half_column(y))))
-        competency_col = evaluations.competency_column(y)
-        if competency_col in cols:
-            result.append((f'{y} 역량', _col_eval_field(competency_col)))
-        result.append((f'{y} 하반기업적', _col_eval_field(evaluations.second_half_column(y))))
-    return result
 
 
 def _col_position_year(_rid, rows):
@@ -531,15 +514,20 @@ _WORK_EXPERIENCE_COLUMNS = [('근무 경력', _col_work_experience)]
 # 평가 관련 옵트인 컬럼 그룹 3종(2026-08-31 사용자 확정 — "평가" 컬럼을
 # 기본 포함에서 view_evaluation 권한자만 선택 가능한 옵트인으로 전환하며
 # 세분화). 다운로드 화면(pages/researcher_list.py)의 체크박스 라벨은
-# "평가(종합 - 최근 3년)"/"연봉등급(최근 3년)"/"업적(역량)평가(최근 3년)"
-# 이지만, 엑셀 컬럼 헤더 자체는 기존 표기를 그대로 유지한다(사용자 확정 —
-# 체크박스 라벨과 엑셀 헤더는 별개). _EVAL_SALARY_COLUMNS는 연도가 고정된
-# (모듈 임포트 시점 회계연도 기준) 정적 목록이지만, "업적(역량)평가"는 그 해
-# 역량 컬럼이 실제 데이터에 있는지 봐야 해서 _eval_half_columns()로 요청마다
-# 동적으로 만든다(build_profile_workbook() 참고).
+# "평가(종합 - 최근 3년)"/"연봉등급(최근 3년)"/"업적평가(최근 3년)"이지만,
+# 엑셀 컬럼 헤더 자체는 기존 표기를 그대로 유지한다(사용자 확정 — 체크박스
+# 라벨과 엑셀 헤더는 별개). 역량 컬럼은 2026-09-09부로 원본처리에서 완전
+# 제외돼(services/evaluations.py 참고) 셋 다 연도가 고정된(모듈 임포트
+# 시점 회계연도 기준) 정적 목록이다.
 _EVAL_SUMMARY_COLUMNS = [(_EVAL_HEADER, _col_evaluation)]
 _EVAL_SALARY_COLUMNS = [
     (f'{y} 연봉등급', _col_eval_field(evaluations.salary_grade_column(y))) for y in _EVAL_SALARY_YEARS
+]
+_EVAL_HALF_COLUMNS = [
+    col for y in _EVAL_HALF_YEARS for col in (
+        (f'{y} 상반기업적', _col_eval_field(evaluations.first_half_column(y))),
+        (f'{y} 하반기업적', _col_eval_field(evaluations.second_half_column(y))),
+    )
 ]
 
 
@@ -570,7 +558,8 @@ def _researcher_row_context(researcher_id: str, tables: dict, permissions: dict,
                              dep_pjt_maps: tuple | None = None,
                              eval_excluded_dep_ids: set | None = None,
                              org_code_dep_id_map: dict | None = None,
-                             org_code_dep_code_map: dict | None = None) -> dict:
+                             org_code_dep_code_map: dict | None = None,
+                             evaluation_exception_ids: set | None = None) -> dict:
     researcher_rows = _rows_for(tables['researchers'], researcher_id)
     return {
         'dep_pjt_maps': dep_pjt_maps,
@@ -578,6 +567,8 @@ def _researcher_row_context(researcher_id: str, tables: dict, permissions: dict,
         # 한 번만 계산해 전달받는다(dep_pjt_maps와 같은 이유).
         'eval_excluded_dep_ids': eval_excluded_dep_ids,
         'org_code_dep_id_map': org_code_dep_id_map,
+        # 평가표기 예외자(2026-09-09) — _col_evaluation() 참고.
+        'evaluation_exception_ids': evaluation_exception_ids or set(),
         # 조직코드(A열, _col_org_code) 표시용 — org_code → dep_code(사용자
         # 확정 2026-09-02).
         'org_code_dep_code_map': org_code_dep_code_map,
@@ -705,7 +696,7 @@ _JOB_PROFILE_COLUMN_WIDTH = 30
 _LANGUAGE_COLUMN_WIDTH = 26
 _WORK_EXPERIENCE_COLUMN_WIDTH = 30
 _EVAL_SUMMARY_COLUMN_WIDTH = 22
-_EVAL_DETAIL_COLUMN_WIDTH = 12  # 연봉등급/상반기업적/하반기업적/역량 — 등급 코드 하나만 담는 좁은 컬럼
+_EVAL_DETAIL_COLUMN_WIDTH = 12  # 연봉등급/상반기업적/하반기업적 — 등급 코드 하나만 담는 좁은 컬럼
 
 
 def build_profile_workbook(
@@ -732,7 +723,7 @@ def build_profile_workbook(
     _PUBLICATION_COLUMNS/_JOB_FUNCTION_COLUMNS/_JOB_PROFILE_COLUMNS/
     _EMPLOYMENT_STATUS_COLUMNS/_LANGUAGE_COLUMNS/_WORK_EXPERIENCE_COLUMNS/
     _EXPERTISE_COLUMNS/_EVAL_SUMMARY_COLUMNS/_EVAL_SALARY_COLUMNS/
-    _eval_half_columns())을 이 순서대로 맨 끝에
+    _EVAL_HALF_COLUMNS)을 이 순서대로 맨 끝에
     추가한다 — 전부 기본값은 False(다운로드 화면 체크박스 기본 해제)이고,
     켜져도 _COLUMNS 자체는 건드리지 않고 이 함수 안에서만 로컬 사본에 덧붙인다.
 
@@ -758,6 +749,12 @@ def build_profile_workbook(
     org_code_dep_id_map = similarity_map.org_code_dep_id_map() if eval_excluded_dep_ids else {}
     # 조직코드(A열) 표시 + 정렬(아래 참고) 모두에 필요 — 항상 계산.
     org_code_dep_code_map = similarity_map.org_code_dep_code_map()
+    # 평가표기 예외자(2026-09-09) — _col_evaluation() 참고. 요청 단위로 한 번만
+    # 집합으로 만들어 전달한다(다른 요청 단위 값들과 같은 이유).
+    exc_df = tables['evaluation_exception']
+    evaluation_exception_ids = (
+        set(exc_df['researcher_id']) if not exc_df.empty and 'researcher_id' in exc_df.columns else set()
+    )
 
     columns = list(_COLUMNS)
     widths = list(_COLUMN_WIDTHS)
@@ -780,9 +777,8 @@ def build_profile_workbook(
         columns.extend(_EVAL_SALARY_COLUMNS)
         widths.extend([_EVAL_DETAIL_COLUMN_WIDTH] * len(_EVAL_SALARY_COLUMNS))
     if include_eval_half and permissions['view_evaluation']:
-        eval_half_columns = _eval_half_columns(tables['evaluations'])
-        columns.extend(eval_half_columns)
-        widths.extend([_EVAL_DETAIL_COLUMN_WIDTH] * len(eval_half_columns))
+        columns.extend(_EVAL_HALF_COLUMNS)
+        widths.extend([_EVAL_DETAIL_COLUMN_WIDTH] * len(_EVAL_HALF_COLUMNS))
     if include_patents:
         columns.extend(_PATENT_COLUMNS)
         widths.extend([_PATENT_COLUMN_WIDTH] * len(_PATENT_COLUMNS))
@@ -849,7 +845,7 @@ def build_profile_workbook(
     for row_idx, rid in enumerate(researcher_ids, start=2):
         ctx = _researcher_row_context(rid, tables, permissions, dep_pjt_maps,
                                        eval_excluded_dep_ids, org_code_dep_id_map,
-                                       org_code_dep_code_map)
+                                       org_code_dep_code_map, evaluation_exception_ids)
         for col_idx, (_header, fn) in enumerate(columns, start=1):
             value = fn(rid, ctx)
             cell = ws.cell(row=row_idx, column=col_idx, value=value)
