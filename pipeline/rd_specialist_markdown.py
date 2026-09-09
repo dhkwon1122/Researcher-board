@@ -8,7 +8,7 @@ group_ordered/build_org_tree/strength_section_html/map_link_html 등)와, 과제
 
 (예전에는 "R&D Project Specialist Agent" 페르소나 프롬프트와 그 마크다운
 출력을 파싱하는 헬퍼들도 이 모듈에 있었지만, 과제↔연구원 매칭 기능 자체가
-제거되면서 함께 삭제됐다 — data/processed/CLAUDE.md 참고.)
+제거되면서 함께 삭제됐다 — docs/CLAUDE.md 참고.)
 """
 
 import html
@@ -113,7 +113,7 @@ def read_team_refer(out_dir: str, period: tuple | None = None) -> list:
     읽는다 — 이 함수는 파이프라인 CLI(데이터 파일에 직접 접근 가능한 환경)
     뿐 아니라 실행 중인 앱 프로세스에서도 호출된다(pages/researcher_similarity_map.py가
     "보유 전문성" 리포트를 화면 진입 시 build_html()로 그때그때 렌더링 —
-    data/processed/CLAUDE.md 2026-08-19 참고). 앱 서버에 team_refer.csv가
+    docs/CLAUDE.md 2026-08-19 참고). 앱 서버에 team_refer.csv가
     없어도(DB만 붙어 있어도) 조직도가 정상적으로 만들어지도록 DB를 우선
     시도한다. 파일도 DB도 없으면 빈 리스트(호출부가 조직도 없이 기존
     방식으로 폴백할 수 있도록).
@@ -389,7 +389,7 @@ def project_card_html(item: dict, anchor: str, include_links: bool = True) -> st
     기술/산출물/난제/배경/추진일정/기대효과/키워드/인력) 하나를 카드로
     렌더링. 예전에는 이 카드가 "R&D Project Specialist Agent"의 직무 딥다이브
     매핑을 함께 보여줬지만, 그 기능은 제거되고 문서 분석 자체가 더 상세해지는
-    쪽으로 목적이 바뀌었다(data/processed/CLAUDE.md 참고). include_links=False면
+    쪽으로 목적이 바뀌었다(docs/CLAUDE.md 참고). include_links=False면
     (앱 밖 메일 본문 — 사용자 확인) 인력 목록의 전문성 MAP 링크를 뺀다."""
     keywords = (item.get('keywords_kr') or []) + (item.get('keywords_en') or [])
     chip_row = ''.join(f'<span class="chip">{html.escape(k)}</span>' for k in keywords)
@@ -796,7 +796,7 @@ def generated_at_stat(computed_at: str | None) -> tuple:
     열 때마다 build_html()을 그 자리에서 다시 렌더링하므로, 예전처럼 이
     함수가 호출되는 시점(datetime.now())을 찍으면 탭을 열기만 해도 "방금
     갱신됨"으로 보여 실제 분석 시점과 완전히 다른 값이 표시되는 문제가
-    있었다(사용자 지적, data/processed/CLAUDE.md 참고) — 이제는 저장된
+    있었다(사용자 지적, docs/CLAUDE.md 참고) — 이제는 저장된
     값을 그대로 보여주므로 탭을 몇 번을 열어도 값이 그대로다. 예전 JSON
     (이 필드가 생기기 전에 저장된 파일)은 값이 없으므로, 그 경우 파이프라인
     재실행이 필요하다는 안내를 함께 보여준다."""

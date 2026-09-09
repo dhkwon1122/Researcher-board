@@ -14,7 +14,7 @@ process_project_search.py(유사 기업/학계 탐색)는 이 체인에 포함�
 필요하면 별도로 직접 실행: python pipeline/process_project_search.py
 
 (예전에는 과제↔연구원 매칭 단계가 더 있었지만, 그 기능 자체가 제거되면서
-삭제됐다 — data/processed/CLAUDE.md 참고.)
+삭제됐다 — docs/CLAUDE.md 참고.)
 
 한 단계가 실패해도(반환값 False) 이후 단계는 계속 진행한다 — 2단계는 1단계의
 산출물을(과제 내 담당 업무), 3단계는 2단계의 산출물을 입력으로 읽으므로, 앞

@@ -656,7 +656,7 @@ def _team_refer_tab() -> html.Div:
 
         # 저장한 행들 안에 부서ID(dep_id)가 중복되면(업서트 자연키 충돌로
         # 일부 행이 조용히 사라지는 원인) 별도 창으로 바로 보여준다(사용자
-        # 요청) — data/processed/CLAUDE.md 참고.
+        # 요청) — docs/CLAUDE.md 참고.
         dbc.Modal(
             [
                 dbc.ModalHeader(dbc.ModalTitle([

@@ -15,7 +15,7 @@ cached_embed()/cosine_sim_matrix() 전체를 쓰고, services/jd_reconciliation.
 
 (예전에는 이 모듈이 process_project_researcher_fit.py의 과제↔연구원 매칭
 로직도 함께 담고 있었지만, 그 기능 자체가 제거되면서 관련 함수도 함께
-삭제됐다 — data/processed/CLAUDE.md 참고.)
+삭제됐다 — docs/CLAUDE.md 참고.)
 """
 
 import hashlib

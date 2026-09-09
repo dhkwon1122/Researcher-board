@@ -23,7 +23,7 @@ dash.register_page(
 # 관리자/유저 구분(로그인·권한 체계)이 아직 없어 임시로 전체 사용자에게
 # 숨겨둔 상태 — 나중에 권한 체계가 생기면 이 플래그를 False로 바꾸고
 # app.py의 '과제 직무/대상자 검증' NavLink를 되살리면 된다
-# (data/processed/CLAUDE.md 참고).
+# (docs/CLAUDE.md 참고).
 _FEATURE_HIDDEN = True
 
 

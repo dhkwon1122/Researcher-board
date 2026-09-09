@@ -163,7 +163,7 @@ def find_duplicate_dep_ids(result: pd.DataFrame) -> list[dict]:
     이 배치 안에서 부서ID만 같아도 곧바로 충돌한다 — merge_utils.upsert_merge()가
     "새 데이터 안에서 키가 중복되면 마지막 행만 채택"하기 때문에, 사용자가
     모르는 새 앞선 행들이 조용히 사라진다(원본 행 수보다 저장된 행 수가
-    적어지는 원인 중 하나 — data/processed/CLAUDE.md 참고). 저장 전에 이걸
+    적어지는 원인 중 하나 — docs/CLAUDE.md 참고). 저장 전에 이걸
     미리 알려주기 위한 진단 함수로, process()(CLI 실행)와
     services.team_refer_store.save_snapshot()(웹 저장) 양쪽이 공유한다.
 

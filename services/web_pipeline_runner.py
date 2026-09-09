@@ -356,7 +356,7 @@ def save_upload(key: str, filename: str, content_bytes: bytes, slot: str | None 
 
     # 원본을 덮어쓰기 전에 위에서 기존 파일을 지웠으므로, 여기서는 이번에
     # 올라온 원본을 그대로 아카이브에 남긴다(무제한 보관 — 사용자 확정,
-    # data/processed/CLAUDE.md 참고). 아카이브 실패가 업로드 자체를 막으면
+    # docs/CLAUDE.md 참고). 아카이브 실패가 업로드 자체를 막으면
     # 안 되므로 실패해도 무시하고 진행한다.
     try:
         archive_raw_bytes(content_bytes, filename, category=key)

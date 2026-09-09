@@ -452,7 +452,7 @@ def answer(question: str, current_only: bool = True, period: tuple[str, str] | N
     period=(시작 YYYY-MM, 종료 YYYY-MM)이 주어지면(누적기준에서 기간까지
     지정한 경우, 2026-08-28) current_only는 무시하고 *_history 테이블에서
     그 기간 안의 마지막 스냅샷을 쓰도록 지시한다 — 명단 화면의 기간 지정
-    조회와 동일한 개념(data/processed/CLAUDE.md 참고)."""
+    조회와 동일한 개념(docs/CLAUDE.md 참고)."""
     question = (question or '').strip()
     if not question:
         return {'intent': 'open_data_query', 'columns': [], 'rows': [], 'note': '질문을 입력해주세요.'}

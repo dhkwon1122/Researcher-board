@@ -18,7 +18,7 @@
 예전에는 매 실행마다 이 파일 전체를 통째로 덮어썼다(자연키 upsert가 아예
 없었음) — 부분 인원만 담긴 파일을 올리면 나머지 사람의 기존 데이터가
 사라지고, 옛날 파일을 나중에 다시 올리면 최신 데이터 전체가 옛날 것으로
-되돌아가는 버그가 있었다(data/processed/CLAUDE.md 참고). 지금은 evaluations/
+되돌아가는 버그가 있었다(docs/CLAUDE.md 참고). 지금은 evaluations/
 tech_ownership/job_profile/work_objective와 같은 방식으로, (researcher_id,
 tech_field, tech_name) 조합 단위 업서트 + valid_year/valid_month 시점 보호로
 바꿨다 — 그 조합에 이미 저장된 값보다 과거 시점이면 그 항목만 건너뛰고

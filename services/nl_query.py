@@ -26,7 +26,7 @@
 
 (예전에는 find_researchers_for_project/find_projects_for_researcher 2개
 intent가 더 있었지만, 그 기반이 되던 과제↔연구원 매칭 기능 자체가 제거되면서
-함께 삭제됐다 — data/processed/CLAUDE.md 참고.)
+함께 삭제됐다 — docs/CLAUDE.md 참고.)
 
 Source:
   data/processed/연구원 보유 전문성 분석.json      (services.data_store.read_expertise_profiles)
@@ -749,7 +749,7 @@ def answer_question(question: str, current_only: bool = True,
     시도해 봐야 매번 똑같이 실패하므로, 여기서 미리 걸러 정확한 안내를
     바로 보여준다 — 이게 없으면 실제로는 "설정 안 됨"인데 사용자에게는
     "지금 요청이 많다"는 오해의 소지가 있는 메시지가 대신 뜬다(사용자 확정
-    — data/processed/CLAUDE.md 참고)."""
+    — docs/CLAUDE.md 참고)."""
     if not llm_client.is_configured():
         return _empty_table_result(
             'error',
