@@ -23,7 +23,7 @@ data/processed/project_confl_address.csv의 각 과제에 대해:
   매칭)가 읽어 갔다. 그 기능은 완전히 제거됐다 — 이 스크립트의 목적이
   "과제에 필요한 직무를 정의"하는 것에서 "과제 문서 자체를 최대한 상세히
   분석하고, 문서에 실제로 언급된 인력의 담당 업무를 기록"하는 것으로
-  바뀌었다(data/processed/CLAUDE.md 참고).
+  바뀌었다(docs/CLAUDE.md 참고).
 
 Source:
   data/processed/project_confl_address.csv (dep_name, project_name, confl_address)

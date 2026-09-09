@@ -24,7 +24,7 @@ def resolve_period_snapshot(period: tuple[date, date], table: str = 'researchers
     구간에 속하는 (valid_year, valid_month) 스냅샷만 골라, researcher_id별로
     그 구간 안에서 가장 최근 스냅샷 1행을 대표값으로 돌려준다 — "이 기간
     동안 소속돼 있었고, 그 기간의 마지막 시점엔 이런 상태였다"는 의미
-    (2026-08-28, data/processed/CLAUDE.md 참고). 구간에 스냅샷이 하나도
+    (2026-08-28, docs/CLAUDE.md 참고). 구간에 스냅샷이 하나도
     없는 사람은 결과에서 빠진다(그 기간엔 존재를 확인할 수 없으므로).
 
     "특정 시점 하나"만 필요하면 period=(아주 이른 날짜, 그 시점)으로 호출하면

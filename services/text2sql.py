@@ -4,7 +4,7 @@ SQL 안전 검증 유틸리티.
 원래는 "연구원 목록" 탭의 자체 AI 검색(자연어 → 로컬 LLM이 PostgreSQL SELECT
 생성 → 여기서 안전 검증 → 실행) 전용 모듈이었다. 그 페이지 전용 기능은 전
 탭 공용 자연어 질문 바(components/nl_query_bar.py, services/nl_query.py)로
-대체되며 삭제됐고(data/processed/CLAUDE.md 참고), 지금은 그때 만든 SQL 안전
+대체되며 삭제됐고(docs/CLAUDE.md 참고), 지금은 그때 만든 SQL 안전
 검증 로직(sanitize_sql, DB 방언과 무관한 순수 문자열 검증)만
 services/open_data_query.py(DuckDB 기반 개방형 질의)가 재사용한다.
 

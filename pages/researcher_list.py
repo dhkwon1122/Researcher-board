@@ -735,7 +735,7 @@ def update_project_options(dept, mode, period_start, period_end):
 # 필터 행)으로만 찾도록 유도한다. 성별/학력/전공/재직상태는 시점에 덜
 # 민감해 그대로 둔다. 다만 누적기준에서 기간(시작~종료)까지 지정하면
 # researchers_history.csv에서 그 기간의 마지막 스냅샷을 쓰므로(사용자 요청,
-# data/processed/CLAUDE.md 2026-08-28 참고) 부서/과제/직급/직책도 그 시점
+# docs/CLAUDE.md 2026-08-28 참고) 부서/과제/직급/직책도 그 시점
 # 기준으로 다시 의미가 있어져 필터를 도로 켠다.
 #
 # '부서' 드롭다운 옵션 자체도 이 콜백에서 기간 기준으로 다시 계산한다

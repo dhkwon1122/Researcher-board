@@ -17,7 +17,7 @@ dash.register_page(__name__, path='/org-comparison', name='조직별 비교', ti
 
 # 당분간 사용하지 않는 화면이라 숨겨둔 상태 — 나중에 다시 쓰게 되면 이
 # 플래그를 False로 바꾸고 app.py의 '조직별 비교' NavLink를 되살리면 된다
-# (data/processed/CLAUDE.md 참고).
+# (docs/CLAUDE.md 참고).
 _FEATURE_HIDDEN = True
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')

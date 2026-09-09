@@ -52,7 +52,7 @@ researchers.csv의 org_code와 org_name_wd로 매핑해 "보유 전문성" 콘�
        python pipeline/journal_authority.py [--refresh-journals]
   3) python pipeline/process_researcher_similarity.py  (선택: 연구원 ↔ 연구원 유사도)
   ※ (예전에는 3)으로 과제↔연구원 매칭 단계가 더 있었지만, 그 기능 자체가
-    제거되면서 삭제됐다 — data/processed/CLAUDE.md 참고.)
+    제거되면서 삭제됐다 — docs/CLAUDE.md 참고.)
   ※ 위 1~2단계(journal_authority 포함)는 모두 개별 항목(과제/연구원/저널 등)
     단위 LLM 호출을 동시 호출 허용치(환경변수 LLM2_MAX_CONCURRENT, 기본 8)
     만큼 스레드풀로 병렬 실행한다.

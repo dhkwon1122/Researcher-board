@@ -761,7 +761,7 @@ def process(top_k: int = DEFAULT_TOP_K, refresh_judgments: bool = False) -> bool
 
     # 화면(build_html())이 "언제 기준 데이터인지"를 보여줄 때 이 값을 그대로
     # 쓴다(마지막 갱신 표시가 render 시점이 아니라 실제 계산 시점을 보여주도록
-    # — 사용자 지적, data/processed/CLAUDE.md 참고). 이번 배치 전체가 같은
+    # — 사용자 지적, docs/CLAUDE.md 참고). 이번 배치 전체가 같은
     # 시각을 공유하므로 항목마다 새로 계산하지 않고 한 번만 찍는다.
     computed_at = datetime.now().strftime('%Y-%m-%d %H:%M')
     for r in results:

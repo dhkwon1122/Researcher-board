@@ -20,7 +20,7 @@ dash_cytoscape) 두 서브뷰를 버튼으로 전환할 수 있다 — 둘 다 �
 없다")에 따라 2026-09-01에 "연구원" 탭 하나로 합쳤다 — 조직도에서 연구원을
 클릭하면 그 사람의 보유 전문성 카드 아래에 유사 연구원 목록이 바로 이어져
 보인다(process_researcher_expertise.build_html()이 similar_by_id를 함께
-받아 카드 안에 그려 넣는다, data/processed/CLAUDE.md 참고). 그보다 더
+받아 카드 안에 그려 넣는다, docs/CLAUDE.md 참고). 그보다 더
 이전에는 "연구원↔과제" 탭도 있었지만, 그 기반이 되던 과제↔연구원 매칭
 기능 자체가 제거되면서 함께 삭제됐다.)
 """
@@ -58,7 +58,7 @@ dash.register_page(__name__, path='/researcher-similarity-map', name='보유 전
 # 사용자 요청: "전문성 MAP"은 보여주기엔 좋으나 기능상 의미가 없어 탭 자체를
 # 숨긴다(코드는 남겨두고 진입 경로만 차단 — pages/org_comparison.py,
 # pages/jd_reconciliation.py와 동일한 _FEATURE_HIDDEN 관례, 재오픈 방법은
-# data/processed/CLAUDE.md 참고). 숨긴 동안은 Tabs에서 '전문성 MAP' 항목을
+# docs/CLAUDE.md 참고). 숨긴 동안은 Tabs에서 '전문성 MAP' 항목을
 # 빼고, highlight_researcher URL 쿼리(리포트 카드의 옛 '📍 전문성 MAP'
 # 아이콘이 전달하던 값 — 그 아이콘도 함께 제거됨, rd_specialist_markdown.py
 # 참고)로 진입해도 더 이상 map 탭으로 랜딩하지 않는다.

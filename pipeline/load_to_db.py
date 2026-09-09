@@ -72,7 +72,7 @@ TABLES = [
     # 원천 1:1 정제 테이블은 아니지만(조직 단위별 1행 — process_team_refer.py),
     # rd_specialist_markdown.read_team_refer()가 "보유 전문성" 리포트의 좌측
     # 조직도 트리를 만들 때 읽는다. 이 리포트가 앱 프로세스에서 그때그때
-    # 렌더링되므로(온디맨드 렌더링, data/processed/CLAUDE.md 2026-08-19 참고),
+    # 렌더링되므로(온디맨드 렌더링, docs/CLAUDE.md 2026-08-19 참고),
     # DB에도 넣어야 CSV 파일이 없는 배포 환경에서도 조직도가 정상 표시된다.
     'team_refer',
     # 어학자격(2026-08-29) — 다른 테이블과 달리 누적하지 않고 매번 파일

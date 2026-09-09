@@ -6,7 +6,7 @@
 지금까지는 웹 업로드(services/web_pipeline_runner.py)든 CLI 경로(data/raw/)든
 새 원본이 오면 이전 원본이 그 자리에서 사라졌다 — 나중에 처리 로직 버그를
 발견해도 그 시점 원본으로 재처리할 수 없고, "그때 정확히 뭘 올렸었나"
-감사 추적도 안 됐다(data/processed/CLAUDE.md 2026-08-27 참고).
+감사 추적도 안 됐다(docs/CLAUDE.md 2026-08-27 참고).
 
 사용법:
     from raw_archive import archive_raw_file

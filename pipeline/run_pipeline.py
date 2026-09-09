@@ -188,7 +188,7 @@
           있으면 되므로 바로 실행 가능)
 
     ※ (예전에는 4)로 과제↔연구원 매칭 단계가 더 있었지만, 그 기능 자체가
-       제거되면서 삭제됐다 — data/processed/CLAUDE.md 참고.)
+       제거되면서 삭제됐다 — docs/CLAUDE.md 참고.)
     ※ 2)는 process_project_search.py(선택, 유사 기업/학계 탐색)와 project_summary.py의
        컨플루언스 원문 캐시(data/processed/project_page_cache.json)를 공유하므로,
        같은 과제를 두 번 조회하지 않는다.
@@ -246,7 +246,7 @@ def _run_step(name: str, fn, results: list, *, skip_hint: str = '') -> bool:
     파이프라인 항목 하나가 죽어도 뒤 항목들은 전부 실행돼야 한다(사용자
     확정, 2026-09-01 — process_leadership.py가 Knox ID 매칭 전멸로
     KeyError를 던졌을 때 뒤 항목 전체가 안 돌아간 문제를 실제로 겪은 뒤
-    추가, data/processed/CLAUDE.md 참고)."""
+    추가, docs/CLAUDE.md 참고)."""
     try:
         ok = fn()
     except Exception as exc:

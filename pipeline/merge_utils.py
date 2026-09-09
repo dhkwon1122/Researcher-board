@@ -5,7 +5,7 @@ data/raw 또는 data/updates에서 새로 처리한 DataFrame을 기존 data/pro
 동작 원칙: 자연키(natural key)가 일치하는 행은 새 값으로 행 전체를 교체하고,
 새로 들어온 파일에 없는 기존 행은 그대로 보존한다(삭제하지 않는다) — 전배·퇴사
 등으로 다음 원본 파일에서 빠진 사람의 데이터가 유실되지 않도록 하기 위함
-(data/processed/CLAUDE.md '데이터 적재/치환' 절 참고).
+(docs/CLAUDE.md '데이터 적재/치환' 절 참고).
 
 TABLE_KEYS: 테이블별 자연키 등록부. 각 process_*.py가 여기서 자기 테이블의
 키를 가져다 쓴다 — 키를 바꿀 일이 있으면 이 파일 한 곳만 고치면 된다.
