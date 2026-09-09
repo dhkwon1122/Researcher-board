@@ -143,7 +143,8 @@ def load_similarity_map(n_neighbors: int = 15, random_state: int = 42, min_clust
         org_map = indexed['org_code'].to_dict()
 
     mapping_df = read_processed('mapping_job_function')
-    job_category_map = job_category_service.build_job_category_map(researchers_df, mapping_df)
+    exception_df = read_processed('exception_job_function')
+    job_category_map = job_category_service.build_job_category_map(researchers_df, mapping_df, exception_df)
 
     rows, vectors = [], []
     missing = 0

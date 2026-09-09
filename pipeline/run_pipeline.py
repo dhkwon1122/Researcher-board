@@ -114,6 +114,13 @@
       배지(기존 R직군/E직군 대체, 2026-09-04)를 만드는 데 쓴다
       (services/job_category.py).
     ※ 처리기: pipeline/process_mapping_job_function.py
+  직무_직군_맵핑_예외자.xlsx (사원번호, 성명, 직군예외)
+    → data/processed/exception_job_function.csv 로 변환(researcher_id 키).
+      mapping_job_function.csv 매칭 결과와 무관하게 등록된 사람의 SAIT
+      직군 표시를 강제로 덮어쓴다(DS는 유지, 2026-09-09). 관리자 "직군
+      예외자" 탭(그리드 CRUD)에서도 수시로 수정 가능
+      (services/exception_job_function_store.py).
+    ※ 처리기: pipeline/process_exception_job_function.py
 
 [등급/Lv 기준표] ★ 원천 파일 없이 정적 데이터로 생성 (run_pipeline.py에서 자동 실행)
   → data/processed/core_technology_grade_info.json (핵심기술 등급 S/A/B 개요)
@@ -459,6 +466,9 @@ def run():
     from process_mapping_job_function import process as process_mapping_job_function
     _run_step('mapping_job_function', process_mapping_job_function, results,
                skip_hint='직무_직군_맵핑.xlsx 없음')
+    from process_exception_job_function import process as process_exception_job_function
+    _run_step('exception_job_function', process_exception_job_function, results,
+               skip_hint='직무_직군_맵핑_예외자.xlsx 없음')
 
     # ── 11-2. 등급/Lv 기준표(정적 참조 데이터) ────────────────────────────
     from process_rubrics import process as process_rubrics

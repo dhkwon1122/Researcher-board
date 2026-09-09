@@ -15,6 +15,7 @@ from dash import (
 )
 
 from config.auth_config import ROLE_LABELS, ROLE_PERMISSIONS
+from services import exception_job_function_store as ejf_store
 from services import team_refer_store
 from services import web_pipeline_runner as wpr
 
@@ -673,6 +674,133 @@ def _team_refer_tab() -> html.Div:
 _STATUS_COLORS = {'성공': 'success', '실패': 'danger', '실행중': 'info'}
 
 
+def _exception_job_function_tab() -> html.Div:
+    """"직군 예외자" 관리 웹 CRUD 탭(2026-09-09) — mapping_job_function.csv
+    기반 매칭 결과와 무관하게 특정 연구원의 SAIT 직군 표시를 강제로
+    덮어쓰는 예외자 명단. 컬럼은 원본 헤더명 그대로(pipeline.
+    process_exception_job_function._COL_MAP 재사용,
+    services.exception_job_function_store 참고). 팀/리더 참조 탭과
+    UX(그리드 CRUD + 엑셀 업로드)는 동일하지만, 시점(연/월) 이력이 없는
+    "현재값만" 테이블이라 입력 날짜 선택기/대량 백필/부서ID 중복 모달 같은
+    시점 관련 장치는 없다(사용자 확정 — 구조를 단순하게 유지)."""
+    rows = ejf_store.list_editable_rows()
+    rows = _renumbered(rows)
+
+    columns = [{'name': 'No.', 'id': '_no', 'editable': False}] + [
+        {'name': col, 'id': col, 'editable': True}
+        for col in ejf_store.KOREAN_COLUMNS
+    ]
+
+    return html.Div([
+        dbc.Alert(
+            [
+                html.I(className='bi bi-info-circle me-2'),
+                '사원번호가 비어 있는 행은 저장되지 않습니다. 여기 등록된 사원번호는 '
+                'mapping_job_function.csv 매칭 결과와 무관하게, 연구원 프로필/전문성 '
+                'MAP의 SAIT 직군 표시를 이 파일의 "직군예외" 값으로 강제 대체합니다 '
+                '(DS 직군은 그대로 유지됩니다).',
+            ],
+            color='light', className='small border mb-3',
+        ),
+
+        dbc.Row([
+            dbc.Col([
+                dbc.Label(' ', className='small d-block mb-1'),
+                dbc.ButtonGroup([
+                    dbc.Button([html.I(className='bi bi-plus-lg me-1'), '행 추가'],
+                               id='exception-job-function-add-row-btn', color='secondary',
+                               outline=True, size='sm'),
+                    dbc.Button([html.I(className='bi bi-save me-1'), '저장'],
+                               id='exception-job-function-save-btn', color='primary', size='sm'),
+                    dbc.Button([html.I(className='bi bi-file-earmark-excel me-1'), '엑셀 다운로드'],
+                               id='exception-job-function-download-btn', color='success',
+                               outline=True, size='sm'),
+                ]),
+                html.Div(
+                    '엑셀 다운로드는 현재 화면의 편집 내용이 아니라 저장된 최신 값을 내려받습니다.',
+                    className='text-muted', style={'fontSize': '0.72rem'},
+                ),
+            ], md='auto'),
+        ], className='mb-2 align-items-end'),
+        dcc.Download(id='exception-job-function-download'),
+
+        dash_table.DataTable(
+            id='exception-job-function-table',
+            columns=columns,
+            data=rows,
+            editable=True,
+            row_deletable=True,
+            page_action='none',
+            style_table={'overflowX': 'auto'},
+            style_cell={
+                'fontSize': '0.72rem', 'padding': '3px 6px', 'textAlign': 'center',
+                'minWidth': '55px', 'maxWidth': '160px',
+                'overflow': 'hidden', 'textOverflow': 'ellipsis',
+            },
+            style_cell_conditional=[{'if': {'column_id': '_no'}, 'width': '40px', 'textAlign': 'center'}],
+            style_header={'fontWeight': '600', 'backgroundColor': '#fafafa',
+                          'textAlign': 'center', 'fontSize': '0.72rem'},
+            css=[{
+                'selector': '.column-header-name',
+                'rule': ('display: inline-block; resize: horizontal; overflow: auto; '
+                         'min-width: 40px; max-width: 600px; vertical-align: bottom;'),
+            }],
+        ),
+
+        html.Div(id='exception-job-function-save-msg', className='mt-2'),
+
+        _exception_job_function_upload_section(),
+    ], className='pt-3')
+
+
+def _exception_job_function_upload_section():
+    """"직군 예외자" 탭 안의 엑셀 업로드 UI(2026-09-09) — "팀/리더 참조" 탭의
+    _team_refer_upload_section()과 동일한 패턴. 백엔드는 services/
+    web_pipeline_runner.py의 'exception_job_function' 항목
+    (hidden_from_table=True)을 그대로 재사용 — 업로드 저장/실행 로그가
+    "데이터 업데이트" 탭의 다른 항목과 동일한 경로를 탄다. needs_valid_date가
+    없어(시점 이력 없는 "현재값만" 테이블) 팀/리더 참조와 달리 "누적
+    시점(연/월)" 입력도, 대량 백필 업로드도 없다."""
+    row = next((r for r in wpr.snapshot() if r['key'] == 'exception_job_function'), None)
+    if row is None:
+        return None
+    filenames = row['uploaded_filenames']
+    filenames_view = (
+        html.Div([html.Div(f, className='small') for f in filenames], className='mt-1')
+        if filenames else html.Div('업로드된 파일 없음', className='small text-muted mt-1')
+    )
+
+    return dbc.Card(dbc.CardBody([
+        html.Div([
+            html.I(className='bi bi-file-earmark-excel me-2 text-success'),
+            html.Span('엑셀 파일로 한 번에 반영', className='fw-semibold small'),
+        ], className='mb-2'),
+        dbc.Row([
+            dbc.Col([
+                html.Div('업로드(직무_직군_맵핑_예외자.xlsx)', className='small text-muted mb-1'),
+                _upload_box('exception_job_function', 'single'),
+                filenames_view,
+            ], md=7),
+            dbc.Col([
+                html.Div(' ', className='small mb-1'),
+                dbc.ButtonGroup([
+                    dbc.Button([html.I(className='bi bi-play-fill me-1'), '실행'],
+                               id='exception-job-function-run-upload-btn', color='primary', size='sm'),
+                    dbc.Button(html.I(className='bi bi-download'),
+                               id={'type': 'du-download', 'key': 'exception_job_function'},
+                               color='link', size='sm', disabled=not row['has_upload'],
+                               title='업로드한 원본 파일 다운로드'),
+                ]),
+            ], md=2),
+            dbc.Col([
+                html.Div('최종실행이력', className='small text-muted mb-1'),
+                html.Div(id='exception-job-function-upload-status',
+                         children=_team_refer_run_status_view(row)),
+            ], md=3),
+        ], className='g-2 align-items-start'),
+    ]), className='shadow-sm mb-3')
+
+
 def _upload_box(key: str, slot: str, small_label: str = '', multiple: bool = False) -> html.Div:
     """단일 업로드 드롭존. slot: 'single'(대부분) | 'legacy'/'new'(직무이력 전용).
     multiple=True(대량 백필 대상 항목만, needs_valid_date 참고)면 파일을
@@ -1045,6 +1173,8 @@ def layout():
                     tab_id='tab-users', label_style={'fontWeight': '600'}),
             dbc.Tab(_team_refer_tab(), label='팀/리더 참조',
                     tab_id='tab-team-refer', label_style={'fontWeight': '600'}),
+            dbc.Tab(_exception_job_function_tab(), label='직군 예외자',
+                    tab_id='tab-exception-job-function', label_style={'fontWeight': '600'}),
             dbc.Tab(_data_update_tab(), label='데이터 업데이트',
                     tab_id='tab-data-update', label_style={'fontWeight': '600'}),
             dbc.Tab(_dev_updates_tab(), label='개발업데이트 이력',
@@ -1833,11 +1963,128 @@ def team_refer_close_dupe_modal(n_clicks):
     return False
 
 
+# ── 콜백: 직군 예외자 — 행 추가 ────────────────────────────────────────────────
+@callback(
+    Output('exception-job-function-table', 'data', allow_duplicate=True),
+    Input('exception-job-function-add-row-btn', 'n_clicks'),
+    State('exception-job-function-table', 'data'),
+    State('exception-job-function-table', 'active_cell'),
+    prevent_initial_call=True,
+)
+def exception_job_function_add_row(n_clicks, rows, active_cell):
+    if not n_clicks:
+        return no_update
+    rows = list(rows or [])
+    new_row = {col: '' for col in ejf_store.KOREAN_COLUMNS}
+    insert_at = active_cell['row'] + 1 if active_cell else len(rows)
+    rows.insert(insert_at, new_row)
+    return _renumbered(rows)
+
+
+# ── 콜백: 직군 예외자 — 행 삭제 직후 No. 즉시 재번호 ───────────────────────────
+# team_refer_renumber_on_change()와 동일한 이유(row_deletable은 DataTable이
+# 클라이언트에서 바로 처리해 별도 콜백이 안 걸리므로, data 자체를 지켜보다가
+# 순서가 어긋나면 다시 매긴다 — idempotent).
+@callback(
+    Output('exception-job-function-table', 'data', allow_duplicate=True),
+    Input('exception-job-function-table', 'data'),
+    prevent_initial_call=True,
+)
+def exception_job_function_renumber_on_change(rows):
+    if not rows:
+        return no_update
+    if [r.get('_no') for r in rows] == list(range(1, len(rows) + 1)):
+        return no_update
+    return _renumbered(list(rows))
+
+
+# ── 콜백: 직군 예외자 — 저장 ───────────────────────────────────────────────────
+# 시점(연/월) 이력이 없는 "현재값만" 테이블이라 team_refer_save()와 달리
+# valid_date/삭제 톰스톤 처리가 없다 — 그리드의 현재 내용 전체가 곧 저장될
+# 값이다(services.exception_job_function_store.save_snapshot() 참고).
+@callback(
+    Output('exception-job-function-save-msg', 'children'),
+    Input('exception-job-function-save-btn', 'n_clicks'),
+    State('exception-job-function-table', 'data'),
+    prevent_initial_call=True,
+)
+def exception_job_function_save(n_clicks, rows):
+    from services.auth import can
+    if not can('manage_users'):
+        return _alert('관리자만 저장할 수 있습니다.', 'danger')
+    if not n_clicks:
+        return no_update
+
+    rows = rows or []
+    valid_rows = [r for r in rows if str(r.get('사원번호') or '').strip()]
+    skipped = len(rows) - len(valid_rows)
+
+    result = ejf_store.save_snapshot(valid_rows)
+
+    parts = [
+        f"저장 완료 — {result['saved_rows']}건 반영"
+        + ('' if result['db_ok'] else ' (DB 미반영, CSV에는 반영됨)') + '.',
+    ]
+    if skipped:
+        parts.append(f'사원번호가 비어 있어 {skipped}행은 저장에서 제외됐습니다.')
+
+    dupes = result.get('duplicate_researcher_ids') or []
+    if dupes:
+        ids = ', '.join(g['researcher_id'] for g in dupes[:5])
+        more = f' 외 {len(dupes) - 5}건' if len(dupes) > 5 else ''
+        parts.append(f'사원번호가 중복된 항목은 첫 번째 행만 반영됐습니다: {ids}{more}')
+
+    alert_color = 'warning' if dupes else 'success'
+    return dbc.Alert([html.Div(p) for p in parts], color=alert_color, dismissable=True,
+                      className='py-2 small mb-0')
+
+
+# ── 콜백: 직군 예외자 — 현재 기준 엑셀 다운로드 ────────────────────────────────
+@callback(
+    Output('exception-job-function-download', 'data'),
+    Input('exception-job-function-download-btn', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def exception_job_function_download(n_clicks):
+    from services.auth import can
+    if not n_clicks or not can('manage_users'):
+        return no_update
+    data = ejf_store.current_snapshot_workbook_bytes()
+    fname = f"직군_예외자_{date.today().strftime('%Y%m%d')}.xlsx"
+    return dcc.send_bytes(data, fname)
+
+
+# ── 콜백: 직군 예외자 — 엑셀 업로드 실행 ───────────────────────────────────────
+# hidden_from_table 항목이라 "데이터 업데이트" 탭의 전체/선택 실행 버튼과
+# 무관한 이 탭 전용 실행 트리거가 필요하다(team_refer_run_upload()와 동일한
+# 이유). needs_valid_date가 없어 연/월 State가 필요 없다.
+@callback(
+    Output('exception-job-function-upload-status', 'children', allow_duplicate=True),
+    Output('data-update-interval', 'disabled', allow_duplicate=True),
+    Input('exception-job-function-run-upload-btn', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def exception_job_function_run_upload(n_clicks):
+    from services.auth import can
+    if not n_clicks:
+        return no_update, no_update
+    if not can('manage_users'):
+        return _alert('관리자만 실행할 수 있습니다.', 'danger'), True
+    if not wpr.has_upload('exception_job_function'):
+        return _alert('업로드된 파일이 없습니다.', 'warning'), True
+
+    if not wpr.start_run(['exception_job_function']):
+        return _alert('이미 다른 작업이 실행 중입니다. 잠시 후 다시 시도해주세요.', 'warning'), False
+    return (_alert('실행을 시작했습니다. 브라우저를 닫아도 서버에서 계속 진행되며, '
+                    '화면은 자동으로 갱신됩니다.', 'info'), False)
+
+
 # ── 콜백: 데이터 업데이트 — 파일 업로드 ────────────────────────────────────────
 @callback(
     Output('data-update-table-container', 'children', allow_duplicate=True),
     Output('data-update-status-msg', 'children', allow_duplicate=True),
     Output('team-refer-upload-status', 'children', allow_duplicate=True),
+    Output('exception-job-function-upload-status', 'children', allow_duplicate=True),
     Input({'type': 'du-upload', 'key': ALL, 'slot': ALL}, 'contents'),
     State({'type': 'du-upload', 'key': ALL, 'slot': ALL}, 'filename'),
     State({'type': 'du-upload', 'key': ALL, 'slot': ALL}, 'id'),
@@ -1846,14 +2093,14 @@ def team_refer_close_dupe_modal(n_clicks):
 def data_update_on_upload(all_contents, all_filenames, all_ids):
     from services.auth import can
     if not can('manage_users'):
-        return no_update, _alert('관리자만 업로드할 수 있습니다.', 'danger'), no_update
+        return no_update, _alert('관리자만 업로드할 수 있습니다.', 'danger'), no_update, no_update
 
     trig = dash.callback_context.triggered_id
     if trig is None:
-        return no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update
     idx = next((i for i, cid in enumerate(all_ids) if cid == trig), None)
     if idx is None or not all_contents[idx]:
-        return no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update
 
     # needs_valid_date 항목의 대량 백필 업로드는 dcc.Upload(multiple=True)라
     # contents/filename이 리스트로 온다 — 그 외(기존 단일 업로드)는 문자열
@@ -1888,12 +2135,15 @@ def data_update_on_upload(all_contents, all_filenames, all_ids):
     else:
         msg, color = '; '.join(errors[:3]) or '업로드에 실패했습니다.', 'danger'
 
-    # team_refer는 "데이터 업데이트" 탭 표에서 숨겨져 있어(hidden_from_table),
-    # 그 탭의 상태 메시지 자리(data-update-status-msg)는 다른 탭이라 안 보인다
-    # — 대신 "팀/리더 참조" 탭 안의 전용 상태 자리로 알림을 보낸다.
+    # team_refer/exception_job_function은 "데이터 업데이트" 탭 표에서
+    # 숨겨져 있어(hidden_from_table), 그 탭의 상태 메시지 자리
+    # (data-update-status-msg)는 다른 탭이라 안 보인다 — 대신 각자의 탭 안
+    # 전용 상태 자리로 알림을 보낸다.
     if trig['key'] == 'team_refer':
-        return _data_update_table(), no_update, _alert(msg, color)
-    return _data_update_table(), _alert(msg, color), no_update
+        return _data_update_table(), no_update, _alert(msg, color), no_update
+    if trig['key'] == 'exception_job_function':
+        return _data_update_table(), no_update, no_update, _alert(msg, color)
+    return _data_update_table(), _alert(msg, color), no_update, no_update
 
 
 # ── 콜백: 과제별컨플 — 컨플 주소 없는 과제 PDF 업로드/삭제 ──────────────────────
@@ -2091,13 +2341,17 @@ def data_update_db_load(n_clicks):
     Output('data-update-db-status', 'children', allow_duplicate=True),
     Output('data-update-interval', 'disabled', allow_duplicate=True),
     Output('team-refer-upload-status', 'children', allow_duplicate=True),
+    Output('exception-job-function-upload-status', 'children', allow_duplicate=True),
     Input('data-update-interval', 'n_intervals'),
     prevent_initial_call=True,
 )
 def data_update_poll(_n):
     team_refer_row = next((r for r in wpr.snapshot() if r['key'] == 'team_refer'), None)
     team_refer_status = _team_refer_run_status_view(team_refer_row) if team_refer_row else no_update
-    return _data_update_table(), _db_status_view(), not wpr.any_running(), team_refer_status
+    ejf_row = next((r for r in wpr.snapshot() if r['key'] == 'exception_job_function'), None)
+    ejf_status = _team_refer_run_status_view(ejf_row) if ejf_row else no_update
+    return (_data_update_table(), _db_status_view(), not wpr.any_running(),
+            team_refer_status, ejf_status)
 
 
 # ── 콜백: 데이터 업데이트 — "이전 Data" 다운로드 ───────────────────────────────

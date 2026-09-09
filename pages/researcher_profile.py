@@ -1146,7 +1146,8 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
         owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid,
                                stacked=True, show_tech_index=False, show_info_hover=False, compact=True,
                                job_category=job_category.job_category_for(
-                                   rid, tables['researchers'], tables['mapping_job_function'])),
+                                   rid, tables['researchers'], tables['mapping_job_function'],
+                                   tables['exception_job_function'])),
     ])
 
     # 학력을 기본정보 표(사번~Knox ID) 바로 아래에 배치한다(사용자 요청).
@@ -1547,7 +1548,8 @@ def update_profile(rid):
                           tables['patents'], tables['job_profile'], tables['tasks_information'], rid),
             owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid,
                                    job_category=job_category.job_category_for(
-                                       rid, tables['researchers'], tables['mapping_job_function'])),
+                                       rid, tables['researchers'], tables['mapping_job_function'],
+                                       tables['exception_job_function'])),
             current_status,
             _build_print_block(rid, tables, researchers, name_map, show_eval),
             True,

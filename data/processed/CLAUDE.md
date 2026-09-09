@@ -9210,3 +9210,120 @@ job_category.py`의 두 함수를 매칭 성공/실패/빈 값/빈 DataFrame 등
 브라우저로 최종 확인(이 세션엔 실제 원본 파일이 없어 사용자가 설명한
 헤더 구조를 그대로 재현한 합성 데이터로만 검증), `pipeline/load_to_db.py`
 를 통한 실제 PostgreSQL 반영(DB 미설정 환경이라 CSV 경로로만 검증).
+
+## 2026-09-09: SAIT직군 예외자 명단 추가 — mapping_job_function 매칭 결과를
+researcher_id 단위로 강제 override + 관리자 "직군 예외자" 웹 CRUD 탭 신설
+
+사용자 요청: 앞서(2026-09-04) DS/SAIT직군 배지로 바꾼 로직에 예외 처리가
+필요하다는 것 — 기존 로직대로면 특정 대상이 R직군(현재는 SAIT 직군 값
+자체로 표현)이어야 하지만, 예외자 명단에 있으면 다른 값(예: E직군)으로
+표기해야 한다. 4가지를 확인 후 진행: (1) 예외자 override는 기본 매칭
+성공/실패와 무관하게 항상 적용(job_function 자체가 mapping_job_function.csv
+에 없어 DS가 "-"인 사람도 SAIT는 예외값 표시), (2) 새 데이터는
+team_refer.csv처럼 시점(연/월/일) 이력을 쌓지 않고 researcher_id 기준
+"현재값만" 관리하는 단순 구조, (3) 적용 범위는 지난번과 동일하게 연구원
+프로필 + 전문성 MAP 호버 라벨 모두, (4) 관리자 "데이터 업데이트" 탭
+백엔드(web_pipeline_runner)에도 등록해 엑셀 일괄 업로드 섹션을 함께 둠.
+
+**신규 `pipeline/process_exception_job_function.py`**: `직무_직군_맵핑_예외자.xlsx`
+(사원번호/성명/직군예외) → `exception_job_function.csv`(researcher_id/name/
+exception_job_category). `process_mapping_job_function.py`와 동일하게
+`source_reader.read_source()` 경로(1~3단계 표준 파이프라인, 헤더 1행) +
+`raw_dir` 오버라이드(웹 업로드)를 지원하고, `process_team_refer.py`와 동일한
+설계로 `build_rows_from_records()`/`find_duplicate_researcher_ids()`를
+공개 함수로 분리해 관리자 화면 그리드 CRUD(아래 store)와 CLI/웹 업로드
+경로가 같은 컬럼 매핑/정제 기준을 공유하게 했다. researcher_id 빈 행 제외,
+중복은 첫 행만 채택(경고 출력). 시점 이력이 없어(사용자 확정 2번)
+`merge_utils` upsert를 쓰지 않고 매 처리마다 파일 전체를 새로 만든다
+(mapping_job_function.csv와 동일한 "현재값만" 패턴).
+
+**`pipeline/sources.py`/`run_pipeline.py`/`load_to_db.py`**: 표준 3곳에
+등록 — SOURCES에 헤더 0-based 0(사용자 확인)으로 추가, run_pipeline.py의
+"직무정보 참조 데이터" 섹션에 실행 단계 추가, load_to_db.py TABLES에
+추가(mapping_job_function과 동일한 이유 — 앱이 요청 시점에 이 테이블을
+읽으므로 DB 전용 배포에서도 정상 표시되려면 필요).
+
+**`services/job_category.py`**: `job_category_for()`/`build_job_category_map()`
+에 `exception_df` 파라미터 추가. 두 함수 모두 먼저 기존 로직대로 DS/SAIT를
+계산한 뒤(researchers.csv/mapping_job_function.csv 매칭, 실패 시 각각
+"-"), **그 결과와 완전히 무관하게** 마지막 단계에서 `exception_df`에
+`researcher_id`가 있으면 SAIT만 그 값으로 덮어쓴다(DS는 그대로) — 이
+순서 덕분에 기본 매칭이 실패해 DS가 "-"인 사람도 exception 등록만
+돼 있으면 SAIT는 예외값을 보여준다(사용자 확정 1번). `job_category_for()`
+는 기존에 여러 개의 조기 `return _BLANK, _BLANK` 분기가 있었는데, 이
+override를 모든 분기 이후 공통으로 한 번만 적용하도록 함수 흐름을
+재구성했다(개별 분기마다 override 로직을 반복하지 않기 위해).
+
+**호출부 3곳**: `services/data_store.py`의 `read_profile_tables()`
+테이블 목록에 `exception_job_function` 추가. `pages/researcher_profile.py`
+의 두 `owned_expertise_block()` 호출부(화면 tech_box, 인쇄 카드) 모두
+`job_category_for(..., tables['exception_job_function'])`로 전달.
+`services/similarity_map.py`의 `load_similarity_map()`이
+`read_processed('exception_job_function')`을 추가로 읽어
+`build_job_category_map()`에 함께 넘긴다 — 전문성 MAP 유사 연구원 호버
+라벨(`pages/researcher_similarity_map.py`, 코드는 있지만 탭 자체는
+`_MAP_TAB_HIDDEN=True`로 숨김)도 자동으로 override가 반영된다(사용자
+확정 3번, 코드 변경 불필요 — job_category 딕셔너리 값만 바뀜).
+
+**신규 `services/exception_job_function_store.py`**: `services/
+team_refer_store.py`를 단순화한 버전 — team_refer는 자연키
+`(dep_id, valid_year, valid_month, valid_day)` upsert + 삭제 톰스톤이
+필요하지만, 이 테이블은 "현재값만" 관리라 그런 장치가 전혀 없다.
+`list_editable_rows()`(researcher_id 오름차순 정렬), `save_snapshot(records)`
+(그리드의 현재 내용 전체로 CSV/DB를 **통째로 교체** — 자연키 upsert
+대신 매번 `DELETE` 후 `INSERT`, 그리드에서 지운 행은 다음 저장 결과에
+없으면 그만), `current_snapshot_workbook_bytes()`(엑셀 다운로드). DB
+테이블에 PK를 걸지 않았다(전체 교체 방식이라 ON CONFLICT가 필요 없고,
+`load_to_db.py`의 배치 적재가 어차피 테이블을 매번 plain하게 재생성해
+PK를 유지 못 하는 기존 제약이 team_refer에도 있어 — 이 테이블은 그
+문제 자체가 발생하지 않도록 설계).
+
+**`services/web_pipeline_runner.py`**: MANIFEST에 `exception_job_function`
+항목 추가(`mode='exact'`, `dest_filename='직무_직군_맵핑_예외자.xlsx'`,
+`hidden_from_table=True`, `pipeline_scope='dashboard'`, `needs_valid_date`
+없음 — team_refer와 동일하게 "데이터 업데이트" 탭 표에는 안 보이고
+그리드 CRUD 탭 안에 업로드 섹션으로만 노출).
+
+**`pages/admin.py`**: "팀/리더 참조"와 "데이터 업데이트" 탭 사이에 새
+"직군 예외자" 탭(`_exception_job_function_tab()`) 신설(사용자 확정 —
+탭 순서 그대로). team_refer 탭과 동일한 UX(그리드 CRUD + 엑셀 업로드
+섹션, `_exception_job_function_upload_section()`)이지만 시점 관련 UI는
+전부 뺐다 — 입력 날짜 선택기, 대량 백필(`_YYYYMM`) 업로드, 부서ID 중복
+전용 모달이 없다(중복 경고는 저장 알림 문구 안에 간단히 포함). 신규
+콜백 5개: `exception_job_function_add_row`/`_renumber_on_change`(행
+추가/삭제 후 No. 재번호, team_refer와 동일한 idempotent 패턴)/`_save`/
+`_download`/`_run_upload`. 기존 `data_update_on_upload`(파일 업로드
+라우팅)와 `data_update_poll`(진행 상황 폴링) 두 콜백은 Output을
+`team-refer-upload-status`와 동일한 방식으로 하나씩 더 늘려
+(`exception-job-function-upload-status`), `trig['key'] ==
+'exception_job_function'`일 때 그 전용 상태 자리로 알림이 가도록
+분기를 추가했다(team_refer 분기와 나란히).
+
+**검증**: `process_exception_job_function.process()`를 합성 xlsx(정상
+2건 + 빈 사번 1건 + 중복 사번 1건)로 직접 실행해 빈 행 제외/중복 첫
+행 채택 확인. `services/job_category.py`의 두 함수를 "기본 매칭
+성공+예외 있음"/"기본 매칭 실패(DS='-')+예외 있음"/"예외 없음" 3가지
+경계 케이스로 직접 호출해 DS 유지·SAIT override·override 미적용이 각각
+정확히 동작하는 것을 확인(가장 중요한 사용자 확정 1번 규칙). `owned_
+expertise_block()`을 override된 `(DS, SAIT)` 튜플로 렌더링해 배지에
+정확히 반영되는 것 확인. `services/exception_job_function_store.py`를
+실제 저장 경로(data/processed/exception_job_function.csv, 테스트 후
+삭제)로 저장→조회→재저장(값 변경)→중복 감지→엑셀 워크북 생성까지
+end-to-end 확인. `pages/admin.py`의 `_exception_job_function_tab()`
+렌더링(모든 컴포넌트 id 포함 확인), `add_row`/`renumber_on_change`/
+`save`(auth.can·store.save_snapshot 모킹)/`download`/`run_upload`
+(wpr.has_upload·start_run 모킹) 콜백 함수를 전부 직접 호출해 확인.
+`data_update_on_upload`/`data_update_poll`의 Output 개수와 return 튜플
+개수가 각각 4/5로 정확히 일치하는 것을 코드 검토로 확인(dash.callback_
+context를 테스트 환경에서 완전히 흉내 내기 어려워 실제 트리거 분기까지는
+실행 검증하지 못했지만, team_refer가 이미 쓰고 있는 것과 동일한 패턴을
+한 줄만 더 얹은 것이라 위험도는 낮다고 판단). 변경/신규 파일 전부
+`py_compile` 통과, `dash.Dash(use_pages=True)` 컨텍스트에서 전체 페이지
+임포트 확인. 테스트로 만든 `data/processed/exception_job_function.csv`는
+검증 후 삭제.
+
+**미검증**: 실제 브라우저에서 "직군 예외자" 탭 조작(행 추가/삭제/저장/
+엑셀 업로드/실행 버튼), `data_update_on_upload`/`data_update_poll`의
+실제 Dash 콜백 트리거 경로(dash.callback_context 목킹 한계로 함수
+내부 로직만 코드 검토로 확인), 실제 PostgreSQL에서의 DB 전체 교체
+(delete+insert) 동작(DB 미설정 환경이라 CSV 경로로만 검증).

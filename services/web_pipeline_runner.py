@@ -131,6 +131,18 @@ MANIFEST = [
     dict(key='mapping_job_function', label='직무_직군_맵핑', module='process_mapping_job_function',
          hint='직무_직군_맵핑.xlsx', mode='exact', dest_filename='직무_직군_맵핑.xlsx',
          pipeline_scope='dashboard'),
+    # 직군 예외자(exception_job_function)는 team_refer와 동일하게 "데이터
+    # 업데이트" 탭 표에는 나타나지 않는다(hidden_from_table=True, 2026-09-09
+    # 사용자 확정) — 대신 관리자 화면의 "직군 예외자" 탭(그리드 CRUD,
+    # services/exception_job_function_store.py) 안에 업로드 UI가 별도로
+    # 있다(pages/admin.py의 _exception_job_function_upload_section()).
+    # MANIFEST 등록 자체(run_one()/save_upload() 등 백엔드 로직)는 그대로
+    # 유지 — 그리드 CRUD와 같은 exception_job_function.csv에 반영하므로
+    # 서로 충돌하지 않는다. 시점(연/월) 이력이 없는 "현재값만" 테이블이라
+    # needs_valid_date는 켜지 않는다(team_refer와의 차이).
+    dict(key='exception_job_function', label='직군 예외자', module='process_exception_job_function',
+         hint='직무_직군_맵핑_예외자.xlsx', mode='exact', dest_filename='직무_직군_맵핑_예외자.xlsx',
+         hidden_from_table=True, pipeline_scope='dashboard'),
     # 팀/리더 참조(team_refer)는 "데이터 업데이트" 탭 표에는 더 이상 나타나지
     # 않는다(hidden_from_table=True, 2026-09-01 사용자 확정) — 대신 관리자
     # 화면의 "팀/리더 참조" 탭(그리드 CRUD, services/team_refer_store.py) 안에
