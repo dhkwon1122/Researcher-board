@@ -21,7 +21,13 @@
 중복 제거 (task_name 기준, tasks.csv와 1:1로 조인되도록 보장):
   동일한 task_name을 가진 행이 여러 개면 아래 우선순위로 1건만 남긴다.
     1순위: task_collabo~task_futureusage 중 값이 채워진 컬럼 수가 많은 행
-    2순위: (1이 동률일 때) write_date가 가장 최근인 행
+    2순위: (1이 동률일 때) write_date가 가장 과거인 행(2026-09-09 수정 —
+      write_date는 process_tasks.py가 "그 이름이 언제부터 쓰였는지"(개명
+      시점)로 그대로 재사용하므로, 같은 이름의 보고서가 내용 변경 없이
+      나중에 재작성돼 write_date만 갱신된 경우에도 최신 작성일을 남기면
+      실제 개명 시점이 뒤로 밀려 왜곡된다 — 최초 작성일을 남겨야 그 이름이
+      실제로 쓰이기 시작한 시점이 보존된다. 예전엔 반대로 최신 작성일을
+      남겼음)
   ※ task_code가 같아도 task_name이 다르면(예: 과제 진행 중 개명) 서로 다른
     행으로 보존한다 — task_code 기준으로만 줄이면 tasks.csv가 참조하는
     과거 시점의 과제명이 유실되어 조인이 실패할 수 있기 때문.
@@ -79,15 +85,18 @@ def _filled_count(row) -> int:
 
 def _dedupe_by_name(df: pd.DataFrame) -> pd.DataFrame:
     """task_name이 동일한 행 중, 채워진 항목이 가장 많은 행을 우선하고(신뢰도),
-    그 수가 같으면 write_date가 가장 최근인 행을 남긴다.
-    task_name이 빈 행은 서로 다른 항목으로 간주해 중복 제거 대상에서 제외한다."""
+    그 수가 같으면 write_date가 가장 과거인 행을 남긴다(2026-09-09 수정 —
+    write_date를 process_tasks.py가 "그 이름이 언제부터 쓰였는지"(개명
+    시점)로 재사용하므로, 최신이 아니라 최초 작성일을 남겨야 실제 개명
+    시점이 보존된다 — 위 모듈 docstring 참고). task_name이 빈 행은 서로
+    다른 항목으로 간주해 중복 제거 대상에서 제외한다."""
     has_name = df['task_name'].astype(str).str.strip() != ''
     with_name = df[has_name].copy()
     without_name = df[~has_name]
 
     with_name['_filled_count'] = with_name.apply(_filled_count, axis=1)
     with_name = (with_name
-                 .sort_values(['_filled_count', 'write_date'])
+                 .sort_values(['_filled_count', 'write_date'], ascending=[True, False])
                  .drop_duplicates('task_name', keep='last')
                  .drop(columns='_filled_count'))
     return pd.concat([with_name, without_name], ignore_index=True)

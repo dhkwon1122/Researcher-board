@@ -27,7 +27,7 @@ from pipeline.rd_specialist_markdown import build_org_tree, read_team_refer
 from pipeline.researcher_fit import _text_hash, researcher_profile_text
 from services import job_category as job_category_service
 from services import researcher_profile_export as export
-from services.data_store import DATA_DIR, read_expertise_profiles, read_processed, read_similar_researchers
+from services.data_store import DATA_DIR, filter_current, read_expertise_profiles, read_processed, read_similar_researchers
 
 
 def _cluster_label(rows: list) -> str:
@@ -562,12 +562,17 @@ def people_team_dep_ids() -> set:
     return {dep_id_map[oc] for oc in org_codes if oc in dep_id_map}
 
 
-def individual_search_options() -> list:
+def individual_search_options(current_only: bool = False) -> list:
     """개인별 검색 드롭다운 옵션 — "이름 [부서] (사번)" 형식(동명이인 구분,
-    pages/researcher_profile.py 검색 드롭다운과 동일한 표기 규칙)."""
+    pages/researcher_profile.py 검색 드롭다운과 동일한 표기 규칙).
+    current_only=True면 현재 소속자만(is_current == 'Y'), False(기본값,
+    기존 동작 유지)면 전배·퇴사자를 포함한 전체 이력 인원을 대상으로 한다
+    (pages/researcher_list.py의 "연구원 선택" 필터가 "검색 기준" 최신/누적
+    토글에 맞춰 이 값을 넘긴다, 2026-09-10)."""
     researchers_df = read_processed('researchers')
     if researchers_df.empty:
         return []
+    researchers_df = filter_current(researchers_df, current_only)
     options = []
     for _, row in researchers_df.sort_values(['department', 'name']).iterrows():
         dept = str(row.get('department', '') or '').strip()

@@ -76,6 +76,16 @@ MANIFEST = [
     dict(key='evaluations', label='T&P(평가)', module='process_tp_evaluation',
          hint='예: T&P 기본 인사 정보 *.xlsx', mode='wildcard', needs_valid_date=True,
          pipeline_scope='dashboard'),
+    # 평가표기 예외자(evaluation_exception, 2026-09-09 도입) — 연봉등급이
+    # 없는 사람의 평가 표기를 "상/하반기업적 두 자리"가 아니라 "하반기업적
+    # 하나만"으로 바꿔주는 researcher_id 목록(services/evaluations.py 참고).
+    # exception_job_function/team_refer와 달리 그리드 CRUD 관리 탭을 두지
+    # 않고 "데이터 업데이트" 탭 엑셀 업로드만 지원한다(사용자 확정) —
+    # hidden_from_table 없이 일반 항목으로 등록. 시점(연/월) 이력이 없는
+    # "현재값만" 테이블이라 needs_valid_date는 켜지 않는다.
+    dict(key='evaluation_exception', label='평가표기 예외자', module='process_evaluation_exception',
+         hint='평가표기예외자.xlsx', mode='exact', dest_filename='평가표기예외자.xlsx',
+         pipeline_scope='dashboard'),
     dict(key='patents', label='특허', module='process_patents',
          hint='특허 리스트.xlsx', mode='exact', dest_filename='특허 리스트.xlsx'),
     dict(key='nurturing', label='양성이력', module='process_nurturing',

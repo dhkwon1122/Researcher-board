@@ -162,5 +162,6 @@ def read_profile_tables() -> dict[str, pd.DataFrame]:
         'work_experience',
         'mapping_job_function',
         'exception_job_function',
+        'evaluation_exception',
     ]
     return {name: read_processed(name) for name in names}

@@ -11,7 +11,7 @@ from dash import html
 from components.detail_tabs import plain_indent_list
 from services.data_store import ASSETS_DIR, PHOTO_DIR, RAW_DIR
 from services.evaluations import (
-    competency_column, first_half_column, format_evaluation_cell, salary_grade_column, second_half_column,
+    first_half_column, format_evaluation_cell, salary_grade_column, second_half_column,
 )
 from services.language_qualification import format_block as language_block_text
 from services.task_history import merge_task_rows
@@ -266,8 +266,16 @@ def _inc_label(inc: pd.DataFrame, year) -> str:
     return '-'
 
 
-def _eval_cell(eva, year) -> tuple[str, str]:
-    """(색상 기준 연봉등급, 화면 표시 문자열 예: "다(EM/EM)") 튜플. eva가 없으면
+def _is_eval_exception(exc_df, rid: str) -> bool:
+    """평가표기 예외자(evaluation_exception.csv) 명단에 rid가 있는지 —
+    연봉등급이 없을 때의 표기 방식을 바꾼다(services.evaluations 참고)."""
+    if exc_df is None or exc_df.empty or 'researcher_id' not in exc_df.columns:
+        return False
+    return rid in set(exc_df['researcher_id'])
+
+
+def _eval_cell(eva, year, is_exception: bool = False) -> tuple[str, str]:
+    """(색상 기준 연봉등급, 화면 표시 문자열 예: "다(EM)") 튜플. eva가 없으면
     둘 다 '-'. evaluation_incentive_block()/evaluation_incentive_summary_text()
     가 공유한다."""
     if eva is None:
@@ -275,8 +283,7 @@ def _eval_cell(eva, year) -> tuple[str, str]:
     salary = _clean_str(eva.get(salary_grade_column(year)))
     first_half = _clean_str(eva.get(first_half_column(year - 1)))
     second_half = _clean_str(eva.get(second_half_column(year - 1)))
-    competency = _clean_str(eva.get(competency_column(year - 1)))
-    display = format_evaluation_cell(salary, first_half, second_half, competency)
+    display = format_evaluation_cell(salary, first_half, second_half, is_exception)
     return salary, display
 
 
@@ -290,13 +297,14 @@ def _eval_incentive_rows(eva_df, inc_df, rid: str):
     return inc, eva
 
 
-def evaluation_incentive_block(eva_df, inc_df, rid: str, years: list[int]):
+def evaluation_incentive_block(eva_df, inc_df, exc_df, rid: str, years: list[int]):
     """years: 연봉등급 연도 리스트(오름차순, 예: [2024,2025,2026]) — 각 연도
-    열은 그 해 연봉등급과, 대응하는 전년도(연도-1) 역량/하반기업적(연봉등급이
-    없으면 상/하반기업적)을 합쳐 services.evaluations.format_evaluation_cell()로
-    한 셀에 표시한다(예:
-    "다(EM/EM)")."""
+    열은 그 해 연봉등급과, 대응하는 전년도(연도-1) 하반기업적(연봉등급이
+    없으면 상/하반기업적, 예외자면 하반기업적만)을 합쳐
+    services.evaluations.format_evaluation_cell()로 한 셀에 표시한다(예:
+    "다(EM)")."""
     inc, eva = _eval_incentive_rows(eva_df, inc_df, rid)
+    is_exception = _is_eval_exception(exc_df, rid)
 
     def _grade_td(salary_grade, display):
         color = GRADE_COLOR.get(salary_grade, '#aaa')
@@ -326,29 +334,33 @@ def evaluation_incentive_block(eva_df, inc_df, rid: str, years: list[int]):
             html.Tr(
                 [html.Td('평가등급', className='small text-muted text-center',
                          style={'whiteSpace': 'nowrap', 'fontSize': '0.75rem', 'verticalAlign': 'middle'})] +
-                [_grade_td(*_eval_cell(eva, year)) for year in years]
+                [_grade_td(*_eval_cell(eva, year, is_exception)) for year in years]
             ),
         ]),
     ], bordered=True, size='sm', className='mb-0 eval-incentive-table', style={'fontSize': '0.8rem'})
 
 
-def evaluation_incentive_summary_text(eva_df, inc_df, rid: str, years: list[int]):
+def evaluation_incentive_summary_text(eva_df, inc_df, exc_df, rid: str, years: list[int]):
     """평가/인센티브 이력을 표 대신 글자 두 줄로 — A4 인쇄처럼 지면이 좁아 표
     형식이 부담스러운 곳에서 쓴다(연도·값 계산은 evaluation_incentive_block()과
     동일 로직 공유, 표시 형식만 다름). 제목("평가 · 인센티브 이력")과
-    "평가"/"인센티브" 구분자 없이 값만 가운데 정렬로 두 줄 보여준다(사용자
+    "평가"/"인센티브" 구분자 없이 값만 가운데 정렬로 줄 보여준다(사용자
     확정 — 어느 자리에 나오는 값인지는 문맥으로 알 수 있다는 전제). 평가
-    줄이 인센티브 줄보다 먼저 온다. 예:
-      나(ES)/가(EM)/다(MT)
-      -/우수/최우수"""
+    줄이 인센티브 줄보다 먼저 온다. 구분자는 "/"가 아니라 ", "(2026-09-09
+    확정). 인센티브는 대상 연도가 하나도 없으면(전 연도 '-') 그 줄 자체를
+    아예 표시하지 않는다(2026-09-09 확정). 예:
+      나(ES), 가(EM), 다(MT)
+      -, 우수, 최우수"""
     inc, eva = _eval_incentive_rows(eva_df, inc_df, rid)
-    inc_line = '/'.join(_inc_label(inc, y) for y in years)
-    eval_line = '/'.join(_eval_cell(eva, y)[1] for y in years)
+    is_exception = _is_eval_exception(exc_df, rid)
+    inc_labels = [_inc_label(inc, y) for y in years]
+    eval_line = ', '.join(_eval_cell(eva, y, is_exception)[1] for y in years)
 
-    return html.Div([
-        html.Div(eval_line, className='small'),
-        html.Div(inc_line, className='small'),
-    ], className='text-center', style={'textAlign': 'center'})
+    children = [html.Div(eval_line, className='small')]
+    if any(label != '-' for label in inc_labels):
+        children.append(html.Div(', '.join(inc_labels), className='small'))
+
+    return html.Div(children, className='text-center', style={'textAlign': 'center'})
 
 
 def nurturing_block(nur_df, rid: str, *, limit: int | None = None, show_empty_message: bool = True,

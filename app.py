@@ -15,14 +15,16 @@ app = dash.Dash(
     use_pages=True,
     external_stylesheets=[dbc.themes.BOOTSTRAP, dbc.icons.BOOTSTRAP],
     suppress_callback_exceptions=True,
-    title='SAIT in 360°',
+    title='People in SAIT',
 )
 
-# 브랜드명("SAIT in 360°")을 표시할 때 "AI" 부분만 파란색(#1677ff, 이 앱
-# 전역에서 쓰는 강조색)으로 칠하는 공용 헬퍼 — 네비게이션 바(흰 글씨 위)와
-# 로그인/초기설정 화면(기본 글자색 위) 둘 다 같은 문구를 재사용한다.
+# 브랜드명("People in SAIT")을 표시할 때 "SAIT" 안의 "AI" 부분만 파란색
+# (#1677ff, 이 앱 전역에서 쓰는 강조색)으로 칠하는 공용 헬퍼 — 네비게이션
+# 바(흰 글씨 위)와 로그인/초기설정 화면(기본 글자색 위) 둘 다 같은 문구를
+# 재사용한다(2026-09-10 "SAIT in 360°" → "People in SAIT" 개명, 사용자
+# 확정 — 폰트는 그대로 유지, "AI" 파란색 강조만 그대로 옮겨왔다).
 def _brand_label(**span_kwargs):
-    return html.Span(['S', html.Span('AI', style={'color': '#1677ff'}), 'T in 360°'], **span_kwargs)
+    return html.Span(['People in S', html.Span('AI', style={'color': '#1677ff'}), 'T'], **span_kwargs)
 
 
 def _get_or_create_secret_key() -> str:
@@ -218,7 +220,7 @@ def _html_page(title: str, body: str) -> str:
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{title} — SAIT in 360°</title>
+  <title>{title} — People in SAIT</title>
   <link rel="stylesheet"
         href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
   <link rel="stylesheet"
@@ -534,11 +536,11 @@ navbar = dbc.Navbar(
             dbc.Nav(
                 [
                     dbc.NavItem(dbc.NavLink(
-                        [html.I(className='bi bi-person-badge-fill me-1'), 'SAIT 인력 프로필'],
+                        [html.I(className='bi bi-person-badge-fill me-1'), '연구원 프로필'],
                         href='/', active='exact', className='text-white',
                     )),
                     dbc.NavItem(dbc.NavLink(
-                        [html.I(className='bi bi-table me-1'), 'SAIT 인력 명단'],
+                        [html.I(className='bi bi-table me-1'), '연구원 명단(AI검색)'],
                         href='/researcher-list', active='exact', className='text-white',
                     )),
                     dbc.NavItem(dbc.NavLink(

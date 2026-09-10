@@ -95,6 +95,14 @@ TABLES = [
     # 반영하지만, 엑셀 일괄 업로드(process_exception_job_function.py) 경로는
     # CSV만 쓰므로 이 배치 적재가 그 간극을 메운다.
     'exception_job_function',
+    # 평가표기 예외자(2026-09-09 도입) — 위 두 테이블과 동일한 이유로
+    # DB에도 넣는다: 연구원 개별 프로필/엑셀 다운로드가 요청 시점에 이
+    # 테이블을 data_store.read_processed()로 읽으므로, CSV 파일이 없는
+    # 배포 환경에서도 평가 표기(연봉등급 없을 때 하반기업적만 표시할지)가
+    # 정상 반영되려면 DB 반영이 필요하다. 그리드 CRUD 없이 엑셀 업로드
+    # 경로(process_evaluation_exception.py)만 있으므로 CSV만으로는
+    # 부족한 배포 환경 간극을 이 배치 적재가 메운다.
+    'evaluation_exception',
 ]
 
 # (테이블명, data/processed/ 안의 JSON 파일명, 각 항목에서 키로 쓸 필드명).

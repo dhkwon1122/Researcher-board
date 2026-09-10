@@ -9406,3 +9406,336 @@ context를 테스트 환경에서 완전히 흉내 내기 어려워 실제 트�
 실제 배포 데이터에 반영되는 것(이 세션엔 실제 원본 파일이 없어 사용자가
 설명한 케이스를 그대로 재현한 합성 데이터로만 검증), 실제 브라우저에서의
 최종 렌더링 확인.
+
+## 2026-09-09 (3): T&P 평가 로직 개편 — 역량 제외, 원본 상/하반기업적 값
+그대로 표기, 연봉등급/예외자 공통 서식 3분기, A4·PDF 구분자 콤마+인센티브
+빈 줄 숨김 (원본처리 + 화면 + A4 인쇄 카드 + 엑셀 다운로드)
+
+사용자 요청 4가지: (1) 원본처리에서 역량 완전 제외, 상/하반기업적만 남김.
+(2) 상/하반기업적은 허용값 제한 없이 셀 값을 그대로 가져옴("M"이 "-"로
+바뀌던 문제) — 조사 결과 이미 2026-08-29에 코드상 고쳐져 있었고, 사용자도
+"예전에 처리된 옛 데이터일 가능성이 높음"을 확인(AskUserQuestion) — 코드
+변경 없음, 재처리로 해결되는 사안. (3) 공통 서식 로직을 "연봉등급
+있음(하반기업적만)/연봉등급 없음(상·하반기업적 두 자리)/연봉등급 없고
+예외자(하반기업적만)"의 3분기로 재정의, 새 예외자 명단
+`evaluation_exception.csv`(원본: `평가표기예외자.xlsx`) 도입. (4) A4 인쇄
+카드/PDF에서 연도 구분자를 "/"→", "로 통일(인센티브 줄도 포함, 사용자가
+AskUserQuestion에서 확정), 인센티브가 전 연도 미선정이면 그 줄 자체를
+표시하지 않음. 4가지 확인 질문(옛 데이터 여부/예외자 관리 방식/인센티브
+구분자 통일 여부/엑셀 개별 컬럼 예외 적용 여부)에 사용자가 모두 답변 —
+예외자는 그리드 CRUD 없이 "데이터 업데이트" 탭 엑셀 업로드만 지원, 엑셀의
+연봉등급/업적평가 "개별 컬럼"(원본 값 그대로 보여주는 옵트인 컬럼)에는
+예외자 가공을 적용하지 않음(원본 그대로).
+
+**`services/evaluations.py`**(공통 서식 모듈, pipeline·화면·엑셀 3곳이
+공유): `competency_column()` 삭제. `format_evaluation_cell()`/
+`format_half_display()`의 시그니처에서 `competency` 인자를 없애고
+`is_exception: bool = False`를 추가 — 새 3분기 로직: 연봉등급 있으면
+`"{연봉등급}({하반기업적})"`(하반기업적 없으면 연봉등급만, 상반기업적은
+이 분기에서 아예 안 씀 — 기존엔 역량과 짝지었던 자리를 아예 삭제),
+연봉등급 없고 예외자면 하반기업적만(없으면 "-"), 연봉등급 없고 예외자도
+아니면 `format_half_pair()`로 상/하반기업적 두 자리("MT/MT") — 단
+**둘 다 없으면 "-/-"가 아니라 "-" 하나만**(기존엔 항상 "-/-"였음, 이번에
+변경). `format_half_display()`는 이제 `format_evaluation_cell()`을
+그대로 위임하는 얇은 래퍼로 단순화(둘의 판단 로직이 완전히 같아짐 —
+역량이 있던 시절엔 "괄호 안" 표기가 살짝 달랐지만 역량이 없어지며 동일해짐).
+
+**`pipeline/process_tp_evaluation.py`**: 연도별 추출 루프에서
+`f'{year} 역량'` → `competency_column(year)` 줄을 완전히 삭제(더 이상
+`{연도}_competency_grade` 컬럼을 만들지 않음). 그 컬럼에만 쓰이던
+`_extract()`의 `warn_if_missing` 파라미터(선택 항목이라 컬럼 없어도
+경고 안 하던 용도)도 다른 호출부가 없어져 함께 제거. 모듈 docstring에서
+역량 관련 서술 전부 삭제.
+
+**신규 `pipeline/process_evaluation_exception.py`**: `평가표기예외자.xlsx`
+(헤더 1번째 행, 사원번호/이름)를 읽어 `evaluation_exception.csv`
+(researcher_id, name)로 변환 — `process_exception_job_function.py`와
+거의 동일한 구조(컬럼 매핑/정제, researcher_id 중복 시 첫 행만 채택 +
+경고, 시점 이력 없이 매번 전체 교체)지만, **그리드 CRUD 없이 엑셀
+업로드만 지원**한다는 점이 다르다(사용자 확정 — `build_rows_from_records()`/
+`find_duplicate_researcher_ids()`를 재사용할 별도 store 모듈을 만들지
+않음). `pipeline/sources.py`(`('evaluation_exception', '평가표기예외자.xlsx', 0)`)/
+`pipeline/run_pipeline.py`(`_run_step('evaluation_exception', ...)`)/
+`pipeline/load_to_db.py`(TABLES에 추가 — CSV 없는 배포 환경에서도 DB로
+반영되도록)/`services/web_pipeline_runner.py`(MANIFEST에
+`hidden_from_table` 없이 일반 항목으로 등록 — "데이터 업데이트" 탭 표에
+그대로 나타남, exception_job_function/team_refer와 다른 점) 4곳에 등록.
+
+**`services/data_store.py`**: `read_profile_tables()`의 테이블 목록에
+`'evaluation_exception'` 추가 — `pages/researcher_profile.py`의
+`tables['evaluation_exception']`으로 화면/A4 인쇄 카드 양쪽에서 조회.
+
+**`components/profile_sections.py`**: 신규 `_is_eval_exception(exc_df, rid)`
+헬퍼 추가. `_eval_cell(eva, year)` → `_eval_cell(eva, year, is_exception=False)`로
+확장(역량 조회 삭제, `format_evaluation_cell()` 호출에 `is_exception` 전달).
+`evaluation_incentive_block()`/`evaluation_incentive_summary_text()`
+시그니처에 `exc_df` 인자를 추가(`eva_df, inc_df, exc_df, rid, years` 순 —
+호출부 2곳, `pages/researcher_profile.py`의 화면 표/A4 인쇄 카드 텍스트
+빌더 둘 다 `tables['evaluation_exception']`을 전달하도록 수정)해 함수
+안에서 `is_exception`을 한 번만 계산해 `_eval_cell()`에 넘긴다.
+`evaluation_incentive_summary_text()`(A4 인쇄 카드 통합 셀 텍스트): 평가
+줄/인센티브 줄 구분자를 `'/'.join(...)` → `', '.join(...)`으로 변경(둘
+다, 사용자가 인센티브 줄도 콤마로 통일하기로 확정), 그 해 인센티브가
+있는 연도가 하나도 없으면(모든 연도가 `_inc_label()` == '-') 인센티브
+줄(`html.Div`) 자체를 아예 렌더링하지 않도록 변경 — 평가 줄은 항상
+표시, 인센티브 줄은 조건부.
+
+**`services/researcher_profile_export.py`**(엑셀 다운로드): `_load_tables()`에
+`'evaluation_exception'` 추가. `build_profile_workbook()`에서 요청 단위로
+한 번만 `evaluation_exception_ids`(researcher_id 집합)를 계산해
+`_researcher_row_context()`(새 인자 `evaluation_exception_ids`)를 거쳐
+`rows['evaluation_exception_ids']`로 각 행 컬럼 함수에 전달(다른
+요청 단위 값들 — `eval_excluded_dep_ids` 등 — 과 동일한 패턴). `_col_evaluation()`
+("종합" 컬럼): `_rid in rows['evaluation_exception_ids']`로 예외자
+여부를 판정해 `format_half_display()`에 `competency` 대신 `is_exception`을
+전달하도록 수정 — 화면/A4 인쇄 카드와 완전히 같은 3분기 로직을 공유.
+`_col_eval_field()`(연봉등급/업적평가 "개별 컬럼", 원본 값 그대로 표시):
+**의도적으로 변경하지 않음** — 사용자 확정(원본 값 그대로, 예외자 가공
+없음). 역량 컬럼을 조건부로 끼워 넣던 `_eval_half_columns(evaluations_df)`
+함수를 완전히 삭제하고, `_EVAL_SALARY_COLUMNS`와 나란히 정적 모듈 상수
+`_EVAL_HALF_COLUMNS`(상반기업적/하반기업적만, 역량 없음)로 교체 —
+더 이상 매 요청마다 evaluations.csv 컬럼 목록을 확인할 필요가 없어졌다
+(역량이 "있을 수도 없을 수도 있는" 선택 항목이었던 시절엔 동적 판단이
+필요했지만, 역량 자체가 없어지며 불필요해짐).
+
+**`services/open_data_query.py`**(자연어 질문 → SQL 생성 프롬프트):
+`_evaluation_period_hint()`가 LLM에게 실제 컬럼명을 알려줄 때 쓰던
+`competency_column(y)` 참조를 제거 — 상/하반기업적 컬럼명만 안내하도록
+프롬프트 텍스트 수정(역량 컬럼이 "있을 수도 없을 수도 있다"던 주의문도
+함께 삭제, 더 이상 해당 사항 없음). `pages/researcher_list.py`/
+`services/nl_query.py`는 연봉등급(`salary_grade_column`)만 쓰고
+있어 영향 없음(확인 완료).
+
+**`pages/researcher_list.py`**: 엑셀 다운로드 옵션 체크박스 라벨
+"업적(역량)평가(최근 3년) 포함" → "업적평가(최근 3년) 포함"(역량이
+빠졌으니 라벨에서도 제거). 그 외 이 화면의 평가 로직(연봉등급 컬럼만
+쓰는 명단 표, 기간 조회 시 `evaluations_history.csv` 사용)은 이번
+변경과 무관해 손대지 않음.
+
+검증: `services.evaluations.format_evaluation_cell()`/`format_half_display()`를
+연봉등급 있음(하반기 있음/없음)·연봉등급 없고 비예외자(둘 다 있음/한쪽만
+없음/둘 다 없음 → "-" 하나만인지)·연봉등급 없고 예외자(하반기 있음/없음)
+8개 조합 + 연봉등급이 있으면 예외자 여부가 결과에 영향 없는 것까지 직접
+호출해 전부 정확히 일치 확인. `pipeline/process_evaluation_exception.py`를
+`build_rows_from_records()`(정상/공백/중복 사원번호 혼합)와 `process()`
+(합성 xlsx → CSV, 임시 디렉터리로 실제 데이터 건드리지 않음) 양쪽으로
+직접 실행해 확인. `components/profile_sections.py`의
+`evaluation_incentive_summary_text()`/`_eval_cell()`/`_is_eval_exception()`을
+합성 DataFrame으로 직접 호출해 콤마 구분자, 인센티브 전무 시 줄 생략,
+예외자/비예외자 분기 전부 확인. `services/researcher_profile_export.py`의
+`_col_evaluation()`/`_col_eval_field()`를 합성 `rows` dict로 직접 호출해
+"종합" 컬럼엔 예외자 가공이 반영되고 개별 컬럼(`_col_eval_field`)엔
+반영되지 않는 것(원본 그대로) 확인. `services.web_pipeline_runner.snapshot()`으로
+`evaluation_exception` 항목이 `hidden_from_table: False`로 정상 등록된
+것 확인. `ast.parse`로 변경 파일 전체 구문 확인 + `import app`으로 앱
+전체(모든 페이지/서비스/파이프라인 임포트 체인) 정상 로드 확인.
+
+**미검증**: 실제 원본 `T&P 기본 인사 정보 *.xlsx`/`평가표기예외자.xlsx`로
+파이프라인을 재실행해 실제 배포 데이터에 반영되는 것(이 세션엔 실제 원본
+파일이 없어 합성 데이터로만 검증), 실제 브라우저에서의 최종 렌더링 확인
+(A4 인쇄 카드 레이아웃, 엑셀 파일을 직접 열어 컬럼 배치 확인 등).
+
+## 2026-09-09 (4): tasks_information.csv 중복 제거 — 동률일 때 최신 작성일이
+아니라 최초 작성일을 남기도록 수정 (과제명 개명 이력 왜곡 버그)
+
+사용자가 과제참여이력(tasks.csv)의 "과제명 이력 보정"(the_task_name) 로직을
+설명해달라고 해서 조사하던 중 "일부 에러가 있는 것 같다"고 지적, 이어서
+`process_task_information.py`의 중복 제거 로직을 직접 짚어 "과제명이 같을
+때 write_date(작성일)를 최신이 아니라 최초 시점으로 남겨야 하는 것 아니냐"고
+질문 → 실제로 재현해 확인한 결과 **사용자 지적이 정확한 버그**였다.
+
+**문제의 정확한 메커니즘**: `_dedupe_by_name()`(`process_task_information.py`)의
+중복 제거 키는 `task_code`+`task_name` 쌍이 아니라 **`task_name` 단독**이다
+(의도된 설계 — 개명 시 같은 task_code가 다른 task_name으로 남아야 이력
+재구성이 가능하므로). 동일 task_name 그룹 안에서 1순위는 "채워진 항목 수가
+많은 행"이고, 2순위(동률 tie-break)가 기존엔 `write_date`가 **가장 최근인**
+행을 남기도록 돼 있었다. 그런데 `write_date`는 `process_tasks.py`의
+`_code_to_history_map()`이 "그 이름이 언제부터 쓰이기 시작했는지"(개명
+시점)로 그대로 재사용한다 — 즉 같은 이름의 과제정보 보고서가 내용 변경 없이
+나중에 재작성돼 write_date만 갱신되면(예: 매년 재제출), 중복 제거가 그
+최신 재작성일을 "개명 시점"으로 잘못 고정시켜버린다.
+
+**재현한 왜곡 예시**: 과제코드 C100이 2020-01-01에 실제로 "GRAPH"→"2DM"으로
+개명됐는데, "2DM" 이름의 과제정보가 2023-01-01에 내용 동일하게 재작성된
+경우 — 수정 전에는 중복 제거 후 개명 이력이 `[GRAPH(2019-01-01),
+2DM(2023-01-01)]`로 남아, 2020-01-01~2023-01-01 사이에 실제로 "2DM"으로
+참여한 사람들이 전부 `the_task_name`이 "GRAPH"로 3년 가까이 잘못 표시됐다.
+
+**수정**: `_dedupe_by_name()`의 정렬을
+`sort_values(['_filled_count', 'write_date'])` →
+`sort_values(['_filled_count', 'write_date'], ascending=[True, False])`로
+변경(`drop_duplicates(keep='last')`는 그대로 유지) — 1순위(채워진 항목 수
+최대)는 그대로 두고, 동률일 때만 가장 과거 write_date가 남도록 뒤집었다.
+모듈 docstring과 `_dedupe_by_name()` 함수 docstring에 변경 이유를 명시.
+
+검증: (1) 동률(내용 동일, write_date만 다름) 케이스에서 과거 날짜가 남는 것,
+(2) 채워진 항목 수가 다를 때는 여전히 내용이 풍부한 행이 우선(1순위 유지,
+날짜 무관)인 것, (3) 위 GRAPH/2DM 왜곡 시나리오를 그대로 재현해 수정 후
+개명 이력이 `[GRAPH(2019-01-01), 2DM(2020-01-01)]`로 정확히 복원되고
+`_split_by_name_history()` 보정 결과도 실제 개명 시점(2020-01-01) 기준으로
+정확히 나뉘는 것을 직접 실행해 확인. `_dedupe_by_name()`은
+`process_task_information.py` 내부에서만 쓰여 다른 소비처(`components/
+timeline_data.py` 등은 산출된 CSV만 읽음) 영향 없음 확인. `py_compile` +
+`import app`으로 전체 임포트 확인.
+
+**참고(이번에 같이 조사했지만 손대지 않은 별개 이슈, 필요시 후속 작업)**:
+같은 세션에서 `_split_by_name_history()`/`_dedupe_by_name()` 조사 중
+추가로 발견한 관련 리스크 — (a) 타임시트의 과제명이 tasks_information.csv의
+과제명과 글자 하나라도 다르면(공백 등) 매핑이 조용히 실패해 그 참여기간
+전체가 보정 없이 원본 이름으로 폴백(경고 로그 없음), (b) 같은 과제코드에
+동일한 write_date로 서로 다른 이름이 두 개 이상 기록되면(과제정보 원본
+데이터 자체의 모호성) `_split_by_name_history()`가 종료일<시작일인 깨진
+구간을 만들 수 있음, (c) `과제정보.xlsx`의 "작성일"이 `parse_yyyymmdd()`가
+인식 못 하는 형식(슬래시 등)이면 `_day_before()`에서 `ValueError`가 나
+그 파이프라인 실행에서 tasks.csv 전체가 갱신되지 않음. 이번 요청 범위
+밖이라 수정하지 않았고, 사용자에게 설명만 함.
+
+## 2026-09-10: 연구원 명단 — 부서/과제 단위 필터 외에 "연구원 선택"(이름/
+사번 다중 검색) 필터 신설
+
+사용자 요청: "연구원 명단에서는 부서, 과제/파트 단위로 검색하고 개인별로
+체크박스를 눌러야하는데, 이걸 내가 원하는 사람을 선택, 선택, 선택해서
+검색할 수 있도록 기능을 추가하고 싶어" — 부서/과제로 좁힌 뒤 표에서
+체크박스로 고르는 기존 방식과 별개로, 이름/사번으로 사람을 직접 검색해
+여러 명을 미리 골라 담는 필터를 원함. AskUserQuestion 2문항으로 확인:
+(1) 부서/과제 등 기존 필터와 같이 걸렸을 때 결합 방식 → "다른 필터와
+AND로 결합"(추천, 기존 필터들도 전부 AND로 결합되는 구조와 일관됨 — 다른
+조직 필터를 안 걸었으면 선택한 사람만 정확히 남음), (2) 배치 위치 →
+"부서/과제 옆 메인 검색줄에 추가"(추천).
+
+**재사용**: `pages/researcher_similarity_map.py`가 이미 쓰고 있던
+`services/similarity_map.py`의 `individual_search_options()`("이름
+[부서] (사번)" 형식, `pages/researcher_profile.py`의 단일 검색 드롭다운과
+동일한 표기 규칙)를 그대로 재사용 — 새 UI 컴포넌트/서식 로직을 새로 만들지
+않았다. 이 함수가 원래 `current_only` 구분 없이 항상 전체 이력 인원을
+대상으로 하고 있어서, `current_only: bool = False`(하위호환 유지 — 생략
+시 기존 동작 그대로) 파라미터를 추가하고 `data_store.filter_current()`로
+걸러내도록 확장했다(`services/similarity_map.py:565-579`).
+
+**`pages/researcher_list.py`**: 메인 필터 카드(부서/과제/버튼 행) 바로
+아래에 폭 12(전체 너비) 행으로 "연구원 선택(이름 또는 사번, 다중 검색)"
+멀티 드롭다운(`filter-researcher`)을 추가 — 부서/과제처럼 md=3으로
+욱여넣지 않고 새 줄로 뺀 이유는 여러 명을 고르면 칩(선택 태그)이 길게
+늘어나 좁은 컬럼에서는 잘리기 때문. 후보 목록은 `toggle_org_filters`
+콜백(검색 기준 최신/누적 토글 + 기간 지정에 반응하던 기존 콜백)에
+`Output('filter-researcher', 'options')`를 얹어 함께 갱신한다 — 단,
+부서/과제/직급/직책과 달리 이 필터는 **어느 모드에서도 비활성화하지
+않는다**(누적기준일 때 오히려 이름/사번 검색이 주력이 되도록 하기 위함,
+기존 화면에 이미 있던 "누적기준: 이름/사번 검색 중심" 안내 문구와 부합) —
+`current_only=not is_cumulative`만 반영해 후보 인원 범위(현재 소속자만 vs
+전배·퇴사자 포함 전체)를 바꾼다(기간별 team_refer 재계산은 하지 않음 —
+이름/사번 식별 자체는 시점에 민감하지 않으므로). `update_table()` 콜백에
+`State('filter-researcher', 'value')`를 추가하고, 성별/학력/전공/재직상태
+필터와 같은 자리(부서/과제처럼 `filters_active` 조건 없이 항상 적용)에
+`display_df[display_df['researcher_id'].isin(researcher)]`로 AND
+필터링을 추가했다. "필터 초기화" 콜백(`clear_filters`)에도
+`Output('filter-researcher', 'value')`를 추가해 다른 필터와 함께
+초기화되도록 했다.
+
+검증: `individual_search_options(current_only=True/False)`를 직접 호출해
+옵션 형식과 `filter_current()` 연동이 정상 동작하는 것 확인.
+`filter_current()`를 is_current가 섞인 합성 DataFrame으로 직접 호출해
+True/False 분기 모두 확인. 부서 필터 없이 "연구원 선택"만 걸었을 때
+정확히 선택한 사람만 남는 것, 부서 필터와 "연구원 선택"을 동시에 걸었을
+때 AND(교집합)로 좁혀지는 것을 합성 DataFrame으로 재현해 확인.
+`py_compile` + `import app`으로 전체 임포트 확인.
+
+**미검증**: 실제 브라우저에서 드롭다운 UI 동작(검색 타이핑, 칩 선택/해제,
+"검색" 버튼과의 연동), 실제 대규모 인원 데이터에서 드롭다운 옵션 수가
+많을 때의 렌더링/검색 체감 성능.
+
+## 2026-09-10 (2): A4 인쇄 제목 주변 회색 배경 제거 + DS/SAIT직군 배지를
+보유기술→핵심기술 옆으로 이동
+
+**1) 제목 주변 회색 배경**: 사용자가 "프로필 인쇄 시 '연구원 프로필' 제목
+주변에도 회색 바탕색이 들어가는데, 첫 네모 박스(사진·기본정보·핵심기술/
+보유기술 통합 박스)가 시작되는 시점부터 회색이 들어가도록 해달라"고 요청.
+`_print_box()`/`combined_box`/`.print-title`/`.profile-print-only`/
+`body`(assets/custom.css의 `@media print` 규칙으로 이미 `#fff` 강제)까지
+전부 확인했지만 이 영역에 회색을 넣는 CSS를 코드에서 찾지 못했다 — 브라우저
+인쇄 미리보기와 메일 PDF(Playwright, services/profile_pdf.py) 양쪽에서
+재현된다는 사용자 확인만 받은 상태에서, 직접 화면을 띄워 원인을 특정하려고
+임시 QA 계정을 만들려 했으나 세션 자동 실행 정책이 계정 생성을 차단해
+포기(억지로 우회하지 않음). 사용자가 사내 화면이라 직접 캡처가 어려워
+손그림 목업(AS-IS: 제목까지 회색이 번짐 / TO-BE: 제목은 흰 배경, 박스부터
+회색)으로 요구사항을 재확인해줌.
+
+정확한 회색의 출처(어느 조상 요소가 배경을 물려주는지)는 끝내 특정하지
+못했지만, "제목 자체를 불투명한 흰색으로 덮으면 어떤 조상의 배경이든 그
+영역만큼은 가려진다"는 원리로 방어적 수정을 적용했다 —
+`pages/researcher_profile.py`의 `_print_profile_content()` 안
+`page1_block`(1페이지 전체를 감싸는 `.print-page-block` — 제목부터 과제/
+인사발령 이력까지)과 그 첫 자식인 "연구원 프로필" 제목 `Div` 양쪽에
+`style={'backgroundColor': '#fff'}`를 명시적으로 추가했다. 이렇게 하면
+회색의 진짜 출처가 무엇이든(상위 요소 상속이든 다른 원인이든) 제목이
+차지하는 영역만큼은 흰색으로 덮여 보이고, 그 아래 combined_box부터는
+기존 로직(테두리만 있고 배경은 없음)이 그대로 유지되므로 사용자가 그린
+TO-BE와 동일한 결과가 된다.
+
+**2) DS/SAIT직군 배지 위치 이동**: `components/detail_tabs.py`의
+`owned_expertise_block()`(핵심기술/보유기술을 그리는 공용 함수 — 화면
+탭과 A4 인쇄 카드 양쪽이 공유)에서, "보유기술" 제목 줄 오른쪽 끝에
+붙어 있던 DS/SAIT직군 배지(`_job_category_pills()`, `ms-auto`)를
+"핵심기술" 제목 줄로 옮겼다. "핵심기술" 제목(`left_title`)이 기존엔
+단순 텍스트/Div라 배지를 얹을 flex 컨테이너가 없었는데, "보유기술" 쪽과
+동일한 구조(`d-flex align-items-center mb-2`로 감싼 뒤 `ms-auto` 배지를
+끝에 붙이는 패턴)로 통일했다 — "보유기술" 쪽은 배지 대신 있던 부제
+("'25년기준")만 남기고 그대로 둔다. 이 함수 하나만 고치면 되므로 화면
+(연구원 프로필 탭, stacked=False)과 인쇄본(stacked=True, compact=True)
+양쪽 모두 자동으로 반영된다.
+
+검증: `owned_expertise_block()`을 compact=True(인쇄본)/False(화면) 양쪽
+모두 job_category 튜플을 넘겨 직접 호출 — 렌더링된 컴포넌트 트리를
+순회해 `ms-auto` 배지가 "핵심기술" 라벨 다음(그리고 "보유기술" 라벨보다
+앞)에 위치하는 것을 확인, "보유기술" 쪽에는 더 이상 배지가 없는 것도
+확인. `py_compile` + `import app`으로 전체 임포트 확인.
+
+**미검증**: 1)번 회색 배경 수정이 실제로 문제를 해결하는지 — 정확한
+원인을 특정하지 못한 채 방어적으로만 수정했으므로, 실제 인쇄/PDF에서
+사용자가 확인해봐야 한다(원인이 제목 자체가 아니라 다른 위치에 있었다면
+이 수정으로는 해결되지 않을 수 있음). 2)번도 실제 브라우저 렌더링 확인은
+못 했다.
+
+## 2026-09-10 (3): 브랜드명 "SAIT in 360°" → "People in SAIT" 개명 +
+"SAIT 인력 프로필"/"SAIT 인력 명단" 페이지명에서 "SAIT" 제거
+
+사용자 요청 2가지: (1) 전역 브랜드명 "SAIT in 360°"를 "People in SAIT"로
+바꾸되 폰트는 그대로, "AI"(SAIT 안의 AI) 부분의 기존 폰트색(파란색,
+#1677ff)은 유지. (2) 네비게이션의 "SAIT 인력 프로필"/"SAIT 인력 명단"을
+각각 "연구원 프로필"/"연구원 명단(AI검색)"으로 수정. AskUserQuestion
+2문항으로 확인: "개별 프로필"/"일괄 인쇄" 등 파생 표현도 "SAIT" 없이
+"연구원"으로 통일할지(→ "네, 모두 통일" 선택), "(AI검색)" 접미사를 어디까지
+붙일지(→ "네비게이션 링크에만" 선택 — register_page name/title과 페이지
+상단 H5 제목은 접미사 없이 "연구원 명단").
+
+**`app.py`**: `_brand_label()`이 조립하던 조각을 `['S', Span('AI', 파랑),
+'T in 360°']` → `['People in S', Span('AI', 파랑), 'T']`로 재구성 — "AI"가
+이제 문구 끝쪽 "SAIT" 안에서 계속 파란색으로 강조된다("People in
+S**AI**T"). 이 함수를 쓰는 네비게이션 바(유일한 호출부) 외에,
+`dash.Dash(title=...)`(브라우저 탭)와 `<title>{title} — ...</title>`
+템플릿에 별도로 박혀있던 "SAIT in 360°" 문자열도 순수 텍스트라 색상 없이
+그대로 "People in SAIT"로 치환. 네비게이션 링크 라벨도 "SAIT 인력 프로필"
+→ "연구원 프로필", "SAIT 인력 명단" → "연구원 명단(AI검색)"으로 수정.
+
+**`pages/researcher_profile.py`**: `dash.register_page()`의 `name`("SAIT
+인력 프로필"→"연구원 프로필")/`title`("SAIT 인력 개별 프로필"→"연구원
+개별 프로필"), 페이지 상단 H5 제목("SAIT 인력 개별 프로필"→"연구원 개별
+프로필"), 일괄 인쇄 화면 제목("SAIT 인력 프로필 일괄 인쇄 (N명)"→"연구원
+프로필 일괄 인쇄 (N명)") 전부 수정.
+
+**`pages/researcher_list.py`**: `dash.register_page()`의 `name`/`title`
+("SAIT 인력 명단"→"연구원 명단", 접미사 없음 — 사용자 확정),
+페이지 상단 H5 제목도 동일하게 "연구원 명단"으로(접미사 없음).
+
+**손대지 않은 곳**: `services/dev_updates.py`의 "SAIT in 360°" 문구는
+2026-09-01에 실제로 있었던 변경을 설명하는 날짜별 변경 이력(변경 당시
+사실 그대로의 기록)이라 개명과 무관하게 그대로 둠.
+
+검증: `_brand_label()`을 직접 호출해 `['People in S', Span('AI', 파랑),
+'T']` 구조로 나오는 것(= "People in S**AI**T") 확인. 전체 저장소에서
+"SAIT 인력 프로필"/"SAIT 인력 개별 프로필"/"SAIT 인력 명단"/"SAIT in
+360" 문자열을 재검색해 `docs/CLAUDE.md`(과거 이력) 외에는 전부 치환된 것
+확인. `py_compile` + `import app`으로 전체 임포트 확인.
+
+**미검증**: 실제 브라우저에서 네비게이션 바/브라우저 탭 제목/로그인
+화면의 최종 렌더링 확인.

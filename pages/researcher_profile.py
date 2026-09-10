@@ -48,8 +48,8 @@ from services import job_category, similarity_map
 dash.register_page(
     __name__,
     path='/',
-    name='SAIT 인력 프로필',
-    title='SAIT 인력 개별 프로필',
+    name='연구원 프로필',
+    title='연구원 개별 프로필',
 )
 
 CURRENT_YEAR = datetime.now().year
@@ -305,7 +305,7 @@ def layout(id=None, ids=None, **_kwargs):
         dbc.Row([
             dbc.Col(
                 html.H5(
-                    [html.I(className='bi bi-person-badge-fill me-2 text-primary'), 'SAIT 인력 개별 프로필'],
+                    [html.I(className='bi bi-person-badge-fill me-2 text-primary'), '연구원 개별 프로필'],
                     className='fw-bold mb-0 mt-1',
                 ),
             ),
@@ -369,7 +369,7 @@ def _bulk_layout(ids_param):
             dbc.Col(
                 html.H5(
                     [html.I(className='bi bi-people-fill me-2 text-primary'),
-                     f'SAIT 인력 프로필 일괄 인쇄 ({len(rid_list)}명)'],
+                     f'연구원 프로필 일괄 인쇄 ({len(rid_list)}명)'],
                     className='fw-bold mb-0 mt-1',
                 ),
             ),
@@ -1260,15 +1260,22 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     # 정의부 주석 참고, 사용자 리포트: "아래에 공간이 있는데 발령
     # 건수가 좀 적게 들어가는 듯해").
     page1_block = html.Div([
+        # 제목("연구원 프로필") 영역은 흰 배경, 그 아래 박스(combined_box)부터
+        # 회색이 시작되도록 제목에 명시적으로 흰 배경을 준다(사용자 요청,
+        # 2026-09-10 — 인쇄/PDF에서 제목 주변까지 회색이 번져 보이던 문제.
+        # 회색의 정확한 출처(상위 요소 상속 등)를 특정하지 못해, 제목 자체를
+        # 불투명한 흰색으로 덮어 어떤 조상 요소의 배경이든 가려지도록 했다).
         html.Div('연구원 프로필', className='print-title',
                  style={'fontSize': '30px', 'fontWeight': 700,
-                        'textAlign': 'center', 'marginBottom': '8px'}),
+                        'textAlign': 'center', 'marginBottom': '8px',
+                        'backgroundColor': '#fff'}),
         combined_box,
         history_box,
         expertise_summary_box,
         task_hr_box,
         html.Div(f'출력일 {datetime.now():%Y-%m-%d}', className='text-muted small text-end mt-2'),
-    ], className='print-page-block', **{'data-fit-height-px': str(_PAGE1_FIT_HEIGHT_PX)})
+    ], className='print-page-block', style={'backgroundColor': '#fff'},
+        **{'data-fit-height-px': str(_PAGE1_FIT_HEIGHT_PX)})
 
     return html.Div([page1_block, _print_pub_patent_detail_page(name, rid, tables)])
 
@@ -1451,7 +1458,8 @@ def _build_print_block(rid, tables, researchers, name_map, show_eval):
     years = sorted(salary_years)
 
     print_eval_content = (
-        evaluation_incentive_summary_text(tables['evaluations'], tables['incentive_selection'], rid, years)
+        evaluation_incentive_summary_text(tables['evaluations'], tables['incentive_selection'],
+                                           tables['evaluation_exception'], rid, years)
         if show_eval
         else _locked_block(icon_only=True)
     )
@@ -1521,7 +1529,8 @@ def update_profile(rid):
         name_map = researchers.set_index('researcher_id')['name'].to_dict()
 
         eval_content = (
-            evaluation_incentive_block(tables['evaluations'], tables['incentive_selection'], rid, years)
+            evaluation_incentive_block(tables['evaluations'], tables['incentive_selection'],
+                                        tables['evaluation_exception'], rid, years)
             if show_eval
             else _locked_block()
         )
