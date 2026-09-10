@@ -9589,3 +9589,57 @@ timeline_data.py` 등은 산출된 CSV만 읽음) 영향 없음 확인. `py_comp
 인식 못 하는 형식(슬래시 등)이면 `_day_before()`에서 `ValueError`가 나
 그 파이프라인 실행에서 tasks.csv 전체가 갱신되지 않음. 이번 요청 범위
 밖이라 수정하지 않았고, 사용자에게 설명만 함.
+
+## 2026-09-10: 연구원 명단 — 부서/과제 단위 필터 외에 "연구원 선택"(이름/
+사번 다중 검색) 필터 신설
+
+사용자 요청: "연구원 명단에서는 부서, 과제/파트 단위로 검색하고 개인별로
+체크박스를 눌러야하는데, 이걸 내가 원하는 사람을 선택, 선택, 선택해서
+검색할 수 있도록 기능을 추가하고 싶어" — 부서/과제로 좁힌 뒤 표에서
+체크박스로 고르는 기존 방식과 별개로, 이름/사번으로 사람을 직접 검색해
+여러 명을 미리 골라 담는 필터를 원함. AskUserQuestion 2문항으로 확인:
+(1) 부서/과제 등 기존 필터와 같이 걸렸을 때 결합 방식 → "다른 필터와
+AND로 결합"(추천, 기존 필터들도 전부 AND로 결합되는 구조와 일관됨 — 다른
+조직 필터를 안 걸었으면 선택한 사람만 정확히 남음), (2) 배치 위치 →
+"부서/과제 옆 메인 검색줄에 추가"(추천).
+
+**재사용**: `pages/researcher_similarity_map.py`가 이미 쓰고 있던
+`services/similarity_map.py`의 `individual_search_options()`("이름
+[부서] (사번)" 형식, `pages/researcher_profile.py`의 단일 검색 드롭다운과
+동일한 표기 규칙)를 그대로 재사용 — 새 UI 컴포넌트/서식 로직을 새로 만들지
+않았다. 이 함수가 원래 `current_only` 구분 없이 항상 전체 이력 인원을
+대상으로 하고 있어서, `current_only: bool = False`(하위호환 유지 — 생략
+시 기존 동작 그대로) 파라미터를 추가하고 `data_store.filter_current()`로
+걸러내도록 확장했다(`services/similarity_map.py:565-579`).
+
+**`pages/researcher_list.py`**: 메인 필터 카드(부서/과제/버튼 행) 바로
+아래에 폭 12(전체 너비) 행으로 "연구원 선택(이름 또는 사번, 다중 검색)"
+멀티 드롭다운(`filter-researcher`)을 추가 — 부서/과제처럼 md=3으로
+욱여넣지 않고 새 줄로 뺀 이유는 여러 명을 고르면 칩(선택 태그)이 길게
+늘어나 좁은 컬럼에서는 잘리기 때문. 후보 목록은 `toggle_org_filters`
+콜백(검색 기준 최신/누적 토글 + 기간 지정에 반응하던 기존 콜백)에
+`Output('filter-researcher', 'options')`를 얹어 함께 갱신한다 — 단,
+부서/과제/직급/직책과 달리 이 필터는 **어느 모드에서도 비활성화하지
+않는다**(누적기준일 때 오히려 이름/사번 검색이 주력이 되도록 하기 위함,
+기존 화면에 이미 있던 "누적기준: 이름/사번 검색 중심" 안내 문구와 부합) —
+`current_only=not is_cumulative`만 반영해 후보 인원 범위(현재 소속자만 vs
+전배·퇴사자 포함 전체)를 바꾼다(기간별 team_refer 재계산은 하지 않음 —
+이름/사번 식별 자체는 시점에 민감하지 않으므로). `update_table()` 콜백에
+`State('filter-researcher', 'value')`를 추가하고, 성별/학력/전공/재직상태
+필터와 같은 자리(부서/과제처럼 `filters_active` 조건 없이 항상 적용)에
+`display_df[display_df['researcher_id'].isin(researcher)]`로 AND
+필터링을 추가했다. "필터 초기화" 콜백(`clear_filters`)에도
+`Output('filter-researcher', 'value')`를 추가해 다른 필터와 함께
+초기화되도록 했다.
+
+검증: `individual_search_options(current_only=True/False)`를 직접 호출해
+옵션 형식과 `filter_current()` 연동이 정상 동작하는 것 확인.
+`filter_current()`를 is_current가 섞인 합성 DataFrame으로 직접 호출해
+True/False 분기 모두 확인. 부서 필터 없이 "연구원 선택"만 걸었을 때
+정확히 선택한 사람만 남는 것, 부서 필터와 "연구원 선택"을 동시에 걸었을
+때 AND(교집합)로 좁혀지는 것을 합성 DataFrame으로 재현해 확인.
+`py_compile` + `import app`으로 전체 임포트 확인.
+
+**미검증**: 실제 브라우저에서 드롭다운 UI 동작(검색 타이핑, 칩 선택/해제,
+"검색" 버튼과의 연동), 실제 대규모 인원 데이터에서 드롭다운 옵션 수가
+많을 때의 렌더링/검색 체감 성능.

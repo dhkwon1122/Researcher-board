@@ -414,6 +414,7 @@ def layout():
 
     dept_opts     = similarity_map.department_filter_options()
     project_opts  = similarity_map.pjt_part_filter_options()
+    researcher_opts = similarity_map.individual_search_options(current_only=True)
     pos_opts      = _filter_options(df, '직급')
     title_opts    = _filter_options(df, '직책')
     gender_opts   = _filter_options(df, '성별')
@@ -575,6 +576,24 @@ def layout():
                         ),
                     ], md=3),
                 ], className='g-3'),
+                # ── 연구원 선택(이름/사번, 다중 검색) ────────────────────────
+                # 부서/과제 단위로만 좁히는 게 아니라, 원하는 사람을 하나씩
+                # 검색해서 여러 명 골라 담을 수 있게 한다(사용자 요청,
+                # 2026-09-10). 다른 필터(부서/과제/직급 등)와 AND로 결합되고
+                # (선택한 사람이 그 필터 조건도 만족해야 최종 목록에 남음,
+                # update_table 참고 — 아무 조직 필터도 안 걸었으면 선택한
+                # 사람만 정확히 남는다), "검색 기준"(최신/누적) 토글에 따라
+                # 후보 목록 자체도 현재 소속자만/전체 이력 인원으로 바뀐다
+                # (toggle_org_filters 콜백이 갱신).
+                dbc.Row(
+                    dbc.Col([
+                        dbc.Label('연구원 선택(이름 또는 사번, 다중 검색)',
+                                  className='small fw-semibold text-muted mb-1'),
+                        dcc.Dropdown(id='filter-researcher', options=researcher_opts, multi=True,
+                                     placeholder='이름 또는 사번으로 검색...', clearable=True),
+                    ], md=12),
+                    className='g-3 mt-0',
+                ),
             ),
             className='mb-3 shadow-sm',
         ),
@@ -759,6 +778,7 @@ def update_project_options(dept, mode, period_start, period_end):
     Output('list-period-range-wrap', 'style'),
     Output('filter-dept-col', 'style'),
     Output('filter-project-col', 'style'),
+    Output('filter-researcher', 'options'),
     Input('list-search-mode', 'value'),
     Input('list-period-range', 'start_date'),
     Input('list-period-range', 'end_date'),
@@ -770,6 +790,12 @@ def toggle_org_filters(mode, period_start, period_end):
     has_period = period is not None
     hint_style = {'fontSize': '0.68rem', 'display': 'block' if has_period else 'none'}
     dept_options = similarity_map.department_filter_options(period=period)
+    # "연구원 선택"(이름/사번) 후보 목록은 부서/과제와 달리 모드와 무관하게
+    # 항상 켜져 있다 — 누적기준일 때 오히려 이 필터가 주력이 되도록 한다
+    # (사용자 요청, 2026-09-10). current_only만 모드에 맞춰 바꿔 전배·퇴사자
+    # 포함 여부를 조정한다(기간 지정 여부와는 무관 — 이름/사번 식별 자체는
+    # 시점에 민감하지 않으므로 부서/과제처럼 period로 다시 계산하지 않는다).
+    researcher_options = similarity_map.individual_search_options(current_only=not is_cumulative)
     # 최신기준일 때는 부서/과제 드롭박스만 보이고 시작일/종료일 박스는 숨김,
     # 누적기준일 때는 반대(기간을 지정하면 부서/과제도 다시 보임) — 사용자
     # 확정(2026-09-02). 이전엔 disabled 처리만 하고 항상 화면에 남아 있었다.
@@ -779,12 +805,12 @@ def toggle_org_filters(mode, period_start, period_end):
 
     if has_period:
         return (False, False, False, False, dept_options, None, None, no_update, no_update,
-                False, hint_style, period_wrap_style, org_col_style, org_col_style)
+                False, hint_style, period_wrap_style, org_col_style, org_col_style, researcher_options)
     if is_cumulative:
         return (True, True, True, True, dept_options, None, None, None, None, False, hint_style,
-                period_wrap_style, org_col_style, org_col_style)
+                period_wrap_style, org_col_style, org_col_style, researcher_options)
     return (False, False, False, False, dept_options, no_update, no_update, no_update, no_update,
-            True, hint_style, period_wrap_style, org_col_style, org_col_style)
+            True, hint_style, period_wrap_style, org_col_style, org_col_style, researcher_options)
 
 
 # ── 콜백 2: 검색 버튼(필터 적용) / 필터 초기화 버튼 → 테이블 데이터 갱신 ──────
@@ -811,12 +837,13 @@ def toggle_org_filters(mode, period_start, period_end):
     State('filter-degree',     'value'),
     State('filter-major',      'value'),
     State('filter-employment', 'value'),
+    State('filter-researcher', 'value'),
     State('list-period-range', 'start_date'),
     State('list-period-range', 'end_date'),
     prevent_initial_call=True,
 )
 def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, dept, project, pos, title,
-                  gender, degree, major, employment, period_start, period_end):
+                  gender, degree, major, employment, researcher, period_start, period_end):
     from services.auth import can, eval_excluded_dep_ids
     show_eval = can('view_evaluation')
     show_incentive = can('view_incentive')
@@ -895,6 +922,12 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, 
         display_df = display_df[display_df['전공'].isin(major)]
     if employment:
         display_df = display_df[display_df['재직상태'].isin(employment)]
+    # 연구원 선택(이름/사번, 다중) — 부서/과제처럼 필터 안전성(filters_active)을
+    # 따지지 않는다. researcher_id로 직접 매칭이라 시점에 영향받지 않으며,
+    # 다른 필터와 AND로 결합된다(사용자 확정, 2026-09-10) — 아무 조직 필터도
+    # 안 걸었으면 선택한 사람만 정확히 남는다.
+    if researcher:
+        display_df = display_df[display_df['researcher_id'].isin(researcher)]
     records = display_df.to_dict('records')
     return records, columns, tooltip_header, _build_tooltip_data(records), [], style_data_conditional
 
@@ -909,12 +942,13 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, 
     Output('filter-degree',     'value'),
     Output('filter-major',      'value'),
     Output('filter-employment', 'value'),
+    Output('filter-researcher', 'value'),
     Input('clear-filters-btn', 'n_clicks'),
     Input('filter-modal-clear-btn', 'n_clicks'),
     prevent_initial_call=True,
 )
 def clear_filters(_clear_clicks, _modal_clear_clicks):
-    return None, None, None, None, None, None, None, None
+    return None, None, None, None, None, None, None, None, None
 
 
 # ── 콜백 3-1: '필터' 버튼 → 상세 필터 모달 열기/닫기 ──────────────────────────
