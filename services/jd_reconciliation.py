@@ -488,7 +488,7 @@ def match_members_to_roles(members: list, roles: list) -> list:
         tasks.append((lambda pt=fit.researcher_profile_text(profile): _judge(pt)) if profile else None)
 
     real_tasks = [t for t in tasks if t is not None]
-    workers = llm_client.max_concurrency()
+    workers = llm_client.batch_concurrency()
     task_results = llm_client.run_concurrent(real_tasks, max_workers=workers) if real_tasks else []
 
     results, it = [], iter(task_results)

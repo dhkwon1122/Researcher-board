@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import BASE_DIR, OUT_DIR  # noqa: E402
 sys.path.insert(0, BASE_DIR)
 from llm_client import (  # noqa: E402
-    call_llm, extract_json, get_truncation_count, max_concurrency,
+    batch_concurrency, call_llm, extract_json, get_truncation_count, max_concurrency,
     reset_truncation_count, run_concurrent,
 )
 from services.llm import LLMError, embed  # noqa: E402,F401 (embed/LLMError는 호출부에서도 사용)

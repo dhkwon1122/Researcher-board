@@ -9961,3 +9961,93 @@ dep_name이 개명된 경우(2019 "A부서"→2022 "A-신설부서") 각 사람�
 `researcher_ids_ever_matching_org_field()`의 체감 성능도 미검증(현재
 구현은 researchers_history.csv 전체를 파이썬 for 루프로 순회 — 이력이
 수만 행 이상으로 커지면 느려질 수 있어, 필요하면 나중에 벡터화 검토).
+
+## 2026-09-10 (8): AI 검색 강화 5건 — 신규 테이블 화이트리스트 등록, 쿼리
+로깅 + 관리자 조회 탭, self-repair 재시도 확대, 화면 전용 동시성 슬롯 분리
+
+훨씬 이전(8월 중순, "AI 검색 기능 설명 + 강화 방법" 논의 직후) "전체
+반영해줘"로 확정됐던 5가지 개선 지시가, 이후 사용자가 완전히 다른 우선순위로
+수십 건의 요청을 이어가며 실제로는 하나도 구현되지 않은 채 남아 있었다 —
+이번에 재확인 후 사용자가 "진행해주고, 상충될만한 내용이 있으면 말해달라"고
+확정해 전부 반영했다. 재확인 과정에서 그 사이 결정된 내용과 상충하는 부분은
+없었다(TABLE_PERMISSIONS 등록 범위는 2026-09-04에 mapping_job_function을
+"요청이 없어 등록 안 함"으로 보류했던 적이 있는데, 이번엔 사용자가 명시적으로
+5건 전체 진행을 확정했으므로 그 보류 사유 자체가 해소됨).
+
+1. **TABLE_PERMISSIONS 3개 테이블 등록**(`config/auth_config.py`):
+   `mapping_job_function`/`exception_job_function`(민감도 낮은 순수 분류
+   참조 테이블, 다른 원천 참조 테이블과 동일하게 권한 제한 없음)와
+   `evaluation_exception`("이 사람은 평가 표기 방식이 다르다"는 사실 자체가
+   평가 관련 인사 정보라 `evaluations`와 동일하게 `view_evaluation` 권한
+   요구)을 화이트리스트에 추가 — 이전엔 여기 없어 `services/open_data_query.py`
+   의 `_discover_csv_tables()`가 발견해도 `auth.filter_permitted_tables()`가
+   조용히 걸러내고 있었다.
+2. **ORDER BY 지시문**: 확인해보니 `_SQL_GEN_SYSTEM_TEMPLATE`에 이미
+   "질문이 순위/정렬을 암시하면(가장 많은, 우수한 등) ORDER BY를 포함하라"는
+   지시와 예시가 들어 있었다(과거 어느 시점에 이미 반영됨, 정확한 시점은
+   git blame으로 특정 안 함) — 추가 변경 불필요로 판단하고 그대로 둠.
+3. **쿼리 로깅 + 관리자 조회 탭**: 신규 `services/nl_query_log.py` —
+   `services/feedback.py`와 동일한 append-only CSV 패턴
+   (`data/processed/nl_query_log.csv`)으로 질문 원문/intent/성공여부(성공/
+   결과없음/실패)/건수/검색기준/기간/비고를 한 줄씩 기록한다(결과 행
+   데이터 자체는 남기지 않음 — 민감정보 최소화). `services/nl_query.py`의
+   유일한 진입점 `answer_question()` 끝에서 한 번만 호출해, 구조화
+   3-intent/open_data_query 폴백 전부가 자동으로 기록되게 했다(로깅 자체가
+   실패해도 검색 기능에 영향 없도록 `log_query()`는 예외를 삼킨다 —
+   best-effort). 관리자 화면에 신규 "AI 검색 로그" 탭(`pages/admin.py`,
+   "데이터 업데이트"와 "개발업데이트 이력" 사이) — 최근 200건을 최신순
+   읽기 전용 표로 보여준다(웹 CRUD 아님, `_dev_updates_tab()`과 동일하게
+   layout() 호출 시점에 그때그때 다시 읽는 정적 렌더링).
+4. **self-repair 재시도 확대**(`services/open_data_query.py`): SQL 생성이
+   안전검증/실행에 실패했을 때의 재시도 루프를 `range(2)`(최초 1회 + 재시도
+   1회) 고정에서 `_MAX_SQL_ATTEMPTS`(기본 3 = 재시도 2회,
+   `OPEN_DATA_QUERY_MAX_ATTEMPTS` 환경변수로 조정)로 확장.
+5. **화면 전용 동시성 슬롯 분리**(`pipeline/llm_client.py`): 지금까지
+   배치 스크립트(무한 대기, `max_wait=None`)와 화면에서 실시간으로
+   기다리는 호출(`nl_query.py`/`open_data_query.py`, `max_wait` 지정)이
+   `LLM2_MAX_CONCURRENT` 슬롯 하나를 공유해, 배치가 바쁘면 화면 질문이
+   `LLM2_QUERY_MAX_WAIT_SECONDS` 동안 기다리다 그냥 실패하기 쉬웠다.
+   `call_llm()`의 `max_wait` 유무(이 프로젝트 전체가 이미 "화면 호출은
+   max_wait을 준다"는 관례를 따르고 있어 별도 표시 없이 이 값 자체를
+   신호로 재사용)로 배치 전용 세마포어(`_get_batch_semaphore()`)와 화면
+   전용 세마포어(`_get_screen_semaphore()`)를 분리 — 신규
+   `screen_reserved_slots()`(환경변수 `LLM2_SCREEN_RESERVED_SLOTS`, 기본
+   2, 배치용으로 최소 1슬롯은 남도록 자동으로 줄어듦)/`batch_concurrency()`
+   (총량 - 예약분)/`screen_concurrency()`(예약분)를 새로 노출. 배치
+   스크립트들이 스레드풀 크기를 잡을 때 쓰던 `llm_client.max_concurrency()`
+   호출 5곳(`services/job_market.py`/`services/jd_reconciliation.py`/
+   `pipeline/process_researcher_expertise.py`(2곳)/`pipeline/journal_
+   authority.py`/`pipeline/process_researcher_similarity.py`)도 실제
+   배치 세마포어 용량과 일치하도록 `batch_concurrency()`로 함께 교체
+   (`pipeline/researcher_fit.py`가 재노출하는 이름에도 추가) — 안 바꿔도
+   동작엔 문제없지만(세마포어가 어차피 최종 상한이라 초과분 스레드는
+   대기만 함) 스레드풀 크기가 실제 동시 실행 가능 수보다 커서 생기는
+   불필요한 유휴 스레드를 없앴다.
+
+검증: `pipeline/llm_client.py`의 4개 신규 함수를 여러 `LLM2_MAX_CONCURRENT`/
+`LLM2_SCREEN_RESERVED_SLOTS` 조합(정상값, 총량=1인 극단값)으로 직접 호출해
+합이 항상 총량과 일치(또는 극단값에서 양쪽 다 최소 1)하는지 확인. `requests.post`
+를 모킹해 배치 호출 4개(동시 실행 시도)와 화면 호출 2개(동시 실행 시도)를
+실제 스레드로 띄워 각 풀의 동시 실행 최대치가 설정값(3/1)을 넘지 않는 것을
+실측으로 확인 — 두 풀이 서로 독립적으로 상한을 지키는지가 이번 변경의
+핵심이라 가장 공들여 검증. `services/nl_query_log.py`의 `log_query()`/
+`read_recent()`를 직접 호출해 CSV 왕복(최신순 반환, 검색기준/기간 표시,
+사용자 없음 처리) 확인, `nl_query.answer_question()` 전체 경로를 Flask
+요청 컨텍스트(`test_request_context()`) 안에서 `call_llm`/`open_data_query.answer`
+모킹으로 실행해 로그가 실제로 한 줄 남는 것까지 end-to-end 확인(요청 컨텍스트
+없이 부르면 `auth.get_current_user()`가 `RuntimeError`를 던지는데,
+`log_query()`가 이를 삼켜 로그를 남기지 않는 것도 함께 확인 — 실제 배포에서는
+Dash 콜백이 항상 HTTP 요청 컨텍스트 안에서 실행되므로 해당 없음). `services/
+open_data_query.py`의 self-repair 루프를 `text2sql.sanitize_sql`이 항상
+실패하도록 몽키패치해 재시도 횟수가 정확히 `_MAX_SQL_ATTEMPTS - 1`번(기본
+2회, 환경변수로 3/4회까지 조정) 호출되는 것을 확인. `config/auth_config.py`의
+3개 신규 항목을 `services.auth.can_table()`로 역할별(view_evaluation 있음/
+없음)로 직접 확인. `dash.page_registry`의 전체 페이지 `layout()`을 재확인해
+회귀 없음 확인. 변경된 모든 파일 `py_compile` + `import app` 통과.
+
+**미검증**: 실제 사내 LLM 서버 접속 환경에서의 self-repair 성공률 개선
+체감(이 세션엔 LLM 서버 없음), 실제 gunicorn 멀티워커 환경에서의 동시성
+슬롯 분리 효과(멀티프로세스라 세마포어가 프로세스별로 따로 생기므로 워커
+수만큼 총 동시 호출 한도가 곱해지는 기존 구조적 특성은 이번 변경 이전과
+동일 — 이번 변경은 "같은 프로세스 안에서 배치와 화면이 서로를 굶기지
+않는 것"만 다룬다), 실제 브라우저에서 "AI 검색 로그" 탭 렌더링 확인.

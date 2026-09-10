@@ -18,6 +18,18 @@ vLLM은 여러 요청을 continuous batching으로 동시에 처리하도록 설
 ReadTimeout/연결 오류는 일시적인 경우가 많아 LLM_MAX_RETRIES회까지
 지수 백오프(LLM_RETRY_BACKOFF초부터 2배씩 증가)로 자동 재시도한다.
 
+동시 호출 슬롯 분리: 지금까지는 배치 스크립트(전문성 분석/유사도 등, 무한
+대기)와 화면에서 실시간으로 응답을 기다리는 호출(nl_query.py/
+open_data_query.py, max_wait로 짧게 대기)이 LLM2_MAX_CONCURRENT 슬롯
+하나를 공유했다 — 배치가 슬롯을 전부 채우고 있으면 화면 질문은 max_wait
+동안 기다리다 실패하기 쉬웠다. 이제 max_wait가 주어진 호출(=화면에서
+온 호출이라는 이 프로젝트 전체의 기존 관례)은 배치와 별도의 전용 풀
+(screen semaphore, LLM2_SCREEN_RESERVED_SLOTS 기본 2)에서 슬롯을 얻고,
+그 슬롯은 배치가 아무리 바빠도 항상 화면 질문만을 위해 비어 있다. 배치
+호출(max_wait=None)은 나머지 슬롯(LLM2_MAX_CONCURRENT - 예약분)만 쓴다 —
+두 풀을 합친 실제 서버 동시 요청 수는 예전과 동일하게 LLM2_MAX_CONCURRENT
+그대로다.
+
 동시 호출 유틸리티:
   run_concurrent(tasks, max_workers=None) — 인자 없는 callable 목록을 스레드풀로
   동시 실행하고, 각각의 (결과, 예외) 튜플을 원래 순서대로 반환한다. 개별 작업이
@@ -61,8 +73,10 @@ def _float_env(name: str, default: float) -> float:
     except (TypeError, ValueError):
         return default
 
-_semaphore_lock = threading.Lock()
-_semaphore: threading.Semaphore | None = None
+_batch_semaphore_lock = threading.Lock()
+_batch_semaphore: threading.Semaphore | None = None
+_screen_semaphore_lock = threading.Lock()
+_screen_semaphore: threading.Semaphore | None = None
 
 _stats_lock = threading.Lock()
 _truncation_count = 0  # content가 비어 finish_reason=length로 대체/실패 처리된 누적 횟수
@@ -102,28 +116,57 @@ def is_configured() -> bool:
 
 
 def max_concurrency() -> int:
-    """설정된 동시 호출 허용치. run_concurrent()로 여러 건을 한꺼번에 넘길 때
-    스레드풀 크기를 이 값에 맞추면 된다(세마포어 자체는 call_llm() 내부에서
-    이 값과 무관하게 항상 강제 적용됨). 환경변수 LLM2_MAX_CONCURRENT(기본 8)
-    로 조정한다."""
+    """설정된 동시 호출 허용치(배치+화면 합계). run_concurrent()로 여러 건을
+    한꺼번에 넘기는 배치 스크립트가 스레드풀 크기를 이 값에 맞추면 된다
+    (call_llm() 내부에서 실제로 강제되는 값은 batch_concurrency()/
+    screen_concurrency()로 나뉜 것 — 이 함수는 총량 조회용). 환경변수
+    LLM2_MAX_CONCURRENT(기본 8)로 조정한다."""
     return max(1, _int_env('LLM2_MAX_CONCURRENT', 8))
+
+
+def screen_reserved_slots() -> int:
+    """전체 슬롯(max_concurrency()) 중 화면 전용으로 예약해 둘 개수. 배치가
+    아무리 바빠도 이 개수만큼은 항상 화면 질문을 위해 비어 있다. 환경변수
+    LLM2_SCREEN_RESERVED_SLOTS(기본 2)로 조정 — 배치용으로 최소 1슬롯은
+    남도록 max_concurrency() - 1을 넘지 않게 자른다."""
+    total = max_concurrency()
+    reserved = max(1, _int_env('LLM2_SCREEN_RESERVED_SLOTS', 2))
+    return min(reserved, max(1, total - 1))
+
+
+def batch_concurrency() -> int:
+    """배치 스크립트 전용 동시 호출 허용치(총량 - 화면 예약분)."""
+    return max(1, max_concurrency() - screen_reserved_slots())
+
+
+def screen_concurrency() -> int:
+    """화면(대시보드) 전용 동시 호출 허용치."""
+    return screen_reserved_slots()
 
 
 def query_max_wait() -> float:
     """화면에서 실시간으로 응답을 기다리는 호출부가 공유하는 기본 대기 한도(초).
-    배치 파이프라인이 동시 호출 슬롯을 다 쓰고 있어도 화면이 무한정 멈추지
-    않도록, 이 시간 안에 슬롯을 못 얻으면 call_llm(..., max_wait=이 값)이
+    화면 전용 슬롯(screen_concurrency())이 이미 다른 화면 요청들로 가득 차
+    있을 때, 이 시간 안에 슬롯을 못 얻으면 call_llm(..., max_wait=이 값)이
     빈 문자열로 빠르게 실패 처리한다. 환경변수 LLM2_QUERY_MAX_WAIT_SECONDS로
     조정한다(기본 15초)."""
     return _float_env('LLM2_QUERY_MAX_WAIT_SECONDS', 15)
 
 
-def _get_semaphore() -> threading.Semaphore:
-    global _semaphore
-    with _semaphore_lock:
-        if _semaphore is None:
-            _semaphore = threading.Semaphore(max_concurrency())
-        return _semaphore
+def _get_batch_semaphore() -> threading.Semaphore:
+    global _batch_semaphore
+    with _batch_semaphore_lock:
+        if _batch_semaphore is None:
+            _batch_semaphore = threading.Semaphore(batch_concurrency())
+        return _batch_semaphore
+
+
+def _get_screen_semaphore() -> threading.Semaphore:
+    global _screen_semaphore
+    with _screen_semaphore_lock:
+        if _screen_semaphore is None:
+            _screen_semaphore = threading.Semaphore(screen_concurrency())
+        return _screen_semaphore
 
 
 def run_concurrent(tasks: list, max_workers: int | None = None, on_complete=None) -> list:
@@ -205,7 +248,10 @@ def call_llm(prompt: str, system_prompt: str, *, temperature: float = 0.2, max_t
 
     max_retries = _int_env('LLM_MAX_RETRIES', 5)
     retry_backoff = _float_env('LLM_RETRY_BACKOFF', 5.0)
-    semaphore = _get_semaphore()
+    # max_wait이 주어진 호출은 화면에서 실시간으로 기다리는 호출이라는 이
+    # 프로젝트 전체의 기존 관례(services/nl_query.py, services/
+    # open_data_query.py)를 그대로 신호로 써서 배치와 다른 전용 풀을 쓴다.
+    semaphore = _get_screen_semaphore() if max_wait is not None else _get_batch_semaphore()
 
     resp = None
     for attempt in range(max_retries + 1):

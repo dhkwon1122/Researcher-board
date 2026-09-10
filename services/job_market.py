@@ -518,7 +518,7 @@ def run_project_search(project_names: list, excluded_org_codes: list) -> dict:
     except LLMError as exc:
         return {'error': f'후보 과제 임베딩 계산 실패: {exc}'}
 
-    workers = llm_client.max_concurrency()
+    workers = llm_client.batch_concurrency()
     tasks = [(lambda rid=rid: recommend_for_researcher(rid, expertise_profiles, candidate_pool))
               for rid in researcher_ids]
     task_results = llm_client.run_concurrent(tasks, max_workers=workers) if tasks else []
@@ -613,7 +613,7 @@ def run_individual_search(researcher_ids: list, excluded_org_codes: list) -> dic
     except LLMError as exc:
         return {'error': f'후보 과제 임베딩 계산 실패: {exc}'}
 
-    workers = llm_client.max_concurrency()
+    workers = llm_client.batch_concurrency()
     tasks = [
         (lambda rid=rid: recommend_for_researcher(rid, expertise_profiles, pool_by_own_org[own_norm_by_rid[rid]]))
         for rid in researcher_ids

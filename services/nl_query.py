@@ -63,6 +63,7 @@ from services.llm import LLMError  # noqa: E402
 from services import auth  # noqa: E402
 from services import data_labels  # noqa: E402
 from services import data_store  # noqa: E402
+from services import nl_query_log  # noqa: E402
 from services import open_data_query  # noqa: E402
 from services import query_settings  # noqa: E402
 from services.evaluations import evaluation_years, salary_grade_column  # noqa: E402
@@ -758,4 +759,5 @@ def answer_question(question: str, current_only: bool = True,
     result = execute_query(parse_question(question), current_only=current_only, period=period)
     if result.get('intent') not in ('error', 'unsupported'):
         result['answer'] = _generate_answer_summary(question, result)
+    nl_query_log.log_query(question, result, current_only=current_only, period=period)
     return result

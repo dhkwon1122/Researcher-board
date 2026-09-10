@@ -33,7 +33,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import OUT_DIR  # noqa: E402
 from excel_reader import clean_str  # noqa: E402
-from llm_client import call_llm, extract_json, max_concurrency, run_concurrent  # noqa: E402
+from llm_client import batch_concurrency, call_llm, extract_json, max_concurrency, run_concurrent  # noqa: E402
 
 _JOURNAL_SYSTEM_PROMPT = '당신은 학술 저널/학회의 권위도를 평가하는 전문가입니다. 요청한 JSON 형식만 출력하세요.'
 
@@ -93,7 +93,7 @@ def update_authority(journals: list, cache: dict, force: bool = False) -> dict:
     if not targets:
         return cache
     label = '전체 재조회' if force else '신규/미확인'
-    workers = max_concurrency()
+    workers = batch_concurrency()
     total = len(targets)
     print(f'[journal_authority] 저널 권위도 조회 중 ({label} {total}건, 동시 {workers}건)...')
     completed = 0

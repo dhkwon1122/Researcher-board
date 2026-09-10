@@ -1145,6 +1145,60 @@ def _dev_update_week_card(week: dict) -> dbc.Card:
     return dbc.Card(dbc.CardBody(body), className='shadow-sm mb-3')
 
 
+_AI_SEARCH_LOG_COLUMNS = [
+    ('시각', '시각'), ('사용자', '사용자'), ('질문', '질문'), ('intent', 'intent'),
+    ('성공여부', '성공여부'), ('건수', '건수'), ('검색기준', '검색기준'), ('기간', '기간'), ('비고', '비고'),
+]
+
+_AI_SEARCH_LOG_BADGE_COLOR = {'성공': 'success', '결과없음': 'secondary', '실패': 'danger'}
+
+
+def _ai_search_log_row(row: dict) -> html.Tr:
+    status = row.get('성공여부', '')
+    return html.Tr([
+        html.Td(row.get('시각', ''), style={'whiteSpace': 'nowrap'}),
+        html.Td(row.get('사용자', '') or '-'),
+        html.Td(row.get('질문', '')),
+        html.Td(row.get('intent', '')),
+        html.Td(dbc.Badge(status, color=_AI_SEARCH_LOG_BADGE_COLOR.get(status, 'light'),
+                           className='text-uppercase')),
+        html.Td(row.get('건수', ''), className='text-center'),
+        html.Td(row.get('검색기준', '')),
+        html.Td(row.get('기간', '') or '-'),
+        html.Td(row.get('비고', '') or '-', style={'maxWidth': '320px', 'whiteSpace': 'normal'}),
+    ])
+
+
+def _ai_search_log_tab() -> html.Div:
+    """"연구원 명단(AI검색)" 탭의 자연어 질문마다 services/nl_query_log.py가
+    남긴 기록(질문/intent/성공여부/건수)을 최근 200건까지 최신순으로 보여준다.
+    쿼리 로그가 어떤 질문이 실패/빈 결과로 끝나는지 드러내야 프롬프트·데이터
+    커버리지를 실제로 개선할 근거가 생긴다(AI 검색 강화 검토에서 지적된
+    공백). 웹 CRUD가 아니라 읽기 전용 — 로그 자체는 화면에서 지우거나 고칠
+    필요가 없어 다른 관리 탭과 달리 저장/삭제 콜백이 없다."""
+    from services import nl_query_log
+    rows = nl_query_log.read_recent(200)
+    if not rows:
+        body = dbc.Alert('아직 기록된 AI 검색 질문이 없습니다.', color='light', className='small border')
+    else:
+        body = dbc.Table(
+            [
+                html.Thead(html.Tr([html.Th(label) for _key, label in _AI_SEARCH_LOG_COLUMNS])),
+                html.Tbody([_ai_search_log_row(r) for r in rows]),
+            ],
+            bordered=True, hover=True, responsive=True, size='sm', className='mb-0 admin-table',
+        )
+    return html.Div([
+        dbc.Alert(
+            [html.I(className='bi bi-info-circle me-2'),
+             f'최근 {len(rows)}건(최대 200건)을 최신순으로 보여줍니다. 질문 원문과 intent/성공여부/'
+             '건수만 기록하고 검색 결과 자체(연구원 이름 등)는 저장하지 않습니다.'],
+            color='light', className='small border mb-3',
+        ),
+        body,
+    ], className='pt-3')
+
+
 def _dev_updates_tab() -> html.Div:
     """이 앱 자체의 기능 변경 이력을 주 단위 개조식으로 보여주는 탭 — 콘텐츠는
     services/dev_updates.py에서 관리한다(웹 CRUD 아님, 코드로 유지 — 매주
@@ -1177,6 +1231,8 @@ def layout():
                     tab_id='tab-exception-job-function', label_style={'fontWeight': '600'}),
             dbc.Tab(_data_update_tab(), label='데이터 업데이트',
                     tab_id='tab-data-update', label_style={'fontWeight': '600'}),
+            dbc.Tab(_ai_search_log_tab(), label='AI 검색 로그',
+                    tab_id='tab-ai-search-log', label_style={'fontWeight': '600'}),
             dbc.Tab(_dev_updates_tab(), label='개발업데이트 이력',
                     tab_id='tab-dev-updates', label_style={'fontWeight': '600'}),
         ], id='admin-tabs', active_tab='tab-users'),
