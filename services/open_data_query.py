@@ -62,6 +62,7 @@ import researcher_fit as fit  # noqa: E402
 from services import auth  # noqa: E402
 from services import data_labels  # noqa: E402
 from services import data_store  # noqa: E402
+from services import nl_query_feedback  # noqa: E402
 from services import query_settings  # noqa: E402
 from services import researcher_profile_export as rpe  # noqa: E402
 from services import text2sql  # noqa: E402
@@ -341,19 +342,21 @@ def _generate_sql(question: str, schema: str, max_wait, current_only: bool = Tru
                    period: tuple[str, str] | None = None) -> dict | None:
     rule = _period_or_current_rule(current_only, period)
     system = query_settings.apply(_SQL_GEN_SYSTEM_TEMPLATE.format(schema=schema, current_only_rule=rule))
+    system += nl_query_feedback.feedback_hint_for(question)
     raw = llm_client.call_llm(question, system, temperature=0.0, max_tokens=700, max_wait=max_wait)
     return _parse_gen_response(raw)
 
 
 def _generate_sql_repair(question: str, schema: str, max_wait, current_only: bool,
                           bad_sql: str, error: str, period: tuple[str, str] | None = None) -> dict | None:
-    """실패한 SQL과 에러 메시지를 시스템 프롬프트 뒤에 덧붙여 한 번만 재생성
-    시도(self-repair). call_llm이 단일 system/user 메시지쌍만 지원하므로,
-    "이전 시도 → 에러" 대화를 시스템 프롬프트 안에 그대로 이어붙이는 방식으로
-    같은 효과를 낸다."""
+    """실패한 SQL과 에러 메시지를 시스템 프롬프트 뒤에 덧붙여 재생성 시도
+    (self-repair, 최대 시도 횟수는 _MAX_SQL_ATTEMPTS 참고). call_llm이 단일
+    system/user 메시지쌍만 지원하므로, "이전 시도 → 에러" 대화를 시스템
+    프롬프트 안에 그대로 이어붙이는 방식으로 같은 효과를 낸다."""
     rule = _period_or_current_rule(current_only, period)
     base = _SQL_GEN_SYSTEM_TEMPLATE.format(schema=schema, current_only_rule=rule)
     system = query_settings.apply(base) + _REPAIR_SYSTEM_SUFFIX.format(bad_sql=bad_sql, error=error[:500])
+    system += nl_query_feedback.feedback_hint_for(question)
     raw = llm_client.call_llm(question, system, temperature=0.0, max_tokens=700, max_wait=max_wait)
     return _parse_gen_response(raw)
 

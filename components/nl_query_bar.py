@@ -27,6 +27,7 @@ import dash_bootstrap_components as dbc
 from dash import Input, Output, State, callback, dcc, html
 
 from services import nl_query
+from services import nl_query_feedback
 from services import query_settings
 
 
@@ -94,6 +95,40 @@ def render() -> html.Div:
             html.Div(id='nl-query-note'),
             target_components={'nl-query-full-result': 'data'},
         ),
+        # 피드백 바 — 매 렌더링마다 새로 만드는 대신 처음부터 고정 배치해 두고
+        # 표시 여부/내용만 콜백으로 갱신한다(이 모듈 docstring의 "동적 컴포넌트
+        # 팬텀 트리거" 재발 방지 규약과 동일한 이유). 좋아요/나빠요는 클릭
+        # 즉시 제출(코멘트 없이)되고, 서술형 의견은 별도 텍스트영역+제출
+        # 버튼으로 독립적으로 제출된다 — 사용자가 이 둘을 반드시 함께 낼
+        # 필요는 없다고 판단해 단순하게 분리했다.
+        html.Div(
+            [
+                html.Span('이 결과가 도움이 되었나요?', className='small text-muted me-2'),
+                dbc.Button(html.I(className='bi bi-hand-thumbs-up'), id='nl-query-feedback-up',
+                           size='sm', outline=True, color='success', n_clicks=0, className='me-1'),
+                dbc.Button(html.I(className='bi bi-hand-thumbs-down'), id='nl-query-feedback-down',
+                           size='sm', outline=True, color='danger', n_clicks=0, className='me-2'),
+                dbc.Button(
+                    [html.I(className='bi bi-chat-left-text me-1'), '개선 의견 남기기'],
+                    id='nl-query-feedback-comment-toggle', size='sm', color='link',
+                    className='text-decoration-none p-0', n_clicks=0,
+                ),
+            ],
+            id='nl-query-feedback-bar', style={'display': 'none'}, className='d-flex align-items-center mt-2',
+        ),
+        dbc.Collapse(
+            html.Div([
+                dcc.Textarea(
+                    id='nl-query-feedback-comment', value='',
+                    placeholder='이 질문/결과에 대해 다음부터 이렇게 답해줬으면 하는 개선 방향을 '
+                                '자유롭게 적어주세요. 비슷한 질문을 다시 물으면 참고합니다.',
+                    style={'width': '100%', 'height': '70px'}, className='mb-2',
+                ),
+                dbc.Button('제출', id='nl-query-feedback-submit', size='sm', color='primary', n_clicks=0),
+                html.Span(id='nl-query-feedback-msg', className='ms-2'),
+            ], className='mt-1'),
+            id='nl-query-feedback-collapse', is_open=False,
+        ),
         dcc.Store(id='nl-query-full-result'),
     ], className='mb-3')
 
@@ -153,7 +188,12 @@ def _run_nl_query(_n_clicks, _n_submit, question, search_mode, period_start, per
         end = date.fromisoformat(period_end)
         period = (f'{start.year:04d}-{start.month:02d}', f'{end.year:04d}-{end.month:02d}')
 
-    return nl_query.answer_question(question, current_only=current_only, period=period)
+    result = nl_query.answer_question(question, current_only=current_only, period=period)
+    # 원본 질문 텍스트를 결과와 함께 담아 둔다 — 피드백 제출 콜백이 "이 결과가
+    # 어떤 질문에 대한 것이었는지"를 검색창의 현재 값(그 사이 사용자가 다른
+    # 질문으로 바꿔 타이핑했을 수 있음)이 아니라 항상 정확히 참조하기 위함.
+    result['_question'] = question
+    return result
 
 
 @callback(
@@ -235,3 +275,70 @@ def _reset_query(n_clicks):
     if not n_clicks:
         return dash.no_update, dash.no_update
     return '', None
+
+
+@callback(
+    Output('nl-query-feedback-bar', 'style'),
+    Output('nl-query-feedback-collapse', 'is_open', allow_duplicate=True),
+    Output('nl-query-feedback-comment', 'value', allow_duplicate=True),
+    Output('nl-query-feedback-msg', 'children', allow_duplicate=True),
+    Input('nl-query-full-result', 'data'),
+    prevent_initial_call=True,
+)
+def _sync_feedback_ui(full_result):
+    """새 질문에 대한 결과가 나오거나(full_result 갱신) 초기화(None)될 때마다
+    피드백 바를 그 결과에 맞춰 다시 세팅한다 — 이전 질문에 대해 열어 뒀던
+    의견 입력창/메시지가 새 결과에도 그대로 남아 헷갈리지 않도록 매번
+    리셋한다."""
+    if not full_result:
+        return {'display': 'none'}, False, '', ''
+    return {'display': 'flex'}, False, '', ''
+
+
+@callback(
+    Output('nl-query-feedback-collapse', 'is_open'),
+    Output('nl-query-feedback-comment', 'value'),
+    Output('nl-query-feedback-msg', 'children'),
+    Input('nl-query-feedback-comment-toggle', 'n_clicks'),
+    Input('nl-query-feedback-up', 'n_clicks'),
+    Input('nl-query-feedback-down', 'n_clicks'),
+    Input('nl-query-feedback-submit', 'n_clicks'),
+    State('nl-query-feedback-collapse', 'is_open'),
+    State('nl-query-feedback-comment', 'value'),
+    State('nl-query-full-result', 'data'),
+    prevent_initial_call=True,
+)
+def _handle_feedback(_toggle, _up, _down, _submit, is_open, comment, full_result):
+    """좋아요/나빠요는 클릭 즉시(코멘트 없이) 제출하고, 서술형 의견은 별도
+    텍스트영역 + 제출 버튼으로 독립적으로 제출한다(components/feedback_modal.py
+    와 동일하게 여러 버튼을 한 콜백에서 dash.ctx.triggered_id로 분기)."""
+    triggered_id = dash.ctx.triggered_id
+    question = (full_result or {}).get('_question', '')
+
+    if triggered_id == 'nl-query-feedback-comment-toggle':
+        return not is_open, dash.no_update, dash.no_update
+
+    if triggered_id in ('nl-query-feedback-up', 'nl-query-feedback-down'):
+        if not question:
+            return dash.no_update, dash.no_update, dash.no_update
+        rating = '좋아요' if triggered_id == 'nl-query-feedback-up' else '나빠요'
+        nl_query_feedback.submit_feedback(question, full_result or {}, rating=rating)
+        msg = dbc.Alert('피드백 감사합니다!', color='success', className='mb-0 py-1 px-2 d-inline-block')
+        # 나빠요를 누르면 구체적인 개선 방향을 받을 기회를 놓치지 않도록 의견
+        # 입력창을 바로 열어준다(좋아요는 굳이 열 필요 없음).
+        open_collapse = True if triggered_id == 'nl-query-feedback-down' else dash.no_update
+        return open_collapse, dash.no_update, msg
+
+    if triggered_id == 'nl-query-feedback-submit':
+        text = (comment or '').strip()
+        if not text:
+            return (dash.no_update, dash.no_update,
+                    dbc.Alert('의견 내용을 입력해주세요.', color='warning', className='mb-0 py-1 px-2 d-inline-block'))
+        if not question:
+            return dash.no_update, dash.no_update, dash.no_update
+        nl_query_feedback.submit_feedback(question, full_result or {}, comment=text)
+        return (False, '',
+                dbc.Alert('제출되었습니다. 다음에 비슷한 질문을 물으면 참고합니다!', color='success',
+                          className='mb-0 py-1 px-2 d-inline-block'))
+
+    return dash.no_update, dash.no_update, dash.no_update

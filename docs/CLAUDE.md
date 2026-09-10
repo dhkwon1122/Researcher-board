@@ -10051,3 +10051,72 @@ open_data_query.py`의 self-repair 루프를 `text2sql.sanitize_sql`이 항상
 수만큼 총 동시 호출 한도가 곱해지는 기존 구조적 특성은 이번 변경 이전과
 동일 — 이번 변경은 "같은 프로세스 안에서 배치와 화면이 서로를 굶기지
 않는 것"만 다룬다), 실제 브라우저에서 "AI 검색 로그" 탭 렌더링 확인.
+
+## 2026-09-10 (9): AI 검색 결과에 좋아요/나빠요 + 서술형 개선 의견 제출 →
+다음 검색부터 자동 반영되는 피드백 루프
+
+사용자 요청: 위 (8)번의 "쿼리 로깅"이 로그만 남기고 개선에 실제로 반영되진
+않던 것에 이어, "질문에 대한 답의 개선 방향을 남기면(서술형이든 좋아요/
+나빠요든) 그 내용이 나중에 AI 검색에 반영되게 할 수 없을까"라는 요청.
+기존 "규칙 설정"(services/query_settings.py)은 관리자가 수동으로 옮겨
+적어야만 반영되는 전역 설정이라, 사용자가 그 자리에서 남긴 의견이 자동으로
+다음 검색에 녹아드는 경로가 없었다 — 이번에 그 경로를 만들었다.
+
+**신규 `services/nl_query_feedback.py`**: `services/feedback.py`와 동일한
+append-only CSV 패턴(`data/processed/nl_query_feedback.csv`)으로 질문
+원문/intent/rating(좋아요·나빠요·빈값)/서술형 의견을 기록한다.
+`find_similar_feedback(question)`가 서술형 의견이 있는 과거 피드백 중 지금
+질문과 의미가 비슷한 것을(BGE-M3 임베딩 코사인 유사도, threshold 0.75,
+이 프로젝트가 이미 쓰는 `services/nl_query.expand_term()`/
+`services/open_data_query._embedding_match()`와 동일한 패턴 —
+`researcher_fit.cached_embed()`를 그대로 재사용해 캐시도 공유) 최대 3건
+찾아, `feedback_hint_for(question)`이 "참고하되 실제 질문과 관련 없으면
+무시하라"는 조건을 단 프롬프트 조각으로 만든다. 평가(rating)만 있고
+의견이 없는 피드백은 LLM에 줄 구체적 지시가 없어 힌트 대상에서 제외
+(통계용으로만 남김). 임베딩 서버 미설정/실패(LLMError)는 빈 힌트로 안전
+폴백 — 검색 기능 자체는 절대 막지 않는다.
+
+**주입 지점 3곳**: `services/open_data_query.py`의 `_generate_sql()`/
+`_generate_sql_repair()`(SQL 생성용 시스템 프롬프트 끝에 추가)와
+`services/nl_query.py`의 `parse_question()`(intent 분류 프롬프트 끝에
+추가) — 둘 다 기존 `query_settings.apply()` 다음에 이어붙여, 관리자
+전역 규칙과 사용자별 즉석 피드백이 순서대로 함께 반영된다.
+
+**UI(`components/nl_query_bar.py`)**: AI 검색 결과 아래 항상 존재하는
+피드백 바(결과가 있을 때만 `display:flex`로 보이게, 이 모듈의 기존
+"동적 컴포넌트 대신 고정 배치 + 속성만 갱신" 규약을 그대로 따름) — 👍/👎
+아이콘 버튼(클릭 즉시 코멘트 없이 제출, 나빠요는 클릭 시 의견 입력창을
+자동으로 열어 구체적 방향을 받을 기회를 놓치지 않게 함) + "개선 의견
+남기기" 토글로 여는 서술형 텍스트영역(제출 버튼으로 독립적으로 제출 —
+좋아요/나빠요와 서술형을 반드시 함께 낼 필요는 없다고 판단해 단순화).
+`_run_nl_query` 콜백이 결과 dict에 `_question`(그 결과를 만든 정확한
+질문 원문)을 함께 담아 Store에 저장해, 피드백 제출 시점에 검색창의 현재
+값(그 사이 사용자가 다른 질문으로 고쳐 썼을 수 있음)이 아니라 항상 정확한
+원본 질문을 참조한다. 새 결과가 나오거나 초기화될 때마다 피드백 바/의견
+입력창/메시지를 리셋한다(이전 질문에 대해 열어 둔 입력창이 새 결과에도
+남아 헷갈리지 않도록).
+
+**관리자 화면**: 2026-09-10 (8)번에서 만든 "AI 검색 로그" 탭에 "사용자
+피드백" 섹션을 추가(`pages/admin.py`) — 최근 200건을 최신순으로 보여준다
+(질문/intent/rating/의견). 이 표가 곧 "지금 AI 검색에 실제로 영향을 주고
+있는 피드백 목록"이기도 하다(서술형 의견이 있는 행이 `feedback_hint_for()`
+의 후보가 됨).
+
+검증: `submit_feedback()`/`read_recent()`/`find_similar_feedback()`/
+`feedback_hint_for()`를 `fit.cached_embed`/`cosine_sim_matrix`를 결정적
+가짜 벡터로 몽키패치해 직접 호출 — 의미가 비슷한 질문만 힌트로 뽑히고
+무관한 질문/의견 없는 피드백은 제외되는 것을 확인. `components/
+nl_query_bar.py`의 `_handle_feedback()`/`_sync_feedback_ui()`를
+`dash._callback_context.context_value`를 직접 세팅해(dash.ctx.triggered_id
+가 필요한 함수라 이 프로젝트의 다른 다중 트리거 콜백들처럼 실제 Dash
+콜백 컨텍스트 시뮬레이션이 필요) 6가지 시나리오(좋아요 클릭/나빠요 클릭+
+입력창 자동 열림/토글 버튼/빈 의견 제출 거부/정상 의견 제출+입력창
+초기화/질문 정보가 없는 결과에 대한 안전한 no-op) 전부 직접 검증. 관리자
+"AI 검색 로그" 탭에 실제 피드백 1건을 넣어 렌더링 확인, 전체 페이지
+`layout()` 재확인해 회귀 없음 확인. 변경/신규 파일 전부 `py_compile` +
+`import app` 통과.
+
+**미검증**: 실제 사내 LLM+임베딩 서버 환경에서 실제 유사 질문 매칭 품질
+(이 세션엔 두 서버 모두 없음, 결정적 가짜 벡터로만 로직 검증), 실제
+브라우저에서 👍/👎 버튼 클릭·의견 입력창 토글·제출 후 메시지 표시까지의
+시각적 확인.
