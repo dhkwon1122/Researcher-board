@@ -9825,3 +9825,62 @@ CMD가 gunicorn)에서는 이 예외가 화면에 에러로 안 뜨고, 그냥 �
 작업에서는 앞으로 `_run_pipeline` 식의 정적 확인뿐 아니라, 이번처럼
 `app.server.test_request_context(path)` 안에서 각 페이지의 `layout()`을
 직접 호출해보는 걸 표준 검증 단계에 포함할 것.
+
+## 2026-09-10 (6): 로그인 시 간헐적 500 에러 — `_get_or_create_secret_key()`의
+Flask secret_key 파일 생성 경쟁 조건(race condition) 버그 수정
+
+사용자가 위 (5)번 버그를 고친 뒤 서버에 재배포해 로그인해보니, "Loading..."
+후 새로고침을 몇 번 하면 "Internal Server Error"가 났다고 리포트 —
+`docker compose logs app`에서 실제 traceback을 받아 확인:
+```
+RuntimeError: The session is unavailable because no secret key was set.
+Set the secret_key on the application to something unique and secret
+Error in app:Exception on /login [GET]
+```
+
+**원인**: `app.py`의 `_get_or_create_secret_key()`가 `config/
+.flask_secret_key` 파일을 `os.O_CREAT | os.O_EXCL`로 원자적 "생성"만 하고,
+그 뒤 `secrets.token_hex(32)`로 만든 키를 파일에 "쓰는" 것은 별도
+`os.write()` 호출이었다 — 이 둘 사이에 아주 짧은 간격이 있다. `gunicorn
+--workers 2`(Dockerfile 기본 설정)라 컨테이너가 뜰 때 두 워커가 이 모듈을
+거의 동시에 import하는데, 워커 A가 파일을 막 "생성"했지만 아직 "쓰기" 전인
+그 틈에 워커 B가 같은 파일을 열려다 `FileExistsError`를 받고 **곧바로 그
+파일을 읽어버리면 빈 파일**을 읽는다 — 기존 코드는 그 빈 문자열을 그대로
+`secret_key`로 써버려서, 그 워커가 처리하는 요청에서만(무작위로 배분되므로
+새로고침할 때마다 걸릴 수도 안 걸릴 수도 있음) Flask가 "secret_key가
+비어있다(=설정 안 됨)"고 판단해 `flask.session` 사용 시 `RuntimeError`를
+던졌다. 매 컨테이너 기동(재빌드/재시작)마다 이 파일이 없는 상태에서
+새로 시작하므로(`docker-compose.yml`에 `config/`가 볼륨 마운트돼 있지
+않아 컨테이너 재생성 때마다 초기화됨) 재현 조건이 항상 갖춰져 있었다.
+
+**직접 재현·검증**: 실제 `multiprocessing.Pool`로 4개 프로세스가 동시에
+기존 로직을 실행하도록 만들고(쓰기 직전에 일부러 지연을 넣어 경합을
+강제 유발) 돌려본 결과, 4개 중 3개가 실제로 빈 문자열을 반환하는 것을
+확인해 버그를 재현했다.
+
+**수정**: `FileExistsError`를 받았을 때 파일 내용이 비어있으면 그대로
+반환하지 않고, `time.sleep(0.1)` 후 **다시 시도**하도록 루프로 바꿨다
+(최대 50회 ≈ 5초 — 다른 워커의 쓰기는 사실상 즉시 끝나므로 충분히
+넉넉한 상한). 이렇게 해도 "모든 워커가 같은 키를 쓴다"는 원래 설계
+의도(파일 하나로 키를 고정해 워커 간 세션 쿠키 서명이 어긋나지 않게 함)는
+그대로 유지된다 — 임의로 각자 키를 만들어버리면 워커마다 키가 달라져
+로그인 직후 다시 로그아웃되는 문제가 재발하므로, "먼저 만든 워커의 값을
+기다렸다 읽는다"는 방식을 유지한 채 그 대기 구간만 견고하게 만들었다.
+
+같은 수정으로 4개 프로세스 동시 실행 테스트를 다시 돌려 전부 **동일한
+값**을 반환하고 **빈 값이 하나도 없는 것**을 확인.
+
+**당장 우회하고 싶다면**(코드 재배포 전 임시 조치): `.env`에
+`FLASK_SECRET_KEY=<임의의 긴 무작위 문자열>`을 지정하면 이 파일 기반
+로직 자체를 타지 않으므로 이 버그와 완전히 무관해진다(기존 코드에
+이미 있던 환경변수 우선 경로) — 다만 이번 근본 수정 이후에는 파일 기반
+경로도 안전하므로 필수는 아니다.
+
+검증: race condition을 강제 유발하는 멀티프로세스 스크립트로 기존
+버그 재현 + 수정 후 정상 동작(4개 동시 실행 모두 동일한 비어있지 않은
+키) 확인. `import app`으로 정상 임포트 및 `secret_key`가 채워지는 것
+확인. `py_compile` 통과.
+
+**미검증**: 실제 gunicorn `--workers 2`로 띄운 상태에서의 재현(이 세션
+환경은 단일 프로세스라 gunicorn 멀티워커 환경 자체를 재현하지 못함 —
+멀티프로세스 시뮬레이션으로 동일한 로직을 검증했을 뿐).
