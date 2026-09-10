@@ -250,7 +250,7 @@ def _html_page(title: str, body: str) -> str:
   <div class="auth-card card p-4 mx-3">
     <div class="text-center mb-4">
       <i class="bi bi-bar-chart-fill brand-icon"></i>
-      <h5 class="fw-bold mt-2 mb-1">S<span style="color:#1677ff">AI</span>T in 360&deg;</h5>
+      <h5 class="fw-bold mt-2 mb-1">People in S<span style="color:#1677ff">AI</span>T</h5>
       <p class="text-muted small mb-0">피플팀 전용 시스템</p>
     </div>
     {body}
