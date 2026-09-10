@@ -454,7 +454,7 @@ def layout():
         # 학력/전공/재직상태는 화면이 복잡해지지 않도록 '필터' 모달로 옮겼다
         # (사용자 요청).
         dbc.Card(
-            dbc.CardBody(
+            dbc.CardBody([
                 dbc.Row([
                     dbc.Col([
                         dbc.Label('검색 기준', className='small fw-semibold text-muted mb-1'),
@@ -594,7 +594,7 @@ def layout():
                     ], md=12),
                     className='g-3 mt-0',
                 ),
-            ),
+            ]),
             className='mb-3 shadow-sm',
         ),
 

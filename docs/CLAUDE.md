@@ -9769,3 +9769,59 @@ S<span>AI</span>T`로 수정(파란색 강조 span은 그대로 유지). 이 템
 360" 통짜 검색)으로 안 걸릴 수 있다 — 다음에 비슷한 전역 문구 교체
 작업을 할 때는 부분 문자열("in 360", "360°", 강조 처리된 스타일 속성
 등)로도 한 번 더 교차 검색해볼 것.
+
+## 2026-09-10 (5): "연구원 명단(AI검색)" 탭이 안 눌리던 회귀 버그 수정
+— `dbc.CardBody()` 두 번째 `dbc.Row`가 `children` 대신 `id` prop으로
+잘못 들어간 실수
+
+사용자가 서버에 배포해 웹 테스트하던 중 "연구원 명단(AI검색)" 탭을
+눌러도 화면이 안 바뀐다고 리포트. 원인은 이번 세션 앞부분에서 추가한
+"연구원 선택"(이름/사번 다중 검색) 필터 코드(`pages/researcher_list.py`
+`layout()`)의 실수였다 — 기존 필터 줄을 감싸던
+
+```python
+dbc.Card(
+    dbc.CardBody(
+        dbc.Row([...부서/과제/버튼...], className='g-3'),
+        dbc.Row(...연구원 선택...),   # ← 두 번째 위치 인자로 그냥 이어붙임
+    ),
+    ...
+)
+```
+
+이 `dbc.CardBody(row1, row2)`처럼 **두 개의 위치 인자**를 넘긴 게
+문제였다 — `CardBody`의 첫 번째 위치 인자는 `children`이지만, 두 번째
+위치 인자는 `id`다. 즉 새로 추가한 `dbc.Row(...)` 전체가 `children`이
+아니라 `id` prop 값으로 들어가버려, dash-bootstrap-components가
+"컴포넌트를 `id`로 못 쓴다"는 `TypeError`를 **레이아웃 생성 시점(페이지를
+열 때마다)** 던지게 됐다. `debug=False`로 서비스되는 배포 환경(Dockerfile
+CMD가 gunicorn)에서는 이 예외가 화면에 에러로 안 뜨고, 그냥 그 페이지
+콘텐츠가 안 바뀌는 것처럼(탭을 눌러도 무반응) 보였다.
+
+**수정**: 두 `dbc.Row(...)`를 리스트 하나로 묶어 `CardBody([row1, row2],
+...)` 형태로 바꿨다 — 위치 인자를 하나만 넘기고 그 안에 두 Row를 리스트로
+담는 방식.
+
+**발견 경위**: 사용자 리포트를 받고 코드를 눈으로 보는 대신, 실제 로그인
+요청 컨텍스트를 흉내 내(`app.server.test_request_context('/researcher-list')`)
+`pages/researcher_list.py`의 `layout()`을 직접 호출해봐서 정확한
+`TypeError`와 스택트레이스를 즉시 확인했다 — 이 방법이 없었다면 브라우저
+개발자 도구 콘솔이나 서버 로그를 봐야 알 수 있었을 문제.
+
+검증: 수정 후 같은 방식으로 `layout()`을 다시 호출해 정상적으로
+`html.Div`를 반환하는 것 확인. 안전 차원에서 `dash.page_registry`에
+등록된 **모든** 페이지(`/`, `/admin`, `/jd-reconciliation`, `/job-market`,
+`/org-comparison`, `/researcher-list`, `/researcher-similarity-map`)의
+`layout()`을 로그인 요청 컨텍스트 안에서 전부 호출해 예외 없이 렌더링되는
+것을 확인 — 이번 세션에서 손댄 페이지 외에 다른 곳엔 같은 유형의 버그가
+없음을 재확인. `py_compile` 통과.
+
+**교훈**: dash-bootstrap-components 컴포넌트에 자식을 여러 개 이어붙일
+때, 이미 위치 인자 하나(`children`)가 채워진 함수 호출에 콤마로
+두 번째 인자를 그냥 추가하면 안 된다 — 반드시 `[]`로 묶어 리스트 하나로
+합쳐야 한다. 이런 실수는 `layout()`을 실제로 호출(요청 컨텍스트 안에서)
+해보기 전까지는 `py_compile`/`import app`만으로는 잡히지 않는다(둘 다
+함수 정의만 확인하고 실행은 안 하므로) — 화면 레이아웃을 변경하는
+작업에서는 앞으로 `_run_pipeline` 식의 정적 확인뿐 아니라, 이번처럼
+`app.server.test_request_context(path)` 안에서 각 페이지의 `layout()`을
+직접 호출해보는 걸 표준 검증 단계에 포함할 것.
