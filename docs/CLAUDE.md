@@ -9884,3 +9884,80 @@ Error in app:Exception on /login [GET]
 **미검증**: 실제 gunicorn `--workers 2`로 띄운 상태에서의 재현(이 세션
 환경은 단일 프로세스라 gunicorn 멀티워커 환경 자체를 재현하지 못함 —
 멀티프로세스 시뮬레이션으로 동일한 로직을 검증했을 뿐).
+
+## 2026-09-10 (7): "검색 기준" 라벨 개명(최신기준→현재, 누적기준→과거포함)
++ 연구원 명단 "과거포함"에서 부서/과제 필터가 재직 기간 전체 이력으로
+동작하도록 개선
+
+**1) 라벨 개명**: 연구원 명단/연구원 프로필/보유 전문성 3개 화면의 "검색
+기준" 라디오 버튼과 관련 안내 문구를 "최신기준"→"현재", "누적기준"→
+"과거포함"으로 통일(사용자 요청). 라디오 옵션 자체(`{'label': ..., 'value':
+'current'/'all'}`)뿐 아니라, 화면에 실제로 보이는 안내 문구/알럿(예:
+"누적기준: 이름/사번 검색 중심", "현재 미소속 ... 누적기준 검색으로 조회된
+이력입니다", "누적기준에서는 조직도가 최신 상태를 보장하지 않아 ...")까지
+전부 찾아 바꿨다 — `value`(내부 코드값 'current'/'all')는 그대로 두고
+표시 라벨만 바꿨으므로 콜백 로직에는 영향 없음. 순수 코드 주석/docstring
+(예: `filter_current(df, current_only)`를 설명하는 문장)은 굳이 바꾸지
+않았다.
+
+**2) 연구원 명단 "과거포함" 부서/과제 필터**: 사용자 질문 — "과거포함으로
+바꾸면 부서/과제 드롭박스가 사라지는데, 당시 팀 참조 데이터가 있으면 부서를
+알 수 있지 않을까?" AskUserQuestion으로 의미를 확인: "A부서"를 고르면
+재직 기간 중 **한 번이라도** A부서였던 사람 전부를 보여줄지(예: 김철수가
+2020년 A부서→2023년 B부서로 이동했으면 A/B 둘 다 검색되게), 아니면
+퇴사·전배 **직전** 마지막 소속만 볼지 — "한 번이라도"(추천)로 확정.
+
+기존에는 "과거포함(기간 미지정)"에서 부서/과제 드롭다운 자체를
+비활성화·숨김 처리했다(2026-09-02 결정) — 이유는 `_org_code`가
+researchers.csv의 **현재** org_code 하나뿐이라, 특정 기간을 안 주면 "그
+사람이 재직 중 어느 부서였는지"를 하나로 특정할 수 없었기 때문(전배
+이력이 있으면 더더욱). 이번에 `researchers_history.csv`(월별 org_code
+스냅샷 전체)와 team_refer.csv 원본(축약 없는 전체 이력)을 함께 봐서 이
+문제를 해결했다.
+
+**`services/similarity_map.py`** 신규 함수 3개:
+- `_team_refer_org_code_timeline()`: team_refer.csv 원본을 org_code
+  (org_name_wd)별로 묶어 valid_date 오름차순 [(연,월,일), dep_name,
+  pjt_part_name] 리스트로 만든다 — 기존 `read_team_refer()`(dep_id별
+  "현재/특정 시점 하나"만 남기는 축약)와 달리 한 org_code가 시간에 따라
+  거쳐온 이름 전체가 필요해서 원본을 그대로 쓴다.
+- `_dep_pjt_name_at(entries, as_of_key)`: 그 org_code의 타임라인에서
+  as_of_key(연,월,일) 이하인 것 중 가장 최근 항목의 (dep_name,
+  pjt_part_name)을 반환 — 부서가 개명된 이력이 있어도 "그 시점에 실제로
+  불리던 이름"을 정확히 찾는다(단순히 오늘 이름을 과거에 소급 적용하지
+  않음).
+- `researcher_ids_ever_matching_org_field(field, names)`:
+  researchers_history.csv의 (researcher_id, org_code, valid_year,
+  valid_month) 스냅샷마다(그 달 말일 기준으로 간주) `_dep_pjt_name_at()`로
+  그 시점 dep_name/pjt_part_name을 구해 names와 비교, 한 번이라도
+  일치하면 그 researcher_id를 포함한다.
+
+**`pages/researcher_list.py`**: `toggle_org_filters` 콜백에서 과거포함
+(기간 미지정) 분기의 부서/과제 `disabled`를 `True`→`False`로, 숨김
+스타일도 제거(`org_col_style`을 항상 `{}`로 통일) — 직급/직책은 기존대로
+비활성화 유지(이번 요청 범위 밖). 드롭다운 옵션 목록 자체는 여전히 "현재"
+team_refer 기준(이미 폐지·개명된 옛 부서명을 옵션으로 올리는 것은 이번
+범위 밖 — 매칭 로직만 과거 이력을 봄). `update_table` 콜백에서 부서/과제
+필터 처리를 `if dept and filters_active:` 한 줄에서 `if dept:` +
+`filters_active`(기존, 현재/기간지정 시)와 `elif is_cumulative`(신규,
+과거포함+기간미지정 시 `researcher_ids_ever_matching_org_field()` 사용)
+두 분기로 나눴다.
+
+검증: `researcher_ids_ever_matching_org_field()`를 `read_processed`를
+모킹한 합성 데이터로 직접 테스트 — (a) 2020년 A부서→2023년 B부서로 전배한
+사람이 "A부서"/"B부서" 필터 양쪽에 다 걸리는 것(사용자가 확정한 "한
+번이라도" 시나리오 정확히 재현), (b) 같은 org_code가 시점에 따라
+dep_name이 개명된 경우(2019 "A부서"→2022 "A-신설부서") 각 사람이 자기가
+실제로 재직하던 시점의 이름으로만 정확히 매칭되는 것(오늘 이름을 과거에
+소급 적용하지 않음) 둘 다 확인. `toggle_org_filters()`를 요청 컨텍스트
+안에서 직접 호출해 과거포함 모드에서 부서/과제만 활성화되고 직급/직책은
+그대로 비활성화 상태인 것 확인. `dash.page_registry`의 전체 페이지
+`layout()`을 재확인해 회귀 없음 확인. `py_compile` 통과.
+
+**미검증**: 실제 `researchers_history.csv`/`team_refer.csv` 실데이터로
+전체 흐름(드롭다운 선택 → 검색 버튼 → 표 갱신)을 브라우저에서 확인하는
+것 — 이 세션 샌드박스에는 두 파일의 실제 다개월 이력 데이터가 없어 로직
+자체는 모킹 데이터로만 검증했다. 실데이터 규모(연구원 수 × 이력 개월 수)에서
+`researcher_ids_ever_matching_org_field()`의 체감 성능도 미검증(현재
+구현은 researchers_history.csv 전체를 파이썬 for 루프로 순회 — 이력이
+수만 행 이상으로 커지면 느려질 수 있어, 필요하면 나중에 벡터화 검토).

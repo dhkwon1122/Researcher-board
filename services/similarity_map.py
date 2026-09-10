@@ -435,6 +435,93 @@ def org_codes_for_pjt_part_names(pjt_part_names, period: tuple | None = None) ->
     } - {''}
 
 
+def _team_refer_org_code_timeline() -> dict:
+    """team_refer.csv 원본(축약 없이 전체 이력)을 org_code(=org_name_wd)별로
+    묶어 valid_date 오름차순 [(valid_date_tuple, dep_name, pjt_part_name), ...]
+    리스트로 만든다 — researcher_ids_ever_matching_org_field() 전용
+    (2026-09-10). read_team_refer()(dep_id별 "현재/특정 시점 하나"만 남기는
+    축약)와 달리, 한 org_code가 시간에 따라 어떤 이름들을 거쳐왔는지 전체
+    타임라인이 필요해서 원본 read_processed('team_refer')를 그대로 쓴다."""
+    df = read_processed('team_refer')
+    if df.empty or not {'org_name_wd', 'valid_year', 'valid_month', 'valid_day'} <= set(df.columns):
+        return {}
+    timeline: dict = {}
+    for _, r in df.iterrows():
+        org_code = str(r.get('org_name_wd', '') or '').strip()
+        if not org_code:
+            continue
+        try:
+            key = (int(r.get('valid_year')), int(r.get('valid_month')), int(r.get('valid_day')))
+        except (TypeError, ValueError):
+            continue
+        timeline.setdefault(org_code, []).append(
+            (key, (r.get('dep_name') or '').strip(), (r.get('pjt_part_name') or '').strip())
+        )
+    for entries in timeline.values():
+        entries.sort(key=lambda t: t[0])
+    return timeline
+
+
+def _dep_pjt_name_at(entries: list, as_of_key: tuple) -> tuple[str, str]:
+    """entries(valid_date 오름차순 [(key, dep_name, pjt_part_name), ...])에서
+    as_of_key(연,월,일) 이하인 것 중 가장 최근 항목의 (dep_name,
+    pjt_part_name)을 반환한다. 해당 시점보다 이전 이력이 아예 없으면
+    ('', '')."""
+    result = ('', '')
+    for key, dep_name, pjt_name in entries:
+        if key <= as_of_key:
+            result = (dep_name, pjt_name)
+        else:
+            break
+    return result
+
+
+def researcher_ids_ever_matching_org_field(field: str, names) -> set:
+    """names(dep_name 또는 pjt_part_name 목록) 중 하나에 재직 기간 중 한
+    번이라도 속했던 적이 있는 researcher_id 집합(2026-09-10 — 사용자 요청:
+    "누적기준(과거포함)에서 부서 필터를 기간 지정 없이 켜면, 당시 팀 참조
+    데이터로 부서를 알 수 있지 않을까"). pages/researcher_list.py의 '과거
+    포함' 모드(기간 미지정) 전용 — org_codes_for_dep_names() 등 기존
+    period 기반 함수는 "그 기간 하나의 시점" 기준이라 사람마다 다른
+    전배 이력 전체를 훑지 못한다.
+
+    researchers_history.csv의 월별 (researcher_id, org_code, valid_year,
+    valid_month) 스냅샷마다, 그 시점(그 달 말일로 간주) 기준
+    _team_refer_org_code_timeline()으로 org_code → dep_name/pjt_part_name을
+    구해 names와 비교한다 — 한 번이라도 일치하면 그 사람을 포함시킨다.
+    field: 'dep_name' 또는 'pjt_part_name'."""
+    if not names:
+        return set()
+    wanted = {names} if isinstance(names, str) else set(names)
+    timeline = _team_refer_org_code_timeline()
+    if not timeline:
+        return set()
+
+    hist = read_processed('researchers_history')
+    required_cols = {'researcher_id', 'org_code', 'valid_year', 'valid_month'}
+    if hist.empty or not required_cols <= set(hist.columns):
+        return set()
+
+    matched: set = set()
+    name_idx = 0 if field == 'dep_name' else 1
+    for _, row in hist.iterrows():
+        rid = str(row.get('researcher_id', '') or '').strip()
+        if not rid or rid in matched:
+            continue
+        org_code = str(row.get('org_code', '') or '').strip()
+        entries = timeline.get(org_code)
+        if not org_code or not entries:
+            continue
+        try:
+            as_of_key = (int(row.get('valid_year')), int(row.get('valid_month')), 31)
+        except (TypeError, ValueError):
+            continue
+        names_at = _dep_pjt_name_at(entries, as_of_key)
+        if names_at[name_idx] in wanted:
+            matched.add(rid)
+    return matched
+
+
 def title_by_researcher_id(period: tuple | None = None) -> dict:
     """researcher_id(조직 단위 책임자의 사번) → assignment_name(직책) 매핑 —
     team_refer 행 중 조직장급만 사번이 채워져 있다(process_team_refer.py

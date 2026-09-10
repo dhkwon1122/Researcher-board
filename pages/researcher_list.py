@@ -461,15 +461,15 @@ def layout():
                         dbc.RadioItems(
                             id='list-search-mode',
                             options=[
-                                {'label': '최신기준', 'value': 'current'},
-                                {'label': '누적기준', 'value': 'all'},
+                                {'label': '현재', 'value': 'current'},
+                                {'label': '과거포함', 'value': 'all'},
                             ],
                             value='current',
                             inline=True,
                             className='small',
                         ),
                         html.Div(
-                            '누적기준: 이름/사번 검색 중심',
+                            '과거포함: 이름/사번 검색 중심',
                             className='text-muted', style={'fontSize': '0.72rem'},
                         ),
                         # 누적기준에서 기간(시작~종료)을 지정하면, 그 기간 동안
@@ -747,22 +747,30 @@ def update_project_options(dept, mode, period_start, period_end):
     return similarity_map.pjt_part_filter_options(dept, period=period)
 
 
-# ── 콜백 1-1: 검색 기준(현재/누적) → 부서·과제·직급·직책 필터 비활성화 + 부서
-# 옵션 갱신 ────────────────────────────────────────────────────────────────
-# 누적기준에서는 조직 배치(부서/과제/직급/직책)가 최신 시점 기준이 아닐 수 있어
-# 혼란을 줄 수 있으므로 비활성화하고 값도 비운다 — 이름/사번(테이블 자체
-# 필터 행)으로만 찾도록 유도한다. 성별/학력/전공/재직상태는 시점에 덜
-# 민감해 그대로 둔다. 다만 누적기준에서 기간(시작~종료)까지 지정하면
-# researchers_history.csv에서 그 기간의 마지막 스냅샷을 쓰므로(사용자 요청,
-# docs/CLAUDE.md 2026-08-28 참고) 부서/과제/직급/직책도 그 시점
-# 기준으로 다시 의미가 있어져 필터를 도로 켠다.
+# ── 콜백 1-1: 검색 기준(현재/과거포함) → 부서·과제·직급·직책 필터 비활성화 +
+# 부서 옵션 갱신 ─────────────────────────────────────────────────────────────
+# 직급/직책은 과거포함(기간 미지정)에서 여전히 비활성화하고 값도 비운다 —
+# 이름/사번(연구원 선택 필터)으로만 찾도록 유도한다. 성별/학력/전공/재직상태는
+# 시점에 덜 민감해 그대로 둔다.
+#
+# 부서/과제는 2026-09-10부로 과거포함(기간 미지정)에서도 계속 켜둔다(사용자
+# 요청 — "당시 팀 참조 데이터가 있으면 부서를 알 수 있지 않을까") —
+# researchers_history.csv의 월별 org_code 스냅샷 + team_refer 전체 이력으로
+# "재직 기간 중 한 번이라도 그 부서/과제였던 사람 전부"를 찾을 수 있어
+# (services.similarity_map.researcher_ids_ever_matching_org_field(), update_table
+# 참고) 기간을 지정하지 않아도 더 이상 의미 없는 필터가 아니다. 기간을
+# 지정하면 기존처럼 그 기간 기준(그 기간 안 dep_id별 최신 스냅샷) team_refer로
+# 매칭한다(2026-08-29 도입).
 #
 # '부서' 드롭다운 옵션 자체도 이 콜백에서 기간 기준으로 다시 계산한다
 # (2026-08-29 추가 — 이전엔 layout() 최초 렌더링 시 오늘 기준으로 한 번만
-# 만들고 끝이었다). 기간이 바뀌면(옵션 자체가 그 시점 기준으로 달라질 수
-# 있으므로) 부서/과제 선택값을 초기화한다 — 이전 기간에 고른 값이 새
-# 기간엔 없는 옵션일 수 있어서. 직급/직책 옵션은 team_refer가 아니라
-# researchers.csv 기준이라 이 갱신과 무관해 값을 그대로 둔다.
+# 만들고 끝이었다). 과거포함(기간 미지정)일 때는 옵션 목록 자체는 "현재"
+# team_refer 기준으로 보여준다(이미 폐지·개명된 옛 부서명 자체를 옵션에
+# 올리는 것은 이번 범위 밖) — 매칭(update_table)만 과거 이력을 본다. 기간이
+# 바뀌면(옵션 자체가 그 시점 기준으로 달라질 수 있으므로) 부서/과제 선택값을
+# 초기화한다 — 이전 기간에 고른 값이 새 기간엔 없는 옵션일 수 있어서.
+# 직급/직책 옵션은 team_refer가 아니라 researchers.csv 기준이라 이 갱신과
+# 무관해 값을 그대로 둔다.
 @callback(
     Output('filter-dept', 'disabled'),
     Output('filter-project', 'disabled'),
@@ -796,18 +804,20 @@ def toggle_org_filters(mode, period_start, period_end):
     # 포함 여부를 조정한다(기간 지정 여부와는 무관 — 이름/사번 식별 자체는
     # 시점에 민감하지 않으므로 부서/과제처럼 period로 다시 계산하지 않는다).
     researcher_options = similarity_map.individual_search_options(current_only=not is_cumulative)
-    # 최신기준일 때는 부서/과제 드롭박스만 보이고 시작일/종료일 박스는 숨김,
-    # 누적기준일 때는 반대(기간을 지정하면 부서/과제도 다시 보임) — 사용자
-    # 확정(2026-09-02). 이전엔 disabled 처리만 하고 항상 화면에 남아 있었다.
+    # 현재일 때는 부서/과제 드롭박스만 보이고 시작일/종료일 박스는 숨김,
+    # 과거포함일 때는 반대(사용자 확정 2026-09-02). 부서/과제 드롭박스
+    # 자체는 이제(2026-09-10) 두 모드 모두에서 항상 보이고 활성 상태다 —
+    # 위 콜백 주석 참고.
     period_wrap_style = {'display': 'block' if is_cumulative else 'none'}
-    show_org_cols = (not is_cumulative) or has_period
-    org_col_style = {} if show_org_cols else {'display': 'none'}
+    org_col_style = {}
 
     if has_period:
         return (False, False, False, False, dept_options, None, None, no_update, no_update,
                 False, hint_style, period_wrap_style, org_col_style, org_col_style, researcher_options)
     if is_cumulative:
-        return (True, True, True, True, dept_options, None, None, None, None, False, hint_style,
+        # 부서/과제(dept/project)는 더 이상 비활성화하지 않는다(disabled=False) —
+        # 직급/직책(pos/title)만 기존처럼 비활성화 + 값 초기화.
+        return (False, False, True, True, dept_options, None, None, None, None, False, hint_style,
                 period_wrap_style, org_col_style, org_col_style, researcher_options)
     return (False, False, False, False, dept_options, no_update, no_update, no_update, no_update,
             True, hint_style, period_wrap_style, org_col_style, org_col_style, researcher_options)
@@ -856,9 +866,13 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, 
         df, show_eval, show_incentive,
         excluded_dep_ids, similarity_map.org_code_dep_id_map(),
     )
-    # 기간을 지정했을 땐 그 시점 기준 값이 있어 부서/과제/직급/직책 필터도
-    # 다시 쓸 수 있다(toggle_org_filters 콜백과 동일한 조건).
+    # 기간을 지정했을 땐 그 시점 기준 값이 있어 직급/직책 필터도 다시 쓸 수
+    # 있다(toggle_org_filters 콜백과 동일한 조건) — 부서/과제는 2026-09-10부로
+    # 과거포함(기간 미지정)에서도 재직 기간 전체 이력으로 매칭하므로
+    # filters_active 여부와 무관하게 항상 걸 수 있다(아래 dept/project
+    # 처리부 참고).
     filters_active = current_only or bool(period)
+    is_cumulative = not current_only
 
     triggered = dash.ctx.triggered_id
 
@@ -904,12 +918,25 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, 
     # period가 주어지면(누적기준 + 기간 지정) 그 기간 기준 team_refer로
     # 매칭한다(2026-08-29 추가) — 선택한 부서/과제 이름이 그 시점에 실제로
     # 그 org_code를 가리켰는지 오늘 기준이 아니라 그 시점 기준으로 판단한다.
-    if dept and filters_active:
-        org_codes = similarity_map.org_codes_for_dep_names(dept, period=period)
-        display_df = display_df[display_df['_org_code'].isin(org_codes)]
-    if project and filters_active:
-        org_codes = similarity_map.org_codes_for_pjt_part_names(project, period=period)
-        display_df = display_df[display_df['_org_code'].isin(org_codes)]
+    if dept:
+        if filters_active:
+            org_codes = similarity_map.org_codes_for_dep_names(dept, period=period)
+            display_df = display_df[display_df['_org_code'].isin(org_codes)]
+        elif is_cumulative:
+            # 과거포함(기간 미지정) — "지금" 그 부서인 사람이 아니라, 재직
+            # 기간 중 한 번이라도 그 부서였던 사람 전부(사용자 확정,
+            # 2026-09-10). _org_code는 researchers.csv의 현재 org_code
+            # 하나뿐이라 이 판정에 못 쓰고, researchers_history.csv 전체
+            # 이력 + team_refer 전체 이력을 함께 보는 전용 함수를 쓴다.
+            matched_ids = similarity_map.researcher_ids_ever_matching_org_field('dep_name', dept)
+            display_df = display_df[display_df['researcher_id'].isin(matched_ids)]
+    if project:
+        if filters_active:
+            org_codes = similarity_map.org_codes_for_pjt_part_names(project, period=period)
+            display_df = display_df[display_df['_org_code'].isin(org_codes)]
+        elif is_cumulative:
+            matched_ids = similarity_map.researcher_ids_ever_matching_org_field('pjt_part_name', project)
+            display_df = display_df[display_df['researcher_id'].isin(matched_ids)]
     if pos and filters_active:
         display_df = display_df[display_df['직급'].isin(pos)]
     if title and filters_active:

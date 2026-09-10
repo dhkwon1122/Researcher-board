@@ -431,8 +431,8 @@ def _selector_card(dept_opts, res_opts, default_dept, default_rid, default_mode=
                     dbc.RadioItems(
                         id='profile-search-mode',
                         options=[
-                            {'label': '최신기준', 'value': 'current'},
-                            {'label': '누적기준', 'value': 'all'},
+                            {'label': '현재', 'value': 'current'},
+                            {'label': '과거포함', 'value': 'all'},
                         ],
                         value=default_mode,
                         inline=True,
@@ -1291,7 +1291,7 @@ def _current_status_badge(researcher):
     mo = str(researcher.get('valid_month', '') or '').strip()
     period = f' (마지막 확인: {yr}-{mo})' if yr and mo else ''
     return dbc.Alert(
-        f'현재 미소속(최신 인력현황에 없음){period} — 누적기준 검색으로 조회된 이력입니다.',
+        f'현재 미소속(최신 인력현황에 없음){period} — 과거포함 검색으로 조회된 이력입니다.',
         color='secondary', className='py-1 px-2 mb-0 d-inline-block',
     )
 
