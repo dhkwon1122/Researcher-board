@@ -28,7 +28,10 @@ team_refer 인텔이크 형식(pipeline/process_team_refer.py의 _COL_MAP과 동
 
 나머지 컬럼:
   1단계부서명 → 그대로(원본 헤더가 비어 있으면 아래 백필 단계로 채움)
-  2단계부서명 ← 원본의 "현소속부서명"
+  2단계부서명 ← 원본의 "현소속부서명" — 단, 1단계부서명이 "대표이사"면
+    2단계부서명도 "대표이사"로 동일하게 맞춘다(2026-09-11 추가 사용자
+    확정 — 대표이사 직속은 그 자체로 최상위 단위라 원본의 2단계 값과
+    무관하게 1/2단계를 통일). _MIRROR_TO_LEVEL2 참고.
   구분/조직코드/사번/성명/직책 → 전부 빈 값(사용자 확정 — 인력현황
     원본에서 이 값들을 자동으로 뽑아내기 어렵고, 뽑아낸다 해도 "이 사람이
     이 조직의 대표 책임자"라는 판단은 별도 정보가 필요해 이 스크립트
@@ -95,6 +98,14 @@ _INTAKE_COLUMNS = [
 _ROOT_MARKERS_B = {'종합기술원', 'SAIT'}
 _ROOT_MARKERS_DIRECT = {'대표이사', '삼성전자'}
 _ROOT_MARKERS_ORG = {'종합기술원', 'SAIT'}
+
+# 1단계부서명이 이 값이면 같은 행의 2단계부서명도 동일한 값으로 맞춘다
+# (2026-09-11 사용자 확정) — "대표이사"는 그 자체로 이미 조직 전체를 대표하는
+# 최상위 단위라, 원본의 2단계부서명(현소속부서명)에 뭐가 적혀 있든 무시하고
+# 1단계와 2단계를 같은 값으로 통일한다. _ROOT_MARKERS_DIRECT(대표이사/삼성전자
+# 둘 다 대상)와 달리 이 규칙은 "대표이사"에만 적용 — "삼성전자"는 기존
+# _fill_upper_level() 규칙(a를 b로 교체) 그대로 유지.
+_MIRROR_TO_LEVEL2 = {'대표이사'}
 
 _OUTPUT_SUFFIX = '_team_refer_intake.csv'
 
@@ -172,6 +183,12 @@ def process_file(path: str) -> tuple:
         c = clean_str(row[_SRC_LEVEL3])
         if not any((a, b, c)):
             continue
+        if a in _MIRROR_TO_LEVEL2:
+            # 1단계부서명이 "대표이사"면 2단계부서명도 동일한 값으로 맞춘다
+            # (2026-09-11 추가 사용자 확정) — 아래 _fill_upper_level()의
+            # "대표이사면 b로 교체" 규칙(g-1)보다 먼저 적용해, 이 값이 b로
+            # 다시 덮이는(a=b가 되면서 원래 b값으로 바뀌는) 일이 없게 한다.
+            b = a
         if upper_lookup is not None:
             a = _fill_upper_level(a, b, upper_lookup)
         key = (a, b, c)
