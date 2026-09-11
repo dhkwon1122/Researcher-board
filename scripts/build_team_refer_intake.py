@@ -210,12 +210,21 @@ def process_file(path: str) -> tuple:
     # 후 직접 채우는 값이라 이 정렬과 무관하다.
     rows.sort(key=lambda r: (r['1단계부서명'], r['2단계부서명'], r['3단계부서명']))
 
-    os.makedirs(OUT_DIR, exist_ok=True)
-    base = os.path.splitext(os.path.basename(path))[0]
-    out_path = os.path.join(OUT_DIR, f'{base}{_OUTPUT_SUFFIX}')
+    try:
+        os.makedirs(OUT_DIR, exist_ok=True)
+        base = os.path.splitext(os.path.basename(path))[0]
+        out_path = os.path.join(OUT_DIR, f'{base}{_OUTPUT_SUFFIX}')
 
-    out_df = pd.DataFrame(rows, columns=_INTAKE_COLUMNS)
-    out_df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+        out_df = pd.DataFrame(rows, columns=_INTAKE_COLUMNS)
+        out_df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
+    except OSError as exc:
+        # 읽기 단계와 달리 저장 단계는 원래 예외 보호가 없어, 한 파일의 저장
+        # 실패(예: Windows 260자 경로 길이 제한 — 원본 파일명이 길면
+        # "<원본파일명>_team_refer_intake.csv" 전체 경로가 한도를 넘어
+        # FileNotFoundError로 나타남)가 전체 배치 실행을 통째로 중단시켰다
+        # (2026-09-11 실사용 중 발견). 이제 그 파일만 실패로 기록하고 나머지
+        # 파일은 계속 처리한다.
+        return False, None, 0, f'출력 파일 저장 실패: {exc}'
 
     return True, out_path, len(rows), None
 
