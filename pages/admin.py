@@ -463,7 +463,7 @@ def _team_refer_upload_section():
         ], className='mb-2'),
         dbc.Row([
             dbc.Col([
-                html.Div('업로드(팀참조시트.xlsx)', className='small text-muted mb-1'),
+                html.Div('업로드(팀참조시트.xlsx 또는 .csv)', className='small text-muted mb-1'),
                 _upload_box('team_refer', 'single', multiple=True),
                 filenames_view, backfill_view,
             ], md=5),

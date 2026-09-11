@@ -162,8 +162,17 @@ MANIFEST = [
     # 서로 충돌하지 않는다(2026-08-29 추가). needs_valid_date=True라 관리자가
     # 기준 연/월을 지정할 수 있고, "_YYYYMM" 파일명 대량 백필 업로드도 다른
     # 시점보호 테이블과 동일하게 지원된다.
+    # mode='wildcard'(2026-09-11 변경, 기존 'exact'에서) — scripts/
+    # build_team_refer_intake.py(인력현황 원본 → team_refer 인텔이크 전처리)의
+    # 산출물은 CSV라, 'exact' 모드처럼 업로드된 파일을 무조건 고정된
+    # '팀참조시트.xlsx'라는 이름으로 강제 저장하면 CSV 내용이 .xlsx 확장자를
+    # 달고 저장돼(진짜 xlsx가 아니므로) 못 읽는다. 'wildcard'로 바꾸면
+    # 원본 파일명·확장자를 그대로 보존해 저장하고(services/web_pipeline_runner.
+    # save_upload()), process_team_refer.py가 확장자로 xlsx/csv를 구분해
+    # 읽는다(_find_source_file()/_read_source() 참고) — researchers(인력현황)
+    # 항목이 이미 쓰는 것과 동일한 방식.
     dict(key='team_refer', label='팀/리더 참조', module='process_team_refer',
-         hint='팀참조시트.xlsx', mode='exact', dest_filename='팀참조시트.xlsx', needs_valid_date=True,
+         hint='팀참조시트.xlsx 또는 .csv', mode='wildcard', needs_valid_date=True,
          hidden_from_table=True, pipeline_scope='llm'),
     # 어학자격은 "현재 재직자 기준으로만 의미가 있는 자료"라(사용자 확정,
     # 2026-08-29) 다른 대부분 항목과 달리 업서트가 아니라 매번 파일 전체로

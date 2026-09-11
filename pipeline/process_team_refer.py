@@ -72,11 +72,21 @@ process()는 다른 process_*.py처럼 raw_dir 매개변수를 받는다(2026-08
 로 넘겨 업로드된 파일을 읽게 한다(기본값은 기존과 동일한 data/raw). 이
 모듈은 pipeline/sources.py(1단계 DRM 제거 파이프라인)에 등록돼 있지 않은
 독립 스크립트라 다른 대부분의 process_*.py와 달리 source_reader.read_source()
-DB/스테이징 경로가 없다 — raw_dir 안의 팀참조시트.xlsx를 항상 직접 읽는다
-(관리자가 웹 업로드 전 Excel에서 DRM을 해제한 사본을 올린다는 전제는
-web_pipeline_runner의 다른 항목과 동일).
+DB/스테이징 경로가 없다(관리자가 웹 업로드 전 Excel에서 DRM을 해제한
+사본을 올린다는 전제는 web_pipeline_runner의 다른 항목과 동일).
+
+── xlsx뿐 아니라 CSV도 직접 읽는다(2026-09-11 추가) ────────────────────────────
+scripts/build_team_refer_intake.py(인력현황 원본 → team_refer 인텔이크
+전처리 스크립트, 신설)의 산출물은 xlsx가 아니라 CSV다(과거 xlsx를 새로 쓸 때
+openpyxl의 OOXML 메타데이터 손상 이력 — docs/CLAUDE.md 2026-08-31/09-02
+참고). 그 CSV를 사람이 검토·보정한 뒤 xlsx로 옮겨 담을 필요 없이 그대로
+다시 업로드할 수 있도록, `팀참조시트.xlsx`가 없으면 `.csv` 확장자도 찾는다
+(_find_source_file() 참고) — 웹 업로드 경로(services.web_pipeline_runner가
+team_refer 항목을 'wildcard' 모드로 등록해 원본 파일명을 그대로 보존)에서는
+그 폴더 안의 유일한 xlsx/csv 파일을 그대로 찾아 쓴다.
 """
 
+import glob
 import os
 import sys
 from datetime import date
@@ -90,6 +100,7 @@ from merge_utils import TABLE_KEYS, write_merged  # noqa: E402
 from team_hierarchy import FIELDS, derive_hierarchy  # noqa: E402
 
 SOURCE_FILE = '팀참조시트.xlsx'
+SOURCE_FILE_CSV = '팀참조시트.csv'
 
 # ── 컬럼명 매핑(엑셀 헤더명 → 인텔이크 컬럼명) — 순서 무관, 이름으로 찾아 변환 ──
 _COL_MAP = {
@@ -220,17 +231,60 @@ def tombstone_missing_dep_ids(result: pd.DataFrame, valid_date: date) -> pd.Data
     return pd.concat([result, tomb_df], ignore_index=True)
 
 
+def _find_source_file(raw_dir: str) -> str | None:
+    """raw_dir에서 읽을 파일 하나를 찾는다. CLI(data/raw/) 사용 시에는
+    다른 테이블용 원본까지 섞여 있을 수 있어 정확한 파일명(SOURCE_FILE
+    또는 그 csv 버전)을 우선 찾는다. 둘 다 없으면(웹 업로드 —
+    data/web_updates/team_refer/처럼 이 폴더에 team_refer 관련 파일 하나만
+    있는 폴더, services.web_pipeline_runner가 'wildcard' 모드로 원본
+    파일명을 그대로 보존해 저장한다) 그 폴더 안의 xlsx/csv 파일이 정확히
+    1개뿐이면 그걸 쓴다(임시 잠금 파일 '~$*' 제외) — 여러 개면 어느 걸
+    읽어야 할지 알 수 없으므로 실패 처리."""
+    exact_xlsx = os.path.join(raw_dir, SOURCE_FILE)
+    if os.path.exists(exact_xlsx):
+        return exact_xlsx
+    exact_csv = os.path.join(raw_dir, SOURCE_FILE_CSV)
+    if os.path.exists(exact_csv):
+        return exact_csv
+
+    candidates = sorted(
+        p for p in glob.glob(os.path.join(raw_dir, '*.xlsx')) + glob.glob(os.path.join(raw_dir, '*.csv'))
+        if not os.path.basename(p).startswith('~$')
+    )
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _read_source(path: str) -> pd.DataFrame:
+    """.xlsx는 read_xlsx()(xlwings, DRM 파일용, 2번째 행 헤더)로, .csv는
+    scripts/build_team_refer_intake.py의 산출물과 동일한 방식
+    (`pd.read_csv(path, encoding='utf-8-sig', dtype=str).fillna('')`, 1번째
+    행 헤더)으로 읽는다 — xlwings/Excel이 전혀 필요 없어 DRM 자동화 문제와
+    무관하다."""
+    if path.lower().endswith('.csv'):
+        return pd.read_csv(path, encoding='utf-8-sig', dtype=str).fillna('')
+    return read_xlsx(path, header_row=1)
+
+
 def process(raw_dir: str = RAW_DIR, valid_date: date | None = None) -> bool:
-    """raw_dir: 팀참조시트.xlsx를 찾을 폴더(기본값 data/raw — 웹 업로드 시
-    services.web_pipeline_runner가 data/web_updates/team_refer/를 넘긴다).
-    valid_date: 이번 업로드분의 유효 날짜(기본값 오늘) — 과거 데이터
-    소급 입력 시 지정."""
-    raw_path = os.path.join(raw_dir, SOURCE_FILE)
-    if not os.path.exists(raw_path):
-        print(f'[SKIP] {SOURCE_FILE} 파일 없음({raw_dir})')
+    """raw_dir: 팀참조시트.xlsx(또는 .csv)를 찾을 폴더(기본값 data/raw —
+    웹 업로드 시 services.web_pipeline_runner가 data/web_updates/team_refer/를
+    넘긴다). valid_date: 이번 업로드분의 유효 날짜(기본값 오늘) — 과거
+    데이터 소급 입력 시 지정."""
+    raw_path = _find_source_file(raw_dir)
+    if not raw_path:
+        others = sorted(
+            os.path.basename(p) for p in
+            glob.glob(os.path.join(raw_dir, '*.xlsx')) + glob.glob(os.path.join(raw_dir, '*.csv'))
+            if not os.path.basename(p).startswith('~$')
+        )
+        if others:
+            print(f'[ERROR] {SOURCE_FILE}(또는 .csv)를 특정할 수 없습니다 — '
+                  f'{raw_dir} 안에 파일이 여러 개 있습니다: {others}')
+        else:
+            print(f'[SKIP] {SOURCE_FILE}(또는 .csv) 파일 없음({raw_dir})')
         return False
 
-    df = read_xlsx(raw_path, header_row=1)
+    df = _read_source(raw_path)
     df.columns = [str(c).strip() for c in df.columns]
 
     missing = [col for col in _COL_MAP if col not in df.columns]
