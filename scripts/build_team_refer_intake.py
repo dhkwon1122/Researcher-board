@@ -26,16 +26,20 @@ team_refer 인텔이크 형식(pipeline/process_team_refer.py의 _COL_MAP과 동
 같은 값을 두 인텔이크 컬럼(비공식소속부서명/3단계부서명)에 그대로 복제해
 넣는다(2026-09-11 사용자 확정 — "org_name_wd : 현재/과거 동일하게 유지").
 
-나머지 컬럼(2026-09-11 (4) 재정정 — 보조 매핑표/백필 로직 전면 재작성):
-  1단계부서명 → 원본 값이 "대표이사"/"삼성전자"면 무조건 2단계부서명
+나머지 컬럼(2026-09-11 (5) 추가 — 마커 치환 후에도 남는 빈 1단계부서명
+백필 단계 신설):
+  1단계부서명 → ① 원본 값이 "대표이사"/"삼성전자"면 무조건 2단계부서명
     (현소속부서명) 값으로 교체(_ROOT_MARKERS_DIRECT). "종합기술원"/"SAIT"
-    면 아래 보조 매핑표에서 2단계부서명으로 조회한 1단계부서명 값으로
-    교체하고, 매핑표에 없으면 2단계부서명 값으로 교체(_ROOT_MARKERS_LOOKUP).
-    그 외(4개 marker가 아닌 값, 빈 값 포함)는 원본 값을 그대로 둔다(빈
-    값이어도 별도 백필을 하지 않음 — 사용자 확정, 예전의 "1단계가 비어
-    있으면 채운다"는 백필 개념 자체를 없앴다).
-  2단계부서명 ← 원본의 "현소속부서명" 그대로(1단계 교체와 무관하게 항상
-    원본 값 유지 — 위 교체 규칙은 1단계만 바꾼다).
+    면 보조 매핑표1(원본 값 기준)에서 2단계부서명으로 조회한 1단계부서명
+    값으로 교체하고, 못 찾으면 2단계부서명 값으로 교체(_ROOT_MARKERS_LOOKUP).
+    ② 그 외(4개 marker가 아닌 값)는 원본 값을 그대로 둔다.
+    ③ ①②를 다 거치고도 1단계부서명이 비어 있으면(실사용 중 발견 — 원본
+    자체에 1단계가 공란인 행이 있을 수 있음), 보조 매핑표2(마커 치환까지
+    끝난 "최종" 값 기준, ①②의 결과를 재료로 새로 만든 2단계→1단계
+    매핑표)에서 2단계부서명으로 조회한 값을 채우고, 그마저 없으면
+    2단계부서명 값을 그대로 채운다(사용자 확정).
+  2단계부서명 ← 원본의 "현소속부서명" 그대로(1단계 교체/백필과 무관하게
+    항상 원본 값 유지).
   구분/조직코드/사번/성명/직책 → 전부 빈 값(사용자 확정 — 인력현황
     원본에서 이 값들을 자동으로 뽑아내기 어렵고, 뽑아낸다 해도 "이 사람이
     이 조직의 대표 책임자"라는 판단은 별도 정보가 필요해 이 스크립트
@@ -179,6 +183,40 @@ def _fill_upper_level(a: str, b: str, upper_lookup: dict) -> str:
     return a
 
 
+def _build_level2_lookup(triples: list) -> dict:
+    """마커 치환(_fill_upper_level)까지 끝낸 (1단계, 2단계, 3단계) 중간
+    결과에서 보조 매핑표2(2단계→1단계)를 만든다(2026-09-11 (5) 신설,
+    사용자 확정) — 매핑표1(_build_upper_level_lookup)이 "원본" 값 기준인
+    것과 달리, 이 표는 마커 치환까지 끝난 "최종" 값 기준이다. 마커 규칙이
+    매핑 실패로 1단계=2단계가 된 행(폴백 값)도 그대로 포함한다(사용자
+    확정 — 특별히 제외할 이유가 없다고 판단).
+
+    매핑표1과 동일한 절차: (1단계, 2단계) 완전 중복 쌍을 먼저 제거한 뒤,
+    2단계별로 원본 등장 순서상 처음 나온 1단계 값을 채택(`setdefault`) —
+    같은 2단계에 서로 다른 1단계가 남아 있어도(원본 데이터 자체의 모순)
+    처음 값을 우선한다."""
+    lookup: dict = {}
+    seen_pairs: set = set()
+    for a, b, _c in triples:
+        if not a or not b:
+            continue
+        if (a, b) in seen_pairs:
+            continue
+        seen_pairs.add((a, b))
+        lookup.setdefault(b, a)
+    return lookup
+
+
+def _backfill_blank_level1(a: str, b: str, level2_lookup: dict) -> str:
+    """마커 치환까지 끝난 뒤에도 1단계부서명(a)이 비어 있으면 2단계부서명
+    (b)으로 보조 매핑표2를 조회해 채운다. 매핑되는 값이 없으면 2단계부서명
+    (b) 값을 그대로 채운다(2026-09-11 (5) 신설, 사용자 확정). a가 이미
+    채워져 있으면(마커 치환 결과 포함) 손대지 않고 그대로 반환한다."""
+    if a:
+        return a
+    return level2_lookup.get(b, b)
+
+
 def process_file(path: str) -> tuple:
     """한 원본 파일을 처리해 (성공 여부, 출력 경로 또는 None, 행 수, 에러
     메시지) 반환."""
@@ -195,8 +233,11 @@ def process_file(path: str) -> tuple:
 
     upper_lookup = _build_upper_level_lookup(df)
 
-    rows = []
-    seen = set()
+    # 1차: 원본 추출 + 마커 치환(대표이사/삼성전자/종합기술원/SAIT)까지
+    # 끝낸 (1단계, 2단계, 3단계) 중간 결과를 모은다 — 아래 보조 매핑표2가
+    # 이 마커 치환 "최종" 값을 재료로 삼으므로(2026-09-11 (5) 사용자 확정),
+    # 이 시점에는 아직 빈 1단계부서명 백필도 최종 중복 제거도 하지 않는다.
+    intermediate = []
     for _, row in df[_SRC_HEADERS].iterrows():
         a = clean_str(row[_SRC_LEVEL1])
         b = clean_str(row[_SRC_LEVEL2])
@@ -205,6 +246,17 @@ def process_file(path: str) -> tuple:
             continue
         if upper_lookup is not None:
             a = _fill_upper_level(a, b, upper_lookup)
+        intermediate.append((a, b, c))
+
+    level2_lookup = _build_level2_lookup(intermediate)
+
+    # 2차: 마커 치환까지 끝나고도 1단계부서명이 비어 있는 행을 보조
+    # 매핑표2로 백필한 뒤(2026-09-11 (5) 신설), 최종 (1단계,2단계,3단계)
+    # 기준으로 중복 제거해 출력 행을 만든다.
+    rows = []
+    seen = set()
+    for a, b, c in intermediate:
+        a = _backfill_blank_level1(a, b, level2_lookup)
         key = (a, b, c)
         if key in seen:
             continue
