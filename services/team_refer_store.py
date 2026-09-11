@@ -15,6 +15,31 @@ DB 쓰기는 services/user_store.py와 같은 패턴(SQLAlchemy Core, DATABASE_U
 미설정/실패 시 모든 함수가 조용히 실패를 나타내는 값을 반환)을 따른다 —
 DB가 없어도 CSV 쓰기만으로 정상 동작해야 한다(save_snapshot()의 반환값
 db_ok로 호출부가 구분해서 안내).
+
+── 3단계 부서 체계 + 그리드 UX 변경(2026-09-11) ────────────────────────────────
+team_refer.csv가 부서/과제·파트 2단 구분에서 1/2/3단계 부서명 3단 구조로
+바뀌면서(pipeline/process_team_refer.py, pipeline/team_hierarchy.py 참고),
+dep_id/upper_dep_id/team_layer가 더 이상 사람이 직접 입력하는 엑셀 컬럼이
+아니라 1/2/3단계 부서명 "전체 경로" 텍스트에서 매번 결정적으로 자동 계산된다.
+그 결과 이 그리드의 UX도 함께 단순해졌다:
+  - 그리드에 더 이상 부서ID/상위부서ID/조직 레벨 컬럼이 없다(KOREAN_COLUMNS는
+    이제 process_team_refer._COL_MAP의 9개 인텔이크 컬럼 그대로 — 1/2/3단계
+    부서명을 각 행에 "전체 경로"로 채우면 저장 시점에 자동으로 조직 단위별
+    1행(own-level-only)으로 재구성된다).
+  - team_refer.csv 자체는 own-level-only 저장 스키마이므로(그 조직 자신의
+    레벨 이름만 채움), 그리드에 불러올 때는 pipeline.team_hierarchy.
+    backfill_full_path()로 상위부서 이름까지 전체 경로로 채워서 보여준다
+    (derive_hierarchy()의 역방향 — 왕복해도 멱등적).
+  - 예전엔 admin.py가 "그리드에서 사라진 부서ID"를 직접 비교해 삭제(톰스톤)
+    대상을 판정했는데(부서ID가 사람이 타이핑하는 값이라 diff가 안정적이었음),
+    이제 dep_id는 텍스트에서 매번 새로 계산되는 값이라 그 방식이 성립하지
+    않는다 — 대신 process_team_refer.tombstone_missing_dep_ids()를 그대로
+    재사용해, "이번 저장 내용에 없는, 현재 살아있는 dep_id"를 저장 시점마다
+    자동으로 찾아 마감 처리한다(그리드가 매번 "현재 조직 전체"를 불러와 그
+    전체를 다시 저장하는 구조이므로, process()의 xlsx 일괄 업로드와 동일한
+    원리가 그대로 적용됨). save_snapshot()의 deleted_dep_ids 인자가 이래서
+    사라졌다 — 호출부(pages/admin.py)가 더 이상 삭제 대상을 직접 계산해
+    넘길 필요가 없다.
 """
 from __future__ import annotations
 
@@ -33,14 +58,18 @@ sys.path.insert(0, os.path.abspath(_PIPELINE_DIR))
 import merge_utils  # noqa: E402
 import process_team_refer as ptr  # noqa: E402
 import rd_specialist_markdown as mmd  # noqa: E402
+import team_hierarchy as th  # noqa: E402
 from paths import OUT_DIR  # noqa: E402
 
 # 엑셀 헤더명(관리자 화면 그리드가 쓰는 컬럼 키) ↔ 표준 영문 컬럼명(CSV/DB가
 # 쓰는 컬럼 키) 매핑 — process_team_refer._COL_MAP을 그대로 재사용해 두
-# 경로가 어긋나지 않게 한다.
+# 경로가 어긋나지 않게 한다(9개 인텔이크 컬럼 — dep_id/upper_dep_id/
+# team_layer는 자동 계산이라 여기 없음).
 KOREAN_COLUMNS = list(ptr._COL_MAP.keys())
 _REVERSE_COL_MAP = {v: k for k, v in ptr._COL_MAP.items()}
-_ALL_VALUE_COLUMNS = list(ptr._COL_MAP.values()) + ['deleted']  # dep_id 포함
+# team_refer.csv/DB 저장 스키마 전체(team_hierarchy.FIELDS — dep_id/
+# upper_dep_id/team_layer 등 자동 계산 필드 포함) + deleted.
+_ALL_VALUE_COLUMNS = list(th.FIELDS) + ['deleted']  # dep_id 포함
 
 metadata = MetaData()
 
@@ -110,9 +139,14 @@ def list_editable_rows() -> list[dict]:
     헤더명(KOREAN_COLUMNS)을 키로 쓴다(사용자 요청: 컬럼명은 xlsx 그대로).
     조직코드(dep_code) 오름차순으로 정렬한다(2026-09-01, 사용자 확정 —
     기존 내림차순에서 변경).
-    pipeline.rd_specialist_markdown.read_team_refer()를 그대로 써서 dep_id별
-    최신·비삭제 행만 가져온다(DB 우선, 없으면 CSV)."""
+    pipeline.rd_specialist_markdown.read_team_refer()로 dep_id별 최신·
+    비삭제 행(own-level-only 저장 스키마)만 가져온 뒤,
+    team_hierarchy.backfill_full_path()로 1/2/3단계 부서명을 전체 경로로
+    채워 그리드에 보여준다 — 그래야 그대로 다시 저장해도(수정 없이
+    저장만 해도) build_rows_from_records()가 같은 dep_id를 재계산해
+    내용이 유지된다."""
     rows = mmd.read_team_refer(OUT_DIR)
+    rows = th.backfill_full_path(rows)
     rows = sorted(rows, key=lambda r: str(r.get('dep_code') or ''))
     return [
         {kor: r.get(eng, '') for eng, kor in _REVERSE_COL_MAP.items()}
@@ -120,15 +154,21 @@ def list_editable_rows() -> list[dict]:
     ]
 
 
-def save_snapshot(records: list[dict], deleted_dep_ids: list[str], valid_date: date) -> dict:
+def save_snapshot(records: list[dict], valid_date: date) -> dict:
     """저장 버튼 콜백 진입점.
 
-    records: 그리드의 현재 행(엑셀 헤더명 키, dep_id 없는 행은 이미 걸러진
-    상태로 넘어온다고 가정 — pages/admin.py가 저장 전에 걸러 안내).
-    deleted_dep_ids: 그리드 로드 당시엔 있었지만 저장 시점 그리드엔 없는
-    dep_id들(행 삭제로 처리) — 그 dep_id의 마지막으로 알려진 값을 그대로
-    가져와 deleted='Y'만 바꾼 톰스톤 행으로, 같은 valid_date에 남긴다(다른
-    컬럼 값을 비우면 이력 조회 시 정보가 사라지므로 값은 보존).
+    records: 그리드의 현재 행(엑셀 헤더명 키, "전체 경로 포함" 인텔이크
+    형태 — list_editable_rows()가 채워준 상위 부서명을 그대로 유지한 채
+    일부만 고쳐도 되고, 새 행을 추가할 때도 1/2/3단계 이름을 자기 레벨까지
+    채우면 된다).
+
+    dep_id/upper_dep_id/team_layer는 build_rows_from_records()가 1/2/3단계
+    부서명 경로에서 자동 계산하므로, "이번 저장에 없는 옛 dep_id"를 사람이
+    직접 표시할 방법이 이제 없다 — 대신 ptr.tombstone_missing_dep_ids()로
+    "이번 저장 내용에 없는, 현재 살아있는 dep_id"를 자동으로 찾아
+    deleted='Y' 톰스톤 행을 추가한다(그리드는 매번 "현재 조직 전체"를
+    불러와 그 전체를 다시 저장하는 구조이므로 process()의 xlsx 일괄
+    업로드와 동일한 원리가 그대로 적용된다).
 
     CSV(data/processed/team_refer.csv)에는 항상 반영하고, DB가 설정돼
     있으면 DB에도 반영한다(실패해도 CSV 반영은 이미 끝난 상태이므로 함수
@@ -140,18 +180,7 @@ def save_snapshot(records: list[dict], deleted_dep_ids: list[str], valid_date: d
     result = ptr.stamp_valid_date(result, valid_date)
     result['deleted'] = 'N'
 
-    if deleted_dep_ids:
-        current_by_dep = {r.get('dep_id'): r for r in mmd.read_team_refer(OUT_DIR)}
-        tombstones = []
-        for dep_id in deleted_dep_ids:
-            src = current_by_dep.get(dep_id) or {}
-            base = {c: src.get(c, '') for c in _ALL_VALUE_COLUMNS}
-            base['dep_id'] = dep_id
-            base['deleted'] = 'Y'
-            tombstones.append(base)
-        tomb_df = pd.DataFrame(tombstones, columns=_ALL_VALUE_COLUMNS)
-        tomb_df = ptr.stamp_valid_date(tomb_df, valid_date)
-        result = pd.concat([result, tomb_df], ignore_index=True)
+    result = ptr.tombstone_missing_dep_ids(result, valid_date)
 
     out_path = os.path.join(OUT_DIR, 'team_refer.csv')
     merged = merge_utils.write_merged(out_path, result, merge_utils.TABLE_KEYS['team_refer'])

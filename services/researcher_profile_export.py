@@ -179,7 +179,7 @@ def _col_dept_task(_rid, rows):
         return '-'
     org_code = str(r.get('org_code') or '').strip()
     dep_map, pjt_map = rows.get('dep_pjt_maps') or ({}, {})
-    # 부서/과제(파트) = team_refer의 dep_name/pjt_part_name(연구원 명단 표와
+    # 부서/과제(파트) = team_refer의 dep_1st_name/dep_3rd_name(연구원 명단 표와
     # 동일 기준 — 사용자 확정). 매핑이 없으면 원본 department/org_code
     # 그대로 보여준다(빈 칸이면 데이터 누락처럼 보이므로).
     dept = _or_dash(dep_map.get(org_code) or r.get('department'))
@@ -737,7 +737,7 @@ def build_profile_workbook(
     # 로그인 사용자당 한 번만 계산 — _col_evaluation/_col_incentive가 매 행마다
     # auth.can()을 다시 호출하지 않도록 _researcher_row_context()에 실어 보낸다.
     permissions = {'view_evaluation': auth.can('view_evaluation'), 'view_incentive': auth.can('view_incentive')}
-    # org_code → dep_name/pjt_part_name 매핑도 배치당 한 번만 만든다(연구원
+    # org_code → dep_1st_name/dep_3rd_name 매핑도 배치당 한 번만 만든다(연구원
     # 수만큼 team_refer를 반복 스캔하지 않도록) — similarity_map이 이 모듈을
     # 임포트하므로(순환 임포트 방지) 여기서는 지연 임포트로 가져온다.
     from services import similarity_map

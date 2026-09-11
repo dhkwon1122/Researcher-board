@@ -179,13 +179,19 @@ COLUMN_LABELS = {
     'date': '일자',
     'type': '유형',
 
-    # 조직도 (team_refer.csv)
+    # 조직도 (team_refer.csv, 2026-09-11 3단계 부서 체계로 dep_1st_name/
+    # dep_2nd_name/dep_3rd_name 도입 — dep_name은 team_refer.csv에서는 더
+    # 이상 안 쓰이지만 project_confl_address.csv가 여전히 이 이름의 컬럼을
+    # 쓰고 있어(무관한 별개 테이블) 그대로 남겨둠)
     'end_name': '최종조직명',
     'team_layer': '조직레벨',
     'assignment_name': '배치명',
     'dep_id': '부서ID',
     'upper_dep_id': '상위부서ID',
     'dep_name': '소속',
+    'dep_1st_name': '1단계부서명',
+    'dep_2nd_name': '2단계부서명',
+    'dep_3rd_name': '3단계부서명',
 
     # 과제 전문성/매칭 (LLM 파생)
     'job_title': '직무',

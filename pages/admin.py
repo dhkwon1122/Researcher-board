@@ -4,7 +4,6 @@ manage_users 권한이 있는 계정만 접근 가능.
 """
 import base64
 import os
-import re
 from datetime import date
 
 import dash
@@ -499,24 +498,22 @@ def _team_refer_upload_section():
 # 입력 가능)를 assets/team_refer_grid.js가 편집용 input에 걸어준다 — 여기서는
 # 그 후보 목록만 계산한다(2026-09-03 추가).
 #
-# 대상 컬럼: 반복되거나 참조되는 값이 많은 컬럼만 선정. 부서ID(고유키,
-# "다음 번호" 자동 제안이 이미 있음)·사번/성명/직책(개인 식별 정보, 참고할
-# 반복값이 아님)은 제외.
+# 대상 컬럼: 반복되거나 참조되는 값이 많은 컬럼만 선정. 사번/성명/직책(개인
+# 식별 정보, 참고할 반복값이 아님)은 제외. 부서ID/상위부서ID/조직 레벨은
+# 2026-09-11 3단계 부서 체계 도입으로 사람이 직접 입력하는 컬럼 자체가
+# 아니게 되어(1/2/3단계 부서명 경로에서 자동 계산 — pipeline/team_hierarchy.py)
+# 더 이상 가이드 대상이 아니다.
 _AUTOFILL_GUIDE_COLUMNS = [
-    '비공식소속부서명', '구분', '부서', '과제/파트', '조직코드', '상위부서ID', '조직 레벨',
+    '비공식소속부서명', '구분', '1단계부서명', '2단계부서명', '3단계부서명', '조직코드',
 ]
-# 조직 레벨(team_layer, 조직도 깊이 1~4)/구분(work_type, "R&D"만 분석 대상)은
-# 데이터가 적어도 후보가 비어 보이지 않도록 고정값을 항상 포함한다(그 외
-# 실제로 쓰인 값이 있으면 함께 보여줌).
-_TEAM_LAYER_FIXED_OPTIONS = ['1', '2', '3', '4']
+# 구분(work_type, "R&D"만 분석 대상)은 데이터가 적어도 후보가 비어 보이지
+# 않도록 고정값을 항상 포함한다(그 외 실제로 쓰인 값이 있으면 함께 보여줌).
 _WORK_TYPE_FIXED_OPTIONS = ['R&D']
 
 
 def _build_autofill_suggestions(rows: list) -> dict:
-    """가이드 대상 컬럼별 자동완성 후보 목록. 대부분 "그 컬럼 자체에 이미
-    쓰인 값"이지만, 상위부서ID만 예외로 '부서ID' 컬럼 값을 후보로 쓴다 —
-    상위부서ID에 실제로 입력해야 하는 값이 다른 행의 부서ID이므로(위
-    행들을 참고해서 자동채움을 가이드해 달라는 요청 그대로)."""
+    """가이드 대상 컬럼별 자동완성 후보 목록 — 대부분 "그 컬럼 자체에 이미
+    쓰인 값"(위 행들을 참고해서 자동채움을 가이드해 달라는 요청 그대로)."""
     rows = rows or []
 
     def _existing(col: str) -> list:
@@ -524,11 +521,7 @@ def _build_autofill_suggestions(rows: list) -> dict:
 
     suggestions = {}
     for col in _AUTOFILL_GUIDE_COLUMNS:
-        if col == '상위부서ID':
-            suggestions[col] = _existing('부서ID')
-        elif col == '조직 레벨':
-            suggestions[col] = sorted(set(_TEAM_LAYER_FIXED_OPTIONS) | set(_existing(col)))
-        elif col == '구분':
+        if col == '구분':
             suggestions[col] = sorted(set(_WORK_TYPE_FIXED_OPTIONS) | set(_existing(col)))
         else:
             suggestions[col] = _existing(col)
@@ -539,9 +532,15 @@ def _team_refer_tab() -> html.Div:
     """팀/리더 참조 웹 CRUD 탭. 컬럼은 팀참조시트.xlsx 원본 헤더명을 그대로
     쓴다(pipeline.process_team_refer._COL_MAP 재사용, services.team_refer_store
     참고) — 행 추가/삭제로 조직 단위를 직접 편집하고, 저장하면 지정한 날짜로
-    누적된다(같은 날 재저장은 그날 값을 덮어씀)."""
+    누적된다(같은 날 재저장은 그날 값을 덮어씀).
+
+    3단계 부서 체계(2026-09-11) 도입 이후 부서ID/상위부서ID/조직 레벨은 이
+    그리드의 편집 대상이 아니다 — 1단계부서명/2단계부서명/3단계부서명을 각
+    행에 "전체 경로"로 채우면(예: 3단계 소속이면 1/2/3단계 이름을 전부 채움)
+    저장 시점에 dep_id/upper_dep_id/team_layer가 그 경로에서 자동으로
+    계산된다(services.team_refer_store.list_editable_rows()가 저장된
+    조직을 불러올 때도 상위 부서명을 전체 경로로 채워 보여준다)."""
     rows = team_refer_store.list_editable_rows()
-    loaded_dep_ids = sorted({r.get('부서ID', '') for r in rows if r.get('부서ID')})
     rows = _renumbered(rows)
 
     # 'No.' 는 화면 표시 전용 — 저장 대상 컬럼(KOREAN_COLUMNS)에는 없으므로
@@ -552,7 +551,6 @@ def _team_refer_tab() -> html.Div:
     ]
 
     return html.Div([
-        dcc.Store(id='team-refer-loaded-dep-ids', data=loaded_dep_ids),
         # 자동채움 가이드(드롭다운/자동완성) 후보 — team_refer_sync_suggestions
         # 콜백이 data가 바뀔 때마다 다시 계산해 채운다. 여기 초기값은 페이지
         # 최초 로드 시 클라이언트 스크립트(assets/team_refer_grid.js)가 바로
@@ -565,8 +563,9 @@ def _team_refer_tab() -> html.Div:
         dbc.Alert(
             [
                 html.I(className='bi bi-info-circle me-2'),
-                '조직 레벨/부서ID가 비어 있는 행은 저장되지 않습니다. 상위부서ID는 '
-                '실제 존재하는 부서ID를 가리켜야 하며, 없으면 최상위 조직으로 취급됩니다.',
+                '1단계부서명은 필수입니다(예: 3단계 소속이면 1/2/3단계 이름을 자기 '
+                '레벨까지 전부 채워주세요). 부서ID/상위부서ID/조직 레벨은 이 경로에서 '
+                '자동으로 계산되므로 따로 입력하지 않습니다.',
             ],
             color='light', className='small border mb-3',
         ),
@@ -1790,29 +1789,12 @@ def confirm_bulk_create(n_clicks, parsed, counter):
     return parts, (counter or 0) + 1, True
 
 
-_DEP_ID_SUFFIX_RE = re.compile(r'^(.*?)(\d+)$')
-
-
-def _suggest_next_dep_id(prev_dep_id: str) -> str:
-    """부서ID 끝의 숫자를 1 증가시켜 다음 값을 제안한다(예: "T1-PRT-01" →
-    "T1-PRT-02") — 자릿수(zero-padding)는 그대로 유지. 끝에 숫자가 없으면
-    (패턴을 못 찾으면) 제안하지 않고 빈 문자열(사용자 확정 2026-09-02,
-    "행 추가" 시 바로 위 행의 부서ID를 참고 — 결과는 그대로 채워지지만
-    셀은 계속 편집 가능해 틀리면 바로 고칠 수 있다)."""
-    prev_dep_id = (prev_dep_id or '').strip()
-    m = _DEP_ID_SUFFIX_RE.match(prev_dep_id)
-    if not m:
-        return ''
-    prefix, digits = m.group(1), m.group(2)
-    return f'{prefix}{str(int(digits) + 1).zfill(len(digits))}'
-
-
 # ── 콜백: 팀/리더 참조 — 행 추가 ─────────────────────────────────────────────
 # 클릭(선택)해둔 셀이 있으면 그 행 바로 다음에 삽입하고, 선택된 셀이 없으면
 # 맨 뒤에 추가한다(사용자 요청: 항상 맨 뒤가 아니라 원하는 위치에 끼워 넣기).
-# 새 행의 부서ID는 바로 위 행(삽입 위치 기준)의 부서ID 끝 숫자를 1 증가시켜
-# 자동 제안해 채운다(2026-09-02 추가) — 위 행이 없거나 끝이 숫자가 아니면
-# 빈 칸으로 둔다. 어차피 편집 가능한 셀이라 제안이 틀리면 바로 고치면 된다.
+# 3단계 부서 체계 도입 이후 부서ID는 더 이상 그리드 컬럼이 아니라(경로에서
+# 자동 계산) "다음 번호 자동 제안" 기능도 함께 없어졌다 — 새 행은 빈 칸으로
+# 추가되고, 1/2/3단계부서명을 자기 레벨까지 채우면 된다.
 @callback(
     Output('team-refer-table', 'data', allow_duplicate=True),
     Input('team-refer-add-row-btn', 'n_clicks'),
@@ -1826,8 +1808,6 @@ def team_refer_add_row(n_clicks, rows, active_cell):
     rows = list(rows or [])
     new_row = {col: '' for col in team_refer_store.KOREAN_COLUMNS}
     insert_at = active_cell['row'] + 1 if active_cell else len(rows)
-    if 0 < insert_at <= len(rows):
-        new_row['부서ID'] = _suggest_next_dep_id(rows[insert_at - 1].get('부서ID', ''))
     rows.insert(insert_at, new_row)
     return _renumbered(rows)
 
@@ -1919,73 +1899,56 @@ clientside_callback(
 
 # ── 콜백: 팀/리더 참조 — 저장 ─────────────────────────────────────────────────
 # 행 삭제(row_deletable) 자체는 DataTable이 클라이언트에서 바로 처리하므로
-# 별도 저장 로직은 없다 — 저장 시점에 team-refer-loaded-dep-ids(그리드를
-# 처음 불러올 때의 부서ID 목록)와 현재 그리드의 부서ID를 비교해 사라진
-# 것을 삭제로 판단한다.
+# 별도 저장 로직은 없다. 3단계 부서 체계 도입 이후 dep_id는 부서명 경로에서
+# 매번 새로 계산되는 값이라(사람이 타이핑하는 값이 아님) "그리드에서 사라진
+# 부서ID"를 여기서 직접 비교할 방법이 없다 — 대신 team_refer_store.
+# save_snapshot()이 process_team_refer.tombstone_missing_dep_ids()로 저장
+# 시점마다 자동으로 삭제(톰스톤) 대상을 찾아 처리한다(그리드가 매번 "현재
+# 조직 전체"를 불러와 그 전체를 다시 저장하는 구조이므로 가능).
 @callback(
     Output('team-refer-save-msg', 'children'),
-    Output('team-refer-loaded-dep-ids', 'data', allow_duplicate=True),
     Output('team-refer-dupe-modal', 'is_open', allow_duplicate=True),
     Output('team-refer-dupe-modal-body', 'children'),
     Input('team-refer-save-btn', 'n_clicks'),
     State('team-refer-table', 'data'),
     State('team-refer-valid-date', 'date'),
-    State('team-refer-loaded-dep-ids', 'data'),
     prevent_initial_call=True,
 )
-def team_refer_save(n_clicks, rows, valid_date_str, loaded_dep_ids):
+def team_refer_save(n_clicks, rows, valid_date_str):
     from services.auth import can
     if not can('manage_users'):
-        return _alert('관리자만 저장할 수 있습니다.', 'danger'), no_update, no_update, no_update
+        return _alert('관리자만 저장할 수 있습니다.', 'danger'), no_update, no_update
     if not n_clicks:
-        return no_update, no_update, no_update, no_update
+        return no_update, no_update, no_update
     if not valid_date_str:
-        return _alert('입력 날짜를 선택해주세요.', 'warning'), no_update, no_update, no_update
+        return _alert('입력 날짜를 선택해주세요.', 'warning'), no_update, no_update
 
     valid_date = date.fromisoformat(valid_date_str[:10])
     rows = rows or []
 
-    valid_rows = [r for r in rows if str(r.get('부서ID') or '').strip()]
+    valid_rows = [r for r in rows if str(r.get('1단계부서명') or '').strip()]
     skipped = len(rows) - len(valid_rows)
 
-    current_dep_ids = {str(r.get('부서ID')).strip() for r in valid_rows}
-    deleted_dep_ids = [d for d in (loaded_dep_ids or []) if d not in current_dep_ids]
-
-    # upper_dep_id(상위부서ID) 존재성 검증 — 저장은 진행하되 경고만 표시한다
-    # (build_org_tree()는 존재하지 않는 upper_dep_id를 조용히 최상위로 취급
-    # 하므로, 오타를 그냥 두면 트리 구조가 의도와 다르게 만들어질 수 있다).
-    warnings = []
-    for r in valid_rows:
-        updep = str(r.get('상위부서ID') or '').strip()
-        if updep and updep not in current_dep_ids:
-            warnings.append(f"부서ID {r.get('부서ID')}({r.get('과제/파트', '')})의 상위부서ID "
-                             f"'{updep}'가 존재하지 않아 최상위 조직으로 취급됩니다")
-
-    result = team_refer_store.save_snapshot(valid_rows, deleted_dep_ids, valid_date)
+    result = team_refer_store.save_snapshot(valid_rows, valid_date)
     team_refer_store.export_snapshot_xlsx(valid_rows, valid_date)
 
     parts = [
         f"저장 완료 — 이번 저장 {result['saved_rows']}행 반영"
         + ('' if result['db_ok'] else ' (DB 미반영, CSV에는 반영됨)') + '.',
     ]
-    if deleted_dep_ids:
-        parts.append(f'{len(deleted_dep_ids)}개 조직이 삭제 처리됐습니다.')
     if skipped:
-        parts.append(f'부서ID가 비어 있어 {skipped}행은 저장에서 제외됐습니다.')
+        parts.append(f'1단계부서명이 비어 있어 {skipped}행은 저장에서 제외됐습니다.')
 
     dupes = result.get('duplicate_dep_ids') or []
     if dupes:
         parts.append(f'부서ID가 중복된 항목이 {len(dupes)}건 있어 일부 행이 저장되지 '
                       '않았을 수 있습니다 — 아래 창을 확인해주세요.')
 
-    alert_color = 'warning' if (warnings or dupes) else 'success'
+    alert_color = 'warning' if dupes else 'success'
     body = [html.Div(p) for p in parts]
-    if warnings:
-        body.append(html.Div('경고: ' + ' / '.join(warnings[:5])
-                              + (f' 외 {len(warnings) - 5}건' if len(warnings) > 5 else '')))
 
     msg = dbc.Alert(body, color=alert_color, dismissable=True, className='py-2 small mb-0')
-    return msg, sorted(current_dep_ids), bool(dupes), _dupe_modal_body(dupes)
+    return msg, bool(dupes), _dupe_modal_body(dupes)
 
 
 # ── 콜백: 팀/리더 참조 — 현재 기준 엑셀 다운로드 ──────────────────────────────
@@ -2030,11 +1993,13 @@ def team_refer_db_load(n_clicks):
 
 def _dupe_modal_body(dupes: list[dict]):
     """부서ID(dep_id) 중복 그룹 리스트를 별도 창(모달)에 보여줄 표로 렌더링.
-    dupes: pipeline.process_team_refer.find_duplicate_dep_ids()의 반환값."""
+    dupes: pipeline.process_team_refer.find_duplicate_dep_ids()의 반환값
+    (display_cols: dep_id/dep_code/dep_1st_name/dep_2nd_name/dep_3rd_name/
+    upper_dep_id/researcher_id/name)."""
     if not dupes:
         return None
     header = html.Thead(html.Tr([
-        html.Th('부서ID'), html.Th('조직코드'), html.Th('과제/파트'), html.Th('부서'),
+        html.Th('부서ID'), html.Th('조직코드'), html.Th('1단계'), html.Th('2단계'), html.Th('3단계'),
         html.Th('상위부서ID'), html.Th('사번'), html.Th('성명'),
     ]))
     body_rows = []
@@ -2042,7 +2007,8 @@ def _dupe_modal_body(dupes: list[dict]):
         for row in g['rows']:
             body_rows.append(html.Tr([
                 html.Td(g['dep_id'], className='fw-semibold'),
-                html.Td(row['dep_code']), html.Td(row['pjt_part_name']), html.Td(row['dep_name']),
+                html.Td(row['dep_code']), html.Td(row['dep_1st_name']),
+                html.Td(row['dep_2nd_name']), html.Td(row['dep_3rd_name']),
                 html.Td(row['upper_dep_id']), html.Td(row['researcher_id']), html.Td(row['name']),
             ]))
     return html.Div([

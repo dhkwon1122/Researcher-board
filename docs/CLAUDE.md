@@ -10120,3 +10120,168 @@ nl_query_bar.py`의 `_handle_feedback()`/`_sync_feedback_ui()`를
 (이 세션엔 두 서버 모두 없음, 결정적 가짜 벡터로만 로직 검증), 실제
 브라우저에서 👍/👎 버튼 클릭·의견 입력창 토글·제출 후 메시지 표시까지의
 시각적 확인.
+
+## 2026-09-11: team_refer.csv — 부서/과제 2단 구분 → 1·2·3단계 부서명 3단
+체계로 전면 개편 + 부서ID/상위부서ID/조직 레벨 자동 계산
+
+배경: 지금까지 team_refer.csv는 "부서(dep_name)/과제·파트(pjt_part_name)"
+2단 구분이었는데, 사용자가 이를 "1단계부서명/2단계부서명/3단계부서명" 3단
+구분으로 바꾸기로 하고(부서-과제/파트 사이에 중간 계층이 하나 더 생기는
+구조), 여러 라운드의 설계 논의를 거쳐 확정했다.
+
+**핵심 설계 결정(사용자 확정, 여러 차례 논의 후)**:
+1. 저장 스키마는 "자기 레벨 이름만" 채운다(own-level-only) — 기존
+   pjt_part_name 컬럼이 각 조직 노드마다 자기 이름 하나만 담던 관례를
+   그대로 3단계로 확장. 조상 이름은 upper_dep_id를 따라가면 알 수 있으므로
+   중복 저장하지 않는다.
+2. **인텔이크(입력) 형태는 "전체 경로 포함"**: 각 레코드(팀참조시트.xlsx의
+   한 행이든, 과거 데이터 추출이든)가 자기 소속 경로를 자기 레벨까지 전부
+   채운다(예: 3단계 소속이면 1/2/3단계 이름을 전부 채움) — 옛 인력현황
+   파일이 직원 1명당 1행에 소속 전체 경로를 담던 방식과 동일해, 향후 과거
+   데이터를 반영할 때도 같은 함수를 재사용할 수 있다.
+3. **dep_id/upper_dep_id/team_layer는 더 이상 사람이 입력하는 값이 아니다** —
+   1/2/3단계 부서명 텍스트 경로에서 결정적으로(md5 해시 기반) 자동 계산한다.
+   핵심 근거(사용자 확정): "dep_id는 트리를 만들기 위한 정보로만 쓰이고,
+   시간이 지나 이름이 바뀌어도 '같은 조직'이라는 연속성을 이어갈 필요가
+   없다" — 그래서 매번 텍스트에서 새로 계산해도 안전하다. 다만 "이번
+   목록에 없는 옛 dep_id"를 그대로 두면 유령 노드가 남으므로, 저장 시점마다
+   자동으로 deleted='Y' 톰스톤 처리한다.
+4. dep_code(형제 정렬 순서)는 사내 규정이라 사람이 조정해야 하는 값 —
+   입력에 없으면 처음 등장한 순서를 기본값으로 채우고, 이미 정해진 값은
+   그대로 존중한다. work_type이 없으면(과거 데이터에서 알아낼 수 없음)
+   'R&D'로 기본 분류한다.
+
+**신규 `pipeline/team_hierarchy.py`**: 이 설계의 핵심 공용 모듈.
+`derive_hierarchy(records)` — "전체 경로 포함" 레코드 목록을 받아, 각
+레코드의 own_path와 모든 접두사(조상)를 조직 단위로 등록하고(예: 리프가
+(A,B,C)면 (A,)/(A,B)/(A,B,C) 3개 조직이 존재하는 것으로 취급), 조직
+단위별 1행(own-level-only) 저장 스키마로 변환한다. `_slug(path)`가
+`AUTO-{md5(path)[:10]}`로 dep_id를 결정적으로 계산하고, org_name_wd/
+work_type/dep_code/researcher_id/name/assignment_name 같은 "이 조직
+자체의 속성"은 그 조직이 어떤 레코드의 own_path와 정확히 일치할 때만
+채워진다(단순히 조상으로만 등장한 조직에는 안 붙음, 여러 레코드가 값을
+주면 첫 값 우선). `backfill_full_path(rows)` — derive_hierarchy()의
+역방향. own-level-only 저장 행을 받아 upper_dep_id 체인을 따라 올라가며
+조상 레벨 이름까지 채운 "전체 경로 포함" 형태로 되돌린다(관리자 그리드가
+저장된 조직을 다시 편집 가능한 형태로 불러올 때 사용 — derive_hierarchy()가
+결과를 다시 own-level-only로 압축하므로 왕복해도 멱등적).
+
+**`pipeline/process_team_refer.py`**: `_COL_MAP`을
+`{'비공식소속부서명':'org_name_wd', '구분':'work_type', '1단계부서명':
+'dep_1st_name', '2단계부서명':'dep_2nd_name', '3단계부서명':'dep_3rd_name',
+'조직코드':'dep_code', '사번':'researcher_id', '성명':'name',
+'직책':'assignment_name'}`로 교체(부서/과제·파트/부서ID/상위부서ID/조직
+레벨을 엑셀 입력 컬럼에서 제거). `build_rows_from_records()`가
+`team_hierarchy.derive_hierarchy()`로 라우팅하도록 재작성.
+`find_duplicate_dep_ids()`의 진단 컬럼도 새 필드명으로 갱신(다만
+derive_hierarchy()가 이미 경로별로 dep_id를 병합하므로 실제로 중복이
+발견되는 경우는 거의 없음 — 관리자 그리드처럼 입력이 항상
+derive_hierarchy()를 거친다는 보장이 없는 호출부를 위한 안전장치로
+유지). 신규 `tombstone_missing_dep_ids(result, valid_date)` — 이번 처리
+결과에 없는 "현재 살아있는" dep_id를 찾아 deleted='Y' 톰스톤 행을
+추가한다(process()의 xlsx 일괄 업로드와 services.team_refer_store의
+관리자 그리드 저장 양쪽이 공유).
+
+**`pipeline/rd_specialist_markdown.py`**: 신규 `own_level_name(node)` —
+team_refer 행(또는 build_org_tree() 노드)에서 자기 team_layer에 해당하는
+이름 하나만 골라 반환(own-level-only 저장 스키마 조회 공용 헬퍼).
+`org_tree_html()._label()`이 기존 `pjt_part_name` 대신 이 함수를 쓰도록
+교체. `build_org_tree()` docstring도 새 필드명(dep_1st_name/dep_2nd_name/
+dep_3rd_name)으로 갱신.
+
+**`services/similarity_map.py`**: team_refer의 dep_name/pjt_part_name을
+쓰던 함수 전부를 own-level-only 스키마에 맞게 재작성 — 핵심은 "own-level
+저장이라 평면 필드 비교로는 부서→과제 캐스케이딩이나 실제 연구원 매칭이
+안 되고, 조직도 트리를 걸어 조상-자손 관계를 따라가야 한다"는 점.
+- `org_tree_options()`: 라벨을 `own_level_name(node)`로 교체.
+- `department_filter_options()`: team_refer 1단계(team_layer==1) 행의
+  dep_1st_name 고유값(조직코드 오름차순).
+- `pjt_part_filter_options(dep_names=None)`: team_refer 3단계
+  (team_layer==3, 리프) 행의 dep_3rd_name 고유값. dep_names(1단계부서명)를
+  지정하면 조직도 트리를 걸어 그 부서 아래 리프만 남긴다(신규
+  `_collect_level3_nodes()`).
+- `org_codes_for_dep_names()`/`org_codes_for_pjt_part_names()`: 매칭되는
+  최상위/리프 노드 자신 + 하위 전체(`_collect_org_codes(...,
+  include_children=True)`)의 org_name_wd 집합으로 재작성.
+- `dep_name_for_org_code()`: org_code가 속한 조직도 트리를 위에서부터
+  훑으며 조상 체인의 1단계 이름을 물려받아 내려가는 방식으로 재작성
+  (own-level-only라 org_code가 달린 노드 자신에는 대체로 dep_1st_name이
+  비어 있음 — 리프 노드라서).
+- `org_code_label_maps()`: 조직도 트리 한 번 순회로 org_code →
+  (dep_1st_name, dep_3rd_name) 매핑을 만들도록 재작성(트리 순회 중
+  조상 dep_1st_name을 물려받으며 내려감).
+- `_team_refer_org_code_timeline()`/`researcher_ids_ever_matching_org_field()`
+  ("과거포함" 모드 부서/과제 필터, 2026-09-10 신설): own-level-only
+  저장이라 특정 과거 시점의 org_code에 대한 dep_1st_name/dep_3rd_name
+  (조상 이름 포함)을 알려면 "그 시점의 조직도"를 세워야 한다 — team_refer.csv
+  원본에 등장하는 서로 다른 valid_date마다 그 시점 기준 조직도를 한 번씩
+  세워(`_latest_rows_in_period` + `build_org_tree`) org_code별 타임라인을
+  구하도록 재작성(변경 시점 수만큼만 계산 — 보통 적음). field 인자도
+  `'dep_name'`/`'pjt_part_name'` → `'dep_1st_name'`/`'dep_3rd_name'`로 변경.
+- `people_team_dep_ids()`: dep_name 매칭 → 1단계(team_layer==1) 노드의
+  dep_1st_name 매칭으로 변경(그 외 하위 전체 포함 로직은 동일).
+
+**관리자 "팀/리더 참조" 그리드 UX — 3단계 체계에 맞춘 필연적 재설계**:
+dep_id/upper_dep_id/team_layer가 사람이 타이핑하는 엑셀 컬럼에서 자동
+계산 값으로 바뀌면서, 이 값들에 의존하던 그리드 기능 전체를 다시 설계해야
+했다(사용자가 명시적으로 요청한 범위는 아니지만, 컬럼 자체가 인텔이크
+스키마에서 사라져 기존 방식이 그대로는 성립할 수 없는 기술적 필연 —
+`pages/admin.py`가 계속 정상 동작하려면 반드시 필요했음).
+- `services/team_refer_store.py`: `KOREAN_COLUMNS`가 이제 9개 인텔이크
+  컬럼만(부서ID/상위부서ID/조직 레벨 없음). `list_editable_rows()`가
+  `read_team_refer()`(own-level-only) 결과를 `team_hierarchy.
+  backfill_full_path()`로 전체 경로 채운 뒤 그리드에 보여준다.
+  `save_snapshot(records, valid_date)` — `deleted_dep_ids` 매개변수를
+  제거하고, `ptr.tombstone_missing_dep_ids()`로 삭제 대상을 자동 판정하도록
+  변경(그리드는 매번 "현재 조직 전체"를 불러와 그 전체를 다시 저장하는
+  구조이므로 process()의 xlsx 일괄 업로드와 동일한 원리가 적용됨).
+  `_ALL_VALUE_COLUMNS`(DB 스키마)를 `team_hierarchy.FIELDS` 기반으로 재정의.
+- `pages/admin.py`: `_suggest_next_dep_id()`(부서ID 다음 번호 자동 제안,
+  2026-09-02 추가 기능)와 `team-refer-loaded-dep-ids` Store(부서ID 삭제
+  diff 추적)를 완전히 제거 — 부서ID가 편집 컬럼이 아니게 되며 둘 다
+  성립하지 않는 기능이 됐다. `_AUTOFILL_GUIDE_COLUMNS`(자동채움 가이드)도
+  1/2/3단계부서명 기준으로 갱신, 상위부서ID 특수 케이스 제거.
+  `team_refer_save()`가 "1단계부서명 비어있는 행만 제외"로 필터링 기준을
+  바꾸고 upper_dep_id 존재성 검증 로직(더 이상 사람이 입력 안 함)을 제거.
+  `_dupe_modal_body()`의 표시 컬럼도 새 필드명으로 갱신. 안내 문구도
+  "1단계부서명은 필수, 부서ID/상위부서ID/조직 레벨은 경로에서 자동 계산"
+  으로 교체.
+
+**`pages/researcher_list.py`**: `researcher_ids_ever_matching_org_field()`
+호출 2곳의 field 인자를 `'dep_name'`/`'pjt_part_name'` →
+`'dep_1st_name'`/`'dep_3rd_name'`으로 변경.
+
+**`services/data_labels.py`**: `dep_1st_name`/`dep_2nd_name`/`dep_3rd_name`
+라벨 추가(기존 `dep_name` 항목은 `project_confl_address.csv`가 여전히
+이 필드명을 쓰고 있어 삭제하지 않고 그대로 유지 — 무관한 별개 테이블).
+
+**의도적으로 범위에서 뺀 것**: `scripts/build_past_team_refer.py`는
+건드리지 않았다 — 이 스크립트는 2026-08-31~09-02에 걸쳐 사용자와 별도로
+확정한 완전히 다른 목적(월별 "End of Month Headcount" 원본에서 조직
+개편 이력을 감사용으로 추출해 `<원본파일명>_team_refer.csv`/
+`team_change.csv`를 만드는 독립 리포팅 도구)을 가진 스크립트로, 이번
+team_refer.csv 라이브 파이프라인 재설계와는 무관한 별개 산출물이다
+(파일명이 우연히 비슷할 뿐 서로 다른 스키마·용도).
+
+**검증**: `team_hierarchy.derive_hierarchy()`/`backfill_full_path()`를
+3단계 합성 경로 데이터로 직접 호출해 own-level-only 압축과 전체 경로
+복원이 서로 정확히 역함수 관계인 것(왕복 후에도 같은 dep_id) 확인.
+`process_team_refer.py`의 전체 흐름(1차 업로드 → 조직도 생성 → 관리자
+그리드 backfill → 특정 리프 삭제 → 재저장)을 임시 디렉터리로 end-to-end
+실행 — 삭제된 리프의 dep_id가 정확히 톰스톤 처리되고(deleted='Y'), 남은
+조상 노드는 그대로 "현재" 상태로 유지되는 것을 확인. `services/
+similarity_map.py`의 재작성된 함수 전부(`org_tree_options`/
+`department_filter_options`/`pjt_part_filter_options`(부서 지정 있음/
+없음/리프가 없는 부서)/`org_codes_for_dep_names`/`org_codes_for_pjt_part_names`/
+`dep_name_for_org_code`/`org_code_label_maps`/`people_team_dep_ids`)을
+People팀(2단 중첩) + 반도체연구소(3단 중첩, 파트 2개) 합성 조직도로 직접
+호출해 전부 기대한 결과 확인. `python3 -c "import app"`로 전체 앱(7개
+페이지) 임포트 확인, 변경된 모든 파일 `py_compile` 통과.
+
+**미검증**: 실제 원본 `팀참조시트.xlsx`(전체 경로 포함 형태로 준비 예정)로
+웹 업로드/CLI 실행 → 화면 렌더링까지 브라우저로 최종 확인(이 세션엔 실제
+원본 파일이 없어 합성 데이터로만 검증), 실제 브라우저에서 관리자 그리드
+조작(행 추가/삭제/저장/자동채움 가이드) 확인, 과거 데이터 추출 자동화는
+이번 범위에 포함되지 않음(사용자가 "전체 경로 포함 형태로 준비 가능"이라고
+확인한 것은 향후 과거 데이터 반영 시에도 이 모듈을 그대로 재사용할 수
+있다는 뜻이며, 실제 과거 데이터 추출·반영 작업 자체는 별도로 진행 필요).

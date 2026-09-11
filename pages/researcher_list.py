@@ -94,8 +94,8 @@ def _build_summary_df(current_only: bool = True, period: tuple[date, date] | Non
 
     # 직책 = team_refer의 assignment_name(researcher_id 기준, 조직장급만
     # 등록돼 있어 나머지는 매핑이 없음 — 그 경우 "-"). 부서/과제(파트)
-    # 표시값 = researchers.csv의 org_code를 team_refer의 dep_name/
-    # pjt_part_name으로 매핑(검색 기준의 부서/과제 필터와 동일한 기준으로
+    # 표시값 = researchers.csv의 org_code를 team_refer의 dep_1st_name/
+    # dep_3rd_name으로 매핑(검색 기준의 부서/과제 필터와 동일한 기준으로
     # 통일 — 사용자 확정). team_refer에 매핑이 없는 org_code는 원본
     # department/org_code 값을 그대로 보여준다(빈 칸으로 두면 데이터
     # 누락처럼 보이므로 — 사용자 확정).
@@ -909,11 +909,11 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, 
         records = display_df.to_dict('records')
         return records, columns, tooltip_header, _build_tooltip_data(records), [], style_data_conditional
 
-    # 부서/과제·파트 필터는 team_refer의 dep_name/pjt_part_name을 라벨로 쓰지만,
-    # 실제 매칭은 항상 org_name_wd(=researchers.csv의 org_code, 화면에는 안
-    # 보이는 내부 컬럼 '_org_code')로 한다 — 라벨 문자열이 researchers.csv
+    # 부서/과제·파트 필터는 team_refer의 dep_1st_name/dep_3rd_name을 라벨로
+    # 쓰지만, 실제 매칭은 항상 org_name_wd(=researchers.csv의 org_code, 화면에는
+    # 안 보이는 내부 컬럼 '_org_code')로 한다 — 라벨 문자열이 researchers.csv
     # 표기와 다를 수 있어 라벨로 직접 비교하지 않는다(services.similarity_map
-    # 참고). '과제' 컬럼 자체는 이제 표시용 pjt_part_name 라벨이라 이 매칭에
+    # 참고). '과제' 컬럼 자체는 이제 표시용 dep_3rd_name 라벨이라 이 매칭에
     # 쓸 수 없다(사용자 확정 — 명단 '과제/파트' 열을 team_refer 라벨로 표시).
     # period가 주어지면(누적기준 + 기간 지정) 그 기간 기준 team_refer로
     # 매칭한다(2026-08-29 추가) — 선택한 부서/과제 이름이 그 시점에 실제로
@@ -928,14 +928,14 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, 
             # 2026-09-10). _org_code는 researchers.csv의 현재 org_code
             # 하나뿐이라 이 판정에 못 쓰고, researchers_history.csv 전체
             # 이력 + team_refer 전체 이력을 함께 보는 전용 함수를 쓴다.
-            matched_ids = similarity_map.researcher_ids_ever_matching_org_field('dep_name', dept)
+            matched_ids = similarity_map.researcher_ids_ever_matching_org_field('dep_1st_name', dept)
             display_df = display_df[display_df['researcher_id'].isin(matched_ids)]
     if project:
         if filters_active:
             org_codes = similarity_map.org_codes_for_pjt_part_names(project, period=period)
             display_df = display_df[display_df['_org_code'].isin(org_codes)]
         elif is_cumulative:
-            matched_ids = similarity_map.researcher_ids_ever_matching_org_field('pjt_part_name', project)
+            matched_ids = similarity_map.researcher_ids_ever_matching_org_field('dep_3rd_name', project)
             display_df = display_df[display_df['researcher_id'].isin(matched_ids)]
     if pos and filters_active:
         display_df = display_df[display_df['직급'].isin(pos)]

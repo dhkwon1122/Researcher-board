@@ -23,7 +23,12 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, Side
 from openpyxl.utils import get_column_letter
 
-from pipeline.rd_specialist_markdown import build_org_tree, read_team_refer
+from pipeline.rd_specialist_markdown import (
+    _latest_rows_in_period,
+    build_org_tree,
+    own_level_name,
+    read_team_refer,
+)
 from pipeline.researcher_fit import _text_hash, researcher_profile_text
 from services import job_category as job_category_service
 from services import researcher_profile_export as export
@@ -288,8 +293,9 @@ def org_tree_options() -> list:
     """부서 선택 드롭다운 옵션 — 조직도를 들여쓰기로 평탄화해 계층이 눈에
     보이도록 한다. value는 dep_id — dep_id가 없는 노드는 하위 연구원을
     org_code로 특정할 수 없으므로 선택지에서 뺀다(자식은 계속 순회).
-    라벨은 pjt_part_name만 사용한다(rd_specialist_markdown.org_tree_html과
-    동일한 규칙 — dep_name은 트리 라벨에 관여하지 않는다)."""
+    라벨은 own_level_name()(자기 team_layer에 해당하는 dep_1st_name/
+    dep_2nd_name/dep_3rd_name 하나)만 사용한다(rd_specialist_markdown.
+    org_tree_html._label과 동일한 규칙)."""
     options = []
 
     def _walk(nodes, depth):
@@ -297,7 +303,7 @@ def org_tree_options() -> list:
             dep_id = (node.get('dep_id') or '').strip()
             if dep_id:
                 indent = '　' * depth
-                head = node.get('pjt_part_name') or ''
+                head = own_level_name(node)
                 who = ' '.join(v for v in (node.get('assignment_name'), node.get('name')) if v)
                 label = f'{indent}{head}' + (f' ({who})' if who else '')
                 options.append({'label': label, 'value': dep_id})
@@ -346,138 +352,203 @@ def researchers_under_departments(dep_ids: list, include_children: bool) -> list
 
 
 # ─── "연구원 명단" 화면 부서/과제·파트 검색 필터(pages/researcher_list.py) ──────
-# team_refer의 dep_name/pjt_part_name은 조직도 트리 구조(dep_id/upper_dep_id)와
-# 무관한 평면(flat) 태그다 — 옵션 목록은 team_refer 원본 행을 그대로 groupby해
-# 만들고, 실제 연구원 필터링은 항상 org_name_wd(=researchers.csv의 org_code)
-# 매칭을 거친다(라벨 문자열과 researchers.csv 값이 다를 수 있어 라벨로 직접
-# 비교하지 않는다 — pages/researcher_list.py의 기존 _project_options() 주석
-# 참고: 서로 다른 원천의 표기가 항상 일치한다는 보장이 없다).
+# 3단계 부서 체계(2026-09-11) 도입 이후 team_refer.csv는 own-level-only 저장
+# 스키마다(team_hierarchy.py 참고) — 각 행은 자기 team_layer에 해당하는
+# dep_1st_name/dep_2nd_name/dep_3rd_name 중 하나만 채우고 나머지는 비운다.
+# '부서' 필터는 1단계(team_layer==1) 행의 dep_1st_name만, '과제/파트' 필터는
+# 3단계(team_layer==3) 행의 dep_3rd_name만 대상으로 한다 — 예전 2단
+# 체계(dep_name/pjt_part_name)처럼 모든 행에 두 값이 함께 채워져 있지 않으므로,
+# 부서→과제/파트 캐스케이딩이나 실제 연구원 매칭 모두 조직도 트리를 걸어
+# 조상-자손 관계를 따라가야 한다(단순 평면 필드 비교 불가).
 
 def _labels_sorted_by_dep_code(rows: list, label_key: str) -> list:
-    """rows에서 label_key(dep_name 또는 pjt_part_name) 고유값을, 그 값을 가진
-    행들 중 가장 앞선(가장 작은) dep_code 기준 오름차순으로 정렬해 반환한다
-    — 같은 이름이 여러 행에 걸쳐 있어도(예: 여러 파트가 같은 dep_name을
-    공유) 조직도 상 가장 먼저 나오는 위치로 정렬 순서를 정한다."""
+    """rows(딕셔너리 목록)에서 label_key 고유값을, 그 값을 가진 행들 중 가장
+    앞선(가장 작은) dep_code 기준 오름차순으로 정렬해 반환한다 — 같은 이름이
+    여러 행에 걸쳐 있어도 조직도 상 가장 먼저 나오는 위치로 정렬 순서를
+    정한다."""
     best_code: dict[str, str] = {}
     for r in rows:
         name = (r.get(label_key) or '').strip()
         if not name:
             continue
-        code = (r.get('dep_code') or '').strip()
+        code = str(r.get('dep_code') or '').strip()
         if name not in best_code or code < best_code[name]:
             best_code[name] = code
     return sorted(best_code, key=lambda n: best_code[n])
 
 
+def _rows_at_layer(rows: list, layer: str) -> list:
+    """team_layer가 정확히 layer(문자열, 예: '1'/'3')인 행만 남긴다 —
+    own-level-only 저장 스키마에서 특정 레벨의 이름 필드(dep_1st_name 등)가
+    실제로 채워진 행만 고르는 용도."""
+    return [r for r in rows if str(r.get('team_layer') or '').strip() == layer]
+
+
+def _collect_level3_nodes(node: dict, out: list) -> None:
+    """node(build_org_tree() 노드) 이하에서 team_layer==3(리프, dep_3rd_name
+    보유)인 노드만 재귀적으로 모은다 — org_tree_options()가 만드는 children
+    구조를 그대로 재사용."""
+    if str(node.get('team_layer') or '') == '3':
+        out.append(node)
+    for child in node.get('children') or []:
+        _collect_level3_nodes(child, out)
+
+
 def department_filter_options(period: tuple | None = None) -> list:
-    """'부서' 드롭다운 옵션 — team_refer의 dep_name 고유값, 조직코드(dep_code)
-    오름차순 정렬(사용자 확정). period=(시작일, 종료일)을 주면 그 기간 기준
-    (그 기간 안 dep_id별 최신 스냅샷) team_refer로 옵션을 만든다(2026-08-29
-    추가, pages/researcher_list.py의 '누적기준 + 기간 지정' 조회) — 생략하면
-    기존처럼 오늘 기준."""
-    names = _labels_sorted_by_dep_code(read_team_refer(DATA_DIR, period=period), 'dep_name')
+    """'부서' 드롭다운 옵션 — team_refer 1단계(team_layer==1) 행의
+    dep_1st_name 고유값, 조직코드(dep_code) 오름차순 정렬(사용자 확정).
+    period=(시작일, 종료일)을 주면 그 기간 기준(그 기간 안 dep_id별 최신
+    스냅샷) team_refer로 옵션을 만든다(2026-08-29 추가, pages/researcher_list.py
+    의 '누적기준 + 기간 지정' 조회) — 생략하면 기존처럼 오늘 기준."""
+    rows = _rows_at_layer(read_team_refer(DATA_DIR, period=period), '1')
+    names = _labels_sorted_by_dep_code(rows, 'dep_1st_name')
     return [{'label': n, 'value': n} for n in names]
 
 
 def pjt_part_filter_options(dep_names=None, period: tuple | None = None) -> list:
-    """'과제/파트' 드롭다운 옵션 — team_refer의 pjt_part_name 고유값,
-    조직코드(dep_code) 오름차순 정렬(사용자 확정). dep_names를 지정하면 그
-    부서(dep_name)에 속한 행만 남긴다(부서 선택 시 캐스케이딩,
-    pages/researcher_list.py의 update_project_options 콜백). period는
-    department_filter_options()와 동일(2026-08-29 추가)."""
-    rows = read_team_refer(DATA_DIR, period=period)
+    """'과제/파트' 드롭다운 옵션 — team_refer 3단계(team_layer==3, 리프) 행의
+    dep_3rd_name 고유값, 조직코드(dep_code) 오름차순 정렬(사용자 확정).
+    dep_names(1단계부서명 목록)를 지정하면 그 부서 아래(조직도 트리 기준)에
+    있는 리프만 남긴다(부서 선택 시 캐스케이딩, pages/researcher_list.py의
+    update_project_options 콜백) — own-level-only 저장이라 평면 필드 비교로는
+    안 되므로 조직도를 걸어 자손을 모은다. period는 department_filter_options()
+    와 동일(2026-08-29 추가)."""
+    tree = build_org_tree(read_team_refer(DATA_DIR, period=period))
     if dep_names:
         wanted = {dep_names} if isinstance(dep_names, str) else set(dep_names)
-        rows = [r for r in rows if (r.get('dep_name') or '').strip() in wanted]
-    names = _labels_sorted_by_dep_code(rows, 'pjt_part_name')
+        leaves: list = []
+        for node in tree:
+            if (node.get('dep_1st_name') or '').strip() in wanted:
+                _collect_level3_nodes(node, leaves)
+        candidates = leaves
+    else:
+        candidates: list = []
+        for node in tree:
+            _collect_level3_nodes(node, candidates)
+    names = _labels_sorted_by_dep_code(candidates, 'dep_3rd_name')
     return [{'label': n, 'value': n} for n in names]
 
 
 def org_codes_for_dep_names(dep_names, period: tuple | None = None) -> set:
-    """선택된 dep_name(들)에 해당하는 team_refer 행들의 org_name_wd 집합.
+    """선택된 1단계부서명(dep_names)에 해당하는 최상위 조직 노드 자신 +
+    하위 전체(조직도 트리, own-level-only 저장이라 평면 매칭 불가 —
+    _collect_org_codes(include_children=True) 재사용)의 org_name_wd 집합.
     period=(시작일, 종료일)을 주면 그 기간 기준(그 기간 안 dep_id별 최신
     스냅샷)으로 매칭한다(2026-08-29 추가, pages/researcher_list.py의
     '누적기준 + 기간 지정' 조회) — 생략하면 기존처럼 오늘 기준."""
     if not dep_names:
         return set()
     wanted = {dep_names} if isinstance(dep_names, str) else set(dep_names)
-    return {
-        (r.get('org_name_wd') or '').strip()
-        for r in read_team_refer(DATA_DIR, period=period)
-        if (r.get('dep_name') or '').strip() in wanted
-    } - {''}
+    tree = build_org_tree(read_team_refer(DATA_DIR, period=period))
+    codes: set = set()
+    for node in tree:
+        if (node.get('dep_1st_name') or '').strip() in wanted:
+            codes |= _collect_org_codes(node, include_children=True)
+    return codes
 
 
 def dep_name_for_org_code(org_code: str) -> str:
-    """researchers.csv의 org_code 하나를 받아, 그 org_code와 매칭되는
-    team_refer 행의 dep_name을 반환한다(없으면 빈 문자열) — 연구원 개별
-    프로필 화면의 '부서' 드롭다운 기본 선택값을 구할 때 쓴다(연구원 명단의
-    '부서' 필터와 동일한 team_refer 기준으로 맞추기 위함)."""
+    """researchers.csv의 org_code 하나를 받아, 그 org_code가 속한 조직도
+    트리 상의 1단계부서명(dep_1st_name)을 반환한다(없으면 빈 문자열) —
+    연구원 개별 프로필 화면의 '부서' 드롭다운 기본 선택값을 구할 때 쓴다
+    (연구원 명단의 '부서' 필터와 동일한 team_refer 1단계 기준으로 맞추기
+    위함). own-level-only 저장이라 org_code가 달린 노드 자신에는 대체로
+    dep_1st_name이 비어 있어(리프 노드라서), 조직도를 위에서부터 훑으며
+    조상 체인의 1단계 이름을 물려받아 내려간다."""
     org_code = (org_code or '').strip()
     if not org_code:
         return ''
-    for r in read_team_refer(DATA_DIR):
-        if (r.get('org_name_wd') or '').strip() == org_code:
-            return (r.get('dep_name') or '').strip()
-    return ''
+
+    def _find(nodes: list, ancestor_dep1: str) -> str:
+        for node in nodes:
+            current_dep1 = (node.get('dep_1st_name') or '').strip() or ancestor_dep1
+            if (node.get('org_name_wd') or '').strip() == org_code:
+                return current_dep1
+            found = _find(node.get('children') or [], current_dep1)
+            if found:
+                return found
+        return ''
+
+    return _find(_org_tree(), '')
 
 
 def org_codes_for_pjt_part_names(pjt_part_names, period: tuple | None = None) -> set:
-    """선택된 pjt_part_name(들)에 해당하는 team_refer 행들의 org_name_wd 집합.
-    period는 org_codes_for_dep_names()와 동일(2026-08-29 추가)."""
+    """선택된 3단계부서명(pjt_part_names, 리프)에 해당하는 조직도 노드 자신 +
+    하위 전체의 org_name_wd 집합. period는 org_codes_for_dep_names()와
+    동일(2026-08-29 추가)."""
     if not pjt_part_names:
         return set()
     wanted = {pjt_part_names} if isinstance(pjt_part_names, str) else set(pjt_part_names)
-    return {
-        (r.get('org_name_wd') or '').strip()
-        for r in read_team_refer(DATA_DIR, period=period)
-        if (r.get('pjt_part_name') or '').strip() in wanted
-    } - {''}
+    tree = build_org_tree(read_team_refer(DATA_DIR, period=period))
+    codes: set = set()
+
+    def _walk(nodes: list) -> None:
+        for node in nodes:
+            if str(node.get('team_layer') or '') == '3' and (node.get('dep_3rd_name') or '').strip() in wanted:
+                codes.update(_collect_org_codes(node, include_children=True))
+            _walk(node.get('children') or [])
+
+    _walk(tree)
+    return codes
 
 
 def _team_refer_org_code_timeline() -> dict:
-    """team_refer.csv 원본(축약 없이 전체 이력)을 org_code(=org_name_wd)별로
-    묶어 valid_date 오름차순 [(valid_date_tuple, dep_name, pjt_part_name), ...]
-    리스트로 만든다 — researcher_ids_ever_matching_org_field() 전용
-    (2026-09-10). read_team_refer()(dep_id별 "현재/특정 시점 하나"만 남기는
-    축약)와 달리, 한 org_code가 시간에 따라 어떤 이름들을 거쳐왔는지 전체
-    타임라인이 필요해서 원본 read_processed('team_refer')를 그대로 쓴다."""
+    """org_code(=org_name_wd)별로 [(valid_date_tuple, dep_1st_name,
+    dep_3rd_name), ...] 타임라인을 만든다 — researcher_ids_ever_matching_org_field()
+    전용(2026-09-10). team_refer.csv는 own-level-only 저장이라(team_hierarchy.py
+    참고) 특정 시점의 org_code에 대한 dep_1st_name/dep_3rd_name(조상 이름
+    포함)을 알려면 "그 시점의 조직도"를 세워 조상 체인을 따라가야 한다 —
+    원본에 등장하는 서로 다른 valid_date마다 그 시점 기준 조직도를 한 번씩
+    세워(_latest_rows_in_period + build_org_tree) org_code별 (dep_1st_name,
+    dep_3rd_name)을 구해 누적한다(변경 시점 수만큼만 계산 — 보통 적음)."""
     df = read_processed('team_refer')
-    if df.empty or not {'org_name_wd', 'valid_year', 'valid_month', 'valid_day'} <= set(df.columns):
+    if df.empty or not {'valid_year', 'valid_month', 'valid_day'} <= set(df.columns):
         return {}
-    timeline: dict = {}
-    for _, r in df.iterrows():
-        org_code = str(r.get('org_name_wd', '') or '').strip()
-        if not org_code:
-            continue
+    all_rows = df.to_dict('records')
+
+    dates: set = set()
+    for r in all_rows:
         try:
-            key = (int(r.get('valid_year')), int(r.get('valid_month')), int(r.get('valid_day')))
+            dates.add((int(r.get('valid_year')), int(r.get('valid_month')), int(r.get('valid_day'))))
         except (TypeError, ValueError):
             continue
-        timeline.setdefault(org_code, []).append(
-            (key, (r.get('dep_name') or '').strip(), (r.get('pjt_part_name') or '').strip())
-        )
+
+    timeline: dict = {}
+
+    def _walk(nodes: list, ancestor_dep1: str, key: tuple) -> None:
+        for node in nodes:
+            dep1 = (node.get('dep_1st_name') or '').strip() or ancestor_dep1
+            org_code = (node.get('org_name_wd') or '').strip()
+            if org_code:
+                dep3 = (node.get('dep_3rd_name') or '').strip()
+                timeline.setdefault(org_code, []).append((key, dep1, dep3))
+            _walk(node.get('children') or [], dep1, key)
+
+    for key in sorted(dates):
+        snapshot_rows = _latest_rows_in_period(all_rows, key, key)
+        _walk(build_org_tree(snapshot_rows), '', key)
+
     for entries in timeline.values():
         entries.sort(key=lambda t: t[0])
     return timeline
 
 
 def _dep_pjt_name_at(entries: list, as_of_key: tuple) -> tuple[str, str]:
-    """entries(valid_date 오름차순 [(key, dep_name, pjt_part_name), ...])에서
-    as_of_key(연,월,일) 이하인 것 중 가장 최근 항목의 (dep_name,
-    pjt_part_name)을 반환한다. 해당 시점보다 이전 이력이 아예 없으면
+    """entries(valid_date 오름차순 [(key, dep_1st_name, dep_3rd_name), ...])에서
+    as_of_key(연,월,일) 이하인 것 중 가장 최근 항목의 (dep_1st_name,
+    dep_3rd_name)을 반환한다. 해당 시점보다 이전 이력이 아예 없으면
     ('', '')."""
     result = ('', '')
-    for key, dep_name, pjt_name in entries:
+    for key, dep1, dep3 in entries:
         if key <= as_of_key:
-            result = (dep_name, pjt_name)
+            result = (dep1, dep3)
         else:
             break
     return result
 
 
 def researcher_ids_ever_matching_org_field(field: str, names) -> set:
-    """names(dep_name 또는 pjt_part_name 목록) 중 하나에 재직 기간 중 한
+    """names(dep_1st_name 또는 dep_3rd_name 목록) 중 하나에 재직 기간 중 한
     번이라도 속했던 적이 있는 researcher_id 집합(2026-09-10 — 사용자 요청:
     "누적기준(과거포함)에서 부서 필터를 기간 지정 없이 켜면, 당시 팀 참조
     데이터로 부서를 알 수 있지 않을까"). pages/researcher_list.py의 '과거
@@ -487,9 +558,9 @@ def researcher_ids_ever_matching_org_field(field: str, names) -> set:
 
     researchers_history.csv의 월별 (researcher_id, org_code, valid_year,
     valid_month) 스냅샷마다, 그 시점(그 달 말일로 간주) 기준
-    _team_refer_org_code_timeline()으로 org_code → dep_name/pjt_part_name을
+    _team_refer_org_code_timeline()으로 org_code → dep_1st_name/dep_3rd_name을
     구해 names와 비교한다 — 한 번이라도 일치하면 그 사람을 포함시킨다.
-    field: 'dep_name' 또는 'pjt_part_name'."""
+    field: 'dep_1st_name' 또는 'dep_3rd_name'."""
     if not names:
         return set()
     wanted = {names} if isinstance(names, str) else set(names)
@@ -503,7 +574,7 @@ def researcher_ids_ever_matching_org_field(field: str, names) -> set:
         return set()
 
     matched: set = set()
-    name_idx = 0 if field == 'dep_name' else 1
+    name_idx = 0 if field == 'dep_1st_name' else 1
     for _, row in hist.iterrows():
         rid = str(row.get('researcher_id', '') or '').strip()
         if not rid or rid in matched:
@@ -544,26 +615,33 @@ def title_by_researcher_id(period: tuple | None = None) -> dict:
 
 def org_code_label_maps(period: tuple | None = None) -> tuple[dict, dict]:
     """researchers.csv의 org_code(=team_refer의 org_name_wd) 전체를 한 번에
-    dep_name/pjt_part_name으로 매핑하는 dict 2개(org_code → dep_name,
-    org_code → pjt_part_name)를 team_refer 한 번 순회로 만든다.
-    dep_name_for_org_code()처럼 한 건씩 team_refer 전체를 매번 다시 훑는
-    방식은 명단처럼 수백 행을 한꺼번에 매핑할 때(수백 × team_refer 전체
-    스캔) 느리므로, 이 dict를 한 번만 만들어 재사용하는 용도(연구원 명단
-    화면 참고). 같은 org_code가 여러 team_refer 행에 걸쳐 있으면(정상
-    데이터에서는 드묾) dep_name_for_org_code()와 동일하게 먼저 나온 값을
-    쓴다. 매핑이 없는 org_code는 두 dict 어디에도 키가 생기지 않는다 —
-    호출부가 `.get(org_code, 원본값)`으로 폴백을 직접 처리한다.
+    1단계부서명(dep_1st_name)/3단계부서명(dep_3rd_name)으로 매핑하는 dict
+    2개(org_code → dep_1st_name, org_code → dep_3rd_name)를 조직도 트리
+    한 번 순회로 만든다(own-level-only 저장이라 조상 체인을 따라가야
+    dep_1st_name을 알 수 있음 — dep_name_for_org_code()와 동일한 원리).
+    dep_name_for_org_code()처럼 org_code 1건씩 트리를 매번 다시 훑는 방식은
+    명단처럼 수백 행을 한꺼번에 매핑할 때(수백 × 트리 전체 스캔) 느리므로,
+    이 dict를 한 번만 만들어 재사용하는 용도(연구원 명단 화면 참고). 같은
+    org_code가 여러 노드에 걸쳐 있으면(정상 데이터에서는 드묾)
+    dep_name_for_org_code()와 동일하게 먼저 나온 값을 쓴다. 매핑이 없는
+    org_code는 두 dict 어디에도 키가 생기지 않는다 — 호출부가
+    `.get(org_code, 원본값)`으로 폴백을 직접 처리한다.
 
     period=(시작일, 종료일)을 주면 그 기간 기준(그 기간 안 dep_id별 최신
     스냅샷)으로 매핑한다(2026-08-29 추가) — 생략하면 기존처럼 오늘 기준."""
     dep_map: dict = {}
     pjt_map: dict = {}
-    for r in read_team_refer(DATA_DIR, period=period):
-        org_code = (r.get('org_name_wd') or '').strip()
-        if not org_code:
-            continue
-        dep_map.setdefault(org_code, (r.get('dep_name') or '').strip())
-        pjt_map.setdefault(org_code, (r.get('pjt_part_name') or '').strip())
+
+    def _walk(nodes: list, ancestor_dep1: str) -> None:
+        for node in nodes:
+            dep1 = (node.get('dep_1st_name') or '').strip() or ancestor_dep1
+            org_code = (node.get('org_name_wd') or '').strip()
+            if org_code:
+                dep_map.setdefault(org_code, dep1)
+                pjt_map.setdefault(org_code, (node.get('dep_3rd_name') or '').strip())
+            _walk(node.get('children') or [], dep1)
+
+    _walk(build_org_tree(read_team_refer(DATA_DIR, period=period)), '')
     return dep_map, pjt_map
 
 
@@ -621,23 +699,22 @@ PEOPLE_TEAM_DEP_NAME = 'People팀'
 
 
 def people_team_dep_ids() -> set:
-    """"People팀"으로 태그된 조직도 노드(dep_name 기준)와 그 하위 전체
-    과제/파트의 dep_id 집합 — 평가등급 열람 제외 체크박스(pages/admin.py,
+    """"People팀"으로 태그된 조직도 1단계 노드(dep_1st_name 기준)와 그 하위
+    전체 과제/파트의 dep_id 집합 — 평가등급 열람 제외 체크박스(pages/admin.py,
     2026-08-31 — "People팀 평가등급 제외"만 지원하도록 단순화)가 이 값을
     그대로 eval_excluded_dep_ids에 저장한다.
 
-    dep_name은 조직도 트리 구조(dep_id/upper_dep_id)와 무관한 평면 태그라
-    (org_codes_for_dep_names() 주석 참고) 하위 과제/파트 행이 자동으로
-    같은 dep_name을 갖지 않는다 — 그래서 단순 dep_name 매칭이 아니라
-    조직도 트리를 걸어, dep_name이 "People팀"인 노드를 찾은 뒤 그 노드의
-    하위 전체(_collect_org_codes(..., include_children=True), researchers_
+    team_refer.csv는 own-level-only 저장이라(team_hierarchy.py 참고)
+    dep_1st_name은 team_layer==1 노드에만 채워져 있다 — 조직도 트리를 걸어
+    dep_1st_name이 "People팀"인 최상위 노드를 찾은 뒤 그 노드의 하위 전체
+    (_collect_org_codes(..., include_children=True), researchers_
     under_departments()가 쓰는 것과 동일한 헬퍼)를 모아야 한다(사용자 확정
     2026-08-31 — "부서가 People팀일 경우 하위 과제/파트가 포함되도록")."""
     org_codes: set = set()
 
     def _walk(nodes):
         for node in nodes:
-            if (node.get('dep_name') or '').strip() == PEOPLE_TEAM_DEP_NAME:
+            if (node.get('dep_1st_name') or '').strip() == PEOPLE_TEAM_DEP_NAME:
                 org_codes.update(_collect_org_codes(node, include_children=True))
             else:
                 _walk(node.get('children') or [])

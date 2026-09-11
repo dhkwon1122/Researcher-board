@@ -89,7 +89,7 @@ def _locked_block(label: str = '', *, icon_only: bool = False):
 def _opt(row, dep_map: dict, pjt_map: dict):
     """부서/과제 표시는 "연구원 명단" 화면(services.similarity_map.
     org_code_label_maps())과 완전히 동일한 규칙을 쓴다 — org_code로
-    team_refer(dep_name/pjt_part_name)를 우선 찾고, 매핑이 없으면(신규
+    team_refer(dep_1st_name/dep_3rd_name)를 우선 찾고, 매핑이 없으면(신규
     입사자 등 아직 팀/리더 참조에 등록 안 된 조직) 부서는 researchers.csv
     원본 department, 과제는 원본 org_code 코드값으로 그대로 폴백한다
     (사용자 확정 2026-08-31 — 이전엔 이 함수가 team_refer 매핑을 아예
