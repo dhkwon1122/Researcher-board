@@ -26,13 +26,14 @@ team_refer 인텔이크 형식(pipeline/process_team_refer.py의 _COL_MAP과 동
 같은 값을 두 인텔이크 컬럼(비공식소속부서명/3단계부서명)에 그대로 복제해
 넣는다(2026-09-11 사용자 확정 — "org_name_wd : 현재/과거 동일하게 유지").
 
-나머지 컬럼:
-  1단계부서명 → 그대로(원본 헤더가 비어 있으면 아래 백필 단계로 채움) —
-    단, 1단계부서명이 "대표이사"/"삼성전자"/"SAIT"면 그 자체로 이미
-    최상위 단위라 정밀한 하위 이름이 아니므로 2단계부서명(현소속부서명)
-    값으로 교체한다(_ROOT_MARKERS_DIRECT, 2026-09-11 사용자 확정 —
-    2단계부서명이 이미 그 값과 같으면(예: "SAIT"/"SAIT") 자기 자신으로
-    교체돼 결과적으로 그대로 유지된다).
+나머지 컬럼(2026-09-11 (4) 재정정 — 보조 매핑표/백필 로직 전면 재작성):
+  1단계부서명 → 원본 값이 "대표이사"/"삼성전자"면 무조건 2단계부서명
+    (현소속부서명) 값으로 교체(_ROOT_MARKERS_DIRECT). "종합기술원"/"SAIT"
+    면 아래 보조 매핑표에서 2단계부서명으로 조회한 1단계부서명 값으로
+    교체하고, 매핑표에 없으면 2단계부서명 값으로 교체(_ROOT_MARKERS_LOOKUP).
+    그 외(4개 marker가 아닌 값, 빈 값 포함)는 원본 값을 그대로 둔다(빈
+    값이어도 별도 백필을 하지 않음 — 사용자 확정, 예전의 "1단계가 비어
+    있으면 채운다"는 백필 개념 자체를 없앴다).
   2단계부서명 ← 원본의 "현소속부서명" 그대로(1단계 교체와 무관하게 항상
     원본 값 유지 — 위 교체 규칙은 1단계만 바꾼다).
   구분/조직코드/사번/성명/직책 → 전부 빈 값(사용자 확정 — 인력현황
@@ -98,21 +99,18 @@ _INTAKE_COLUMNS = [
 ]
 
 # "이미 최상위" 마커 — build_past_team_refer.py의 ROOT_MARKERS와 동일 개념.
-# _ROOT_MARKERS_B: 1단계부서명이 비어 있을 때(백필) 2단계부서명이 이 값이면
-#   그 값 자체를 1단계로 채운다(을 조회 불필요 — 이미 최상위).
-# _ROOT_MARKERS_DIRECT: 1단계부서명이 이미 이 값으로 채워져 있어도(비어
-#   있지 않아도) 정밀한 하위 이름이 아니므로 무조건 2단계부서명 값으로
-#   교체한다(사용자 확정 2026-09-11 — "SAIT"도 "대표이사"/"삼성전자"와
-#   동일하게 취급하도록 이 그룹으로 옮김: 1단계="SAIT"+2단계="AI융합기술팀"
-#   → 1단계="AI융합기술팀"으로 교체. 1단계="SAIT"+2단계="SAIT"면 자기
-#   자신으로 교체돼 결과적으로 "SAIT" 그대로 유지된다).
-# _ROOT_MARKERS_ORG: 1단계부서명이 이 값이면, 2단계부서명을 을(2단계→1단계
-#   매핑표)에서 한 번 더 조회해 더 정밀한 값으로 교체한다(못 찾으면 2단계
-#   값 그대로) — "종합기술원"만 이 방식 유지(사용자가 이번에 언급하지
-#   않아 기존 동작 그대로).
-_ROOT_MARKERS_B = {'종합기술원', 'SAIT'}
-_ROOT_MARKERS_DIRECT = {'대표이사', '삼성전자', 'SAIT'}
-_ROOT_MARKERS_ORG = {'종합기술원'}
+# 2026-09-11 (4) 재정정 — 두 그룹으로 재편(사용자 확정):
+# _ROOT_MARKERS_DIRECT: 1단계부서명이 이 값이면 무조건 2단계부서명 값으로
+#   직접 교체한다(을 조회 없음).
+# _ROOT_MARKERS_LOOKUP: 1단계부서명이 이 값이면, 2단계부서명을 을(아래
+#   _build_upper_level_lookup()이 만드는 현소속부서명→1단계부서명 매핑표)
+#   에서 조회해 그 값으로 교체하고, 매핑표에 없으면 2단계부서명 값으로
+#   직접 교체한다(폴백).
+# 두 그룹 다 아닌 값(빈 값 포함)은 이 스크립트가 손대지 않고 원본 그대로
+# 둔다 — 예전의 "1단계가 비어 있으면 채운다" 백필 개념은 완전히 삭제.
+_ROOT_MARKERS_DIRECT = {'대표이사', '삼성전자'}
+_ROOT_MARKERS_LOOKUP = {'종합기술원', 'SAIT'}
+_ALL_ROOT_MARKERS = _ROOT_MARKERS_DIRECT | _ROOT_MARKERS_LOOKUP
 
 _OUTPUT_SUFFIX = '_team_refer_intake.csv'
 
@@ -136,35 +134,47 @@ def _read_source(path: str):
 
 
 def _build_upper_level_lookup(df: pd.DataFrame) -> dict | None:
-    """원본에서 "1단계부서명"/"현소속부서명" 2개 헤더로 보조 매핑표(2단계→
-    1단계)를 만든다 — 1단계부서명이 비어 있는 행의 백필용. 둘 중 하나라도
-    없으면 None(백필 단계 자체를 건너뜀)."""
+    """원본에서 "1단계부서명"/"현소속부서명" 2개 헤더로 보조 매핑표(현소속
+    부서명→1단계부서명)를 만든다(2026-09-11 (4) 재정정, 사용자 확정 절차
+    그대로). 둘 중 하나라도 헤더 자체가 없으면 None(_ROOT_MARKERS_LOOKUP
+    조회 단계 자체를 건너뜀).
+
+    절차:
+      1) 1단계부서명·현소속부서명 중 하나라도 빈 행은 제외.
+      2) (1단계, 현소속) 쌍이 완전히 동일한 중복 행 제외.
+      3) 1단계부서명이 4개 root marker(_ALL_ROOT_MARKERS) 중 하나인 쌍 제외
+         — marker 자신은 "정밀한 값"이 아니므로 매핑표에 값으로 남지 않게.
+      4) 남은 쌍을 원본 등장 순서대로 현소속부서명→1단계부서명 dict로 조립.
+         같은 현소속부서명에 서로 다른 1단계부서명이 남아 있으면(원본 데이터
+         자체의 모순) 처음 나온 값을 채택한다(사용자 확정)."""
     if any(h not in df.columns for h in (_SRC_LEVEL1, _SRC_LEVEL2)):
         return None
+    seen_pairs = set()
     lookup: dict = {}
     for _, row in df[[_SRC_LEVEL1, _SRC_LEVEL2]].iterrows():
         a = clean_str(row[_SRC_LEVEL1])
         b = clean_str(row[_SRC_LEVEL2])
-        if a and b:
-            lookup.setdefault(b, a)
+        if not a or not b:
+            continue
+        if (a, b) in seen_pairs:
+            continue
+        seen_pairs.add((a, b))
+        if a in _ALL_ROOT_MARKERS:
+            continue
+        lookup.setdefault(b, a)
     return lookup
 
 
 def _fill_upper_level(a: str, b: str, upper_lookup: dict) -> str:
-    """1단계부서명(a)이 비어 있으면 2단계부서명(b)으로 보조 매핑표를 조회해
-    채운다(build_past_team_refer.py의 d~g 규칙, 2026-09-02 정정본과 동일).
-    a가 이미 채워져 있어도 _ROOT_MARKERS_DIRECT(대표이사/삼성전자/SAIT)면
-    정밀한 하위 이름이 아니므로 무조건 b로 교체하고, _ROOT_MARKERS_ORG
-    (종합기술원)면 을을 한 번 더 조회해 더 정밀한 값을 찾는다(2026-09-11
-    사용자 확정 — SAIT를 종합기술원과 분리해 DIRECT 그룹으로 이동)."""
-    if not a:
-        if b in _ROOT_MARKERS_B:
-            a = b
-        else:
-            a = upper_lookup.get(b, b)
+    """1단계부서명(a)이 _ROOT_MARKERS_DIRECT(대표이사/삼성전자)면 무조건
+    2단계부서명(b) 값으로 교체하고, _ROOT_MARKERS_LOOKUP(종합기술원/SAIT)면
+    보조 매핑표에서 b로 조회한 값으로 교체(못 찾으면 b로 폴백)한다(2026-09-11
+    (4) 재정정, 사용자 확정). 그 외(4개 marker가 아닌 값, 빈 값 포함)는
+    아무 규칙도 적용하지 않고 원본 a를 그대로 반환한다 — 예전의 "a가 비어
+    있으면 백필" 개념은 완전히 삭제됐다."""
     if a in _ROOT_MARKERS_DIRECT:
         a = b
-    elif a in _ROOT_MARKERS_ORG:
+    elif a in _ROOT_MARKERS_LOOKUP:
         a = upper_lookup.get(b, b)
     return a
 
@@ -204,11 +214,10 @@ def process_file(path: str) -> tuple:
             '3단계부서명': c, '조직코드': '', '사번': '', '성명': '', '직책': '',
         })
 
-    # 조직 위계상 큰 단위부터 눈에 잘 띄도록 1단계→2단계→3단계 오름차순
-    # 정렬(build_past_team_refer.py와 동일한 관례) — 사람이 검토할 때
-    # 보기 편하게 하려는 것일 뿐, 조직코드(사내 정렬 규정)는 사람이 검토
-    # 후 직접 채우는 값이라 이 정렬과 무관하다.
-    rows.sort(key=lambda r: (r['1단계부서명'], r['2단계부서명'], r['3단계부서명']))
+    # 3단계→2단계→1단계 오름차순 정렬(2026-09-11 (4) 재정정, 사용자 확정 —
+    # 기존 1→2→3 우선순위에서 완전히 반대로 뒤집힘). 조직코드(사내 정렬
+    # 규정)는 사람이 검토 후 직접 채우는 값이라 이 정렬과 무관하다.
+    rows.sort(key=lambda r: (r['3단계부서명'], r['2단계부서명'], r['1단계부서명']))
 
     try:
         os.makedirs(OUT_DIR, exist_ok=True)
