@@ -10972,3 +10972,134 @@ org_code와 매칭되는, 조직이 트리에서 위치를 옮겨도 안정적�
 "체크한 행을 개별 이동"이 아니라 "여러 행을 한꺼번에 넓은 범위로 옮기고
 싶은" 실사용 시나리오가 있을 때 한 칸씩 반복 클릭해야 하는 UX가 불편하지
 않은지.
+
+## 2026-09-16: JOB Market "검색 중 오류가 발생했습니다: Extra data: line 1
+column N" — embedding_cache.json 동시 쓰기 손상 버그 수정
+
+사용자 리포트: JOB Market에서 "종료 예정 과제 선정" 모드로 과제를 고르고
+"참여 가능한 과제에서 제외"까지 지정한 뒤 실행하면 `검색 중 오류가
+발생했습니다: Extra data: line 1 column 10419954(char 10419953)` 오류가
+남. "Extra data"는 `json.loads()`가 파일 앞부분에서 완결된 JSON 문서
+하나를 다 읽고 났는데 그 뒤에 알 수 없는 바이트가 더 남아있을 때만 나는
+메시지라, 실제 데이터 파일이 손상돼 있다는 뜻 — LLM 응답(수백~수천자)
+정도로는 나올 수 없는 1000만자 넘는 위치라 대용량 캐시 파일이 원인일
+것으로 보고 추적.
+
+**원인**: `pipeline/researcher_fit.py`의 `_load_embed_cache()`/
+`_save_embed_cache()`(`data/processed/embedding_cache.json` — BGE-M3
+임베딩을 텍스트 해시로 캐시해 여러 화면이 공유하는 순수 성능 캐시)가
+`open(path, 'w')`로 파일 전체를 그냥 덮어쓰는 방식이었다. 이 앱은
+`Dockerfile`이 `gunicorn --workers 2`로 띄우는데(이미 `app.py`의
+`_get_or_create_secret_key()`에 이 프로젝트 내 다른 워커 경쟁 조건
+수정 사례가 있음), 두 워커가 거의 동시에 `cached_embed()`를 호출하면
+(JOB Market 검색과 "AI 검색"이 동시에 들어오거나, 사용자 두 명이 각각
+검색하는 경우 등) 한쪽이 파일을 다 쓰기 전에 다른 쪽이 같은 파일을
+다시 열어(open은 즉시 truncate) 쓰기 시작할 수 있어, 결과물이 "완성된
+JSON 문서 + 그 뒤에 다른 워커가 쓰다 만 나머지 바이트"로 깨질 수 있었다
+— 정확히 "Extra data" 증상과 일치. 이후 그 손상된 파일을 아무 캐시
+호출이나 읽을 때마다(JOB Market뿐 아니라 "보유 전문성 MAP"/AI 검색/
+오프라인 유사도 파이프라인 전부 같은 파일을 공유) 예외 없이 계속
+재발한다 — 한 번 손상되면 파일을 누가 수동으로 안 고치는 한 스스로
+복구되지 않는 구조였음.
+
+**수정**:
+- `_save_embed_cache()`: 같은 디렉터리에 `.{pid}.tmp` 임시 파일로 전체
+  내용을 다 쓴 뒤 `os.replace()`로 원자적 교체(POSIX에서 원자적 — 같은
+  파일시스템 내 rename). 두 워커가 거의 동시에 저장해도 읽는 쪽은 항상
+  "완성된 이전 파일" 또는 "완성된 새 파일" 중 하나만 보게 돼 파일
+  손상 자체가 더 이상 발생하지 않는다(한쪽 워커의 신규 캐시 항목이
+  유실될 수는 있지만, 순수 성능 캐시라 다음 호출 때 다시 계산되면
+  그만이라 문제 없음).
+- `_load_embed_cache()`: `json.JSONDecodeError`/`OSError`를 잡아 빈
+  캐시(`{}`)로 안전하게 처리하도록 방어 추가 — 위 원자적 쓰기 수정
+  이후에도, **이미 손상된 채 남아있는 기존 파일**은 이 방어가 없으면
+  계속 예외를 던지므로(자기 치유 불가) 함께 고쳐야 완전한 수정이 된다.
+  이제는 손상된 파일을 만나면 그 자리에서 빈 캐시로 취급하고, 이어지는
+  `cached_embed()`가 필요한 임베딩을 다시 계산해 원자적 쓰기로 정상
+  파일을 새로 만든다 — 사람이 서버에 들어가 파일을 수동으로 지우지
+  않아도 다음 호출 한 번으로 스스로 복구된다.
+- `services/similarity_map.py`(보유 전문성 MAP)도 `embedding_cache.json`을
+  직접 `json.load()`하던 별도 코드가 있어 같은 손상에 노출돼 있었다 —
+  `researcher_fit._load_embed_cache()`를 그대로 재사용하도록 교체해
+  동일하게 방어되게 함. `services/nl_query.py`/`pipeline/show_embedding.py`/
+  `pipeline/process_researcher_similarity.py`는 전부 `fit.cached_embed()`를
+  통해서만 이 캐시를 쓰므로 `researcher_fit.py` 한 곳만 고쳐도 자동으로
+  함께 보호된다.
+
+**검증**: `python3 -c` 직접 호출로 (1) 두 JSON 문서를 이어붙여 사용자가
+겪은 것과 동일한 `json.JSONDecodeError: Extra data: line 1 column 25`를
+재현, (2) 수정된 `_load_embed_cache()`가 이 손상된 파일에서 예외 없이
+`{}`를 반환하는 것, (3) `_save_embed_cache()`가 그 뒤 정상적으로 유효한
+JSON 파일을 새로 만드는 것을 확인. `python3 -m py_compile`/
+`python3 -c "import app"` 통과. 이 개발 환경에는
+`data/processed/embedding_cache.json` 자체가 없어(실사용 서버에만 존재)
+JOB Market 화면을 통한 종단 간 재현은 하지 못했다 — 위 수정이 원인
+코드 경로(load/save)를 직접 겨냥한 것이라 별도 배포 조치 없이도 다음
+캐시 접근 시점에 자동으로 복구될 것으로 판단.
+
+**미검증**: 실제 운영 서버의 현재 `embedding_cache.json`이 이미 손상된
+상태인지(사용자가 계속 같은 오류를 본다면 그 파일이 아직 손상 상태이며,
+이 수정이 배포된 뒤 다음 호출에서 자동 복구될 것), 동시 저장으로
+"유실되는" 신규 캐시 항목이 실사용 빈도에서 체감될 만큼 잦은지(순수
+성능 캐시라 정확성에는 영향 없음 — 그 텍스트의 임베딩을 그다음 호출
+때 한 번 더 계산하는 정도).
+
+## 2026-09-16: 팀/리더 참조 — "엑셀 파일로 한번에 반영" 누적 시점에 일(day)
+추가 + 업로드 라벨 문구 단순화
+
+사용자 리포트: "엑셀 파일로 한번에 반영"에서 누적 시점을 연/월만 고를 수
+있는데, 실제로는 항상 9/1처럼 그 달 1일자로 반영돼 최신 데이터로
+업데이트가 안 된다 — 맞는지 확인 요청.
+
+**확인 결과: 사용자 진단이 정확했다.** `team_refer_run_upload()` 콜백이
+`date(int(year), int(month), 1)`로 일(day)을 항상 1로 고정해서 저장하고
+있었다. team_refer는 자연키가 `(dep_id, valid_year, valid_month,
+valid_day)`이고 "가장 최근 날짜" 행을 그 dep_id의 "현재" 상태로 취급하는
+구조인데(`rd_specialist_markdown._latest_current_rows()`), 그리드
+화면에서의 수동 수정·저장(`team-refer-valid-date`, `dcc.DatePickerSingle`
+로 일 단위까지 지정 가능)이 이미 그달 중 더 늦은 날짜(예: 9/10)로
+들어가 있으면, 그 뒤에 올린 "최신" 엑셀이 9/1로 고정 저장되면서 9/10
+값보다 더 "과거"로 취급돼 실제로는 반영되지 않는 문제였다 — 관리자
+입장에서는 분명 최신 엑셀을 올렸는데 화면에 옛날 값이 계속 보이는
+현상으로 나타난다.
+
+**`pages/admin.py`**:
+- 신규 `_valid_date_picker(key, valid_date)`: 그리드의
+  `team-refer-valid-date`와 동일하게 `dcc.DatePickerSingle`(연/월/일)을
+  그대로 쓴다. 기존 `_valid_period_picker()`(연/월 드롭다운 2개)가
+  `DatePickerSingle`을 안 쓴 이유(영문 캘린더 헤더, 애초에 일 단위가
+  필요 없는 항목들)는 team_refer에는 해당하지 않는다(일 단위가 반드시
+  필요) — 그래서 `_valid_period_picker()` 자체는 그대로 두고(evaluations/
+  core_technology/job_profile/work_objective_* 등 다른 "데이터 업데이트"
+  항목은 계속 월 단위, 여기는 원래도 일 단위 개념이 없어 이 변경과
+  무관), team_refer 전용 별도 함수를 새로 추가했다.
+- `_team_refer_upload_section()`: "누적 시점(연/월)" → "누적 시점(연/월/일)"
+  라벨 변경, `_valid_period_picker('team_refer', year, month)` 호출을
+  `_valid_date_picker('team_refer', today)`로 교체.
+- `team_refer_run_upload()` 콜백: `State`를
+  `{'type': 'du-valid-year'/'du-valid-month', 'key': 'team_refer'}`
+  두 개에서 `{'type': 'du-valid-date', 'key': 'team_refer'}`(date
+  문자열) 하나로 교체하고, `date(int(year), int(month), 1)` 대신
+  `date.fromisoformat(valid_date_str)`로 선택한 날짜를 그대로 씀.
+- "업로드(팀참조시트.xlsx 또는 .csv)" → "업로드(xlsx 또는 csv)"로 문구
+  단순화(사용자 요청 2번 — 파일명이 꼭 "팀참조시트"일 필요는 없으므로).
+
+**검증**: 실제 서버(임시 admin 계정) + 직접 재현 시나리오로 버그와 수정을
+모두 확인 — (1) `services.team_refer_store.save_snapshot()`으로 특정
+조직에 9/10일자 값(성명=OLD_MANUAL)을 먼저 저장, (2) 같은 조직의 다른
+값(성명=NEW_UPLOAD)을 담은 csv를 "엑셀 파일로 한번에 반영" 업로드
+섹션에 올리고 "실행"(날짜 선택기 기본값=오늘 실제 날짜, 이 환경에서는
+9/14) 클릭, (3) 실행 후 `data/processed/team_refer.csv`에 9/14일자로
+NEW_UPLOAD 행이 정확히 추가되고, `read_team_refer()`의 "현재" 판정도
+NEW_UPLOAD로 정상 갱신되는 것까지 확인 — 수정 전이었다면 9/1로 고정
+저장돼 9/10보다 과거로 취급되어 OLD_MANUAL이 계속 "현재"로 남았을
+시나리오. 화면에서 라벨 문구("업로드(xlsx 또는 csv)", "누적 시점
+(연/월/일)")와 날짜 선택기 기본값(오늘 날짜, YYYY-MM-DD)도 육안으로
+확인. `python3 -m py_compile`/`python3 -c "import app"` 통과. 테스트
+계정·`data/processed/team_refer.csv`는 검증 후 삭제,
+`config/users.json`은 원본과 diff 없음 재확인.
+
+**미검증**: 이미 과거에 9/1로 잘못 고정 저장돼 실제로는 반영되지 않은
+채 누적돼 있는 실제 운영 데이터가 있다면(이 수정은 앞으로의 업로드만
+고치므로), 그 과거 이력을 다시 찾아 올바른 날짜로 재업로드해야 하는지
+확인이 필요할 수 있음.

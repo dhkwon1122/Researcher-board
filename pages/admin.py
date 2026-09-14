@@ -546,13 +546,13 @@ def _team_refer_upload_section():
         ], className='mb-2'),
         dbc.Row([
             dbc.Col([
-                html.Div('업로드(팀참조시트.xlsx 또는 .csv)', className='small text-muted mb-1'),
+                html.Div('업로드(xlsx 또는 csv)', className='small text-muted mb-1'),
                 _upload_box('team_refer', 'single', multiple=True),
                 filenames_view, backfill_view,
             ], md=5),
             dbc.Col([
-                html.Div('누적 시점(연/월)', className='small text-muted mb-1'),
-                _valid_period_picker('team_refer', today.year, today.month),
+                html.Div('누적 시점(연/월/일)', className='small text-muted mb-1'),
+                _valid_date_picker('team_refer', today),
             ], md=3),
             dbc.Col([
                 html.Div(' ', className='small mb-1'),
@@ -992,6 +992,25 @@ def _valid_period_picker(key: str, year: int, month: int):
             clearable=False, searchable=False, style={'minWidth': '76px'},
         ), width='auto'),
     ], className='g-1 justify-content-center')
+
+
+def _valid_date_picker(key: str, valid_date: date):
+    """"누적 시점(연/월/일)" 입력 — 일 단위까지 필요한 항목 전용(2026-09-16
+    추가, team_refer가 첫 사용처). team_refer는 자연키가 (dep_id,
+    valid_year, valid_month, valid_day)라 "가장 최근 날짜"로 현재 상태를
+    가리는데, 이 화면(엑셀 일괄 업로드)이 항상 일=1로 고정 저장하면 이미
+    그달 중 더 늦은 날짜로 저장된 값(관리자 화면 그리드의
+    team-refer-valid-date로 수동 저장한 값 등)에 밀려 "최신 데이터"로
+    반영되지 않는 문제가 있었다(사용자 리포트 — 매달 1일 이후에 올린
+    엑셀이 실제로는 무시되는 현상). 그리드의 team-refer-valid-date와
+    동일하게 dcc.DatePickerSingle을 그대로 쓴다 — _valid_period_picker()가
+    이걸 안 쓰고 연/월 드롭다운으로 대체한 이유(영문 캘린더 헤더, 일
+    단위가 필요 없음)가 여기서는 해당하지 않는다(일 단위가 반드시
+    필요함)."""
+    return dcc.DatePickerSingle(
+        id={'type': 'du-valid-date', 'key': key}, date=valid_date.isoformat(),
+        display_format='YYYY-MM-DD', className='d-block',
+    )
 
 
 def _api_button(key: str, has_api: bool):
@@ -2754,11 +2773,10 @@ def data_update_run(_all_clicks, _sel_clicks, check_values, check_ids,
     Output('team-refer-upload-status', 'children', allow_duplicate=True),
     Output('data-update-interval', 'disabled', allow_duplicate=True),
     Input('team-refer-run-upload-btn', 'n_clicks'),
-    State({'type': 'du-valid-year', 'key': 'team_refer'}, 'value'),
-    State({'type': 'du-valid-month', 'key': 'team_refer'}, 'value'),
+    State({'type': 'du-valid-date', 'key': 'team_refer'}, 'date'),
     prevent_initial_call=True,
 )
-def team_refer_run_upload(n_clicks, year, month):
+def team_refer_run_upload(n_clicks, valid_date_str):
     from services.auth import can
     if not n_clicks:
         return no_update, no_update
@@ -2767,7 +2785,10 @@ def team_refer_run_upload(n_clicks, year, month):
     if not wpr.has_upload('team_refer'):
         return _alert('업로드된 파일이 없습니다.', 'warning'), True
 
-    valid_dates = {'team_refer': date(int(year), int(month), 1)} if year and month else {}
+    # 일(day) 단위까지 그대로 반영한다(2026-09-16 수정 — _valid_date_picker
+    # 참고: 예전에는 항상 일=1로 고정 저장돼, 이미 그달 중 더 늦은 날짜로
+    # 저장된 값에 밀려 새로 올린 엑셀이 "최신"으로 반영되지 않는 문제가 있었음).
+    valid_dates = {'team_refer': date.fromisoformat(valid_date_str)} if valid_date_str else {}
     if not wpr.start_run(['team_refer'], valid_dates=valid_dates):
         return _alert('이미 다른 작업이 실행 중입니다. 잠시 후 다시 시도해주세요.', 'warning'), False
     return (_alert('실행을 시작했습니다. 브라우저를 닫아도 서버에서 계속 진행되며, '

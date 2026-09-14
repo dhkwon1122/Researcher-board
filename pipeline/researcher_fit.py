@@ -106,16 +106,41 @@ def _text_hash(text: str) -> str:
 
 
 def _load_embed_cache() -> dict:
+    """embedding_cache.json을 읽는다 — 손상돼 있어도 예외를 던지지 않고 빈
+    캐시로 취급한다(2026-09-16 수정). gunicorn --workers 2(app.py 참고 —
+    이 프로젝트에 이미 워커 간 경쟁 조건 사례가 있음) 환경에서 두 워커가
+    거의 동시에 cached_embed()를 호출하면 예전에는 둘 다 open(path, 'w')로
+    같은 파일을 truncate+write해, 한쪽이 다 쓰기 전에 다른 쪽이 truncate를
+    걸치는 순간이 생겨 파일이 "완성된 JSON + 그 뒤에 다른 워커가 쓰다 만
+    나머지 바이트"로 깨질 수 있었다(JOB Market에서 실제로 재현된 사용자
+    리포트 — json.JSONDecodeError: "Extra data: line 1 column N" 형태로
+    나타남, N이 첫 번째 완성된 JSON 문서의 끝 위치). 이 캐시는 순수 성능
+    캐시(임베딩 재계산만 하면 복구됨 — pipeline/load_to_db.py 참고)라
+    손상된 내용을 버리고 빈 캐시로 다시 시작해도 데이터 유실이 없다.
+    _save_embed_cache()의 원자적 쓰기(임시 파일 + os.replace)로 새 손상은
+    막았지만, 이미 손상된 채 남아있는 기존 파일도 있을 수 있어 읽기 쪽도
+    함께 방어한다."""
     if not os.path.exists(_EMBED_CACHE_PATH):
         return {}
-    with open(_EMBED_CACHE_PATH, encoding='utf-8') as f:
-        return json.load(f)
+    try:
+        with open(_EMBED_CACHE_PATH, encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
 
 
 def _save_embed_cache(cache: dict):
+    """임시 파일에 다 쓴 뒤 os.replace()로 원자적으로 교체한다 — 여러
+    워커가 거의 동시에 저장해도(멱등적이지 않은 read-modify-write라
+    한쪽의 신규 항목이 유실될 순 있어도, 이건 순수 성능 캐시라 다음 호출
+    때 다시 계산되면 그만) 읽는 쪽은 항상 "완성된 이전 파일" 또는
+    "완성된 새 파일" 중 하나만 보게 되어 _load_embed_cache()가 겪던
+    파일 손상(위 docstring 참고)이 재발하지 않는다."""
     os.makedirs(OUT_DIR, exist_ok=True)
-    with open(_EMBED_CACHE_PATH, 'w', encoding='utf-8') as f:
+    tmp_path = f'{_EMBED_CACHE_PATH}.{os.getpid()}.tmp'
+    with open(tmp_path, 'w', encoding='utf-8') as f:
         json.dump(cache, f)
+    os.replace(tmp_path, _EMBED_CACHE_PATH)
 
 
 def cached_embed(texts: list) -> np.ndarray:
