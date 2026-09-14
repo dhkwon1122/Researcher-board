@@ -210,6 +210,16 @@ h1, h2, h3, h4, h5, h6 {
   text-align: center;
 }
 
+/* "사용자/권한 관리" 표만 셀 내용(아이디/이름/역할/이메일/상태/체크박스/
+   관리 버튼 전부)까지 가운데 정렬(2026-09-17, 사용자 확정) — 헤더는 이미
+   위 .admin-table thead th로 가운데 정렬돼 있었지만 셀 내용은 기본값
+   (좌측 정렬)이었다. "데이터 업데이트" 표는 업로드 위젯/실행 이력처럼
+   왼쪽 정렬이 자연스러운 내용이 많아 이 클래스(.user-mgmt-table)로 범위를
+   좁혀 "사용자/권한 관리" 표에만 적용한다. */
+.user-mgmt-table tbody td {
+  text-align: center;
+}
+
 /* "데이터 업데이트"/"사용자·권한 관리" 표 컬럼 크기 조절(2026-09-02, 사용자
    확정) — 이 표들은 dash_table.DataTable이 아니라 일반 dbc.Table이라
    컬럼 너비 드래그 조절 기능이 없다. 헤더 라벨을 감싼 span에 브라우저
@@ -222,6 +232,46 @@ h1, h2, h3, h4, h5, h6 {
   min-width: 40px;
   max-width: 400px;
   vertical-align: bottom;
+}
+
+/* AG Grid(dash-ag-grid) 테이블 — 팀/리더 참조·직군 예외자 탭(2026-09-17
+   전환)이 기본으로 쓰는 AG Grid "Quartz" 테마는 이 앱의 Ant Design풍
+   네이비/블루 어드민 스타일(위 :root의 --gs-*)과 폰트·헤더 색·테두리
+   색이 전부 달라, 같은 관리자 화면 안에서 탭을 옮길 때마다 스타일이
+   확 바뀌어 보이는 문제가 있었다(사용자 확정). AG Grid v33+ Theming
+   API는 각 그리드 컴포넌트(className="gs-ag-grid")에 아래 --ag-* CSS
+   변수를 얹는 것만으로 색/폰트/치수를 앱 테마에 맞게 오버라이드할 수
+   있다(공식 지원 방식 — 격리 테스트로 실제 적용 확인). 이 앱 전체를
+   덮는 사용자·권한 관리/데이터 업데이트 표(dbc.Table + .admin-table)와
+   같은 헤더 배경(--gs-header-bg)/테두리색(--gs-border)/폰트(--gs-font)를
+   써서 두 그리드 탭도 같은 계열로 보이게 한다. 글자 크기(0.78rem)는
+   맞추지 않았다 — 팀/리더 참조는 컬럼이 9개라 좁은 화면에서도 가로
+   스크롤 없이 다 보이게 하려고 일부러 촘촘하게 잡은 값(예전
+   dash_table 시절부터의 선택)이라, 다른 표의 폰트 크기에 맞춰 키우면
+   다시 가로 스크롤이 생긴다. */
+.gs-ag-grid {
+  --ag-font-family: var(--gs-font);
+  --ag-font-size: 0.78rem;
+  --ag-header-background-color: var(--gs-header-bg);
+  --ag-header-foreground-color: var(--gs-text);
+  --ag-header-text-color: var(--gs-text);
+  --ag-header-cell-text-color: var(--gs-text);
+  --ag-border-color: var(--gs-border);
+  --ag-row-border-color: var(--gs-border);
+  --ag-background-color: var(--gs-surface);
+  --ag-odd-row-background-color: var(--gs-surface);
+  --ag-row-hover-color: rgba(22, 119, 255, 0.06);
+  --ag-selected-row-background-color: rgba(22, 119, 255, 0.08);
+  --ag-input-focus-border-color: var(--gs-accent);
+  --ag-checkbox-checked-color: var(--gs-accent);
+  --ag-range-selection-border-color: var(--gs-accent);
+  --ag-wrapper-border-radius: var(--gs-radius-sm);
+  --ag-cell-horizontal-padding: 8px;
+  --ag-header-height: 34px;
+  --ag-row-height: 30px;
+}
+.gs-ag-grid .ag-header-cell-label {
+  font-weight: 600;
 }
 
 /* "체크" 컬럼 체크박스 — 기본 부트스트랩 체크박스가 흐릿해 잘 안 보이던
@@ -491,9 +541,17 @@ h1, h2, h3, h4, h5, h6 {
      아닌 기본(무명) 페이지 컨텍스트에 속해, 실제 인쇄 콘텐츠(.profile-print-only
      등 named page 콘텐츠)가 다 끝난 뒤에도 100vh만큼 배경을 더 채우려다 무명
      @page(A3 landscape) 크기의 빈 페이지가 한 장 더 붙는다. 인쇄 중엔 필요
-     없는 높이라 0으로 되돌린다. */
+     없는 높이라 0으로 되돌린다. 이 Div는 인라인 style로 backgroundColor:
+     '#f5f5f5'(화면용 옅은 회색, --gs-bg)도 같이 갖고 있는데, 위 body 규칙과
+     달리 이 Div는 안 건드려 놨었다 — 인쇄 콘텐츠 안의 흰 박스(.print-box 등)
+     사이 여백이나 페이지 하단 빈 공간처럼 콘텐츠가 이 Div를 완전히 덮지
+     못하는 자리마다 이 회색이 그대로 비쳐 보이는 문제(2026-09-17, 사용자
+     요청 "모든 화면에 대해서 흰 배경으로") — Playwright로 PDF를 직접
+     생성해 배경색이 정확히 어느 요소에서 새어 나오는지 격리 확인. body와
+     똑같이 흰색으로 덮어써 해결한다. */
   #react-entry-point > div {
     min-height: 0 !important;
+    background-color: #fff !important;
   }
 
   /* 인쇄 콘텐츠는 화면 컴포넌트를 그대로 재사용해 표 헤더(0.72rem)/카드 제목

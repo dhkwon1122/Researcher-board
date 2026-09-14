@@ -11,7 +11,7 @@ import dash
 import dash_ag_grid as dag
 import dash_bootstrap_components as dbc
 from dash import (
-    ALL, MATCH, Input, Output, State, callback, clientside_callback, ctx, dash_table, dcc, html,
+    ALL, MATCH, Input, Output, State, callback, clientside_callback, ctx, dcc, html,
     no_update,
 )
 
@@ -345,7 +345,8 @@ def _user_management_tab() -> html.Div:
             html.Thead(html.Tr(header_cells)),
             html.Tbody(_build_user_rows(users, _DEFAULT_USER_SORT), id='user-table-body'),
         ],
-        bordered=True, hover=True, responsive=True, size='sm', className='mb-0 admin-table',
+        bordered=True, hover=True, responsive=True, size='sm',
+        className='mb-0 admin-table user-mgmt-table',
     )
 
     return html.Div([
@@ -717,17 +718,22 @@ def _team_refer_tab() -> html.Div:
         # 바 줄바꿈이 달라질 때 어긋날 수 있음).
         html.Div([
             dbc.ButtonGroup([
+                dbc.Button([html.I(className='bi bi-arrow-bar-up me-1'), '맨 위로'],
+                           id='team-refer-move-top-btn', color='secondary', outline=True, size='sm'),
                 dbc.Button([html.I(className='bi bi-arrow-up me-1'), '위로'],
                            id='team-refer-move-up-btn', color='secondary', outline=True, size='sm'),
                 dbc.Button([html.I(className='bi bi-arrow-down me-1'), '아래로'],
                            id='team-refer-move-down-btn', color='secondary', outline=True, size='sm'),
+                dbc.Button([html.I(className='bi bi-arrow-bar-down me-1'), '맨 아래로'],
+                           id='team-refer-move-bottom-btn', color='secondary', outline=True, size='sm'),
                 dbc.Button([html.I(className='bi bi-trash me-1'), '선택 삭제'],
                            id='team-refer-bulk-delete-btn', color='danger', outline=True, size='sm'),
             ]),
             html.Div(
                 '왼쪽 체크박스로 행을 고른 뒤 사용하세요(맨 위 헤더 체크박스로 전체 '
-                '선택/해제할 수 있습니다). 이동은 체크한 행만 개별적으로 한 칸씩 '
-                '움직이며 상위부서와 무관하게 자유롭게 이동할 수 있습니다. 삭제는 '
+                '선택/해제할 수 있습니다). "위로"/"아래로"는 체크한 행만 개별적으로 '
+                '한 칸씩, "맨 위로"/"맨 아래로"는 체크한 행만 그리드 맨 위/맨 아래로 '
+                '한 번에 옮깁니다(둘 다 상위부서와 무관하게 자유롭게 이동). 삭제는 '
                 '하위 조직이 있으면 함께 삭제됩니다(하위 조직을 남겨두면 그 소속 '
                 '정보 때문에 상위 조직이 자동으로 다시 생겨 실제로 삭제되지 '
                 '않습니다). No.는 화면에 보이는 순서 그대로(맨 위 1 ~ 맨 아래 N) '
@@ -746,6 +752,7 @@ def _team_refer_tab() -> html.Div:
         html.Div(
             dag.AgGrid(
                 id='team-refer-table',
+                className='gs-ag-grid',
                 columnDefs=column_defs,
                 rowData=rows,
                 getRowId='params.data._rid',
@@ -766,7 +773,12 @@ def _team_refer_tab() -> html.Div:
                 # 헤더 클릭 정렬(sortable=True)은 화면 표시 순서만 바꾸고
                 # rowData 자체의 순서는 그대로 유지됨을 확인했다 — 이동/삭제가
                 # 배열 순서=계층 구조를 가정하는 로직(_row_path 등)에 영향 없음.
-                style={'width': '100%', 'fontSize': '0.78rem'},
+                # 폰트 크기는 style이 아니라 className='gs-ag-grid'(assets/
+                # custom.css)의 --ag-font-size로 지정한다 — AG Grid는 내부
+                # 셀/헤더 글자 크기를 이 CSS 변수로 그리므로, 여기 style에
+                # fontSize를 줘도 반영되지 않는다(격리 테스트로 확인,
+                # 2026-09-17).
+                style={'width': '100%'},
             ),
             id='team-refer-grid-wrap',
         ),
@@ -821,12 +833,25 @@ def _exception_job_function_tab() -> html.Div:
     services.exception_job_function_store 참고). 팀/리더 참조 탭과
     UX(그리드 CRUD + 엑셀 업로드)는 동일하지만, 시점(연/월) 이력이 없는
     "현재값만" 테이블이라 입력 날짜 선택기/대량 백필/부서ID 중복 모달 같은
-    시점 관련 장치는 없다(사용자 확정 — 구조를 단순하게 유지)."""
-    rows = ejf_store.list_editable_rows()
-    rows = _renumbered(rows)
+    시점 관련 장치는 없다(사용자 확정 — 구조를 단순하게 유지).
 
-    columns = [{'name': 'No.', 'id': '_no', 'editable': False}] + [
-        {'name': col, 'id': col, 'editable': True}
+    2026-09-17: 팀/리더 참조와 동일한 이유로 `dash_table.DataTable`에서
+    AG Grid(dash-ag-grid)로 전환 — 자세한 배경/검증은 docs/CLAUDE.md의
+    2026-09-17 "팀/리더 참조 그리드 — dash_table → dash-ag-grid" 항목
+    참고. 이 탭은 하위 조직 계층이 없는 단순 평면 목록이라 `_row_path`/
+    `_subtree_range`(cascade 삭제)는 애초에 필요 없다 — 삭제는 체크박스
+    선택 + "선택 삭제" 버튼으로 통일했다(예전엔 `row_deletable`의 행별
+    × 버튼이었는데, AG Grid Community엔 그 기본 UI가 없어 team_refer와
+    같은 방식으로 교체)."""
+    rows = _renumbered(_ensure_rid(ejf_store.list_editable_rows()))
+
+    column_defs = [
+        {
+            'headerName': 'No.', 'field': '_no', 'editable': False,
+            'sortable': False, 'filter': False, 'width': 70, 'pinned': 'left',
+        },
+    ] + [
+        {'headerName': col, 'field': col, 'editable': True, 'tooltipField': col}
         for col in ejf_store.KOREAN_COLUMNS
     ]
 
@@ -849,6 +874,9 @@ def _exception_job_function_tab() -> html.Div:
                     dbc.Button([html.I(className='bi bi-plus-lg me-1'), '행 추가'],
                                id='exception-job-function-add-row-btn', color='secondary',
                                outline=True, size='sm'),
+                    dbc.Button([html.I(className='bi bi-trash me-1'), '선택 삭제'],
+                               id='exception-job-function-bulk-delete-btn', color='danger',
+                               outline=True, size='sm'),
                     dbc.Button([html.I(className='bi bi-save me-1'), '저장'],
                                id='exception-job-function-save-btn', color='primary', size='sm'),
                     dbc.Button([html.I(className='bi bi-file-earmark-excel me-1'), '엑셀 다운로드'],
@@ -856,34 +884,34 @@ def _exception_job_function_tab() -> html.Div:
                                outline=True, size='sm'),
                 ]),
                 html.Div(
-                    '엑셀 다운로드는 현재 화면의 편집 내용이 아니라 저장된 최신 값을 내려받습니다.',
+                    '왼쪽 체크박스로 행을 고른 뒤 "선택 삭제"를 누르세요(헤더 체크박스로 '
+                    '전체 선택/해제 가능). 엑셀 다운로드는 현재 화면의 편집 내용이 아니라 '
+                    '저장된 최신 값을 내려받습니다.',
                     className='text-muted', style={'fontSize': '0.72rem'},
                 ),
             ], md='auto'),
         ], className='mb-2 align-items-end'),
         dcc.Download(id='exception-job-function-download'),
+        html.Div(id='exception-job-function-bulk-msg'),
 
-        dash_table.DataTable(
+        dag.AgGrid(
             id='exception-job-function-table',
-            columns=columns,
-            data=rows,
-            editable=True,
-            row_deletable=True,
-            page_action='none',
-            style_table={'overflowX': 'auto'},
-            style_cell={
-                'fontSize': '0.72rem', 'padding': '3px 6px', 'textAlign': 'center',
-                'minWidth': '55px', 'maxWidth': '160px',
-                'overflow': 'hidden', 'textOverflow': 'ellipsis',
+            className='gs-ag-grid',
+            columnDefs=column_defs,
+            rowData=rows,
+            getRowId='params.data._rid',
+            selectedRows=[],
+            defaultColDef={
+                'resizable': True, 'sortable': True, 'filter': False,
+                'minWidth': 55, 'wrapHeaderText': True, 'autoHeaderHeight': True,
             },
-            style_cell_conditional=[{'if': {'column_id': '_no'}, 'width': '40px', 'textAlign': 'center'}],
-            style_header={'fontWeight': '600', 'backgroundColor': '#fafafa',
-                          'textAlign': 'center', 'fontSize': '0.72rem'},
-            css=[{
-                'selector': '.column-header-name',
-                'rule': ('display: inline-block; resize: horizontal; overflow: auto; '
-                         'min-width: 40px; max-width: 600px; vertical-align: bottom;'),
-            }],
+            dashGridOptions={
+                'rowSelection': {'mode': 'multiRow', 'checkboxes': True, 'headerCheckbox': True},
+                'domLayout': 'autoHeight',
+                'stopEditingWhenCellsLoseFocus': True,
+                'tooltipShowDelay': 0,
+            },
+            style={'width': '100%'},
         ),
 
         html.Div(id='exception-job-function-save-msg', className='mt-2'),
@@ -2081,22 +2109,48 @@ def _move_selected(rows: list, selected_rows: list, direction: str):
     return rows, new_selected, blocked
 
 
+# ── 팀/리더 참조 그리드 — 체크박스 선택 맨 위/맨 아래로 이동(2026-09-17 추가) ───
+# _move_selected()(한 칸씩)와 달리 체크한 행들을 한 번에 그리드 맨 위/맨
+# 아래로 보낸다 — 여러 칸 떨어진 곳으로 옮기려고 "위로"/"아래로"를 여러 번
+# 누를 필요가 없게. 체크한 행들끼리의 상대 순서, 체크하지 않은 행들끼리의
+# 상대 순서는 각각 원래 배열 순서 그대로 유지된다(안정 분할 — stable
+# partition). 이동은 여기서도 상위부서 경계와 무관하게 체크한 행만
+# 개별적으로 옮긴다(하위 조직을 묶어 옮기지 않음 — 위/아래 한 칸 이동과
+# 동일한 방침, 2026-09-16 확정).
+def _move_to_edge(rows: list, selected_idx: list, edge: str):
+    selected_set = set(selected_idx)
+    picked = [r for i, r in enumerate(rows) if i in selected_set]
+    rest = [r for i, r in enumerate(rows) if i not in selected_set]
+    if edge == 'top':
+        new_rows = picked + rest
+        new_selected_idx = list(range(len(picked)))
+    else:
+        new_rows = rest + picked
+        new_selected_idx = list(range(len(rest), len(new_rows)))
+    return new_rows, new_selected_idx
+
+
 @callback(
     Output('team-refer-table', 'rowData', allow_duplicate=True),
     Output('team-refer-table', 'selectedRows', allow_duplicate=True),
     Output('team-refer-bulk-msg', 'children', allow_duplicate=True),
+    Input('team-refer-move-top-btn', 'n_clicks'),
     Input('team-refer-move-up-btn', 'n_clicks'),
     Input('team-refer-move-down-btn', 'n_clicks'),
+    Input('team-refer-move-bottom-btn', 'n_clicks'),
     State('team-refer-table', 'rowData'),
     State('team-refer-table', 'selectedRows'),
     prevent_initial_call=True,
 )
-def team_refer_move_selected(n_up, n_down, rows, selected_rows):
+def team_refer_move_selected(n_top, n_up, n_down, n_bottom, rows, selected_rows):
     trig = ctx.triggered_id
-    if not trig:
-        return no_update, no_update, no_update
-    direction = 'up' if trig == 'team-refer-move-up-btn' else 'down'
-    if not (n_up if direction == 'up' else n_down):
+    n_clicks_by_id = {
+        'team-refer-move-top-btn': n_top,
+        'team-refer-move-up-btn': n_up,
+        'team-refer-move-down-btn': n_down,
+        'team-refer-move-bottom-btn': n_bottom,
+    }
+    if not trig or not n_clicks_by_id.get(trig):
         return no_update, no_update, no_update
 
     rows = list(rows or [])
@@ -2105,12 +2159,19 @@ def team_refer_move_selected(n_up, n_down, rows, selected_rows):
     if not selected_idx:
         return no_update, no_update, _alert('이동할 행을 먼저 체크해주세요.', 'warning')
 
-    new_rows, new_selected_idx, blocked = _move_selected(rows, selected_idx, direction)
+    if trig in ('team-refer-move-up-btn', 'team-refer-move-down-btn'):
+        direction = 'up' if trig == 'team-refer-move-up-btn' else 'down'
+        new_rows, new_selected_idx, blocked = _move_selected(rows, selected_idx, direction)
+        msg = (_alert('이미 맨 위/맨 아래에 있어 더 이상 이동할 수 없는 행이 있습니다.', 'info')
+               if blocked else no_update)
+    else:
+        edge = 'top' if trig == 'team-refer-move-top-btn' else 'bottom'
+        new_rows, new_selected_idx = _move_to_edge(rows, selected_idx, edge)
+        msg = no_update
+
     new_rows = _renumbered(new_rows)
     _renumber_dep_codes(new_rows)
     new_selected_rows = [new_rows[i] for i in new_selected_idx]
-    msg = (_alert('이미 맨 위/맨 아래에 있어 더 이상 이동할 수 없는 행이 있습니다.', 'info')
-           if blocked else no_update)
     return new_rows, new_selected_rows, msg
 
 
@@ -2341,40 +2402,53 @@ def team_refer_close_merge_modal(n_clicks):
     return False
 
 
-# ── 콜백: 직군 예외자 — 행 추가 ────────────────────────────────────────────────
+# ── 콜백: 직군 예외자 — 행 추가(2026-09-17: 항상 맨 뒤에 추가로 단순화 —
+# team_refer_add_row와 같은 이유, AG Grid의 selectedRows는 클릭 위치가
+# 아니라 체크된 행 전체를 담는 값이라 "클릭해둔 셀 다음" 방식을 그대로
+# 재현하기 어렵다) ────────────────────────────────────────────────────────────
 @callback(
-    Output('exception-job-function-table', 'data', allow_duplicate=True),
+    Output('exception-job-function-table', 'rowData', allow_duplicate=True),
+    Output('exception-job-function-table', 'selectedRows', allow_duplicate=True),
     Input('exception-job-function-add-row-btn', 'n_clicks'),
-    State('exception-job-function-table', 'data'),
-    State('exception-job-function-table', 'active_cell'),
+    State('exception-job-function-table', 'rowData'),
     prevent_initial_call=True,
 )
-def exception_job_function_add_row(n_clicks, rows, active_cell):
+def exception_job_function_add_row(n_clicks, rows):
     if not n_clicks:
-        return no_update
+        return no_update, no_update
     rows = list(rows or [])
     new_row = {col: '' for col in ejf_store.KOREAN_COLUMNS}
-    insert_at = active_cell['row'] + 1 if active_cell else len(rows)
-    rows.insert(insert_at, new_row)
-    return _renumbered(rows)
+    new_row['_rid'] = uuid.uuid4().hex[:12]
+    rows.append(new_row)
+    return _renumbered(rows), []
 
 
-# ── 콜백: 직군 예외자 — 행 삭제 직후 No. 즉시 재번호 ───────────────────────────
-# row_deletable(행 삭제)은 DataTable이 클라이언트에서 바로 처리해 별도
-# 콜백이 안 걸리므로, data 자체를 지켜보다가 순서가 어긋나면 다시 매긴다
-# — idempotent(이 탭은 여전히 dash_table을 그대로 쓴다 — 팀/리더 참조
-# 탭만 2026-09-17에 AG Grid로 전환됐다).
+# ── 콜백: 직군 예외자 — 체크박스 선택 삭제(2026-09-17, AG Grid 전환과 함께
+# row_deletable의 행별 × 버튼을 대체) ─────────────────────────────────────────
+# 이 탭은 하위 조직 계층이 없는 평면 목록이라 team_refer_bulk_delete와 달리
+# cascade 판정(_subtree_range) 없이 체크한 행만 그대로 지운다.
 @callback(
-    Output('exception-job-function-table', 'data', allow_duplicate=True),
-    Input('exception-job-function-table', 'data'),
+    Output('exception-job-function-table', 'rowData', allow_duplicate=True),
+    Output('exception-job-function-table', 'selectedRows', allow_duplicate=True),
+    Output('exception-job-function-bulk-msg', 'children', allow_duplicate=True),
+    Input('exception-job-function-bulk-delete-btn', 'n_clicks'),
+    State('exception-job-function-table', 'rowData'),
+    State('exception-job-function-table', 'selectedRows'),
     prevent_initial_call=True,
 )
-def exception_job_function_renumber_on_change(rows):
-    if not rows:
-        return no_update
-    if [r.get('_no') for r in rows] == list(range(1, len(rows) + 1)):
-        return no_update
-    return _renumbered(list(rows))
+def exception_job_function_bulk_delete(n_clicks, rows, selected_rows):
+    if not n_clicks:
+        return no_update, no_update, no_update
+    rows = list(rows or [])
+    selected_rids = {r['_rid'] for r in (selected_rows or []) if r.get('_rid')}
+    if not selected_rids:
+        return no_update, no_update, _alert('삭제할 행을 먼저 체크해주세요.', 'warning')
+
+    new_rows = [r for r in rows if r.get('_rid') not in selected_rids]
+    new_rows = _renumbered(new_rows)
+    msg = _alert(f'{len(rows) - len(new_rows)}개 행을 삭제했습니다. "저장"을 눌러야 실제로 반영됩니다.',
+                 'success')
+    return new_rows, [], msg
 
 
 # ── 콜백: 직군 예외자 — 저장 ───────────────────────────────────────────────────
@@ -2384,7 +2458,7 @@ def exception_job_function_renumber_on_change(rows):
 @callback(
     Output('exception-job-function-save-msg', 'children'),
     Input('exception-job-function-save-btn', 'n_clicks'),
-    State('exception-job-function-table', 'data'),
+    State('exception-job-function-table', 'rowData'),
     prevent_initial_call=True,
 )
 def exception_job_function_save(n_clicks, rows):
