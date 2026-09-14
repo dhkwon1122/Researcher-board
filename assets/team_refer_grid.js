@@ -128,10 +128,14 @@
     }
 
     function setupInteractionFixes(wrap) {
-        // 2) 클릭 위치로 커서 이동.
+        // 2) 클릭 위치로 커서 이동. row_selectable(체크박스, 2026-09-15 추가)
+        // 컬럼도 <input>이지만 type="checkbox"라 setSelectionRange을 아예
+        // 지원하지 않아(호출 시 DOMException) 텍스트 입력(기본 type="text")
+        // 에만 적용한다.
         wrap.addEventListener('mouseup', function (e) {
             var input = e.target;
             if (!input || input.tagName !== 'INPUT') { return; }
+            if (input.type && input.type !== 'text') { return; }
             var clientX = e.clientX;
             setTimeout(function () {
                 // dash_table의 자체 처리(select-all)가 이미 끝난 뒤(macrotask)

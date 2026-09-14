@@ -199,6 +199,9 @@ def save_snapshot(records: list[dict], valid_date: date) -> dict:
     """
     result = ptr.build_rows_from_records(records)
     duplicate_dep_ids = ptr.find_duplicate_dep_ids(result)
+    # "(SAIT)"/"(기술원)" 태그 제거로 서로 다른 원본이 하나로 합쳐진 경우를
+    # 확인용으로 함께 반환한다(2026-09-15 확정 — 값 손실이 있는지 확인 필요).
+    tag_merges = ptr.find_tag_merges(records)
 
     result = ptr.stamp_valid_date(result, valid_date)
     result['deleted'] = 'N'
@@ -211,6 +214,7 @@ def save_snapshot(records: list[dict], valid_date: date) -> dict:
     db_ok = _upsert_rows_to_db(result)
     return {
         'saved_rows': len(result), 'total_rows': len(merged), 'db_ok': db_ok,
+        'tag_merges': tag_merges,
         'duplicate_dep_ids': duplicate_dep_ids,
     }
 

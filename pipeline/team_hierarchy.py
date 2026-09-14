@@ -49,11 +49,11 @@ FIELDS = (
     'researcher_id', 'name', 'assignment_name',
 )
 
-_LEVEL_FIELDS = ('dep_1st_name', 'dep_2nd_name', 'dep_3rd_name')
+LEVEL_FIELDS = ('dep_1st_name', 'dep_2nd_name', 'dep_3rd_name')
 _DEFAULT_WORK_TYPE = 'R&D'
 
 
-def _slug(path: tuple) -> str:
+def slug(path: tuple) -> str:
     """경로 튜플(예: ('반도체연구소','소재개발팀'))을 결정적인 dep_id로
     변환. 같은 텍스트는 항상 같은 dep_id가 되고(멱등적), 다른 실행/다른
     시점에서 돌려도 동일하다 — 연속성을 신경 쓰지 않아도 되는 이유가 바로
@@ -63,12 +63,12 @@ def _slug(path: tuple) -> str:
     return f'AUTO-{digest}'
 
 
-def _own_path(record: dict) -> tuple:
+def own_path(record: dict) -> tuple:
     """레코드에서 dep_1st_name/dep_2nd_name/dep_3rd_name을 순서대로 읽어,
     처음 빈 값을 만나는 지점까지만 잘라 경로 튜플을 만든다(중간에 빈 값이
     있으면 그 뒤는 무시 — 방어적 처리, 정상 입력이라면 발생하지 않음)."""
     path = []
-    for field in _LEVEL_FIELDS:
+    for field in LEVEL_FIELDS:
         value = str(record.get(field) or '').strip()
         if not value:
             break
@@ -96,28 +96,28 @@ def derive_hierarchy(records: list) -> list:
 
     def _ensure_node(path: tuple) -> dict:
         if path not in nodes:
-            dep_id = _slug(path)
+            dep_id = slug(path)
             upper_path = path[:-1]
             node = {f: '' for f in FIELDS}
             node['dep_id'] = dep_id
-            node['upper_dep_id'] = _slug(upper_path) if upper_path else ''
+            node['upper_dep_id'] = slug(upper_path) if upper_path else ''
             node['team_layer'] = str(len(path))
-            node[_LEVEL_FIELDS[len(path) - 1]] = path[-1]
+            node[LEVEL_FIELDS[len(path) - 1]] = path[-1]
             nodes[path] = node
             order.append(path)
         return nodes[path]
 
     for record in records:
-        own_path = _own_path(record)
-        if not own_path:
+        record_path = own_path(record)
+        if not record_path:
             continue
-        # own_path 자신과 모든 접두사(조상)를 조직 단위로 등록한다.
-        for depth in range(1, len(own_path) + 1):
-            _ensure_node(own_path[:depth])
+        # record_path 자신과 모든 접두사(조상)를 조직 단위로 등록한다.
+        for depth in range(1, len(record_path) + 1):
+            _ensure_node(record_path[:depth])
 
-        # 이 레코드가 실제로 own_path 레벨 소속임을 나타내는 속성값은
-        # own_path 노드에만 채운다(조상 노드에는 채우지 않음).
-        node = nodes[own_path]
+        # 이 레코드가 실제로 record_path 레벨 소속임을 나타내는 속성값은
+        # record_path 노드에만 채운다(조상 노드에는 채우지 않음).
+        node = nodes[record_path]
         for field in ('org_name_wd', 'work_type', 'dep_code', 'researcher_id', 'name', 'assignment_name'):
             value = str(record.get(field) or '').strip()
             if value and not node[field]:
@@ -156,8 +156,8 @@ def backfill_full_path(rows: list) -> list:
                 layer = int(node.get('team_layer') or 0)
             except (TypeError, ValueError):
                 layer = 0
-            if 1 <= layer <= len(_LEVEL_FIELDS):
-                field = _LEVEL_FIELDS[layer - 1]
+            if 1 <= layer <= len(LEVEL_FIELDS):
+                field = LEVEL_FIELDS[layer - 1]
                 value = str(node.get(field) or '').strip()
                 if value and not full.get(field):
                     full[field] = value
