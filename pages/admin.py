@@ -345,7 +345,8 @@ def _user_management_tab() -> html.Div:
             html.Thead(html.Tr(header_cells)),
             html.Tbody(_build_user_rows(users, _DEFAULT_USER_SORT), id='user-table-body'),
         ],
-        bordered=True, hover=True, responsive=True, size='sm', className='mb-0 admin-table',
+        bordered=True, hover=True, responsive=True, size='sm',
+        className='mb-0 admin-table user-mgmt-table',
     )
 
     return html.Div([

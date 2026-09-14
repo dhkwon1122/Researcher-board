@@ -11639,3 +11639,23 @@ Playwright로 확인 — 체크한 1개 행이 "맨 위로"로 정확히 맨 앞
 0건(`net::ERR_TUNNEL_CONNECTION_FAILED`는 무관한 기존 샌드박스
 제약). 테스트 계정·`data/processed/team_refer.csv`는 검증 후 삭제,
 `config/users.json`은 원본과 diff 없음 재확인.
+
+## 2026-09-17: 사용자/권한 관리 표 — 셀 내용까지 가운데 정렬
+
+사용자 요청: 헤더는 이미 가운데 정렬돼 있었지만(`.admin-table thead
+th`, 2026-09-01) 셀 내용(아이디/이름/역할/이메일/상태/체크박스/관리
+버튼)은 기본값인 좌측 정렬 그대로였다.
+
+새 클래스 `.user-mgmt-table`을 `_user_management_tab()`의
+`dbc.Table`에만 추가(`admin-table`은 그대로 유지 — 헤더 스타일은
+공유)하고, `assets/custom.css`에 `.user-mgmt-table tbody td {
+text-align: center; }`를 추가했다. "데이터 업데이트" 표는 같은
+`admin-table` 클래스를 공유하지만(업로드 위젯/실행 이력이 많아
+좌측 정렬이 자연스러움) 이 새 클래스는 안 붙여 영향받지 않는다.
+
+**검증**: 실제 서버 + Playwright로 확인 — `.user-mgmt-table tbody
+td`의 계산된 `text-align`이 `center`로 바뀐 것, `#data-update-table-
+container`의 표는 그대로 `start`(영향 없음)인 것을 확인. 스크린샷으로
+아이디/이름/역할/이메일/상태 배지/체크박스/관리 버튼 전부 가운데
+정렬된 것도 눈으로 확인. 테스트 계정은 검증 후 삭제,
+`config/users.json`은 원본과 diff 없음 재확인.
