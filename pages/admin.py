@@ -405,6 +405,24 @@ def _renumbered(rows: list) -> list:
     return rows
 
 
+def _split_hidden_rows(rows: list) -> tuple[list, list]:
+    """비공식소속부서명이 빈 행(리프에 실제 배정이 없는 조직 — 조직도
+    트리를 이루기 위한 상위 노드로만 쓰이는 행, 2026-09-15 요청)을
+    가독성을 위해 그리드 화면에서 숨긴다. dep_id/upper_dep_id/team_layer
+    (부모-자식 관계에 필수)는 이 그리드의 편집 컬럼이 아니라 1/2/3단계
+    부서명 "전체 경로"에서 매번 자동 계산되므로(pipeline/team_hierarchy.py),
+    이 행들을 화면에서만 안 보이게 해도 그 계산에 필요한 정보(1/2/3단계
+    부서명)는 여전히 온전히 보존된다 — 실제로 삭제하지 않고
+    team-refer-hidden-rows Store에 그대로 담아 두었다가, 저장(team_refer_save)
+    시 화면에 보이는(편집된) 행과 합쳐서 반영한다(안 그러면 tombstone_
+    missing_dep_ids()가 "이번 저장에 없다"고 판단해 실수로 삭제될 것).
+    반환값은 (화면에 보일 행, 숨길 행) 순서."""
+    visible, hidden = [], []
+    for r in rows:
+        (hidden if not str(r.get('비공식소속부서명') or '').strip() else visible).append(r)
+    return visible, hidden
+
+
 def _team_refer_run_status_view(row: dict):
     """팀/리더 참조 업로드 섹션의 "최종실행이력/실행결과" 미니 표시 —
     초기 렌더와 폴링 갱신(team_refer_upload_poll) 양쪽이 공유."""
@@ -539,8 +557,14 @@ def _team_refer_tab() -> html.Div:
     행에 "전체 경로"로 채우면(예: 3단계 소속이면 1/2/3단계 이름을 전부 채움)
     저장 시점에 dep_id/upper_dep_id/team_layer가 그 경로에서 자동으로
     계산된다(services.team_refer_store.list_editable_rows()가 저장된
-    조직을 불러올 때도 상위 부서명을 전체 경로로 채워 보여준다)."""
+    조직을 불러올 때도 상위 부서명을 전체 경로로 채워 보여준다).
+
+    비공식소속부서명이 빈 행(리프 배정 없이 조직도 트리 구조상으로만
+    존재하는 상위 노드)은 가독성을 위해 화면에서 숨기고(_split_hidden_rows),
+    team-refer-hidden-rows Store에 그대로 보관해 저장 시 다시 합친다."""
     rows = team_refer_store.list_editable_rows()
+    all_suggestions = _build_autofill_suggestions(rows)
+    rows, hidden_rows = _split_hidden_rows(rows)
     rows = _renumbered(rows)
 
     # 'No.' 는 화면 표시 전용 — 저장 대상 컬럼(KOREAN_COLUMNS)에는 없으므로
@@ -554,18 +578,29 @@ def _team_refer_tab() -> html.Div:
         # 자동채움 가이드(드롭다운/자동완성) 후보 — team_refer_sync_suggestions
         # 콜백이 data가 바뀔 때마다 다시 계산해 채운다. 여기 초기값은 페이지
         # 최초 로드 시 클라이언트 스크립트(assets/team_refer_grid.js)가 바로
-        # 쓸 수 있게 미리 계산해 둔 것.
-        dcc.Store(id='team-refer-suggestions', data=_build_autofill_suggestions(rows)),
+        # 쓸 수 있게 미리 계산해 둔 것(숨긴 행 포함 전체 기준 — all_suggestions).
+        dcc.Store(id='team-refer-suggestions', data=all_suggestions),
+        # 비공식소속부서명이 빈 행(가독성을 위해 화면에서 숨김) — 편집 대상이
+        # 아니라 저장 시 화면에 보이는 행과 그대로 합쳐서 반영한다.
+        dcc.Store(id='team-refer-hidden-rows', data=hidden_rows),
         # clientside_callback 전용 더미 Output(화면에 표시할 내용 없음) —
         # pages/researcher_profile.py의 profile-print-dummy와 동일한 패턴.
         html.Div(id='team-refer-grid-dummy', style={'display': 'none'}),
+        # 드래그 재정렬(assets/team_refer_grid.js)이 참조할 최신 data/sort_by
+        # 캐시 전용 더미 Output(2026-09-14 추가) — 위 dummy와 트리거 Input이
+        # 달라 별도로 둠.
+        html.Div(id='team-refer-grid-dummy-2', style={'display': 'none'}),
 
         dbc.Alert(
             [
                 html.I(className='bi bi-info-circle me-2'),
                 '1단계부서명은 필수입니다(예: 3단계 소속이면 1/2/3단계 이름을 자기 '
                 '레벨까지 전부 채워주세요). 부서ID/상위부서ID/조직 레벨은 이 경로에서 '
-                '자동으로 계산되므로 따로 입력하지 않습니다.',
+                '자동으로 계산되므로 따로 입력하지 않습니다.'
+                + (f' 비공식소속부서명이 비어 있는 {len(hidden_rows)}개 행은 '
+                   '(리프에 실제 배정이 없는 상위 조직 — 부모-자식 관계 계산에는 계속 '
+                   '쓰이지만) 가독성을 위해 화면에서 숨겼습니다. 데이터는 그대로 '
+                   '보존되며 저장 시 함께 반영됩니다.' if hidden_rows else ''),
             ],
             color='light', className='small border mb-3',
         ),
@@ -1874,9 +1909,12 @@ def team_refer_sync_tooltip(rows):
 @callback(
     Output('team-refer-suggestions', 'data'),
     Input('team-refer-table', 'data'),
+    State('team-refer-hidden-rows', 'data'),
 )
-def team_refer_sync_suggestions(rows):
-    return _build_autofill_suggestions(rows)
+def team_refer_sync_suggestions(rows, hidden_rows):
+    # 화면에 안 보이는(비공식소속부서명 공백) 행도 후보 재료로 함께 쓴다 —
+    # 예를 들어 상위부서명·조직코드 등은 그 행에도 유효한 값일 수 있다.
+    return _build_autofill_suggestions(list(rows or []) + list(hidden_rows or []))
 
 
 # assets/team_refer_grid.js의 window.__syncTeamReferSuggestions()가 후보
@@ -1896,6 +1934,27 @@ clientside_callback(
     Input('team-refer-suggestions', 'data'),
 )
 
+# 같은 부모(형제) 그룹 안에서만 행을 드래그해 순서를 바꾸는 기능
+# (assets/team_refer_grid.js, 2026-09-14 추가)이 참조할 최신 data/sort_by를
+# 캐싱한다 — services.team_refer_store.list_editable_rows()가 이제
+# 계층적으로(부모별로 묶어서) 정렬해 반환하므로, 같은 부모 밑 조직끼리는
+# 항상 화면에서 붙어 보인다(드래그가 의미 있으려면 필요한 선행 조건).
+# 헤더 클릭으로 임의 컬럼 정렬 중일 때는 이 "형제끼리 붙어 있음" 가정이
+# 깨지므로 sort_by 상태도 함께 캐싱해 JS 쪽에서 드래그를 비활성화한다.
+clientside_callback(
+    """
+    function(rows, sortBy) {
+        if (window.__teamReferOnDataChange) {
+            window.__teamReferOnDataChange(rows, sortBy);
+        }
+        return '';
+    }
+    """,
+    Output('team-refer-grid-dummy-2', 'children'),
+    Input('team-refer-table', 'data'),
+    Input('team-refer-table', 'sort_by'),
+)
+
 
 # ── 콜백: 팀/리더 참조 — 저장 ─────────────────────────────────────────────────
 # 행 삭제(row_deletable) 자체는 DataTable이 클라이언트에서 바로 처리하므로
@@ -1911,10 +1970,11 @@ clientside_callback(
     Output('team-refer-dupe-modal-body', 'children'),
     Input('team-refer-save-btn', 'n_clicks'),
     State('team-refer-table', 'data'),
+    State('team-refer-hidden-rows', 'data'),
     State('team-refer-valid-date', 'date'),
     prevent_initial_call=True,
 )
-def team_refer_save(n_clicks, rows, valid_date_str):
+def team_refer_save(n_clicks, rows, hidden_rows, valid_date_str):
     from services.auth import can
     if not can('manage_users'):
         return _alert('관리자만 저장할 수 있습니다.', 'danger'), no_update, no_update
@@ -1924,7 +1984,11 @@ def team_refer_save(n_clicks, rows, valid_date_str):
         return _alert('입력 날짜를 선택해주세요.', 'warning'), no_update, no_update
 
     valid_date = date.fromisoformat(valid_date_str[:10])
-    rows = rows or []
+    # 화면에 보이는(편집된) 행 + 가독성을 위해 숨겨뒀던 행(비공식소속부서명
+    # 공백, _split_hidden_rows 참고)을 합쳐서 저장한다 — 숨긴 행을 빼고
+    # 저장하면 tombstone_missing_dep_ids()가 "이번 저장에 없다"고 보고
+    # 실수로 삭제 처리할 것이다.
+    rows = list(rows or []) + list(hidden_rows or [])
 
     valid_rows = [r for r in rows if str(r.get('1단계부서명') or '').strip()]
     skipped = len(rows) - len(valid_rows)
@@ -2413,6 +2477,8 @@ def data_update_db_load(n_clicks):
     Output('data-update-interval', 'disabled', allow_duplicate=True),
     Output('team-refer-upload-status', 'children', allow_duplicate=True),
     Output('exception-job-function-upload-status', 'children', allow_duplicate=True),
+    Output('team-refer-table', 'data', allow_duplicate=True),
+    Output('team-refer-hidden-rows', 'data', allow_duplicate=True),
     Input('data-update-interval', 'n_intervals'),
     prevent_initial_call=True,
 )
@@ -2421,8 +2487,20 @@ def data_update_poll(_n):
     team_refer_status = _team_refer_run_status_view(team_refer_row) if team_refer_row else no_update
     ejf_row = next((r for r in wpr.snapshot() if r['key'] == 'exception_job_function'), None)
     ejf_status = _team_refer_run_status_view(ejf_row) if ejf_row else no_update
+    # 팀/리더 참조 그리드도 매 폴링마다 최신 저장 상태로 갱신한다(2026-09-14
+    # 추가) — intake CSV 업로드→실행이 끝나도 그리드가 페이지 최초 로드 시점
+    # 값 그대로 남아 새로고침해야만 반영되던 문제. data-update-interval은
+    # 어떤 작업이든 실행 중일 때만 틱하고 끝나면 스스로 꺼지므로(아래
+    # not wpr.any_running()), 실질적으로 "실행 완료 직후 한 번" 갱신되는
+    # 효과를 낸다 — 단, 이 틱이 도는 사이(다른 항목이 실행 중인 동안 포함)
+    # 그리드에서 저장 안 한 수동 편집을 하고 있었다면 그 내용은 이 갱신으로
+    # 덮어써질 수 있다(사용자 확정 — 자동 갱신을 우선하기로 함).
+    # 비공식소속부서명 빈 행은 여기서도 다시 숨겨(_split_hidden_rows,
+    # 2026-09-15 추가) team-refer-hidden-rows Store를 함께 갱신한다.
+    visible_rows, hidden_rows = _split_hidden_rows(team_refer_store.list_editable_rows())
+    grid_data = _renumbered(visible_rows)
     return (_data_update_table(), _db_status_view(), not wpr.any_running(),
-            team_refer_status, ejf_status)
+            team_refer_status, ejf_status, grid_data, hidden_rows)
 
 
 # ── 콜백: 데이터 업데이트 — "이전 Data" 다운로드 ───────────────────────────────

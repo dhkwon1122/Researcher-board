@@ -10511,3 +10511,216 @@ a가 이미 채워져 있으면(마커 치환 결과 포함) 손대지 않는다
 1종, 총 10행)를 한 파일로 합쳐 재실행해 전부 기대값과 일치하는 것을
 최종 확인. `python3 -c "import app"` 전체 임포트 확인, `py_compile`
 통과.
+
+## 2026-09-14: 팀/리더 참조 그리드 — 데이터 업데이트 폴링 시 자동 반영
+
+배경: intake CSV 업로드→실행이 백그라운드에서 끝나도 "팀/리더 참조" 탭의
+편집 그리드(`team-refer-table`)는 `/admin` 페이지 최초 진입 시 한 번만
+`services.team_refer_store.list_editable_rows()`를 읽어와, 실행 완료 후
+브라우저를 새로고침해야만 반영된 결과가 보이는 문제를 확인(직전 대화에서
+사용자가 발견). 확인 질문(AskUserQuestion)으로 "자동 갱신(실행 완료
+직후 한 번 최신 데이터로 교체, 그 사이 미저장 편집이 있었다면 사라질 수
+있음)"을 사용자가 명시적으로 선택.
+
+**`pages/admin.py`의 `data_update_poll()`**(기존 — 백그라운드 실행 진행
+상황을 3초마다 확인하는 폴링 콜백, `data-update-interval`이 어떤 작업이든
+실행 중일 때만 틱하고 끝나면 스스로 꺼짐)에 `Output('team-refer-table',
+'data', allow_duplicate=True)`를 추가 — 매 틱마다
+`_renumbered(team_refer_store.list_editable_rows())`로 그리드 데이터를
+다시 계산해 내보낸다. 인터벌 자체가 "실행 중일 때만" 도는 구조라, 결과적으로
+"실행 완료 직후 한 번" 갱신되는 효과를 낸다(그 이후엔 인터벌이 꺼져 더 이상
+안 건드림). 이미 있던 `team_refer_sync_tooltip`/`team_refer_sync_suggestions`
+콜백이 `Input('team-refer-table', 'data')`를 구독하고 있어, 그리드 데이터가
+갱신되면 툴팁/자동채움 가이드 후보도 자동으로 함께 재계산된다(추가 배선
+불필요).
+
+검증: 실제 `pipeline.process_team_refer.process()`로 intake CSV를
+처리(임시 디렉터리로 격리) → `services.team_refer_store.list_editable_rows()`
+→ `pages.admin._renumbered()`까지 실제 파이프라인 함수로 end-to-end
+실행해 그리드가 받을 정확한 데이터 형태(`_no` 포함)를 확인. `data_update_poll()`
+콜백 자체도 `wpr.snapshot`/`wpr.any_running`/`team_refer_store.
+list_editable_rows`를 몬키패치해 직접 호출 — 반환 튜플이 정확히 6개 Output과
+일치하고, 6번째(team-refer-table data)가 최신 그리드 데이터로 채워지는 것을
+확인. `python3 -c "import app"` 전체 임포트 확인, `py_compile` 통과. 이
+과정에서 이전 세션 테스트 때 지우지 않고 남아있던 `data/processed/team_refer.csv`
+잔여 파일(사용자 환경과 무관, 이 세션 샌드박스 전용 실수)도 함께 정리.
+
+**참고**: DB(`DATABASE_URL`)가 설정된 배포에서는 이 자동 반영이 CSV
+기준으로만 동작한다 — intake CSV 업로드 자체는 CSV만 갱신하고 DB는
+건드리지 않으므로, DB 반영 버튼을 별도로 누르지 않으면 `read_team_refer()`
+가 DB를 우선 읽어 여전히 반영 전 상태를 보여줄 수 있다(이건 이번 수정
+범위 밖 — 기존에 이미 안내된 별도 단계).
+
+## 2026-09-14 (2): 팀/리더 참조 그리드 — 계층적(부모별) 정렬 + 형제 그룹
+안 드래그로 순서 변경(부모 행 드래그 시 하위 조직 전체를 한 블록으로 이동)
+
+배경: 관리자가 "팀/리더 참조" 그리드에서 조직을 사람이 보기 좋은 순서로
+정렬하고 싶다는 요청 3건을 처리했다: (1) 업로드 시 신규 데이터를 올리면
+기존 데이터가 사라져야 하는지(확인 결과 정상 동작 — DB에 별도로 "DB 반영"
+버튼을 누르지 않으면 CSV만 갱신돼 DB 기반 화면엔 옛 값이 남는다는 사전
+확인 절차 안내), (2) `비공식소속부서명`이 비어 있어도 1/2단계부서명만
+채워진 행이 있는 이유(조직도 트리의 상위 노드로서 필요한 정상 구조라고
+확인), (3) 그리드 행 전체를 위/아래로 드래그해 순서를 바꾸는 기능(행 안의
+데이터는 그대로 유지) — AskUserQuestion으로 "같은 부모(형제) 그룹 안에서만
+드래그 가능"과 "그리드 기본 정렬을 계층적(부모별 그룹핑)으로 변경" 둘 다
+확정.
+
+**Part A — 계층적 정렬**(`services/team_refer_store.py`): 기존
+`list_editable_rows()`는 `dep_code` 전역 오름차순 단일 정렬이라(dep_id가
+전역 순차 카운터로 매겨지므로) 같은 부모의 자식들이 화면에서 흩어져
+보였다. `mmd.build_org_tree(rows)`가 이미 만드는 부모-자식 트리를
+`_flatten_org_tree(tree)`(신규, 각 노드를 부모→자식 순서로 깊이 우선
+평탄화)로 펼쳐 반환하도록 교체 — 같은 부모의 자식들은 항상 화면에
+연속으로 붙어 나오고, 그 안에서는 기존 `build_org_tree()`의 dep_code
+기준 정렬이 그대로 유지된다.
+
+**Part B — 형제 그룹 안 드래그 재정렬**(`assets/team_refer_grid.js`,
+`pages/admin.py`): DataTable 자체엔 행 드래그 기능이 없어 순수 JS로
+구현. `page_action='none'`(페이지네이션 없음, 전체 행이 항상 DOM에 있음)
++ `sort_action='custom'`(헤더 클릭 정렬 시 Python 콜백이 `data` 배열을
+직접 재작성 — DataTable이 자체적으로 행 순서를 바꾸지 않음)이라, 렌더링된
+`<tr>` DOM 순서가 항상 `data` 배열 순서와 정확히 일치한다는 게 이
+구현의 핵심 전제.
+- `pages/admin.py`: `_team_refer_tab()`의 그리드를 감싸는
+  `team-refer-grid-wrap` div에 숨은 더미 `team-refer-grid-dummy-2`를
+  추가하고, `team-refer-table`의 `data`/`sort_by`가 바뀔 때마다
+  `window.__teamReferOnDataChange(rows, sortBy)`를 호출하는
+  `clientside_callback`을 신설.
+- `assets/team_refer_grid.js`: `rowGroupKeyFromRow(row)`(1→2→3단계
+  부서명을 순서대로 읽다가 처음 빈 값을 만나면 그 행 자신의 레벨 —
+  그 앞 단계까지의 값이 곧 부모를 가리키므로 그룹 키로 씀)로 "형제
+  그룹"을 판정. `dragstart`/`dragover`/`drop`/`dragend` 이벤트로 같은
+  그룹 안에서만 드롭을 허용(다른 그룹 행 위로는 `preventDefault()`를
+  안 불러 자연스럽게 거부된 것처럼 보임), 헤더 클릭 정렬이 활성화돼
+  있으면(`sort_by` 있음) "형제끼리 붙어 있음" 가정이 깨지므로 드래그
+  자체를 비활성화. 드롭되면 그 그룹이 기존에 갖고 있던 조직코드 값들을
+  새 순서에 맞게 재배당(새 번호를 만들지 않아 다른 그룹과 충돌 없음),
+  `window.dash_clientside.set_props('team-refer-table', {data: rows})`
+  로 즉시 반영.
+- **부모 행 드래그 시 하위 조직 전체를 함께 이동**(구현 중 자체 발견·수정한
+  설계 결함): 초기 구현은 드래그한 행 하나만 옮겨, 부모 행(예: 2단계
+  "B1팀")을 옮기면 그 바로 아래 자식 행(3단계 "B1-1파트")과 분리되는
+  버그가 있었다 — Part A의 계층적 평탄화 결과 자식 행은 항상 부모 바로
+  다음에 연속으로 나오므로, `rowOwnPath(row)`(그 행의 1→2→3단계 경로)와
+  `isDescendantPath(path, ancestorPath)`(접두사 관계 판정)로
+  `subtreeRange(rows, idx)`가 "드래그 대상 행 + 그 뒤에 연속으로 이어지는
+  하위 조직 행 전체"를 하나의 구간으로 찾아, 그 구간 전체를 블록으로
+  옮기도록 `drop` 핸들러를 재작성했다.
+- **드래그가 실제로는 전혀 동작하지 않던 잠재 버그 발견·수정**(라이브
+  테스트로 처음 발견): `markRowsDraggable()`을 데이터 변경 시 한 번만
+  (`requestAnimationFrame`으로) 호출해 `<tr>`에 `draggable=true`를 직접
+  설정했는데, 같은 `data` 변화를 지켜보는 다른 서버 왕복 콜백들
+  (`team_refer_sync_tooltip`/`team_refer_sync_suggestions`, `tooltip_data`
+  등 다른 prop을 갱신)이 뒤이어 도착하면 DataTable이 `<tbody>`를 다시
+  그려(새 `<tr>` 노드로 교체) 방금 설정한 `draggable` 속성이 사라졌다 —
+  실제 브라우저로 확인해보니 모든 행의 `draggable`이 항상 `false`였다
+  (한 번도 동작한 적이 없었던 셈). 한 번만 마크하는 대신, `wrap`에
+  지속적인 `MutationObserver`(자동채움 가이드의 `<input>` 감시와 동일한
+  패턴)를 달아 새로 생기는 `<tr>`마다 계속 `draggable=true`를 재적용하도록
+  고쳤다.
+
+**검증**: 실제 서버(임시 admin 계정, `services.team_refer_store.save_snapshot()`
+으로 만든 B연구소(B1팀+자식 B1-1파트, B2팀, B3팀)/A연구소(A1팀, A2팀)
+합성 조직도)를 Playwright(Chromium)로 구동해 확인.
+- Part A: `list_editable_rows()`가 B연구소 서브트리(B1팀+자식+B2팀+B3팀)
+  전체를 연속으로, 그다음 A연구소 서브트리를 연속으로 반환하는 것을 직접
+  호출로 확인.
+- draggable 버그: 수정 전 실측 — 모든 `<tr>.draggable`이 `false`.
+  수정 후 — 전부 `true`로 지속.
+- Playwright의 `page.drag_and_drop()`(고수준 API)이 이 헤드리스
+  Chromium 빌드에서 draggable 엘리먼트에 대해 네이티브 `dragstart`를
+  아예 발생시키지 않는 것을 확인(툴 자체의 한계 — 실제 사용자의 마우스
+  드래그와는 무관) — 대신 `new DragEvent(..., {dataTransfer: new
+  DataTransfer()})`로 `dragstart`/`dragover`/`drop`/`dragend`를 실제
+  DOM에 직접 dispatch해, 앱의 진짜 이벤트 핸들러 경로를 그대로 태워
+  검증했다.
+- **핵심 시나리오**: B1팀(자식 B1-1파트 포함, 조직코드1)을 비인접 형제인
+  B3팀(조직코드3) 위로 드롭 — 결과가 정확히 `[B연구소, B2팀(코드1),
+  B1팀(코드2), B1-1파트(코드1, 그대로), B3팀(코드3), A연구소, A1팀, A2팀]`
+  로 나왔다: (a) 자식 B1-1파트가 부모 B1팀과 계속 붙어서 함께 이동(핵심
+  수정 사항 검증), (b) "드롭 대상 바로 앞에 삽입" 의미대로 B2팀이 앞으로
+  당겨지고 B1팀 블록이 B3팀 바로 앞으로 이동, (c) 형제 그룹(B1팀/B2팀/
+  B3팀)의 조직코드만 새 순서(1,2,3)로 재배당되고 자식(B1-1파트, 별도
+  그룹)의 코드는 그대로, (d) 다른 그룹(A연구소 서브트리)은 전혀 안
+  건드려짐 — 모두 손으로 미리 계산한 기대값과 정확히 일치. 렌더링된
+  DOM(`<tr>` 실제 텍스트)도 이 순서 그대로 반영돼, `dash_clientside.
+  set_props()`를 통한 서버 왕복 없는 즉시 갱신까지 확인.
+- 다른 그룹 위로 드롭 시도(B1팀 → A1팀): 데이터 배열이 드롭 전후로
+  완전히 동일(조용히 거부) 확인.
+- 헤더 클릭 정렬(`.column-header--sort` 아이콘) 활성화 후: `window.
+  __teamReferSortActive`가 `true`로 바뀌고, 그 상태에서의 드래그 시도는
+  `dragstart` 자체가 `preventDefault()`로 즉시 취소되며 데이터가 전혀
+  안 바뀌는 것 확인.
+- `node --check`/`python3 -m py_compile`/`python3 -c "import app"` 전체
+  통과.
+- 테스트로 만든 임시 admin 계정·`data/processed/team_refer.csv`(및 저장
+  시 함께 생기는 `team_refer_history.csv`/`team_leader_refer/` 스냅샷)는
+  검증 후 전부 삭제, `config/users.json`은 원본과 diff 없음을 재확인해
+  원상 복구했다.
+
+**미검증**: 실제 사용자 마우스 드래그(진짜 OS 레벨 HTML5 DnD)로 조작하는
+것 — 이번 라이브 테스트는 Playwright 툴 자체의 한계로 합성 DragEvent
+dispatch를 통해 앱의 이벤트 핸들러 로직을 검증했으며, 브라우저의 네이티브
+드래그 시각 효과(고스트 이미지, 커서 모양)나 실제 사용자 조작감은
+확인하지 못했다.
+
+## 2026-09-15: 팀/리더 참조 그리드 — 비공식소속부서명 빈 행을 화면에서 숨김
+(부모-자식 관계 데이터는 그대로 보존)
+
+사용자 요청: 비공식소속부서명이 비어 있는 행(리프에 실제 배정 없이
+조직도 트리 구조를 이루기 위해서만 존재하는 상위 노드 — 예: "B연구소"
+루트 단독 행, "B연구소/B1팀" 단독 행)은 dep_id/upper_dep_id 등 부모-자식
+관계 계산에 계속 쓰이는 필수 데이터만 남기고, 그리드 화면에서는 안 보이게
+가려서 가독성을 높이고 싶다는 것.
+
+**핵심 설계 제약**: `services.team_refer_store.save_snapshot()`이 호출하는
+`pipeline.process_team_refer.tombstone_missing_dep_ids()`는 "이번 저장에
+제출된 행에 없는, 현재 살아있는 dep_id"를 자동으로 삭제(톰스톤) 처리한다
+(그리드가 매번 "현재 조직 전체"를 다시 제출하는 구조라 가능한 방식,
+2026-09-11 설계). 따라서 단순히 이 행들을 그리드 `data`에서 빼버리면,
+다음 "저장" 클릭 때 이 행들이 전부 삭제된 것으로 오인돼 실제로
+사라진다 — 화면에서만 숨기고 데이터는 보존하려면 별도 보관·병합 장치가
+필요했다.
+
+**`pages/admin.py`**: 신규 `_split_hidden_rows(rows)` — 비공식소속부서명이
+빈 행을 걸러 `(화면에 보일 행, 숨길 행)` 튜플로 나눈다. `_team_refer_tab()`
+이 `list_editable_rows()` 결과를 이 함수로 나눠, 화면에 보일 행만
+`team-refer-table`의 `data`로 렌더링하고 숨긴 행은 신규
+`dcc.Store(id='team-refer-hidden-rows')`에 그대로 담아둔다(편집 대상
+아님, 사용자에게 노출도 안 함). 안내 `Alert`에 "N개 행을 가독성을 위해
+숨겼고 데이터는 보존되며 저장 시 함께 반영된다"는 문구를 동적으로 추가.
+`team_refer_save()` 콜백이 저장 직전 `State('team-refer-hidden-rows',
+'data')`를 화면에서 편집된 행과 합쳐서(`rows + hidden_rows`)
+`save_snapshot()`에 넘기도록 수정 — 숨긴 행이 "이번 저장에 없다"고
+오인되지 않아 톰스톤 대상에서 제외된다. intake CSV 실행 후 그리드를
+자동 갱신하는 `data_update_poll()`(2026-09-14 도입)도 동일하게
+`_split_hidden_rows()`를 적용해 `team-refer-hidden-rows` Store를 함께
+갱신하도록 `Output` 1개 추가. `team_refer_sync_suggestions()`(자동채움
+가이드 후보 계산)도 숨긴 행을 `State`로 함께 받아 후보 재료에 포함시켜,
+숨겨진 행에만 있던 값(예: 상위 조직의 조직코드)도 계속 자동완성 후보로
+나오게 했다.
+
+**행 추가/삭제/정렬/드래그 재정렬은 영향 없음**: 이 기능들은 전부 화면에
+보이는(`team-refer-table.data`) 행만 다루므로 그대로 동작한다. 새로
+추가한 행은 비공식소속부서명이 비어 있어도 "숨김" 대상이 아니라 계속
+화면에 남아 사용자가 채워 넣을 수 있다(숨김 판정은 페이지 로드/폴링
+갱신 시점에만 한 번 적용되고, 편집 중인 화면 데이터에는 소급 적용하지
+않음 — 편집 중 값을 지워도 그 자리에서 사라지지 않고, 다음 새로고침/
+저장 후 재로드 때 비로소 숨겨진다).
+
+**검증**: 실제 서버(임시 admin 계정) + `services.team_refer_store.
+save_snapshot()`으로 만든 합성 조직도(비공식소속부서명이 채워진 리프
+3개 + 빈 상위 노드 3개, 총 6행)를 Playwright로 확인 — (1) 그리드에
+정확히 리프 3개 행만 렌더링되고 상위 3개 행은 안 보이는 것, (2) 안내
+문구에 "3개 행" 숨김 안내가 정확히 표시되는 것, (3) "저장" 클릭 시
+서버 응답이 "이번 저장 6행 반영"으로 화면에 안 보이는 3개까지 포함해
+정상 제출되는 것, (4) 저장 후 `list_editable_rows()`를 직접 다시 호출해
+6행 전부(숨겨졌던 3행 포함) 그대로 남아있는 것(톰스톤 안 됨)을 확인.
+`python3 -m py_compile`/`python3 -c "import app"` 통과. 테스트 계정·
+`data/processed/team_refer.csv`(및 부수 산출물)는 검증 후 삭제,
+`config/users.json`은 원본과 diff 없음 재확인.
+
+**미검증**: 실제 브라우저에서 안내 문구/숨김 개수가 대규모 실데이터
+(수십~수백 개 조직 단위)에서도 체감상 가독성이 실제로 개선되는지,
+숨긴 행이 매우 많을 때(예: 수백 개) `team-refer-hidden-rows` Store에
+담기는 페이로드 크기가 체감 성능에 영향을 주는지.
