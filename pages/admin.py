@@ -4,9 +4,11 @@ manage_users 권한이 있는 계정만 접근 가능.
 """
 import base64
 import os
+import uuid
 from datetime import date
 
 import dash
+import dash_ag_grid as dag
 import dash_bootstrap_components as dbc
 from dash import (
     ALL, MATCH, Input, Output, State, callback, clientside_callback, ctx, dash_table, dcc, html,
@@ -444,23 +446,36 @@ def _renumbered(rows: list) -> list:
     (2026-09-16: 계층 구조 표시('_tree') 관련 로직은 "구조" 열 제거와
     함께 삭제 — team_refer 탭뿐 아니라 직군 예외자 탭도 함께 쓰는 공용
     함수라 그 탭 행에는 애초에 의미 없는 필드였다.) 조직코드(dep_code)
-    재배당은 이 함수의 책임이 아니다 — team_refer_sort(헤더 클릭 정렬)도
-    이 함수를 그대로 쓰는데, 정렬은 화면에 "보여주는" 순서만 바꾸는
-    기능이라 관리자가 정해둔 조직코드까지 정렬 기준으로 덮어쓰면 안 되기
-    때문(_renumber_dep_codes() 참고 — 이동/삭제/행추가 콜백이 필요할 때만
-    명시적으로 호출)."""
+    재배당은 이 함수의 책임이 아니다(_renumber_dep_codes() 참고 —
+    이동/삭제/행추가 콜백이 필요할 때만 명시적으로 호출). 팀/리더 참조
+    탭은 2026-09-17 AG Grid 전환 이후에도 이 함수를 그대로 쓴다 —
+    valueGetter로 rowIndex에서 매번 계산하는 방식을 시도했으나, getRowId를
+    쓰는 AG Grid는 행 순서만 바뀌었을 때(삭제/이동) 그 값을 다시 그리지
+    않는 문제를 직접 확인해(_no 필드 자체가 실제로 안 바뀌면 셀이
+    갱신되지 않음) 되돌렸다."""
     for i, r in enumerate(rows, start=1):
         r['_no'] = i
+    return rows
+
+
+def _ensure_rid(rows: list) -> list:
+    """AG Grid(dash-ag-grid)는 안정적인 행 식별자(getRowId)가 필요하다 —
+    이름처럼 편집 가능한 필드를 키로 쓰면 값이 바뀌거나 겹칠 때 선택/이동
+    상태가 엉킬 수 있어, 로드/생성 시점에 한 번만 부여하는 합성 필드를
+    쓴다. team_refer_store.KOREAN_COLUMNS에 없으므로 save_snapshot()이
+    그대로 무시한다(2026-09-17, AG Grid 전환)."""
+    for r in rows:
+        r.setdefault('_rid', uuid.uuid4().hex[:12])
     return rows
 
 
 def _renumber_dep_codes(rows: list) -> None:
     """조직코드(dep_code)를 현재 화면 순서 그대로 1~N으로 다시 매긴다
     (2026-09-16 확정 — "맨 위가 1, 맨 뒤가 N"). 이동/삭제/행 추가처럼
-    행의 순서·구성 자체가 바뀌는 조작 직후에만 호출한다 — 헤더 클릭
-    정렬(team_refer_sort)이나 최초 로드 시에는 호출하지 않는다(정렬은
-    보기 순서만 바꾸는 기능이라 조직코드까지 정렬 기준으로 덮어쓰면
-    안 됨). 조직코드는 조직도(pipeline/rd_specialist_markdown.py)가
+    행의 순서·구성 자체가 바뀌는 조작 직후에만 호출한다 — 헤더 클릭 정렬은
+    호출하지 않는다(AG Grid 네이티브 sortable은 화면 표시 순서만 바꾸고
+    rowData 배열 자체는 그대로 유지함을 확인했으므로, 정렬 기준으로
+    조직코드를 덮어쓸 위험 자체가 없다). 조직코드는 조직도(pipeline/rd_specialist_markdown.py)가
     같은 상위부서 아래 형제 노드의 표시 순서로도 그대로 쓰므로, 여기서
     전역 일련번호로 다시 매겨도 "같은 부모 밑 형제끼리의 상대적 순서"는
     항상 그대로 보존된다(전역 단조증가 값이라 부분집합만 봐도 상대 순서가
@@ -573,44 +588,23 @@ def _team_refer_upload_section():
     ]), className='shadow-sm mb-3')
 
 
-# ── 팀/리더 참조 그리드 — 자동채움 가이드(드롭다운/자동완성) ─────────────────────
-# dash_table 자체의 dropdown(presentation='dropdown')은 react-select 기반이라
-# 목록에 없는 값은 아예 입력할 수 없다(선택 전용) — "가이드"가 아니라
-# "제한"이 되어 새 부서/과제를 추가하는 흐름과 맞지 않는다. 대신 브라우저
-# 네이티브 <input list="..."> + <datalist>(자동완성, 목록 밖 값도 자유
-# 입력 가능)를 assets/team_refer_grid.js가 편집용 input에 걸어준다 — 여기서는
-# 그 후보 목록만 계산한다(2026-09-03 추가).
-#
-# 대상 컬럼: 반복되거나 참조되는 값이 많은 컬럼만 선정. 사번/성명/직책(개인
-# 식별 정보, 참고할 반복값이 아님)은 제외. 부서ID/상위부서ID/조직 레벨은
-# 2026-09-11 3단계 부서 체계 도입으로 사람이 직접 입력하는 컬럼 자체가
-# 아니게 되어(1/2/3단계 부서명 경로에서 자동 계산 — pipeline/team_hierarchy.py)
-# 더 이상 가이드 대상이 아니다. 구분(work_type)은 2026-09-17부터 자유
-# 입력 자동완성이 아니라 아래 _WORK_TYPE_OPTIONS 3개 중에서만 고르는
-# 네이티브 드롭다운(dash_table presentation='dropdown')으로 바뀌어
-# 이 자동완성 가이드 대상에서 제외한다.
-_AUTOFILL_GUIDE_COLUMNS = [
-    '비공식소속부서명', '1단계부서명', '2단계부서명', '3단계부서명', '조직코드',
-]
-
-# 구분(work_type) 드롭다운 선택지(2026-09-17 확정) — "R&D"만 보유 전문성
-# 분석 대상이라는 기존 필터(pipeline/process_researcher_expertise.py의
-# work_type=="R&D" 게이트)는 그대로 두고, 그 외 인원을 자유 텍스트로
-# 잘못 적어 넣지 않도록 실제로 쓰이는 3개 구분값만 선택 가능하게 한다.
-# clearable=True로 둬서 기존처럼 빈 값도 허용한다(비어 있으면
-# team_hierarchy.derive_hierarchy()가 'R&D'로 기본 채움 — 그대로 유지).
+# ── 팀/리더 참조 그리드 — AG Grid(dash-ag-grid) 전환(2026-09-17) ─────────────
+# 기존 dash_table.DataTable + assets/team_refer_grid.js의 커스텀 JS 패치
+# (자동채움 가이드용 <datalist>, 클릭 위치로 커서 이동, F2 편집 진입 등 —
+# 전부 dash_table 자체에 없는 기능을 직접 흉내 낸 것들) 대신, 그런 기능을
+# 원래 갖추고 있는 오픈소스 그리드 라이브러리 AG Grid(Community 에디션,
+# MIT 라이선스 — 사내 상업적 용도 제약 없음)로 교체했다. Dash 공식
+# 패키지(dash-ag-grid)가 있어 이 Dash/Python 구조를 그대로 유지하면서
+# 그리드 엔진만 바꿀 수 있다. AG Grid가 기본 제공해 더 이상 직접 구현할
+# 필요가 없어진 것들: 헤더 전체선택 체크박스, 셀 클릭 위치로 커서 이동,
+# 더블클릭/Enter/F2로 편집 진입, 컬럼 리사이즈, 툴팁(tooltipField), 헤더
+# 클릭 정렬(클라이언트에서 즉시 처리 — 서버 왕복 불필요, 실제 rowData
+# 순서는 안 바뀌고 화면 표시만 바뀜을 확인). 자유 입력 + 값 제안이라는
+# 자동채움 가이드(<datalist>) 기능은 AG Grid Community에 직접적인 대응
+# 기능이 없어 이번 전환에서는 빠졌다(값 자체를 잘못 적을 위험은 여전히
+# 크지 않은 컬럼들이라 — 나중에 정말 필요하면 커스텀 셀 에디터로 추가
+# 가능).
 _WORK_TYPE_OPTIONS = ['R&D', 'R&D_Support', 'Staff']
-
-
-def _build_autofill_suggestions(rows: list) -> dict:
-    """가이드 대상 컬럼별 자동완성 후보 목록 — "그 컬럼 자체에 이미 쓰인
-    값"(위 행들을 참고해서 자동채움을 가이드해 달라는 요청 그대로)."""
-    rows = rows or []
-
-    def _existing(col: str) -> list:
-        return sorted({str(r.get(col, '') or '').strip() for r in rows} - {''})
-
-    return {col: _existing(col) for col in _AUTOFILL_GUIDE_COLUMNS}
 
 
 def _team_refer_tab() -> html.Div:
@@ -630,33 +624,34 @@ def _team_refer_tab() -> html.Div:
     존재하는 상위 노드)은 가독성을 위해 화면에서 숨기고(_split_hidden_rows),
     team-refer-hidden-rows Store에 그대로 보관해 저장 시 다시 합친다."""
     rows = team_refer_store.list_editable_rows()
-    all_suggestions = _build_autofill_suggestions(rows)
     rows, hidden_rows = _split_hidden_rows(rows)
-    rows = _renumbered(rows)
+    rows = _renumbered(_ensure_rid(rows))
 
-    # 'No.'는 화면 표시 전용 — 저장 대상 컬럼(KOREAN_COLUMNS)에는 없으므로
-    # team_refer_store.save_snapshot()이 그대로 무시한다(_COL_MAP에 없는 키).
-    # (2026-09-16: 부모-자식 관계를 아이콘으로 보여주던 '구조'/'_tree' 열은
-    # 제거 — 이동이 더 이상 하위 조직을 묶어서 처리하지 않게 되어 미리
-    # 보여줄 필요가 없어졌다.)
-    # 구분 컬럼만 presentation='dropdown'으로 지정 — DataTable(아래)의
-    # dropdown={'구분': {...}} 옵션 목록(_WORK_TYPE_OPTIONS)에서만 고를 수
-    # 있다(2026-09-17 확정, 사용자 요청).
-    columns = [
-        {'name': 'No.', 'id': '_no', 'editable': False},
+    # AG Grid columnDefs — 'No.'는 화면 표시 전용(저장 대상 컬럼
+    # KOREAN_COLUMNS에는 없음). getRowId를 쓰는 AG Grid는 행 순서가 바뀌어도
+    # 그 자체만으로는 valueGetter 기반 컬럼을 다시 그리지 않는다는 걸 직접
+    # 확인해(rowIndex가 바뀌어도 화면에 예전 값이 그대로 남음), dash_table
+    # 시절처럼 이동/삭제/행추가 콜백이 끝날 때마다 파이썬에서 _renumbered()로
+    # 실제 필드 값을 다시 매겨 확실하게 갱신되게 한다.
+    # 구분 컬럼만 agSelectCellEditor로 _WORK_TYPE_OPTIONS 3가지 값 중에서만
+    # 고를 수 있게 제한한다(2026-09-17 확정, 사용자 요청).
+    column_defs = [
+        {
+            'headerName': 'No.', 'field': '_no', 'editable': False,
+            'sortable': False, 'filter': False, 'width': 70, 'pinned': 'left',
+        },
     ] + [
-        {'name': col, 'id': col, 'editable': True}
-        if col != '구분' else
-        {'name': col, 'id': col, 'editable': True, 'presentation': 'dropdown'}
+        {
+            'headerName': col, 'field': col, 'editable': True,
+            'tooltipField': col,
+            **({'cellEditor': 'agSelectCellEditor',
+                'cellEditorParams': {'values': [''] + _WORK_TYPE_OPTIONS}}
+               if col == '구분' else {}),
+        }
         for col in team_refer_store.KOREAN_COLUMNS
     ]
 
     return html.Div([
-        # 자동채움 가이드(드롭다운/자동완성) 후보 — team_refer_sync_suggestions
-        # 콜백이 data가 바뀔 때마다 다시 계산해 채운다. 여기 초기값은 페이지
-        # 최초 로드 시 클라이언트 스크립트(assets/team_refer_grid.js)가 바로
-        # 쓸 수 있게 미리 계산해 둔 것(숨긴 행 포함 전체 기준 — all_suggestions).
-        dcc.Store(id='team-refer-suggestions', data=all_suggestions),
         # 비공식소속부서명이 빈 행(가독성을 위해 화면에서 숨김) — 편집 대상이
         # 아니라 저장 시 화면에 보이는 행과 그대로 합쳐서 반영한다.
         dcc.Store(id='team-refer-hidden-rows', data=hidden_rows),
@@ -722,10 +717,6 @@ def _team_refer_tab() -> html.Div:
         # 바 줄바꿈이 달라질 때 어긋날 수 있음).
         html.Div([
             dbc.ButtonGroup([
-                dbc.Button('전체 선택',
-                           id='team-refer-select-all-btn', color='secondary', outline=True, size='sm'),
-                dbc.Button('전체 해제',
-                           id='team-refer-select-none-btn', color='secondary', outline=True, size='sm'),
                 dbc.Button([html.I(className='bi bi-arrow-up me-1'), '위로'],
                            id='team-refer-move-up-btn', color='secondary', outline=True, size='sm'),
                 dbc.Button([html.I(className='bi bi-arrow-down me-1'), '아래로'],
@@ -734,13 +725,13 @@ def _team_refer_tab() -> html.Div:
                            id='team-refer-bulk-delete-btn', color='danger', outline=True, size='sm'),
             ]),
             html.Div(
-                '왼쪽 체크박스로 행을 고른 뒤 사용하세요(dash_table 제약으로 헤더 '
-                '전체선택 체크박스 대신 "전체 선택/해제" 버튼을 제공합니다). 이동은 '
-                '체크한 행만 개별적으로 한 칸씩 움직이며 상위부서와 무관하게 자유롭게 '
-                '이동할 수 있습니다. 삭제는 하위 조직이 있으면 함께 삭제됩니다(하위 '
-                '조직을 남겨두면 그 소속 정보 때문에 상위 조직이 자동으로 다시 생겨 '
-                '실제로 삭제되지 않습니다). 이동/삭제/행 추가 후에는 조직코드가 화면 '
-                '순서 그대로(맨 위 1 ~ 맨 아래 N) 자동으로 다시 매겨집니다.',
+                '왼쪽 체크박스로 행을 고른 뒤 사용하세요(맨 위 헤더 체크박스로 전체 '
+                '선택/해제할 수 있습니다). 이동은 체크한 행만 개별적으로 한 칸씩 '
+                '움직이며 상위부서와 무관하게 자유롭게 이동할 수 있습니다. 삭제는 '
+                '하위 조직이 있으면 함께 삭제됩니다(하위 조직을 남겨두면 그 소속 '
+                '정보 때문에 상위 조직이 자동으로 다시 생겨 실제로 삭제되지 '
+                '않습니다). No.는 화면에 보이는 순서 그대로(맨 위 1 ~ 맨 아래 N) '
+                '항상 자동으로 매겨집니다.',
                 className='text-muted', style={'fontSize': '0.72rem'},
             ),
         ], className='team-refer-sticky-toolbar'),
@@ -749,56 +740,33 @@ def _team_refer_tab() -> html.Div:
         html.Div(id='team-refer-db-load-msg'),
         html.Div(id='team-refer-bulk-msg'),
 
-        # id를 가진 고정 래퍼 — assets/team_refer_grid.js가 이 안에서만
-        # 이벤트를 지켜본다(자동채움 가이드/클릭 위치로 커서 이동/F2 편집
-        # 진입, 2026-09-03 추가). dash_table이 내부 DOM을 재렌더링해도
-        # 이 래퍼 자체의 id는 계속 유지된다.
+        # id를 가진 고정 래퍼 — assets/team_refer_grid.js가 이 안에서 네비게이션
+        # 바 높이를 재 CSS 변수로 넘겨준다(.team-refer-sticky-toolbar가 씀).
+        # AG Grid가 내부 DOM을 재렌더링해도 이 래퍼 자체의 id는 계속 유지된다.
         html.Div(
-            dash_table.DataTable(
+            dag.AgGrid(
                 id='team-refer-table',
-                columns=columns,
-                data=rows,
-                editable=True,
-                row_deletable=True,
-                row_selectable='multi',  # 행별/전체 체크박스 — 선택 삭제·위/아래 이동 버튼용(2026-09-15)
-                selected_rows=[],
-                page_action='none',  # 페이지 나누지 않고 전체 행을 한 번에 표시
-                sort_action='custom',  # 헤더 클릭 정렬 — team_refer_sort 콜백이 처리(No.도 같이 갱신)
-                sort_by=[],
-                # 구분 컬럼 전용 드롭다운 선택지(2026-09-17 확정) — columns의
-                # 해당 컬럼에 presentation='dropdown'을 지정해야 이 옵션이
-                # 실제로 적용된다.
-                dropdown={
-                    '구분': {
-                        'options': [{'label': v, 'value': v} for v in _WORK_TYPE_OPTIONS],
-                        'clearable': True,
-                    },
+                columnDefs=column_defs,
+                rowData=rows,
+                getRowId='params.data._rid',
+                selectedRows=[],
+                defaultColDef={
+                    'resizable': True, 'sortable': True, 'filter': False,
+                    'minWidth': 55, 'wrapHeaderText': True, 'autoHeaderHeight': True,
                 },
-                style_table={'overflowX': 'auto'},
-                # 전체 가운데 정렬 + 좁은 폭에서도 최대한 좌우 스크롤 없이 한 화면에
-                # 들어오도록 폰트/여백을 줄이고, 그래도 안 들어가는 내용은 말줄임
-                # 처리 후 마우스 오버로 전체를 보여준다(tooltip_data, 사용자 확정
-                # — 안 들어가면 스크롤이 남는 것도 허용).
-                style_cell={
-                    'fontSize': '0.72rem', 'padding': '3px 6px', 'textAlign': 'center',
-                    'minWidth': '55px', 'maxWidth': '160px',
-                    'overflow': 'hidden', 'textOverflow': 'ellipsis',
+                dashGridOptions={
+                    # 헤더 전체선택 체크박스 포함 — dash_table에는 없던 기능이라
+                    # 예전엔 '전체 선택/해제' 버튼으로 대신했으나 AG Grid는
+                    # 기본 제공한다(2026-09-17, AG Grid 전환).
+                    'rowSelection': {'mode': 'multiRow', 'checkboxes': True, 'headerCheckbox': True},
+                    'domLayout': 'autoHeight',  # 페이지 나누지 않고 전체 행을 한 번에 표시(dash_table의 page_action='none'과 동일)
+                    'stopEditingWhenCellsLoseFocus': True,
+                    'tooltipShowDelay': 0,
                 },
-                style_cell_conditional=[
-                    {'if': {'column_id': '_no'}, 'width': '40px', 'textAlign': 'center'},
-                ],
-                style_header={'fontWeight': '600', 'backgroundColor': '#fafafa',
-                              'textAlign': 'center', 'fontSize': '0.72rem'},
-                tooltip_delay=0,
-                tooltip_duration=None,
-                # DataTable에는 컬럼 너비 드래그 조절 기능이 없어(구버전 dash_table),
-                # 헤더 텍스트를 감싸는 요소에 브라우저 네이티브 CSS resize를 적용해
-                # 우측 하단 모서리를 드래그해 너비를 조절할 수 있게 한다.
-                css=[{
-                    'selector': '.column-header-name',
-                    'rule': ('display: inline-block; resize: horizontal; overflow: auto; '
-                             'min-width: 40px; max-width: 600px; vertical-align: bottom;'),
-                }],
+                # 헤더 클릭 정렬(sortable=True)은 화면 표시 순서만 바꾸고
+                # rowData 자체의 순서는 그대로 유지됨을 확인했다 — 이동/삭제가
+                # 배열 순서=계층 구조를 가정하는 로직(_row_path 등)에 영향 없음.
+                style={'width': '100%', 'fontSize': '0.78rem'},
             ),
             id='team-refer-grid-wrap',
         ),
@@ -1981,31 +1949,35 @@ def confirm_bulk_create(n_clicks, parsed, counter):
 
 
 # ── 콜백: 팀/리더 참조 — 행 추가 ─────────────────────────────────────────────
-# 클릭(선택)해둔 셀이 있으면 그 행 바로 다음에 삽입하고, 선택된 셀이 없으면
-# 맨 뒤에 추가한다(사용자 요청: 항상 맨 뒤가 아니라 원하는 위치에 끼워 넣기).
-# 3단계 부서 체계 도입 이후 부서ID는 더 이상 그리드 컬럼이 아니라(경로에서
-# 자동 계산) "다음 번호 자동 제안" 기능도 함께 없어졌다 — 새 행은 빈 칸으로
-# 추가되고, 1/2/3단계부서명을 자기 레벨까지 채우면 된다.
+# 항상 맨 뒤에 추가한다(2026-09-17, AG Grid 전환과 함께 단순화 — 예전엔
+# 클릭해둔 셀 바로 다음에 끼워 넣었으나, AG Grid의 selectedRows는 클릭
+# 위치가 아니라 체크된 행 전체를 담는 값이라 같은 방식으로 재현하려면
+# 별도 상태 추적이 필요해 실익 대비 복잡도가 커 뺐다 — 새 행은 맨 뒤에서
+# "위로" 버튼으로 옮기면 된다). 3단계 부서 체계 도입 이후 부서ID는 더
+# 이상 그리드 컬럼이 아니라(경로에서 자동 계산) "다음 번호 자동 제안"
+# 기능도 없다 — 새 행은 빈 칸으로 추가되고, 1/2/3단계부서명을 자기
+# 레벨까지 채우면 된다.
 @callback(
-    Output('team-refer-table', 'data', allow_duplicate=True),
-    Output('team-refer-table', 'selected_rows', allow_duplicate=True),
+    Output('team-refer-table', 'rowData', allow_duplicate=True),
+    Output('team-refer-table', 'selectedRows', allow_duplicate=True),
     Input('team-refer-add-row-btn', 'n_clicks'),
-    State('team-refer-table', 'data'),
-    State('team-refer-table', 'active_cell'),
+    State('team-refer-table', 'rowData'),
     prevent_initial_call=True,
 )
-def team_refer_add_row(n_clicks, rows, active_cell):
+def team_refer_add_row(n_clicks, rows):
     if not n_clicks:
         return no_update, no_update
     rows = list(rows or [])
     new_row = {col: '' for col in team_refer_store.KOREAN_COLUMNS}
-    insert_at = active_cell['row'] + 1 if active_cell else len(rows)
-    rows.insert(insert_at, new_row)
+    new_row['_rid'] = uuid.uuid4().hex[:12]
+    rows.append(new_row)
+    # 새 행이 맨 뒤에 붙으며 총 행 수가 늘므로 No./조직코드를 화면 순서
+    # 그대로 다시 매긴다(맨 위 1 ~ 맨 아래 N, 2026-09-16 확정). 'No.'는
+    # getRowId를 쓰는 AG Grid에서 rowIndex 파생 값이 행 순서 변경만으로는
+    # 자동 갱신되지 않음을 확인해(위 컬럼 정의 주석 참고) 실제 필드 값으로
+    # 둔다.
     rows = _renumbered(rows)
-    # 새 행이 끼어들며 뒤쪽 행들의 화면 순서가 밀리므로 조직코드도 함께
-    # 다시 매긴다(맨 위 1 ~ 맨 아래 N, 2026-09-16 확정).
     _renumber_dep_codes(rows)
-    # 행이 삽입되면서 체크박스 선택 인덱스가 어긋날 수 있어 선택을 비운다.
     return rows, []
 
 
@@ -2014,34 +1986,34 @@ def team_refer_add_row(n_clicks, rows, active_cell):
 # 체크해도 자식이 자동으로 함께 삭제된다(하위 조직을 남겨두면 그 소속 정보
 # 때문에 상위 조직이 자동으로 다시 생겨 실제로 삭제되지 않기 때문 —
 # 2026-09-16 재확인, "구조" 열 제거와 무관하게 삭제만은 계속 하위 조직
-# 포함). row_deletable의 × 버튼(행 1개만 지움)과는
-# 별개 기능으로 그대로 공존한다.
+# 포함). 행 1개만 지우고 싶을 때도 그 행 하나만 체크해 이 버튼으로
+# 지운다(AG Grid Community에는 dash_table의 행별 × 삭제 버튼 같은 기본
+# 제공 UI가 없어 2026-09-17 전환과 함께 정리 — 기능은 이 버튼 하나로
+# 통합).
 @callback(
-    Output('team-refer-table', 'data', allow_duplicate=True),
-    Output('team-refer-table', 'selected_rows', allow_duplicate=True),
+    Output('team-refer-table', 'rowData', allow_duplicate=True),
+    Output('team-refer-table', 'selectedRows', allow_duplicate=True),
     Output('team-refer-bulk-msg', 'children', allow_duplicate=True),
     Input('team-refer-bulk-delete-btn', 'n_clicks'),
-    State('team-refer-table', 'data'),
-    State('team-refer-table', 'selected_rows'),
-    State('team-refer-table', 'sort_by'),
+    State('team-refer-table', 'rowData'),
+    State('team-refer-table', 'selectedRows'),
     prevent_initial_call=True,
 )
-def team_refer_bulk_delete(n_clicks, rows, selected_rows, sort_by):
+def team_refer_bulk_delete(n_clicks, rows, selected_rows):
     if not n_clicks:
         return no_update, no_update, no_update
-    # 하위 조직 판정(_subtree_range)은 계층적(부모→자식) 순서를 전제로 한다 —
-    # 헤더 클릭 정렬이 활성화돼 있으면 그 전제가 깨져 엉뚱한 행이 함께
-    # 삭제될 수 있어 정렬 해제를 먼저 요청한다.
-    if sort_by:
-        return no_update, no_update, _alert('정렬을 해제한 후 다시 시도해주세요(헤더 정렬 중에는 '
-                                             '하위 조직 판정이 정확하지 않습니다).', 'warning')
     rows = list(rows or [])
-    selected_rows = [i for i in (selected_rows or []) if 0 <= i < len(rows)]
-    if not selected_rows:
+    selected_rids = {r['_rid'] for r in (selected_rows or []) if r.get('_rid')}
+    selected_idx = [i for i, r in enumerate(rows) if r.get('_rid') in selected_rids]
+    if not selected_idx:
         return no_update, no_update, _alert('삭제할 행을 먼저 체크해주세요.', 'warning')
 
+    # 하위 조직 판정(_subtree_range)은 계층적(부모→자식) 순서를 전제로
+    # 한다 — AG Grid 헤더 클릭 정렬은 화면 표시 순서만 바꾸고 rowData 배열
+    # 순서 자체는 그대로 유지됨을 확인했으므로(2026-09-17), 정렬 중에도
+    # 이 전제가 깨지지 않아 예전처럼 "정렬 해제" 요청이 필요 없다.
     to_delete: set = set()
-    for idx in selected_rows:
+    for idx in selected_idx:
         start, end = _subtree_range(rows, idx)
         to_delete.update(range(start, end))
 
@@ -2110,170 +2082,64 @@ def _move_selected(rows: list, selected_rows: list, direction: str):
 
 
 @callback(
-    Output('team-refer-table', 'data', allow_duplicate=True),
-    Output('team-refer-table', 'selected_rows', allow_duplicate=True),
+    Output('team-refer-table', 'rowData', allow_duplicate=True),
+    Output('team-refer-table', 'selectedRows', allow_duplicate=True),
     Output('team-refer-bulk-msg', 'children', allow_duplicate=True),
     Input('team-refer-move-up-btn', 'n_clicks'),
     Input('team-refer-move-down-btn', 'n_clicks'),
-    State('team-refer-table', 'data'),
-    State('team-refer-table', 'selected_rows'),
-    State('team-refer-table', 'sort_by'),
+    State('team-refer-table', 'rowData'),
+    State('team-refer-table', 'selectedRows'),
     prevent_initial_call=True,
 )
-def team_refer_move_selected(n_up, n_down, rows, selected_rows, sort_by):
+def team_refer_move_selected(n_up, n_down, rows, selected_rows):
     trig = ctx.triggered_id
     if not trig:
         return no_update, no_update, no_update
     direction = 'up' if trig == 'team-refer-move-up-btn' else 'down'
     if not (n_up if direction == 'up' else n_down):
         return no_update, no_update, no_update
-    # 헤더 클릭 정렬 중에는 화면에 보이는 순서가 저장된 조직코드 순서와
-    # 달라 이동/재배번이 헷갈릴 수 있어(기존 방침과 동일하게) 정렬 해제를
-    # 먼저 요청한다.
-    if sort_by:
-        return no_update, no_update, _alert('정렬을 해제한 후 다시 시도해주세요.', 'warning')
 
     rows = list(rows or [])
-    selected_rows = [i for i in (selected_rows or []) if 0 <= i < len(rows)]
-    if not selected_rows:
+    selected_rids = {r['_rid'] for r in (selected_rows or []) if r.get('_rid')}
+    selected_idx = [i for i, r in enumerate(rows) if r.get('_rid') in selected_rids]
+    if not selected_idx:
         return no_update, no_update, _alert('이동할 행을 먼저 체크해주세요.', 'warning')
 
-    new_rows, new_selected, blocked = _move_selected(rows, selected_rows, direction)
+    new_rows, new_selected_idx, blocked = _move_selected(rows, selected_idx, direction)
     new_rows = _renumbered(new_rows)
     _renumber_dep_codes(new_rows)
+    new_selected_rows = [new_rows[i] for i in new_selected_idx]
     msg = (_alert('이미 맨 위/맨 아래에 있어 더 이상 이동할 수 없는 행이 있습니다.', 'info')
            if blocked else no_update)
-    return new_rows, new_selected, msg
+    return new_rows, new_selected_rows, msg
 
 
-# dash_table의 row_selectable='multi'는 헤더에 "전체 선택" 체크박스를
-# 자체적으로 렌더링하지 않는다(dash-select-header 셀이 항상 비어있음 —
-# dash_table 자체 한계). 그래서 버튼 두 개로 대체한다.
-@callback(
-    Output('team-refer-table', 'selected_rows', allow_duplicate=True),
-    Input('team-refer-select-all-btn', 'n_clicks'),
-    State('team-refer-table', 'data'),
-    prevent_initial_call=True,
-)
-def team_refer_select_all(n_clicks, rows):
-    if not n_clicks:
-        return no_update
-    return list(range(len(rows or [])))
-
-
-@callback(
-    Output('team-refer-table', 'selected_rows', allow_duplicate=True),
-    Input('team-refer-select-none-btn', 'n_clicks'),
-    prevent_initial_call=True,
-)
-def team_refer_select_none(n_clicks):
-    if not n_clicks:
-        return no_update
-    return []
-
-
-# ── 콜백: 팀/리더 참조 — 헤더 클릭 정렬(오름차순/내림차순) ────────────────────
-# sort_action='custom'이라 DataTable이 데이터를 직접 재정렬하지 않고
-# sort_by(정렬 기준)만 갱신한다 — 여기서 실제로 재정렬하고, 'No.' 열도
-# 새 순서에 맞게 다시 매긴다("정렬순에 따라 동적으로 맵핑").
-@callback(
-    Output('team-refer-table', 'data', allow_duplicate=True),
-    Output('team-refer-table', 'selected_rows', allow_duplicate=True),
-    Input('team-refer-table', 'sort_by'),
-    State('team-refer-table', 'data'),
-    prevent_initial_call=True,
-)
-def team_refer_sort(sort_by, rows):
-    if not sort_by:
-        return no_update, no_update
-    rows = list(rows or [])
-    for spec in reversed(sort_by):
-        col = spec['column_id']
-        rows.sort(key=lambda r: _sort_key(r.get(col)), reverse=(spec['direction'] == 'desc'))
-    # 정렬로 행 순서 자체가 바뀌므로 체크박스 선택은 비운다(형제 이동
-    # 버튼도 정렬 중엔 어차피 막히므로 선택을 유지할 이유가 없다).
-    return _renumbered(rows), []
-
-
-# ── 콜백: 팀/리더 참조 — 행 삭제 직후 No. 즉시 재번호 ─────────────────────────
-# row_deletable(행 삭제)은 DataTable이 클라이언트에서 바로 처리해 data가
-# 곧장 줄어드는데, 그때는 team_refer_add_row/team_refer_sort 같은 명시적
-# 콜백이 안 걸린다. 그래서 data 자체를 Input으로 지켜보다가 'No.'가 현재
-# 순서(1..N)와 어긋나 있으면(=삭제로 빠짐) 바로 다시 매긴다 — 이때 조직코드도
-# 함께 화면 순서 그대로 다시 매겨(_renumber_dep_codes, 2026-09-16 추가)
-# ×(단일 행 삭제) 버튼을 써도 "맨 위 1 ~ 맨 아래 N" 규칙이 그대로 유지되게
-# 한다. Output도 같은 data라 자기 자신을 다시 트리거하지만, 이미 맞게
-# 매겨진 상태에서는 no_update를 반환해 루프가 멈춘다(idempotent) —
-# 편집(셀 값 변경)이나 헤더 정렬(team_refer_sort가 이미 'No.'를 맞춰
-# 반환)처럼 이 콜백이 직접 재배번할 필요가 없는 변경에서는 한 번 더
-# 불리지만 즉시 no_update로 끝나 조직코드에 영향이 없다.
-@callback(
-    Output('team-refer-table', 'data', allow_duplicate=True),
-    Input('team-refer-table', 'data'),
-    prevent_initial_call=True,
-)
-def team_refer_renumber_on_change(rows):
-    if not rows:
-        return no_update
-    if [r.get('_no') for r in rows] == list(range(1, len(rows) + 1)):
-        return no_update
-    rows = _renumbered(list(rows))
-    _renumber_dep_codes(rows)
-    return rows
-
-
-# ── 콜백: 팀/리더 참조 — 셀 툴팁을 항상 최신 데이터로 유지 ─────────────────────
-# 말줄임(...) 처리된 셀도 마우스를 올리면 전체 내용을 볼 수 있게(사용자
-# 확정) — 행 추가/삭제/정렬/편집 등 data를 바꾸는 콜백이 여러 개라 그때마다
-# 각자 tooltip_data를 다시 계산하게 하는 대신, data 자체를 지켜보다가 한
-# 곳에서만 갱신한다.
-@callback(
-    Output('team-refer-table', 'tooltip_data'),
-    Input('team-refer-table', 'data'),
-)
-def team_refer_sync_tooltip(rows):
-    if not rows:
-        return []
-    return [{k: str(v) if v is not None else '' for k, v in row.items()} for row in rows]
-
-
-# ── 콜백: 팀/리더 참조 — 자동채움 가이드 후보 갱신 ────────────────────────────
-# tooltip과 같은 이유로 data 하나만 지켜본다 — 행 추가/삭제/정렬/편집
-# 어디서 바뀌든 매번 최신 값 기준으로 후보를 다시 계산.
-@callback(
-    Output('team-refer-suggestions', 'data'),
-    Input('team-refer-table', 'data'),
-    State('team-refer-hidden-rows', 'data'),
-)
-def team_refer_sync_suggestions(rows, hidden_rows):
-    # 화면에 안 보이는(비공식소속부서명 공백) 행도 후보 재료로 함께 쓴다 —
-    # 예를 들어 상위부서명·조직코드 등은 그 행에도 유효한 값일 수 있다.
-    return _build_autofill_suggestions(list(rows or []) + list(hidden_rows or []))
-
-
-# assets/team_refer_grid.js의 window.__syncTeamReferSuggestions()가 후보
-# 목록으로 <datalist>를 다시 만들고(자동채움 가이드), 최초 1회 이 그리드
-# 전용 이벤트(클릭 위치로 커서 이동/F2 편집 진입)를 등록한다 — 서버
-# 왕복 없이 클라이언트에서 바로 처리(2026-09-03 추가).
+# assets/team_refer_grid.js의 window.__syncTeamReferNavbarHeight()가
+# 네비게이션 바 실제 높이를 재 CSS 변수로 넘긴다(.team-refer-sticky-toolbar가
+# 그 값을 씀) — AG Grid가 rowData를 그릴 때마다(최초 로드 포함) 네비게이션
+# 바가 이미 렌더링되어 있음이 보장되는 시점이라 이 Input에 건다(2026-09-17,
+# 예전 자동채움 가이드 갱신 콜백에 얹혀 있던 것을 분리 — 그 콜백 자체는
+# AG Grid 전환으로 제거됨).
 clientside_callback(
     """
-    function(suggestions) {
-        if (window.__syncTeamReferSuggestions) {
-            window.__syncTeamReferSuggestions(suggestions);
+    function(rowData) {
+        if (window.__syncTeamReferNavbarHeight) {
+            window.__syncTeamReferNavbarHeight();
         }
         return '';
     }
     """,
     Output('team-refer-grid-dummy', 'children'),
-    Input('team-refer-suggestions', 'data'),
+    Input('team-refer-table', 'rowData'),
 )
 
 
 # ── 콜백: 팀/리더 참조 — 저장 ─────────────────────────────────────────────────
-# 행 삭제(row_deletable) 자체는 DataTable이 클라이언트에서 바로 처리하므로
-# 별도 저장 로직은 없다. 3단계 부서 체계 도입 이후 dep_id는 부서명 경로에서
-# 매번 새로 계산되는 값이라(사람이 타이핑하는 값이 아님) "그리드에서 사라진
-# 부서ID"를 여기서 직접 비교할 방법이 없다 — 대신 team_refer_store.
+# 행 삭제는 위 team_refer_bulk_delete가 서버 콜백으로 처리하므로(AG Grid
+# Community에는 dash_table의 row_deletable 같은 클라이언트 자동 삭제가
+# 없음) 별도 저장 로직은 없다. 3단계 부서 체계 도입 이후 dep_id는 부서명
+# 경로에서 매번 새로 계산되는 값이라(사람이 타이핑하는 값이 아님) "그리드에서
+# 사라진 부서ID"를 여기서 직접 비교할 방법이 없다 — 대신 team_refer_store.
 # save_snapshot()이 process_team_refer.tombstone_missing_dep_ids()로 저장
 # 시점마다 자동으로 삭제(톰스톤) 대상을 찾아 처리한다(그리드가 매번 "현재
 # 조직 전체"를 불러와 그 전체를 다시 저장하는 구조이므로 가능).
@@ -2284,7 +2150,7 @@ clientside_callback(
     Output('team-refer-merge-modal', 'is_open', allow_duplicate=True),
     Output('team-refer-merge-modal-body', 'children'),
     Input('team-refer-save-btn', 'n_clicks'),
-    State('team-refer-table', 'data'),
+    State('team-refer-table', 'rowData'),
     State('team-refer-hidden-rows', 'data'),
     State('team-refer-valid-date', 'date'),
     prevent_initial_call=True,
@@ -2494,9 +2360,10 @@ def exception_job_function_add_row(n_clicks, rows, active_cell):
 
 
 # ── 콜백: 직군 예외자 — 행 삭제 직후 No. 즉시 재번호 ───────────────────────────
-# team_refer_renumber_on_change()와 동일한 이유(row_deletable은 DataTable이
-# 클라이언트에서 바로 처리해 별도 콜백이 안 걸리므로, data 자체를 지켜보다가
-# 순서가 어긋나면 다시 매긴다 — idempotent).
+# row_deletable(행 삭제)은 DataTable이 클라이언트에서 바로 처리해 별도
+# 콜백이 안 걸리므로, data 자체를 지켜보다가 순서가 어긋나면 다시 매긴다
+# — idempotent(이 탭은 여전히 dash_table을 그대로 쓴다 — 팀/리더 참조
+# 탭만 2026-09-17에 AG Grid로 전환됐다).
 @callback(
     Output('exception-job-function-table', 'data', allow_duplicate=True),
     Input('exception-job-function-table', 'data'),
@@ -2856,9 +2723,9 @@ def data_update_db_load(n_clicks):
     Output('data-update-interval', 'disabled', allow_duplicate=True),
     Output('team-refer-upload-status', 'children', allow_duplicate=True),
     Output('exception-job-function-upload-status', 'children', allow_duplicate=True),
-    Output('team-refer-table', 'data', allow_duplicate=True),
+    Output('team-refer-table', 'rowData', allow_duplicate=True),
     Output('team-refer-hidden-rows', 'data', allow_duplicate=True),
-    Output('team-refer-table', 'selected_rows', allow_duplicate=True),
+    Output('team-refer-table', 'selectedRows', allow_duplicate=True),
     Input('data-update-interval', 'n_intervals'),
     prevent_initial_call=True,
 )
@@ -2878,7 +2745,7 @@ def data_update_poll(_n):
     # 비공식소속부서명 빈 행은 여기서도 다시 숨겨(_split_hidden_rows,
     # 2026-09-15 추가) team-refer-hidden-rows Store를 함께 갱신한다.
     visible_rows, hidden_rows = _split_hidden_rows(team_refer_store.list_editable_rows())
-    grid_data = _renumbered(visible_rows)
+    grid_data = _renumbered(_ensure_rid(visible_rows))
     return (_data_update_table(), _db_status_view(), not wpr.any_running(),
             team_refer_status, ejf_status, grid_data, hidden_rows, [])
 

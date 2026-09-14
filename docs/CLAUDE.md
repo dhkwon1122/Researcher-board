@@ -11365,3 +11365,149 @@ drop/dragend 리스너 + rowObserver 전부 포함), `window.__teamReferOnDataCh
 **미검증**: 드롭다운으로 "구분" 값을 대량으로(체크박스 다수 선택 후
 일괄 변경 같은) 한 번에 바꾸는 기능은 이번 요청 범위 밖이라 다루지
 않음(한 셀씩 개별 변경만 가능, dash_table 자체 제약).
+
+## 2026-09-17: 팀/리더 참조 그리드 — dash_table → dash-ag-grid(AG Grid
+Community) 전환
+
+사용자 질문("팀/리더 참조 테이블이 css 기반으로 구현되어 있는거지?
+오픈소스 중에 지금 있는 기능을 포함하고, 사내에서도 쓸수 있는 게
+있을까?")에 대한 답변으로, 실제로는 `dash_table.DataTable` + 커스텀
+CSS/JS 패치(이 문서에 계속 기록된 자동채움 가이드용 `<datalist>`, 클릭
+위치로 커서 이동, F2 편집 진입, 컬럼 리사이즈용 CSS resize 핸들 등 —
+전부 `dash_table` 자체에 없는 기능을 손으로 흉내 낸 것들)로 구현돼
+있었다고 설명하고, **AG Grid Community 에디션**(MIT 라이선스 — 사내
+상업적 용도 제약 없음, Dash 공식 패키지 `dash-ag-grid`로 감싸져 있어
+Python/Dash 콜백 구조를 그대로 유지 가능)을 대안으로 추천했다. 이어진
+사용자 확정("사내에서 쓸수있다는거지? 그렇다면 추천대로 해줘(대신
+언제든 과거로 롤백할수 있도록 해줘, 사내에서 적용이 불가할 경우
+롤백)")에 따라 실제 전환을 진행했다.
+
+**사내 사용 가능성 확인**: `dash-ag-grid` 패키지를 설치해 직접
+확인한 결과, AG Grid의 JS 번들(`dash_ag_grid.min.js`,
+`async-community.js`, `async-enterprise.js` 등)이 패키지 안에 전부
+로컬로 포함돼 있어 런타임에 외부 CDN을 전혀 필요로 하지 않는다(이
+샌드박스에서 막혀 있던 `cdn.jsdelivr.net` 같은 외부 CDN 문제와는
+무관 — 그건 기존 Bootstrap 테마 로딩 문제로 이번 전환과 별개).
+`requirements.txt`에 `dash-ag-grid==35.3.0` 한 줄만 추가하면 되고,
+`Dockerfile`은 이미 사내 PyPI 미러(`PIP_INDEX_URL`/`PIP_TRUSTED_HOST`/
+`PIP_CERT`) 환경변수를 지원하고 있어 별도 수정이 필요 없다.
+
+**변경 범위**: "팀/리더 참조" 탭(`pages/admin.py`의 `_team_refer_tab()`
++ 관련 콜백 전부)만 전환했다. "직군 예외자" 탭(`exception-job-function-
+table`)은 그대로 `dash_table.DataTable`을 쓴다 — 두 탭이 완전히 독립된
+컴포넌트라 전환 범위를 좁혀도 문제없고, 한 번에 다 바꾸는 것보다
+리스크가 작다.
+
+**AG Grid로 교체하며 기본 제공받아 삭제한 커스텀 코드**:
+- 헤더 전체선택 체크박스: `dashGridOptions={'rowSelection': {'mode':
+  'multiRow', 'checkboxes': True, 'headerCheckbox': True}}`(신형,
+  비-deprecated API)로 기본 제공 — 예전엔 `dash_table`이 이 기능
+  자체가 없어 "전체 선택"/"전체 해제" 버튼(2026-09-15 추가)으로
+  대신했는데, 이제 그 두 버튼과 콜백(`team_refer_select_all`/
+  `team_refer_select_none`)을 삭제했다.
+- "구분" 드롭다운: `agSelectCellEditor` + `cellEditorParams.values`로
+  구현(AG Grid Community 기본 제공). 단, 실제 렌더링은 네이티브
+  `<select>`가 아니라 AG Grid 자체 콤보박스 위젯(`.ag-picker-field-
+  wrapper`)이라, Playwright로 검증할 때 상호작용 방식이 다르다(더블
+  클릭 → `.ag-picker-field-wrapper` 클릭 → `role="option"` 클릭).
+- 셀 클릭 위치로 커서 이동, 더블클릭/Enter/F2 편집 진입, 컬럼
+  리사이즈: 전부 AG Grid 기본 동작이라 `assets/team_refer_grid.js`의
+  관련 코드(`caretIndexFromClick`, `simulateDoubleClick`,
+  `setupInteractionFixes`, F2 keydown 핸들러, MutationObserver 등)를
+  전부 삭제 — 이 파일은 이제 네비게이션 바 높이 재측정
+  (`syncNavbarHeightVar`) 하나만 남았다(`window.__syncTeamReferSuggestions`
+  → `window.__syncTeamReferNavbarHeight`로 이름을 바꾸고, 트리거도
+  `team-refer-suggestions` Store 대신 `team-refer-table`의 `rowData`
+  로 옮겼다).
+- 툴팁: `tooltipField`(컬럼 정의)로 기본 제공 — `team_refer_sync_tooltip`
+  콜백과 `tooltip_data` 갱신 로직을 전부 삭제.
+- 헤더 클릭 정렬: `defaultColDef={'sortable': True}`로 기본 제공.
+  **직접 실험으로 확인한 중요한 성질**: AG Grid의 네이티브 정렬은
+  순수 클라이언트 표시 순서만 바꾸고, Python이 `State(...,'rowData')`
+  로 읽는 실제 배열 순서는 전혀 바뀌지 않는다(격리된 프로브 앱으로
+  검증 — 화면은 정렬된 순서로 보여도 콜백에서 읽은 rowData는 원래
+  순서 그대로). 덕분에 `_row_path`/`_subtree_range`가 전제하는 "배열
+  순서 = 부모→자식 계층 순서"가 정렬 중에도 절대 깨지지 않는다는 게
+  보장돼, 예전에 있던 "정렬을 해제한 후 다시 시도해주세요" 경고와
+  `team_refer_sort`/`team_refer_renumber_on_change` 콜백을 전부
+  삭제할 수 있었다(정렬 자체가 서버 왕복 없이 클라이언트에서 즉시
+  처리되는 것도 부가 이득).
+
+**빠진 기능(사용자에게 명시적으로 알려야 함)**:
+- **자동채움 가이드**(`<datalist>` 기반, 자유 입력 + 기존 값 제안)가
+  없어졌다. AG Grid Community에는 "자유 입력은 허용하면서 기존 값을
+  제안만 하는" 컴포넌트가 기본 제공되지 않는다(있는 건 `agSelectCellEditor`
+  같은 "목록 밖 값은 아예 입력 불가"인 제한형 에디터뿐). 값을 잘못
+  입력할 위험이 크지 않은 컬럼들(부서명 등은 이미 3단계 경로로 자동
+  검증됨)이라 이번 전환에서는 그냥 뺐다 — 나중에 정말 필요하면 AG
+  Grid의 커스텀 셀 에디터(React 컴포넌트)로 직접 구현 가능.
+- **행 추가 위치**가 "클릭해둔 셀 다음"에서 "항상 맨 뒤"로 단순화됐다.
+  AG Grid의 `selectedRows`는 dash_table의 `active_cell`과 달리 "클릭한
+  셀 위치"가 아니라 "체크된 행 전체"를 담는 값이라 같은 방식을
+  재현하려면 별도 상태 추적이 필요해, 실익 대비 복잡도가 커 뺐다 —
+  추가 후 "위로" 버튼으로 원하는 위치로 옮기면 된다.
+- **행별 개별 삭제(× 버튼)**가 없어졌다 — 이제 "선택 삭제" 버튼
+  하나로 통일(행 1개만 지우고 싶으면 그 행 하나만 체크). AG Grid
+  Community에는 `dash_table`의 `row_deletable`(행별 × 버튼 자동 표시)
+  같은 기본 제공 UI가 없다.
+
+**구현 세부사항**:
+- 행 식별자(`getRowId`)로 편집 가능한 필드 대신 로드/생성 시점에
+  `uuid.uuid4().hex[:12]`로 부여하는 합성 필드 `_rid`를 새로 추가
+  (`_ensure_rid()`) — `KOREAN_COLUMNS`에 없어 `save_snapshot()`이
+  그대로 무시한다. 체크박스 선택(`selectedRows`)이 dash_table처럼
+  인덱스가 아니라 전체 행 dict를 담는 값이라, 삭제/이동 콜백에서
+  `_rid`로 실제 배열 인덱스를 역으로 찾아 기존 로직(`_subtree_range`,
+  `_move_selected`)에 그대로 넘기는 방식으로 구현했다.
+  `_move_selected()`의 O(N²) 스캔 제거(2026-09-17 앞선 수정) 등 기존
+  이동 로직 자체는 전혀 손대지 않고 그대로 재사용했다.
+  **직접 실험으로 확인한 함정**: 'No.' 컬럼을 처음엔 `valueGetter:
+  {'function': 'params.node.rowIndex + 1'}`로 구현했는데, `getRowId`를
+  쓰는 AG Grid는 행이 삭제/이동으로 순서만 바뀌었을 때(같은 행
+  객체가 다른 인덱스로 이동) 그 값을 다시 그리지 않는 문제가 있었다
+  (실제 rowIndex는 바뀌었는데 화면엔 삭제 전 값이 그대로 남음 —
+  Playwright로 직접 재현/확인). 그래서 dash_table 시절과 똑같이
+  `_renumbered()`로 파이썬에서 실제 `_no` 필드 값을 매번 다시 매기는
+  방식으로 되돌렸다(add/delete/move 콜백과 `data_update_poll` 전부).
+- `domLayout: 'autoHeight'`로 dash_table의 `page_action='none'`(전체
+  행을 한 번에 표시, 그리드 자체 스크롤 없이 페이지가 스크롤)을 재현.
+- `defaultColDef={'resizable': True, 'sortable': True}`로 컬럼 리사이즈/
+  정렬을 기본 제공.
+
+**검증**: 실제 서버(임시 admin 계정, `data/processed/team_refer.csv`에
+부모-자식 3단계 계층을 포함한 합성 데이터 4~5행) + Playwright로 확인 —
+(1) 초기 로드 시 깊이우선(부모→자식) 순서 그대로 렌더링, (2) 텍스트
+셀 편집(성명 변경) 및 "구분" 드롭다운 편집(agSelectCellEditor 콤보박스
+상호작용 포함) 후 값이 정확히 반영, (3) 헤더 전체선택 체크박스로
+전체 선택/해제 및 "선택 삭제"로 일괄 삭제 동작, (4) 체크박스 1개
+선택 후 "선택 삭제"로 하위 조직(자식 1개)까지 함께 삭제되는 것
+(cascade), 삭제 후 No.가 1..N으로 정확히 재번호, (5) "행 추가"로 맨
+뒤에 빈 행 추가 후 "위로"로 이동, (6) 새 행에 필수 값(1단계부서명)을
+채우고 "저장" → 실제 CSV에 정확히 반영되는 것(`list_editable_rows()`로
+재확인), (7) **정렬 중 삭제 안전성**: 사번 컬럼 헤더를 클릭해
+내림차순으로 정렬한 뒤, 화면에 정렬된 순서 기준으로 체크박스를
+선택해 삭제해도(선택은 `_rid` 기반이라 정렬 여부와 무관하게 항상
+올바른 실제 행을 가리킴) 엉뚱한 행이 삭제되지 않고 의도한 행(과
+그 하위 조직만) 정확히 삭제되는 것까지 확인. 콘솔/페이지 에러 0건
+(`net::ERR_TUNNEL_CONNECTION_FAILED`는 이 샌드박스의 외부 CDN 차단
+때문이고 AG Grid는 로컬 번들이라 무관 — 기존에도 있던 무관한 에러).
+`python3 -m py_compile pages/admin.py` 통과. 테스트 계정·
+`data/processed/team_refer.csv`·`data/processed/team_leader_refer/`
+(엑셀 export)는 검증 후 전부 삭제, `config/users.json`은 원본과 diff
+없음 재확인.
+
+**롤백 방법**: 이 전환은 별도 커밋으로 분리돼 있다 — 사내 환경에
+`dash-ag-grid` 패키지를 설치할 수 없거나(사내 PyPI 미러에 없음 등)
+운영 중 AG Grid 관련 문제가 발견되면, 이 전환 커밋만
+`git revert <커밋해시>`로 되돌리면 즉시 `dash_table.DataTable` 기반
+이전 구현으로 복귀한다(그 전 커밋들 — 드래그 삭제/구분 드롭다운
+등은 전혀 영향받지 않음). `requirements.txt`의 `dash-ag-grid==35.3.0`
+줄도 같은 revert에 포함되므로 별도로 지울 필요가 없다. 되돌린 뒤
+`pip install -r requirements.txt`만 다시 실행하면 된다(DB/CSV 데이터
+스키마는 이번 전환으로 전혀 바뀌지 않았으므로 데이터 마이그레이션은
+필요 없음).
+
+**미검증**: 실제 사내 배포 환경에서의 `dash-ag-grid` 설치 자체(사내
+PyPI 미러에 이 패키지가 있는지)는 이 세션에서 확인할 방법이 없다 —
+안 되면 위 롤백 방법으로 되돌리면 된다. 자동채움 가이드 커스텀
+에디터 재구현, 대량 "구분" 값 일괄 변경도 이번 범위 밖.
