@@ -88,6 +88,7 @@ team_refer 항목을 'wildcard' 모드로 등록해 원본 파일명을 그대�
 
 import glob
 import os
+import re
 import sys
 from datetime import date
 
@@ -97,7 +98,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import clean_str as _clean, norm_id, read_xlsx  # noqa: E402
 from merge_utils import TABLE_KEYS, write_merged  # noqa: E402
-from team_hierarchy import FIELDS, derive_hierarchy  # noqa: E402
+from team_hierarchy import FIELDS, LEVEL_FIELDS, derive_hierarchy, own_path, slug  # noqa: E402
 
 SOURCE_FILE = '팀참조시트.xlsx'
 SOURCE_FILE_CSV = '팀참조시트.csv'
@@ -129,16 +130,25 @@ def stamp_valid_date(df: pd.DataFrame, valid_date: date) -> pd.DataFrame:
     return df
 
 
-def build_rows_from_records(records: list) -> pd.DataFrame:
-    """레코드 리스트(엑셀 헤더명을 키로 쓰는 dict — "전체 경로 포함" 인텔이크
-    형태, 각 행이 자기 소속 경로를 자기 레벨까지 전부 채움)를 _COL_MAP 기준으로
-    컬럼 매핑·정제한 뒤 team_hierarchy.derive_hierarchy()에 넘겨 조직 단위별
-    1행(자기 레벨 이름만 채운 저장 스키마 — dep_id/upper_dep_id/team_layer
-    자동 계산)으로 변환한다.
+# ── "(SAIT)"/"(기술원)" 표기 제거(2026-09-15 확정) ────────────────────────────
+# 같은 팀이 조직 관점(종합기술원 vs SAIT)에 따라 다르게 표기돼 들어오는
+# 경우가 있어("AI융합기술팀(SAIT)"/"AI융합기술팀(기술원)"), 1/2/3단계부서명
+# 값에서 이 태그만 지우고 실제로는 같은 조직으로 합쳐지게 한다(사용자 확정 —
+# 두 태그가 동시에 한 값에 붙는 경우는 없어 정규식으로 단순 제거해도 안전).
+# team_refer.csv를 만드는 이 함수(build_rows_from_records)에서 지워 저장하므로
+# 그리드/조직도 사이드바/엑셀 다운로드/AI 검색 등 team_refer.csv를 쓰는 모든
+# 화면에 자동으로 반영된다.
+_ORG_TAG_PATTERN = re.compile(r'\(SAIT\)|\(기술원\)')
 
-    valid_year/valid_month/valid_day/deleted는 이 함수가 붙이지 않는다 —
-    호출부가 stamp_valid_date()로 붙인다(저장 시점을 여기서 강제하지
-    않기 위함)."""
+
+def _strip_org_tags(value) -> str:
+    return _ORG_TAG_PATTERN.sub('', str(value or '')).strip()
+
+
+def _cleaned_records(records: list) -> list:
+    """레코드 리스트(엑셀 헤더명 키)를 _COL_MAP 기준으로 컬럼 매핑·정제한
+    dict 리스트로 변환한다(태그 제거 전 단계) — build_rows_from_records()와
+    find_tag_merges()가 공유(정제 로직이 갈라지지 않도록 한 곳에서만 정의)."""
     df = pd.DataFrame(records)
     for col in _COL_MAP:
         if col not in df.columns:
@@ -149,9 +159,76 @@ def build_rows_from_records(records: list) -> pd.DataFrame:
         for src_col, out_col in _COL_MAP.items()
     })
     cleaned['researcher_id'] = cleaned['researcher_id'].apply(norm_id)
+    return cleaned.to_dict('records')
 
-    nodes = derive_hierarchy(cleaned.to_dict('records'))
+
+def _strip_record_tags(record: dict) -> dict:
+    stripped = dict(record)
+    for field in LEVEL_FIELDS:
+        stripped[field] = _strip_org_tags(stripped[field])
+    return stripped
+
+
+def build_rows_from_records(records: list) -> pd.DataFrame:
+    """레코드 리스트(엑셀 헤더명을 키로 쓰는 dict — "전체 경로 포함" 인텔이크
+    형태, 각 행이 자기 소속 경로를 자기 레벨까지 전부 채움)를 _COL_MAP 기준으로
+    컬럼 매핑·정제하고 1/2/3단계부서명의 "(SAIT)"/"(기술원)" 태그를 제거한 뒤
+    team_hierarchy.derive_hierarchy()에 넘겨 조직 단위별 1행(자기 레벨 이름만
+    채운 저장 스키마 — dep_id/upper_dep_id/team_layer 자동 계산)으로 변환한다.
+
+    valid_year/valid_month/valid_day/deleted는 이 함수가 붙이지 않는다 —
+    호출부가 stamp_valid_date()로 붙인다(저장 시점을 여기서 강제하지
+    않기 위함)."""
+    pre_records = _cleaned_records(records)
+    stripped_records = [_strip_record_tags(r) for r in pre_records]
+    nodes = derive_hierarchy(stripped_records)
     return pd.DataFrame(nodes, columns=list(FIELDS))
+
+
+def find_tag_merges(records: list) -> list[dict]:
+    """"(SAIT)"/"(기술원)" 태그 제거로 서로 다른 원본 조직 경로가 같은
+    조직으로 합쳐지는 경우를 찾는다(예: "...AI융합기술팀(SAIT)"와
+    "...AI융합기술팀(기술원)"가 둘 다 "...AI융합기술팀"이 되는 경우) —
+    build_rows_from_records()가 실제로 적용하는 것과 동일한 정제·태그 제거
+    단계를 거쳐, 태그 제거 "전" 경로 기준으로 그룹핑한 뒤 같은 "후" 경로로
+    묶이는 그룹이 2개 이상이면 병합으로 본다.
+
+    반환: [{'merged_name': 태그 제거 후 이름, 'kept': {최종 저장된 값},
+    'variants': [{'original_name': 태그 제거 전 이름, ...원본 속성}, ...]}]
+    (병합이 없으면 빈 리스트)."""
+    pre_records = _cleaned_records(records)
+    stripped_records = [_strip_record_tags(r) for r in pre_records]
+
+    groups: dict = {}  # post_path -> {pre_path: representative pre_record}
+    for pre, post in zip(pre_records, stripped_records):
+        post_path = own_path(post)
+        if not post_path:
+            continue
+        pre_path = own_path(pre)
+        groups.setdefault(post_path, {}).setdefault(pre_path, pre)
+
+    merge_groups = {path: variants for path, variants in groups.items() if len(variants) > 1}
+    if not merge_groups:
+        return []
+
+    nodes_by_id = {n['dep_id']: n for n in derive_hierarchy(stripped_records)}
+    attr_fields = ('org_name_wd', 'dep_code', 'researcher_id', 'name', 'assignment_name')
+
+    def _attrs(rec: dict) -> dict:
+        return {f: rec.get(f, '') for f in attr_fields}
+
+    results = []
+    for post_path, variants in merge_groups.items():
+        final_node = nodes_by_id.get(slug(post_path), {})
+        results.append({
+            'merged_name': post_path[-1] if post_path else '',
+            'kept': _attrs(final_node),
+            'variants': [
+                {'original_name': pre_path[-1] if pre_path else '', **_attrs(rec)}
+                for pre_path, rec in variants.items()
+            ],
+        })
+    return results
 
 
 def find_duplicate_dep_ids(result: pd.DataFrame) -> list[dict]:
@@ -195,6 +272,21 @@ def _print_duplicate_warning(dupes: list[dict]) -> None:
             print(f"      {i}) 조직코드={row['dep_code']} 1단계={row['dep_1st_name']} "
                   f"2단계={row['dep_2nd_name']} 3단계={row['dep_3rd_name']} "
                   f"상위부서ID={row['upper_dep_id']} 사번={row['researcher_id']} 성명={row['name']}")
+
+
+def _print_merge_warning(merges: list[dict]) -> None:
+    if not merges:
+        return
+    print(f'[WARN] "(SAIT)"/"(기술원)" 태그 제거로 {len(merges)}건이 하나의 조직으로 합쳐졌습니다 '
+          f'— 확인용으로 병합된 항목을 나열합니다(값 손실은 없는지 확인해주세요):')
+    for m in merges:
+        print(f"  · 합쳐진 이름: {m['merged_name']}")
+        for v in m['variants']:
+            print(f"      - 원래 표기: {v['original_name']} (조직코드={v['org_name_wd']}, "
+                  f"사번={v['researcher_id']}, 성명={v['name']}, 직책={v['assignment_name']})")
+        k = m['kept']
+        print(f"      → 최종 유지된 값: 조직코드={k['org_name_wd']}, 사번={k['researcher_id']}, "
+              f"성명={k['name']}, 직책={k['assignment_name']}")
 
 
 def tombstone_missing_dep_ids(result: pd.DataFrame, valid_date: date) -> pd.DataFrame:
@@ -296,8 +388,10 @@ def process(raw_dir: str = RAW_DIR, valid_date: date | None = None) -> bool:
         )
         return False
 
-    result = build_rows_from_records(df.to_dict('records'))
+    records = df.to_dict('records')
+    result = build_rows_from_records(records)
     _print_duplicate_warning(find_duplicate_dep_ids(result))
+    _print_merge_warning(find_tag_merges(records))
 
     valid_date = valid_date or date.today()
     result = stamp_valid_date(result, valid_date)

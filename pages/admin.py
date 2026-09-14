@@ -397,11 +397,121 @@ def _sort_key(value):
         return (1, s)
 
 
+# ── 팀/리더 참조 그리드 — 계층 구조 표시 + 체크박스 이동/삭제(2026-09-15) ──────
+# assets/team_refer_grid.js의 드래그 재정렬(rowOwnPath/isDescendantPath/
+# subtreeRange)과 완전히 동일한 개념을 Python 쪽 체크박스 이동/삭제 버튼용으로
+# 재구현한 것 — 그리드 데이터(KOREAN_COLUMNS 키)를 그대로 다루므로 JS와
+# 코드를 공유할 수 없어 별도로 둔다(로직은 동일).
+_LEVEL_COLS = ['1단계부서명', '2단계부서명', '3단계부서명']
+_TREE_ICONS = {1: '🏢', 2: '🗂️', 3: '📄'}
+
+
+def _row_path(row: dict) -> tuple:
+    """행의 "자기 경로"(1→2→3단계 순서로 읽다가 처음 빈 값을 만나면 중단).
+    assets/team_refer_grid.js의 rowOwnPath()와 동일한 규칙."""
+    path = []
+    for col in _LEVEL_COLS:
+        v = str(row.get(col) or '').strip()
+        if not v:
+            break
+        path.append(v)
+    return tuple(path)
+
+
+def _is_descendant_path(path: tuple, ancestor: tuple) -> bool:
+    return len(path) > len(ancestor) and path[:len(ancestor)] == ancestor
+
+
+def _subtree_range(rows: list, idx: int) -> tuple:
+    """rows[idx](및 그 뒤에 연속으로 이어지는 하위 조직 행 전체)를 하나의
+    구간 [start, end)로 묶는다 — list_editable_rows()가 깊이 우선(부모→자식)
+    순서로 반환하므로 자손 행은 항상 부모 바로 다음부터 연속이다."""
+    path = _row_path(rows[idx])
+    end = idx + 1
+    while end < len(rows) and _is_descendant_path(_row_path(rows[end]), path):
+        end += 1
+    return idx, end
+
+
+def _preceding_sibling_range(rows: list, block_start: int):
+    """block_start 바로 앞에 있는 "진짜 형제(같은 부모)" 블록의 시작 인덱스를
+    찾는다. 형제가 아니라 다른 상위부서 소속 행이거나 그리드 맨 위면 None —
+    "형제간 이동만 자유롭게, 다른 상위부서로는 이동 불가"(2026-09-15 확정)를
+    이 함수 하나가 보장한다."""
+    if block_start <= 0:
+        return None
+    my_path = _row_path(rows[block_start])
+    my_parent, my_depth = my_path[:-1], len(my_path)
+    j = block_start - 1
+    while j >= 0:
+        p = _row_path(rows[j])
+        if len(p) < my_depth:
+            return None  # 더 얕은(무관하거나 조상인) 행을 만남 — 형제 없음
+        if len(p) == my_depth:
+            return j if p[:-1] == my_parent else None
+        j -= 1  # p가 더 깊음(우리 자신의 자손이거나 아직 안 지난 다른 형제의 자손) — 계속 위로
+    return None
+
+
+def _following_sibling_start(rows: list, block_start: int, block_end: int):
+    """block_end 위치의 행이 진짜 형제(같은 부모)면 그 인덱스를, 아니면
+    None을 반환 — subtreeRange() 정의상 block_end는 항상 우리 자손이 아닌
+    첫 행이므로, 그 행의 깊이는 우리와 같거나(형제 후보) 더 얕다(경계)."""
+    if block_end >= len(rows):
+        return None
+    my_path = _row_path(rows[block_start])
+    my_parent, my_depth = my_path[:-1], len(my_path)
+    p = _row_path(rows[block_end])
+    if len(p) == my_depth and p[:-1] == my_parent:
+        return block_end
+    return None
+
+
+def _reassign_sibling_codes(rows: list, parent_path: tuple) -> None:
+    """parent_path의 직속 자식들(진짜 형제)이 갖고 있던 조직코드 값들을
+    모아, 지금 순서에 맞게 재배당한다(assets/team_refer_grid.js 드래그의
+    codesBefore/idxAfter와 동일한 발상 — 새 번호를 만들지 않아 다른 그룹과
+    충돌하지 않는다)."""
+    idxs = [i for i, r in enumerate(rows)
+            if _row_path(r)[:-1] == parent_path and len(_row_path(r)) == len(parent_path) + 1]
+    if len(idxs) < 2:
+        return
+    codes = sorted((rows[i].get('조직코드') or '' for i in idxs), key=_sort_key)
+    for i, code in zip(idxs, codes):
+        rows[i]['조직코드'] = code
+
+
+def _annotate_tree(rows: list) -> None:
+    """각 행에 비편집 표시용 '_tree' 필드를 채운다 — 계층 깊이(들여쓰기 +
+    아이콘)와, 체크해서 이동/삭제하면 함께 따라올 하위 조직이 있으면 그
+    개수(+N)를 미리 보여준다(2026-09-15, 체크박스로 조작하기 전에 부모-자식
+    관계를 명확히 알 수 있게 — 자동 하이라이트 대신 항상 보이는 아이콘으로).
+    들여쓰기는 실제 텍스트 깊이가 아니라 "화면에 보이는 가장 가까운 조상"
+    기준(스택 기반 1회 순회) — 조상 행이 비공식소속부서명 공백으로 숨겨져
+    있으면 그만큼 들여쓰기가 줄어든다."""
+    stack: list = []  # [(path, visible_depth), ...]
+    for i, row in enumerate(rows):
+        path = _row_path(row)
+        while stack and not _is_descendant_path(path, stack[-1][0]):
+            stack.pop()
+        depth = (stack[-1][1] + 1) if stack else 0
+        icon = _TREE_ICONS.get(len(path) or 1, '📄')
+        _, end = _subtree_range(rows, i)
+        extra = end - i - 1
+        badge = f' (+{extra})' if extra else ''
+        indent = '　' * depth
+        prefix = '└ ' if depth else ''
+        row['_tree'] = f'{indent}{prefix}{icon}{badge}'
+        stack.append((path, depth))
+
+
 def _renumbered(rows: list) -> list:
-    """현재 순서(정렬/추가/삭제 반영 후) 그대로 1부터 번호를 다시 매긴다 —
-    '_no'는 화면 표시 전용이라 저장 대상 데이터에는 포함되지 않는다."""
+    """현재 순서(정렬/추가/삭제/이동 반영 후) 그대로 1부터 번호를 다시
+    매기고, 계층 구조 표시('_tree')도 함께 갱신한다 — 둘 다 화면 표시
+    전용이라 저장 대상 데이터에는 포함되지 않는다."""
     for i, r in enumerate(rows, start=1):
         r['_no'] = i
+    _annotate_tree(rows)
     return rows
 
 
@@ -567,9 +677,14 @@ def _team_refer_tab() -> html.Div:
     rows, hidden_rows = _split_hidden_rows(rows)
     rows = _renumbered(rows)
 
-    # 'No.' 는 화면 표시 전용 — 저장 대상 컬럼(KOREAN_COLUMNS)에는 없으므로
-    # team_refer_store.save_snapshot()이 그대로 무시한다(_COL_MAP에 없는 키).
-    columns = [{'name': 'No.', 'id': '_no', 'editable': False}] + [
+    # 'No.'/'_tree' 는 화면 표시 전용 — 저장 대상 컬럼(KOREAN_COLUMNS)에는
+    # 없으므로 team_refer_store.save_snapshot()이 그대로 무시한다(_COL_MAP에
+    # 없는 키). '_tree'는 체크박스로 이동/삭제하기 전에 부모-자식 관계를
+    # 아이콘 + 들여쓰기로 미리 보여준다(_annotate_tree() 참고, 2026-09-15).
+    columns = [
+        {'name': 'No.', 'id': '_no', 'editable': False},
+        {'name': '구조', 'id': '_tree', 'editable': False},
+    ] + [
         {'name': col, 'id': col, 'editable': True}
         for col in team_refer_store.KOREAN_COLUMNS
     ]
@@ -636,9 +751,32 @@ def _team_refer_tab() -> html.Div:
                     className='text-muted', style={'fontSize': '0.72rem'},
                 ),
             ], md='auto'),
+            dbc.Col([
+                dbc.Label(' ', className='small d-block mb-1'),
+                dbc.ButtonGroup([
+                    dbc.Button('전체 선택',
+                               id='team-refer-select-all-btn', color='secondary', outline=True, size='sm'),
+                    dbc.Button('전체 해제',
+                               id='team-refer-select-none-btn', color='secondary', outline=True, size='sm'),
+                    dbc.Button([html.I(className='bi bi-arrow-up me-1'), '위로'],
+                               id='team-refer-move-up-btn', color='secondary', outline=True, size='sm'),
+                    dbc.Button([html.I(className='bi bi-arrow-down me-1'), '아래로'],
+                               id='team-refer-move-down-btn', color='secondary', outline=True, size='sm'),
+                    dbc.Button([html.I(className='bi bi-trash me-1'), '선택 삭제'],
+                               id='team-refer-bulk-delete-btn', color='danger', outline=True, size='sm'),
+                ]),
+                html.Div(
+                    '왼쪽 체크박스로 행을 고른 뒤 사용하세요(dash_table 제약으로 헤더 '
+                    '전체선택 체크박스 대신 "전체 선택/해제" 버튼을 제공합니다) — 하위 조직(구조 '
+                    '열의 └ 표시)이 있는 행을 고르면 그 하위 조직 전체가 함께 이동/삭제됩니다. '
+                    '이동은 같은 상위부서 형제 안에서만 가능합니다.',
+                    className='text-muted', style={'fontSize': '0.72rem'},
+                ),
+            ], md='auto'),
         ], className='mb-2 align-items-end'),
         dcc.Download(id='team-refer-download'),
         html.Div(id='team-refer-db-load-msg'),
+        html.Div(id='team-refer-bulk-msg'),
 
         # id를 가진 고정 래퍼 — assets/team_refer_grid.js가 이 안에서만
         # 이벤트를 지켜본다(자동채움 가이드/클릭 위치로 커서 이동/F2 편집
@@ -651,6 +789,8 @@ def _team_refer_tab() -> html.Div:
                 data=rows,
                 editable=True,
                 row_deletable=True,
+                row_selectable='multi',  # 행별/전체 체크박스 — 선택 삭제·위/아래 이동 버튼용(2026-09-15)
+                selected_rows=[],
                 page_action='none',  # 페이지 나누지 않고 전체 행을 한 번에 표시
                 sort_action='custom',  # 헤더 클릭 정렬 — team_refer_sort 콜백이 처리(No.도 같이 갱신)
                 sort_by=[],
@@ -664,7 +804,10 @@ def _team_refer_tab() -> html.Div:
                     'minWidth': '55px', 'maxWidth': '160px',
                     'overflow': 'hidden', 'textOverflow': 'ellipsis',
                 },
-                style_cell_conditional=[{'if': {'column_id': '_no'}, 'width': '40px', 'textAlign': 'center'}],
+                style_cell_conditional=[
+                    {'if': {'column_id': '_no'}, 'width': '40px', 'textAlign': 'center'},
+                    {'if': {'column_id': '_tree'}, 'width': '70px', 'textAlign': 'left', 'whiteSpace': 'nowrap'},
+                ],
                 style_header={'fontWeight': '600', 'backgroundColor': '#fafafa',
                               'textAlign': 'center', 'fontSize': '0.72rem'},
                 tooltip_delay=0,
@@ -701,6 +844,21 @@ def _team_refer_tab() -> html.Div:
                 dbc.ModalFooter(dbc.Button('확인', id='team-refer-dupe-modal-close', size='sm')),
             ],
             id='team-refer-dupe-modal', is_open=False, size='lg',
+        ),
+
+        # "(SAIT)"/"(기술원)" 표기 제거로 서로 다른 원본이 하나로 합쳐지면
+        # 값 손실이 없는지 확인할 수 있도록 별도 창으로 보여준다(2026-09-15
+        # 확정 — docs/CLAUDE.md 참고).
+        dbc.Modal(
+            [
+                dbc.ModalHeader(dbc.ModalTitle([
+                    html.I(className='bi bi-info-circle-fill text-info me-2'),
+                    '조직명 병합 확인 — "(SAIT)"/"(기술원)" 표기 제거',
+                ])),
+                dbc.ModalBody(id='team-refer-merge-modal-body'),
+                dbc.ModalFooter(dbc.Button('확인', id='team-refer-merge-modal-close', size='sm')),
+            ],
+            id='team-refer-merge-modal', is_open=False, size='lg',
         ),
     ], className='pt-3')
 
@@ -1832,6 +1990,7 @@ def confirm_bulk_create(n_clicks, parsed, counter):
 # 추가되고, 1/2/3단계부서명을 자기 레벨까지 채우면 된다.
 @callback(
     Output('team-refer-table', 'data', allow_duplicate=True),
+    Output('team-refer-table', 'selected_rows', allow_duplicate=True),
     Input('team-refer-add-row-btn', 'n_clicks'),
     State('team-refer-table', 'data'),
     State('team-refer-table', 'active_cell'),
@@ -1839,12 +1998,170 @@ def confirm_bulk_create(n_clicks, parsed, counter):
 )
 def team_refer_add_row(n_clicks, rows, active_cell):
     if not n_clicks:
-        return no_update
+        return no_update, no_update
     rows = list(rows or [])
     new_row = {col: '' for col in team_refer_store.KOREAN_COLUMNS}
     insert_at = active_cell['row'] + 1 if active_cell else len(rows)
     rows.insert(insert_at, new_row)
-    return _renumbered(rows)
+    # 행이 삽입되면서 체크박스 선택 인덱스가 어긋날 수 있어 선택을 비운다.
+    return _renumbered(rows), []
+
+
+# ── 콜백: 팀/리더 참조 — 체크박스 선택 삭제(2026-09-15) ───────────────────────
+# 체크한 행 + 그 하위 조직 전체(_subtree_range)를 한번에 지운다 — 부모만
+# 체크해도 자식이 자동으로 함께 삭제된다("구조" 열의 (+N) 배지로 미리 몇
+# 개가 함께 삭제될지 알 수 있음). row_deletable의 × 버튼(행 1개만 지움)과는
+# 별개 기능으로 그대로 공존한다.
+@callback(
+    Output('team-refer-table', 'data', allow_duplicate=True),
+    Output('team-refer-table', 'selected_rows', allow_duplicate=True),
+    Output('team-refer-bulk-msg', 'children', allow_duplicate=True),
+    Input('team-refer-bulk-delete-btn', 'n_clicks'),
+    State('team-refer-table', 'data'),
+    State('team-refer-table', 'selected_rows'),
+    State('team-refer-table', 'sort_by'),
+    prevent_initial_call=True,
+)
+def team_refer_bulk_delete(n_clicks, rows, selected_rows, sort_by):
+    if not n_clicks:
+        return no_update, no_update, no_update
+    # 하위 조직 판정(_subtree_range)은 계층적(부모→자식) 순서를 전제로 한다 —
+    # 헤더 클릭 정렬이 활성화돼 있으면 그 전제가 깨져 엉뚱한 행이 함께
+    # 삭제될 수 있어(assets/team_refer_grid.js의 드래그 비활성화와 동일한
+    # 이유) 정렬 해제를 먼저 요청한다.
+    if sort_by:
+        return no_update, no_update, _alert('정렬을 해제한 후 다시 시도해주세요(헤더 정렬 중에는 '
+                                             '하위 조직 판정이 정확하지 않습니다).', 'warning')
+    rows = list(rows or [])
+    selected_rows = [i for i in (selected_rows or []) if 0 <= i < len(rows)]
+    if not selected_rows:
+        return no_update, no_update, _alert('삭제할 행을 먼저 체크해주세요.', 'warning')
+
+    to_delete: set = set()
+    for idx in selected_rows:
+        start, end = _subtree_range(rows, idx)
+        to_delete.update(range(start, end))
+
+    new_rows = [r for i, r in enumerate(rows) if i not in to_delete]
+    msg = _alert(f'{len(to_delete)}개 행을 삭제했습니다(하위 조직 포함). "저장"을 눌러야 실제로 반영됩니다.',
+                 'success')
+    return _renumbered(new_rows), [], msg
+
+
+# ── 콜백: 팀/리더 참조 — 체크박스 선택 위/아래 이동(2026-09-15) ────────────────
+# "형제간 이동만 자유롭게, 다른 상위부서로는 이동 불가"(2026-09-15 확정) —
+# 체크한 행(+하위 조직 전체)을 같은 부모를 공유하는 바로 앞/뒤 형제 블록과
+# 자리를 맞바꾼다. 여러 개 체크하면 각각 한 칸씩 개별 이동(오름차순/내림차순
+# 순서로 처리하면 인접한 여러 선택도 자연스럽게 함께 밀려 올라간다/내려간다).
+# 형제가 없는(=그리드 맨 끝이거나 다른 상위부서 소속) 행은 이동을 건너뛰고
+# "다른 상위부서로의 이동은 불가합니다" 안내를 보여준다.
+def _move_selected(rows: list, selected_rows: list, direction: str):
+    rows = list(rows)
+    own_paths = []
+    seen = set()
+    for idx in selected_rows:
+        if 0 <= idx < len(rows):
+            p = _row_path(rows[idx])
+            if p not in seen:
+                seen.add(p)
+                own_paths.append(p)
+
+    def _current_index(path):
+        return next((i for i, r in enumerate(rows) if _row_path(r) == path), None)
+
+    ordered = sorted(
+        (p for p in own_paths if _current_index(p) is not None),
+        key=_current_index, reverse=(direction == 'down'),
+    )
+
+    blocked = 0
+    for path in ordered:
+        idx = _current_index(path)
+        if idx is None:
+            continue
+        start, end = _subtree_range(rows, idx)
+        if direction == 'up':
+            sib_start = _preceding_sibling_range(rows, start)
+            if sib_start is None:
+                blocked += 1
+                continue
+            block = rows[start:end]
+            sib_block = rows[sib_start:start]
+            rows[sib_start:end] = block + sib_block
+        else:
+            sib_start = _following_sibling_start(rows, start, end)
+            if sib_start is None:
+                blocked += 1
+                continue
+            _, sib_end = _subtree_range(rows, sib_start)
+            block = rows[start:end]
+            sib_block = rows[sib_start:sib_end]
+            rows[start:sib_end] = sib_block + block
+        _reassign_sibling_codes(rows, path[:-1])
+
+    new_selected = [i for i, r in enumerate(rows) if _row_path(r) in seen]
+    return rows, new_selected, blocked
+
+
+@callback(
+    Output('team-refer-table', 'data', allow_duplicate=True),
+    Output('team-refer-table', 'selected_rows', allow_duplicate=True),
+    Output('team-refer-bulk-msg', 'children', allow_duplicate=True),
+    Input('team-refer-move-up-btn', 'n_clicks'),
+    Input('team-refer-move-down-btn', 'n_clicks'),
+    State('team-refer-table', 'data'),
+    State('team-refer-table', 'selected_rows'),
+    State('team-refer-table', 'sort_by'),
+    prevent_initial_call=True,
+)
+def team_refer_move_selected(n_up, n_down, rows, selected_rows, sort_by):
+    trig = ctx.triggered_id
+    if not trig:
+        return no_update, no_update, no_update
+    direction = 'up' if trig == 'team-refer-move-up-btn' else 'down'
+    if not (n_up if direction == 'up' else n_down):
+        return no_update, no_update, no_update
+    # 형제(같은 부모) 판정이 계층적 순서를 전제로 하므로, 헤더 클릭 정렬
+    # 중에는 드래그 기능과 동일하게 이동을 막는다.
+    if sort_by:
+        return no_update, no_update, _alert('정렬을 해제한 후 다시 시도해주세요(헤더 정렬 중에는 '
+                                             '형제 판정이 정확하지 않습니다).', 'warning')
+
+    rows = list(rows or [])
+    selected_rows = [i for i in (selected_rows or []) if 0 <= i < len(rows)]
+    if not selected_rows:
+        return no_update, no_update, _alert('이동할 행을 먼저 체크해주세요.', 'warning')
+
+    new_rows, new_selected, blocked = _move_selected(rows, selected_rows, direction)
+    new_rows = _renumbered(new_rows)
+    msg = _alert('다른 상위부서로의 이동은 불가합니다.', 'warning') if blocked else no_update
+    return new_rows, new_selected, msg
+
+
+# dash_table의 row_selectable='multi'는 헤더에 "전체 선택" 체크박스를
+# 자체적으로 렌더링하지 않는다(dash-select-header 셀이 항상 비어있음 —
+# dash_table 자체 한계). 그래서 버튼 두 개로 대체한다.
+@callback(
+    Output('team-refer-table', 'selected_rows', allow_duplicate=True),
+    Input('team-refer-select-all-btn', 'n_clicks'),
+    State('team-refer-table', 'data'),
+    prevent_initial_call=True,
+)
+def team_refer_select_all(n_clicks, rows):
+    if not n_clicks:
+        return no_update
+    return list(range(len(rows or [])))
+
+
+@callback(
+    Output('team-refer-table', 'selected_rows', allow_duplicate=True),
+    Input('team-refer-select-none-btn', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def team_refer_select_none(n_clicks):
+    if not n_clicks:
+        return no_update
+    return []
 
 
 # ── 콜백: 팀/리더 참조 — 헤더 클릭 정렬(오름차순/내림차순) ────────────────────
@@ -1853,18 +2170,21 @@ def team_refer_add_row(n_clicks, rows, active_cell):
 # 새 순서에 맞게 다시 매긴다("정렬순에 따라 동적으로 맵핑").
 @callback(
     Output('team-refer-table', 'data', allow_duplicate=True),
+    Output('team-refer-table', 'selected_rows', allow_duplicate=True),
     Input('team-refer-table', 'sort_by'),
     State('team-refer-table', 'data'),
     prevent_initial_call=True,
 )
 def team_refer_sort(sort_by, rows):
     if not sort_by:
-        return no_update
+        return no_update, no_update
     rows = list(rows or [])
     for spec in reversed(sort_by):
         col = spec['column_id']
         rows.sort(key=lambda r: _sort_key(r.get(col)), reverse=(spec['direction'] == 'desc'))
-    return _renumbered(rows)
+    # 정렬로 행 순서 자체가 바뀌므로 체크박스 선택은 비운다(형제 이동
+    # 버튼도 정렬 중엔 어차피 막히므로 선택을 유지할 이유가 없다).
+    return _renumbered(rows), []
 
 
 # ── 콜백: 팀/리더 참조 — 행 삭제 직후 No. 즉시 재번호 ─────────────────────────
@@ -1968,6 +2288,8 @@ clientside_callback(
     Output('team-refer-save-msg', 'children'),
     Output('team-refer-dupe-modal', 'is_open', allow_duplicate=True),
     Output('team-refer-dupe-modal-body', 'children'),
+    Output('team-refer-merge-modal', 'is_open', allow_duplicate=True),
+    Output('team-refer-merge-modal-body', 'children'),
     Input('team-refer-save-btn', 'n_clicks'),
     State('team-refer-table', 'data'),
     State('team-refer-hidden-rows', 'data'),
@@ -1977,11 +2299,11 @@ clientside_callback(
 def team_refer_save(n_clicks, rows, hidden_rows, valid_date_str):
     from services.auth import can
     if not can('manage_users'):
-        return _alert('관리자만 저장할 수 있습니다.', 'danger'), no_update, no_update
+        return _alert('관리자만 저장할 수 있습니다.', 'danger'), no_update, no_update, no_update, no_update
     if not n_clicks:
-        return no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update, no_update
     if not valid_date_str:
-        return _alert('입력 날짜를 선택해주세요.', 'warning'), no_update, no_update
+        return _alert('입력 날짜를 선택해주세요.', 'warning'), no_update, no_update, no_update, no_update
 
     valid_date = date.fromisoformat(valid_date_str[:10])
     # 화면에 보이는(편집된) 행 + 가독성을 위해 숨겨뒀던 행(비공식소속부서명
@@ -2008,11 +2330,16 @@ def team_refer_save(n_clicks, rows, hidden_rows, valid_date_str):
         parts.append(f'부서ID가 중복된 항목이 {len(dupes)}건 있어 일부 행이 저장되지 '
                       '않았을 수 있습니다 — 아래 창을 확인해주세요.')
 
-    alert_color = 'warning' if dupes else 'success'
+    merges = result.get('tag_merges') or []
+    if merges:
+        parts.append(f'"(SAIT)"/"(기술원)" 표기 제거로 {len(merges)}건이 하나의 조직으로 '
+                      '합쳐졌습니다 — 값이 유실되지 않았는지 아래 창에서 확인해주세요.')
+
+    alert_color = 'warning' if (dupes or merges) else 'success'
     body = [html.Div(p) for p in parts]
 
     msg = dbc.Alert(body, color=alert_color, dismissable=True, className='py-2 small mb-0')
-    return msg, bool(dupes), _dupe_modal_body(dupes)
+    return msg, bool(dupes), _dupe_modal_body(dupes), bool(merges), _merge_modal_body(merges)
 
 
 # ── 콜백: 팀/리더 참조 — 현재 기준 엑셀 다운로드 ──────────────────────────────
@@ -2093,6 +2420,63 @@ def _dupe_modal_body(dupes: list[dict]):
     prevent_initial_call=True,
 )
 def team_refer_close_dupe_modal(n_clicks):
+    if not n_clicks:
+        return no_update
+    return False
+
+
+def _merge_modal_body(merges: list[dict]):
+    """"(SAIT)"/"(기술원)" 태그 제거로 여러 원본 조직이 하나로 합쳐진 경우를
+    보여준다. merges: pipeline.process_team_refer.find_tag_merges()의 반환값
+    — 각 병합 그룹마다 원래 표기(variants)와 최종 유지된 값(kept)을 대조해서
+    값 손실이 없는지 확인할 수 있게 한다. kept은 필드별로 "먼저 나온 값
+    우선"이라 variants 중 어느 한 행과 정확히 일치한다는 보장이 없어(예:
+    조직코드는 A 행 것, 사번은 B 행 것이 섞여 남을 수 있음), 행 단위로
+    "이 값이 유지됐다"고 표시하지 않고 원본들과 최종 값을 나란히 보여주는
+    방식으로 구성했다."""
+    if not merges:
+        return None
+    header = html.Thead(html.Tr([
+        html.Th('구분'), html.Th('표기'), html.Th('조직코드'),
+        html.Th('사번'), html.Th('성명'), html.Th('직책'),
+    ]))
+    body_rows = []
+    for m in merges:
+        body_rows.append(html.Tr([
+            html.Td(f"■ {m['merged_name']}으로 합쳐짐", colSpan=6, className='fw-semibold bg-light'),
+        ]))
+        for v in m['variants']:
+            body_rows.append(html.Tr([
+                html.Td('원본'), html.Td(v['original_name']),
+                html.Td(v['dep_code']), html.Td(v['researcher_id']),
+                html.Td(v['name']), html.Td(v['assignment_name']),
+            ], className='text-muted'))
+        k = m['kept']
+        body_rows.append(html.Tr([
+            html.Td('최종 유지', className='fw-semibold'), html.Td(m['merged_name']),
+            html.Td(k['dep_code']), html.Td(k['researcher_id']),
+            html.Td(k['name']), html.Td(k['assignment_name']),
+        ], className='table-success'))
+    return html.Div([
+        html.Div(
+            f'"(SAIT)"/"(기술원)" 표기가 제거되면서 {len(merges)}건이 같은 이름의 조직으로 '
+            '합쳐졌습니다. 필드마다 먼저 값이 채워진 원본이 우선 채택되므로(조직코드는 '
+            'A 원본, 사번은 B 원본 것이 섞여 남을 수 있음), 초록색 "최종 유지" 행과 위쪽 '
+            '"원본" 행들을 비교해 필요한 값이 빠지지 않았는지 확인해주세요. 빠진 값이 있으면 '
+            '"최종 유지" 행에 해당하는 실제 그리드 행에 직접 채워 넣은 뒤 다시 저장하면 됩니다.',
+            className='small text-muted mb-2',
+        ),
+        dbc.Table([header, html.Tbody(body_rows)], bordered=True, hover=True, size='sm',
+                   responsive=True, className='mb-0'),
+    ])
+
+
+@callback(
+    Output('team-refer-merge-modal', 'is_open', allow_duplicate=True),
+    Input('team-refer-merge-modal-close', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def team_refer_close_merge_modal(n_clicks):
     if not n_clicks:
         return no_update
     return False
@@ -2479,6 +2863,7 @@ def data_update_db_load(n_clicks):
     Output('exception-job-function-upload-status', 'children', allow_duplicate=True),
     Output('team-refer-table', 'data', allow_duplicate=True),
     Output('team-refer-hidden-rows', 'data', allow_duplicate=True),
+    Output('team-refer-table', 'selected_rows', allow_duplicate=True),
     Input('data-update-interval', 'n_intervals'),
     prevent_initial_call=True,
 )
@@ -2500,7 +2885,7 @@ def data_update_poll(_n):
     visible_rows, hidden_rows = _split_hidden_rows(team_refer_store.list_editable_rows())
     grid_data = _renumbered(visible_rows)
     return (_data_update_table(), _db_status_view(), not wpr.any_running(),
-            team_refer_status, ejf_status, grid_data, hidden_rows)
+            team_refer_status, ejf_status, grid_data, hidden_rows, [])
 
 
 # ── 콜백: 데이터 업데이트 — "이전 Data" 다운로드 ───────────────────────────────
