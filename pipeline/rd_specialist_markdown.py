@@ -148,6 +148,31 @@ def read_team_refer(out_dir: str, period: tuple | None = None) -> list:
     return _pick(df.to_dict('records'))
 
 
+_LEVEL_NAME_FIELDS = ('dep_1st_name', 'dep_2nd_name', 'dep_3rd_name')
+
+
+def own_level_name(node: dict) -> str:
+    """team_refer 행(또는 build_org_tree() 노드)에서 자기 team_layer에 해당하는
+    이름 하나만 골라 반환한다 — 저장 스키마가 own-level-only(자기 레벨 컬럼만
+    채움)이므로 team_layer가 1이면 dep_1st_name, 2면 dep_2nd_name, 3이면
+    dep_3rd_name을 본다. team_layer가 이 범위를 벗어나거나 비어 있으면(방어적
+    처리) 채워진 첫 값을 폴백으로 쓴다. org_tree_html._label()과
+    services.similarity_map(조직도 드롭다운 라벨)이 공유한다."""
+    try:
+        layer = int(node.get('team_layer') or 0)
+    except (TypeError, ValueError):
+        layer = 0
+    if 1 <= layer <= len(_LEVEL_NAME_FIELDS):
+        value = (node.get(_LEVEL_NAME_FIELDS[layer - 1]) or '').strip()
+        if value:
+            return value
+    for field in _LEVEL_NAME_FIELDS:
+        value = (node.get(field) or '').strip()
+        if value:
+            return value
+    return ''
+
+
 def build_org_tree(rows: list) -> list:
     """team_refer.csv 행들을 dep_id(자신의 조직 ID)/upper_dep_id(상위 조직의
     dep_id) 기준으로 계층화한다 — 각 행이 자신의 부모를 명시적으로 갖고 있으므로
@@ -157,12 +182,13 @@ def build_org_tree(rows: list) -> list:
     최상위 노드로 취급한다. 각 노드의 자식들은 dep_code(조직 위계·표시 순서
     코드, 구 code3) 오름차순으로 정렬한다.
     반환: 최상위 노드 리스트, 각 노드는
-      {org_name_wd, work_type, dep_name, pjt_part_name, team_layer(int),
-       researcher_id, name, assignment_name, dep_code, dep_id, upper_dep_id,
-       children: [...]}
-    노드 라벨(org_tree_html._label)은 pjt_part_name만 사용한다 — dep_name은
-    "연구원 명단" 화면의 부서 검색 필터 표시값 전용이라 트리 렌더링에는
-    관여하지 않는다."""
+      {org_name_wd, work_type, dep_1st_name, dep_2nd_name, dep_3rd_name,
+       team_layer(int), researcher_id, name, assignment_name, dep_code,
+       dep_id, upper_dep_id, children: [...]}
+    노드 라벨(org_tree_html._label)은 자기 team_layer에 해당하는
+    dep_1st_name/dep_2nd_name/dep_3rd_name 중 하나만 사용한다(own-level-only
+    저장 관례 — team_hierarchy.py 참고, 조상 이름은 upper_dep_id를 따라가면
+    알 수 있으므로 중복 저장하지 않는다)."""
     nodes: list = []
     nodes_by_id: dict = {}
     for row in rows:
@@ -243,7 +269,7 @@ def org_tree_html(tree: list, node_content_fn=None) -> str:
     구경만 하게 두지 않기 위함. 하위 노드들은 .org-node-body로 감싸 들여쓰기
     (padding-left/border-left, CONSOLE_STYLE 참고)가 적용되게 한다."""
     def _label(node: dict) -> str:
-        head = html.escape(node.get('pjt_part_name') or '')
+        head = html.escape(own_level_name(node) or '')
         assignment = (node.get('assignment_name') or '').strip()
         person = (node.get('name') or '').strip()
         who = f'{assignment} {person}'.strip()

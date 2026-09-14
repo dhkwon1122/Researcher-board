@@ -1,5 +1,6 @@
 import os
 import secrets
+import time
 from html import escape
 
 import dash
@@ -37,24 +38,41 @@ def _get_or_create_secret_key() -> str:
     못해(무작위로 요청이 이 워커 저 워커로 분산되므로) 로그인 직후 다시
     로그아웃 상태로 튕기는 것처럼 보인다. 파일에 고정해두면 모든 워커가 같은
     키를 쓴다. 파일 생성은 os.O_EXCL로 원자적으로 시도해, 여러 워커가 거의
-    동시에 뜨더라도 하나만 파일을 쓰고 나머지는 그 값을 읽는다."""
+    동시에 뜨더라도 하나만 파일을 쓰고 나머지는 그 값을 읽는다.
+
+    2026-09-10 수정 — 경쟁 조건(race condition) 버그: 워커 A가 O_EXCL로
+    파일을 막 "생성"했지만 아직 키 내용을 "쓰기" 전인 그 짧은 틈에, 워커 B가
+    같은 파일을 열려다 FileExistsError를 받고 곧바로 그 파일을 읽으면 아직
+    빈 파일을 읽어버려 secret_key가 빈 문자열이 된다(Flask는 이걸 "비밀키가
+    설정 안 됨"으로 취급해 session 사용 시 RuntimeError). 실제로 사용자가
+    gunicorn --workers 2 환경에서 이 증상(로그인 시 간헐적 500 에러)을
+    겪어 재현·수정 — 빈 내용을 읽으면 그대로 반환하지 말고, 다른 워커가
+    쓰기를 끝낼 때까지 잠깐씩 재시도한다."""
     env_key = os.environ.get('FLASK_SECRET_KEY', '').strip()
     if env_key:
         return env_key
 
     key_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config', '.flask_secret_key')
     os.makedirs(os.path.dirname(key_path), exist_ok=True)
-    try:
-        fd = os.open(key_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+
+    for _ in range(50):  # 최대 약 5초 대기 — 다른 워커의 쓰기는 사실상 즉시 끝남
+        try:
+            fd = os.open(key_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            with open(key_path, encoding='utf-8') as f:
+                existing = f.read().strip()
+            if existing:
+                return existing
+            time.sleep(0.1)  # 다른 워커가 방금 만들었지만 아직 쓰는 중 — 잠깐 뒤 재시도
+            continue
         try:
             key = secrets.token_hex(32)
             os.write(fd, key.encode('utf-8'))
         finally:
             os.close(fd)
         return key
-    except FileExistsError:
-        with open(key_path, encoding='utf-8') as f:
-            return f.read().strip()
+
+    raise RuntimeError(f'{key_path} 생성/읽기에 반복 실패했습니다(다른 워커의 쓰기가 끝나지 않음).')
 
 
 app.server.secret_key = _get_or_create_secret_key()

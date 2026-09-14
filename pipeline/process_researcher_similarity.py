@@ -337,7 +337,7 @@ def _update_pair_judgments(pairs: set, text_by_id: dict, cache: dict, force: boo
     if not targets:
         return cache
     label = '전체 재판정' if force else '신규/미확인'
-    workers = fit.max_concurrency()
+    workers = fit.batch_concurrency()
     total = len(targets)
     print(f'[process_researcher_similarity] 연구원 쌍 LLM 판정 중 ({label} {total}쌍, 동시 {workers}건)...')
     completed = 0

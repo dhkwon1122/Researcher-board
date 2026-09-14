@@ -163,4 +163,16 @@ TABLE_PERMISSIONS: dict[str, str | None] = {
     # 근무 경력(2026-08-29) — 어학자격과 동일하게 민감도가 낮은 원천
     # 데이터라 권한 제한 없음(사용자 확정 — AI 검색 조회 가능하게).
     'work_experience':          None,
+
+    # 직무_직군_맵핑(2026-09-04)/직무_직군_맵핑_예외자(2026-09-09) — DS/SAIT
+    # 직군 표기용 참조 테이블. 급여·평가 정보를 담지 않는 단순 분류 매핑이라
+    # job_profile/tech_ownership 등 다른 원천 참조 테이블과 동일하게 권한
+    # 제한 없음.
+    'mapping_job_function':     None,
+    'exception_job_function':   None,
+
+    # 평가표기예외자(2026-09-09, evaluation_exception.csv) — "이 사람은 T&P
+    # 평가 표기 방식이 다르다"는 사실 자체가 평가 관련 인사 정보라, evaluations
+    # 와 동일한 view_evaluation 권한으로 제한한다.
+    'evaluation_exception':     'view_evaluation',
 }

@@ -59,7 +59,7 @@ from paths import BASE_DIR, OUT_DIR  # noqa: E402
 sys.path.insert(0, BASE_DIR)
 from excel_reader import clean_str as _clean  # noqa: E402
 from llm_client import (  # noqa: E402
-    call_llm, extract_json, get_truncation_count, max_concurrency,
+    batch_concurrency, call_llm, extract_json, get_truncation_count, max_concurrency,
     reset_truncation_count, run_concurrent,
 )
 import journal_authority  # noqa: E402
@@ -748,7 +748,7 @@ def analyze_researchers_as_of(researcher_ids: list, valid_date: date) -> list:
         prepared.append((idx, rid, prompt))
 
     if prepared:
-        workers = max_concurrency()
+        workers = batch_concurrency()
         tasks_ = [(lambda p=prompt: _analyze_researcher(p)) for _, _, prompt in prepared]
         task_results = run_concurrent(tasks_, max_workers=workers)
         for (idx, rid, _), (analysis, error) in zip(prepared, task_results):
@@ -870,7 +870,7 @@ def process(refresh_journals: bool = False) -> bool:
     # 다른 연구원 분석은 계속 진행하고, 실패한 연구원만 에러와 함께 로그로
     # 남겨 추후 원인 파악·동시성 조정에 활용할 수 있게 한다.
     if prepared:
-        workers = max_concurrency()
+        workers = batch_concurrency()
         print(f'[process_researcher_expertise] 연구원 {len(prepared)}명 LLM 분석 시작 '
               f'(전체 {total}명 중 {skip_count}명 건너뜀, 동시 {workers}건)...')
 

@@ -271,7 +271,7 @@ def _cumulative_search_panel():
     llm_summary_block() 하나면 충분하다."""
     return html.Div([
         dbc.Alert(
-            '누적기준: 조직도 대신 이름/사번으로 검색합니다(전배·퇴사 등으로 '
+            '과거포함: 조직도 대신 이름/사번으로 검색합니다(전배·퇴사 등으로 '
             '최신 인력현황에 없는 사람도 포함) — 조직 구조가 바뀌면 조직도 위치가 '
             '더 이상 유효하지 않을 수 있어, 이 모드에서는 조직도 탐색을 지원하지 않습니다.',
             color='secondary', className='small mb-3',
@@ -800,7 +800,7 @@ def _download_panel():
             className='mb-2 small',
         ),
         html.Div(
-            '누적기준에서는 조직도가 최신 상태를 보장하지 않아 "부서 선택(조직도)"를 사용할 수 없습니다.',
+            '과거포함에서는 조직도가 최신 상태를 보장하지 않아 "부서 선택(조직도)"를 사용할 수 없습니다.',
             id='expertise-download-mode-hint', className='text-muted mb-2',
             style={'fontSize': '0.72rem', 'display': 'none'},
         ),
@@ -883,8 +883,8 @@ def layout(highlight_researcher=None, mail_rid=None, **_kwargs):
             dbc.RadioItems(
                 id='expertise-search-mode',
                 options=[
-                    {'label': '최신기준 (조직도 탐색)', 'value': 'current'},
-                    {'label': '누적기준 (이름/사번 검색만)', 'value': 'all'},
+                    {'label': '현재 (조직도 탐색)', 'value': 'current'},
+                    {'label': '과거포함 (이름/사번 검색만)', 'value': 'all'},
                     # '과거 시점 조회(온디맨드 분석)' 옵션은 화면에서만 숨긴다(사용자
                     # 확정 2026-09-02) — value='historical' 처리 로직(아래
                     # _toggle_download_panel, _render_historical_results 등)은

@@ -36,11 +36,14 @@ CSV(및 LLM 파생 JSON 산출물)를 그 자리에서 SQL로 조회한다 — �
 무한 대기 대신 빠르게 실패한다(text2sql.py에는 이 보호가 없음).
 
 self-repair: 생성된 SQL이 안전 검증(sanitize_sql)에 걸리거나 DuckDB 실행
-자체가 에러(문법 오류 등)로 실패하면, 그 에러 메시지를 LLM에 다시 주고 한
-번만 재생성을 시도한다(_generate_sql_repair). 기존 "0건이면 의미 기반
-재시도"(_semantic_fallback)는 SQL 자체는 정상 실행됐지만 결과가 없는
-경우를 보완하는 것이고, 이 재시도는 SQL이 애초에 실행 불가능했던 경우를
-보완하는 것이라 서로 겹치지 않는다.
+자체가 에러(문법 오류 등)로 실패하면, 그 에러 메시지를 LLM에 다시 주고
+재생성을 시도한다(_generate_sql_repair). 총 시도 횟수는 _MAX_SQL_ATTEMPTS
+(기본 3 = 최초 생성 1회 + 재시도 2회, OPEN_DATA_QUERY_MAX_ATTEMPTS로 조정)
+— 복잡한 조인/스키마가 필요한 질문은 한 번의 재시도로 못 고치는 경우가
+있어 기존 1회에서 늘렸다. 기존 "0건이면 의미 기반 재시도"(_semantic_
+fallback)는 SQL 자체는 정상 실행됐지만 결과가 없는 경우를 보완하는 것이고,
+이 재시도는 SQL이 애초에 실행 불가능했던 경우를 보완하는 것이라 서로
+겹치지 않는다.
 """
 
 import json
@@ -59,6 +62,7 @@ import researcher_fit as fit  # noqa: E402
 from services import auth  # noqa: E402
 from services import data_labels  # noqa: E402
 from services import data_store  # noqa: E402
+from services import nl_query_feedback  # noqa: E402
 from services import query_settings  # noqa: E402
 from services import researcher_profile_export as rpe  # noqa: E402
 from services import text2sql  # noqa: E402
@@ -70,6 +74,15 @@ from services.llm import LLMError  # noqa: E402
 DISPLAY_LIMIT = 1000
 _EMBEDDING_MATCH_THRESHOLD = 0.75
 _DISTINCT_VALUES_CAP = 2000
+
+# self-repair 총 시도 횟수(최초 생성 1회 + 재시도 (n-1)회). 기존엔 2(=재시도
+# 1회)로 고정돼 있었는데, 복잡한 스키마/조인이 필요한 질문은 한 번의 재시도로
+# 못 고치는 경우가 있어 기본값을 3(=재시도 2회)으로 늘리고 환경변수로 더
+# 조정할 수 있게 했다(OPEN_DATA_QUERY_MAX_ATTEMPTS). 시도할 때마다 LLM을
+# 다시 호출하므로 너무 크게 잡으면 응답이 느려진다 — 화면은 어차피
+# LLM2_QUERY_MAX_WAIT_SECONDS로 슬롯 대기시간이 제한돼 있어 무한정 느려지진
+# 않는다.
+_MAX_SQL_ATTEMPTS = max(1, int(os.environ.get('OPEN_DATA_QUERY_MAX_ATTEMPTS', '3')))
 
 # 결과에 researcher_id가 있으면 항상 맨 앞에 rpe.PERSON_BASE_COLUMNS 7개를
 # 붙인다(services.researcher_profile_export 참고) — 원래 SQL 결과에 이
@@ -329,19 +342,21 @@ def _generate_sql(question: str, schema: str, max_wait, current_only: bool = Tru
                    period: tuple[str, str] | None = None) -> dict | None:
     rule = _period_or_current_rule(current_only, period)
     system = query_settings.apply(_SQL_GEN_SYSTEM_TEMPLATE.format(schema=schema, current_only_rule=rule))
+    system += nl_query_feedback.feedback_hint_for(question)
     raw = llm_client.call_llm(question, system, temperature=0.0, max_tokens=700, max_wait=max_wait)
     return _parse_gen_response(raw)
 
 
 def _generate_sql_repair(question: str, schema: str, max_wait, current_only: bool,
                           bad_sql: str, error: str, period: tuple[str, str] | None = None) -> dict | None:
-    """실패한 SQL과 에러 메시지를 시스템 프롬프트 뒤에 덧붙여 한 번만 재생성
-    시도(self-repair). call_llm이 단일 system/user 메시지쌍만 지원하므로,
-    "이전 시도 → 에러" 대화를 시스템 프롬프트 안에 그대로 이어붙이는 방식으로
-    같은 효과를 낸다."""
+    """실패한 SQL과 에러 메시지를 시스템 프롬프트 뒤에 덧붙여 재생성 시도
+    (self-repair, 최대 시도 횟수는 _MAX_SQL_ATTEMPTS 참고). call_llm이 단일
+    system/user 메시지쌍만 지원하므로, "이전 시도 → 에러" 대화를 시스템
+    프롬프트 안에 그대로 이어붙이는 방식으로 같은 효과를 낸다."""
     rule = _period_or_current_rule(current_only, period)
     base = _SQL_GEN_SYSTEM_TEMPLATE.format(schema=schema, current_only_rule=rule)
     system = query_settings.apply(base) + _REPAIR_SYSTEM_SUFFIX.format(bad_sql=bad_sql, error=error[:500])
+    system += nl_query_feedback.feedback_hint_for(question)
     raw = llm_client.call_llm(question, system, temperature=0.0, max_tokens=700, max_wait=max_wait)
     return _parse_gen_response(raw)
 
@@ -491,7 +506,7 @@ def answer(question: str, current_only: bool = True, period: tuple[str, str] | N
 
         columns, rows = None, None
         safe_sql, last_error = None, None
-        for attempt in range(2):
+        for attempt in range(_MAX_SQL_ATTEMPTS):
             try:
                 safe_sql = text2sql.sanitize_sql(_cap_limit(gen['sql']))
             except text2sql.Text2SQLError as exc:
@@ -504,9 +519,10 @@ def answer(question: str, current_only: bool = True, period: tuple[str, str] | N
                 except Exception as exc:  # noqa: BLE001
                     last_error = f'조회 중 오류가 발생했습니다: {str(exc)[:200]}'
 
-            if attempt == 1:
+            if attempt == _MAX_SQL_ATTEMPTS - 1:
                 break
-            # self-repair: 실패한 SQL과 에러를 LLM에 주고 한 번만 재생성
+            # self-repair: 실패한 SQL과 에러를 LLM에 주고 재생성(최대
+            # _MAX_SQL_ATTEMPTS - 1회)
             repaired = _generate_sql_repair(
                 question, schema, max_wait, current_only, gen['sql'], last_error, period=period,
             )

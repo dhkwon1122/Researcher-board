@@ -9825,3 +9825,689 @@ CMD가 gunicorn)에서는 이 예외가 화면에 에러로 안 뜨고, 그냥 �
 작업에서는 앞으로 `_run_pipeline` 식의 정적 확인뿐 아니라, 이번처럼
 `app.server.test_request_context(path)` 안에서 각 페이지의 `layout()`을
 직접 호출해보는 걸 표준 검증 단계에 포함할 것.
+
+## 2026-09-10 (6): 로그인 시 간헐적 500 에러 — `_get_or_create_secret_key()`의
+Flask secret_key 파일 생성 경쟁 조건(race condition) 버그 수정
+
+사용자가 위 (5)번 버그를 고친 뒤 서버에 재배포해 로그인해보니, "Loading..."
+후 새로고침을 몇 번 하면 "Internal Server Error"가 났다고 리포트 —
+`docker compose logs app`에서 실제 traceback을 받아 확인:
+```
+RuntimeError: The session is unavailable because no secret key was set.
+Set the secret_key on the application to something unique and secret
+Error in app:Exception on /login [GET]
+```
+
+**원인**: `app.py`의 `_get_or_create_secret_key()`가 `config/
+.flask_secret_key` 파일을 `os.O_CREAT | os.O_EXCL`로 원자적 "생성"만 하고,
+그 뒤 `secrets.token_hex(32)`로 만든 키를 파일에 "쓰는" 것은 별도
+`os.write()` 호출이었다 — 이 둘 사이에 아주 짧은 간격이 있다. `gunicorn
+--workers 2`(Dockerfile 기본 설정)라 컨테이너가 뜰 때 두 워커가 이 모듈을
+거의 동시에 import하는데, 워커 A가 파일을 막 "생성"했지만 아직 "쓰기" 전인
+그 틈에 워커 B가 같은 파일을 열려다 `FileExistsError`를 받고 **곧바로 그
+파일을 읽어버리면 빈 파일**을 읽는다 — 기존 코드는 그 빈 문자열을 그대로
+`secret_key`로 써버려서, 그 워커가 처리하는 요청에서만(무작위로 배분되므로
+새로고침할 때마다 걸릴 수도 안 걸릴 수도 있음) Flask가 "secret_key가
+비어있다(=설정 안 됨)"고 판단해 `flask.session` 사용 시 `RuntimeError`를
+던졌다. 매 컨테이너 기동(재빌드/재시작)마다 이 파일이 없는 상태에서
+새로 시작하므로(`docker-compose.yml`에 `config/`가 볼륨 마운트돼 있지
+않아 컨테이너 재생성 때마다 초기화됨) 재현 조건이 항상 갖춰져 있었다.
+
+**직접 재현·검증**: 실제 `multiprocessing.Pool`로 4개 프로세스가 동시에
+기존 로직을 실행하도록 만들고(쓰기 직전에 일부러 지연을 넣어 경합을
+강제 유발) 돌려본 결과, 4개 중 3개가 실제로 빈 문자열을 반환하는 것을
+확인해 버그를 재현했다.
+
+**수정**: `FileExistsError`를 받았을 때 파일 내용이 비어있으면 그대로
+반환하지 않고, `time.sleep(0.1)` 후 **다시 시도**하도록 루프로 바꿨다
+(최대 50회 ≈ 5초 — 다른 워커의 쓰기는 사실상 즉시 끝나므로 충분히
+넉넉한 상한). 이렇게 해도 "모든 워커가 같은 키를 쓴다"는 원래 설계
+의도(파일 하나로 키를 고정해 워커 간 세션 쿠키 서명이 어긋나지 않게 함)는
+그대로 유지된다 — 임의로 각자 키를 만들어버리면 워커마다 키가 달라져
+로그인 직후 다시 로그아웃되는 문제가 재발하므로, "먼저 만든 워커의 값을
+기다렸다 읽는다"는 방식을 유지한 채 그 대기 구간만 견고하게 만들었다.
+
+같은 수정으로 4개 프로세스 동시 실행 테스트를 다시 돌려 전부 **동일한
+값**을 반환하고 **빈 값이 하나도 없는 것**을 확인.
+
+**당장 우회하고 싶다면**(코드 재배포 전 임시 조치): `.env`에
+`FLASK_SECRET_KEY=<임의의 긴 무작위 문자열>`을 지정하면 이 파일 기반
+로직 자체를 타지 않으므로 이 버그와 완전히 무관해진다(기존 코드에
+이미 있던 환경변수 우선 경로) — 다만 이번 근본 수정 이후에는 파일 기반
+경로도 안전하므로 필수는 아니다.
+
+검증: race condition을 강제 유발하는 멀티프로세스 스크립트로 기존
+버그 재현 + 수정 후 정상 동작(4개 동시 실행 모두 동일한 비어있지 않은
+키) 확인. `import app`으로 정상 임포트 및 `secret_key`가 채워지는 것
+확인. `py_compile` 통과.
+
+**미검증**: 실제 gunicorn `--workers 2`로 띄운 상태에서의 재현(이 세션
+환경은 단일 프로세스라 gunicorn 멀티워커 환경 자체를 재현하지 못함 —
+멀티프로세스 시뮬레이션으로 동일한 로직을 검증했을 뿐).
+
+## 2026-09-10 (7): "검색 기준" 라벨 개명(최신기준→현재, 누적기준→과거포함)
++ 연구원 명단 "과거포함"에서 부서/과제 필터가 재직 기간 전체 이력으로
+동작하도록 개선
+
+**1) 라벨 개명**: 연구원 명단/연구원 프로필/보유 전문성 3개 화면의 "검색
+기준" 라디오 버튼과 관련 안내 문구를 "최신기준"→"현재", "누적기준"→
+"과거포함"으로 통일(사용자 요청). 라디오 옵션 자체(`{'label': ..., 'value':
+'current'/'all'}`)뿐 아니라, 화면에 실제로 보이는 안내 문구/알럿(예:
+"누적기준: 이름/사번 검색 중심", "현재 미소속 ... 누적기준 검색으로 조회된
+이력입니다", "누적기준에서는 조직도가 최신 상태를 보장하지 않아 ...")까지
+전부 찾아 바꿨다 — `value`(내부 코드값 'current'/'all')는 그대로 두고
+표시 라벨만 바꿨으므로 콜백 로직에는 영향 없음. 순수 코드 주석/docstring
+(예: `filter_current(df, current_only)`를 설명하는 문장)은 굳이 바꾸지
+않았다.
+
+**2) 연구원 명단 "과거포함" 부서/과제 필터**: 사용자 질문 — "과거포함으로
+바꾸면 부서/과제 드롭박스가 사라지는데, 당시 팀 참조 데이터가 있으면 부서를
+알 수 있지 않을까?" AskUserQuestion으로 의미를 확인: "A부서"를 고르면
+재직 기간 중 **한 번이라도** A부서였던 사람 전부를 보여줄지(예: 김철수가
+2020년 A부서→2023년 B부서로 이동했으면 A/B 둘 다 검색되게), 아니면
+퇴사·전배 **직전** 마지막 소속만 볼지 — "한 번이라도"(추천)로 확정.
+
+기존에는 "과거포함(기간 미지정)"에서 부서/과제 드롭다운 자체를
+비활성화·숨김 처리했다(2026-09-02 결정) — 이유는 `_org_code`가
+researchers.csv의 **현재** org_code 하나뿐이라, 특정 기간을 안 주면 "그
+사람이 재직 중 어느 부서였는지"를 하나로 특정할 수 없었기 때문(전배
+이력이 있으면 더더욱). 이번에 `researchers_history.csv`(월별 org_code
+스냅샷 전체)와 team_refer.csv 원본(축약 없는 전체 이력)을 함께 봐서 이
+문제를 해결했다.
+
+**`services/similarity_map.py`** 신규 함수 3개:
+- `_team_refer_org_code_timeline()`: team_refer.csv 원본을 org_code
+  (org_name_wd)별로 묶어 valid_date 오름차순 [(연,월,일), dep_name,
+  pjt_part_name] 리스트로 만든다 — 기존 `read_team_refer()`(dep_id별
+  "현재/특정 시점 하나"만 남기는 축약)와 달리 한 org_code가 시간에 따라
+  거쳐온 이름 전체가 필요해서 원본을 그대로 쓴다.
+- `_dep_pjt_name_at(entries, as_of_key)`: 그 org_code의 타임라인에서
+  as_of_key(연,월,일) 이하인 것 중 가장 최근 항목의 (dep_name,
+  pjt_part_name)을 반환 — 부서가 개명된 이력이 있어도 "그 시점에 실제로
+  불리던 이름"을 정확히 찾는다(단순히 오늘 이름을 과거에 소급 적용하지
+  않음).
+- `researcher_ids_ever_matching_org_field(field, names)`:
+  researchers_history.csv의 (researcher_id, org_code, valid_year,
+  valid_month) 스냅샷마다(그 달 말일 기준으로 간주) `_dep_pjt_name_at()`로
+  그 시점 dep_name/pjt_part_name을 구해 names와 비교, 한 번이라도
+  일치하면 그 researcher_id를 포함한다.
+
+**`pages/researcher_list.py`**: `toggle_org_filters` 콜백에서 과거포함
+(기간 미지정) 분기의 부서/과제 `disabled`를 `True`→`False`로, 숨김
+스타일도 제거(`org_col_style`을 항상 `{}`로 통일) — 직급/직책은 기존대로
+비활성화 유지(이번 요청 범위 밖). 드롭다운 옵션 목록 자체는 여전히 "현재"
+team_refer 기준(이미 폐지·개명된 옛 부서명을 옵션으로 올리는 것은 이번
+범위 밖 — 매칭 로직만 과거 이력을 봄). `update_table` 콜백에서 부서/과제
+필터 처리를 `if dept and filters_active:` 한 줄에서 `if dept:` +
+`filters_active`(기존, 현재/기간지정 시)와 `elif is_cumulative`(신규,
+과거포함+기간미지정 시 `researcher_ids_ever_matching_org_field()` 사용)
+두 분기로 나눴다.
+
+검증: `researcher_ids_ever_matching_org_field()`를 `read_processed`를
+모킹한 합성 데이터로 직접 테스트 — (a) 2020년 A부서→2023년 B부서로 전배한
+사람이 "A부서"/"B부서" 필터 양쪽에 다 걸리는 것(사용자가 확정한 "한
+번이라도" 시나리오 정확히 재현), (b) 같은 org_code가 시점에 따라
+dep_name이 개명된 경우(2019 "A부서"→2022 "A-신설부서") 각 사람이 자기가
+실제로 재직하던 시점의 이름으로만 정확히 매칭되는 것(오늘 이름을 과거에
+소급 적용하지 않음) 둘 다 확인. `toggle_org_filters()`를 요청 컨텍스트
+안에서 직접 호출해 과거포함 모드에서 부서/과제만 활성화되고 직급/직책은
+그대로 비활성화 상태인 것 확인. `dash.page_registry`의 전체 페이지
+`layout()`을 재확인해 회귀 없음 확인. `py_compile` 통과.
+
+**미검증**: 실제 `researchers_history.csv`/`team_refer.csv` 실데이터로
+전체 흐름(드롭다운 선택 → 검색 버튼 → 표 갱신)을 브라우저에서 확인하는
+것 — 이 세션 샌드박스에는 두 파일의 실제 다개월 이력 데이터가 없어 로직
+자체는 모킹 데이터로만 검증했다. 실데이터 규모(연구원 수 × 이력 개월 수)에서
+`researcher_ids_ever_matching_org_field()`의 체감 성능도 미검증(현재
+구현은 researchers_history.csv 전체를 파이썬 for 루프로 순회 — 이력이
+수만 행 이상으로 커지면 느려질 수 있어, 필요하면 나중에 벡터화 검토).
+
+## 2026-09-10 (8): AI 검색 강화 5건 — 신규 테이블 화이트리스트 등록, 쿼리
+로깅 + 관리자 조회 탭, self-repair 재시도 확대, 화면 전용 동시성 슬롯 분리
+
+훨씬 이전(8월 중순, "AI 검색 기능 설명 + 강화 방법" 논의 직후) "전체
+반영해줘"로 확정됐던 5가지 개선 지시가, 이후 사용자가 완전히 다른 우선순위로
+수십 건의 요청을 이어가며 실제로는 하나도 구현되지 않은 채 남아 있었다 —
+이번에 재확인 후 사용자가 "진행해주고, 상충될만한 내용이 있으면 말해달라"고
+확정해 전부 반영했다. 재확인 과정에서 그 사이 결정된 내용과 상충하는 부분은
+없었다(TABLE_PERMISSIONS 등록 범위는 2026-09-04에 mapping_job_function을
+"요청이 없어 등록 안 함"으로 보류했던 적이 있는데, 이번엔 사용자가 명시적으로
+5건 전체 진행을 확정했으므로 그 보류 사유 자체가 해소됨).
+
+1. **TABLE_PERMISSIONS 3개 테이블 등록**(`config/auth_config.py`):
+   `mapping_job_function`/`exception_job_function`(민감도 낮은 순수 분류
+   참조 테이블, 다른 원천 참조 테이블과 동일하게 권한 제한 없음)와
+   `evaluation_exception`("이 사람은 평가 표기 방식이 다르다"는 사실 자체가
+   평가 관련 인사 정보라 `evaluations`와 동일하게 `view_evaluation` 권한
+   요구)을 화이트리스트에 추가 — 이전엔 여기 없어 `services/open_data_query.py`
+   의 `_discover_csv_tables()`가 발견해도 `auth.filter_permitted_tables()`가
+   조용히 걸러내고 있었다.
+2. **ORDER BY 지시문**: 확인해보니 `_SQL_GEN_SYSTEM_TEMPLATE`에 이미
+   "질문이 순위/정렬을 암시하면(가장 많은, 우수한 등) ORDER BY를 포함하라"는
+   지시와 예시가 들어 있었다(과거 어느 시점에 이미 반영됨, 정확한 시점은
+   git blame으로 특정 안 함) — 추가 변경 불필요로 판단하고 그대로 둠.
+3. **쿼리 로깅 + 관리자 조회 탭**: 신규 `services/nl_query_log.py` —
+   `services/feedback.py`와 동일한 append-only CSV 패턴
+   (`data/processed/nl_query_log.csv`)으로 질문 원문/intent/성공여부(성공/
+   결과없음/실패)/건수/검색기준/기간/비고를 한 줄씩 기록한다(결과 행
+   데이터 자체는 남기지 않음 — 민감정보 최소화). `services/nl_query.py`의
+   유일한 진입점 `answer_question()` 끝에서 한 번만 호출해, 구조화
+   3-intent/open_data_query 폴백 전부가 자동으로 기록되게 했다(로깅 자체가
+   실패해도 검색 기능에 영향 없도록 `log_query()`는 예외를 삼킨다 —
+   best-effort). 관리자 화면에 신규 "AI 검색 로그" 탭(`pages/admin.py`,
+   "데이터 업데이트"와 "개발업데이트 이력" 사이) — 최근 200건을 최신순
+   읽기 전용 표로 보여준다(웹 CRUD 아님, `_dev_updates_tab()`과 동일하게
+   layout() 호출 시점에 그때그때 다시 읽는 정적 렌더링).
+4. **self-repair 재시도 확대**(`services/open_data_query.py`): SQL 생성이
+   안전검증/실행에 실패했을 때의 재시도 루프를 `range(2)`(최초 1회 + 재시도
+   1회) 고정에서 `_MAX_SQL_ATTEMPTS`(기본 3 = 재시도 2회,
+   `OPEN_DATA_QUERY_MAX_ATTEMPTS` 환경변수로 조정)로 확장.
+5. **화면 전용 동시성 슬롯 분리**(`pipeline/llm_client.py`): 지금까지
+   배치 스크립트(무한 대기, `max_wait=None`)와 화면에서 실시간으로
+   기다리는 호출(`nl_query.py`/`open_data_query.py`, `max_wait` 지정)이
+   `LLM2_MAX_CONCURRENT` 슬롯 하나를 공유해, 배치가 바쁘면 화면 질문이
+   `LLM2_QUERY_MAX_WAIT_SECONDS` 동안 기다리다 그냥 실패하기 쉬웠다.
+   `call_llm()`의 `max_wait` 유무(이 프로젝트 전체가 이미 "화면 호출은
+   max_wait을 준다"는 관례를 따르고 있어 별도 표시 없이 이 값 자체를
+   신호로 재사용)로 배치 전용 세마포어(`_get_batch_semaphore()`)와 화면
+   전용 세마포어(`_get_screen_semaphore()`)를 분리 — 신규
+   `screen_reserved_slots()`(환경변수 `LLM2_SCREEN_RESERVED_SLOTS`, 기본
+   2, 배치용으로 최소 1슬롯은 남도록 자동으로 줄어듦)/`batch_concurrency()`
+   (총량 - 예약분)/`screen_concurrency()`(예약분)를 새로 노출. 배치
+   스크립트들이 스레드풀 크기를 잡을 때 쓰던 `llm_client.max_concurrency()`
+   호출 5곳(`services/job_market.py`/`services/jd_reconciliation.py`/
+   `pipeline/process_researcher_expertise.py`(2곳)/`pipeline/journal_
+   authority.py`/`pipeline/process_researcher_similarity.py`)도 실제
+   배치 세마포어 용량과 일치하도록 `batch_concurrency()`로 함께 교체
+   (`pipeline/researcher_fit.py`가 재노출하는 이름에도 추가) — 안 바꿔도
+   동작엔 문제없지만(세마포어가 어차피 최종 상한이라 초과분 스레드는
+   대기만 함) 스레드풀 크기가 실제 동시 실행 가능 수보다 커서 생기는
+   불필요한 유휴 스레드를 없앴다.
+
+검증: `pipeline/llm_client.py`의 4개 신규 함수를 여러 `LLM2_MAX_CONCURRENT`/
+`LLM2_SCREEN_RESERVED_SLOTS` 조합(정상값, 총량=1인 극단값)으로 직접 호출해
+합이 항상 총량과 일치(또는 극단값에서 양쪽 다 최소 1)하는지 확인. `requests.post`
+를 모킹해 배치 호출 4개(동시 실행 시도)와 화면 호출 2개(동시 실행 시도)를
+실제 스레드로 띄워 각 풀의 동시 실행 최대치가 설정값(3/1)을 넘지 않는 것을
+실측으로 확인 — 두 풀이 서로 독립적으로 상한을 지키는지가 이번 변경의
+핵심이라 가장 공들여 검증. `services/nl_query_log.py`의 `log_query()`/
+`read_recent()`를 직접 호출해 CSV 왕복(최신순 반환, 검색기준/기간 표시,
+사용자 없음 처리) 확인, `nl_query.answer_question()` 전체 경로를 Flask
+요청 컨텍스트(`test_request_context()`) 안에서 `call_llm`/`open_data_query.answer`
+모킹으로 실행해 로그가 실제로 한 줄 남는 것까지 end-to-end 확인(요청 컨텍스트
+없이 부르면 `auth.get_current_user()`가 `RuntimeError`를 던지는데,
+`log_query()`가 이를 삼켜 로그를 남기지 않는 것도 함께 확인 — 실제 배포에서는
+Dash 콜백이 항상 HTTP 요청 컨텍스트 안에서 실행되므로 해당 없음). `services/
+open_data_query.py`의 self-repair 루프를 `text2sql.sanitize_sql`이 항상
+실패하도록 몽키패치해 재시도 횟수가 정확히 `_MAX_SQL_ATTEMPTS - 1`번(기본
+2회, 환경변수로 3/4회까지 조정) 호출되는 것을 확인. `config/auth_config.py`의
+3개 신규 항목을 `services.auth.can_table()`로 역할별(view_evaluation 있음/
+없음)로 직접 확인. `dash.page_registry`의 전체 페이지 `layout()`을 재확인해
+회귀 없음 확인. 변경된 모든 파일 `py_compile` + `import app` 통과.
+
+**미검증**: 실제 사내 LLM 서버 접속 환경에서의 self-repair 성공률 개선
+체감(이 세션엔 LLM 서버 없음), 실제 gunicorn 멀티워커 환경에서의 동시성
+슬롯 분리 효과(멀티프로세스라 세마포어가 프로세스별로 따로 생기므로 워커
+수만큼 총 동시 호출 한도가 곱해지는 기존 구조적 특성은 이번 변경 이전과
+동일 — 이번 변경은 "같은 프로세스 안에서 배치와 화면이 서로를 굶기지
+않는 것"만 다룬다), 실제 브라우저에서 "AI 검색 로그" 탭 렌더링 확인.
+
+## 2026-09-10 (9): AI 검색 결과에 좋아요/나빠요 + 서술형 개선 의견 제출 →
+다음 검색부터 자동 반영되는 피드백 루프
+
+사용자 요청: 위 (8)번의 "쿼리 로깅"이 로그만 남기고 개선에 실제로 반영되진
+않던 것에 이어, "질문에 대한 답의 개선 방향을 남기면(서술형이든 좋아요/
+나빠요든) 그 내용이 나중에 AI 검색에 반영되게 할 수 없을까"라는 요청.
+기존 "규칙 설정"(services/query_settings.py)은 관리자가 수동으로 옮겨
+적어야만 반영되는 전역 설정이라, 사용자가 그 자리에서 남긴 의견이 자동으로
+다음 검색에 녹아드는 경로가 없었다 — 이번에 그 경로를 만들었다.
+
+**신규 `services/nl_query_feedback.py`**: `services/feedback.py`와 동일한
+append-only CSV 패턴(`data/processed/nl_query_feedback.csv`)으로 질문
+원문/intent/rating(좋아요·나빠요·빈값)/서술형 의견을 기록한다.
+`find_similar_feedback(question)`가 서술형 의견이 있는 과거 피드백 중 지금
+질문과 의미가 비슷한 것을(BGE-M3 임베딩 코사인 유사도, threshold 0.75,
+이 프로젝트가 이미 쓰는 `services/nl_query.expand_term()`/
+`services/open_data_query._embedding_match()`와 동일한 패턴 —
+`researcher_fit.cached_embed()`를 그대로 재사용해 캐시도 공유) 최대 3건
+찾아, `feedback_hint_for(question)`이 "참고하되 실제 질문과 관련 없으면
+무시하라"는 조건을 단 프롬프트 조각으로 만든다. 평가(rating)만 있고
+의견이 없는 피드백은 LLM에 줄 구체적 지시가 없어 힌트 대상에서 제외
+(통계용으로만 남김). 임베딩 서버 미설정/실패(LLMError)는 빈 힌트로 안전
+폴백 — 검색 기능 자체는 절대 막지 않는다.
+
+**주입 지점 3곳**: `services/open_data_query.py`의 `_generate_sql()`/
+`_generate_sql_repair()`(SQL 생성용 시스템 프롬프트 끝에 추가)와
+`services/nl_query.py`의 `parse_question()`(intent 분류 프롬프트 끝에
+추가) — 둘 다 기존 `query_settings.apply()` 다음에 이어붙여, 관리자
+전역 규칙과 사용자별 즉석 피드백이 순서대로 함께 반영된다.
+
+**UI(`components/nl_query_bar.py`)**: AI 검색 결과 아래 항상 존재하는
+피드백 바(결과가 있을 때만 `display:flex`로 보이게, 이 모듈의 기존
+"동적 컴포넌트 대신 고정 배치 + 속성만 갱신" 규약을 그대로 따름) — 👍/👎
+아이콘 버튼(클릭 즉시 코멘트 없이 제출, 나빠요는 클릭 시 의견 입력창을
+자동으로 열어 구체적 방향을 받을 기회를 놓치지 않게 함) + "개선 의견
+남기기" 토글로 여는 서술형 텍스트영역(제출 버튼으로 독립적으로 제출 —
+좋아요/나빠요와 서술형을 반드시 함께 낼 필요는 없다고 판단해 단순화).
+`_run_nl_query` 콜백이 결과 dict에 `_question`(그 결과를 만든 정확한
+질문 원문)을 함께 담아 Store에 저장해, 피드백 제출 시점에 검색창의 현재
+값(그 사이 사용자가 다른 질문으로 고쳐 썼을 수 있음)이 아니라 항상 정확한
+원본 질문을 참조한다. 새 결과가 나오거나 초기화될 때마다 피드백 바/의견
+입력창/메시지를 리셋한다(이전 질문에 대해 열어 둔 입력창이 새 결과에도
+남아 헷갈리지 않도록).
+
+**관리자 화면**: 2026-09-10 (8)번에서 만든 "AI 검색 로그" 탭에 "사용자
+피드백" 섹션을 추가(`pages/admin.py`) — 최근 200건을 최신순으로 보여준다
+(질문/intent/rating/의견). 이 표가 곧 "지금 AI 검색에 실제로 영향을 주고
+있는 피드백 목록"이기도 하다(서술형 의견이 있는 행이 `feedback_hint_for()`
+의 후보가 됨).
+
+검증: `submit_feedback()`/`read_recent()`/`find_similar_feedback()`/
+`feedback_hint_for()`를 `fit.cached_embed`/`cosine_sim_matrix`를 결정적
+가짜 벡터로 몽키패치해 직접 호출 — 의미가 비슷한 질문만 힌트로 뽑히고
+무관한 질문/의견 없는 피드백은 제외되는 것을 확인. `components/
+nl_query_bar.py`의 `_handle_feedback()`/`_sync_feedback_ui()`를
+`dash._callback_context.context_value`를 직접 세팅해(dash.ctx.triggered_id
+가 필요한 함수라 이 프로젝트의 다른 다중 트리거 콜백들처럼 실제 Dash
+콜백 컨텍스트 시뮬레이션이 필요) 6가지 시나리오(좋아요 클릭/나빠요 클릭+
+입력창 자동 열림/토글 버튼/빈 의견 제출 거부/정상 의견 제출+입력창
+초기화/질문 정보가 없는 결과에 대한 안전한 no-op) 전부 직접 검증. 관리자
+"AI 검색 로그" 탭에 실제 피드백 1건을 넣어 렌더링 확인, 전체 페이지
+`layout()` 재확인해 회귀 없음 확인. 변경/신규 파일 전부 `py_compile` +
+`import app` 통과.
+
+**미검증**: 실제 사내 LLM+임베딩 서버 환경에서 실제 유사 질문 매칭 품질
+(이 세션엔 두 서버 모두 없음, 결정적 가짜 벡터로만 로직 검증), 실제
+브라우저에서 👍/👎 버튼 클릭·의견 입력창 토글·제출 후 메시지 표시까지의
+시각적 확인.
+
+## 2026-09-11: team_refer.csv — 부서/과제 2단 구분 → 1·2·3단계 부서명 3단
+체계로 전면 개편 + 부서ID/상위부서ID/조직 레벨 자동 계산
+
+배경: 지금까지 team_refer.csv는 "부서(dep_name)/과제·파트(pjt_part_name)"
+2단 구분이었는데, 사용자가 이를 "1단계부서명/2단계부서명/3단계부서명" 3단
+구분으로 바꾸기로 하고(부서-과제/파트 사이에 중간 계층이 하나 더 생기는
+구조), 여러 라운드의 설계 논의를 거쳐 확정했다.
+
+**핵심 설계 결정(사용자 확정, 여러 차례 논의 후)**:
+1. 저장 스키마는 "자기 레벨 이름만" 채운다(own-level-only) — 기존
+   pjt_part_name 컬럼이 각 조직 노드마다 자기 이름 하나만 담던 관례를
+   그대로 3단계로 확장. 조상 이름은 upper_dep_id를 따라가면 알 수 있으므로
+   중복 저장하지 않는다.
+2. **인텔이크(입력) 형태는 "전체 경로 포함"**: 각 레코드(팀참조시트.xlsx의
+   한 행이든, 과거 데이터 추출이든)가 자기 소속 경로를 자기 레벨까지 전부
+   채운다(예: 3단계 소속이면 1/2/3단계 이름을 전부 채움) — 옛 인력현황
+   파일이 직원 1명당 1행에 소속 전체 경로를 담던 방식과 동일해, 향후 과거
+   데이터를 반영할 때도 같은 함수를 재사용할 수 있다.
+3. **dep_id/upper_dep_id/team_layer는 더 이상 사람이 입력하는 값이 아니다** —
+   1/2/3단계 부서명 텍스트 경로에서 결정적으로(md5 해시 기반) 자동 계산한다.
+   핵심 근거(사용자 확정): "dep_id는 트리를 만들기 위한 정보로만 쓰이고,
+   시간이 지나 이름이 바뀌어도 '같은 조직'이라는 연속성을 이어갈 필요가
+   없다" — 그래서 매번 텍스트에서 새로 계산해도 안전하다. 다만 "이번
+   목록에 없는 옛 dep_id"를 그대로 두면 유령 노드가 남으므로, 저장 시점마다
+   자동으로 deleted='Y' 톰스톤 처리한다.
+4. dep_code(형제 정렬 순서)는 사내 규정이라 사람이 조정해야 하는 값 —
+   입력에 없으면 처음 등장한 순서를 기본값으로 채우고, 이미 정해진 값은
+   그대로 존중한다. work_type이 없으면(과거 데이터에서 알아낼 수 없음)
+   'R&D'로 기본 분류한다.
+
+**신규 `pipeline/team_hierarchy.py`**: 이 설계의 핵심 공용 모듈.
+`derive_hierarchy(records)` — "전체 경로 포함" 레코드 목록을 받아, 각
+레코드의 own_path와 모든 접두사(조상)를 조직 단위로 등록하고(예: 리프가
+(A,B,C)면 (A,)/(A,B)/(A,B,C) 3개 조직이 존재하는 것으로 취급), 조직
+단위별 1행(own-level-only) 저장 스키마로 변환한다. `_slug(path)`가
+`AUTO-{md5(path)[:10]}`로 dep_id를 결정적으로 계산하고, org_name_wd/
+work_type/dep_code/researcher_id/name/assignment_name 같은 "이 조직
+자체의 속성"은 그 조직이 어떤 레코드의 own_path와 정확히 일치할 때만
+채워진다(단순히 조상으로만 등장한 조직에는 안 붙음, 여러 레코드가 값을
+주면 첫 값 우선). `backfill_full_path(rows)` — derive_hierarchy()의
+역방향. own-level-only 저장 행을 받아 upper_dep_id 체인을 따라 올라가며
+조상 레벨 이름까지 채운 "전체 경로 포함" 형태로 되돌린다(관리자 그리드가
+저장된 조직을 다시 편집 가능한 형태로 불러올 때 사용 — derive_hierarchy()가
+결과를 다시 own-level-only로 압축하므로 왕복해도 멱등적).
+
+**`pipeline/process_team_refer.py`**: `_COL_MAP`을
+`{'비공식소속부서명':'org_name_wd', '구분':'work_type', '1단계부서명':
+'dep_1st_name', '2단계부서명':'dep_2nd_name', '3단계부서명':'dep_3rd_name',
+'조직코드':'dep_code', '사번':'researcher_id', '성명':'name',
+'직책':'assignment_name'}`로 교체(부서/과제·파트/부서ID/상위부서ID/조직
+레벨을 엑셀 입력 컬럼에서 제거). `build_rows_from_records()`가
+`team_hierarchy.derive_hierarchy()`로 라우팅하도록 재작성.
+`find_duplicate_dep_ids()`의 진단 컬럼도 새 필드명으로 갱신(다만
+derive_hierarchy()가 이미 경로별로 dep_id를 병합하므로 실제로 중복이
+발견되는 경우는 거의 없음 — 관리자 그리드처럼 입력이 항상
+derive_hierarchy()를 거친다는 보장이 없는 호출부를 위한 안전장치로
+유지). 신규 `tombstone_missing_dep_ids(result, valid_date)` — 이번 처리
+결과에 없는 "현재 살아있는" dep_id를 찾아 deleted='Y' 톰스톤 행을
+추가한다(process()의 xlsx 일괄 업로드와 services.team_refer_store의
+관리자 그리드 저장 양쪽이 공유).
+
+**`pipeline/rd_specialist_markdown.py`**: 신규 `own_level_name(node)` —
+team_refer 행(또는 build_org_tree() 노드)에서 자기 team_layer에 해당하는
+이름 하나만 골라 반환(own-level-only 저장 스키마 조회 공용 헬퍼).
+`org_tree_html()._label()`이 기존 `pjt_part_name` 대신 이 함수를 쓰도록
+교체. `build_org_tree()` docstring도 새 필드명(dep_1st_name/dep_2nd_name/
+dep_3rd_name)으로 갱신.
+
+**`services/similarity_map.py`**: team_refer의 dep_name/pjt_part_name을
+쓰던 함수 전부를 own-level-only 스키마에 맞게 재작성 — 핵심은 "own-level
+저장이라 평면 필드 비교로는 부서→과제 캐스케이딩이나 실제 연구원 매칭이
+안 되고, 조직도 트리를 걸어 조상-자손 관계를 따라가야 한다"는 점.
+- `org_tree_options()`: 라벨을 `own_level_name(node)`로 교체.
+- `department_filter_options()`: team_refer 1단계(team_layer==1) 행의
+  dep_1st_name 고유값(조직코드 오름차순).
+- `pjt_part_filter_options(dep_names=None)`: team_refer 3단계
+  (team_layer==3, 리프) 행의 dep_3rd_name 고유값. dep_names(1단계부서명)를
+  지정하면 조직도 트리를 걸어 그 부서 아래 리프만 남긴다(신규
+  `_collect_level3_nodes()`).
+- `org_codes_for_dep_names()`/`org_codes_for_pjt_part_names()`: 매칭되는
+  최상위/리프 노드 자신 + 하위 전체(`_collect_org_codes(...,
+  include_children=True)`)의 org_name_wd 집합으로 재작성.
+- `dep_name_for_org_code()`: org_code가 속한 조직도 트리를 위에서부터
+  훑으며 조상 체인의 1단계 이름을 물려받아 내려가는 방식으로 재작성
+  (own-level-only라 org_code가 달린 노드 자신에는 대체로 dep_1st_name이
+  비어 있음 — 리프 노드라서).
+- `org_code_label_maps()`: 조직도 트리 한 번 순회로 org_code →
+  (dep_1st_name, dep_3rd_name) 매핑을 만들도록 재작성(트리 순회 중
+  조상 dep_1st_name을 물려받으며 내려감).
+- `_team_refer_org_code_timeline()`/`researcher_ids_ever_matching_org_field()`
+  ("과거포함" 모드 부서/과제 필터, 2026-09-10 신설): own-level-only
+  저장이라 특정 과거 시점의 org_code에 대한 dep_1st_name/dep_3rd_name
+  (조상 이름 포함)을 알려면 "그 시점의 조직도"를 세워야 한다 — team_refer.csv
+  원본에 등장하는 서로 다른 valid_date마다 그 시점 기준 조직도를 한 번씩
+  세워(`_latest_rows_in_period` + `build_org_tree`) org_code별 타임라인을
+  구하도록 재작성(변경 시점 수만큼만 계산 — 보통 적음). field 인자도
+  `'dep_name'`/`'pjt_part_name'` → `'dep_1st_name'`/`'dep_3rd_name'`로 변경.
+- `people_team_dep_ids()`: dep_name 매칭 → 1단계(team_layer==1) 노드의
+  dep_1st_name 매칭으로 변경(그 외 하위 전체 포함 로직은 동일).
+
+**관리자 "팀/리더 참조" 그리드 UX — 3단계 체계에 맞춘 필연적 재설계**:
+dep_id/upper_dep_id/team_layer가 사람이 타이핑하는 엑셀 컬럼에서 자동
+계산 값으로 바뀌면서, 이 값들에 의존하던 그리드 기능 전체를 다시 설계해야
+했다(사용자가 명시적으로 요청한 범위는 아니지만, 컬럼 자체가 인텔이크
+스키마에서 사라져 기존 방식이 그대로는 성립할 수 없는 기술적 필연 —
+`pages/admin.py`가 계속 정상 동작하려면 반드시 필요했음).
+- `services/team_refer_store.py`: `KOREAN_COLUMNS`가 이제 9개 인텔이크
+  컬럼만(부서ID/상위부서ID/조직 레벨 없음). `list_editable_rows()`가
+  `read_team_refer()`(own-level-only) 결과를 `team_hierarchy.
+  backfill_full_path()`로 전체 경로 채운 뒤 그리드에 보여준다.
+  `save_snapshot(records, valid_date)` — `deleted_dep_ids` 매개변수를
+  제거하고, `ptr.tombstone_missing_dep_ids()`로 삭제 대상을 자동 판정하도록
+  변경(그리드는 매번 "현재 조직 전체"를 불러와 그 전체를 다시 저장하는
+  구조이므로 process()의 xlsx 일괄 업로드와 동일한 원리가 적용됨).
+  `_ALL_VALUE_COLUMNS`(DB 스키마)를 `team_hierarchy.FIELDS` 기반으로 재정의.
+- `pages/admin.py`: `_suggest_next_dep_id()`(부서ID 다음 번호 자동 제안,
+  2026-09-02 추가 기능)와 `team-refer-loaded-dep-ids` Store(부서ID 삭제
+  diff 추적)를 완전히 제거 — 부서ID가 편집 컬럼이 아니게 되며 둘 다
+  성립하지 않는 기능이 됐다. `_AUTOFILL_GUIDE_COLUMNS`(자동채움 가이드)도
+  1/2/3단계부서명 기준으로 갱신, 상위부서ID 특수 케이스 제거.
+  `team_refer_save()`가 "1단계부서명 비어있는 행만 제외"로 필터링 기준을
+  바꾸고 upper_dep_id 존재성 검증 로직(더 이상 사람이 입력 안 함)을 제거.
+  `_dupe_modal_body()`의 표시 컬럼도 새 필드명으로 갱신. 안내 문구도
+  "1단계부서명은 필수, 부서ID/상위부서ID/조직 레벨은 경로에서 자동 계산"
+  으로 교체.
+
+**`pages/researcher_list.py`**: `researcher_ids_ever_matching_org_field()`
+호출 2곳의 field 인자를 `'dep_name'`/`'pjt_part_name'` →
+`'dep_1st_name'`/`'dep_3rd_name'`으로 변경.
+
+**`services/data_labels.py`**: `dep_1st_name`/`dep_2nd_name`/`dep_3rd_name`
+라벨 추가(기존 `dep_name` 항목은 `project_confl_address.csv`가 여전히
+이 필드명을 쓰고 있어 삭제하지 않고 그대로 유지 — 무관한 별개 테이블).
+
+**의도적으로 범위에서 뺀 것**: `scripts/build_past_team_refer.py`는
+건드리지 않았다 — 이 스크립트는 2026-08-31~09-02에 걸쳐 사용자와 별도로
+확정한 완전히 다른 목적(월별 "End of Month Headcount" 원본에서 조직
+개편 이력을 감사용으로 추출해 `<원본파일명>_team_refer.csv`/
+`team_change.csv`를 만드는 독립 리포팅 도구)을 가진 스크립트로, 이번
+team_refer.csv 라이브 파이프라인 재설계와는 무관한 별개 산출물이다
+(파일명이 우연히 비슷할 뿐 서로 다른 스키마·용도).
+
+**검증**: `team_hierarchy.derive_hierarchy()`/`backfill_full_path()`를
+3단계 합성 경로 데이터로 직접 호출해 own-level-only 압축과 전체 경로
+복원이 서로 정확히 역함수 관계인 것(왕복 후에도 같은 dep_id) 확인.
+`process_team_refer.py`의 전체 흐름(1차 업로드 → 조직도 생성 → 관리자
+그리드 backfill → 특정 리프 삭제 → 재저장)을 임시 디렉터리로 end-to-end
+실행 — 삭제된 리프의 dep_id가 정확히 톰스톤 처리되고(deleted='Y'), 남은
+조상 노드는 그대로 "현재" 상태로 유지되는 것을 확인. `services/
+similarity_map.py`의 재작성된 함수 전부(`org_tree_options`/
+`department_filter_options`/`pjt_part_filter_options`(부서 지정 있음/
+없음/리프가 없는 부서)/`org_codes_for_dep_names`/`org_codes_for_pjt_part_names`/
+`dep_name_for_org_code`/`org_code_label_maps`/`people_team_dep_ids`)을
+People팀(2단 중첩) + 반도체연구소(3단 중첩, 파트 2개) 합성 조직도로 직접
+호출해 전부 기대한 결과 확인. `python3 -c "import app"`로 전체 앱(7개
+페이지) 임포트 확인, 변경된 모든 파일 `py_compile` 통과.
+
+**미검증**: 실제 원본 `팀참조시트.xlsx`(전체 경로 포함 형태로 준비 예정)로
+웹 업로드/CLI 실행 → 화면 렌더링까지 브라우저로 최종 확인(이 세션엔 실제
+원본 파일이 없어 합성 데이터로만 검증), 실제 브라우저에서 관리자 그리드
+조작(행 추가/삭제/저장/자동채움 가이드) 확인, 과거 데이터 추출 자동화는
+이번 범위에 포함되지 않음(사용자가 "전체 경로 포함 형태로 준비 가능"이라고
+확인한 것은 향후 과거 데이터 반영 시에도 이 모듈을 그대로 재사용할 수
+있다는 뜻이며, 실제 과거 데이터 추출·반영 작업 자체는 별도로 진행 필요).
+
+## 2026-09-11 (2): 인력현황 원본 → team_refer 인텔이크 전처리 스크립트 신설
+(빠져 있던 전처리 단계 보완)
+
+**배경**: 위 team_refer 3단계 개편 직후 사용자가 지적 — 팀참조시트.xlsx는
+"처음부터 사람이 조직 계층을 정리해 넣은 데이터"인데, 실제로 필요한 건
+"인력현황 원본(data/raw의 YYYYMM_That Month Headcount/YYYYMM_End of Month
+Headcount 류 파일)을 넣으면 자동으로 팀참조시트를 만들어주는" 전처리
+단계였다 — `scripts/build_past_team_refer.py`와 같은 방식으로 인력현황을
+한 차례 정리해 산출하는 과정이 빠져 있었다. 확인해보니 실제로 누락이었다:
+`scripts/build_past_team_refer.py`는 2026-08-31~09-02에 이미 다른 목적
+(월별 조직 개편 이력을 사람이 비교해 보는 감사용 리포트, team_refer.csv와
+스키마 자체가 다름)으로 확정돼 있어 이번 3단계 개편에서 그대로 뒀는데,
+그러면서 "인력현황 → team_refer 인텔이크" 변환 다리 자체가 어디에도
+없다는 게 드러났다.
+
+**확인 문답으로 확정한 설계**:
+1. 인력현황 원본의 "비공식소속부서명" 컬럼이 org_name_wd(researchers.csv의
+   org_code 매칭키) 역할을 하는 바로 그 컬럼이다(별도 컬럼 없음) — 팀참조
+   시트.xlsx에서는 이 역할과 3단계부서명 표시가 서로 다른 컬럼으로 분리돼
+   있지만, 인력현황 원본에는 3단계 이름을 별도로 정리한 컬럼이 없어 같은
+   값을 두 인텔이크 컬럼(비공식소속부서명=org_name_wd, 3단계부서명)에
+   그대로 복제해 넣기로 확정("org_name_wd : 현재/과거 동일하게 유지"라는
+   기존 확정 사항과 일치).
+2. 산출물은 team_refer.csv에 바로 반영하지 않고 "중간 산출물"(CSV)만
+   만든다 — 사람이 검토·보정(특히 조직코드는 사내 규정이라 사람이 조정)한
+   뒤 관리자 화면에서 재업로드.
+3. 적용 대상은 과거 데이터 일괄 백필뿐 아니라 매달 갱신되는 최신 인력현황
+   파일도 포함(반복 사용 가능한 범용 전처리 도구).
+4. 기존 `scripts/build_past_team_refer.py`(감사용 리포트, 이미 확정된
+   도구)는 건드리지 않고 완전히 새 스크립트로 분리.
+5. 중간 산출물(CSV)을 사람이 검토한 뒤 다시 엑셀 양식으로 옮겨 담을 필요
+   없이, CSV 그대로 관리자 화면에 재업로드할 수 있도록 확장.
+
+**신규 `scripts/build_team_refer_intake.py`**: 인력현황 원본에서
+"1단계부서명"/"현소속부서명"/"비공식소속부서명" 3개 헤더를 찾아
+`_COL_MAP`과 동일한 9개 컬럼(비공식소속부서명/구분/1단계부서명/2단계부서명/
+3단계부서명/조직코드/사번/성명/직책)의 CSV로 변환한다.
+`build_past_team_refer.py`와 동일한 읽기 인프라(xlwings 기반 `read_xlsx()`,
+이미 DRM이 제거된 .csv 직접 읽기 지원, 원본 폴더를 CLI 인자로 오버라이드
+가능)와 A열(1단계부서명) 백필 로직(2026-09-02 확정본 — 종합기술원/SAIT/
+대표이사/삼성전자 root marker 처리)을 그대로 재현(별도 스크립트로 분리하되
+로직은 검증된 것을 재사용). org_name_wd/3단계부서명 두 출력 컬럼에 원본의
+"비공식소속부서명" 값을 그대로 복제해 넣고, 구분/조직코드/사번/성명/직책은
+전부 빈 값(team_hierarchy.derive_hierarchy()가 work_type='R&D'/dep_code=
+첫등장순으로 기본 채움 — "과거는 자동채우기 어려움 전체 R&D로/추출된
+데이터 순으로 나열"이라는 기존 확정 사항과 일치). 출력:
+`data/processed/team_refer_intake/<원본파일명>_team_refer_intake.csv`
+(1단계→2단계→3단계 오름차순 정렬, researchers.csv와 동일한 utf-8-sig
+저장 방식 — xlsx 재작성 시 겪었던 OOXML 손상 위험을 피하기 위해 CSV 유지).
+
+**`pipeline/process_team_refer.py`**: `process()`가 `팀참조시트.xlsx`뿐
+아니라 `팀참조시트.csv`도 찾도록 확장(`_find_source_file()`) — 정확한
+파일명이 없으면(웹 업로드 폴더처럼 그 항목 전용 폴더에 파일이 하나만 있는
+경우) 폴더 안의 xlsx/csv가 정확히 1개일 때만 그걸 쓰고, 여러 개면 어느
+걸 읽어야 할지 알 수 없어 실패 처리(파일 목록을 에러 메시지에 표시).
+`_read_source()`가 확장자로 xlsx(xlwings, 2행 헤더)/csv(pandas, 1행
+헤더) 읽기를 분기.
+
+**`services/web_pipeline_runner.py`**: `team_refer` 항목의 `mode`를
+`'exact'`(업로드된 파일을 무조건 고정 파일명 `팀참조시트.xlsx`로 강제
+저장)에서 `'wildcard'`(원본 파일명·확장자 그대로 보존, `researchers`
+항목과 동일한 방식)로 변경 — 'exact' 모드로는 CSV를 업로드해도 `.xlsx`
+확장자를 강제로 붙여 저장해버려(진짜 xlsx가 아니므로) 못 읽는 문제가
+있었다. `dest_filename` 필드 제거(wildcard 모드는 안 씀).
+
+**`pages/admin.py`**: "팀/리더 참조" 탭 업로드 섹션의 안내 문구를
+"업로드(팀참조시트.xlsx)" → "업로드(팀참조시트.xlsx 또는 .csv)"로 변경.
+
+**검증**: `build_team_refer_intake.process_file()`을 합성 인력현황
+xlsx(정상 2건 + 1단계 공백+종합기술원 root marker 1건 + 1단계 공백+보조
+lookup 필요 1건 + 대표이사/삼성전자 direct marker 1건)로 직접 실행해
+전부 build_past_team_refer.py와 동일한 백필 규칙 결과가 나오는 것 확인.
+`process_team_refer.py`의 `_find_source_file()`을 (a) 정확한 파일명이
+다른 무관한 파일들 사이에 있어도 우선 선택되는 것(CLI data/raw/ 시나리오
+회귀 없음), (b) 폴더에 CSV 파일 하나만 있을 때(웹 업로드 시나리오) 정확히
+찾는 것, (c) 파일이 여러 개라 모호할 때 실패하고 목록을 보여주는 것 —
+3가지 모두 확인. 새 인텔이크 CSV를 `process()`에 실제로 태워 조직도까지
+정상 생성되는 end-to-end 흐름(3단계 트리, org_name_wd 정상 반영, work_type
+기본값 R&D, dep_code 첫등장순 자동 배정)을 확인. `python3 -c "import app"`로
+전체 앱 임포트 확인, 변경/신규 파일 전부 `py_compile` 통과.
+
+`services.web_pipeline_runner._run_backfill_batch()`(대량 소급 백필,
+`_YYYYMM` 파일명)도 CSV 확장자로 실제 실행해 정상 반영되는 것까지 확인.
+
+**미검증**: 실제 인력현황 원본 파일(이 세션엔 없음, 합성 데이터로만 검증),
+실제 브라우저에서 CSV 파일을 "팀/리더 참조" 업로드 섹션에 드래그해 올리는 것.
+
+## 2026-09-11 (3): build_team_refer_intake.py — "대표이사"/"SAIT"인 1단계
+부서명을 2단계부서명 값으로 교체(정정본 — 최초 구현 방향이 반대였음)
+
+사용자 요청(최초): 1단계부서명 값이 "대표이사"인 행은 같은 행의 2단계
+부서명도 "대표이사"로 맞춰달라는 것으로 이해해, `_MIRROR_TO_LEVEL2 = {'대표이사'}`
++ `if a in _MIRROR_TO_LEVEL2: b = a`(1단계 값을 2단계로 밀어넣는 방향)로
+구현했었다.
+
+**사용자 정정**: 방향이 반대였다 — "1단계부서명이 '대표이사'인 행은
+1단계부서명을 2단계부서명의 값으로 바꿔달라는 거였어. 예를 들어 1단계
+부서명 '대표이사', 2단계부서명 'AI융합기술팀'이면 → 1단계부서명
+'AI융합기술팀', 2단계부서명 'AI융합기술팀'으로 변경." 그리고 "SAIT"도
+같은 방식으로 처리해달라고 확장: "1단계부서명이 'SAIT'인데 2단계부서명이
+'SAIT'가 아니면 1단계부서명인 'SAIT'를 2단계부서명으로 바꿔줘... 단,
+1단계부서명 'SAIT', 2단계부서명 'SAIT'이면 ... 1단계부서명을 'SAIT'로
+유지."
+
+**수정**: `_MIRROR_TO_LEVEL2`와 그 호출부(잘못된 방향의 로직)를 완전히
+삭제. 대신 이미 있던 `_ROOT_MARKERS_DIRECT`(a가 이 값이면 무조건 b로
+교체하는 규칙 — 기존엔 `{'대표이사', '삼성전자'}`만 포함)에 `'SAIT'`를
+추가해 `{'대표이사', '삼성전자', 'SAIT'}`로 확장하고, `_ROOT_MARKERS_ORG`
+(을 재조회 방식)에서는 `'SAIT'`를 제거해 `{'종합기술원'}`만 남겼다 —
+이렇게 "SAIT"를 DIRECT 그룹으로 옮기기만 하면, 이미 있던
+`_fill_upper_level()`의 `if a in _ROOT_MARKERS_DIRECT: a = b` 로직이
+정정된 요구사항을 그대로 만족한다(1단계="SAIT"+2단계="AI융합기술팀"→
+1단계="AI융합기술팀"으로 교체, 1단계="SAIT"+2단계="SAIT"면 자기 자신으로
+교체돼 결과적으로 "SAIT" 그대로 유지). 최초 잘못된 구현보다 코드가 오히려
+더 단순해졌다(새 로직 불필요, 상수 집합 조정 + 삭제만).
+
+검증: 사용자가 준 3가지 예시(대표이사+AI융합기술팀→AI융합기술팀/
+AI융합기술팀, SAIT+AI융합기술팀→AI융합기술팀/AI융합기술팀,
+SAIT+SAIT→SAIT/SAIT 유지)를 합성 데이터로 정확히 재현해 확인. 회귀
+테스트로 삼성전자(직접 교체, 영향 없음)/종합기술원(공백 백필 +
+을 재조회, 영향 없음)도 재확인해 이번 정정이 다른 규칙에 부작용을
+주지 않는 것을 확인. `python3 -c "import app"` 전체 임포트 확인,
+`py_compile` 통과.
+
+## 2026-09-11 (4): build_team_refer_intake.py — 보조 매핑표 생성/백필 로직
+전면 재작성 + 정렬 순서 반전(3→2→1)
+
+배경: (3)번 정정본을 검토한 사용자가, 백필 로직 자체를 처음부터 다시
+설계해달라고 요청 — "1단계가 비어 있으면 채운다"는 예전 백필 개념을
+완전히 없애고, 1단계부서명이 4개 root marker(대표이사/삼성전자/종합
+기술원/SAIT)일 때만 규칙을 적용하는 방식으로 단순화했다. 구현 전
+이해한 내용을 설명하고 AskUserQuestion으로 4가지 애매한 지점을 확인:
+(1) 4개 marker도 아니고 그냥 빈 값인 1단계부서명은 그대로 빈 값 유지,
+(2) 보조 매핑표에서 같은 현소속부서명에 서로 다른 1단계부서명이 남으면
+처음 나온 값 채택, (3) 정렬 순서를 3단계→2단계→1단계로 완전히 반전,
+(4) 대표이사/삼성전자 규칙에서 현소속부서명도 공백이면 스펙 그대로
+(1단계도 공백이 됨) 진행 — 4가지 전부 사용자 확정.
+
+**`_ROOT_MARKERS_DIRECT`/`_ROOT_MARKERS_LOOKUP`(신규, 기존 3분류
+`_ROOT_MARKERS_B`/`_ROOT_MARKERS_DIRECT`/`_ROOT_MARKERS_ORG`를 2분류로
+재편)**:
+- `_ROOT_MARKERS_DIRECT = {'대표이사', '삼성전자'}` — 1단계부서명이 이
+  값이면 무조건 2단계부서명(현소속부서명) 값으로 직접 교체.
+- `_ROOT_MARKERS_LOOKUP = {'종합기술원', 'SAIT'}` — 1단계부서명이 이
+  값이면 보조 매핑표에서 2단계부서명으로 조회한 값으로 교체, 못 찾으면
+  2단계부서명 값으로 폴백.
+- 두 그룹 다 아닌 값(빈 값 포함)은 아무 규칙도 적용하지 않고 원본 그대로
+  둔다 — 예전의 "1단계 공백이면 채운다" 백필 개념 완전 삭제.
+
+**`_build_upper_level_lookup()` 재작성** — 사용자가 설명한 절차 그대로
+구현: (1) 1단계·현소속 둘 중 하나라도 빈 행 제외 → (2) `(1단계, 현소속)`
+쌍이 완전히 동일한 중복 제거 → (3) 1단계가 4개 marker 중 하나인 쌍 제외
+(marker 자신은 "정밀한 값"이 아니므로 매핑표 값으로 남지 않게) → (4)
+남은 쌍을 원본 등장 순서 그대로 현소속→1단계 dict로 조립, 같은 현소속에
+서로 다른 1단계가 남으면(원본 데이터 자체의 모순) `setdefault`로 처음
+나온 값 채택.
+
+**`_fill_upper_level()` 재작성** — `if a in _ROOT_MARKERS_DIRECT: a = b`
+/`elif a in _ROOT_MARKERS_LOOKUP: a = upper_lookup.get(b, b)`/그 외 변경
+없음, 3줄로 대폭 단순화(기존엔 "a 공백 백필" + "marker 재교체" 2단계
+로직이었음).
+
+**정렬 순서 반전**: `rows.sort(key=lambda r: (r['1단계부서명'],
+r['2단계부서명'], r['3단계부서명']))` → `(r['3단계부서명'],
+r['2단계부서명'], r['1단계부서명'])`(3단계 1순위, 2단계 2순위, 1단계
+3순위, 전부 오름차순).
+
+검증: 사용자가 준 예시 2개(SAIT+홍길동팀→매핑표 조회로 "동에번쩍서에번쩍",
+SAIT+허허허팀→매핑 실패로 허허허팀 폴백)를 합성 데이터로 정확히 재현.
+대표이사/삼성전자 직접 교체(현소속 공백 포함 — 확정대로 1단계도 공백이
+됨), 4개 marker가 아닌 빈 1단계부서명이 그대로 빈 값 유지되는 것,
+같은 현소속부서명에 서로 다른 1단계부서명이 붙은 매핑 충돌 상황에서
+처음 나온 값이 채택되는 것, 3→2→1 정렬이 실제로 적용되는 것, 필수 헤더
+3개 중 하나라도 없으면 기존과 동일하게 "헤더 없음" 실패 처리되는 것
+모두 합성 데이터로 확인. `python3 -c "import app"` 전체 임포트 확인,
+`py_compile` 통과.
+
+## 2026-09-11 (5): build_team_refer_intake.py — 마커 치환 후에도 남는 빈
+1단계부서명을 보조 매핑표2로 추가 백필
+
+배경: (4)번 정정 후 사용자가 실제 인력현황 파일로 전처리해보니, 마커
+치환(대표이사/삼성전자/종합기술원/SAIT)까지 다 거치고도 1단계부서명이
+빈 채로 남는 행이 실제로 있다는 것을 발견 — (4)번은 "4개 marker일 때만
+규칙을 적용하고 그 외는 원본 그대로 둔다"고 확정했었는데, 원본 자체에
+marker도 아니면서 그냥 공란인 1단계부서명이 있는 경우까지는 다루지
+않았었다. 구현 전 이해한 내용을 설명하고 AskUserQuestion 4문항으로
+확정: (1) 보조 매핑표2는 마커 치환까지 끝난 "최종" 값을 재료로 사용,
+(2) 마커 규칙이 매핑 실패로 1단계=2단계가 된 폴백 행도 매핑표2에 포함,
+(3) 매핑표2도 매핑표1과 동일하게 충돌 시 처음 나온 값 채택, (4) 실행
+순서는 "마커 치환 다음, 정렬 전" — 4가지 전부 사용자 확정.
+
+**신규 `_build_level2_lookup(triples)`**: 마커 치환까지 끝난
+`(1단계, 2단계, 3단계)` 중간 결과 리스트에서 2단계→1단계 매핑표를
+만든다. `_build_upper_level_lookup()`(매핑표1)과 완전히 동일한 절차 —
+(1단계,2단계) 완전 중복 쌍 제거 → 둘 다 채워진 쌍만 → 2단계별로 원본
+등장 순서상 처음 나온 1단계 값 채택(`setdefault`). 매핑표1과의 차이는
+"원본 값" 대신 "마커 치환까지 끝난 최종 값"을 재료로 쓴다는 것과, marker
+값 자체를 걸러내는 필터가 없다는 것(마커 치환 결과이므로 애초에 marker
+문자열이 남아있을 수 없고, 폴백으로 1단계=2단계가 된 행도 그대로 포함).
+
+**신규 `_backfill_blank_level1(a, b, level2_lookup)`**: 마커 치환까지
+끝나고도 1단계부서명(a)이 비어 있으면 2단계부서명(b)으로 매핑표2를
+조회해 채우고, 매핑되는 값이 없으면 2단계부서명(b) 값을 그대로 채운다.
+a가 이미 채워져 있으면(마커 치환 결과 포함) 손대지 않는다.
+
+**`process_file()` 실행 순서 재구성**(사용자 확정 — 마커 치환 다음,
+정렬 전): 기존엔 "원본 추출 → 마커 치환 → 중복 제거 → 행 조립"이 한
+루프 안에서 끝났는데, 이제 두 단계로 나뉜다.
+1. 1차 루프: 원본 추출(완전히 빈 행은 기존과 동일하게 건너뜀) + 마커
+   치환까지만 끝낸 `(a, b, c)` 중간 결과 리스트를 만든다(아직 백필도
+   최종 중복 제거도 안 함).
+2. 이 중간 결과 전체로 `_build_level2_lookup()` 호출해 매핑표2 생성.
+3. 2차 루프: 중간 결과를 순회하며 `_backfill_blank_level1()`로 빈
+   1단계를 백필한 뒤, 최종 `(a,b,c)` 기준으로 중복 제거해 출력 행을
+   조립(정렬은 그 다음 기존 3→2→1 로직 그대로).
+
+검증: 사용자가 준 예시 2개(1단계="", 2단계="가나다팀" + 매핑표2 재료
+"다라마팀"/"가나다팀" → 매핑 성공 시 "다라마팀"/"가나다팀", 매핑 실패
+시 "가나다팀"/"가나다팀")를 합성 데이터로 정확히 재현. 마커 규칙 폴백
+행(SAIT+허허허팀→매핑표1 실패로 자기 자신 폴백)이 매핑표2에 포함돼
+뒤따르는 빈 1단계 행(""+허허허팀)을 정확히 백필해주는 것도 확인.
+(4)번의 전체 회귀 테스트(마커 치환 6종 + 매핑 충돌 3종 + 이번 백필
+1종, 총 10행)를 한 파일로 합쳐 재실행해 전부 기대값과 일치하는 것을
+최종 확인. `python3 -c "import app"` 전체 임포트 확인, `py_compile`
+통과.
