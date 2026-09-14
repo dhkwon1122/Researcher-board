@@ -717,17 +717,22 @@ def _team_refer_tab() -> html.Div:
         # 바 줄바꿈이 달라질 때 어긋날 수 있음).
         html.Div([
             dbc.ButtonGroup([
+                dbc.Button([html.I(className='bi bi-arrow-bar-up me-1'), '맨 위로'],
+                           id='team-refer-move-top-btn', color='secondary', outline=True, size='sm'),
                 dbc.Button([html.I(className='bi bi-arrow-up me-1'), '위로'],
                            id='team-refer-move-up-btn', color='secondary', outline=True, size='sm'),
                 dbc.Button([html.I(className='bi bi-arrow-down me-1'), '아래로'],
                            id='team-refer-move-down-btn', color='secondary', outline=True, size='sm'),
+                dbc.Button([html.I(className='bi bi-arrow-bar-down me-1'), '맨 아래로'],
+                           id='team-refer-move-bottom-btn', color='secondary', outline=True, size='sm'),
                 dbc.Button([html.I(className='bi bi-trash me-1'), '선택 삭제'],
                            id='team-refer-bulk-delete-btn', color='danger', outline=True, size='sm'),
             ]),
             html.Div(
                 '왼쪽 체크박스로 행을 고른 뒤 사용하세요(맨 위 헤더 체크박스로 전체 '
-                '선택/해제할 수 있습니다). 이동은 체크한 행만 개별적으로 한 칸씩 '
-                '움직이며 상위부서와 무관하게 자유롭게 이동할 수 있습니다. 삭제는 '
+                '선택/해제할 수 있습니다). "위로"/"아래로"는 체크한 행만 개별적으로 '
+                '한 칸씩, "맨 위로"/"맨 아래로"는 체크한 행만 그리드 맨 위/맨 아래로 '
+                '한 번에 옮깁니다(둘 다 상위부서와 무관하게 자유롭게 이동). 삭제는 '
                 '하위 조직이 있으면 함께 삭제됩니다(하위 조직을 남겨두면 그 소속 '
                 '정보 때문에 상위 조직이 자동으로 다시 생겨 실제로 삭제되지 '
                 '않습니다). No.는 화면에 보이는 순서 그대로(맨 위 1 ~ 맨 아래 N) '
@@ -2103,22 +2108,48 @@ def _move_selected(rows: list, selected_rows: list, direction: str):
     return rows, new_selected, blocked
 
 
+# ── 팀/리더 참조 그리드 — 체크박스 선택 맨 위/맨 아래로 이동(2026-09-17 추가) ───
+# _move_selected()(한 칸씩)와 달리 체크한 행들을 한 번에 그리드 맨 위/맨
+# 아래로 보낸다 — 여러 칸 떨어진 곳으로 옮기려고 "위로"/"아래로"를 여러 번
+# 누를 필요가 없게. 체크한 행들끼리의 상대 순서, 체크하지 않은 행들끼리의
+# 상대 순서는 각각 원래 배열 순서 그대로 유지된다(안정 분할 — stable
+# partition). 이동은 여기서도 상위부서 경계와 무관하게 체크한 행만
+# 개별적으로 옮긴다(하위 조직을 묶어 옮기지 않음 — 위/아래 한 칸 이동과
+# 동일한 방침, 2026-09-16 확정).
+def _move_to_edge(rows: list, selected_idx: list, edge: str):
+    selected_set = set(selected_idx)
+    picked = [r for i, r in enumerate(rows) if i in selected_set]
+    rest = [r for i, r in enumerate(rows) if i not in selected_set]
+    if edge == 'top':
+        new_rows = picked + rest
+        new_selected_idx = list(range(len(picked)))
+    else:
+        new_rows = rest + picked
+        new_selected_idx = list(range(len(rest), len(new_rows)))
+    return new_rows, new_selected_idx
+
+
 @callback(
     Output('team-refer-table', 'rowData', allow_duplicate=True),
     Output('team-refer-table', 'selectedRows', allow_duplicate=True),
     Output('team-refer-bulk-msg', 'children', allow_duplicate=True),
+    Input('team-refer-move-top-btn', 'n_clicks'),
     Input('team-refer-move-up-btn', 'n_clicks'),
     Input('team-refer-move-down-btn', 'n_clicks'),
+    Input('team-refer-move-bottom-btn', 'n_clicks'),
     State('team-refer-table', 'rowData'),
     State('team-refer-table', 'selectedRows'),
     prevent_initial_call=True,
 )
-def team_refer_move_selected(n_up, n_down, rows, selected_rows):
+def team_refer_move_selected(n_top, n_up, n_down, n_bottom, rows, selected_rows):
     trig = ctx.triggered_id
-    if not trig:
-        return no_update, no_update, no_update
-    direction = 'up' if trig == 'team-refer-move-up-btn' else 'down'
-    if not (n_up if direction == 'up' else n_down):
+    n_clicks_by_id = {
+        'team-refer-move-top-btn': n_top,
+        'team-refer-move-up-btn': n_up,
+        'team-refer-move-down-btn': n_down,
+        'team-refer-move-bottom-btn': n_bottom,
+    }
+    if not trig or not n_clicks_by_id.get(trig):
         return no_update, no_update, no_update
 
     rows = list(rows or [])
@@ -2127,12 +2158,19 @@ def team_refer_move_selected(n_up, n_down, rows, selected_rows):
     if not selected_idx:
         return no_update, no_update, _alert('이동할 행을 먼저 체크해주세요.', 'warning')
 
-    new_rows, new_selected_idx, blocked = _move_selected(rows, selected_idx, direction)
+    if trig in ('team-refer-move-up-btn', 'team-refer-move-down-btn'):
+        direction = 'up' if trig == 'team-refer-move-up-btn' else 'down'
+        new_rows, new_selected_idx, blocked = _move_selected(rows, selected_idx, direction)
+        msg = (_alert('이미 맨 위/맨 아래에 있어 더 이상 이동할 수 없는 행이 있습니다.', 'info')
+               if blocked else no_update)
+    else:
+        edge = 'top' if trig == 'team-refer-move-top-btn' else 'bottom'
+        new_rows, new_selected_idx = _move_to_edge(rows, selected_idx, edge)
+        msg = no_update
+
     new_rows = _renumbered(new_rows)
     _renumber_dep_codes(new_rows)
     new_selected_rows = [new_rows[i] for i in new_selected_idx]
-    msg = (_alert('이미 맨 위/맨 아래에 있어 더 이상 이동할 수 없는 행이 있습니다.', 'info')
-           if blocked else no_update)
     return new_rows, new_selected_rows, msg
 
 
