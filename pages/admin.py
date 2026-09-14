@@ -746,6 +746,7 @@ def _team_refer_tab() -> html.Div:
         html.Div(
             dag.AgGrid(
                 id='team-refer-table',
+                className='gs-ag-grid',
                 columnDefs=column_defs,
                 rowData=rows,
                 getRowId='params.data._rid',
@@ -766,7 +767,12 @@ def _team_refer_tab() -> html.Div:
                 # 헤더 클릭 정렬(sortable=True)은 화면 표시 순서만 바꾸고
                 # rowData 자체의 순서는 그대로 유지됨을 확인했다 — 이동/삭제가
                 # 배열 순서=계층 구조를 가정하는 로직(_row_path 등)에 영향 없음.
-                style={'width': '100%', 'fontSize': '0.78rem'},
+                # 폰트 크기는 style이 아니라 className='gs-ag-grid'(assets/
+                # custom.css)의 --ag-font-size로 지정한다 — AG Grid는 내부
+                # 셀/헤더 글자 크기를 이 CSS 변수로 그리므로, 여기 style에
+                # fontSize를 줘도 반영되지 않는다(격리 테스트로 확인,
+                # 2026-09-17).
+                style={'width': '100%'},
             ),
             id='team-refer-grid-wrap',
         ),
@@ -884,6 +890,7 @@ def _exception_job_function_tab() -> html.Div:
 
         dag.AgGrid(
             id='exception-job-function-table',
+            className='gs-ag-grid',
             columnDefs=column_defs,
             rowData=rows,
             getRowId='params.data._rid',
@@ -898,7 +905,7 @@ def _exception_job_function_tab() -> html.Div:
                 'stopEditingWhenCellsLoseFocus': True,
                 'tooltipShowDelay': 0,
             },
-            style={'width': '100%', 'fontSize': '0.78rem'},
+            style={'width': '100%'},
         ),
 
         html.Div(id='exception-job-function-save-msg', className='mt-2'),

@@ -11554,3 +11554,58 @@ CSV에 저장한 뒤 다시 불러올 때 `'nan'`이라는 문자열로 잘못 �
 전환 이전부터 있던 순수 데이터 계층 버그). `team_refer_store.py`의
 동일 패턴 함수는 다른 방식(딕셔너리 그대로 순회)이라 이 문제가 없다.
 사용자에게 별도로 보고 — 이번 작업 범위 밖이라 수정하지 않았다.
+
+## 2026-09-17: 관리자 화면 4개 탭 스타일 통일(AG Grid ↔ dbc.Table)
+
+사용자 피드백: "탭 간에 스타일이 너무 다른거같아" — 팀/리더 참조·직군
+예외자 탭을 AG Grid로 바꾸면서 AG Grid 기본 테마("Quartz")가 그대로
+적용돼, 이 앱 전체가 쓰는 Ant Design풍 네이비/블루 어드민 스타일
+(`assets/custom.css`의 `--gs-*` 변수 — 사용자/권한 관리·데이터
+업데이트 탭이 쓰는 `dbc.Table.admin-table`도 이 톤)과 헤더 색·테두리
+색·폰트가 달라 두 그리드 탭만 눈에 띄게 튀어 보였다.
+
+**해결 방법**: AG Grid v33+ "Theming API"는 그리드 컨테이너에 CSS
+클래스를 하나 얹고 그 클래스 안에서 `--ag-*` CSS 변수를 재정의하는
+것만으로 색/폰트/치수를 오버라이드할 수 있다(공식 지원 방식 — 격리된
+Dash 프로브 앱으로 직접 확인: `--ag-header-background-color`,
+`--ag-border-color`, `--ag-font-family`, `--ag-row-height` 등이 전부
+그대로 반영됨). `assets/custom.css`에 `.gs-ag-grid` 클래스를 새로
+추가해 `--gs-*` 변수를 그대로 참조하게 하고(`--ag-header-background-
+color: var(--gs-header-bg)` 등), `pages/admin.py`의 두 `dag.AgGrid`
+컴포넌트(`team-refer-table`, `exception-job-function-table`)에
+`className='gs-ag-grid'`를 붙였다.
+
+**세부**: 폰트 크기(0.78rem)는 두 그리드 사이에서만 통일하고 나머지
+두 탭의 실제 헤더 폰트 크기(0.85rem, `.admin-table thead th`
+확인)와는 정확히 맞추지 않았다 — 팀/리더 참조는 컬럼이 9개라 좁은
+화면에서도 가로 스크롤 없이 다 보이게 하려고 원래부터 촘촘한 값을
+썼기 때문에(dash_table 시절부터의 선택), 다른 탭 폰트 크기에 맞춰
+키우면 가로 스크롤이 다시 생긴다. 헤더 배경(`#fafafa`)/테두리색
+(`#d9d9d9`)/폰트(Pretendard Variable)/헤더 굵기(600)는 정확히 일치
+시켰다 — 이 차이가 "탭마다 스타일이 다르다"는 인상의 실제 원인이었고,
+글자 크기 1~2px 차이는 상대적으로 눈에 덜 띄기 때문.
+
+**시행착오**: `dag.AgGrid`의 `style={'fontSize': ...}` prop(기존에
+이미 쓰고 있던 방식)은 그리드를 감싸는 바깥 `<div>`에만 적용되고
+AG Grid 내부 셀/헤더 글자 크기에는 반영되지 않음을 격리 테스트로
+확인(`.ag-cell`의 계산된 font-size가 인라인 style과 무관하게 항상
+`--ag-font-size` 기본값을 따름) — 그래서 `style`의 `fontSize`를
+빼고 `--ag-font-size`(CSS 변수)로 옮겼다.
+
+**검증**: 실제 서버(임시 admin 계정, 팀/리더 참조 합성 데이터 2행) +
+Playwright로 4개 탭 각 표를 요소 단위로 스크린샷 촬영해 비교 — 헤더
+배경색(`rgb(250,250,250)`)·테두리색(`rgb(217,217,217)`)·폰트
+(Pretendard Variable)·헤더 굵기(600)가 4개 탭 모두 동일함을 계산된
+스타일(computed style)로 직접 확인. (참고: 이 검증 중 dbc.Tabs가
+비활성 탭도 DOM에서 안 숨겨지는 것처럼 보이는 현상을 발견했는데,
+원인은 이 샌드박스에서 `dbc.themes.BOOTSTRAP`(CDN)이 막혀 부트스트랩
+자체 CSS가 로드되지 않아서였다 — 실제 배포 환경(CDN 정상)에서는
+해당하지 않는, 이전부터 있던 샌드박스 전용 제약이라 이번 스타일
+작업과는 무관.) 콘솔/페이지 에러 0건. 테스트 계정·
+`data/processed/team_refer.csv`는 검증 후 삭제,
+`config/users.json`은 원본과 diff 없음 재확인.
+
+**롤백**: 이 커밋만 되돌리면(`assets/custom.css`의 `.gs-ag-grid`
+블록 제거 + `pages/admin.py`의 `className='gs-ag-grid'` 2곳 제거)
+AG Grid 기본 테마로 돌아간다 — 기능(편집/선택/삭제 등)에는 전혀
+영향 없는 순수 스타일 변경이라 언제든 안전하게 되돌릴 수 있다.

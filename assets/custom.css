@@ -224,6 +224,46 @@ h1, h2, h3, h4, h5, h6 {
   vertical-align: bottom;
 }
 
+/* AG Grid(dash-ag-grid) 테이블 — 팀/리더 참조·직군 예외자 탭(2026-09-17
+   전환)이 기본으로 쓰는 AG Grid "Quartz" 테마는 이 앱의 Ant Design풍
+   네이비/블루 어드민 스타일(위 :root의 --gs-*)과 폰트·헤더 색·테두리
+   색이 전부 달라, 같은 관리자 화면 안에서 탭을 옮길 때마다 스타일이
+   확 바뀌어 보이는 문제가 있었다(사용자 확정). AG Grid v33+ Theming
+   API는 각 그리드 컴포넌트(className="gs-ag-grid")에 아래 --ag-* CSS
+   변수를 얹는 것만으로 색/폰트/치수를 앱 테마에 맞게 오버라이드할 수
+   있다(공식 지원 방식 — 격리 테스트로 실제 적용 확인). 이 앱 전체를
+   덮는 사용자·권한 관리/데이터 업데이트 표(dbc.Table + .admin-table)와
+   같은 헤더 배경(--gs-header-bg)/테두리색(--gs-border)/폰트(--gs-font)를
+   써서 두 그리드 탭도 같은 계열로 보이게 한다. 글자 크기(0.78rem)는
+   맞추지 않았다 — 팀/리더 참조는 컬럼이 9개라 좁은 화면에서도 가로
+   스크롤 없이 다 보이게 하려고 일부러 촘촘하게 잡은 값(예전
+   dash_table 시절부터의 선택)이라, 다른 표의 폰트 크기에 맞춰 키우면
+   다시 가로 스크롤이 생긴다. */
+.gs-ag-grid {
+  --ag-font-family: var(--gs-font);
+  --ag-font-size: 0.78rem;
+  --ag-header-background-color: var(--gs-header-bg);
+  --ag-header-foreground-color: var(--gs-text);
+  --ag-header-text-color: var(--gs-text);
+  --ag-header-cell-text-color: var(--gs-text);
+  --ag-border-color: var(--gs-border);
+  --ag-row-border-color: var(--gs-border);
+  --ag-background-color: var(--gs-surface);
+  --ag-odd-row-background-color: var(--gs-surface);
+  --ag-row-hover-color: rgba(22, 119, 255, 0.06);
+  --ag-selected-row-background-color: rgba(22, 119, 255, 0.08);
+  --ag-input-focus-border-color: var(--gs-accent);
+  --ag-checkbox-checked-color: var(--gs-accent);
+  --ag-range-selection-border-color: var(--gs-accent);
+  --ag-wrapper-border-radius: var(--gs-radius-sm);
+  --ag-cell-horizontal-padding: 8px;
+  --ag-header-height: 34px;
+  --ag-row-height: 30px;
+}
+.gs-ag-grid .ag-header-cell-label {
+  font-weight: 600;
+}
+
 /* "체크" 컬럼 체크박스 — 기본 부트스트랩 체크박스가 흐릿해 잘 안 보이던
    문제 해결(2026-09-01, 사용자 확정): 테마 강조색 테두리를 둘러 눈에 띄게. */
 .du-check-box .form-check-input {
