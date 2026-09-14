@@ -10511,3 +10511,42 @@ a가 이미 채워져 있으면(마커 치환 결과 포함) 손대지 않는다
 1종, 총 10행)를 한 파일로 합쳐 재실행해 전부 기대값과 일치하는 것을
 최종 확인. `python3 -c "import app"` 전체 임포트 확인, `py_compile`
 통과.
+
+## 2026-09-14: 팀/리더 참조 그리드 — 데이터 업데이트 폴링 시 자동 반영
+
+배경: intake CSV 업로드→실행이 백그라운드에서 끝나도 "팀/리더 참조" 탭의
+편집 그리드(`team-refer-table`)는 `/admin` 페이지 최초 진입 시 한 번만
+`services.team_refer_store.list_editable_rows()`를 읽어와, 실행 완료 후
+브라우저를 새로고침해야만 반영된 결과가 보이는 문제를 확인(직전 대화에서
+사용자가 발견). 확인 질문(AskUserQuestion)으로 "자동 갱신(실행 완료
+직후 한 번 최신 데이터로 교체, 그 사이 미저장 편집이 있었다면 사라질 수
+있음)"을 사용자가 명시적으로 선택.
+
+**`pages/admin.py`의 `data_update_poll()`**(기존 — 백그라운드 실행 진행
+상황을 3초마다 확인하는 폴링 콜백, `data-update-interval`이 어떤 작업이든
+실행 중일 때만 틱하고 끝나면 스스로 꺼짐)에 `Output('team-refer-table',
+'data', allow_duplicate=True)`를 추가 — 매 틱마다
+`_renumbered(team_refer_store.list_editable_rows())`로 그리드 데이터를
+다시 계산해 내보낸다. 인터벌 자체가 "실행 중일 때만" 도는 구조라, 결과적으로
+"실행 완료 직후 한 번" 갱신되는 효과를 낸다(그 이후엔 인터벌이 꺼져 더 이상
+안 건드림). 이미 있던 `team_refer_sync_tooltip`/`team_refer_sync_suggestions`
+콜백이 `Input('team-refer-table', 'data')`를 구독하고 있어, 그리드 데이터가
+갱신되면 툴팁/자동채움 가이드 후보도 자동으로 함께 재계산된다(추가 배선
+불필요).
+
+검증: 실제 `pipeline.process_team_refer.process()`로 intake CSV를
+처리(임시 디렉터리로 격리) → `services.team_refer_store.list_editable_rows()`
+→ `pages.admin._renumbered()`까지 실제 파이프라인 함수로 end-to-end
+실행해 그리드가 받을 정확한 데이터 형태(`_no` 포함)를 확인. `data_update_poll()`
+콜백 자체도 `wpr.snapshot`/`wpr.any_running`/`team_refer_store.
+list_editable_rows`를 몬키패치해 직접 호출 — 반환 튜플이 정확히 6개 Output과
+일치하고, 6번째(team-refer-table data)가 최신 그리드 데이터로 채워지는 것을
+확인. `python3 -c "import app"` 전체 임포트 확인, `py_compile` 통과. 이
+과정에서 이전 세션 테스트 때 지우지 않고 남아있던 `data/processed/team_refer.csv`
+잔여 파일(사용자 환경과 무관, 이 세션 샌드박스 전용 실수)도 함께 정리.
+
+**참고**: DB(`DATABASE_URL`)가 설정된 배포에서는 이 자동 반영이 CSV
+기준으로만 동작한다 — intake CSV 업로드 자체는 CSV만 갱신하고 DB는
+건드리지 않으므로, DB 반영 버튼을 별도로 누르지 않으면 `read_team_refer()`
+가 DB를 우선 읽어 여전히 반영 전 상태를 보여줄 수 있다(이건 이번 수정
+범위 밖 — 기존에 이미 안내된 별도 단계).

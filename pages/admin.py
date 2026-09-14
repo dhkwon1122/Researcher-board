@@ -2413,6 +2413,7 @@ def data_update_db_load(n_clicks):
     Output('data-update-interval', 'disabled', allow_duplicate=True),
     Output('team-refer-upload-status', 'children', allow_duplicate=True),
     Output('exception-job-function-upload-status', 'children', allow_duplicate=True),
+    Output('team-refer-table', 'data', allow_duplicate=True),
     Input('data-update-interval', 'n_intervals'),
     prevent_initial_call=True,
 )
@@ -2421,8 +2422,17 @@ def data_update_poll(_n):
     team_refer_status = _team_refer_run_status_view(team_refer_row) if team_refer_row else no_update
     ejf_row = next((r for r in wpr.snapshot() if r['key'] == 'exception_job_function'), None)
     ejf_status = _team_refer_run_status_view(ejf_row) if ejf_row else no_update
+    # 팀/리더 참조 그리드도 매 폴링마다 최신 저장 상태로 갱신한다(2026-09-14
+    # 추가) — intake CSV 업로드→실행이 끝나도 그리드가 페이지 최초 로드 시점
+    # 값 그대로 남아 새로고침해야만 반영되던 문제. data-update-interval은
+    # 어떤 작업이든 실행 중일 때만 틱하고 끝나면 스스로 꺼지므로(아래
+    # not wpr.any_running()), 실질적으로 "실행 완료 직후 한 번" 갱신되는
+    # 효과를 낸다 — 단, 이 틱이 도는 사이(다른 항목이 실행 중인 동안 포함)
+    # 그리드에서 저장 안 한 수동 편집을 하고 있었다면 그 내용은 이 갱신으로
+    # 덮어써질 수 있다(사용자 확정 — 자동 갱신을 우선하기로 함).
+    grid_data = _renumbered(team_refer_store.list_editable_rows())
     return (_data_update_table(), _db_status_view(), not wpr.any_running(),
-            team_refer_status, ejf_status)
+            team_refer_status, ejf_status, grid_data)
 
 
 # ── 콜백: 데이터 업데이트 — "이전 Data" 다운로드 ───────────────────────────────
