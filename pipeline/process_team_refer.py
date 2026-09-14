@@ -231,6 +231,50 @@ def find_tag_merges(records: list) -> list[dict]:
     return results
 
 
+# ── 신규 업로드 시 책임자(사번/성명/직책) 과거값 자동 채움(2026-09-16 확정) ────
+# 인력현황 원본을 scripts/build_team_refer_intake.py로 전처리한 인텔이크는
+# 사번/성명/직책이 항상 빈 값이다(그 스크립트 docstring 참고 — "이 사람이
+# 이 조직의 대표 책임자"라는 판단은 별도 정보가 필요해 범위 밖). 매번
+# 관리자가 새로 다 채워 넣지 않아도 되도록, 같은 비공식소속부서명(org_name_wd,
+# researchers.csv의 org_code와 매칭되는 안정적인 조직 키)을 가진 "현재"
+# 조직(read_team_refer()가 반환하는, 톰스톤되지 않은 가장 최근 저장값)의
+# 값을 그대로 채운다 — 이번 업로드에 이미 값이 있는 필드는 덮어쓰지 않는다
+# (팀참조시트.xlsx처럼 사람이 직접 채워 올리는 입력은 그대로 존중).
+# 관리자가 그리드에서 이 값을 수동으로 고쳐 저장하면 그 수정값이 곧
+# "현재" 값이 되므로, 다음 업로드부터는 자동으로 그 수정된 값이 채워진다 —
+# 별도의 이력 저장소 없이 team_refer.csv 자체가 "마지막으로 확인된 값"의
+# 원천이 된다. services.team_refer_store.save_snapshot()(관리자 화면 그리드
+# 저장)에는 적용하지 않는다 — 그리드는 항상 "현재 전체 + 편집분"을 다시
+# 제출하는 구조라, 관리자가 일부러 값을 비워 저장(담당자 공석 처리 등)해도
+# 여기서 과거값으로 도로 채워버리면 의도적인 공백 처리가 불가능해진다.
+def _backfill_leader_fields(result: pd.DataFrame) -> pd.DataFrame:
+    """result(이번 업로드로 만들어진 조직 단위별 1행)에서 사번/성명/직책이
+    빈 행을, 같은 비공식소속부서명을 가진 "현재" 조직의 값으로 채운다."""
+    from rd_specialist_markdown import read_team_refer  # 지연 임포트: 순환 참조 회피
+
+    current_by_org = {}
+    for row in read_team_refer(OUT_DIR):
+        org = str(row.get('org_name_wd') or '').strip()
+        if org:
+            current_by_org[org] = row
+
+    if not current_by_org or result.empty:
+        return result
+
+    leader_fields = ['researcher_id', 'name', 'assignment_name']
+
+    def _fill(row):
+        org = str(row['org_name_wd'] or '').strip()
+        prev = current_by_org.get(org) if org else None
+        if prev:
+            for field in leader_fields:
+                if not str(row[field] or '').strip():
+                    row[field] = prev.get(field, '')
+        return row
+
+    return result.apply(_fill, axis=1)
+
+
 def find_duplicate_dep_ids(result: pd.DataFrame) -> list[dict]:
     """같은 업로드/저장 안에서 부서ID(dep_id)가 중복된 행을 찾는다.
 
@@ -390,6 +434,7 @@ def process(raw_dir: str = RAW_DIR, valid_date: date | None = None) -> bool:
 
     records = df.to_dict('records')
     result = build_rows_from_records(records)
+    result = _backfill_leader_fields(result)
     _print_duplicate_warning(find_duplicate_dep_ids(result))
     _print_merge_warning(find_tag_merges(records))
 
