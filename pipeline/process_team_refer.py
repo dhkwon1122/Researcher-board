@@ -231,7 +231,8 @@ def find_tag_merges(records: list) -> list[dict]:
     return results
 
 
-# ── 신규 업로드 시 책임자(사번/성명/직책) 과거값 자동 채움(2026-09-16 확정) ────
+# ── 신규 업로드 시 책임자(사번/성명/직책) 과거값 자동 채움(2026-09-16 확정,
+# 2026-09-17 시점 조건 추가) ─────────────────────────────────────────────────
 # 인력현황 원본을 scripts/build_team_refer_intake.py로 전처리한 인텔이크는
 # 사번/성명/직책이 항상 빈 값이다(그 스크립트 docstring 참고 — "이 사람이
 # 이 조직의 대표 책임자"라는 판단은 별도 정보가 필요해 범위 밖). 매번
@@ -247,9 +248,20 @@ def find_tag_merges(records: list) -> list[dict]:
 # 저장)에는 적용하지 않는다 — 그리드는 항상 "현재 전체 + 편집분"을 다시
 # 제출하는 구조라, 관리자가 일부러 값을 비워 저장(담당자 공석 처리 등)해도
 # 여기서 과거값으로 도로 채워버리면 의도적인 공백 처리가 불가능해진다.
-def _backfill_leader_fields(result: pd.DataFrame) -> pd.DataFrame:
+#
+# 2026-09-17 확정: 무조건 "가장 최근 저장값"을 채우지 않고, 이번 업로드의
+# 유효 날짜(valid_date)가 그 조직의 기존 저장값의 유효 날짜보다 같거나
+# 늦을 때만 채운다. 예: AI융합팀이 2026-09-04일자로 사번/성명/직책이 이미
+# 저장돼 있을 때, 2026-09-14일자로 업로드하면(9/4보다 미래 시점 — "그
+# 뒤로도 그대로 유지됐다"고 가정할 수 있음) 그대로 채우지만, 2026-09-01
+# 일자로(과거 시점 소급 입력) 업로드하면 채우지 않고 공란으로 남긴다 —
+# 9/4에 알게 된 값을 9/4 이전 시점에도 똑같았다고 가정할 근거가 없기
+# 때문(9/4 시점에 새로 배정됐을 수도 있음).
+def _backfill_leader_fields(result: pd.DataFrame, valid_date: date) -> pd.DataFrame:
     """result(이번 업로드로 만들어진 조직 단위별 1행)에서 사번/성명/직책이
-    빈 행을, 같은 비공식소속부서명을 가진 "현재" 조직의 값으로 채운다."""
+    빈 행을, 같은 비공식소속부서명을 가진 "현재" 조직의 값으로 채운다 —
+    단, valid_date(이번 업로드의 유효 날짜)가 그 "현재" 값이 저장된 날짜보다
+    같거나 미래일 때만(과거 시점 소급 입력에는 채우지 않음)."""
     from rd_specialist_markdown import read_team_refer  # 지연 임포트: 순환 참조 회피
 
     current_by_org = {}
@@ -263,13 +275,25 @@ def _backfill_leader_fields(result: pd.DataFrame) -> pd.DataFrame:
 
     leader_fields = ['researcher_id', 'name', 'assignment_name']
 
+    def _prev_valid_date(prev: dict) -> date | None:
+        try:
+            return date(int(prev.get('valid_year') or 0),
+                        int(prev.get('valid_month') or 0),
+                        int(prev.get('valid_day') or 0))
+        except (TypeError, ValueError):
+            return None  # 옛 스키마 등으로 날짜를 알 수 없으면 채우지 않음(보수적으로 처리)
+
     def _fill(row):
         org = str(row['org_name_wd'] or '').strip()
         prev = current_by_org.get(org) if org else None
-        if prev:
-            for field in leader_fields:
-                if not str(row[field] or '').strip():
-                    row[field] = prev.get(field, '')
+        if not prev:
+            return row
+        prev_date = _prev_valid_date(prev)
+        if prev_date is None or valid_date < prev_date:
+            return row
+        for field in leader_fields:
+            if not str(row[field] or '').strip():
+                row[field] = prev.get(field, '')
         return row
 
     return result.apply(_fill, axis=1)
@@ -432,13 +456,14 @@ def process(raw_dir: str = RAW_DIR, valid_date: date | None = None) -> bool:
         )
         return False
 
+    valid_date = valid_date or date.today()
+
     records = df.to_dict('records')
     result = build_rows_from_records(records)
-    result = _backfill_leader_fields(result)
+    result = _backfill_leader_fields(result, valid_date)
     _print_duplicate_warning(find_duplicate_dep_ids(result))
     _print_merge_warning(find_tag_merges(records))
 
-    valid_date = valid_date or date.today()
     result = stamp_valid_date(result, valid_date)
     result['deleted'] = 'N'
 
