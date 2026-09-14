@@ -11305,3 +11305,63 @@ draggable 속성을 갖고 있는 것(중복 제거가 정상 동작을 깨지 �
 버그인지는 git blame으로 확인하지 않음(코드 자체는 그 이후로 안 바뀐
 부분이라 후자일 가능성이 높음) — 사용자가 이 기능을 그동안 실제로
 얼마나 자주/정상적으로 써왔는지에 따라 체감 영향 정도가 다를 수 있음.
+
+## 2026-09-17: 팀/리더 참조 — 행 드래그 재정렬 기능 완전 제거 + "구분"
+컬럼 드롭다운(R&D/R&D_Support/Staff) 전환
+
+사용자 요청 두 가지: (1) 바로 전에 O(N²) 스캔 제거·off-by-one 인덱스
+버그 수정·중복 DOM 순회 제거까지 세 차례 손봤음에도 드래그로 행을
+옮길 때 화면이 계속 멈춰서, 기능 자체를 아예 삭제해달라는 것. (2)
+"구분" 열을 자유 입력이 아니라 R&D/R&D_Support/Staff 3개 중에서만
+고르는 드롭다운으로 만들어달라는 것.
+
+**1) 드래그 재정렬 기능 삭제**: `assets/team_refer_grid.js`에서 드래그
+관련 코드를 전부 제거 — `depCodeCompare`, `rowGroupKeyFromRow`,
+`trIndex`, `rowGroupKeyOfTr`, `markRowsDraggable`, `rowOwnPath`,
+`isDescendantPath`, `subtreeRange`, `setupRowDrag`(dragstart/dragover/
+drop/dragend 리스너 + rowObserver 전부 포함), `window.__teamReferOnDataChange`,
+`window.__teamReferRows`/`window.__teamReferSortActive` 전역 변수까지
+모두 삭제. 이 콜백에 얹혀 있던 네비게이션 바 높이 재측정(항목 4,
+2026-09-16 추가)은 트리거가 필요해 `window.__syncTeamReferSuggestions`
+(team-refer-suggestions Store가 바뀔 때마다 호출 — 그리드 데이터가 바뀔
+때마다 함께 갱신되므로 기존과 동일한 신뢰성으로 동작)로 옮겼다.
+`pages/admin.py`에서도 이 드래그 전용 캐싱을 위해 있던 두 번째
+`clientside_callback`과 `team-refer-grid-dummy-2` 더미 컴포넌트를
+통째로 삭제. `services/team_refer_store.py`의 `_flatten_org_tree()`/
+`list_editable_rows()`가 부모-자식 그룹으로 묶어서 정렬하는 로직은
+그대로 남겨뒀다 — 원래 드래그 기능의 선행 조건으로 도입됐지만, 그
+자체로도 가독성에 도움이 되므로(같은 부모 밑 조직끼리 항상 붙어
+보임) 순수 표시 순서 목적으로 유지(주석만 갱신해 더 이상 드래그와
+무관함을 명시). 체크박스 선택 후 "위로/아래로" 버튼으로 개별 행을
+옮기는 기존 기능(2026-09-16)은 이 삭제와 무관하게 그대로 유지된다.
+
+**2) "구분" 드롭다운**: 기존에는 다른 자유입력 컬럼들과 같은 방식
+(브라우저 네이티브 `<datalist>` 자동완성 가이드, 목록 밖 값도 입력
+가능)이었는데, `구분`은 값 종류가 실제로 3개뿐이라 자유 입력을 막고
+정확히 이 3개 중에서만 고르게 하는 게 맞다는 판단이라 `dash_table`의
+네이티브 드롭다운(`presentation='dropdown'` + `DataTable(dropdown=...)`)
+으로 바꿨다 — 이 방식은 원래 다른 컬럼(부서명 등)에는 "목록에 없는
+값을 아예 입력할 수 없어 자유 입력이 필요한 흐름과 안 맞는다"는 이유로
+일부러 피했던 방식인데(2026-09-03 결정, 코드 상단 주석 참고), "구분"은
+정확히 그 "제한"이 필요한 경우라 여기서만 예외적으로 적용한다.
+`_WORK_TYPE_OPTIONS = ['R&D', 'R&D_Support', 'Staff']`를 새로 정의하고,
+`_AUTOFILL_GUIDE_COLUMNS`에서는 '구분'을 제외했다(드롭다운으로 바뀌면서
+자유 입력 자동완성 가이드 자체가 더 이상 의미 없음). `clearable=True`로
+둬서 빈 값은 계속 허용한다 — 비어 있으면 기존처럼
+`team_hierarchy.derive_hierarchy()`가 'R&D'로 기본 채우는 동작은
+그대로 유지(`pipeline/process_researcher_expertise.py`의
+`work_type=="R&D"` 필터도 변경 없음 — "R&D_Support"/"Staff"는 그
+필터에서 자동으로 제외되는 것도 기존과 동일).
+
+**검증**: 실제 서버(임시 admin 계정) + Playwright 확인 — (1) 그리드의
+모든 행이 더 이상 `draggable=true`가 아닌 것(드래그 완전 제거 확인),
+(2) "구분" 셀을 클릭하면 정확히 `['R&D', 'R&D_Support', 'Staff']` 3개
+선택지만 있는 드롭다운이 뜨는 것, (3) "R&D_Support"를 선택해 셀 값이
+바뀌고 "저장" 후 실제 CSV에도 정확히 반영되는 것까지 확인. 콘솔/페이지
+에러 0건. `python3 -m py_compile`/`python3 -c "import app"` 통과.
+테스트 계정·`data/processed/team_refer.csv`는 검증 후 삭제,
+`config/users.json`은 원본과 diff 없음 재확인.
+
+**미검증**: 드롭다운으로 "구분" 값을 대량으로(체크박스 다수 선택 후
+일괄 변경 같은) 한 번에 바꾸는 기능은 이번 요청 범위 밖이라 다루지
+않음(한 셀씩 개별 변경만 가능, dash_table 자체 제약).
