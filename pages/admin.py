@@ -706,32 +706,42 @@ def _team_refer_tab() -> html.Div:
                     className='text-muted', style={'fontSize': '0.72rem'},
                 ),
             ], md='auto'),
-            dbc.Col([
-                dbc.Label(' ', className='small d-block mb-1'),
-                dbc.ButtonGroup([
-                    dbc.Button('전체 선택',
-                               id='team-refer-select-all-btn', color='secondary', outline=True, size='sm'),
-                    dbc.Button('전체 해제',
-                               id='team-refer-select-none-btn', color='secondary', outline=True, size='sm'),
-                    dbc.Button([html.I(className='bi bi-arrow-up me-1'), '위로'],
-                               id='team-refer-move-up-btn', color='secondary', outline=True, size='sm'),
-                    dbc.Button([html.I(className='bi bi-arrow-down me-1'), '아래로'],
-                               id='team-refer-move-down-btn', color='secondary', outline=True, size='sm'),
-                    dbc.Button([html.I(className='bi bi-trash me-1'), '선택 삭제'],
-                               id='team-refer-bulk-delete-btn', color='danger', outline=True, size='sm'),
-                ]),
-                html.Div(
-                    '왼쪽 체크박스로 행을 고른 뒤 사용하세요(dash_table 제약으로 헤더 '
-                    '전체선택 체크박스 대신 "전체 선택/해제" 버튼을 제공합니다). 이동은 '
-                    '체크한 행만 개별적으로 한 칸씩 움직이며 상위부서와 무관하게 자유롭게 '
-                    '이동할 수 있습니다. 삭제는 하위 조직이 있으면 함께 삭제됩니다(하위 '
-                    '조직을 남겨두면 그 소속 정보 때문에 상위 조직이 자동으로 다시 생겨 '
-                    '실제로 삭제되지 않습니다). 이동/삭제/행 추가 후에는 조직코드가 화면 '
-                    '순서 그대로(맨 위 1 ~ 맨 아래 N) 자동으로 다시 매겨집니다.',
-                    className='text-muted', style={'fontSize': '0.72rem'},
-                ),
-            ], md='auto'),
         ], className='mb-2 align-items-end'),
+
+        # 체크박스 선택/이동/삭제 버튼은 화면(브라우저) 스크롤에 영향받지
+        # 않도록 항상 보이는 위치에 고정한다(2026-09-16, 사용자 요청 —
+        # 아래쪽 행을 체크하려면 위로 스크롤해 이 버튼을 누른 뒤 결과를
+        # 보려고 다시 아래로 스크롤해야 하는 불편함이 있었음). CSS
+        # (assets/custom.css의 .team-refer-sticky-toolbar)가
+        # position: sticky로 네비게이션 바 바로 아래에 붙인다 — 네비게이션
+        # 바 실제 높이는 assets/team_refer_grid.js가 재서 CSS 변수로
+        # 넘겨준다(고정 픽셀로 하드코딩하면 화면 폭에 따라 네비게이션
+        # 바 줄바꿈이 달라질 때 어긋날 수 있음).
+        html.Div([
+            dbc.ButtonGroup([
+                dbc.Button('전체 선택',
+                           id='team-refer-select-all-btn', color='secondary', outline=True, size='sm'),
+                dbc.Button('전체 해제',
+                           id='team-refer-select-none-btn', color='secondary', outline=True, size='sm'),
+                dbc.Button([html.I(className='bi bi-arrow-up me-1'), '위로'],
+                           id='team-refer-move-up-btn', color='secondary', outline=True, size='sm'),
+                dbc.Button([html.I(className='bi bi-arrow-down me-1'), '아래로'],
+                           id='team-refer-move-down-btn', color='secondary', outline=True, size='sm'),
+                dbc.Button([html.I(className='bi bi-trash me-1'), '선택 삭제'],
+                           id='team-refer-bulk-delete-btn', color='danger', outline=True, size='sm'),
+            ]),
+            html.Div(
+                '왼쪽 체크박스로 행을 고른 뒤 사용하세요(dash_table 제약으로 헤더 '
+                '전체선택 체크박스 대신 "전체 선택/해제" 버튼을 제공합니다). 이동은 '
+                '체크한 행만 개별적으로 한 칸씩 움직이며 상위부서와 무관하게 자유롭게 '
+                '이동할 수 있습니다. 삭제는 하위 조직이 있으면 함께 삭제됩니다(하위 '
+                '조직을 남겨두면 그 소속 정보 때문에 상위 조직이 자동으로 다시 생겨 '
+                '실제로 삭제되지 않습니다). 이동/삭제/행 추가 후에는 조직코드가 화면 '
+                '순서 그대로(맨 위 1 ~ 맨 아래 N) 자동으로 다시 매겨집니다.',
+                className='text-muted', style={'fontSize': '0.72rem'},
+            ),
+        ], className='team-refer-sticky-toolbar'),
+
         dcc.Download(id='team-refer-download'),
         html.Div(id='team-refer-db-load-msg'),
         html.Div(id='team-refer-bulk-msg'),
