@@ -252,10 +252,20 @@
         return 'root';
     }
 
+    // dash_table은 헤더 행도 데이터 행과 같은 <tbody> 안에 <tr>로 넣어
+    // 둔다(헤더 셀은 <th>, 데이터 셀은 <td> — 실제로 확인: querySelector로
+    // 살펴보면 tbody의 첫 자식이 <td>가 하나도 없는 헤더 행이다). 그냥
+    // parent.children 안에서의 위치를 인덱스로 쓰면 이 헤더 행 때문에
+    // 모든 데이터 행의 인덱스가 실제보다 1씩 밀려서(2026-09-17 확인 —
+    // 드래그로 옮기면 의도한 행이 아니라 그 다음 행이 옮겨지는 오동작의
+    // 원인이었다), <td>가 있는(=진짜 데이터) 행만 세어서 인덱스를 구한다.
     function trIndex(tr) {
         var parent = tr && tr.parentElement;
         if (!parent) { return -1; }
-        return Array.prototype.indexOf.call(parent.children, tr);
+        var dataRows = Array.prototype.filter.call(parent.children, function (el) {
+            return el.tagName === 'TR' && el.querySelector('td');
+        });
+        return dataRows.indexOf(tr);
     }
 
     // sort_action='custom'이라(pages/admin.py 참고) DataTable이 자체적으로
@@ -432,10 +442,15 @@
         if (!dragInitialized) {
             setupRowDrag(wrap);
             dragInitialized = true;
+            // 최초 1회만 명시적으로 마킹한다 — setupRowDrag()가 등록하는
+            // rowObserver가 그 이후로는 새로 생기는 <tr>마다 자동으로
+            // draggable을 걸어주므로(DataTable이 새 data로 <tr>를 다시
+            // 그릴 때마다 이 콜백이 매번 wrap 전체를 다시 훑는 건
+            // 중복이었다 — 2026-09-17 확인: 행이 많을 때 데이터가 바뀔
+            // 때마다(체크박스 이동/삭제, 드래그 재정렬 등) 매번 전체 행을
+            // 훑는 중복 작업이 쌓여 화면이 버벅이는 원인 중 하나였음).
+            requestAnimationFrame(function () { markRowsDraggable(wrap); });
         }
-        // DataTable이 새 data로 <tr>를 다시 그리는 건 이 콜백 이후에
-        // 비동기로 일어날 수 있어, 한 프레임 뒤에 draggable을 다시 건다.
-        requestAnimationFrame(function () { markRowsDraggable(wrap); });
         return '';
     };
 })();

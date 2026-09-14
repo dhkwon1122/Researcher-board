@@ -2060,29 +2060,39 @@ def _move_selected(rows: list, selected_rows: list, direction: str):
                 seen.add(p)
                 own_paths.append(p)
 
-    def _current_index(path):
-        return next((i for i, r in enumerate(rows) if _row_path(r) == path), None)
+    # 경로별 "현재 인덱스"를 매번 rows 전체를 다시 스캔해서 찾지 않고
+    # (예전 방식 — 체크한 행마다 O(N) 스캔을 2번씩 해서 사실상 O(N^2),
+    # 2026-09-17 확인: 2,000행 전체 선택 후 이동 시 3초 넘게 걸려 화면이
+    # 멈춘 것처럼 보이는 원인으로 확인됨) 사전(index_of)에 한 번만 담아두고
+    # 스왑이 일어날 때마다 그 두 행의 인덱스만 O(1)로 갱신한다.
+    index_of = {_row_path(r): i for i, r in enumerate(rows)}
 
     ordered = sorted(
-        (p for p in own_paths if _current_index(p) is not None),
-        key=_current_index, reverse=(direction == 'down'),
+        (p for p in own_paths if p in index_of),
+        key=lambda p: index_of[p], reverse=(direction == 'down'),
     )
 
     blocked = 0
     for path in ordered:
-        idx = _current_index(path)
+        idx = index_of.get(path)
         if idx is None:
             continue
         if direction == 'up':
             if idx == 0:
                 blocked += 1
                 continue
+            other_path = _row_path(rows[idx - 1])
             rows[idx - 1], rows[idx] = rows[idx], rows[idx - 1]
+            index_of[path] = idx - 1
+            index_of[other_path] = idx
         else:
             if idx >= len(rows) - 1:
                 blocked += 1
                 continue
+            other_path = _row_path(rows[idx + 1])
             rows[idx], rows[idx + 1] = rows[idx + 1], rows[idx]
+            index_of[path] = idx + 1
+            index_of[other_path] = idx
 
     new_selected = [i for i, r in enumerate(rows) if _row_path(r) in seen]
     return rows, new_selected, blocked
