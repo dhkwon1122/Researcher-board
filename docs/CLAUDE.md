@@ -11043,3 +11043,63 @@ JOB Market 화면을 통한 종단 간 재현은 하지 못했다 — 위 수정
 "유실되는" 신규 캐시 항목이 실사용 빈도에서 체감될 만큼 잦은지(순수
 성능 캐시라 정확성에는 영향 없음 — 그 텍스트의 임베딩을 그다음 호출
 때 한 번 더 계산하는 정도).
+
+## 2026-09-16: 팀/리더 참조 — "엑셀 파일로 한번에 반영" 누적 시점에 일(day)
+추가 + 업로드 라벨 문구 단순화
+
+사용자 리포트: "엑셀 파일로 한번에 반영"에서 누적 시점을 연/월만 고를 수
+있는데, 실제로는 항상 9/1처럼 그 달 1일자로 반영돼 최신 데이터로
+업데이트가 안 된다 — 맞는지 확인 요청.
+
+**확인 결과: 사용자 진단이 정확했다.** `team_refer_run_upload()` 콜백이
+`date(int(year), int(month), 1)`로 일(day)을 항상 1로 고정해서 저장하고
+있었다. team_refer는 자연키가 `(dep_id, valid_year, valid_month,
+valid_day)`이고 "가장 최근 날짜" 행을 그 dep_id의 "현재" 상태로 취급하는
+구조인데(`rd_specialist_markdown._latest_current_rows()`), 그리드
+화면에서의 수동 수정·저장(`team-refer-valid-date`, `dcc.DatePickerSingle`
+로 일 단위까지 지정 가능)이 이미 그달 중 더 늦은 날짜(예: 9/10)로
+들어가 있으면, 그 뒤에 올린 "최신" 엑셀이 9/1로 고정 저장되면서 9/10
+값보다 더 "과거"로 취급돼 실제로는 반영되지 않는 문제였다 — 관리자
+입장에서는 분명 최신 엑셀을 올렸는데 화면에 옛날 값이 계속 보이는
+현상으로 나타난다.
+
+**`pages/admin.py`**:
+- 신규 `_valid_date_picker(key, valid_date)`: 그리드의
+  `team-refer-valid-date`와 동일하게 `dcc.DatePickerSingle`(연/월/일)을
+  그대로 쓴다. 기존 `_valid_period_picker()`(연/월 드롭다운 2개)가
+  `DatePickerSingle`을 안 쓴 이유(영문 캘린더 헤더, 애초에 일 단위가
+  필요 없는 항목들)는 team_refer에는 해당하지 않는다(일 단위가 반드시
+  필요) — 그래서 `_valid_period_picker()` 자체는 그대로 두고(evaluations/
+  core_technology/job_profile/work_objective_* 등 다른 "데이터 업데이트"
+  항목은 계속 월 단위, 여기는 원래도 일 단위 개념이 없어 이 변경과
+  무관), team_refer 전용 별도 함수를 새로 추가했다.
+- `_team_refer_upload_section()`: "누적 시점(연/월)" → "누적 시점(연/월/일)"
+  라벨 변경, `_valid_period_picker('team_refer', year, month)` 호출을
+  `_valid_date_picker('team_refer', today)`로 교체.
+- `team_refer_run_upload()` 콜백: `State`를
+  `{'type': 'du-valid-year'/'du-valid-month', 'key': 'team_refer'}`
+  두 개에서 `{'type': 'du-valid-date', 'key': 'team_refer'}`(date
+  문자열) 하나로 교체하고, `date(int(year), int(month), 1)` 대신
+  `date.fromisoformat(valid_date_str)`로 선택한 날짜를 그대로 씀.
+- "업로드(팀참조시트.xlsx 또는 .csv)" → "업로드(xlsx 또는 csv)"로 문구
+  단순화(사용자 요청 2번 — 파일명이 꼭 "팀참조시트"일 필요는 없으므로).
+
+**검증**: 실제 서버(임시 admin 계정) + 직접 재현 시나리오로 버그와 수정을
+모두 확인 — (1) `services.team_refer_store.save_snapshot()`으로 특정
+조직에 9/10일자 값(성명=OLD_MANUAL)을 먼저 저장, (2) 같은 조직의 다른
+값(성명=NEW_UPLOAD)을 담은 csv를 "엑셀 파일로 한번에 반영" 업로드
+섹션에 올리고 "실행"(날짜 선택기 기본값=오늘 실제 날짜, 이 환경에서는
+9/14) 클릭, (3) 실행 후 `data/processed/team_refer.csv`에 9/14일자로
+NEW_UPLOAD 행이 정확히 추가되고, `read_team_refer()`의 "현재" 판정도
+NEW_UPLOAD로 정상 갱신되는 것까지 확인 — 수정 전이었다면 9/1로 고정
+저장돼 9/10보다 과거로 취급되어 OLD_MANUAL이 계속 "현재"로 남았을
+시나리오. 화면에서 라벨 문구("업로드(xlsx 또는 csv)", "누적 시점
+(연/월/일)")와 날짜 선택기 기본값(오늘 날짜, YYYY-MM-DD)도 육안으로
+확인. `python3 -m py_compile`/`python3 -c "import app"` 통과. 테스트
+계정·`data/processed/team_refer.csv`는 검증 후 삭제,
+`config/users.json`은 원본과 diff 없음 재확인.
+
+**미검증**: 이미 과거에 9/1로 잘못 고정 저장돼 실제로는 반영되지 않은
+채 누적돼 있는 실제 운영 데이터가 있다면(이 수정은 앞으로의 업로드만
+고치므로), 그 과거 이력을 다시 찾아 올바른 날짜로 재업로드해야 하는지
+확인이 필요할 수 있음.
