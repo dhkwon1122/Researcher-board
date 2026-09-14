@@ -397,13 +397,18 @@ def _sort_key(value):
         return (1, s)
 
 
-# ── 팀/리더 참조 그리드 — 계층 구조 표시 + 체크박스 이동/삭제(2026-09-15) ──────
+# ── 팀/리더 참조 그리드 — 체크박스 이동/삭제(2026-09-15, 2026-09-16 단순화) ────
 # assets/team_refer_grid.js의 드래그 재정렬(rowOwnPath/isDescendantPath/
-# subtreeRange)과 완전히 동일한 개념을 Python 쪽 체크박스 이동/삭제 버튼용으로
+# subtreeRange)과 완전히 동일한 개념을 Python 쪽 체크박스 삭제 버튼용으로
 # 재구현한 것 — 그리드 데이터(KOREAN_COLUMNS 키)를 그대로 다루므로 JS와
-# 코드를 공유할 수 없어 별도로 둔다(로직은 동일).
+# 코드를 공유할 수 없어 별도로 둔다(로직은 동일). 2026-09-16: "구조" 열(부모-
+# 자식 아이콘 표시)을 없애면서, 이동은 "체크한 행 하나만 개별로, 상위부서
+# 경계와 무관하게 자유롭게" 이동하는 방식으로 단순화(사용자 확정) — 하위
+# 조직을 함께 묶어 이동시키던 로직(_preceding_sibling_range 등)은 제거.
+# 삭제만 기존처럼 하위 조직 전체를 함께 지운다(사용자 확정 — 하위 조직이
+# 남아있으면 그 소속 정보 때문에 상위 조직이 자동으로 다시 생성돼 사실상
+# 삭제되지 않는 문제가 있어, 삭제는 계속 하위 조직 포함이 맞음).
 _LEVEL_COLS = ['1단계부서명', '2단계부서명', '3단계부서명']
-_TREE_ICONS = {1: '🏢', 2: '🗂️', 3: '📄'}
 
 
 def _row_path(row: dict) -> tuple:
@@ -433,86 +438,36 @@ def _subtree_range(rows: list, idx: int) -> tuple:
     return idx, end
 
 
-def _preceding_sibling_range(rows: list, block_start: int):
-    """block_start 바로 앞에 있는 "진짜 형제(같은 부모)" 블록의 시작 인덱스를
-    찾는다. 형제가 아니라 다른 상위부서 소속 행이거나 그리드 맨 위면 None —
-    "형제간 이동만 자유롭게, 다른 상위부서로는 이동 불가"(2026-09-15 확정)를
-    이 함수 하나가 보장한다."""
-    if block_start <= 0:
-        return None
-    my_path = _row_path(rows[block_start])
-    my_parent, my_depth = my_path[:-1], len(my_path)
-    j = block_start - 1
-    while j >= 0:
-        p = _row_path(rows[j])
-        if len(p) < my_depth:
-            return None  # 더 얕은(무관하거나 조상인) 행을 만남 — 형제 없음
-        if len(p) == my_depth:
-            return j if p[:-1] == my_parent else None
-        j -= 1  # p가 더 깊음(우리 자신의 자손이거나 아직 안 지난 다른 형제의 자손) — 계속 위로
-    return None
-
-
-def _following_sibling_start(rows: list, block_start: int, block_end: int):
-    """block_end 위치의 행이 진짜 형제(같은 부모)면 그 인덱스를, 아니면
-    None을 반환 — subtreeRange() 정의상 block_end는 항상 우리 자손이 아닌
-    첫 행이므로, 그 행의 깊이는 우리와 같거나(형제 후보) 더 얕다(경계)."""
-    if block_end >= len(rows):
-        return None
-    my_path = _row_path(rows[block_start])
-    my_parent, my_depth = my_path[:-1], len(my_path)
-    p = _row_path(rows[block_end])
-    if len(p) == my_depth and p[:-1] == my_parent:
-        return block_end
-    return None
-
-
-def _reassign_sibling_codes(rows: list, parent_path: tuple) -> None:
-    """parent_path의 직속 자식들(진짜 형제)이 갖고 있던 조직코드 값들을
-    모아, 지금 순서에 맞게 재배당한다(assets/team_refer_grid.js 드래그의
-    codesBefore/idxAfter와 동일한 발상 — 새 번호를 만들지 않아 다른 그룹과
-    충돌하지 않는다)."""
-    idxs = [i for i, r in enumerate(rows)
-            if _row_path(r)[:-1] == parent_path and len(_row_path(r)) == len(parent_path) + 1]
-    if len(idxs) < 2:
-        return
-    codes = sorted((rows[i].get('조직코드') or '' for i in idxs), key=_sort_key)
-    for i, code in zip(idxs, codes):
-        rows[i]['조직코드'] = code
-
-
-def _annotate_tree(rows: list) -> None:
-    """각 행에 비편집 표시용 '_tree' 필드를 채운다 — 계층 깊이(들여쓰기 +
-    아이콘)와, 체크해서 이동/삭제하면 함께 따라올 하위 조직이 있으면 그
-    개수(+N)를 미리 보여준다(2026-09-15, 체크박스로 조작하기 전에 부모-자식
-    관계를 명확히 알 수 있게 — 자동 하이라이트 대신 항상 보이는 아이콘으로).
-    들여쓰기는 실제 텍스트 깊이가 아니라 "화면에 보이는 가장 가까운 조상"
-    기준(스택 기반 1회 순회) — 조상 행이 비공식소속부서명 공백으로 숨겨져
-    있으면 그만큼 들여쓰기가 줄어든다."""
-    stack: list = []  # [(path, visible_depth), ...]
-    for i, row in enumerate(rows):
-        path = _row_path(row)
-        while stack and not _is_descendant_path(path, stack[-1][0]):
-            stack.pop()
-        depth = (stack[-1][1] + 1) if stack else 0
-        icon = _TREE_ICONS.get(len(path) or 1, '📄')
-        _, end = _subtree_range(rows, i)
-        extra = end - i - 1
-        badge = f' (+{extra})' if extra else ''
-        indent = '　' * depth
-        prefix = '└ ' if depth else ''
-        row['_tree'] = f'{indent}{prefix}{icon}{badge}'
-        stack.append((path, depth))
-
-
 def _renumbered(rows: list) -> list:
-    """현재 순서(정렬/추가/삭제/이동 반영 후) 그대로 1부터 번호를 다시
-    매기고, 계층 구조 표시('_tree')도 함께 갱신한다 — 둘 다 화면 표시
-    전용이라 저장 대상 데이터에는 포함되지 않는다."""
+    """현재 순서(정렬/추가/삭제/이동 반영 후) 그대로 1부터 'No.'를 다시
+    매긴다 — 화면 표시 전용이라 저장 대상 데이터에는 포함되지 않는다.
+    (2026-09-16: 계층 구조 표시('_tree') 관련 로직은 "구조" 열 제거와
+    함께 삭제 — team_refer 탭뿐 아니라 직군 예외자 탭도 함께 쓰는 공용
+    함수라 그 탭 행에는 애초에 의미 없는 필드였다.) 조직코드(dep_code)
+    재배당은 이 함수의 책임이 아니다 — team_refer_sort(헤더 클릭 정렬)도
+    이 함수를 그대로 쓰는데, 정렬은 화면에 "보여주는" 순서만 바꾸는
+    기능이라 관리자가 정해둔 조직코드까지 정렬 기준으로 덮어쓰면 안 되기
+    때문(_renumber_dep_codes() 참고 — 이동/삭제/행추가 콜백이 필요할 때만
+    명시적으로 호출)."""
     for i, r in enumerate(rows, start=1):
         r['_no'] = i
-    _annotate_tree(rows)
     return rows
+
+
+def _renumber_dep_codes(rows: list) -> None:
+    """조직코드(dep_code)를 현재 화면 순서 그대로 1~N으로 다시 매긴다
+    (2026-09-16 확정 — "맨 위가 1, 맨 뒤가 N"). 이동/삭제/행 추가처럼
+    행의 순서·구성 자체가 바뀌는 조작 직후에만 호출한다 — 헤더 클릭
+    정렬(team_refer_sort)이나 최초 로드 시에는 호출하지 않는다(정렬은
+    보기 순서만 바꾸는 기능이라 조직코드까지 정렬 기준으로 덮어쓰면
+    안 됨). 조직코드는 조직도(pipeline/rd_specialist_markdown.py)가
+    같은 상위부서 아래 형제 노드의 표시 순서로도 그대로 쓰므로, 여기서
+    전역 일련번호로 다시 매겨도 "같은 부모 밑 형제끼리의 상대적 순서"는
+    항상 그대로 보존된다(전역 단조증가 값이라 부분집합만 봐도 상대 순서가
+    바뀌지 않음) — 관리자 그리드 화면에서 상위부서 경계를 넘나들며
+    자유롭게 재배열해도(2026-09-16 확정) 조직도 렌더링에는 영향이 없다."""
+    for i, row in enumerate(rows, start=1):
+        row['조직코드'] = str(i)
 
 
 def _split_hidden_rows(rows: list) -> tuple[list, list]:
@@ -677,13 +632,13 @@ def _team_refer_tab() -> html.Div:
     rows, hidden_rows = _split_hidden_rows(rows)
     rows = _renumbered(rows)
 
-    # 'No.'/'_tree' 는 화면 표시 전용 — 저장 대상 컬럼(KOREAN_COLUMNS)에는
-    # 없으므로 team_refer_store.save_snapshot()이 그대로 무시한다(_COL_MAP에
-    # 없는 키). '_tree'는 체크박스로 이동/삭제하기 전에 부모-자식 관계를
-    # 아이콘 + 들여쓰기로 미리 보여준다(_annotate_tree() 참고, 2026-09-15).
+    # 'No.'는 화면 표시 전용 — 저장 대상 컬럼(KOREAN_COLUMNS)에는 없으므로
+    # team_refer_store.save_snapshot()이 그대로 무시한다(_COL_MAP에 없는 키).
+    # (2026-09-16: 부모-자식 관계를 아이콘으로 보여주던 '구조'/'_tree' 열은
+    # 제거 — 이동이 더 이상 하위 조직을 묶어서 처리하지 않게 되어 미리
+    # 보여줄 필요가 없어졌다.)
     columns = [
         {'name': 'No.', 'id': '_no', 'editable': False},
-        {'name': '구조', 'id': '_tree', 'editable': False},
     ] + [
         {'name': col, 'id': col, 'editable': True}
         for col in team_refer_store.KOREAN_COLUMNS
@@ -767,9 +722,12 @@ def _team_refer_tab() -> html.Div:
                 ]),
                 html.Div(
                     '왼쪽 체크박스로 행을 고른 뒤 사용하세요(dash_table 제약으로 헤더 '
-                    '전체선택 체크박스 대신 "전체 선택/해제" 버튼을 제공합니다) — 하위 조직(구조 '
-                    '열의 └ 표시)이 있는 행을 고르면 그 하위 조직 전체가 함께 이동/삭제됩니다. '
-                    '이동은 같은 상위부서 형제 안에서만 가능합니다.',
+                    '전체선택 체크박스 대신 "전체 선택/해제" 버튼을 제공합니다). 이동은 '
+                    '체크한 행만 개별적으로 한 칸씩 움직이며 상위부서와 무관하게 자유롭게 '
+                    '이동할 수 있습니다. 삭제는 하위 조직이 있으면 함께 삭제됩니다(하위 '
+                    '조직을 남겨두면 그 소속 정보 때문에 상위 조직이 자동으로 다시 생겨 '
+                    '실제로 삭제되지 않습니다). 이동/삭제/행 추가 후에는 조직코드가 화면 '
+                    '순서 그대로(맨 위 1 ~ 맨 아래 N) 자동으로 다시 매겨집니다.',
                     className='text-muted', style={'fontSize': '0.72rem'},
                 ),
             ], md='auto'),
@@ -806,7 +764,6 @@ def _team_refer_tab() -> html.Div:
                 },
                 style_cell_conditional=[
                     {'if': {'column_id': '_no'}, 'width': '40px', 'textAlign': 'center'},
-                    {'if': {'column_id': '_tree'}, 'width': '70px', 'textAlign': 'left', 'whiteSpace': 'nowrap'},
                 ],
                 style_header={'fontWeight': '600', 'backgroundColor': '#fafafa',
                               'textAlign': 'center', 'fontSize': '0.72rem'},
@@ -2003,14 +1960,20 @@ def team_refer_add_row(n_clicks, rows, active_cell):
     new_row = {col: '' for col in team_refer_store.KOREAN_COLUMNS}
     insert_at = active_cell['row'] + 1 if active_cell else len(rows)
     rows.insert(insert_at, new_row)
+    rows = _renumbered(rows)
+    # 새 행이 끼어들며 뒤쪽 행들의 화면 순서가 밀리므로 조직코드도 함께
+    # 다시 매긴다(맨 위 1 ~ 맨 아래 N, 2026-09-16 확정).
+    _renumber_dep_codes(rows)
     # 행이 삽입되면서 체크박스 선택 인덱스가 어긋날 수 있어 선택을 비운다.
-    return _renumbered(rows), []
+    return rows, []
 
 
 # ── 콜백: 팀/리더 참조 — 체크박스 선택 삭제(2026-09-15) ───────────────────────
 # 체크한 행 + 그 하위 조직 전체(_subtree_range)를 한번에 지운다 — 부모만
-# 체크해도 자식이 자동으로 함께 삭제된다("구조" 열의 (+N) 배지로 미리 몇
-# 개가 함께 삭제될지 알 수 있음). row_deletable의 × 버튼(행 1개만 지움)과는
+# 체크해도 자식이 자동으로 함께 삭제된다(하위 조직을 남겨두면 그 소속 정보
+# 때문에 상위 조직이 자동으로 다시 생겨 실제로 삭제되지 않기 때문 —
+# 2026-09-16 재확인, "구조" 열 제거와 무관하게 삭제만은 계속 하위 조직
+# 포함). row_deletable의 × 버튼(행 1개만 지움)과는
 # 별개 기능으로 그대로 공존한다.
 @callback(
     Output('team-refer-table', 'data', allow_duplicate=True),
@@ -2043,18 +2006,20 @@ def team_refer_bulk_delete(n_clicks, rows, selected_rows, sort_by):
         to_delete.update(range(start, end))
 
     new_rows = [r for i, r in enumerate(rows) if i not in to_delete]
+    new_rows = _renumbered(new_rows)
+    _renumber_dep_codes(new_rows)
     msg = _alert(f'{len(to_delete)}개 행을 삭제했습니다(하위 조직 포함). "저장"을 눌러야 실제로 반영됩니다.',
                  'success')
-    return _renumbered(new_rows), [], msg
+    return new_rows, [], msg
 
 
-# ── 콜백: 팀/리더 참조 — 체크박스 선택 위/아래 이동(2026-09-15) ────────────────
-# "형제간 이동만 자유롭게, 다른 상위부서로는 이동 불가"(2026-09-15 확정) —
-# 체크한 행(+하위 조직 전체)을 같은 부모를 공유하는 바로 앞/뒤 형제 블록과
-# 자리를 맞바꾼다. 여러 개 체크하면 각각 한 칸씩 개별 이동(오름차순/내림차순
-# 순서로 처리하면 인접한 여러 선택도 자연스럽게 함께 밀려 올라간다/내려간다).
-# 형제가 없는(=그리드 맨 끝이거나 다른 상위부서 소속) 행은 이동을 건너뛰고
-# "다른 상위부서로의 이동은 불가합니다" 안내를 보여준다.
+# ── 콜백: 팀/리더 참조 — 체크박스 선택 위/아래 이동(2026-09-16 단순화) ─────────
+# 체크한 행 하나하나를 각각 한 칸씩 개별로 위/아래로 옮긴다 — 하위 조직을
+# 묶어서 함께 옮기지 않고, 상위부서 경계와도 무관하게 그리드 전체에서
+# 자유롭게 이동한다(사용자 확정, "구조" 열 제거와 함께 단순화). 여러 개
+# 체크하면 이동 방향에 맞는 순서로 처리해 인접한 선택끼리 자연스럽게 함께
+# 밀려 올라가거나/내려간다. 그리드 맨 위(위로 이동 시)/맨 아래(아래로 이동
+# 시)에 이미 있는 행은 더 이상 이동할 수 없어 건너뛴다.
 def _move_selected(rows: list, selected_rows: list, direction: str):
     rows = list(rows)
     own_paths = []
@@ -2079,25 +2044,16 @@ def _move_selected(rows: list, selected_rows: list, direction: str):
         idx = _current_index(path)
         if idx is None:
             continue
-        start, end = _subtree_range(rows, idx)
         if direction == 'up':
-            sib_start = _preceding_sibling_range(rows, start)
-            if sib_start is None:
+            if idx == 0:
                 blocked += 1
                 continue
-            block = rows[start:end]
-            sib_block = rows[sib_start:start]
-            rows[sib_start:end] = block + sib_block
+            rows[idx - 1], rows[idx] = rows[idx], rows[idx - 1]
         else:
-            sib_start = _following_sibling_start(rows, start, end)
-            if sib_start is None:
+            if idx >= len(rows) - 1:
                 blocked += 1
                 continue
-            _, sib_end = _subtree_range(rows, sib_start)
-            block = rows[start:end]
-            sib_block = rows[sib_start:sib_end]
-            rows[start:sib_end] = sib_block + block
-        _reassign_sibling_codes(rows, path[:-1])
+            rows[idx], rows[idx + 1] = rows[idx + 1], rows[idx]
 
     new_selected = [i for i, r in enumerate(rows) if _row_path(r) in seen]
     return rows, new_selected, blocked
@@ -2121,11 +2077,11 @@ def team_refer_move_selected(n_up, n_down, rows, selected_rows, sort_by):
     direction = 'up' if trig == 'team-refer-move-up-btn' else 'down'
     if not (n_up if direction == 'up' else n_down):
         return no_update, no_update, no_update
-    # 형제(같은 부모) 판정이 계층적 순서를 전제로 하므로, 헤더 클릭 정렬
-    # 중에는 드래그 기능과 동일하게 이동을 막는다.
+    # 헤더 클릭 정렬 중에는 화면에 보이는 순서가 저장된 조직코드 순서와
+    # 달라 이동/재배번이 헷갈릴 수 있어(기존 방침과 동일하게) 정렬 해제를
+    # 먼저 요청한다.
     if sort_by:
-        return no_update, no_update, _alert('정렬을 해제한 후 다시 시도해주세요(헤더 정렬 중에는 '
-                                             '형제 판정이 정확하지 않습니다).', 'warning')
+        return no_update, no_update, _alert('정렬을 해제한 후 다시 시도해주세요.', 'warning')
 
     rows = list(rows or [])
     selected_rows = [i for i in (selected_rows or []) if 0 <= i < len(rows)]
@@ -2134,7 +2090,9 @@ def team_refer_move_selected(n_up, n_down, rows, selected_rows, sort_by):
 
     new_rows, new_selected, blocked = _move_selected(rows, selected_rows, direction)
     new_rows = _renumbered(new_rows)
-    msg = _alert('다른 상위부서로의 이동은 불가합니다.', 'warning') if blocked else no_update
+    _renumber_dep_codes(new_rows)
+    msg = (_alert('이미 맨 위/맨 아래에 있어 더 이상 이동할 수 없는 행이 있습니다.', 'info')
+           if blocked else no_update)
     return new_rows, new_selected, msg
 
 
@@ -2191,10 +2149,14 @@ def team_refer_sort(sort_by, rows):
 # row_deletable(행 삭제)은 DataTable이 클라이언트에서 바로 처리해 data가
 # 곧장 줄어드는데, 그때는 team_refer_add_row/team_refer_sort 같은 명시적
 # 콜백이 안 걸린다. 그래서 data 자체를 Input으로 지켜보다가 'No.'가 현재
-# 순서(1..N)와 어긋나 있으면(=삭제로 빠짐) 바로 다시 매긴다. Output도 같은
-# data라 자기 자신을 다시 트리거하지만, 이미 맞게 매겨진 상태에서는
-# no_update를 반환해 루프가 멈춘다(idempotent) — 편집(셀 값 변경)처럼
-# 순서가 안 바뀌는 변경에서도 한 번 더 불리지만 즉시 no_update로 끝난다.
+# 순서(1..N)와 어긋나 있으면(=삭제로 빠짐) 바로 다시 매긴다 — 이때 조직코드도
+# 함께 화면 순서 그대로 다시 매겨(_renumber_dep_codes, 2026-09-16 추가)
+# ×(단일 행 삭제) 버튼을 써도 "맨 위 1 ~ 맨 아래 N" 규칙이 그대로 유지되게
+# 한다. Output도 같은 data라 자기 자신을 다시 트리거하지만, 이미 맞게
+# 매겨진 상태에서는 no_update를 반환해 루프가 멈춘다(idempotent) —
+# 편집(셀 값 변경)이나 헤더 정렬(team_refer_sort가 이미 'No.'를 맞춰
+# 반환)처럼 이 콜백이 직접 재배번할 필요가 없는 변경에서는 한 번 더
+# 불리지만 즉시 no_update로 끝나 조직코드에 영향이 없다.
 @callback(
     Output('team-refer-table', 'data', allow_duplicate=True),
     Input('team-refer-table', 'data'),
@@ -2205,7 +2167,9 @@ def team_refer_renumber_on_change(rows):
         return no_update
     if [r.get('_no') for r in rows] == list(range(1, len(rows) + 1)):
         return no_update
-    return _renumbered(list(rows))
+    rows = _renumbered(list(rows))
+    _renumber_dep_codes(rows)
+    return rows
 
 
 # ── 콜백: 팀/리더 참조 — 셀 툴팁을 항상 최신 데이터로 유지 ─────────────────────
