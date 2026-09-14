@@ -398,22 +398,22 @@ def _sort_key(value):
 
 
 # ── 팀/리더 참조 그리드 — 체크박스 이동/삭제(2026-09-15, 2026-09-16 단순화) ────
-# assets/team_refer_grid.js의 드래그 재정렬(rowOwnPath/isDescendantPath/
-# subtreeRange)과 완전히 동일한 개념을 Python 쪽 체크박스 삭제 버튼용으로
-# 재구현한 것 — 그리드 데이터(KOREAN_COLUMNS 키)를 그대로 다루므로 JS와
-# 코드를 공유할 수 없어 별도로 둔다(로직은 동일). 2026-09-16: "구조" 열(부모-
-# 자식 아이콘 표시)을 없애면서, 이동은 "체크한 행 하나만 개별로, 상위부서
-# 경계와 무관하게 자유롭게" 이동하는 방식으로 단순화(사용자 확정) — 하위
-# 조직을 함께 묶어 이동시키던 로직(_preceding_sibling_range 등)은 제거.
-# 삭제만 기존처럼 하위 조직 전체를 함께 지운다(사용자 확정 — 하위 조직이
-# 남아있으면 그 소속 정보 때문에 상위 조직이 자동으로 다시 생성돼 사실상
-# 삭제되지 않는 문제가 있어, 삭제는 계속 하위 조직 포함이 맞음).
+# 체크박스로 고른 행 + 그 하위 조직 전체를 하나의 구간으로 묶어 삭제
+# 버튼용으로 쓴다(로직은 assets/team_refer_grid.js가 2026-09-17에 제거된
+# 행 드래그 재정렬 기능에서 쓰던 것과 같은 발상 — 부모 행과 그 하위
+# 자손 행은 항상 화면에 연속으로 붙어 나온다는 성질을 이용). 2026-09-16:
+# "구조" 열(부모-자식 아이콘 표시)을 없애면서, 이동은 "체크한 행 하나만
+# 개별로, 상위부서 경계와 무관하게 자유롭게" 이동하는 방식으로 단순화
+# (사용자 확정) — 하위 조직을 함께 묶어 이동시키던 로직(_preceding_
+# sibling_range 등)은 제거. 삭제만 기존처럼 하위 조직 전체를 함께
+# 지운다(사용자 확정 — 하위 조직이 남아있으면 그 소속 정보 때문에 상위
+# 조직이 자동으로 다시 생성돼 사실상 삭제되지 않는 문제가 있어, 삭제는
+# 계속 하위 조직 포함이 맞음).
 _LEVEL_COLS = ['1단계부서명', '2단계부서명', '3단계부서명']
 
 
 def _row_path(row: dict) -> tuple:
-    """행의 "자기 경로"(1→2→3단계 순서로 읽다가 처음 빈 값을 만나면 중단).
-    assets/team_refer_grid.js의 rowOwnPath()와 동일한 규칙."""
+    """행의 "자기 경로"(1→2→3단계 순서로 읽다가 처음 빈 값을 만나면 중단)."""
     path = []
     for col in _LEVEL_COLS:
         v = str(row.get(col) or '').strip()
@@ -585,30 +585,32 @@ def _team_refer_upload_section():
 # 식별 정보, 참고할 반복값이 아님)은 제외. 부서ID/상위부서ID/조직 레벨은
 # 2026-09-11 3단계 부서 체계 도입으로 사람이 직접 입력하는 컬럼 자체가
 # 아니게 되어(1/2/3단계 부서명 경로에서 자동 계산 — pipeline/team_hierarchy.py)
-# 더 이상 가이드 대상이 아니다.
+# 더 이상 가이드 대상이 아니다. 구분(work_type)은 2026-09-17부터 자유
+# 입력 자동완성이 아니라 아래 _WORK_TYPE_OPTIONS 3개 중에서만 고르는
+# 네이티브 드롭다운(dash_table presentation='dropdown')으로 바뀌어
+# 이 자동완성 가이드 대상에서 제외한다.
 _AUTOFILL_GUIDE_COLUMNS = [
-    '비공식소속부서명', '구분', '1단계부서명', '2단계부서명', '3단계부서명', '조직코드',
+    '비공식소속부서명', '1단계부서명', '2단계부서명', '3단계부서명', '조직코드',
 ]
-# 구분(work_type, "R&D"만 분석 대상)은 데이터가 적어도 후보가 비어 보이지
-# 않도록 고정값을 항상 포함한다(그 외 실제로 쓰인 값이 있으면 함께 보여줌).
-_WORK_TYPE_FIXED_OPTIONS = ['R&D']
+
+# 구분(work_type) 드롭다운 선택지(2026-09-17 확정) — "R&D"만 보유 전문성
+# 분석 대상이라는 기존 필터(pipeline/process_researcher_expertise.py의
+# work_type=="R&D" 게이트)는 그대로 두고, 그 외 인원을 자유 텍스트로
+# 잘못 적어 넣지 않도록 실제로 쓰이는 3개 구분값만 선택 가능하게 한다.
+# clearable=True로 둬서 기존처럼 빈 값도 허용한다(비어 있으면
+# team_hierarchy.derive_hierarchy()가 'R&D'로 기본 채움 — 그대로 유지).
+_WORK_TYPE_OPTIONS = ['R&D', 'R&D_Support', 'Staff']
 
 
 def _build_autofill_suggestions(rows: list) -> dict:
-    """가이드 대상 컬럼별 자동완성 후보 목록 — 대부분 "그 컬럼 자체에 이미
-    쓰인 값"(위 행들을 참고해서 자동채움을 가이드해 달라는 요청 그대로)."""
+    """가이드 대상 컬럼별 자동완성 후보 목록 — "그 컬럼 자체에 이미 쓰인
+    값"(위 행들을 참고해서 자동채움을 가이드해 달라는 요청 그대로)."""
     rows = rows or []
 
     def _existing(col: str) -> list:
         return sorted({str(r.get(col, '') or '').strip() for r in rows} - {''})
 
-    suggestions = {}
-    for col in _AUTOFILL_GUIDE_COLUMNS:
-        if col == '구분':
-            suggestions[col] = sorted(set(_WORK_TYPE_FIXED_OPTIONS) | set(_existing(col)))
-        else:
-            suggestions[col] = _existing(col)
-    return suggestions
+    return {col: _existing(col) for col in _AUTOFILL_GUIDE_COLUMNS}
 
 
 def _team_refer_tab() -> html.Div:
@@ -637,10 +639,15 @@ def _team_refer_tab() -> html.Div:
     # (2026-09-16: 부모-자식 관계를 아이콘으로 보여주던 '구조'/'_tree' 열은
     # 제거 — 이동이 더 이상 하위 조직을 묶어서 처리하지 않게 되어 미리
     # 보여줄 필요가 없어졌다.)
+    # 구분 컬럼만 presentation='dropdown'으로 지정 — DataTable(아래)의
+    # dropdown={'구분': {...}} 옵션 목록(_WORK_TYPE_OPTIONS)에서만 고를 수
+    # 있다(2026-09-17 확정, 사용자 요청).
     columns = [
         {'name': 'No.', 'id': '_no', 'editable': False},
     ] + [
         {'name': col, 'id': col, 'editable': True}
+        if col != '구분' else
+        {'name': col, 'id': col, 'editable': True, 'presentation': 'dropdown'}
         for col in team_refer_store.KOREAN_COLUMNS
     ]
 
@@ -656,10 +663,6 @@ def _team_refer_tab() -> html.Div:
         # clientside_callback 전용 더미 Output(화면에 표시할 내용 없음) —
         # pages/researcher_profile.py의 profile-print-dummy와 동일한 패턴.
         html.Div(id='team-refer-grid-dummy', style={'display': 'none'}),
-        # 드래그 재정렬(assets/team_refer_grid.js)이 참조할 최신 data/sort_by
-        # 캐시 전용 더미 Output(2026-09-14 추가) — 위 dummy와 트리거 Input이
-        # 달라 별도로 둠.
-        html.Div(id='team-refer-grid-dummy-2', style={'display': 'none'}),
 
         dbc.Alert(
             [
@@ -762,6 +765,15 @@ def _team_refer_tab() -> html.Div:
                 page_action='none',  # 페이지 나누지 않고 전체 행을 한 번에 표시
                 sort_action='custom',  # 헤더 클릭 정렬 — team_refer_sort 콜백이 처리(No.도 같이 갱신)
                 sort_by=[],
+                # 구분 컬럼 전용 드롭다운 선택지(2026-09-17 확정) — columns의
+                # 해당 컬럼에 presentation='dropdown'을 지정해야 이 옵션이
+                # 실제로 적용된다.
+                dropdown={
+                    '구분': {
+                        'options': [{'label': v, 'value': v} for v in _WORK_TYPE_OPTIONS],
+                        'clearable': True,
+                    },
+                },
                 style_table={'overflowX': 'auto'},
                 # 전체 가운데 정렬 + 좁은 폭에서도 최대한 좌우 스크롤 없이 한 화면에
                 # 들어오도록 폰트/여백을 줄이고, 그래도 안 들어가는 내용은 말줄임
@@ -2019,8 +2031,7 @@ def team_refer_bulk_delete(n_clicks, rows, selected_rows, sort_by):
         return no_update, no_update, no_update
     # 하위 조직 판정(_subtree_range)은 계층적(부모→자식) 순서를 전제로 한다 —
     # 헤더 클릭 정렬이 활성화돼 있으면 그 전제가 깨져 엉뚱한 행이 함께
-    # 삭제될 수 있어(assets/team_refer_grid.js의 드래그 비활성화와 동일한
-    # 이유) 정렬 해제를 먼저 요청한다.
+    # 삭제될 수 있어 정렬 해제를 먼저 요청한다.
     if sort_by:
         return no_update, no_update, _alert('정렬을 해제한 후 다시 시도해주세요(헤더 정렬 중에는 '
                                              '하위 조직 판정이 정확하지 않습니다).', 'warning')
@@ -2255,27 +2266,6 @@ clientside_callback(
     """,
     Output('team-refer-grid-dummy', 'children'),
     Input('team-refer-suggestions', 'data'),
-)
-
-# 같은 부모(형제) 그룹 안에서만 행을 드래그해 순서를 바꾸는 기능
-# (assets/team_refer_grid.js, 2026-09-14 추가)이 참조할 최신 data/sort_by를
-# 캐싱한다 — services.team_refer_store.list_editable_rows()가 이제
-# 계층적으로(부모별로 묶어서) 정렬해 반환하므로, 같은 부모 밑 조직끼리는
-# 항상 화면에서 붙어 보인다(드래그가 의미 있으려면 필요한 선행 조건).
-# 헤더 클릭으로 임의 컬럼 정렬 중일 때는 이 "형제끼리 붙어 있음" 가정이
-# 깨지므로 sort_by 상태도 함께 캐싱해 JS 쪽에서 드래그를 비활성화한다.
-clientside_callback(
-    """
-    function(rows, sortBy) {
-        if (window.__teamReferOnDataChange) {
-            window.__teamReferOnDataChange(rows, sortBy);
-        }
-        return '';
-    }
-    """,
-    Output('team-refer-grid-dummy-2', 'children'),
-    Input('team-refer-table', 'data'),
-    Input('team-refer-table', 'sort_by'),
 )
 
 
