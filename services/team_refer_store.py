@@ -134,11 +134,33 @@ def _upsert_rows_to_db(rows_df: pd.DataFrame) -> bool:
         return False
 
 
+def _flatten_org_tree(tree: list) -> list:
+    """build_org_tree()가 만든 계층 트리(각 노드는 원본 행 dict +
+    'children' 리스트)를 부모→자식 순서로 평탄화한다(깊이 우선 순회) —
+    형제는 build_org_tree() 안에서 이미 조직코드(dep_code) 오름차순으로
+    정렬돼 있으므로, 이 평탄화 결과는 "같은 부모 밑 조직끼리는 항상 화면에
+    붙어서 보이는" 계층적 그룹 순서가 된다(2026-09-14 도입 — 그리드
+    드래그 정렬의 선행 조건. 기존 "전체 조직코드 오름차순" 한 가지 기준
+    으로만 정렬하면 서로 다른 부모의 자식들이 전역 조직코드 값에 따라
+    뒤섞여 보일 수 있었다)."""
+    flat = []
+    for node in tree:
+        children = node.get('children') or []
+        flat.append({k: v for k, v in node.items() if k != 'children'})
+        flat.extend(_flatten_org_tree(children))
+    return flat
+
+
 def list_editable_rows() -> list[dict]:
     """관리자 화면 그리드에 로드할 "현재" 팀참조 행 목록 — 엑셀 원본
     헤더명(KOREAN_COLUMNS)을 키로 쓴다(사용자 요청: 컬럼명은 xlsx 그대로).
-    조직코드(dep_code) 오름차순으로 정렬한다(2026-09-01, 사용자 확정 —
-    기존 내림차순에서 변경).
+    계층적으로 정렬한다(2026-09-14, 사용자 확정 — 기존 "전체 조직코드
+    오름차순" 단일 기준에서 변경): build_org_tree()로 부모-자식 트리를
+    만든 뒤 깊이 우선으로 평탄화 — 최상위 조직부터, 그 바로 아래 자식들이
+    바로 이어지고(조직코드 오름차순), 그 다음 형제 조직으로 넘어가는
+    순서. 같은 부모 밑 조직끼리 항상 화면에서 붙어 보여야 그리드에서
+    "형제 그룹 안에서만 드래그 재정렬"이 의미가 있다(assets/
+    team_refer_grid.js의 드래그 로직이 이 가정에 의존).
     pipeline.rd_specialist_markdown.read_team_refer()로 dep_id별 최신·
     비삭제 행(own-level-only 저장 스키마)만 가져온 뒤,
     team_hierarchy.backfill_full_path()로 1/2/3단계 부서명을 전체 경로로
@@ -147,7 +169,8 @@ def list_editable_rows() -> list[dict]:
     내용이 유지된다."""
     rows = mmd.read_team_refer(OUT_DIR)
     rows = th.backfill_full_path(rows)
-    rows = sorted(rows, key=lambda r: str(r.get('dep_code') or ''))
+    tree = mmd.build_org_tree(rows)
+    rows = _flatten_org_tree(tree)
     return [
         {kor: r.get(eng, '') for eng, kor in _REVERSE_COL_MAP.items()}
         for r in rows

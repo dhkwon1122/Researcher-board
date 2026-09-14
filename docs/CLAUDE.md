@@ -10550,3 +10550,116 @@ list_editable_rows`를 몬키패치해 직접 호출 — 반환 튜플이 정확
 건드리지 않으므로, DB 반영 버튼을 별도로 누르지 않으면 `read_team_refer()`
 가 DB를 우선 읽어 여전히 반영 전 상태를 보여줄 수 있다(이건 이번 수정
 범위 밖 — 기존에 이미 안내된 별도 단계).
+
+## 2026-09-14 (2): 팀/리더 참조 그리드 — 계층적(부모별) 정렬 + 형제 그룹
+안 드래그로 순서 변경(부모 행 드래그 시 하위 조직 전체를 한 블록으로 이동)
+
+배경: 관리자가 "팀/리더 참조" 그리드에서 조직을 사람이 보기 좋은 순서로
+정렬하고 싶다는 요청 3건을 처리했다: (1) 업로드 시 신규 데이터를 올리면
+기존 데이터가 사라져야 하는지(확인 결과 정상 동작 — DB에 별도로 "DB 반영"
+버튼을 누르지 않으면 CSV만 갱신돼 DB 기반 화면엔 옛 값이 남는다는 사전
+확인 절차 안내), (2) `비공식소속부서명`이 비어 있어도 1/2단계부서명만
+채워진 행이 있는 이유(조직도 트리의 상위 노드로서 필요한 정상 구조라고
+확인), (3) 그리드 행 전체를 위/아래로 드래그해 순서를 바꾸는 기능(행 안의
+데이터는 그대로 유지) — AskUserQuestion으로 "같은 부모(형제) 그룹 안에서만
+드래그 가능"과 "그리드 기본 정렬을 계층적(부모별 그룹핑)으로 변경" 둘 다
+확정.
+
+**Part A — 계층적 정렬**(`services/team_refer_store.py`): 기존
+`list_editable_rows()`는 `dep_code` 전역 오름차순 단일 정렬이라(dep_id가
+전역 순차 카운터로 매겨지므로) 같은 부모의 자식들이 화면에서 흩어져
+보였다. `mmd.build_org_tree(rows)`가 이미 만드는 부모-자식 트리를
+`_flatten_org_tree(tree)`(신규, 각 노드를 부모→자식 순서로 깊이 우선
+평탄화)로 펼쳐 반환하도록 교체 — 같은 부모의 자식들은 항상 화면에
+연속으로 붙어 나오고, 그 안에서는 기존 `build_org_tree()`의 dep_code
+기준 정렬이 그대로 유지된다.
+
+**Part B — 형제 그룹 안 드래그 재정렬**(`assets/team_refer_grid.js`,
+`pages/admin.py`): DataTable 자체엔 행 드래그 기능이 없어 순수 JS로
+구현. `page_action='none'`(페이지네이션 없음, 전체 행이 항상 DOM에 있음)
++ `sort_action='custom'`(헤더 클릭 정렬 시 Python 콜백이 `data` 배열을
+직접 재작성 — DataTable이 자체적으로 행 순서를 바꾸지 않음)이라, 렌더링된
+`<tr>` DOM 순서가 항상 `data` 배열 순서와 정확히 일치한다는 게 이
+구현의 핵심 전제.
+- `pages/admin.py`: `_team_refer_tab()`의 그리드를 감싸는
+  `team-refer-grid-wrap` div에 숨은 더미 `team-refer-grid-dummy-2`를
+  추가하고, `team-refer-table`의 `data`/`sort_by`가 바뀔 때마다
+  `window.__teamReferOnDataChange(rows, sortBy)`를 호출하는
+  `clientside_callback`을 신설.
+- `assets/team_refer_grid.js`: `rowGroupKeyFromRow(row)`(1→2→3단계
+  부서명을 순서대로 읽다가 처음 빈 값을 만나면 그 행 자신의 레벨 —
+  그 앞 단계까지의 값이 곧 부모를 가리키므로 그룹 키로 씀)로 "형제
+  그룹"을 판정. `dragstart`/`dragover`/`drop`/`dragend` 이벤트로 같은
+  그룹 안에서만 드롭을 허용(다른 그룹 행 위로는 `preventDefault()`를
+  안 불러 자연스럽게 거부된 것처럼 보임), 헤더 클릭 정렬이 활성화돼
+  있으면(`sort_by` 있음) "형제끼리 붙어 있음" 가정이 깨지므로 드래그
+  자체를 비활성화. 드롭되면 그 그룹이 기존에 갖고 있던 조직코드 값들을
+  새 순서에 맞게 재배당(새 번호를 만들지 않아 다른 그룹과 충돌 없음),
+  `window.dash_clientside.set_props('team-refer-table', {data: rows})`
+  로 즉시 반영.
+- **부모 행 드래그 시 하위 조직 전체를 함께 이동**(구현 중 자체 발견·수정한
+  설계 결함): 초기 구현은 드래그한 행 하나만 옮겨, 부모 행(예: 2단계
+  "B1팀")을 옮기면 그 바로 아래 자식 행(3단계 "B1-1파트")과 분리되는
+  버그가 있었다 — Part A의 계층적 평탄화 결과 자식 행은 항상 부모 바로
+  다음에 연속으로 나오므로, `rowOwnPath(row)`(그 행의 1→2→3단계 경로)와
+  `isDescendantPath(path, ancestorPath)`(접두사 관계 판정)로
+  `subtreeRange(rows, idx)`가 "드래그 대상 행 + 그 뒤에 연속으로 이어지는
+  하위 조직 행 전체"를 하나의 구간으로 찾아, 그 구간 전체를 블록으로
+  옮기도록 `drop` 핸들러를 재작성했다.
+- **드래그가 실제로는 전혀 동작하지 않던 잠재 버그 발견·수정**(라이브
+  테스트로 처음 발견): `markRowsDraggable()`을 데이터 변경 시 한 번만
+  (`requestAnimationFrame`으로) 호출해 `<tr>`에 `draggable=true`를 직접
+  설정했는데, 같은 `data` 변화를 지켜보는 다른 서버 왕복 콜백들
+  (`team_refer_sync_tooltip`/`team_refer_sync_suggestions`, `tooltip_data`
+  등 다른 prop을 갱신)이 뒤이어 도착하면 DataTable이 `<tbody>`를 다시
+  그려(새 `<tr>` 노드로 교체) 방금 설정한 `draggable` 속성이 사라졌다 —
+  실제 브라우저로 확인해보니 모든 행의 `draggable`이 항상 `false`였다
+  (한 번도 동작한 적이 없었던 셈). 한 번만 마크하는 대신, `wrap`에
+  지속적인 `MutationObserver`(자동채움 가이드의 `<input>` 감시와 동일한
+  패턴)를 달아 새로 생기는 `<tr>`마다 계속 `draggable=true`를 재적용하도록
+  고쳤다.
+
+**검증**: 실제 서버(임시 admin 계정, `services.team_refer_store.save_snapshot()`
+으로 만든 B연구소(B1팀+자식 B1-1파트, B2팀, B3팀)/A연구소(A1팀, A2팀)
+합성 조직도)를 Playwright(Chromium)로 구동해 확인.
+- Part A: `list_editable_rows()`가 B연구소 서브트리(B1팀+자식+B2팀+B3팀)
+  전체를 연속으로, 그다음 A연구소 서브트리를 연속으로 반환하는 것을 직접
+  호출로 확인.
+- draggable 버그: 수정 전 실측 — 모든 `<tr>.draggable`이 `false`.
+  수정 후 — 전부 `true`로 지속.
+- Playwright의 `page.drag_and_drop()`(고수준 API)이 이 헤드리스
+  Chromium 빌드에서 draggable 엘리먼트에 대해 네이티브 `dragstart`를
+  아예 발생시키지 않는 것을 확인(툴 자체의 한계 — 실제 사용자의 마우스
+  드래그와는 무관) — 대신 `new DragEvent(..., {dataTransfer: new
+  DataTransfer()})`로 `dragstart`/`dragover`/`drop`/`dragend`를 실제
+  DOM에 직접 dispatch해, 앱의 진짜 이벤트 핸들러 경로를 그대로 태워
+  검증했다.
+- **핵심 시나리오**: B1팀(자식 B1-1파트 포함, 조직코드1)을 비인접 형제인
+  B3팀(조직코드3) 위로 드롭 — 결과가 정확히 `[B연구소, B2팀(코드1),
+  B1팀(코드2), B1-1파트(코드1, 그대로), B3팀(코드3), A연구소, A1팀, A2팀]`
+  로 나왔다: (a) 자식 B1-1파트가 부모 B1팀과 계속 붙어서 함께 이동(핵심
+  수정 사항 검증), (b) "드롭 대상 바로 앞에 삽입" 의미대로 B2팀이 앞으로
+  당겨지고 B1팀 블록이 B3팀 바로 앞으로 이동, (c) 형제 그룹(B1팀/B2팀/
+  B3팀)의 조직코드만 새 순서(1,2,3)로 재배당되고 자식(B1-1파트, 별도
+  그룹)의 코드는 그대로, (d) 다른 그룹(A연구소 서브트리)은 전혀 안
+  건드려짐 — 모두 손으로 미리 계산한 기대값과 정확히 일치. 렌더링된
+  DOM(`<tr>` 실제 텍스트)도 이 순서 그대로 반영돼, `dash_clientside.
+  set_props()`를 통한 서버 왕복 없는 즉시 갱신까지 확인.
+- 다른 그룹 위로 드롭 시도(B1팀 → A1팀): 데이터 배열이 드롭 전후로
+  완전히 동일(조용히 거부) 확인.
+- 헤더 클릭 정렬(`.column-header--sort` 아이콘) 활성화 후: `window.
+  __teamReferSortActive`가 `true`로 바뀌고, 그 상태에서의 드래그 시도는
+  `dragstart` 자체가 `preventDefault()`로 즉시 취소되며 데이터가 전혀
+  안 바뀌는 것 확인.
+- `node --check`/`python3 -m py_compile`/`python3 -c "import app"` 전체
+  통과.
+- 테스트로 만든 임시 admin 계정·`data/processed/team_refer.csv`(및 저장
+  시 함께 생기는 `team_refer_history.csv`/`team_leader_refer/` 스냅샷)는
+  검증 후 전부 삭제, `config/users.json`은 원본과 diff 없음을 재확인해
+  원상 복구했다.
+
+**미검증**: 실제 사용자 마우스 드래그(진짜 OS 레벨 HTML5 DnD)로 조작하는
+것 — 이번 라이브 테스트는 Playwright 툴 자체의 한계로 합성 DragEvent
+dispatch를 통해 앱의 이벤트 핸들러 로직을 검증했으며, 브라우저의 네이티브
+드래그 시각 효과(고스트 이미지, 커서 모양)나 실제 사용자 조작감은
+확인하지 못했다.

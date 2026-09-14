@@ -559,6 +559,10 @@ def _team_refer_tab() -> html.Div:
         # clientside_callback 전용 더미 Output(화면에 표시할 내용 없음) —
         # pages/researcher_profile.py의 profile-print-dummy와 동일한 패턴.
         html.Div(id='team-refer-grid-dummy', style={'display': 'none'}),
+        # 드래그 재정렬(assets/team_refer_grid.js)이 참조할 최신 data/sort_by
+        # 캐시 전용 더미 Output(2026-09-14 추가) — 위 dummy와 트리거 Input이
+        # 달라 별도로 둠.
+        html.Div(id='team-refer-grid-dummy-2', style={'display': 'none'}),
 
         dbc.Alert(
             [
@@ -1894,6 +1898,27 @@ clientside_callback(
     """,
     Output('team-refer-grid-dummy', 'children'),
     Input('team-refer-suggestions', 'data'),
+)
+
+# 같은 부모(형제) 그룹 안에서만 행을 드래그해 순서를 바꾸는 기능
+# (assets/team_refer_grid.js, 2026-09-14 추가)이 참조할 최신 data/sort_by를
+# 캐싱한다 — services.team_refer_store.list_editable_rows()가 이제
+# 계층적으로(부모별로 묶어서) 정렬해 반환하므로, 같은 부모 밑 조직끼리는
+# 항상 화면에서 붙어 보인다(드래그가 의미 있으려면 필요한 선행 조건).
+# 헤더 클릭으로 임의 컬럼 정렬 중일 때는 이 "형제끼리 붙어 있음" 가정이
+# 깨지므로 sort_by 상태도 함께 캐싱해 JS 쪽에서 드래그를 비활성화한다.
+clientside_callback(
+    """
+    function(rows, sortBy) {
+        if (window.__teamReferOnDataChange) {
+            window.__teamReferOnDataChange(rows, sortBy);
+        }
+        return '';
+    }
+    """,
+    Output('team-refer-grid-dummy-2', 'children'),
+    Input('team-refer-table', 'data'),
+    Input('team-refer-table', 'sort_by'),
 )
 
 
