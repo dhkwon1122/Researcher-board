@@ -10972,3 +10972,74 @@ org_code와 매칭되는, 조직이 트리에서 위치를 옮겨도 안정적�
 "체크한 행을 개별 이동"이 아니라 "여러 행을 한꺼번에 넓은 범위로 옮기고
 싶은" 실사용 시나리오가 있을 때 한 칸씩 반복 클릭해야 하는 UX가 불편하지
 않은지.
+
+## 2026-09-16: JOB Market "검색 중 오류가 발생했습니다: Extra data: line 1
+column N" — embedding_cache.json 동시 쓰기 손상 버그 수정
+
+사용자 리포트: JOB Market에서 "종료 예정 과제 선정" 모드로 과제를 고르고
+"참여 가능한 과제에서 제외"까지 지정한 뒤 실행하면 `검색 중 오류가
+발생했습니다: Extra data: line 1 column 10419954(char 10419953)` 오류가
+남. "Extra data"는 `json.loads()`가 파일 앞부분에서 완결된 JSON 문서
+하나를 다 읽고 났는데 그 뒤에 알 수 없는 바이트가 더 남아있을 때만 나는
+메시지라, 실제 데이터 파일이 손상돼 있다는 뜻 — LLM 응답(수백~수천자)
+정도로는 나올 수 없는 1000만자 넘는 위치라 대용량 캐시 파일이 원인일
+것으로 보고 추적.
+
+**원인**: `pipeline/researcher_fit.py`의 `_load_embed_cache()`/
+`_save_embed_cache()`(`data/processed/embedding_cache.json` — BGE-M3
+임베딩을 텍스트 해시로 캐시해 여러 화면이 공유하는 순수 성능 캐시)가
+`open(path, 'w')`로 파일 전체를 그냥 덮어쓰는 방식이었다. 이 앱은
+`Dockerfile`이 `gunicorn --workers 2`로 띄우는데(이미 `app.py`의
+`_get_or_create_secret_key()`에 이 프로젝트 내 다른 워커 경쟁 조건
+수정 사례가 있음), 두 워커가 거의 동시에 `cached_embed()`를 호출하면
+(JOB Market 검색과 "AI 검색"이 동시에 들어오거나, 사용자 두 명이 각각
+검색하는 경우 등) 한쪽이 파일을 다 쓰기 전에 다른 쪽이 같은 파일을
+다시 열어(open은 즉시 truncate) 쓰기 시작할 수 있어, 결과물이 "완성된
+JSON 문서 + 그 뒤에 다른 워커가 쓰다 만 나머지 바이트"로 깨질 수 있었다
+— 정확히 "Extra data" 증상과 일치. 이후 그 손상된 파일을 아무 캐시
+호출이나 읽을 때마다(JOB Market뿐 아니라 "보유 전문성 MAP"/AI 검색/
+오프라인 유사도 파이프라인 전부 같은 파일을 공유) 예외 없이 계속
+재발한다 — 한 번 손상되면 파일을 누가 수동으로 안 고치는 한 스스로
+복구되지 않는 구조였음.
+
+**수정**:
+- `_save_embed_cache()`: 같은 디렉터리에 `.{pid}.tmp` 임시 파일로 전체
+  내용을 다 쓴 뒤 `os.replace()`로 원자적 교체(POSIX에서 원자적 — 같은
+  파일시스템 내 rename). 두 워커가 거의 동시에 저장해도 읽는 쪽은 항상
+  "완성된 이전 파일" 또는 "완성된 새 파일" 중 하나만 보게 돼 파일
+  손상 자체가 더 이상 발생하지 않는다(한쪽 워커의 신규 캐시 항목이
+  유실될 수는 있지만, 순수 성능 캐시라 다음 호출 때 다시 계산되면
+  그만이라 문제 없음).
+- `_load_embed_cache()`: `json.JSONDecodeError`/`OSError`를 잡아 빈
+  캐시(`{}`)로 안전하게 처리하도록 방어 추가 — 위 원자적 쓰기 수정
+  이후에도, **이미 손상된 채 남아있는 기존 파일**은 이 방어가 없으면
+  계속 예외를 던지므로(자기 치유 불가) 함께 고쳐야 완전한 수정이 된다.
+  이제는 손상된 파일을 만나면 그 자리에서 빈 캐시로 취급하고, 이어지는
+  `cached_embed()`가 필요한 임베딩을 다시 계산해 원자적 쓰기로 정상
+  파일을 새로 만든다 — 사람이 서버에 들어가 파일을 수동으로 지우지
+  않아도 다음 호출 한 번으로 스스로 복구된다.
+- `services/similarity_map.py`(보유 전문성 MAP)도 `embedding_cache.json`을
+  직접 `json.load()`하던 별도 코드가 있어 같은 손상에 노출돼 있었다 —
+  `researcher_fit._load_embed_cache()`를 그대로 재사용하도록 교체해
+  동일하게 방어되게 함. `services/nl_query.py`/`pipeline/show_embedding.py`/
+  `pipeline/process_researcher_similarity.py`는 전부 `fit.cached_embed()`를
+  통해서만 이 캐시를 쓰므로 `researcher_fit.py` 한 곳만 고쳐도 자동으로
+  함께 보호된다.
+
+**검증**: `python3 -c` 직접 호출로 (1) 두 JSON 문서를 이어붙여 사용자가
+겪은 것과 동일한 `json.JSONDecodeError: Extra data: line 1 column 25`를
+재현, (2) 수정된 `_load_embed_cache()`가 이 손상된 파일에서 예외 없이
+`{}`를 반환하는 것, (3) `_save_embed_cache()`가 그 뒤 정상적으로 유효한
+JSON 파일을 새로 만드는 것을 확인. `python3 -m py_compile`/
+`python3 -c "import app"` 통과. 이 개발 환경에는
+`data/processed/embedding_cache.json` 자체가 없어(실사용 서버에만 존재)
+JOB Market 화면을 통한 종단 간 재현은 하지 못했다 — 위 수정이 원인
+코드 경로(load/save)를 직접 겨냥한 것이라 별도 배포 조치 없이도 다음
+캐시 접근 시점에 자동으로 복구될 것으로 판단.
+
+**미검증**: 실제 운영 서버의 현재 `embedding_cache.json`이 이미 손상된
+상태인지(사용자가 계속 같은 오류를 본다면 그 파일이 아직 손상 상태이며,
+이 수정이 배포된 뒤 다음 호출에서 자동 복구될 것), 동시 저장으로
+"유실되는" 신규 캐시 항목이 실사용 빈도에서 체감될 만큼 잦은지(순수
+성능 캐시라 정확성에는 영향 없음 — 그 텍스트의 임베딩을 그다음 호출
+때 한 번 더 계산하는 정도).

@@ -29,7 +29,7 @@ from pipeline.rd_specialist_markdown import (
     own_level_name,
     read_team_refer,
 )
-from pipeline.researcher_fit import _text_hash, researcher_profile_text
+from pipeline.researcher_fit import _load_embed_cache, _text_hash, researcher_profile_text
 from services import job_category as job_category_service
 from services import researcher_profile_export as export
 from services.data_store import DATA_DIR, filter_current, read_expertise_profiles, read_processed, read_similar_researchers
@@ -136,8 +136,10 @@ def load_similarity_map(n_neighbors: int = 15, random_state: int = 42, min_clust
 
     with open(expertise_path, encoding='utf-8') as f:
         profiles = json.load(f)
-    with open(cache_path, encoding='utf-8') as f:
-        embed_cache = json.load(f)
+    # embedding_cache.json은 직접 json.load()하지 않고 researcher_fit._load_embed_cache()를
+    # 재사용한다 — 그쪽이 여러 gunicorn 워커의 동시 쓰기로 파일이 손상돼도
+    # (2026-09-16 수정 참고) 예외 없이 빈 캐시로 안전하게 처리한다.
+    embed_cache = _load_embed_cache()
 
     researchers_df = read_processed('researchers')
     name_map, dept_map, org_map = {}, {}, {}
