@@ -525,3 +525,22 @@ h1, h2, h3, h4, h5, h6 {
   background-color: #f8f9fa;
   border-color: #6c757d !important;
 }
+
+/* 팀/리더 참조 그리드 — 체크박스 선택/이동/삭제 버튼을 스크롤해도 항상
+   보이게(2026-09-16, 사용자 요청 — 아래쪽 행을 체크하려면 위로 스크롤해
+   버튼을 누르고 다시 아래로 스크롤해 결과를 확인해야 해서 불편했음).
+   top 값은 --app-navbar-height(assets/team_refer_grid.js가 네비게이션
+   바의 실제 렌더링 높이를 재서 채워 넣는 CSS 변수 — 고정 픽셀을 쓰면
+   폰트/아이콘 로딩 지연이나 화면 폭에 따라 네비게이션 바 높이가 달라질
+   때 어긋날 수 있어 하드코딩하지 않았다)을 그대로 쓴다. z-index는
+   Bootstrap .sticky-top(네비게이션 바)의 기본값 1020보다 낮게 둬서
+   겹칠 때 네비게이션 바가 항상 위에 오게 한다. */
+.team-refer-sticky-toolbar {
+  position: sticky;
+  top: var(--app-navbar-height, 60px);
+  z-index: 1010;
+  background-color: var(--gs-surface);
+  padding: 6px 0 8px;
+  margin-bottom: 0.5rem;
+  border-bottom: 1px solid var(--gs-border);
+}

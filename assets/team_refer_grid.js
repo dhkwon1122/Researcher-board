@@ -47,11 +47,35 @@
 //     재배당한다(새 번호를 만들지 않음 — 다른 그룹과 충돌하지 않음).
 //     헤더 클릭 정렬이 활성화돼 있으면(sort_by 있음) 이 "형제끼리 붙어
 //     있음" 가정이 깨지므로 드래그 자체를 비활성화한다.
+//
+//  5) "전체 선택/해제/위로/아래로/선택 삭제" 버튼(pages/admin.py의
+//     .team-refer-sticky-toolbar)이 스크롤해도 항상 보이도록, 네비게이션
+//     바(.app-navbar, sticky top)의 실제 렌더링 높이를 재서 CSS 변수
+//     --app-navbar-height에 채워 넣는다(2026-09-16 추가 — 사용자가 아래쪽
+//     행을 체크하려면 위로 스크롤해 버튼을 누르고 다시 아래로 스크롤해
+//     결과를 봐야 해서 불편하다고 요청). 고정 픽셀을 CSS에 그대로 박아두면
+//     폰트 로딩 지연이나 화면 폭에 따라 네비게이션 바가 줄바꿈되는 경우
+//     실제 높이와 어긋날 수 있어, 페이지 로드/리사이즈 때마다 다시 잰다.
 
 (function () {
     var GRID_WRAP_ID = 'team-refer-grid-wrap';
     var initialized = false;
     var datalistCols = [];  // 자동채움 대상 컬럼명(마지막 동기화 기준)
+
+    function syncNavbarHeightVar() {
+        var navbar = document.querySelector('.app-navbar');
+        if (!navbar) { return; }
+        var height = navbar.getBoundingClientRect().height;
+        if (height > 0) {
+            document.documentElement.style.setProperty('--app-navbar-height', height + 'px');
+        }
+    }
+    // 네비게이션 바는 이 앱의 모든 페이지에 공통으로 있는 전역 레이아웃이라
+    // 이 그리드가 화면에 없어도(다른 페이지) 그냥 실행되지만, CSS 변수만
+    // 세팅할 뿐이라 다른 화면에 영향은 없다.
+    syncNavbarHeightVar();
+    window.addEventListener('load', syncNavbarHeightVar);
+    window.addEventListener('resize', syncNavbarHeightVar);
 
     function datalistIdFor(col) {
         return 'du-datalist::' + col;
@@ -394,6 +418,13 @@
     // pages/admin.py의 clientside_callback이 team-refer-table의 data 또는
     // sort_by가 바뀔 때마다(최초 로드 포함) 이 함수를 부른다.
     window.__teamReferOnDataChange = function (rows, sortBy) {
+        // Dash는 React SPA라 브라우저 'load' 이벤트가 실제 네비게이션 바
+        // 렌더링보다 먼저 끝나버릴 수 있어(직접 확인 — 'load' 시점에
+        // .app-navbar가 아직 DOM에 없는 경우가 있었음), window.onload에만
+        // 기대지 않고 이 콜백(그리드가 실제로 화면에 존재해야만 호출되므로
+        // 이 시점엔 네비게이션 바도 항상 이미 렌더링돼 있음)에서도 다시
+        // 재본다 — 이미 맞게 세팅돼 있으면 다시 재도 비용이 거의 없다.
+        syncNavbarHeightVar();
         window.__teamReferRows = rows || [];
         window.__teamReferSortActive = !!(sortBy && sortBy.length);
         var wrap = document.getElementById(GRID_WRAP_ID);
