@@ -7,9 +7,10 @@ from datetime import date, datetime
 from urllib.parse import parse_qs
 
 import dash
+import dash_ag_grid as dag
 import dash_bootstrap_components as dbc
 import pandas as pd
-from dash import Input, Output, State, callback, dash_table, dcc, html, no_update
+from dash import Input, Output, State, callback, dcc, html, no_update
 
 from components import nl_query_bar
 from components.timeline_data import dedupe_patents
@@ -244,49 +245,35 @@ def _filter_options(df: pd.DataFrame, col: str) -> list:
 
 
 
-# ── 조건부 스타일 (평가등급 색상) ─────────────────────────────────────────────
-_GRADE_COLOR = {
-    '가': ('#d4edda', '#155724'),
-    '나': ('#d1ecf1', '#0c5460'),
-    '다': ('#fff3cd', '#856404'),
-    '라': ('#fde8d8', '#7d3c00'),
-    '마': ('#f8d7da', '#721c24'),
+# ── 조건부 스타일 (평가등급 색상, AG Grid 전환) ────────────────────────────────
+# dash_table 시절엔 Python이 컬럼id마다 "값이 가/나/다/라/마면 이 색"이라는
+# 조건 리스트를 미리 다 나열해야 했다(뒤에 오는 규칙이 우선 적용되는 순서
+# 의존적 구조라, 홀수행 줄무늬가 등급색을 덮어쓰는 버그가 실제로 있었음
+# — 2026-08-20 수정 이력 참고). AG Grid는 셀 값 자체를 런타임에 보고
+# 색을 정하는 cellStyle 함수를 쓸 수 있어(dangerously_allow_code=True로
+# 명시적 허용, 이 문자열은 사용자 입력과 무관하게 코드에 고정된 값이라
+# XSS 우려가 없음), 컬럼이 몇 개든 어떤 연도든 상관없이 값 기준으로만
+# 판단하는 함수 하나로 충분하다 — 순서 의존 버그 자체가 구조적으로
+# 사라진다. 이 함수는 평가등급 컬럼(field가 _EVAL_GRADE_PATTERN에 맞는
+# 컬럼)에만 붙인다.
+_GRADE_CELL_STYLE = {
+    'function': (
+        "params.value === '가' ? {backgroundColor:'#d4edda', color:'#155724', textAlign:'center'} : "
+        "params.value === '나' ? {backgroundColor:'#d1ecf1', color:'#0c5460', textAlign:'center'} : "
+        "params.value === '다' ? {backgroundColor:'#fff3cd', color:'#856404', textAlign:'center'} : "
+        "params.value === '라' ? {backgroundColor:'#fde8d8', color:'#7d3c00', textAlign:'center'} : "
+        "params.value === '마' ? {backgroundColor:'#f8d7da', color:'#721c24', textAlign:'center'} : "
+        "{textAlign:'center'}"
+    )
 }
-def _grade_styles_for(columns) -> list:
-    """주어진 컬럼id 목록 중 평가등급 컬럼(_EVAL_GRADE_PATTERN에 맞는 것)에
-    대해서만 조건부 색상 스타일을 만든다. 고정 _EVAL_GRADE_COLUMNS(오늘 기준
-    3개년) 대신 실제 표시되는 컬럼 기준으로 매번 계산해야, 기간 지정 조회로
-    다른 연도의 평가등급 컬럼("'23평가" 등)이 나와도 색상이 정상 적용된다
-    (2026-08-28 — 고정 목록만 쓰면 기간 조회 시 색상이 하나도 안 붙었다)."""
-    grade_cols = [c for c in columns if _EVAL_GRADE_PATTERN.match(str(c))]
-    return [
-        {'if': {'filter_query': f'{{{col}}} = {grade}', 'column_id': col},
-         'backgroundColor': bg, 'color': fg}
-        for col in grade_cols
-        for grade, (bg, fg) in _GRADE_COLOR.items()
-    ]
 
-
-_GRADE_STYLES = _grade_styles_for(_EVAL_GRADE_COLUMNS)
-
-# 순서 중요: style_data_conditional은 뒤에 오는 규칙이 같은 셀의 같은 속성을
-# 덮어쓴다(나중에 매치되는 규칙이 우선) — 홀수행 줄무늬(row_index: 'odd')가
-# 열 지정 없이 모든 셀에 적용되므로, 평가등급 색상(특정 열만 대상)보다
-# 먼저 와야 홀수행에서도 등급 색이 줄무늬 배경에 덮이지 않고 살아남는다.
-_BASE_STYLE_DATA_CONDITIONAL = [
-    {'if': {'row_index': 'odd'}, 'backgroundColor': '#fafafa'},
-    {'if': {'state': 'active'}, 'backgroundColor': '#bae0ff',
-     'border': '1px solid #1677ff'},
-]
-
-
-def _style_data_conditional_for(columns: list, show_eval: bool) -> list:
-    """`columns`(_build_columns()가 만든 dict 목록)에 실제로 포함된 평가등급
-    컬럼 기준으로 조건부 색상 스타일을 계산한다."""
-    if not show_eval:
-        return _BASE_STYLE_DATA_CONDITIONAL
-    col_ids = [c['id'] for c in columns]
-    return _BASE_STYLE_DATA_CONDITIONAL + _grade_styles_for(col_ids)
+# 홀수행 줄무늬 — AG Grid의 선언적 getRowStyle(styleConditions)로, JS 함수
+# 문자열 없이도(dangerously_allow_code 불필요) 안전하게 적용 가능하다.
+_ROW_STRIPE_STYLE = {
+    'styleConditions': [
+        {'condition': 'params.node.rowIndex % 2 === 1', 'style': {'backgroundColor': '#fafafa'}},
+    ],
+}
 
 
 # ── 필수 컬럼(사용자 확정) — AI 검색 없이도 항상 노출된다. 사번(researcher_id)은
@@ -316,38 +303,75 @@ _OPTIONAL_FILTER_COLUMNS = ['성별', '학력', '전공']
 _NUMERIC_COLUMNS = {'논문(전체)', '논문(3년)', '특허(출원)', '특허(등록)', '수상'}
 
 
-def _build_columns(df: pd.DataFrame, optional_ids: list | None = None,
-                    extra_ids: list | None = None, extra_labels: list | None = None) -> list:
-    """필수 컬럼 → (상세 필터로 선택돼 함께 보여줄) 선택 컬럼 → AI 검색이
-    돌려준 추가 컬럼 순서로 구성한다. df에 실제로 존재하는 컬럼만 포함한다
-    (권한 필터로 평가/인센티브가 빠졌을 수 있어서)."""
-    cols = [
-        {'name': label, 'id': col_id, 'type': 'text'}
-        for col_id, label in _ESSENTIAL_COLUMNS if col_id in df.columns
+# 왼쪽 정렬 + 폭 지정이 필요한 3개 필수 컬럼(dash_table의 style_cell_conditional
+# 대응). '이름'은 프로필 이동을 유도하는 링크처럼 보이도록 강조.
+_LEFT_ALIGN_COL_STYLE = {
+    '이름': {'textAlign': 'left', 'fontWeight': '600', 'cursor': 'pointer', 'color': '#1677ff'},
+    '부서': {'textAlign': 'left'},
+    '과제': {'textAlign': 'left'},
+}
+
+
+def _col_def(col_id: str, label: str) -> dict:
+    """컬럼id/라벨 하나를 AG Grid colDef 하나로 변환. 툴팁(tooltipField)은
+    AG Grid가 그 컬럼의 렌더링 값을 그대로 보여주므로 dash_table 시절의
+    `_build_tooltip_data()`(Python이 매 렌더마다 전체 셀 값을 다시 계산해
+    넘기던 것)가 더 이상 필요 없다. 평가등급 컬럼은 값 기준 조건부 색상
+    (_GRADE_CELL_STYLE)을, 그 외 컬럼은 기본 가운데 정렬(defaultColDef)을
+    그대로 쓰거나 이름/부서/과제만 좌측 정렬로 덮어쓴다."""
+    col: dict = {
+        'headerName': label, 'field': col_id, 'tooltipField': col_id,
+        'filter': 'agNumberColumnFilter' if col_id in _NUMERIC_COLUMNS else 'agTextColumnFilter',
+        'floatingFilter': True,
+    }
+    if _EVAL_GRADE_PATTERN.match(str(col_id)):
+        col['cellStyle'] = _GRADE_CELL_STYLE
+    elif col_id in _LEFT_ALIGN_COL_STYLE:
+        col['cellStyle'] = _LEFT_ALIGN_COL_STYLE[col_id]
+    return col
+
+
+# 체크박스 선택 컬럼 — AG Grid의 헤더 전체선택 체크박스(dashGridOptions.
+# rowSelection)는 columnDefs의 "첫 번째 컬럼"에 자동으로 붙는데, 격리
+# 테스트로 확인한 결과 그 컬럼이 다른 컬럼과 같은 field를 공유하면(중복)
+# 체크박스 자체가 렌더링되지 않는다 — team_refer/exception_job_function
+# 탭과 동일하게 고유한 '_no'(행 번호) 필드를 가진 전용 컬럼을 맨 앞에 둔다.
+_CHECKBOX_COL_DEF = {
+    'headerName': 'No.', 'field': '_no', 'sortable': False, 'filter': False,
+    'width': 60, 'pinned': 'left',
+}
+
+
+def _build_column_defs(df: pd.DataFrame, optional_ids: list | None = None,
+                        extra_ids: list | None = None, extra_labels: list | None = None) -> list:
+    """체크박스 컬럼 → 필수 컬럼 → (상세 필터로 선택돼 함께 보여줄) 선택
+    컬럼 → AI 검색이 돌려준 추가 컬럼 순서로 AG Grid columnDefs를 구성한다.
+    df에 실제로 존재하는 컬럼만 포함한다(권한 필터로 평가/인센티브가
+    빠졌을 수 있어서)."""
+    cols = [_CHECKBOX_COL_DEF] + [
+        _col_def(col_id, label) for col_id, label in _ESSENTIAL_COLUMNS if col_id in df.columns
     ]
     seen = set(_ESSENTIAL_IDS)
     for col_id in (optional_ids or []):
         if col_id in df.columns and col_id not in seen:
             seen.add(col_id)
-            cols.append({'name': col_id, 'id': col_id, 'type': 'text'})
+            cols.append(_col_def(col_id, col_id))
     extra_ids = extra_ids or []
     extra_labels = extra_labels or extra_ids
     for col_id, label in zip(extra_ids, extra_labels):
         if col_id in seen:
             continue
         seen.add(col_id)
-        cols.append({'name': label, 'id': col_id,
-                     'type': 'numeric' if col_id in _NUMERIC_COLUMNS else 'text'})
+        cols.append(_col_def(col_id, label))
     return cols
-    # 평균IF는 혼합값(숫자/'-')이 있어 numeric으로 분류하지 않고 text로 유지
 
 
-def _build_tooltip_data(records: list) -> list:
-    """각 셀에 그 값 전체를 툴팁으로 붙인다 — 컬럼 너비가 좁아 말줄임(...)
-    처리된 값도 마우스를 올리면 전체를 볼 수 있게(사용자 확정: 전체 컬럼
-    대상). `_org_code`처럼 화면에 없는 내부 컬럼이 섞여 있어도 dash_table이
-    실제 렌더링 중인 컬럼id만 골라 쓰므로 문제없다."""
-    return [{k: str(v) if v is not None else '' for k, v in row.items()} for row in records]
+def _with_row_numbers(records: list) -> list:
+    """체크박스 컬럼(_CHECKBOX_COL_DEF)이 참조하는 '_no'(1..N, 화면 표시
+    순서) 필드를 각 행에 붙인다."""
+    for i, row in enumerate(records, 1):
+        row['_no'] = i
+    return records
 
 
 # AI 검색 결과 중 명단에 다시 노출하지 않을 컬럼 — 이름/부서는 필수 컬럼과
@@ -422,8 +446,7 @@ def layout():
     major_opts    = _filter_options(df, '전공')
     employ_opts   = _filter_options(df, '재직상태')
 
-    columns = _build_columns(display_df)
-    style_data_conditional = _style_data_conditional_for(columns, show_eval)
+    column_defs = _build_column_defs(display_df)
 
     return html.Div([
         dcc.Location(id='list-url', refresh=True),
@@ -647,76 +670,38 @@ def layout():
             id='filter-modal', is_open=False,
         ),
 
-        # ── DataTable ─────────────────────────────────────────────────────
+        # ── 표(AG Grid Community, 2026-09-18 dash_table → dash-ag-grid 전환) ──
+        # team_refer/exception_job_function 탭과 동일한 무료(MIT) 오픈소스
+        # 전환 — 컬럼 리사이즈/필터/정렬은 이제 AG Grid 네이티브 기능이고,
+        # 정렬·필터가 반영된 "현재 화면에 보이는 행 순서"는 virtualRowData로
+        # 확인했다(격리 테스트로 검증 — 정렬만/필터만/필터+정렬 조합 전부
+        # 정확히 반영됨). 체크박스는 '_no' 전용 컬럼에 달려 있고, 그 컬럼
+        # 또는 데이터 셀 어디를 클릭해도 체크 상태에는 영향이 없음을 확인했다
+        # (cellClicked 콜백이 실제 이동 로직을 담당).
         dbc.Card(
             dbc.CardBody(
-                dash_table.DataTable(
+                dag.AgGrid(
                     id='researcher-table',
-                    columns=columns,
-                    data=display_df.to_dict('records') if not display_df.empty else [],
-                    # 필터 / 정렬
-                    filter_action='native',
-                    sort_action='native',
-                    sort_mode='multi',
-                    # 행 체크박스(프로필 일괄 인쇄용 — 없으면 화면에 보이는 전체를 인쇄)
-                    row_selectable='multi',
-                    selected_rows=[],
-                    # 페이지
-                    page_action='native',
-                    page_size=30,
-                    # 스타일
-                    style_as_list_view=True,
-                    style_table={'overflowX': 'auto'},
-                    style_header={
-                        'backgroundColor': '#fafafa',
-                        'color': '#1f1f1f',
-                        'fontWeight': '600',
-                        'fontSize': '0.8rem',
-                        'textAlign': 'center',
-                        'whiteSpace': 'normal',
+                    className='gs-ag-grid',
+                    dangerously_allow_code=True,  # _GRADE_CELL_STYLE(고정 문자열, 사용자 입력 무관) 때문에 필요
+                    columnDefs=column_defs,
+                    rowData=_with_row_numbers(display_df.to_dict('records')) if not display_df.empty else [],
+                    getRowId='params.data.researcher_id',
+                    selectedRows=[],
+                    defaultColDef={
+                        'resizable': True, 'sortable': True, 'filter': 'agTextColumnFilter',
+                        'floatingFilter': True, 'minWidth': 60, 'wrapHeaderText': True,
+                        'autoHeaderHeight': True, 'cellStyle': {'textAlign': 'center'},
+                        'filterParams': {'caseSensitive': False},
                     },
-                    # 검색(필터) 행이라는 게 눈에 띄도록 배경/테두리를 뚜렷하게
-                    # 준다(사용자 확정 — "검색 가능한 행이라는 걸 보여주면 좋겠다").
-                    style_filter={
-                        'backgroundColor': '#e6f4ff',
-                        'fontSize': '0.75rem',
-                        'borderTop': '2px solid #1677ff',
-                        'borderBottom': '2px solid #bae0ff',
+                    dashGridOptions={
+                        'rowSelection': {'mode': 'multiRow', 'checkboxes': True, 'headerCheckbox': True},
+                        'pagination': True, 'paginationPageSize': 30,
+                        'domLayout': 'autoHeight',
+                        'tooltipShowDelay': 0,
                     },
-                    style_cell={
-                        'fontSize': '0.82rem',
-                        'padding': '5px 10px',
-                        'textAlign': 'center',
-                        'minWidth': '55px',
-                        'maxWidth': '160px',
-                        'overflow': 'hidden',
-                        'textOverflow': 'ellipsis',
-                    },
-                    style_cell_conditional=[
-                        {'if': {'column_id': '이름'}, 'textAlign': 'left', 'minWidth': '80px',
-                         'fontWeight': '600', 'cursor': 'pointer', 'color': '#1677ff'},
-                        {'if': {'column_id': '부서'}, 'textAlign': 'left', 'minWidth': '100px'},
-                        {'if': {'column_id': '과제'}, 'textAlign': 'left', 'minWidth': '100px'},
-                    ],
-                    style_data_conditional=style_data_conditional,
-                    tooltip_header={col['id']: col['id'] for col in columns},
-                    tooltip_data=_build_tooltip_data(display_df.to_dict('records') if not display_df.empty else []),
-                    tooltip_delay=0,
-                    tooltip_duration=None,
-                    # 대소문자 구분 없이 항상 필터(사용자 확정) + 필터 행 자체에
-                    # 브라우저 네이티브 CSS resize로 컬럼 너비 드래그 조절(admin.py
-                    # team-refer-table과 동일한 트릭).
-                    filter_options={'case': 'insensitive', 'placeholder_text': '🔍 검색...'},
-                    css=[
-                        {
-                            'selector': '.column-header-name',
-                            'rule': ('display: inline-block; resize: horizontal; overflow: auto; '
-                                     'min-width: 40px; max-width: 600px; vertical-align: bottom;'),
-                        },
-                        # 대소문자 토글 아이콘(Aa) 숨김 — filter_options.case로 이미
-                        # 항상 대소문자 무시로 고정했으니 토글 자체가 필요 없다.
-                        {'selector': '.dash-filter--case', 'rule': 'display: none;'},
-                    ],
+                    getRowStyle=_ROW_STRIPE_STYLE,
+                    style={'width': '100%'},
                 ),
                 className='p-0',
             ),
@@ -828,12 +813,9 @@ def toggle_org_filters(mode, period_start, period_end):
 # 테이블에 반영된다(사용자 확정). 필터 초기화 버튼은 이 콜백에도 함께 연결해,
 # 눌렀을 때 드롭다운 값과 무관하게 항상 전체 목록으로 되돌아가게 한다.
 @callback(
-    Output('researcher-table', 'data'),
-    Output('researcher-table', 'columns'),
-    Output('researcher-table', 'tooltip_header'),
-    Output('researcher-table', 'tooltip_data'),
-    Output('researcher-table', 'selected_rows'),
-    Output('researcher-table', 'style_data_conditional'),
+    Output('researcher-table', 'rowData'),
+    Output('researcher-table', 'columnDefs'),
+    Output('researcher-table', 'selectedRows'),
     Input('list-search-btn',   'n_clicks'),
     Input('filter-modal-apply-btn', 'n_clicks'),
     Input('clear-filters-btn', 'n_clicks'),
@@ -882,32 +864,26 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, 
     if triggered == 'nl-query-full-result':
         if not ai_result or not ai_result.get('rows'):
             # 질문 없음/초기화/결과 없음 → 필수 컬럼만으로 전체 목록 복귀
-            columns = _build_columns(display_df)
-            tooltip_header = {c['id']: c['id'] for c in columns}
-            records = display_df.to_dict('records')
-            return (records, columns, tooltip_header, _build_tooltip_data(records), [],
-                    _style_data_conditional_for(columns, show_eval))
+            column_defs = _build_column_defs(display_df)
+            records = _with_row_numbers(display_df.to_dict('records'))
+            return records, column_defs, []
         merged_df, extra_ids, extra_labels = _merge_ai_result(display_df, ai_result)
-        columns = _build_columns(merged_df, extra_ids=extra_ids, extra_labels=extra_labels)
-        tooltip_header = {c['id']: c['id'] for c in columns}
-        records = merged_df.to_dict('records')
-        return (records, columns, tooltip_header, _build_tooltip_data(records), [],
-                _style_data_conditional_for(columns, show_eval))
+        column_defs = _build_column_defs(merged_df, extra_ids=extra_ids, extra_labels=extra_labels)
+        records = _with_row_numbers(merged_df.to_dict('records'))
+        return records, column_defs, []
 
     # 상세 필터(성별/학력/전공)로 값을 고르면 그 컬럼도 함께 보여준다.
     optional_values = dict(zip(_OPTIONAL_FILTER_COLUMNS, (gender, degree, major)))
     optional_ids = [col for col in _OPTIONAL_FILTER_COLUMNS if optional_values[col]]
-    columns = _build_columns(display_df, optional_ids=optional_ids)
-    tooltip_header = {c['id']: c['id'] for c in columns}
-    style_data_conditional = _style_data_conditional_for(columns, show_eval)
+    column_defs = _build_column_defs(display_df, optional_ids=optional_ids)
     if display_df.empty:
-        return [], columns, tooltip_header, [], [], style_data_conditional
+        return [], column_defs, []
 
     # 모드 전환 자체가 트리거면(부서/과제/직급/직책 필터가 비활성화·초기화되는
     # 시점과 겹칠 수 있어) 조직 필터는 적용하지 않고 전체(해당 모드) 목록을 보여준다.
     if triggered in ('clear-filters-btn', 'list-search-mode'):
-        records = display_df.to_dict('records')
-        return records, columns, tooltip_header, _build_tooltip_data(records), [], style_data_conditional
+        records = _with_row_numbers(display_df.to_dict('records'))
+        return records, column_defs, []
 
     # 부서/과제·파트 필터는 team_refer의 dep_1st_name/dep_3rd_name을 라벨로
     # 쓰지만, 실제 매칭은 항상 org_name_wd(=researchers.csv의 org_code, 화면에는
@@ -955,8 +931,8 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, 
     # 안 걸었으면 선택한 사람만 정확히 남는다.
     if researcher:
         display_df = display_df[display_df['researcher_id'].isin(researcher)]
-    records = display_df.to_dict('records')
-    return records, columns, tooltip_header, _build_tooltip_data(records), [], style_data_conditional
+    records = _with_row_numbers(display_df.to_dict('records'))
+    return records, column_defs, []
 
 
 # ── 콜백 3: 필터 초기화 버튼 → 드롭다운 값 비우기(메인 화면 + 필터 모달) ─────
@@ -995,7 +971,7 @@ def toggle_filter_modal(_open_clicks, _apply_clicks):
 @callback(
     Output('researcher-list-excel-download', 'data'),
     Input('list-excel-btn', 'n_clicks'),
-    State('researcher-table', 'derived_virtual_data'),
+    State('researcher-table', 'virtualRowData'),
     State('list-excel-options-check', 'value'),
     prevent_initial_call=True,
 )
@@ -1034,19 +1010,19 @@ def download_excel(n_clicks, virtual_data, excel_options):
 
 
 # ── 콜백 5: 행 클릭 → 프로필 화면 이동 ──────────────────────────────────────
+# AG Grid의 cellClicked는 getRowId(=researcher_id로 지정)를 rowId로 그대로
+# 돌려주므로, dash_table 시절처럼 derived_virtual_data에서 행 인덱스로
+# 역조회할 필요가 없다(더 단순하고 정렬/필터 상태와도 무관하게 항상 정확).
+# 체크박스 전용 컬럼(_no)을 클릭했을 때는 선택 토글만 하고 이동하지 않는다.
 @callback(
     Output('list-url', 'href'),
-    Input('researcher-table', 'active_cell'),
-    State('researcher-table', 'derived_virtual_data'),
+    Input('researcher-table', 'cellClicked'),
     prevent_initial_call=True,
 )
-def navigate_to_profile(active_cell, virtual_data):
-    if not active_cell or not virtual_data:
+def navigate_to_profile(cell):
+    if not cell or cell.get('colId') == '_no':
         return no_update
-    row_idx = active_cell.get('row')
-    if row_idx is None or row_idx >= len(virtual_data):
-        return no_update
-    rid = virtual_data[row_idx].get('researcher_id')
+    rid = cell.get('rowId')
     if not rid:
         return no_update
     return f'/?id={rid}'
@@ -1057,20 +1033,19 @@ def navigate_to_profile(active_cell, virtual_data):
 # 표 자체 열별 필터/정렬까지 반영된, 엑셀 다운로드와 동일한 기준) 전체를
 # 대상으로 삼는다 — 과제/부서로 필터해두고 그냥 누르면 그 풀 전체가,
 # 체크박스로 일부만 고르면 그 인원만 인쇄 화면(/?ids=...)으로 넘어간다.
+# selectedRows는 AG Grid가 인덱스가 아니라 행 객체 자체를 돌려주므로
+# virtualRowData와 조합해 인덱스로 역조회하던 절차가 필요 없어졌다.
 @callback(
     Output('list-url', 'href', allow_duplicate=True),
     Input('list-bulk-print-btn', 'n_clicks'),
-    State('researcher-table', 'derived_virtual_data'),
-    State('researcher-table', 'selected_rows'),
+    State('researcher-table', 'virtualRowData'),
+    State('researcher-table', 'selectedRows'),
     prevent_initial_call=True,
 )
 def bulk_print_navigate(n_clicks, virtual_data, selected_rows):
     if not n_clicks or not virtual_data:
         return no_update
-    if selected_rows:
-        rows = [virtual_data[i] for i in selected_rows if i < len(virtual_data)]
-    else:
-        rows = virtual_data
+    rows = selected_rows if selected_rows else virtual_data
     researcher_ids = [row['researcher_id'] for row in rows if row.get('researcher_id')]
     if not researcher_ids:
         return no_update

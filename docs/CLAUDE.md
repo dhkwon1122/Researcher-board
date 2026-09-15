@@ -11868,3 +11868,99 @@ config.py`(AI 검색 노출 범위)/`services/web_pipeline_runner.py`
 파생 분석 산출물→용어 설명)가 정상인지, `헤더 매핑 상세` 시트 첫 5행/
 마지막 20행 값이 의도대로 들어갔는지 직접 읽어 확인. `markitdown`으로도
 파일 전체가 오류 없이 파싱되는지 확인.
+
+## 2026-09-18 (3): 연구원 명단 그리드 — dash_table → dash-ag-grid 전환
+
+사용자 질문("팀/리더 참조 시트에 적용한 오픈소스를 연구원 명단(AI 검색)에
+반영할 수 있을까? 반영했을때 어떤 특이사항이 있을지 확인해줘")에 답하며
+`virtualRowData`(AG Grid Community의 `derived_virtual_data` 대체재)가
+공식 문서상으론 "필터만 반영"이라 적혀 있지만 실제로 정렬까지 반영하는지
+격리된 Playwright 테스트로 먼저 직접 검증했고("정렬/필터/정렬+필터 조합"
+5개 시나리오 전부 기대대로 동작 확인), 사용자가 이어서 "마이그레이션
+진행해줘"라고 확정해 `pages/researcher_list.py`의 "연구원 명단" 표를
+`pages/admin.py`의 팀/리더 참조·직군 예외자 탭과 동일한 방식으로 전환했다.
+
+**변경 범위**: `pages/researcher_list.py` 한 파일. 필터 드롭다운/모달,
+`_build_summary_df()`, `_apply_permission_filter()`, AI 검색 결과 병합
+(`_merge_ai_result()`) 등 표 렌더링과 무관한 로직은 전혀 손대지 않았다.
+
+**AG Grid로 교체하며 삭제한 커스텀 코드**: `_GRADE_COLOR`/`_grade_styles_for()`/
+`_BASE_STYLE_DATA_CONDITIONAL`/`_style_data_conditional_for()`(평가등급별
+셀 배경색·홀수행 줄무늬를 `style_data_conditional` 조건식 리스트로 손으로
+구성하던 로직)를 전부 지우고, 컬럼 정의(colDef)의 `cellStyle`(등급별 배경색,
+`dangerously_allow_code=True` 필요 — 아래 참고)과 `getRowStyle`의
+`styleConditions` 선언형(코드 실행 플래그 불필요, `params.node.rowIndex % 2`)
+로 대체했다. `_build_columns()`/`_build_tooltip_data()`도 `_build_column_defs()`
+하나로 통합(체크박스 컬럼 → 필수 컬럼 → 상세필터 선택 컬럼 → AI 검색
+추가 컬럼 순서로 조립, `tooltipField`로 툴팁은 AG Grid 기본 제공).
+
+**`dangerously_allow_code=True`를 켠 이유**: 등급(가/나/다/라/마)별 셀
+배경색을 `cellStyle={'function': '...'}`(JS 문자열)로 구현하려면 이
+플래그가 필요하다. 이 플래그의 경고("Dash가 나중에 재생용으로 저장하는
+레이아웃에 위험")는 사용자 입력이 그대로 레이아웃 문자열에 들어가는
+경우를 말하는데, 이 JS 문자열은 개발자 코드에 100% 하드코딩돼 있고
+요청/사용자 입력에서 파생되는 부분이 전혀 없어(값은 `params.value`로
+런타임에 AG Grid가 채움) 실제 XSS 위험이 적용되지 않는다고 판단해
+켰다. 홀수행 줄무늬는 `getRowStyle`의 `styleConditions` 선언형 문법
+(dash-ag-grid 전용 래퍼, JS eval이 아님)으로 이 플래그 없이 구현했다.
+
+**체크박스 컬럼 — 직접 실험으로 확인한 함정**: `dashGridOptions.rowSelection
+= {mode: 'multiRow', checkboxes: True, headerCheckbox: True}`를 켜면 AG
+Grid가 체크박스 전용 컬럼(`colId: 'ag-Grid-SelectionColumn'`, 빈
+헤더텍스트)을 자동으로 추가로 삽입한다 — 격리 프로브로 여러 번 실패를
+반복하며 확인한 사실: 체크박스 컬럼을 첫 번째 columnDef에 수동으로
+끼워 넣으려 하면(`field` 없음, 또는 다른 컬럼과 `field` 중복) 체크박스
+자체가 렌더링되지 않거나 클릭이 엉뚱한 요소(헤더 전체선택)를 건드리는
+문제가 생겼다. team_refer/exception_job_function 탭과 동일하게, 맨 앞
+`_no`(행 번호, 고유 field) 컬럼을 두고 AG Grid가 그 옆에 별도의
+선택 컬럼을 자동으로 붙이게 두는 방식으로 확정했다. 실제 배포 페이지에서
+Playwright로 재확인한 결과 이 자동 선택 컬럼은 헤더 텍스트가 빈 문자열로
+보이는 게 정상 동작(체크박스만 있고 라벨이 없는 컬럼)이며, 버그가 아니다.
+
+**`cellClicked`/`selectedRows`로 얻은 단순화**: `cellClicked` 이벤트가
+반환하는 `rowId`가 `getRowId='params.data.researcher_id'`로 설정한
+값과 그대로 일치해, dash_table 시절처럼 `derived_virtual_data`에서
+클릭한 인덱스로 역참조할 필요 없이 `rowId`를 바로 프로필 URL에 쓸 수
+있다(`navigate_to_profile`). `selectedRows`도 인덱스 배열이 아니라
+선택된 행 전체를 담아, 일괄 인쇄(`bulk_print_navigate`)가 `virtualRowData`
+(선택이 없을 때: 현재 필터/정렬된 전체)와 `selectedRows`(선택이 있을 때:
+선택된 행만) 중 하나를 그대로 쓰면 되도록 단순해졌다.
+
+**콜백 변경**: `update_table`의 Output이 6개(`data/columns/tooltip_header/
+tooltip_data/selected_rows/style_data_conditional`)에서 3개(`rowData/
+columnDefs/selectedRows`)로 줄었다. `download_excel`은 `State(...,
+'derived_virtual_data')` → `State(..., 'virtualRowData')`만 교체(본문
+로직은 그대로). `navigate_to_profile`은 `active_cell`+인덱스 역참조 방식을
+버리고 `cellClicked`의 `rowId`를 직접 쓰도록 재작성(체크박스 컬럼
+`_no` 클릭은 `colId == '_no'`로 걸러 네비게이션 안 되게 처리).
+
+**검증**: 실제 서버(임시 `qa.tester` 계정) + Playwright로 확인 —
+(1) 헤더/30행 페이지네이션 정상, (2) '이름' 헤더 클릭 시 오름차순/
+내림차순 정렬이 전체 50행 기준으로 정확히 반영(가나다순), (3) 체크박스로
+특정 행만 정확히 선택(`aria-selected` 반영), 체크박스 컬럼(`_no`) 클릭은
+프로필로 이동하지 않음, (4) 데이터 셀 클릭 시 `researcher_id`가 정확히
+붙은 프로필 URL로 이동, (5) 선택 없이 "일괄 인쇄" → 현재 필터/정렬된
+전체 50명 URL 생성, 1개 선택 후 "일괄 인쇄" → 그 1명만의 URL 생성,
+(6) 엑셀 다운로드 버튼 → 정상 크기의 xlsx 파일 생성, (7) 그리드 API로
+필터 적용 시 `virtualRowData`(표시 행 수)가 정확히 반영. 콘솔 에러는
+연구원 프로필 페이지의 리더십 차트(`components/profile_sections.py`
+`leadership_figure()`, `KeyError: 'evaluator_group'`) 500 에러 1건뿐인데,
+이는 이번에 건드리지 않은 다른 파일·다른 페이지의 기존 버그라 이번
+전환과 무관함을 서버 로그로 직접 확인(범위 밖이라 손대지 않음).
+**직접 실험으로 확인한 테스트 함정**: AG Grid는 가상 스크롤을 위해
+행 DOM 요소를 절대좌표(`transform: translateY`)로 배치하고 정렬 시에도
+DOM 트리상의 형제 순서를 바꾸지 않는다 — 그래서 `.ag-cell` 셀들을
+DOM에 나타나는 순서 그대로 읽으면 정렬 후에도 뒤섞인 것처럼 보인다
+(처음엔 이걸 정렬 버그로 오인했었다). 각 셀의 조상 `[role=row]`의
+`row-index` 속성 기준으로 재정렬해서 비교해야 실제 화면 순서를 얻는다.
+테스트 계정(`qa.tester`)과 `config/users.json` 변경은 검증 후 원본과
+diff 없이 복원, 서버 프로세스도 종료.
+
+**롤백 방법**: 이 전환은 별도 커밋으로 분리돼 있다 — 문제가 발견되면
+`git revert <커밋해시>`로 이전 `dash_table.DataTable` 구현으로 즉시
+복귀 가능(데이터 스키마 변경 없음, `requirements.txt`는 이미 팀/리더
+참조 전환 때 `dash-ag-grid`가 추가돼 있어 별도 조치 불필요).
+
+**미검증**: 실제 사내 배포 환경에서의 렌더링(이 세션은 샌드박스
+서버 대상)은 확인 범위 밖 — 문제가 있으면 위 롤백 방법으로 되돌리면
+된다.
