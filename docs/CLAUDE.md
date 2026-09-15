@@ -11964,3 +11964,67 @@ diff 없이 복원, 서버 프로세스도 종료.
 **미검증**: 실제 사내 배포 환경에서의 렌더링(이 세션은 샌드박스
 서버 대상)은 확인 범위 밖 — 문제가 있으면 위 롤백 방법으로 되돌리면
 된다.
+
+## 2026-09-18 (4): 시상 이력 — "근속" 포함 명칭은 전처리에서 제외
+
+사용자 요청("연구원 개별 프로필 화면에서 시상 이력 중 명칭이
+'장기근속상'인 경우 전처리에서 제외하도록 해줘")에 먼저 가능 여부와
+확인사항을 답했다. 시상 이력은 `pipeline/process_awards.py`(원본
+`시상 세부사항.xlsx` → `data/processed/awards.csv`) 한 곳에서만
+전처리되므로 거기 한 곳만 고치면 화면(프로필 상세/인쇄), 연구원 명단의
+시상 건수 집계, AI 검색까지 시상 이력을 쓰는 모든 경로에 일괄 적용됨을
+확인해 안내했다. 그 답변에 사용자가 (1) "'근속'이 들어가는 명칭을
+제외하면 될 것 같아"(부분 일치로 확정 — "10년 근속상"처럼 연차가 붙는
+변형까지 포괄), (2) 기존에 이미 적재된 장기근속상 행이 DB에도 반영돼
+있어 지속 노출 우려, (3) 전처리에서 빼서 웹상 모든 곳에서 삭제로
+확정해와 반영했다.
+
+**구현**: `process()`가 `수상명`(COL_NAME) → `award_name`으로 옮겨
+`result` DataFrame을 만드는 직후, `write_merged()`로 저장하기 전에
+`award_name`에 `_EXCLUDE_NAME_SUBSTRINGS = ['근속']`의 문자열이 포함된
+행을 제외하도록 추가(`result['award_name'].str.contains('|'.join(...),
+na=False, regex=True)`). 제외된 행이 있으면 몇 건이 어떤 값 때문에
+빠졌는지 콘솔에 출력(`[SKIP] 수상명에 ['근속'] 포함 N행 제외 (예: [...])`
+) — 다른 process_*.py의 `[SKIP]`/`[OK]` 로그 관례와 동일. 리스트로
+둔 이유는 나중에 제외 키워드가 늘어나도(예: 정년퇴임 관련 등) 한
+곳만 고치면 되게 하기 위함. 합성 데이터로 "장기근속상"/"10년 근속상"이
+정확히 빠지고 "그룹표창"/"부문표창"/빈 값/NaN은 안 빠지는 것을 직접
+확인.
+
+**기존에 이미 DB/CSV에 적재된 근속 관련 행은 이 코드 수정만으로는
+안 지워짐 — 별도 안내**: `merge_utils.write_merged()`가 쓰는 자연키
+upsert(`researcher_id+award_date+award_name`)는 새 파일에 없는 기존
+키를 "보존"하는 구조라, 원본 엑셀에 근속상 행이 여전히 있는 채로
+파이프라인을 재실행해도(새 결과엔 근속행이 안 만들어지므로) 기존
+`data/processed/awards.csv`에 이미 들어간 근속 행은 "새 파일에 없으니
+보존" 규칙에 걸려 그대로 남는다. 이번 세션의 로컬 `data/processed/
+awards.csv`는 헤더만 있고 데이터가 0행이라 실제로 지울 대상이 없었고,
+DATABASE_URL도 이 샌드박스엔 설정돼 있지 않아(운영 DB는 별도 환경)
+이 세션에서 직접 삭제를 실행할 수는 없었다. 대신 사용자에게 운영
+환경에서 실행할 절차를 안내했다:
+1. `data/processed/awards.csv`에서 근속 포함 행을 먼저 제거(CSV가
+   진실 원본이고 DB는 `pipeline/load_to_db.py`가 `to_sql(...,
+   if_exists='replace')`로 통째로 재생성하는 거울이라, CSV부터 정리해야
+   나중에 DB를 다시 적재해도 근속 행이 되살아나지 않는다):
+   ```python
+   import pandas as pd
+   df = pd.read_csv('data/processed/awards.csv', encoding='utf-8-sig', dtype=str).fillna('')
+   before = len(df)
+   df = df[~df['award_name'].str.contains('근속', na=False)]
+   df.to_csv('data/processed/awards.csv', index=False, encoding='utf-8-sig')
+   print(f'{before} -> {len(df)}행')
+   ```
+2. DB에 반영: `python3 -c "from pipeline.load_to_db import load; load(tables=['awards'])"`
+   — awards 테이블만 정리된 CSV로 통째 재생성(`load()`의 `tables` 인자는
+   팀/리더 참조 탭이 테이블 하나만 즉시 반영할 때 쓰는 것과 같은
+   기존 기능, 2026-09-02 도입). DB에 `DELETE FROM awards WHERE
+   award_name LIKE '%근속%'`를 직접 실행하는 방법도 있지만 CSV를 먼저
+   정리하지 않으면 다음에 `load_to_db.py`가 다시 돌 때 근속 행이
+   CSV에서 그대로 복사돼 되살아나므로, CSV 정리가 먼저이자 필수임을
+   강조해 안내했다.
+
+**미검증**: 실제 원본 `시상 세부사항.xlsx`의 근속상 표기가 정확히
+어떤 문자열들인지("장기근속상" 외 다른 변형이 더 있는지)는 이 세션이
+확인할 방법이 없어 사용자 확인("근속"이 들어가는 명칭)에 그대로
+따랐다. 운영 환경 CSV/DB 정리 실행 자체도 이 세션 밖(사용자가 직접
+실행)이라 실행 결과는 미확인.

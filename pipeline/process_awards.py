@@ -29,6 +29,12 @@ COL_ORG         = '수여기관'
 COL_DESC        = '설명'
 # ─────────────────────────────────────────────────────────────────────────────
 
+# 수상명(award_name)에 이 문자열이 포함되면 전처리에서 제외한다 — 근속 연차별로
+# "10년 근속상"/"장기근속상" 등 표기가 갈려도 "근속"만 포함하면 전부 걸러지도록
+# 부분 일치로 판단한다(2026-09-15, 사용자 확정: 시상 이력이 아니라 근속을
+# 기리는 상이라 연구원 프로필/명단/AI 검색 등 어디에도 노출하지 않기로 함).
+_EXCLUDE_NAME_SUBSTRINGS = ['근속']
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import parse_flexible_date as _fmt_date, read_xlsx, norm_id
@@ -78,6 +84,14 @@ def process(raw_dir: str = RAW_DIR) -> bool:
         'awarding_org':  _col(COL_ORG),
         'description':   _col(COL_DESC),
     })
+
+    exclude_mask = result['award_name'].str.contains(
+        '|'.join(_EXCLUDE_NAME_SUBSTRINGS), na=False, regex=True,
+    )
+    if exclude_mask.any():
+        print(f'[SKIP] 수상명에 {_EXCLUDE_NAME_SUBSTRINGS} 포함 {exclude_mask.sum()}행 제외 '
+              f'(예: {sorted(result.loc[exclude_mask, "award_name"].unique())[:5]})')
+        result = result[~exclude_mask].copy()
 
     result['year'] = result['award_date'].str[:4].replace('', pd.NA)
     result = result.sort_values(['researcher_id', 'award_date'], ascending=[True, False]).reset_index(drop=True)
