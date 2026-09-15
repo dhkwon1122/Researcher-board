@@ -760,6 +760,7 @@ def _team_refer_tab() -> html.Div:
                 defaultColDef={
                     'resizable': True, 'sortable': True, 'filter': False,
                     'minWidth': 55, 'wrapHeaderText': True, 'autoHeaderHeight': True,
+                    'cellStyle': {'textAlign': 'center'},  # 헤더 가운데 정렬은 .gs-ag-grid(custom.css)가 처리
                 },
                 dashGridOptions={
                     # 헤더 전체선택 체크박스 포함 — dash_table에는 없던 기능이라
@@ -904,6 +905,7 @@ def _exception_job_function_tab() -> html.Div:
             defaultColDef={
                 'resizable': True, 'sortable': True, 'filter': False,
                 'minWidth': 55, 'wrapHeaderText': True, 'autoHeaderHeight': True,
+                'cellStyle': {'textAlign': 'center'},  # 헤더 가운데 정렬은 .gs-ag-grid(custom.css)가 처리
             },
             dashGridOptions={
                 'rowSelection': {'mode': 'multiRow', 'checkboxes': True, 'headerCheckbox': True},

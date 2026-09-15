@@ -272,6 +272,11 @@ h1, h2, h3, h4, h5, h6 {
 }
 .gs-ag-grid .ag-header-cell-label {
   font-weight: 600;
+  /* 헤더 라벨도 셀 내용(defaultColDef.cellStyle)과 맞춰 가운데 정렬
+     (2026-09-18, 사용자 요청 — 팀/리더 참조·직군 예외자 표 전부).
+     AG Grid 헤더는 cellStyle이 아니라 flex 컨테이너라 justify-content로
+     맞춘다. */
+  justify-content: center;
 }
 
 /* "체크" 컬럼 체크박스 — 기본 부트스트랩 체크박스가 흐릿해 잘 안 보이던
