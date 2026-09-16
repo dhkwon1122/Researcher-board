@@ -267,6 +267,15 @@ def save_snapshot(records: list[dict], valid_date: date) -> dict:
     # 조직코드를 매길 수 있다(_assign_depth_first_dep_codes() docstring 참고).
     result = _assign_depth_first_dep_codes(result)
 
+    # team_refer.csv 저장 형식 재배치(2026-09-17 확정, ptr.reshape_storage_
+    # columns() 참고) — 외부 시스템이 이 파일을 직접 읽어 org_name_wd가
+    # 무조건 3단계부서명 칸에 있어야 하므로, 엑셀 일괄 업로드(process())와
+    # 동일하게 그리드 저장 경로도 최종 저장 직전에 이 재배치를 거친다.
+    # dep_id/upper_dep_id/team_layer는 그대로이고, 그리드 자체(list_editable_
+    # rows()가 보여주는 값)는 항상 각 행 자기 칸만 읽으므로 이 재배치와 무관하게
+    # 그대로 유지된다.
+    result = ptr.reshape_storage_columns(result)
+
     result = ptr.stamp_valid_date(result, valid_date)
     result['deleted'] = 'N'
 
