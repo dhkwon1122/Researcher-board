@@ -166,15 +166,25 @@ def list_editable_rows() -> list[dict]:
     team_hierarchy.backfill_full_path()로 1/2/3단계 부서명을 전체 경로로
     채워 그리드에 보여준다 — 그래야 그대로 다시 저장해도(수정 없이
     저장만 해도) build_rows_from_records()가 같은 dep_id를 재계산해
-    내용이 유지된다."""
+    내용이 유지된다.
+
+    KOREAN_COLUMNS(엑셀 헤더명) 외에 `_valid_date`('YYYY-MM-DD', 그 행이
+    마지막으로 저장된 시점)도 함께 얹는다 — pages/admin.py가 엑셀 업로드
+    직후 "이번에 갱신 안 된 예전 행"을 색으로 구분해 보여줄 때 쓴다
+    (2026-09-16, 사용자 요청). `_`로 시작해 KOREAN_COLUMNS와 겹치지
+    않고, save_snapshot()의 _cleaned_records()는 _COL_MAP에 있는 키만
+    읽으므로 저장 시 그대로 무시된다(부작용 없음)."""
     rows = mmd.read_team_refer(OUT_DIR)
     rows = th.backfill_full_path(rows)
     tree = mmd.build_org_tree(rows)
     rows = _flatten_org_tree(tree)
-    return [
-        {kor: r.get(eng, '') for eng, kor in _REVERSE_COL_MAP.items()}
-        for r in rows
-    ]
+    out = []
+    for r in rows:
+        row = {kor: r.get(eng, '') for eng, kor in _REVERSE_COL_MAP.items()}
+        y, m, d = r.get('valid_year', ''), r.get('valid_month', ''), r.get('valid_day', '')
+        row['_valid_date'] = f'{y}-{m}-{d}' if y and m and d else ''
+        out.append(row)
+    return out
 
 
 def _assign_depth_first_dep_codes(result: pd.DataFrame) -> pd.DataFrame:

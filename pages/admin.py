@@ -488,6 +488,31 @@ def _renumber_dep_codes(rows: list) -> None:
         row['조직코드'] = f'{i:04d}'
 
 
+def _mark_stale_rows(rows: list, highlight_date: str | None) -> list:
+    """엑셀 일괄 업로드 직후에만, 이번 업로드 날짜(highlight_date,
+    'YYYY-MM-DD')와 그 행의 마지막 저장일(team_refer_store.list_editable_
+    rows()가 채워주는 `_valid_date`)이 다른 행에 `_stale=True`를 표시한다
+    (2026-09-16, 사용자 요청). intake 원본의 1~3단계부서명(경로 텍스트)이
+    조금만 바뀌어도 dep_id가 새로 계산돼, 비공식소속부서명은 같은데 예전
+    dep_id로 저장된 "과거 데이터"가 새 항목과 나란히 남는 경우가 있다 —
+    이걸 색으로 표시해 관리자가 눈으로 찾아 수동으로 정리("선택 삭제")할
+    수 있게 하는 용도다. getRowStyle의 styleConditions가 이 값을 읽어
+    배경색을 강조한다.
+
+    highlight_date가 없으면(업로드 직후가 아니라 평소 화면 로드/조회 시)
+    아무 것도 표시하지 않는다 — 조직마다 마지막 저장일이 원래 제각각인
+    게 정상이라(날짜 기반 누적 테이블), 업로드와 무관하게 상시로 켜두면
+    맞지 않는 조직마다 항상 색이 칠해져 오히려 혼란을 준다(사용자 확정
+    — "엑셀 업로드 직후에만 특별히 보여주는 형태")."""
+    if not highlight_date:
+        for r in rows:
+            r.pop('_stale', None)
+        return rows
+    for r in rows:
+        r['_stale'] = bool(r.get('_valid_date')) and r['_valid_date'] != highlight_date
+    return rows
+
+
 def _split_hidden_rows(rows: list) -> tuple[list, list]:
     """비공식소속부서명이 빈 행(리프에 실제 배정이 없는 조직 — 조직도
     트리를 이루기 위한 상위 노드로만 쓰이는 행, 2026-09-15 요청)을
@@ -658,6 +683,12 @@ def _team_refer_tab() -> html.Div:
         # 비공식소속부서명이 빈 행(가독성을 위해 화면에서 숨김) — 편집 대상이
         # 아니라 저장 시 화면에 보이는 행과 그대로 합쳐서 반영한다.
         dcc.Store(id='team-refer-hidden-rows', data=hidden_rows),
+        # "엑셀 파일로 한번에 반영" 실행 시점에만 이번 업로드 날짜('YYYY-MM-DD')로
+        # 채워지는 임시 표시 — _mark_stale_rows()/team_refer_run_upload() 참고.
+        # 페이지를 새로고침하거나 다른 화면으로 나갔다 오면(이 컴포넌트가
+        # 새로 만들어지며 기본값 None으로 리셋) 강조 표시도 함께 사라진다
+        # (사용자 확정 — "엑셀 업로드 직후에만" 보이는 임시 기능).
+        dcc.Store(id='team-refer-highlight-date', data=None),
         # clientside_callback 전용 더미 Output(화면에 표시할 내용 없음) —
         # pages/researcher_profile.py의 profile-print-dummy와 동일한 패턴.
         html.Div(id='team-refer-grid-dummy', style={'display': 'none'}),
@@ -738,6 +769,17 @@ def _team_refer_tab() -> html.Div:
                     'domLayout': 'autoHeight',  # 페이지 나누지 않고 전체 행을 한 번에 표시(dash_table의 page_action='none'과 동일)
                     'stopEditingWhenCellsLoseFocus': True,
                     'tooltipShowDelay': 0,
+                },
+                # 엑셀 업로드 직후에만 _mark_stale_rows()가 채우는 `_stale`을
+                # 보고 배경색을 강조한다(2026-09-16, 사용자 요청) — 코드 실행
+                # 플래그(dangerously_allow_code) 없이 되는 선언형 방식(dash-ag-grid
+                # 전용 styleConditions, pages/researcher_list.py의 홀수행
+                # 줄무늬와 동일한 패턴).
+                getRowStyle={
+                    'styleConditions': [
+                        {'condition': 'params.data._stale === true',
+                         'style': {'backgroundColor': '#fff3cd'}},
+                    ],
                 },
                 # 헤더 클릭 정렬(sortable=True)은 화면 표시 순서만 바꾸고
                 # rowData 자체의 순서는 그대로 유지됨을 확인했다 — 이동/삭제가
@@ -2676,6 +2718,7 @@ def data_update_run(_all_clicks, _sel_clicks, check_values, check_ids,
 @callback(
     Output('team-refer-upload-status', 'children', allow_duplicate=True),
     Output('data-update-interval', 'disabled', allow_duplicate=True),
+    Output('team-refer-highlight-date', 'data', allow_duplicate=True),
     Input('team-refer-run-upload-btn', 'n_clicks'),
     State({'type': 'du-valid-date', 'key': 'team_refer'}, 'date'),
     prevent_initial_call=True,
@@ -2683,20 +2726,24 @@ def data_update_run(_all_clicks, _sel_clicks, check_values, check_ids,
 def team_refer_run_upload(n_clicks, valid_date_str):
     from services.auth import can
     if not n_clicks:
-        return no_update, no_update
+        return no_update, no_update, no_update
     if not can('manage_users'):
-        return _alert('관리자만 실행할 수 있습니다.', 'danger'), True
+        return _alert('관리자만 실행할 수 있습니다.', 'danger'), True, no_update
     if not wpr.has_upload('team_refer'):
-        return _alert('업로드된 파일이 없습니다.', 'warning'), True
+        return _alert('업로드된 파일이 없습니다.', 'warning'), True, no_update
 
     # 일(day) 단위까지 그대로 반영한다(2026-09-16 수정 — _valid_date_picker
     # 참고: 예전에는 항상 일=1로 고정 저장돼, 이미 그달 중 더 늦은 날짜로
     # 저장된 값에 밀려 새로 올린 엑셀이 "최신"으로 반영되지 않는 문제가 있었음).
+    highlight_date = valid_date_str or date.today().isoformat()
     valid_dates = {'team_refer': date.fromisoformat(valid_date_str)} if valid_date_str else {}
     if not wpr.start_run(['team_refer'], valid_dates=valid_dates):
-        return _alert('이미 다른 작업이 실행 중입니다. 잠시 후 다시 시도해주세요.', 'warning'), False
+        return _alert('이미 다른 작업이 실행 중입니다. 잠시 후 다시 시도해주세요.', 'warning'), False, no_update
+    # team-refer-highlight-date를 이번 업로드 날짜로 채워, 완료 후
+    # data_update_poll()이 그리드를 새로고침할 때 이 날짜와 다른(=이번
+    # 업로드로 안 갱신된) 행을 색으로 강조하게 한다(_mark_stale_rows() 참고).
     return (_alert('실행을 시작했습니다. 브라우저를 닫아도 서버에서 계속 진행되며, '
-                    '화면은 자동으로 갱신됩니다.', 'info'), False)
+                    '화면은 자동으로 갱신됩니다.', 'info'), False, highlight_date)
 
 
 # ── 콜백: 데이터 업데이트 — 항목별 "API로 가져오기" 아이콘 ─────────────────────
@@ -2754,9 +2801,10 @@ def data_update_db_load(n_clicks):
     Output('team-refer-hidden-rows', 'data', allow_duplicate=True),
     Output('team-refer-table', 'selectedRows', allow_duplicate=True),
     Input('data-update-interval', 'n_intervals'),
+    State('team-refer-highlight-date', 'data'),
     prevent_initial_call=True,
 )
-def data_update_poll(_n):
+def data_update_poll(_n, highlight_date):
     team_refer_row = next((r for r in wpr.snapshot() if r['key'] == 'team_refer'), None)
     team_refer_status = _team_refer_run_status_view(team_refer_row) if team_refer_row else no_update
     ejf_row = next((r for r in wpr.snapshot() if r['key'] == 'exception_job_function'), None)
@@ -2773,6 +2821,10 @@ def data_update_poll(_n):
     # 2026-09-15 추가) team-refer-hidden-rows Store를 함께 갱신한다.
     visible_rows, hidden_rows = _split_hidden_rows(team_refer_store.list_editable_rows())
     grid_data = _renumbered(_ensure_rid(visible_rows))
+    # 엑셀 업로드가 방금 끝난 경우(team-refer-highlight-date가 채워져
+    # 있음)에만, 이번 업로드 날짜와 다른 행("과거 데이터")을 색으로
+    # 강조한다(_mark_stale_rows() 참고).
+    grid_data = _mark_stale_rows(grid_data, highlight_date)
     return (_data_update_table(), _db_status_view(), not wpr.any_running(),
             team_refer_status, ejf_status, grid_data, hidden_rows, [])
 

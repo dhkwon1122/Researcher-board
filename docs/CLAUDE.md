@@ -12360,3 +12360,55 @@ SAIT 밑으로 편입되는 것(그 자식 AI팀의 부모는 여전히 AI사업
 아니고 합성 데이터로만 검증했다 — 실제 업로드 후 "보유 전문성" 조직도에서
 "AI융합팀" 같은 조직이 SAIT/종합기술원 밑에 정확히 나타나는지는 실제
 업로드로 재확인이 필요하다.
+
+## 2026-09-16 (9): 팀/리더 참조 — 엑셀 업로드 직후 "안 갱신된 과거 데이터"
+행을 색으로 강조
+
+사용자가 실제 intake 파일로 업로드해본 뒤 발견한 상황: 업로드 원본의
+비공식소속부서명이 바뀌거나, 비공식소속부서명은 같아도 1~3단계부서명
+(경로 텍스트)이 달라지면 dep_id가 새로 계산돼(해시 기반), 예전
+dep_id로 저장된 "과거 데이터"가 자동으로 안 지워지고 새 항목과 나란히
+남는다 — 이 둘(이번에 갱신된 신규 vs 안 갱신된 과거)을 색으로 구분해
+관리자가 눈으로 찾아 수동으로 정리("선택 삭제")할 수 있게 해달라는
+요청. 구현 전 이해한 내용과 확인할 점 5가지를 먼저 확인받았다: (1)
+저장 시점(valid_year/month/day) 비교로 판단, (2) 팀/리더 참조 그리드에
+상시가 아니라 "엑셀 업로드 직후에만" 표시, (3) 추천 색상(신규는 기본,
+과거는 옅은 노란색) 그대로, (4) 행 단위 강조, (5) 자동 삭제 없이
+"눈으로 구분 → 수동 삭제" 용도.
+
+**구현**:
+- `services/team_refer_store.py`의 `list_editable_rows()`가 각 행에
+  `_valid_date`('YYYY-MM-DD', 그 행이 마지막으로 저장된 시점)를 추가로
+  얹도록 수정 — KOREAN_COLUMNS에 없는 내부용 필드라 저장 시
+  `_cleaned_records()`가 무시해 부작용이 없다.
+- `pages/admin.py`에 `dcc.Store(id='team-refer-highlight-date',
+  data=None)`를 새로 추가 — "엑셀 파일로 한번에 반영" 실행(`team_refer_
+  run_upload()`) 시점에만 그 업로드의 valid_date로 채워진다. 페이지를
+  새로고침하거나 다른 화면으로 나갔다 오면 이 컴포넌트가 새로 만들어지며
+  기본값 None으로 리셋돼 강조 표시도 자연히 사라진다(탭 전환은 admin.py
+  구조상 서버 재렌더링이 아니라 이미 마운트된 탭들을 CSS로 숨기고 보여주는
+  방식이라, 탭만 왔다 갔다 하는 동안은 강조가 유지된다 — 확인함).
+- `_mark_stale_rows(rows, highlight_date)` 헬퍼를 추가해 `_valid_date`가
+  `highlight_date`와 다른 행에 `_stale=True`를 표시 — `highlight_date`가
+  없으면(평소 화면 로드/조회 시) 아무 것도 표시하지 않는다(조직마다
+  마지막 저장일이 원래 제각각인 게 정상이라, 상시로 켜두면 업로드와
+  무관하게 늘 색이 칠해져 오히려 혼란을 줌).
+- `team-refer-table`의 `dashGridOptions`에 `getRowStyle`(dash-ag-grid
+  선언형 styleConditions — 코드 실행 플래그 불필요, `pages/researcher_list.py`
+  의 홀수행 줄무늬와 동일한 패턴)을 추가해 `params.data._stale === true`
+  인 행에 옅은 노란색(`#fff3cd`, 부트스트랩 warning 계열) 배경을 준다.
+- 업로드 완료 후 그리드를 갱신하는 `data_update_poll()`이 `team-refer-
+  highlight-date` Store를 State로 읽어 `_mark_stale_rows()`를 거친
+  rowData를 내보내도록 수정.
+
+**검증**: `_mark_stale_rows()`에 신규(오늘 날짜)/과거(예전 날짜)/날짜
+정보 없음(신규 추가 행 등) 3가지를 섞은 합성 데이터로 신규만 `_stale=
+False`, 과거만 `True`로 정확히 갈리는 것, `highlight_date`가 없으면
+`_stale` 키 자체가 안 붙는 것을 확인. `list_editable_rows()`가 실제로
+`_valid_date`를 정확히 채워주는지 임시 디렉터리에 합성 team_refer.csv를
+만들어 end-to-end로 확인(숨김 행·보이는 행 둘 다 정상). `python3 -m
+py_compile pages/admin.py services/team_refer_store.py` 통과.
+
+**미검증**: 실제 intake 파일 업로드 → 그리드에서 색이 실제로 보이는지,
+"엑셀 업로드 직후에만" 보였다가 페이지를 새로고침하면 사라지는지는
+이 세션 밖(사용자가 직접 확인)이라 실행 결과는 다음 확인이 필요하다.
