@@ -357,6 +357,49 @@ def _print_merge_warning(merges: list[dict]) -> None:
               f"성명={k['name']}, 직책={k['assignment_name']}")
 
 
+_KNOWN_ROOT_NAMES = {'SAIT', '종합기술원'}
+
+
+def reparent_orphan_roots(result: pd.DataFrame) -> pd.DataFrame:
+    """1단계부서명만 채워지고(2/3단계부서명·비공식소속부서명 전부 빈)
+    그 1단계부서명이 실제 최상위 루트("SAIT"/"종합기술원")가 아닌 행을
+    찾아 upper_dep_id를 그 루트의 dep_id로 채운다(2026-09-16, 사용자
+    확정 — "보유 전문성"의 조직도가 부모-자식 관계를 올바르게 그리도록
+    하기 위함).
+
+    인력현황 원본에서 만드는 intake(scripts/build_team_refer_intake.py
+    산출물)에는 사람 배정이 없는 조직이 1단계부서명만 채워진 채로 들어올
+    수 있는데(예: "AI융합팀"), 2/3단계 정보가 없어 겉보기엔 최상위
+    조직처럼 보일 뿐 실제로는 SAIT나 종합기술원 밑에 속한다.
+
+    같은 업로드 파일 안에 "SAIT"와 "종합기술원"이 동시에 루트로 존재할
+    일은 없다는 전제(사용자 확정)로, 실제로 존재하는 쪽 하나만 찾아 그
+    dep_id를 쓴다. 이번 파일에 루트 자체가(SAIT도 종합기술원도) 없으면
+    아무것도 바꾸지 않는다(기존과 동일하게 최상위로 남김, 사용자 확정).
+
+    엑셀 일괄 업로드(process()) 전용이다 — 관리자 화면 그리드 저장
+    (services.team_refer_store.save_snapshot())에는 적용하지 않는다
+    (사용자 확정 — "이건 보유 전문성의 조직도에서 부모-자식 관계 반영
+    하기 위한 작업"이라 배치 업로드 경로에만 필요하다고 판단)."""
+    root_rows = result[
+        (result['team_layer'] == '1') & (result['dep_1st_name'].isin(_KNOWN_ROOT_NAMES))
+    ]
+    if root_rows.empty:
+        return result
+    root_dep_id = root_rows.iloc[0]['dep_id']
+
+    orphan_mask = (
+        (result['team_layer'] == '1')
+        & (~result['dep_1st_name'].isin(_KNOWN_ROOT_NAMES))
+        & (result['dep_2nd_name'] == '')
+        & (result['dep_3rd_name'] == '')
+        & (result['org_name_wd'] == '')
+    )
+    result = result.copy()
+    result.loc[orphan_mask, 'upper_dep_id'] = root_dep_id
+    return result
+
+
 def tombstone_missing_dep_ids(result: pd.DataFrame, valid_date: date) -> pd.DataFrame:
     """이번 처리 결과(result — build_rows_from_records()가 만든, 이번에
     "살아있어야 할" 조직 전체)에 없는, 현재 "살아있는" dep_id를 찾아
@@ -460,6 +503,7 @@ def process(raw_dir: str = RAW_DIR, valid_date: date | None = None) -> bool:
 
     records = df.to_dict('records')
     result = build_rows_from_records(records)
+    result = reparent_orphan_roots(result)
     result = _backfill_leader_fields(result, valid_date)
     _print_duplicate_warning(find_duplicate_dep_ids(result))
     _print_merge_warning(find_tag_merges(records))

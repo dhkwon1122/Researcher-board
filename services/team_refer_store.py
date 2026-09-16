@@ -177,59 +177,53 @@ def list_editable_rows() -> list[dict]:
     ]
 
 
-def _renumber_dep_codes(records: list[dict]) -> list[dict]:
-    """조직코드(『조직코드』, dep_code)를 저장 시점에 정리한다 — 단, 이미
-    값이 있는 행은 그 값을 그대로 존중하고(4자리 0-패딩만 맞춤), 값이
-    비어 있는 행에만 새 번호를 매긴다.
+def _assign_depth_first_dep_codes(result: pd.DataFrame) -> pd.DataFrame:
+    """조직코드(dep_code)를 저장 시점마다 "실제 트리를 순회하는 순서"(부모
+    → 그 자식 전부 → 다음 형제, mmd.build_org_tree()/org_tree_html()이
+    화면에 그리는 순서와 정확히 동일) 그대로 0001부터 다시 매긴다.
 
-    2026-09-16 처음 도입했을 때는 저장할 때마다 화면 순서 그대로 전체를
-    무조건 다시 매겼는데(보이는 조직 0001부터, 숨김 조직 9999부터
-    거꾸로), 그 결과 이동/추가/삭제 버튼을 전혀 안 눌러도(다른 필드만
-    고쳐 저장) 조직코드 번호 자체가 저장할 때마다 바뀌어 버렸다(사용자
-    재보고). 순서를 바꾸고 싶을 때는 위로/아래로/맨위로/맨아래로 버튼을
-    누르면 되고, 그 버튼들이 이미 클라이언트(pages/admin.py의 같은 이름
-    함수)에서 화면 순서 그대로 새 조직코드를 매겨 넘겨준다 — 여기 서버
-    쪽은 그 결과를 존중해서 패딩만 하면 충분하다.
+    **두 차례 시행착오 끝에 확정한 방식(2026-09-16)**:
+    1차 시도(저장마다 "화면에 보이는 행 배열 순서 + 숨김 행을 배열 맨
+    뒤에 이어붙인 순서"로 재배정, 숨김 행은 9999부터 거꾸로)는 실제
+    트리 순회 순서와 어긋났다 — 화면에 안 보이는(비공식소속부서명 없는)
+    조직이 마침 어떤 자식들의 "부모"인 경우, 부모는 9999쪽으로 밀려나고
+    그 자식들은 낮은 번호를 받아 부모-자식 번호가 완전히 따로 놀았다
+    (사용자 재보고 — "0001, 0071~076, 0081~084, 0019~025..." 처럼 뒤섞여
+    보임). 2차 시도("이미 값 있으면 그대로 두고 패딩만")는 그 뒤섞인 옛
+    값을 그대로 보존해 문제를 감추기만 했다.
 
-    패딩이 필요한 이유는 그대로다: build_org_tree()(pipeline/
-    rd_specialist_markdown.py)의 형제 정렬이 문자열 비교라, 패딩 없는
-    '2'/'10'을 그대로 두면 '10'이 '2'보다 문자상 앞서 실제 원하는 숫자
-    순서와 어긋난다. 4자리로 0-패딩하면 문자열 비교와 숫자 비교 결과가
-    항상 같아진다.
+    이번 방식은 dep_id/upper_dep_id로 실제 트리를 구성한 뒤(build_org_tree
+    — 형제는 일단 "기존" dep_code로 1차 정렬) 그 트리를 부모→자식 순서로
+    직접 순회하며 새 번호를 매긴다 — 그래서 부모 바로 다음에 그 자식들이
+    항상 연달아 번호를 받고(사용자 요청: "가장 윗행부터 아래행 순으로
+    0001, 0002, 0003"), 화면에 안 보이는 구조용 조직도 자기 트리 위치에서
+    자연스럽게 번호를 받아 부모-자식 번호가 어긋나지 않는다. 트리 구조
+    (부모-자식 관계·형제 상대 순서)가 이번 저장에서 안 바뀌었으면, 같은
+    순회를 다시 해도 항상 같은 값이 나와(안정적 재배정) 순서를 안 바꾸고
+    다른 필드만 고쳐 저장해도 조직코드가 요동치지 않는다.
 
-    비공식소속부서명이 빈 행(관리자 화면 그리드에는 안 보이는, 리프에
-    실제 배정이 없는 조직 — pages/admin.py의 _split_hidden_rows() 참고)은
-    화면에서 순서를 확인/조정할 방법이 없어 "기존 값 존중"이 의미가
-    없으므로, 이 행들만 예외적으로 여전히 매번 9999부터 거꾸로 다시
-    매긴다 — 보이는 조직의 번호 범위와 겹치지 않게 항상 형제들 중 맨
-    뒤로 밀려나게 하려는 목적은 그대로다(2026-09-16, 사용자 확정)."""
-    def _pad(value: str) -> str:
-        value = value.strip()
-        return f'{int(value):04d}' if value.isdigit() else value
+    이 방식을 쓰면 그리드의 "조직코드" 셀에 값을 직접 타이핑해도 다음
+    저장 때 트리 위치 기준으로 덮어써진다 — 순서를 바꾸려면 위로/아래로/
+    맨위로/맨아래로 버튼을 써야 한다(사용자가 저장 시점 자동 재배정을
+    직접 요청해 확정)."""
+    rows = result.to_dict('records')
+    tree = mmd.build_org_tree(rows)
 
-    next_visible = 1
-    for r in records:
-        if str(r.get('비공식소속부서명') or '').strip():
-            existing = str(r.get('조직코드') or '').strip()
-            if existing.isdigit():
-                next_visible = max(next_visible, int(existing) + 1)
+    new_codes: dict[str, str] = {}
+    counter = 0
 
-    hidden_i = 9999
-    out = []
-    for r in records:
-        r = dict(r)
-        if str(r.get('비공식소속부서명') or '').strip():
-            existing = str(r.get('조직코드') or '').strip()
-            if existing:
-                r['조직코드'] = _pad(existing)
-            else:
-                r['조직코드'] = f'{next_visible:04d}'
-                next_visible += 1
-        else:
-            r['조직코드'] = f'{hidden_i:04d}'
-            hidden_i -= 1
-        out.append(r)
-    return out
+    def _walk(nodes: list) -> None:
+        nonlocal counter
+        for node in nodes:
+            counter += 1
+            new_codes[node['dep_id']] = f'{counter:04d}'
+            _walk(node['children'])
+
+    _walk(tree)
+
+    result = result.copy()
+    result['dep_code'] = result['dep_id'].map(new_codes).fillna(result['dep_code'])
+    return result
 
 
 def save_snapshot(records: list[dict], valid_date: date) -> dict:
@@ -238,7 +232,8 @@ def save_snapshot(records: list[dict], valid_date: date) -> dict:
     records: 그리드의 현재 행(엑셀 헤더명 키, "전체 경로 포함" 인텔이크
     형태 — list_editable_rows()가 채워준 상위 부서명을 그대로 유지한 채
     일부만 고쳐도 되고, 새 행을 추가할 때도 1/2/3단계 이름을 자기 레벨까지
-    채우면 된다). _renumber_dep_codes()로 조직코드를 먼저 정리한 뒤 처리한다.
+    채우면 된다). dep_id/upper_dep_id가 계산된 뒤 _assign_depth_first_
+    dep_codes()로 조직코드를 트리 순회 순서대로 다시 매긴다.
 
     dep_id/upper_dep_id/team_layer는 build_rows_from_records()가 1/2/3단계
     부서명 경로에서 자동 계산하므로, "이번 저장에 없는 옛 dep_id"를 사람이
@@ -252,12 +247,15 @@ def save_snapshot(records: list[dict], valid_date: date) -> dict:
     있으면 DB에도 반영한다(실패해도 CSV 반영은 이미 끝난 상태이므로 함수
     전체가 실패하지 않는다 — db_ok로 호출부가 구분해서 안내).
     """
-    records = _renumber_dep_codes(records)
     result = ptr.build_rows_from_records(records)
     duplicate_dep_ids = ptr.find_duplicate_dep_ids(result)
     # "(SAIT)"/"(기술원)" 태그 제거로 서로 다른 원본이 하나로 합쳐진 경우를
     # 확인용으로 함께 반환한다(2026-09-15 확정 — 값 손실이 있는지 확인 필요).
     tag_merges = ptr.find_tag_merges(records)
+
+    # dep_id/upper_dep_id가 나온 뒤에야 실제 트리를 구성해 순회 순서대로
+    # 조직코드를 매길 수 있다(_assign_depth_first_dep_codes() docstring 참고).
+    result = _assign_depth_first_dep_codes(result)
 
     result = ptr.stamp_valid_date(result, valid_date)
     result['deleted'] = 'N'
