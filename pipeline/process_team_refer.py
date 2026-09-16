@@ -362,16 +362,29 @@ _KNOWN_ROOT_NAMES = {'SAIT', '종합기술원'}
 
 
 def reparent_orphan_roots(result: pd.DataFrame) -> pd.DataFrame:
-    """1단계부서명만 채워지고(2/3단계부서명·비공식소속부서명 전부 빈)
-    그 1단계부서명이 실제 최상위 루트("SAIT"/"종합기술원")가 아닌 행을
-    찾아 upper_dep_id를 그 루트의 dep_id로 채운다(2026-09-16, 사용자
-    확정 — "보유 전문성"의 조직도가 부모-자식 관계를 올바르게 그리도록
-    하기 위함).
+    """1단계부서명만 채워진(2/3단계부서명 전부 빈) 그 1단계부서명이 실제
+    최상위 루트("SAIT"/"종합기술원")가 아닌 행을 찾아 upper_dep_id를 그
+    루트의 dep_id로 채운다(2026-09-16, 사용자 확정 — "보유 전문성"의
+    조직도가 부모-자식 관계를 올바르게 그리도록 하기 위함).
 
     인력현황 원본에서 만드는 intake(scripts/build_team_refer_intake.py
     산출물)에는 사람 배정이 없는 조직이 1단계부서명만 채워진 채로 들어올
     수 있는데(예: "AI융합팀"), 2/3단계 정보가 없어 겉보기엔 최상위
     조직처럼 보일 뿐 실제로는 SAIT나 종합기술원 밑에 속한다.
+
+    upper_dep_id만 바꾸고 team_layer/1~3단계부서명 컬럼 값은 그대로
+    둔다 — build_org_tree()의 부모-자식 관계는 dep_id/upper_dep_id로만
+    정해지고 team_layer는 라벨 표시용일 뿐이라, 이미 3단계 깊이인 하위
+    조직(예: ADDP>공정>파트1의 "파트1")이 있어도 스키마에 없는 4단계
+    칸이 필요 없이 그대로 안전하게 동작한다.
+
+    2026-09-17 확정: `org_name_wd`가 채워져 있어도(=collapse_repeated_
+    levels()로 진짜 조직명이 붙은 1단계 노드여도) 그대로 재부모화 대상에
+    포함한다 — "내부 데이터상 부서단위가 명확하지 않아 담당자 의도대로
+    SAIT 산하에 편입시킨다"는 원칙은 org_name_wd 유무와 무관하게 적용됨
+    (최초 2026-09-16 버전은 org_name_wd가 빈 자리표시자 노드만 대상으로
+    했었으나, 실제 명명된 1단계 조직도 동일하게 편입해야 한다는 사용자
+    확정에 따라 조건을 완화).
 
     같은 업로드 파일 안에 "SAIT"와 "종합기술원"이 동시에 루트로 존재할
     일은 없다는 전제(사용자 확정)로, 실제로 존재하는 쪽 하나만 찾아 그
@@ -394,10 +407,49 @@ def reparent_orphan_roots(result: pd.DataFrame) -> pd.DataFrame:
         & (~result['dep_1st_name'].isin(_KNOWN_ROOT_NAMES))
         & (result['dep_2nd_name'] == '')
         & (result['dep_3rd_name'] == '')
-        & (result['org_name_wd'] == '')
     )
     result = result.copy()
     result.loc[orphan_mask, 'upper_dep_id'] = root_dep_id
+    return result
+
+
+_LEVEL_COLS = ('1단계부서명', '2단계부서명', '3단계부서명')
+
+
+def collapse_repeated_levels(records: list) -> list:
+    """1/2/3단계부서명 중 어떤 레벨의 값이 바로 위 레벨의 값과 같으면, 그
+    레벨은 실제로 새로운 깊이가 아니라 "이 상위 레벨 자체에는 별도 하위
+    구분이 없다"는 것을 사람이 미관상 반복 입력해 표현한 것으로 보고
+    접는다(2026-09-17 확정). 값이 붙어 있던 칸은 비우는 대신 뒤 칸들을
+    앞으로 당겨 채운다 — own_path()가 첫 빈 값에서 경로 읽기를 멈추므로,
+    중간 칸만 비우고 뒤 칸 값을 그대로 두면 그 뒤 값이 통째로 무시된다.
+
+    예: (ADDP,ADDP,ADDP) → 2·3단계 모두 바로 위와 같아 전부 접힘 → (ADDP,'','')
+        (ADDP,ADDP,2D)   → 2단계만 접힘(2D는 3단계 칸에서 2단계 칸으로 당겨짐)
+                            → (ADDP,'2D','')
+        (ADDP,공정,공정)  → 3단계만 접힘 → (ADDP,'공정','')
+        (ADDP,공정,파트1) → 전부 다름, 접힐 것 없음 → 변화 없음
+
+    "ADDP 산하에 우연히 같은 이름 'ADDP'인 별도 하위조직이 있는" 경우는
+    이 휴리스틱으로 구분할 수 없다는 한계가 있으나, 실제 데이터에는 그런
+    경우가 없다고 사용자가 확인함.
+
+    엑셀 일괄 업로드(process()) 전용이다 — 관리자 화면 그리드(services.
+    team_refer_store)에는 적용하지 않는다(사용자 확정 — 그리드에서는
+    사람이 이 반복 표기를 그대로 입력해서 쓸 수 있어야 하므로)."""
+    result = []
+    for record in records:
+        new_record = dict(record)
+        kept = []
+        for col in _LEVEL_COLS:
+            value = str(record.get(col) or '').strip()
+            if not value:
+                break
+            if not kept or value != kept[-1]:
+                kept.append(value)
+        for i, col in enumerate(_LEVEL_COLS):
+            new_record[col] = kept[i] if i < len(kept) else ''
+        result.append(new_record)
     return result
 
 
@@ -516,6 +568,7 @@ def process(raw_dir: str = RAW_DIR, valid_date: date | None = None) -> bool:
     valid_date = valid_date or date.today()
 
     records = df.to_dict('records')
+    records = collapse_repeated_levels(records)
     result = build_rows_from_records(records)
     result = reparent_orphan_roots(result)
     result = _backfill_leader_fields(result, valid_date)
