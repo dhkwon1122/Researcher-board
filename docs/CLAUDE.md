@@ -12186,3 +12186,31 @@ B: 배정 인력 전문성 기반...)")도 같은 B 라벨로 통일해 툴팁�
 **검증**: `python3 -m py_compile pages/job_market.py` 통과, 변경된
 문구 3곳(툴팁 A/B 설명, 상단 요약 문구)이 요청한 표현과 정확히
 일치하는지 diff로 재확인.
+
+## 2026-09-16 (5): 보유 전문성 요약 — "전문지식 및 역량" 목록도
+"주요 역할·책임"과 동일한 네모 마커로 통일
+
+사용자가 Job Market의 연구원 카드에서 눈치챈 불일치("주요 역할책임
+설명란엔 네모가 나오는데 전문지식 및 역량 설명란엔 없다")를 통일해달라고
+요청. `components/detail_tabs.py`의 `llm_summary_block()`(Job Market·
+연구원 프로필 "보유 전문성" 탭·전문성 MAP 탭이 전부 공유하는 컴포넌트)이
+주요 역할·책임은 `bullet_list()`(사각 마커), 전문지식 및 역량은
+`plain_indent_list()`(마커 없음)로 서로 다르게 렌더링하고 있었다 —
+`plain_indent_list()`는 실제로 2026-08-27경 "전문지식 및 역량은 마커
+없이 들여쓰기만 해달라"는 별도의 이전 요청으로 도입된 것이었는데,
+이번에 그 결정을 뒤집어 둘 다 `bullet_list()`로 통일했다.
+
+**변경 범위**: `llm_summary_block()` 호출 한 곳(전문지식 및 역량 렌더링
+줄)만 `plain_indent_list(domain_skill)` → `bullet_list(domain_skill)`로
+교체 — 이 함수가 공유 컴포넌트라 Job Market뿐 아니라 연구원 프로필의
+"보유 전문성" 탭에도 동일하게 반영된다(사용자가 "job market에서"라고
+콕 집었지만, 같은 컴포넌트를 여러 화면이 공유하는 구조라 화면별로만
+다르게 만들려면 별도 파라미터가 필요해 — 요청하지 않은 복잡도라 추가하지
+않고 공용 컴포넌트를 그대로 통일하는 쪽을 택했다). `plain_indent_list()`
+함수 자체는 `components/profile_sections.py`의 다른 곳(양성/시상 이력 등)
+에서 여전히 쓰여 삭제하지 않았다.
+
+**검증**: `llm_summary_block()`에 합성 프로필(전문지식 및 역량 2건 포함)을
+직접 넣어 렌더링한 결과를 확인 — 전문지식 및 역량 목록도 주요 역할·책임과
+동일한 사각 마커(`borderRadius: 1px`인 작은 span)로 렌더링됨을 확인.
+`python3 -m py_compile components/detail_tabs.py` 통과.
