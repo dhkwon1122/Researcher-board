@@ -177,13 +177,47 @@ def list_editable_rows() -> list[dict]:
     ]
 
 
+def _renumber_dep_codes(records: list[dict]) -> list[dict]:
+    """조직코드(『조직코드』, dep_code)를 저장 직전에 매번 새로 매긴다.
+
+    build_org_tree()(pipeline/rd_specialist_markdown.py)의 형제 정렬이
+    문자열 비교라, 패딩 없는 '2'/'10'을 그대로 두면 '10'이 '2'보다 문자상
+    앞서 실제 원하는 숫자 순서와 어긋난다(2026-09-16, 사용자 보고로 확인
+    — 화면에서 행을 옮겨 저장해도 다시 열면 순서가 어긋나 보이는 원인).
+    4자리로 0-패딩하면 문자열 비교와 숫자 비교 결과가 항상 같아진다
+    (team_hierarchy.py가 새 조직에 기본값을 채울 때 쓰는 `f'{i:04d}'`와
+    동일한 규칙으로 통일).
+
+    비공식소속부서명이 빈 행(관리자 화면 그리드에는 안 보이는, 리프에
+    실제 배정이 없는 조직 — pages/admin.py의 _split_hidden_rows() 참고)은
+    화면에서 순서를 확인/조정할 방법이 없으므로, 보이는 조직(0001부터
+    화면 순서 그대로)과 절대 겹치지 않도록 9999부터 거꾸로 매겨 항상
+    형제들 중 맨 뒤로 밀려나게 한다(2026-09-16, 사용자 확정).
+
+    호출부(save_snapshot())가 저장할 때마다 무조건 이 함수를 거치므로,
+    예전에 패딩 없이 저장된 조직코드도 다음 저장 한 번으로 자동 정리된다
+    — 별도 마이그레이션이 필요 없다."""
+    visible_i, hidden_i = 0, 9999
+    out = []
+    for r in records:
+        r = dict(r)
+        if str(r.get('비공식소속부서명') or '').strip():
+            visible_i += 1
+            r['조직코드'] = f'{visible_i:04d}'
+        else:
+            r['조직코드'] = f'{hidden_i:04d}'
+            hidden_i -= 1
+        out.append(r)
+    return out
+
+
 def save_snapshot(records: list[dict], valid_date: date) -> dict:
     """저장 버튼 콜백 진입점.
 
     records: 그리드의 현재 행(엑셀 헤더명 키, "전체 경로 포함" 인텔이크
     형태 — list_editable_rows()가 채워준 상위 부서명을 그대로 유지한 채
     일부만 고쳐도 되고, 새 행을 추가할 때도 1/2/3단계 이름을 자기 레벨까지
-    채우면 된다).
+    채우면 된다). _renumber_dep_codes()로 조직코드를 먼저 정리한 뒤 처리한다.
 
     dep_id/upper_dep_id/team_layer는 build_rows_from_records()가 1/2/3단계
     부서명 경로에서 자동 계산하므로, "이번 저장에 없는 옛 dep_id"를 사람이
@@ -197,6 +231,7 @@ def save_snapshot(records: list[dict], valid_date: date) -> dict:
     있으면 DB에도 반영한다(실패해도 CSV 반영은 이미 끝난 상태이므로 함수
     전체가 실패하지 않는다 — db_ok로 호출부가 구분해서 안내).
     """
+    records = _renumber_dep_codes(records)
     result = ptr.build_rows_from_records(records)
     duplicate_dep_ids = ptr.find_duplicate_dep_ids(result)
     # "(SAIT)"/"(기술원)" 태그 제거로 서로 다른 원본이 하나로 합쳐진 경우를
