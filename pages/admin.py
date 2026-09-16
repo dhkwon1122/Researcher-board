@@ -531,6 +531,96 @@ def _split_hidden_rows(rows: list) -> tuple[list, list]:
     return visible, hidden
 
 
+def _team_refer_preview_section():
+    """"팀/리더 참조" 탭 — 웹에서 바로 결과를 확인하는 미리보기(2026-09-17
+    신설, 사용자 요청: "수정하고 푸시, 커밋하고 다시 pull 받아서 이미지
+    재생성하고 하니까 너무 비효율적"). 실제 업로드/저장 없이
+    pipeline.process_team_refer.process()가 거치는 변환(collapse_repeated_
+    levels → build_rows_from_records → reparent_orphan_roots)만 그대로
+    실행해 보여준다 — 지금 서버에 실제로 배포된 코드가 이 데이터를 어떻게
+    처리하는지 그 자리에서 확인할 수 있어(원인 조사·배포 검증 용도로도
+    쓸 수 있음), 파이프라인 로직을 고칠 때마다 매번 실제 배포까지 거쳐야
+    확인 가능했던 비효율을 없앤다."""
+    return dbc.Card(dbc.CardBody([
+        html.Div([
+            html.I(className='bi bi-eye me-2 text-info'),
+            html.Span('미리보기 (저장하지 않음)', className='fw-semibold small'),
+        ], className='mb-2'),
+        html.Div(
+            '엑셀에서 원하는 범위를 복사해(첫 줄은 헤더) 아래에 붙여넣고 '
+            '"미리보기 실행"을 누르면, "엑셀 파일로 한번에 반영"이 실제로 '
+            '만들어낼 결과(부서ID/상위부서ID/조직 레벨 포함)를 그 자리에서 '
+            '보여줍니다 — 저장되지 않습니다. 헤더는 비공식소속부서명/구분/'
+            '1단계부서명/2단계부서명/3단계부서명/조직코드/사번/성명/직책 중 '
+            '필요한 것만 있어도 나머지는 빈 값으로 처리됩니다.',
+            className='small text-muted mb-2',
+        ),
+        dcc.Textarea(
+            id='team-refer-preview-input',
+            placeholder=(
+                '비공식소속부서명\t1단계부서명\t2단계부서명\t3단계부서명\n'
+                'SAIT\tSAIT\tSAIT\tSAIT\n'
+                'ADDP\tADDP\tADDP\tADDP'
+            ),
+            style={'width': '100%', 'height': '110px', 'fontFamily': 'monospace', 'fontSize': '0.8rem'},
+        ),
+        dbc.Button([html.I(className='bi bi-play-fill me-1'), '미리보기 실행'],
+                   id='team-refer-preview-btn', color='info', size='sm', className='mt-2'),
+        html.Div(id='team-refer-preview-output', className='mt-2'),
+    ]), className='shadow-sm mb-3')
+
+
+def _team_refer_preview_table(result):
+    """preview_pasted_table()의 결과(DataFrame)를 표로 렌더링. '상태'
+    컬럼은 _split_hidden_rows()와 동일한 기준(org_name_wd 비어있으면
+    "숨김")으로 판정 — 실제 그리드에서 이 조직이 보일지 안 보일지 그대로
+    보여준다."""
+    header = ['상태', '1단계부서명', '2단계부서명', '3단계부서명', '비공식소속부서명',
+              '조직 레벨', '조직코드', '부서ID', '상위부서ID']
+    rows = []
+    for _, r in result.iterrows():
+        visible = bool(str(r['org_name_wd'] or '').strip())
+        status = dbc.Badge('표시', color='success') if visible else dbc.Badge('숨김', color='secondary')
+        rows.append(html.Tr([
+            html.Td(status),
+            html.Td(r['dep_1st_name']),
+            html.Td(r['dep_2nd_name']),
+            html.Td(r['dep_3rd_name']),
+            html.Td(r['org_name_wd']),
+            html.Td(r['team_layer']),
+            html.Td(r['dep_code']),
+            html.Td(r['dep_id'], className='small text-muted'),
+            html.Td(r['upper_dep_id'], className='small text-muted'),
+        ]))
+    return dbc.Table(
+        [html.Thead(html.Tr([html.Th(h) for h in header])), html.Tbody(rows)],
+        bordered=True, hover=True, size='sm', className='admin-table mt-2',
+    )
+
+
+@callback(
+    Output('team-refer-preview-output', 'children'),
+    Input('team-refer-preview-btn', 'n_clicks'),
+    State('team-refer-preview-input', 'value'),
+    prevent_initial_call=True,
+)
+def team_refer_preview(n_clicks, text):
+    if not n_clicks:
+        return no_update
+    if not (text or '').strip():
+        return dbc.Alert('붙여넣을 데이터가 없습니다.', color='warning', className='small mb-0')
+    try:
+        result = team_refer_store.preview_pasted_table(text)
+    except Exception as exc:
+        return dbc.Alert(f'미리보기 실행 중 오류: {exc}', color='danger', className='small mb-0')
+    if result.empty:
+        return dbc.Alert(
+            '결과가 없습니다 — 첫 줄이 헤더로 인식되는지, 1단계부서명이 채워져 있는지 확인해주세요.',
+            color='warning', className='small mb-0',
+        )
+    return _team_refer_preview_table(result)
+
+
 def _team_refer_run_status_view(row: dict):
     """팀/리더 참조 업로드 섹션의 "최종실행이력/실행결과" 미니 표시 —
     초기 렌더와 폴링 갱신(team_refer_upload_poll) 양쪽이 공유."""
@@ -800,6 +890,7 @@ def _team_refer_tab() -> html.Div:
         # 2026-09-02) — 위 표로 직접 편집하는 것이 주 흐름이고, 엑셀 일괄
         # 반영은 보조 수단이라 화면 아래쪽에 두는 것이 자연스럽다.
         _team_refer_upload_section(),
+        _team_refer_preview_section(),
 
         # 저장한 행들 안에 부서ID(dep_id)가 중복되면(업서트 자연키 충돌로
         # 일부 행이 조용히 사라지는 원인) 별도 창으로 바로 보여준다(사용자
