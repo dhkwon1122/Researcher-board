@@ -81,40 +81,21 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-from pipeline.excel_reader import clean_str, read_xlsx  # noqa: E402
+from pipeline.excel_reader import read_xlsx  # noqa: E402
+from pipeline.team_refer_intake import (  # noqa: E402
+    _INTAKE_COLUMNS, _SRC_HEADERS, transform,
+)
 
 RAW_DIR = os.path.join(BASE_DIR, 'data', 'raw', 'team_refer_intake_source')
 OUT_DIR = os.path.join(BASE_DIR, 'data', 'processed', 'team_refer_intake')
 
-# 원본에서 찾을 헤더(1단계부서명/현소속부서명/비공식소속부서명) — 순서는
-# 아래 인텔이크 출력 컬럼(_INTAKE_COLUMNS)과 다르므로 별도로 유지.
-_SRC_LEVEL1 = '1단계부서명'
-_SRC_LEVEL2 = '현소속부서명'
-_SRC_LEVEL3 = '비공식소속부서명'
-_SRC_HEADERS = [_SRC_LEVEL1, _SRC_LEVEL2, _SRC_LEVEL3]
-
-# pipeline/process_team_refer.py의 _COL_MAP 키와 정확히 동일한 순서/이름 —
-# 이 순서 그대로 저장해야 process_team_refer.py가 헤더 텍스트로 컬럼을
-# 찾는 방식과 어긋나지 않는다(위치가 아니라 이름으로 찾으므로 순서 자체는
-# 필수는 아니지만, 그대로 맞춰 헷갈림을 없앤다).
-_INTAKE_COLUMNS = [
-    '비공식소속부서명', '구분', '1단계부서명', '2단계부서명', '3단계부서명',
-    '조직코드', '사번', '성명', '직책',
-]
-
-# "이미 최상위" 마커 — build_past_team_refer.py의 ROOT_MARKERS와 동일 개념.
-# 2026-09-11 (4) 재정정 — 두 그룹으로 재편(사용자 확정):
-# _ROOT_MARKERS_DIRECT: 1단계부서명이 이 값이면 무조건 2단계부서명 값으로
-#   직접 교체한다(을 조회 없음).
-# _ROOT_MARKERS_LOOKUP: 1단계부서명이 이 값이면, 2단계부서명을 을(아래
-#   _build_upper_level_lookup()이 만드는 현소속부서명→1단계부서명 매핑표)
-#   에서 조회해 그 값으로 교체하고, 매핑표에 없으면 2단계부서명 값으로
-#   직접 교체한다(폴백).
-# 두 그룹 다 아닌 값(빈 값 포함)은 이 스크립트가 손대지 않고 원본 그대로
-# 둔다 — 예전의 "1단계가 비어 있으면 채운다" 백필 개념은 완전히 삭제.
-_ROOT_MARKERS_DIRECT = {'대표이사', '삼성전자'}
-_ROOT_MARKERS_LOOKUP = {'종합기술원', 'SAIT'}
-_ALL_ROOT_MARKERS = _ROOT_MARKERS_DIRECT | _ROOT_MARKERS_LOOKUP
+# 원본→인텔이크 변환 로직(헤더 매핑 규칙, 대표이사/삼성전자/종합기술원/SAIT
+# 처리 등)은 전부 pipeline/team_refer_intake.py로 옮겼다(2026-09-16) —
+# pipeline/process_team_refer.py의 웹 업로드 경로가 원본을 자동 감지해
+# 그 모듈을 직접 재사용할 수 있게 하기 위함(사용자 요청: "원본을 넣으면
+# intake.py 모듈을 거쳐서 들어갈 수 있도록"). 이 파일은 그 로직을 그대로
+# 가져다 쓰는 CLI 래퍼로 남았다 — 사용법·헤더 매핑 배경 설명은 이 파일
+# docstring에 그대로 유지.
 
 _OUTPUT_SUFFIX = '_team_refer_intake.csv'
 
@@ -137,89 +118,11 @@ def _read_source(path: str):
     return read_xlsx(path, header_row=1)
 
 
-def _build_upper_level_lookup(df: pd.DataFrame) -> dict | None:
-    """원본에서 "1단계부서명"/"현소속부서명" 2개 헤더로 보조 매핑표(현소속
-    부서명→1단계부서명)를 만든다(2026-09-11 (4) 재정정, 사용자 확정 절차
-    그대로). 둘 중 하나라도 헤더 자체가 없으면 None(_ROOT_MARKERS_LOOKUP
-    조회 단계 자체를 건너뜀).
-
-    절차:
-      1) 1단계부서명·현소속부서명 중 하나라도 빈 행은 제외.
-      2) (1단계, 현소속) 쌍이 완전히 동일한 중복 행 제외.
-      3) 1단계부서명이 4개 root marker(_ALL_ROOT_MARKERS) 중 하나인 쌍 제외
-         — marker 자신은 "정밀한 값"이 아니므로 매핑표에 값으로 남지 않게.
-      4) 남은 쌍을 원본 등장 순서대로 현소속부서명→1단계부서명 dict로 조립.
-         같은 현소속부서명에 서로 다른 1단계부서명이 남아 있으면(원본 데이터
-         자체의 모순) 처음 나온 값을 채택한다(사용자 확정)."""
-    if any(h not in df.columns for h in (_SRC_LEVEL1, _SRC_LEVEL2)):
-        return None
-    seen_pairs = set()
-    lookup: dict = {}
-    for _, row in df[[_SRC_LEVEL1, _SRC_LEVEL2]].iterrows():
-        a = clean_str(row[_SRC_LEVEL1])
-        b = clean_str(row[_SRC_LEVEL2])
-        if not a or not b:
-            continue
-        if (a, b) in seen_pairs:
-            continue
-        seen_pairs.add((a, b))
-        if a in _ALL_ROOT_MARKERS:
-            continue
-        lookup.setdefault(b, a)
-    return lookup
-
-
-def _fill_upper_level(a: str, b: str, upper_lookup: dict) -> str:
-    """1단계부서명(a)이 _ROOT_MARKERS_DIRECT(대표이사/삼성전자)면 무조건
-    2단계부서명(b) 값으로 교체하고, _ROOT_MARKERS_LOOKUP(종합기술원/SAIT)면
-    보조 매핑표에서 b로 조회한 값으로 교체(못 찾으면 b로 폴백)한다(2026-09-11
-    (4) 재정정, 사용자 확정). 그 외(4개 marker가 아닌 값, 빈 값 포함)는
-    아무 규칙도 적용하지 않고 원본 a를 그대로 반환한다 — 예전의 "a가 비어
-    있으면 백필" 개념은 완전히 삭제됐다."""
-    if a in _ROOT_MARKERS_DIRECT:
-        a = b
-    elif a in _ROOT_MARKERS_LOOKUP:
-        a = upper_lookup.get(b, b)
-    return a
-
-
-def _build_level2_lookup(triples: list) -> dict:
-    """마커 치환(_fill_upper_level)까지 끝낸 (1단계, 2단계, 3단계) 중간
-    결과에서 보조 매핑표2(2단계→1단계)를 만든다(2026-09-11 (5) 신설,
-    사용자 확정) — 매핑표1(_build_upper_level_lookup)이 "원본" 값 기준인
-    것과 달리, 이 표는 마커 치환까지 끝난 "최종" 값 기준이다. 마커 규칙이
-    매핑 실패로 1단계=2단계가 된 행(폴백 값)도 그대로 포함한다(사용자
-    확정 — 특별히 제외할 이유가 없다고 판단).
-
-    매핑표1과 동일한 절차: (1단계, 2단계) 완전 중복 쌍을 먼저 제거한 뒤,
-    2단계별로 원본 등장 순서상 처음 나온 1단계 값을 채택(`setdefault`) —
-    같은 2단계에 서로 다른 1단계가 남아 있어도(원본 데이터 자체의 모순)
-    처음 값을 우선한다."""
-    lookup: dict = {}
-    seen_pairs: set = set()
-    for a, b, _c in triples:
-        if not a or not b:
-            continue
-        if (a, b) in seen_pairs:
-            continue
-        seen_pairs.add((a, b))
-        lookup.setdefault(b, a)
-    return lookup
-
-
-def _backfill_blank_level1(a: str, b: str, level2_lookup: dict) -> str:
-    """마커 치환까지 끝난 뒤에도 1단계부서명(a)이 비어 있으면 2단계부서명
-    (b)으로 보조 매핑표2를 조회해 채운다. 매핑되는 값이 없으면 2단계부서명
-    (b) 값을 그대로 채운다(2026-09-11 (5) 신설, 사용자 확정). a가 이미
-    채워져 있으면(마커 치환 결과 포함) 손대지 않고 그대로 반환한다."""
-    if a:
-        return a
-    return level2_lookup.get(b, b)
-
-
 def process_file(path: str) -> tuple:
     """한 원본 파일을 처리해 (성공 여부, 출력 경로 또는 None, 행 수, 에러
-    메시지) 반환."""
+    메시지) 반환. 실제 변환 로직은 pipeline/team_refer_intake.py의
+    transform()에 있다(2026-09-16 분리) — 이 함수는 파일 읽기/쓰기만
+    담당한다."""
     try:
         df = _read_source(path)
     except Exception as exc:
@@ -227,56 +130,15 @@ def process_file(path: str) -> tuple:
 
     df.columns = [str(c).strip() for c in df.columns]
 
-    missing = [h for h in _SRC_HEADERS if h not in df.columns]
-    if missing:
-        return False, None, 0, f'헤더 없음: {", ".join(missing)}'
-
-    upper_lookup = _build_upper_level_lookup(df)
-
-    # 1차: 원본 추출 + 마커 치환(대표이사/삼성전자/종합기술원/SAIT)까지
-    # 끝낸 (1단계, 2단계, 3단계) 중간 결과를 모은다 — 아래 보조 매핑표2가
-    # 이 마커 치환 "최종" 값을 재료로 삼으므로(2026-09-11 (5) 사용자 확정),
-    # 이 시점에는 아직 빈 1단계부서명 백필도 최종 중복 제거도 하지 않는다.
-    intermediate = []
-    for _, row in df[_SRC_HEADERS].iterrows():
-        a = clean_str(row[_SRC_LEVEL1])
-        b = clean_str(row[_SRC_LEVEL2])
-        c = clean_str(row[_SRC_LEVEL3])
-        if not any((a, b, c)):
-            continue
-        if upper_lookup is not None:
-            a = _fill_upper_level(a, b, upper_lookup)
-        intermediate.append((a, b, c))
-
-    level2_lookup = _build_level2_lookup(intermediate)
-
-    # 2차: 마커 치환까지 끝나고도 1단계부서명이 비어 있는 행을 보조
-    # 매핑표2로 백필한 뒤(2026-09-11 (5) 신설), 최종 (1단계,2단계,3단계)
-    # 기준으로 중복 제거해 출력 행을 만든다.
-    rows = []
-    seen = set()
-    for a, b, c in intermediate:
-        a = _backfill_blank_level1(a, b, level2_lookup)
-        key = (a, b, c)
-        if key in seen:
-            continue
-        seen.add(key)
-        rows.append({
-            '비공식소속부서명': c, '구분': '', '1단계부서명': a, '2단계부서명': b,
-            '3단계부서명': c, '조직코드': '', '사번': '', '성명': '', '직책': '',
-        })
-
-    # 3단계→2단계→1단계 오름차순 정렬(2026-09-11 (4) 재정정, 사용자 확정 —
-    # 기존 1→2→3 우선순위에서 완전히 반대로 뒤집힘). 조직코드(사내 정렬
-    # 규정)는 사람이 검토 후 직접 채우는 값이라 이 정렬과 무관하다.
-    rows.sort(key=lambda r: (r['3단계부서명'], r['2단계부서명'], r['1단계부서명']))
+    try:
+        out_df = transform(df)
+    except ValueError as exc:
+        return False, None, 0, str(exc)
 
     try:
         os.makedirs(OUT_DIR, exist_ok=True)
         base = os.path.splitext(os.path.basename(path))[0]
         out_path = os.path.join(OUT_DIR, f'{base}{_OUTPUT_SUFFIX}')
-
-        out_df = pd.DataFrame(rows, columns=_INTAKE_COLUMNS)
         out_df.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=csv.QUOTE_NONNUMERIC)
     except OSError as exc:
         # 읽기 단계와 달리 저장 단계는 원래 예외 보호가 없어, 한 파일의 저장
@@ -287,7 +149,7 @@ def process_file(path: str) -> tuple:
         # 파일은 계속 처리한다.
         return False, None, 0, f'출력 파일 저장 실패: {exc}'
 
-    return True, out_path, len(rows), None
+    return True, out_path, len(out_df), None
 
 
 def main(raw_arg: str = RAW_DIR):

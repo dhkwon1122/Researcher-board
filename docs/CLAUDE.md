@@ -12360,3 +12360,113 @@ SAIT 밑으로 편입되는 것(그 자식 AI팀의 부모는 여전히 AI사업
 아니고 합성 데이터로만 검증했다 — 실제 업로드 후 "보유 전문성" 조직도에서
 "AI융합팀" 같은 조직이 SAIT/종합기술원 밑에 정확히 나타나는지는 실제
 업로드로 재확인이 필요하다.
+
+## 2026-09-16 (9): 팀/리더 참조 — 엑셀 업로드 직후 "안 갱신된 과거 데이터"
+행을 색으로 강조
+
+사용자가 실제 intake 파일로 업로드해본 뒤 발견한 상황: 업로드 원본의
+비공식소속부서명이 바뀌거나, 비공식소속부서명은 같아도 1~3단계부서명
+(경로 텍스트)이 달라지면 dep_id가 새로 계산돼(해시 기반), 예전
+dep_id로 저장된 "과거 데이터"가 자동으로 안 지워지고 새 항목과 나란히
+남는다 — 이 둘(이번에 갱신된 신규 vs 안 갱신된 과거)을 색으로 구분해
+관리자가 눈으로 찾아 수동으로 정리("선택 삭제")할 수 있게 해달라는
+요청. 구현 전 이해한 내용과 확인할 점 5가지를 먼저 확인받았다: (1)
+저장 시점(valid_year/month/day) 비교로 판단, (2) 팀/리더 참조 그리드에
+상시가 아니라 "엑셀 업로드 직후에만" 표시, (3) 추천 색상(신규는 기본,
+과거는 옅은 노란색) 그대로, (4) 행 단위 강조, (5) 자동 삭제 없이
+"눈으로 구분 → 수동 삭제" 용도.
+
+**구현**:
+- `services/team_refer_store.py`의 `list_editable_rows()`가 각 행에
+  `_valid_date`('YYYY-MM-DD', 그 행이 마지막으로 저장된 시점)를 추가로
+  얹도록 수정 — KOREAN_COLUMNS에 없는 내부용 필드라 저장 시
+  `_cleaned_records()`가 무시해 부작용이 없다.
+- `pages/admin.py`에 `dcc.Store(id='team-refer-highlight-date',
+  data=None)`를 새로 추가 — "엑셀 파일로 한번에 반영" 실행(`team_refer_
+  run_upload()`) 시점에만 그 업로드의 valid_date로 채워진다. 페이지를
+  새로고침하거나 다른 화면으로 나갔다 오면 이 컴포넌트가 새로 만들어지며
+  기본값 None으로 리셋돼 강조 표시도 자연히 사라진다(탭 전환은 admin.py
+  구조상 서버 재렌더링이 아니라 이미 마운트된 탭들을 CSS로 숨기고 보여주는
+  방식이라, 탭만 왔다 갔다 하는 동안은 강조가 유지된다 — 확인함).
+- `_mark_stale_rows(rows, highlight_date)` 헬퍼를 추가해 `_valid_date`가
+  `highlight_date`와 다른 행에 `_stale=True`를 표시 — `highlight_date`가
+  없으면(평소 화면 로드/조회 시) 아무 것도 표시하지 않는다(조직마다
+  마지막 저장일이 원래 제각각인 게 정상이라, 상시로 켜두면 업로드와
+  무관하게 늘 색이 칠해져 오히려 혼란을 줌).
+- `team-refer-table`의 `dashGridOptions`에 `getRowStyle`(dash-ag-grid
+  선언형 styleConditions — 코드 실행 플래그 불필요, `pages/researcher_list.py`
+  의 홀수행 줄무늬와 동일한 패턴)을 추가해 `params.data._stale === true`
+  인 행에 옅은 노란색(`#fff3cd`, 부트스트랩 warning 계열) 배경을 준다.
+- 업로드 완료 후 그리드를 갱신하는 `data_update_poll()`이 `team-refer-
+  highlight-date` Store를 State로 읽어 `_mark_stale_rows()`를 거친
+  rowData를 내보내도록 수정.
+
+**검증**: `_mark_stale_rows()`에 신규(오늘 날짜)/과거(예전 날짜)/날짜
+정보 없음(신규 추가 행 등) 3가지를 섞은 합성 데이터로 신규만 `_stale=
+False`, 과거만 `True`로 정확히 갈리는 것, `highlight_date`가 없으면
+`_stale` 키 자체가 안 붙는 것을 확인. `list_editable_rows()`가 실제로
+`_valid_date`를 정확히 채워주는지 임시 디렉터리에 합성 team_refer.csv를
+만들어 end-to-end로 확인(숨김 행·보이는 행 둘 다 정상). `python3 -m
+py_compile pages/admin.py services/team_refer_store.py` 통과.
+
+**미검증**: 실제 intake 파일 업로드 → 그리드에서 색이 실제로 보이는지,
+"엑셀 업로드 직후에만" 보였다가 페이지를 새로고침하면 사라지는지는
+이 세션 밖(사용자가 직접 확인)이라 실행 결과는 다음 확인이 필요하다.
+
+## 2026-09-16 (10): 팀/리더 참조 엑셀 업로드 — 인력현황 원본을 올리면
+자동으로 intake 변환을 거치도록 연동
+
+사용자 요청: "엑셀 파일로 한번에 반영"에 지금까지는 `scripts/build_team_
+refer_intake.py`를 사람이 로컬에서 먼저 실행해 만든 "중간 산출물"만
+올릴 수 있었는데, 인력현황 원본을 그대로 올려도 그 변환을 자동으로
+거쳐 반영되게 해달라는 것. 원본은 "1단계부서명"/"현소속부서명"/
+"비공식소속부서명" 3개 헤더만 있고, 인텔이크 형식은 9개 컬럼
+(`_COL_MAP`)이 필요해 서로 다른 파일 형식이다.
+
+**구현**: `scripts/build_team_refer_intake.py`에 있던 변환 로직(헤더
+매핑 규칙 — 대표이사/삼성전자/종합기술원/SAIT 처리, 보조 매핑표1/2 등)
+전체를 새 모듈 `pipeline/team_refer_intake.py`로 옮기고 `transform(df)`
+(원본 DataFrame → 인텔이크 DataFrame)와 `is_raw_format(df)`(원본 헤더
+3개가 다 있는지) 두 함수로 정리했다. `scripts/build_team_refer_intake.py`
+는 파일 읽기/쓰기만 남기고 이 모듈을 그대로 가져다 쓰는 CLI 래퍼가
+됐다(기존 사용법·산출물 동일, 회귀 없음). `pipeline/process_team_refer.py`
+의 `process()`(엑셀 일괄 업로드의 실제 처리 함수)가 파일을 읽은 직후
+`team_refer_intake.is_raw_format()`으로 원본 여부를 자동 감지해,
+원본이면 `transform()`을 먼저 거치고 그 결과를 기존 파이프라인
+(`build_rows_from_records()` → `reparent_orphan_roots()` → ...)에
+그대로 흘려보낸다 — 이미 인텔이크 형식으로 변환된 파일을 올리는 기존
+방식도 그대로 지원한다(원본 헤더가 없으면 이 감지 블록은 아무 일도
+안 하고 지나감).
+
+**서버에서 원본 xlsx를 읽을 수 있는 이유**: `pipeline/excel_reader.py`
+의 `read_xlsx()`는 xlwings(Excel COM, DRM 파일 전용)를 import할 수
+없는 환경(Linux 서버)에서는 자동으로 openpyxl(pandas)로 폴백한다 —
+그래서 "업로드 전 DRM을 해제한 사본을 올린다"는 이 화면의 기존 전제
+(다른 데이터 업데이트 항목들과 동일)만 지키면, 원본을 서버에서도 문제
+없이 읽을 수 있다. 원본이 여전히 DRM 잠금 상태라면 Linux 서버에는
+Excel이 없어 이 경로에서도 읽기 자체가 실패한다 — 이건 기존 다른
+항목들과 동일한 한계이지 이번 기능만의 제약은 아니다.
+
+**알려드릴 부작용**: `scripts/build_team_refer_intake.py`의 원래
+설계는 "사람이 산출물을 열어서 검토·보정(특히 조직코드)한 뒤 업로드"
+였는데, 이번 자동 연동 경로는 그 검토 단계를 건너뛴다. 조직코드는
+비어있는 채로 들어가 `team_hierarchy.derive_hierarchy()`가 "처음
+등장한 순서" 기준 기본값을 자동으로 채운다 — 마음에 안 드는 순서면
+업로드 후 그리드에서 위로/아래로 버튼으로 재배열하면 된다(저장 시
+`_assign_depth_first_dep_codes()`가 트리 순회 순서로 정리해줌, 2026-09-16
+(7) 참고).
+
+**검증**: `pipeline/team_refer_intake.py`의 `transform()`이 리팩터링
+전과 동일한 결과(종합기술원/SAIT 매핑, 대표이사/삼성전자 직접 치환,
+빈 1단계 백필 전부)를 내는 것을 합성 데이터로 확인. `process_team_refer.py`
+의 흐름(원본 감지 → 변환 → `build_rows_from_records()` →
+`reparent_orphan_roots()`)을 파일 I/O 없이 이어 실행해 최종 dep_id/
+upper_dep_id까지 정상적으로 계산되는 것을 확인. 이미 인텔이크 형식인
+파일은 `is_raw_format()`이 False를 반환해(원본 전용 헤더 "현소속부서명"
+이 없으므로) 기존과 동일하게 변환 없이 그대로 통과하는 것도 확인 —
+회귀 없음. `python3 -m py_compile pipeline/process_team_refer.py
+pipeline/team_refer_intake.py scripts/build_team_refer_intake.py` 통과.
+
+**미검증**: 실제 인력현황 원본 파일(진짜 DRM이 걸려 있었을 파일의
+복호화된 사본)을 웹에서 직접 업로드해보는 것은 이 세션 밖이라 확인이
+필요하다.
