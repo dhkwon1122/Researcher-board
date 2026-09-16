@@ -660,30 +660,12 @@ def _team_refer_tab() -> html.Div:
         # pages/researcher_profile.py의 profile-print-dummy와 동일한 패턴.
         html.Div(id='team-refer-grid-dummy', style={'display': 'none'}),
 
-        dbc.Alert(
-            [
-                html.I(className='bi bi-info-circle me-2'),
-                '1단계부서명은 필수입니다(예: 3단계 소속이면 1/2/3단계 이름을 자기 '
-                '레벨까지 전부 채워주세요). 부서ID/상위부서ID/조직 레벨은 이 경로에서 '
-                '자동으로 계산되므로 따로 입력하지 않습니다.'
-                + (f' 비공식소속부서명이 비어 있는 {len(hidden_rows)}개 행은 '
-                   '(리프에 실제 배정이 없는 상위 조직 — 부모-자식 관계 계산에는 계속 '
-                   '쓰이지만) 가독성을 위해 화면에서 숨겼습니다. 데이터는 그대로 '
-                   '보존되며 저장 시 함께 반영됩니다.' if hidden_rows else ''),
-            ],
-            color='light', className='small border mb-3',
-        ),
-
         dbc.Row([
             dbc.Col([
                 dbc.Label('입력 날짜', className='small fw-semibold text-muted mb-1'),
                 dcc.DatePickerSingle(
                     id='team-refer-valid-date', date=date.today().isoformat(),
                     display_format='YYYY-MM-DD', className='d-block',
-                ),
-                html.Div(
-                    '기본값은 오늘 — 과거 데이터를 소급 입력할 때만 바꾸세요.',
-                    className='text-muted', style={'fontSize': '0.72rem'},
                 ),
             ], md='auto'),
             dbc.Col([
@@ -699,11 +681,6 @@ def _team_refer_tab() -> html.Div:
                                id='team-refer-db-load-btn', color='info', outline=True, size='sm',
                                title='team_refer 테이블만 DB에 바로 반영(저장된 최신 값 기준)'),
                 ]),
-                html.Div(
-                    '엑셀 다운로드는 현재 화면의 편집 내용이 아니라 저장된 최신 값을 내려받습니다. '
-                    'DB 반영도 마찬가지로 저장된 최신 값을 반영합니다(화면 편집 중인 내용 아님).',
-                    className='text-muted', style={'fontSize': '0.72rem'},
-                ),
             ], md='auto'),
         ], className='mb-2 align-items-end'),
 
@@ -729,17 +706,6 @@ def _team_refer_tab() -> html.Div:
                 dbc.Button([html.I(className='bi bi-trash me-1'), '선택 삭제'],
                            id='team-refer-bulk-delete-btn', color='danger', outline=True, size='sm'),
             ]),
-            html.Div(
-                '왼쪽 체크박스로 행을 고른 뒤 사용하세요(맨 위 헤더 체크박스로 전체 '
-                '선택/해제할 수 있습니다). "위로"/"아래로"는 체크한 행만 개별적으로 '
-                '한 칸씩, "맨 위로"/"맨 아래로"는 체크한 행만 그리드 맨 위/맨 아래로 '
-                '한 번에 옮깁니다(둘 다 상위부서와 무관하게 자유롭게 이동). 삭제는 '
-                '하위 조직이 있으면 함께 삭제됩니다(하위 조직을 남겨두면 그 소속 '
-                '정보 때문에 상위 조직이 자동으로 다시 생겨 실제로 삭제되지 '
-                '않습니다). No.는 화면에 보이는 순서 그대로(맨 위 1 ~ 맨 아래 N) '
-                '항상 자동으로 매겨집니다.',
-                className='text-muted', style={'fontSize': '0.72rem'},
-            ),
         ], className='team-refer-sticky-toolbar'),
 
         dcc.Download(id='team-refer-download'),
@@ -857,17 +823,6 @@ def _exception_job_function_tab() -> html.Div:
     ]
 
     return html.Div([
-        dbc.Alert(
-            [
-                html.I(className='bi bi-info-circle me-2'),
-                '사원번호가 비어 있는 행은 저장되지 않습니다. 여기 등록된 사원번호는 '
-                'mapping_job_function.csv 매칭 결과와 무관하게, 연구원 프로필/전문성 '
-                'MAP의 SAIT 직군 표시를 이 파일의 "직군예외" 값으로 강제 대체합니다 '
-                '(DS 직군은 그대로 유지됩니다).',
-            ],
-            color='light', className='small border mb-3',
-        ),
-
         dbc.Row([
             dbc.Col([
                 dbc.Label(' ', className='small d-block mb-1'),
@@ -1288,8 +1243,8 @@ def _data_update_tab() -> html.Div:
         dbc.Alert(
             [
                 html.I(className='bi bi-info-circle me-2'),
-                '엑셀 업로드 시 복호화(일반문서로 변환) 후 업로드 가능합니다. '
-                '"전체 업데이트"는 파일이 업로드된 항목만 실행합니다.',
+                '엑셀 업로드 시 복호화(일반문서로 변환) 후 업로드 가능, '
+                '전체 업데이트는 파일이 업로드 된 항목만 실행',
             ],
             color='light', className='small border mb-3',
         ),
