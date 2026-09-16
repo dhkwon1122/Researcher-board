@@ -227,11 +227,11 @@ def _ai_tag():
 def llm_summary_block(profile: dict | None, similar: list | None = None, name_map: dict | None = None,
                        *, include_responsibilities: bool = True, deemphasize_strength: bool = False):
     """전문성 요약(LLM) — 연구원 보유 전문성 분석.json의 핵심 분야(strength_fields)/
-    키워드(strength_keywords)를 배지로, 주요 역할·책임(key_responsibilities)은
-    불릿 목록(bullet_list(), disc 마커 대신 사각 마커 — 사용자 요청)으로,
-    전문지식 및 역량(domain_knowledge_skill)은 마커 없이 들여쓰기만 된 목록
-    (plain_indent_list() — 사용자 요청: "목록 아이콘 없이 약간 들여쓰기만
-    된 상태로 나열되게 해줘")으로 보여준다.
+    키워드(strength_keywords)를 배지로, 주요 역할·책임(key_responsibilities)과
+    전문지식 및 역량(domain_knowledge_skill)은 둘 다 불릿 목록(bullet_list(),
+    disc 마커 대신 사각 마커)으로 동일하게 보여준다(2026-09-16, 사용자 요청 —
+    이전엔 전문지식 및 역량만 마커 없이 들여쓰기만 된 plain_indent_list()를
+    썼는데, "동일하게 네모가 나올 수 있도록" 통일했다).
     similar(researcher_similarity.json의 해당 연구원 항목 중 'similar' 리스트,
     시니어 우선으로 이미 정렬돼 있음)가 주어지면 시니어 3명·주니어 3명을 유사
     연구원 배지로 덧붙인다(생략하면 유사 연구원 섹션 자체를 건너뜀 — A4 인쇄
@@ -292,7 +292,7 @@ def llm_summary_block(profile: dict | None, similar: list | None = None, name_ma
             children.append(html.Div(print_sub_heading('전문지식 및 역량'), className='mb-1'))
         else:
             children.append(html.Div('전문지식 및 역량', className='small text-muted fw-semibold mt-2 mb-1'))
-        children.append(plain_indent_list(domain_skill))
+        children.append(bullet_list(domain_skill))
 
     name_map = name_map or {}
     senior = [s for s in (similar or []) if s.get('tenure_level') == 'Senior'][:3]
