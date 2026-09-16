@@ -99,6 +99,7 @@ from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import clean_str as _clean, norm_id, read_xlsx  # noqa: E402
 from merge_utils import TABLE_KEYS, write_merged  # noqa: E402
 from team_hierarchy import FIELDS, LEVEL_FIELDS, derive_hierarchy, own_path, slug  # noqa: E402
+import team_refer_intake  # noqa: E402
 
 SOURCE_FILE = '팀참조시트.xlsx'
 SOURCE_FILE_CSV = '팀참조시트.csv'
@@ -489,6 +490,19 @@ def process(raw_dir: str = RAW_DIR, valid_date: date | None = None) -> bool:
 
     df = _read_source(raw_path)
     df.columns = [str(c).strip() for c in df.columns]
+
+    # 인력현황 원본("1단계부서명"/"현소속부서명"/"비공식소속부서명" 3개
+    # 헤더만 있는 raw 파일)을 그대로 올린 경우, 예전엔 scripts/build_team_
+    # refer_intake.py를 사람이 먼저 로컬에서 실행해 인텔이크 형식으로
+    # 바꾼 뒤에야 이 업로드 섹션에 올릴 수 있었다. 이제 그 변환 로직
+    # (pipeline/team_refer_intake.py로 분리)을 여기서 자동 감지해 바로
+    # 적용한다(2026-09-16, 사용자 요청: "원본을 넣으면 intake.py 모듈을
+    # 거쳐서 들어갈 수 있도록") — 이미 인텔이크 형식(_COL_MAP 컬럼)으로
+    # 변환된 파일을 올리는 기존 방식도 그대로 지원한다(원본 헤더가 없으면
+    # 이 블록은 아무것도 하지 않고 지나간다).
+    if team_refer_intake.is_raw_format(df):
+        print('[INFO] 인력현황 원본 형식 감지 — team_refer 인텔이크 형식으로 자동 변환합니다.')
+        df = team_refer_intake.transform(df)
 
     missing = [col for col in _COL_MAP if col not in df.columns]
     if missing:

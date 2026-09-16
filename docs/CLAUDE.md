@@ -12412,3 +12412,61 @@ py_compile pages/admin.py services/team_refer_store.py` 통과.
 **미검증**: 실제 intake 파일 업로드 → 그리드에서 색이 실제로 보이는지,
 "엑셀 업로드 직후에만" 보였다가 페이지를 새로고침하면 사라지는지는
 이 세션 밖(사용자가 직접 확인)이라 실행 결과는 다음 확인이 필요하다.
+
+## 2026-09-16 (10): 팀/리더 참조 엑셀 업로드 — 인력현황 원본을 올리면
+자동으로 intake 변환을 거치도록 연동
+
+사용자 요청: "엑셀 파일로 한번에 반영"에 지금까지는 `scripts/build_team_
+refer_intake.py`를 사람이 로컬에서 먼저 실행해 만든 "중간 산출물"만
+올릴 수 있었는데, 인력현황 원본을 그대로 올려도 그 변환을 자동으로
+거쳐 반영되게 해달라는 것. 원본은 "1단계부서명"/"현소속부서명"/
+"비공식소속부서명" 3개 헤더만 있고, 인텔이크 형식은 9개 컬럼
+(`_COL_MAP`)이 필요해 서로 다른 파일 형식이다.
+
+**구현**: `scripts/build_team_refer_intake.py`에 있던 변환 로직(헤더
+매핑 규칙 — 대표이사/삼성전자/종합기술원/SAIT 처리, 보조 매핑표1/2 등)
+전체를 새 모듈 `pipeline/team_refer_intake.py`로 옮기고 `transform(df)`
+(원본 DataFrame → 인텔이크 DataFrame)와 `is_raw_format(df)`(원본 헤더
+3개가 다 있는지) 두 함수로 정리했다. `scripts/build_team_refer_intake.py`
+는 파일 읽기/쓰기만 남기고 이 모듈을 그대로 가져다 쓰는 CLI 래퍼가
+됐다(기존 사용법·산출물 동일, 회귀 없음). `pipeline/process_team_refer.py`
+의 `process()`(엑셀 일괄 업로드의 실제 처리 함수)가 파일을 읽은 직후
+`team_refer_intake.is_raw_format()`으로 원본 여부를 자동 감지해,
+원본이면 `transform()`을 먼저 거치고 그 결과를 기존 파이프라인
+(`build_rows_from_records()` → `reparent_orphan_roots()` → ...)에
+그대로 흘려보낸다 — 이미 인텔이크 형식으로 변환된 파일을 올리는 기존
+방식도 그대로 지원한다(원본 헤더가 없으면 이 감지 블록은 아무 일도
+안 하고 지나감).
+
+**서버에서 원본 xlsx를 읽을 수 있는 이유**: `pipeline/excel_reader.py`
+의 `read_xlsx()`는 xlwings(Excel COM, DRM 파일 전용)를 import할 수
+없는 환경(Linux 서버)에서는 자동으로 openpyxl(pandas)로 폴백한다 —
+그래서 "업로드 전 DRM을 해제한 사본을 올린다"는 이 화면의 기존 전제
+(다른 데이터 업데이트 항목들과 동일)만 지키면, 원본을 서버에서도 문제
+없이 읽을 수 있다. 원본이 여전히 DRM 잠금 상태라면 Linux 서버에는
+Excel이 없어 이 경로에서도 읽기 자체가 실패한다 — 이건 기존 다른
+항목들과 동일한 한계이지 이번 기능만의 제약은 아니다.
+
+**알려드릴 부작용**: `scripts/build_team_refer_intake.py`의 원래
+설계는 "사람이 산출물을 열어서 검토·보정(특히 조직코드)한 뒤 업로드"
+였는데, 이번 자동 연동 경로는 그 검토 단계를 건너뛴다. 조직코드는
+비어있는 채로 들어가 `team_hierarchy.derive_hierarchy()`가 "처음
+등장한 순서" 기준 기본값을 자동으로 채운다 — 마음에 안 드는 순서면
+업로드 후 그리드에서 위로/아래로 버튼으로 재배열하면 된다(저장 시
+`_assign_depth_first_dep_codes()`가 트리 순회 순서로 정리해줌, 2026-09-16
+(7) 참고).
+
+**검증**: `pipeline/team_refer_intake.py`의 `transform()`이 리팩터링
+전과 동일한 결과(종합기술원/SAIT 매핑, 대표이사/삼성전자 직접 치환,
+빈 1단계 백필 전부)를 내는 것을 합성 데이터로 확인. `process_team_refer.py`
+의 흐름(원본 감지 → 변환 → `build_rows_from_records()` →
+`reparent_orphan_roots()`)을 파일 I/O 없이 이어 실행해 최종 dep_id/
+upper_dep_id까지 정상적으로 계산되는 것을 확인. 이미 인텔이크 형식인
+파일은 `is_raw_format()`이 False를 반환해(원본 전용 헤더 "현소속부서명"
+이 없으므로) 기존과 동일하게 변환 없이 그대로 통과하는 것도 확인 —
+회귀 없음. `python3 -m py_compile pipeline/process_team_refer.py
+pipeline/team_refer_intake.py scripts/build_team_refer_intake.py` 통과.
+
+**미검증**: 실제 인력현황 원본 파일(진짜 DRM이 걸려 있었을 파일의
+복호화된 사본)을 웹에서 직접 업로드해보는 것은 이 세션 밖이라 확인이
+필요하다.
