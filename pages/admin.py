@@ -481,9 +481,12 @@ def _renumber_dep_codes(rows: list) -> None:
     전역 일련번호로 다시 매겨도 "같은 부모 밑 형제끼리의 상대적 순서"는
     항상 그대로 보존된다(전역 단조증가 값이라 부분집합만 봐도 상대 순서가
     바뀌지 않음) — 관리자 그리드 화면에서 상위부서 경계를 넘나들며
-    자유롭게 재배열해도(2026-09-16 확정) 조직도 렌더링에는 영향이 없다."""
+    자유롭게 재배열해도(2026-09-16 확정) 조직도 렌더링에는 영향이 없다.
+    4자리로 0-패딩하는 이유는 services.team_refer_store._renumber_dep_codes()
+    (서버 쪽, 저장 시점에 한 번 더 정리)와 동일 — build_org_tree()의 형제
+    정렬이 문자열 비교라 패딩 없이는 '10'이 '2'보다 앞서는 문제가 있다."""
     for i, row in enumerate(rows, start=1):
-        row['조직코드'] = str(i)
+        row['조직코드'] = f'{i:04d}'
 
 
 def _split_hidden_rows(rows: list) -> tuple[list, list]:
@@ -839,12 +842,6 @@ def _exception_job_function_tab() -> html.Div:
                                id='exception-job-function-download-btn', color='success',
                                outline=True, size='sm'),
                 ]),
-                html.Div(
-                    '왼쪽 체크박스로 행을 고른 뒤 "선택 삭제"를 누르세요(헤더 체크박스로 '
-                    '전체 선택/해제 가능). 엑셀 다운로드는 현재 화면의 편집 내용이 아니라 '
-                    '저장된 최신 값을 내려받습니다.',
-                    className='text-muted', style={'fontSize': '0.72rem'},
-                ),
             ], md='auto'),
         ], className='mb-2 align-items-end'),
         dcc.Download(id='exception-job-function-download'),

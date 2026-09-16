@@ -178,32 +178,53 @@ def list_editable_rows() -> list[dict]:
 
 
 def _renumber_dep_codes(records: list[dict]) -> list[dict]:
-    """조직코드(『조직코드』, dep_code)를 저장 직전에 매번 새로 매긴다.
+    """조직코드(『조직코드』, dep_code)를 저장 시점에 정리한다 — 단, 이미
+    값이 있는 행은 그 값을 그대로 존중하고(4자리 0-패딩만 맞춤), 값이
+    비어 있는 행에만 새 번호를 매긴다.
 
-    build_org_tree()(pipeline/rd_specialist_markdown.py)의 형제 정렬이
-    문자열 비교라, 패딩 없는 '2'/'10'을 그대로 두면 '10'이 '2'보다 문자상
-    앞서 실제 원하는 숫자 순서와 어긋난다(2026-09-16, 사용자 보고로 확인
-    — 화면에서 행을 옮겨 저장해도 다시 열면 순서가 어긋나 보이는 원인).
-    4자리로 0-패딩하면 문자열 비교와 숫자 비교 결과가 항상 같아진다
-    (team_hierarchy.py가 새 조직에 기본값을 채울 때 쓰는 `f'{i:04d}'`와
-    동일한 규칙으로 통일).
+    2026-09-16 처음 도입했을 때는 저장할 때마다 화면 순서 그대로 전체를
+    무조건 다시 매겼는데(보이는 조직 0001부터, 숨김 조직 9999부터
+    거꾸로), 그 결과 이동/추가/삭제 버튼을 전혀 안 눌러도(다른 필드만
+    고쳐 저장) 조직코드 번호 자체가 저장할 때마다 바뀌어 버렸다(사용자
+    재보고). 순서를 바꾸고 싶을 때는 위로/아래로/맨위로/맨아래로 버튼을
+    누르면 되고, 그 버튼들이 이미 클라이언트(pages/admin.py의 같은 이름
+    함수)에서 화면 순서 그대로 새 조직코드를 매겨 넘겨준다 — 여기 서버
+    쪽은 그 결과를 존중해서 패딩만 하면 충분하다.
+
+    패딩이 필요한 이유는 그대로다: build_org_tree()(pipeline/
+    rd_specialist_markdown.py)의 형제 정렬이 문자열 비교라, 패딩 없는
+    '2'/'10'을 그대로 두면 '10'이 '2'보다 문자상 앞서 실제 원하는 숫자
+    순서와 어긋난다. 4자리로 0-패딩하면 문자열 비교와 숫자 비교 결과가
+    항상 같아진다.
 
     비공식소속부서명이 빈 행(관리자 화면 그리드에는 안 보이는, 리프에
     실제 배정이 없는 조직 — pages/admin.py의 _split_hidden_rows() 참고)은
-    화면에서 순서를 확인/조정할 방법이 없으므로, 보이는 조직(0001부터
-    화면 순서 그대로)과 절대 겹치지 않도록 9999부터 거꾸로 매겨 항상
-    형제들 중 맨 뒤로 밀려나게 한다(2026-09-16, 사용자 확정).
+    화면에서 순서를 확인/조정할 방법이 없어 "기존 값 존중"이 의미가
+    없으므로, 이 행들만 예외적으로 여전히 매번 9999부터 거꾸로 다시
+    매긴다 — 보이는 조직의 번호 범위와 겹치지 않게 항상 형제들 중 맨
+    뒤로 밀려나게 하려는 목적은 그대로다(2026-09-16, 사용자 확정)."""
+    def _pad(value: str) -> str:
+        value = value.strip()
+        return f'{int(value):04d}' if value.isdigit() else value
 
-    호출부(save_snapshot())가 저장할 때마다 무조건 이 함수를 거치므로,
-    예전에 패딩 없이 저장된 조직코드도 다음 저장 한 번으로 자동 정리된다
-    — 별도 마이그레이션이 필요 없다."""
-    visible_i, hidden_i = 0, 9999
+    next_visible = 1
+    for r in records:
+        if str(r.get('비공식소속부서명') or '').strip():
+            existing = str(r.get('조직코드') or '').strip()
+            if existing.isdigit():
+                next_visible = max(next_visible, int(existing) + 1)
+
+    hidden_i = 9999
     out = []
     for r in records:
         r = dict(r)
         if str(r.get('비공식소속부서명') or '').strip():
-            visible_i += 1
-            r['조직코드'] = f'{visible_i:04d}'
+            existing = str(r.get('조직코드') or '').strip()
+            if existing:
+                r['조직코드'] = _pad(existing)
+            else:
+                r['조직코드'] = f'{next_visible:04d}'
+                next_visible += 1
         else:
             r['조직코드'] = f'{hidden_i:04d}'
             hidden_i -= 1
