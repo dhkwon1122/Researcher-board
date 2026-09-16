@@ -511,14 +511,24 @@ def _find_source_file(raw_dir: str) -> str | None:
 
 
 def _read_source(path: str) -> pd.DataFrame:
-    """.xlsx는 read_xlsx()(xlwings, DRM 파일용, 2번째 행 헤더)로, .csv는
+    """.xlsx는 read_xlsx()(xlwings, DRM 파일용)로, .csv는
     scripts/build_team_refer_intake.py의 산출물과 동일한 방식
     (`pd.read_csv(path, encoding='utf-8-sig', dtype=str).fillna('')`, 1번째
     행 헤더)으로 읽는다 — xlwings/Excel이 전혀 필요 없어 DRM 자동화 문제와
-    무관하다."""
+    무관하다.
+
+    xlsx는 header_row='auto'(공란 행을 건너뛰고 실제 값이 있는 첫 행을
+    헤더로 자동 인식)를 쓴다 — 원본 팀참조시트.xlsx(1행 공란, 2행 헤더)와
+    관리자 화면 "엑셀 다운로드" 산출물(1행이 바로 헤더,
+    services.team_refer_store._build_workbook()) 둘 다 이 업로드 섹션에
+    다시 올릴 수 있어야 하는데, 예전처럼 header_row=1로 고정하면 다운로드
+    파일은 진짜 헤더 행이 통째로 버려지고 첫 데이터 행이 헤더로 잘못
+    읽혀 "[ERROR] 필수 컬럼 없음"으로 실패했다(2026-09-17 실제 재현 후
+    발견 — "엑셀 다운로드 → 그대로 재업로드" 마이그레이션 경로가 이
+    수정 전에는 동작하지 않았다)."""
     if path.lower().endswith('.csv'):
         return pd.read_csv(path, encoding='utf-8-sig', dtype=str).fillna('')
-    return read_xlsx(path, header_row=1)
+    return read_xlsx(path, header_row='auto')
 
 
 def process(raw_dir: str = RAW_DIR, valid_date: date | None = None) -> bool:
