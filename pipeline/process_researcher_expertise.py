@@ -515,11 +515,13 @@ def build_html(results: list, researchers_df: pd.DataFrame, similar_by_id: dict 
                     similarity_item=(similar_by_id or {}).get(rid), dept_map=dept_map, org_map=org_map,
                 ))
 
-    tagline_suffix = ' + 유사 연구원 매칭' if similar_by_id else ''
+    similarity_line = (
+        '<br>- 유사 연구원 매칭(R&amp;D Talent Profiling Agent)' if similar_by_id else ''
+    )
     sidebar = (
         '<h1>연구원 전문성 콘솔</h1>'
-        f'<p class="tagline">학력·과제이력·직무이력·기술·논문·특허 종합 분석{tagline_suffix} '
-        '(R&amp;D Talent Profiling Agent)</p>'
+        '<p class="tagline">- 학력(전공), 과제이력, 직무이력, 논문, 특허, 업무목표 등 '
+        f'기술이력 기반 종합 분석{similarity_line}</p>'
         f'{mmd.org_search_input_html()}'
         f'{"".join(nav_groups)}'
     )

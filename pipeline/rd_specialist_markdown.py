@@ -281,6 +281,15 @@ def org_tree_html(tree: list, node_content_fn=None) -> str:
         children_html = ''.join(_node_html(c) for c in node['children'])
         if not extra and not children_html:
             return ''
+        if not (node.get('org_name_wd') or '').strip():
+            # 비공식소속부서명이 없는 조직 — 팀/리더 참조 관리자 그리드에서도
+            # 화면에 숨겨지는(리프에 실제 배정이 없는, 조직도 트리를 이루기
+            # 위한 구조용 상위 노드) 대상과 동일한 기준(2026-09-16, 사용자
+            # 요청). 이 노드 자신의 <details>/<summary> 라벨만 생략하고
+            # 하위 조직은 그대로(한 단계 안 들여써져) 펼쳐 보여준다 —
+            # 실제 존재하지 않는 조직명을 보여주지 않으면서도 그 아래 실제
+            # 배정된 하위 조직·연구원은 계속 찾아볼 수 있게 한다.
+            return extra + children_html
         body = extra + (f'<div class="org-node-body">{children_html}</div>' if children_html else '')
         open_attr = ' open' if node['team_layer'] <= 2 else ''
         return f'<details class="org-node"{open_attr}><summary>{_label(node)}</summary>{body}</details>'
