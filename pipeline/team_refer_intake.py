@@ -17,10 +17,13 @@ scripts/build_team_refer_intake.py 안에 있던 로직을 그대로 옮겨온 �
 경우가 있어 자동으로 채운다(구분/조직코드는 여전히 빈 값 — 사용자 확정).
 
 직책 판단(_compute_title(), 사용자 확정 2026-09-17, 우선순위 순):
-  1. "직책명" 헤더 값이 있으면 그 값.
-  2. (1이 없을 때) "글로벌직책명" 헤더 값이 있으면 그 값 — 단 "고문"이라는
-     단어가 포함돼 있으면 그 사람은 이 조직의 책임자 후보에서 완전히
-     제외한다(3번 "(M)" 체크로도 넘어가지 않고 바로 직책 없음 처리).
+  1. "직책명" 헤더 값이 있으면 그 값 — 단 "고문" 또는 "자문"이라는
+     텍스트가 포함돼 있으면(부분 일치 — "비상근고문"도 해당) 그 사람은
+     책임자 후보에서 완전히 제외한다(2번·3번 체크로도 넘어가지 않고
+     바로 직책 없음 처리, 2026-09-17 2차 확정).
+  2. (1이 없을 때) "글로벌직책명" 헤더 값이 있으면 그 값 — 단 "고문"
+     또는 "회장"이 포함돼 있으면(부분 일치) 마찬가지로 완전히 제외한다
+     (2026-09-17 2차 확정 — "회장" 추가).
   3. (1·2가 전부 없을 때) "직무프로필명" 헤더 값에 "(M)"이라는 문자열이
      포함돼 있으면(부분 일치 — "연구위원(M)"도 해당) "PM".
   4. 셋 다 해당 안 되면 직책 없음(이 사람은 책임자 후보가 아님).
@@ -40,8 +43,23 @@ org_name_wd로 매칭해 사번/성명/직책 칸을 채우고, 매칭되는 책
 이 5개 헤더("직무프로필명"/"직책명"/"글로벌직책명"/"사원번호"/"성명")는
 `is_raw_format()`의 "원본 판정" 기준에는 포함하지 않는다(기존 3개 헤더
 그대로) — 원본에 이 5개 중 하나라도 없으면 사번/성명/직책 자동 채움만
-건너뛰고(전부 빈 값, 기존과 동일 동작) 나머지 변환은 그대로 진행한다."""
+건너뛰고(전부 빈 값, 기존과 동일 동작) 나머지 변환은 그대로 진행한다.
+
+── "(알파벳 한 글자) 과제명" 형식 조직 간 책임자 정보 전파(2026-09-17
+2차 추가) ───────────────────────────────────────────────────────────────────
+비공식소속부서명이 "(D) 산화수소전자원자"/"(E) 산화수소전자원자"처럼
+"(알파벳 한 글자) 과제명" 형식으로 여러 변형이 존재하는 경우(같은 과제의
+하위 코드 분류로 추정), 그중 한 변형에서만 책임자(사번/성명/직책)를
+찾을 수 있어도 같은 "과제명"을 가진 다른 변형에 그대로 전파한다
+(_project_base_name()/_propagate_project_variant_leaders(), 사용자
+확정). 이미 자기 자신의 책임자를 찾은 변형(드물게 여러 변형에 각각
+책임자가 있는 경우)은 덮어쓰지 않고 그대로 둔다 — 책임자가 없는 변형만
+채운다. 같은 과제명 그룹에 책임자가 있는 변형이 여럿이면(정상적으로는
+발생하지 않는다고 가정) 그중 org_name_wd 오름차순으로 가장 먼저인
+것을 전파 원본으로 쓴다(결정적 동작을 위한 안전망)."""
 from __future__ import annotations
+
+import re
 
 import pandas as pd
 
@@ -61,9 +79,14 @@ _SRC_EMP_NO = '사원번호'
 _SRC_NAME = '성명'
 _LEADER_SRC_HEADERS = (_SRC_JOB_PROFILE, _SRC_TITLE, _SRC_GLOBAL_TITLE, _SRC_EMP_NO, _SRC_NAME)
 
-_ADVISOR_MARKER = '고문'
+_TITLE_EXCLUDE_MARKERS = ('고문', '자문')
+_GLOBAL_TITLE_EXCLUDE_MARKERS = ('고문', '회장')
 _PM_MARKER = '(M)'
 _PM_TITLE = 'PM'
+
+# "(알파벳 한 글자) 과제명" 형식 판정(예: "(D) 산화수소전자원자") — group(1)이
+# 알파벳 한 글자, group(2)가 과제명(전파 그룹핑 키).
+_PROJECT_VARIANT_RE = re.compile(r'^\(([A-Za-z])\)\s*(.+)$')
 
 # process_team_refer._COL_MAP 키와 정확히 동일한 순서/이름.
 _INTAKE_COLUMNS = [
@@ -77,17 +100,46 @@ _ALL_ROOT_MARKERS = _ROOT_MARKERS_DIRECT | _ROOT_MARKERS_LOOKUP
 
 
 def _compute_title(row) -> str:
-    """한 행(직원 1명)의 "직책" 값을 계산한다 — 우선순위: 직책명 >
-    글로벌직책명(단 "고문" 포함 시 완전 제외) > 직무프로필명의 "(M)"
-    (→"PM"). 셋 다 해당 안 되면 빈 문자열(책임자 후보 아님)."""
+    """한 행(직원 1명)의 "직책" 값을 계산한다 — 우선순위: 직책명(단
+    "고문"/"자문" 포함 시 완전 제외) > 글로벌직책명(단 "고문"/"회장"
+    포함 시 완전 제외) > 직무프로필명의 "(M)"(→"PM"). 셋 다 해당 안
+    되면 빈 문자열(책임자 후보 아님)."""
     title_name = _clean_str(row.get(_SRC_TITLE, ''))
     if title_name:
-        return title_name
+        return '' if any(m in title_name for m in _TITLE_EXCLUDE_MARKERS) else title_name
     global_title = _clean_str(row.get(_SRC_GLOBAL_TITLE, ''))
     if global_title:
-        return '' if _ADVISOR_MARKER in global_title else global_title
+        return '' if any(m in global_title for m in _GLOBAL_TITLE_EXCLUDE_MARKERS) else global_title
     job_profile = _clean_str(row.get(_SRC_JOB_PROFILE, ''))
     return _PM_TITLE if _PM_MARKER in job_profile else ''
+
+
+def _project_base_name(org_name_wd: str) -> str | None:
+    """org_name_wd가 "(알파벳 한 글자) 과제명" 형식이면 과제명 부분만
+    반환하고, 아니면 None."""
+    m = _PROJECT_VARIANT_RE.match(org_name_wd)
+    return m.group(2).strip() if m else None
+
+
+def _propagate_project_variant_leaders(leader_lookup: dict, org_names) -> None:
+    """"(D) 과제명"/"(E) 과제명"처럼 같은 과제명을 공유하는 org_name_wd
+    변형끼리, 그중 하나에서만 찾은 책임자 정보를 나머지 변형에도 전파한다
+    (2026-09-17 2차 추가, 사용자 확정) — leader_lookup을 그 자리에서
+    수정한다. 이미 자기 책임자가 있는 변형은 덮어쓰지 않는다(setdefault)."""
+    groups: dict = {}
+    for name in org_names:
+        base = _project_base_name(name)
+        if base:
+            groups.setdefault(base, []).append(name)
+    for variants in groups.values():
+        if len(variants) < 2:
+            continue
+        source = next((v for v in sorted(variants) if v in leader_lookup), None)
+        if not source:
+            continue
+        leader = leader_lookup[source]
+        for v in variants:
+            leader_lookup.setdefault(v, leader)
 
 
 def _build_leader_lookup(df: pd.DataFrame) -> dict:
@@ -217,6 +269,7 @@ def transform(df: pd.DataFrame) -> pd.DataFrame:
 
     level2_lookup = _build_level2_lookup(intermediate)
     leader_lookup = _build_leader_lookup(df)
+    _propagate_project_variant_leaders(leader_lookup, {c for _a, _b, c in intermediate if c})
 
     rows = []
     seen = set()
