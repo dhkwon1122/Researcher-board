@@ -453,6 +453,95 @@ def collapse_repeated_levels(records: list) -> list:
     return result
 
 
+_STORAGE_LAYER_IDX = {'1': 0, '2': 1, '3': 2}
+
+
+def reshape_storage_columns(result: pd.DataFrame) -> pd.DataFrame:
+    """team_refer.csv 저장 형식 전용 재배치(2026-09-17 확정) — dep_id/
+    upper_dep_id/team_layer(내부 트리 구조·조직코드 순서 결정에 쓰이는 값)는
+    전혀 건드리지 않고, 1/2/3단계부서명 3개 컬럼의 "표시 값"만 외부 시스템
+    요구사항에 맞춰 다시 채운다: 외부 시스템이 team_refer.csv를 직접 읽는데
+    "비공식소속부서명(org_name_wd)은 무조건 3단계부서명 칸에 있어야 한다"는
+    내부 규정이 있어, own-level-only 저장 스키마(자기 team_layer 칸만 채움)
+    그대로는 1·2단계 조직의 org_name_wd가 엉뚱한 칸(1·2단계부서명 칸)에
+    남는다.
+
+    규칙(사용자 확정): team_layer=L인 행의 "자기 칸 위치"를 own_idx=L-1이라
+    하면,
+      - own_idx 이상 위치(자기 칸 포함, 그 오른쪽 칸 전부) → 이 조직 자신의
+        이름(org_name_wd)을 그대로 채운다(3단계 칸은 항상 own_idx<=2라
+        무조건 이 규칙에 걸려 자기 이름이 들어간다 — org_name_wd가 무조건
+        3단계에 들어가야 한다는 요구사항이 이렇게 충족된다).
+      - own_idx보다 왼쪽 칸 → 실제 조상 조직의 이름을 채운다(1단계만 있던
+        조직은 2·3단계에 자기 이름을 그대로 복제, 2·3단계만 있던 조직은
+        1단계에 부모 이름을, 3단계만 있던 조직은 2단계에 부모/1단계에
+        조부모 이름을 채우는 것까지 전부 이 한 규칙으로 커버됨).
+    조상 이름은 upper_dep_id 체인을 값을 바꾸기 전 원본 result 기준으로
+    거슬러 올라가 찾는다(자기 칸 위치 차이만큼만 정확히 위로 이동 —
+    reparent_orphan_roots()가 이미 반영한 SAIT 강제 편입 뒤에 이 함수가
+    실행되므로, ADDP/인사처럼 SAIT 밑으로 편입된 1단계 조직은 own_idx=0이라
+    애초에 조상을 조회하지 않아 SAIT 이름이 섞여 들어올 일이 없다).
+
+    조상/자신의 "이름"은 org_name_wd가 있으면 그 값을, 없으면(사람 배정이
+    없어 org_name_wd가 비어 있는, 경로상으로만 존재하는 조상 전용 노드 —
+    예: 아무도 1단계 "ADDP" 자체에 직접 소속되지 않고 다들 그 밑 2·3단계에만
+    있는 경우) 원래 own-level-only 스키마에서 그 칸에 있던 값(경로 텍스트,
+    org_name_wd와 무관하게 항상 채워져 있음)을 그대로 쓴다 — 이 폴백이 없으면
+    org_name_wd가 없는 조상 노드의 라벨이 통째로 빈 칸이 돼
+    rd_specialist_markdown.own_level_name()이 읽는 조직도 표시 라벨이
+    사라지는 회귀가 생긴다.
+
+    안전성 확인(2026-09-17): own_level_name()과 team_hierarchy.
+    backfill_full_path()는 둘 다 "그 노드 자신의 team_layer에 해당하는 칸"만
+    읽는데, 이 함수는 own_idx(=자기 칸) 위치에도 항상 "자기 이름"을 넣으므로
+    (own_idx 이상 규칙에 own_idx 자신도 포함) 그 칸의 값은 재배치 전과
+    실질적으로 동일하다(org_name_wd가 있으면 원래 경로 텍스트 대신
+    org_name_wd로 바뀔 뿐, 사람이 org_name_wd를 그 조직의 이름과 다르게
+    입력하는 경우가 없다면 사실상 같은 문자열). services/similarity_map.py의
+    함수들도 정확히 team_layer==1/team_layer==3인 노드만 필터링해 그 칸을
+    읽거나, 비어 있을 때만 조상에서 상속하는 방식이라 마찬가지로 영향 없음
+    (이미 채워진 칸이라 "상속" 분기를 안 타게 될 뿐, 상속했을 값과 동일한
+    값이 이미 들어있어 결과는 같음).
+
+    process()(xlsx 일괄 업로드)와 services.team_refer_store.save_snapshot()
+    (관리자 화면 그리드 저장) 양쪽 다 최종 저장 직전에 호출한다 — 외부
+    시스템은 두 경로로 저장된 team_refer.csv를 구분하지 않고 읽으므로 저장
+    형식은 항상 일관돼야 한다. 관리자 그리드 자체의 편집 화면(services.
+    team_refer_store.list_editable_rows())은 이 함수가 채운 값과 무관하게
+    항상 자기 칸의 값(=자기 이름)만 보여주므로 그리드 UX는 바뀌지 않는다."""
+    if result.empty:
+        return result
+    by_dep_id = result.set_index('dep_id', drop=False).to_dict('index')
+
+    def _effective_self(node: dict) -> str:
+        own_idx = _STORAGE_LAYER_IDX.get(str(node.get('team_layer')))
+        org_name_wd = str(node.get('org_name_wd') or '').strip()
+        if org_name_wd:
+            return org_name_wd
+        if own_idx is None:
+            return ''
+        return str(node.get(LEVEL_FIELDS[own_idx]) or '')
+
+    def _ancestor_self(dep_id: str, hops: int) -> str:
+        node = by_dep_id.get(dep_id)
+        for _ in range(hops):
+            if not node:
+                return ''
+            node = by_dep_id.get(node.get('upper_dep_id'))
+        return _effective_self(node) if node else ''
+
+    def _reshape(row):
+        own_idx = _STORAGE_LAYER_IDX.get(str(row['team_layer']))
+        if own_idx is None:
+            return row
+        self_name = _effective_self(row)
+        for i, col in enumerate(LEVEL_FIELDS):
+            row[col] = self_name if i >= own_idx else _ancestor_self(row['dep_id'], own_idx - i)
+        return row
+
+    return result.copy().apply(_reshape, axis=1)
+
+
 def tombstone_missing_dep_ids(result: pd.DataFrame, valid_date: date) -> pd.DataFrame:
     """이번 처리 결과(result — build_rows_from_records()가 만든, 이번에
     "살아있어야 할" 조직 전체)에 없는, 현재 "살아있는" dep_id를 찾아
@@ -585,6 +674,8 @@ def process(raw_dir: str = RAW_DIR, valid_date: date | None = None) -> bool:
     _print_duplicate_warning(find_duplicate_dep_ids(result))
     _print_merge_warning(find_tag_merges(records))
 
+    result = reshape_storage_columns(result)
+
     result = stamp_valid_date(result, valid_date)
     result['deleted'] = 'N'
 
@@ -603,7 +694,8 @@ def process(raw_dir: str = RAW_DIR, valid_date: date | None = None) -> bool:
 # 때마다 매번 실제 배포까지 거쳐야 확인 가능했던 것이 비효율적이라는 지적)
 # 으로 추가. "엑셀 파일로 한번에 반영"(process())이 실제로 거치는 변환
 # 단계(collapse_repeated_levels → build_rows_from_records →
-# reparent_orphan_roots)를 파일 업로드·저장 없이 그대로 재사용해, 지금
+# reparent_orphan_roots → reshape_storage_columns)를 파일 업로드·저장
+# 없이 그대로 재사용해, 지금
 # 서버에 실제로 배포된 코드가 어떻게 동작하는지를 그 자리에서 보여준다
 # (배포 검증 용도로도 쓸 수 있다 — 미리보기 결과가 기대와 다르면 배포된
 # 코드가 최신이 아닐 가능성을 의심할 수 있음). valid_date 스탬프/톰스톤/
@@ -631,12 +723,13 @@ def parse_pasted_table(text: str) -> list[dict]:
 
 def preview_transform(records: list) -> pd.DataFrame:
     """process()가 실제로 거치는 변환(collapse_repeated_levels →
-    build_rows_from_records → reparent_orphan_roots)만 그대로 적용해
-    결과를 반환한다 — 파일 저장(valid_date 스탬프/톰스톤/DB 반영)은
-    하지 않는다."""
+    build_rows_from_records → reparent_orphan_roots →
+    reshape_storage_columns)만 그대로 적용해 결과를 반환한다 — 파일 저장
+    (valid_date 스탬프/톰스톤/DB 반영)은 하지 않는다."""
     records = collapse_repeated_levels(records)
     result = build_rows_from_records(records)
     result = reparent_orphan_roots(result)
+    result = reshape_storage_columns(result)
     return result
 
 
