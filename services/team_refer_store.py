@@ -350,15 +350,3 @@ def current_snapshot_workbook_bytes() -> bytes:
     buf = io.BytesIO()
     _build_workbook(list_editable_rows()).save(buf)
     return buf.getvalue()
-
-
-def preview_pasted_table(text: str) -> pd.DataFrame:
-    """관리자 화면 "미리보기" — 엑셀에서 복사해 붙여넣은 텍스트를
-    "엑셀 파일로 한번에 반영"(pipeline.process_team_refer.process())과
-    동일한 변환 로직에 그대로 태워 결과를 반환한다(저장 없음).
-    pages/admin.py는 pipeline/*.py를 직접 import하지 않는 관례를 따라
-    이 얇은 래퍼를 거친다."""
-    records = ptr.parse_pasted_table(text)
-    if not records:
-        return pd.DataFrame()
-    return ptr.preview_transform(records)

@@ -634,11 +634,26 @@ def _read_source(path: str) -> pd.DataFrame:
     return read_xlsx(path, header_row='auto')
 
 
-def process(raw_dir: str = RAW_DIR, valid_date: date | None = None) -> bool:
+def process(raw_dir: str = RAW_DIR, valid_date: date | None = None, skip_tombstone: bool = False) -> bool:
     """raw_dir: 팀참조시트.xlsx(또는 .csv)를 찾을 폴더(기본값 data/raw —
     웹 업로드 시 services.web_pipeline_runner가 data/web_updates/team_refer/를
     넘긴다). valid_date: 이번 업로드분의 유효 날짜(기본값 오늘) — 과거
-    데이터 소급 입력 시 지정."""
+    데이터 소급 입력 시 지정.
+
+    skip_tombstone(기본 False, 2026-09-17 추가): True면 tombstone_missing_
+    dep_ids() 단계를 건너뛴다 — scripts/backfill_team_refer_history.py
+    (과거 여러 달치 인력현황 원본을 한 번에 소급 반영하는 스크립트) 전용
+    옵션이다. tombstone_missing_dep_ids()는 "현재(전체 파일 기준 가장 최근
+    날짜) 살아있는 dep_id인데 이번 실행 결과에 없으면 사라진 것으로
+    본다"는 로직이라, 이미 더 미래 시점(예: 2026-09)의 "현재" 데이터가
+    쌓여 있는 상태에서 그보다 과거 시점(예: 2020-03)을 나중에 소급
+    반영하면, 미래에만 존재하는 온갖 조직이 전부 "2020-03에 사라짐"으로
+    잘못 톰스톤 처리된다 — "현재" 조직도 표시 자체는(항상 dep_id별 가장
+    최근 날짜를 고르므로) 영향받지 않지만, 기간 지정 조회(_latest_rows_
+    in_period() 등 특정 시점 기준 조직도 재구성)가 그 잘못된 톰스톤을
+    "2020-03 시점의 실제 상태"로 오인해 과거 조직도가 깨진다. 정상적인
+    웹 업로드/그리드 저장(항상 "지금" 또는 그 이후 시점만 다루므로 이
+    문제가 없음)에는 기본값 False 그대로 둔다."""
     raw_path = _find_source_file(raw_dir)
     if not raw_path:
         others = sorted(
@@ -693,58 +708,14 @@ def process(raw_dir: str = RAW_DIR, valid_date: date | None = None) -> bool:
     result = stamp_valid_date(result, valid_date)
     result['deleted'] = 'N'
 
-    result = tombstone_missing_dep_ids(result, valid_date)
+    if not skip_tombstone:
+        result = tombstone_missing_dep_ids(result, valid_date)
 
     out_path = os.path.join(OUT_DIR, 'team_refer.csv')
     merged = write_merged(out_path, result, TABLE_KEYS['team_refer'])
 
     print(f'[OK]   team_refer.csv 저장 (이번 업로드 {len(result)}행 반영, 누적 총 {len(merged)}행)')
     return True
-
-
-# ── 관리자 화면 "미리보기"(2026-09-17 신설) ────────────────────────────────
-# 엑셀 업로드→git push/pull→이미지 재생성 없이도, 이 로직이 실제로 어떤
-# 결과를 만드는지 웹에서 바로 확인하고 싶다는 요청(파이프라인 코드를 고칠
-# 때마다 매번 실제 배포까지 거쳐야 확인 가능했던 것이 비효율적이라는 지적)
-# 으로 추가. "엑셀 파일로 한번에 반영"(process())이 실제로 거치는 변환
-# 단계(collapse_repeated_levels → build_rows_from_records →
-# reparent_orphan_roots → reshape_storage_columns)를 파일 업로드·저장
-# 없이 그대로 재사용해, 지금
-# 서버에 실제로 배포된 코드가 어떻게 동작하는지를 그 자리에서 보여준다
-# (배포 검증 용도로도 쓸 수 있다 — 미리보기 결과가 기대와 다르면 배포된
-# 코드가 최신이 아닐 가능성을 의심할 수 있음). valid_date 스탬프/톰스톤/
-# 책임자 자동 채움(_backfill_leader_fields, 현재 저장된 값을 참조하는
-# 상태 의존 로직)은 "지금 이 입력만으로 뭐가 만들어지는지"를 보는 목적과
-# 맞지 않아 미리보기에서는 뺐다.
-def parse_pasted_table(text: str) -> list[dict]:
-    """엑셀에서 복사해 붙여넣은 텍스트(탭 구분, 콤마도 지원)를 레코드
-    목록(dict, 첫 줄을 헤더로 사용)으로 변환한다. 헤더에 _COL_MAP의 9개
-    컬럼 중 일부만 있어도 된다(build_rows_from_records()의 _cleaned_records()
-    가 빠진 컬럼을 자동으로 빈 값 처리) — 예: 비공식소속부서명/1단계부서명/
-    2단계부서명/3단계부서명 4개만 붙여넣어도 나머지(구분/조직코드/사번/
-    성명/직책)는 빈 값으로 간주된다."""
-    lines = [ln for ln in text.replace('\r\n', '\n').replace('\r', '\n').split('\n') if ln.strip()]
-    if not lines:
-        return []
-    delimiter = '\t' if '\t' in lines[0] else ','
-    header = [h.strip() for h in lines[0].split(delimiter)]
-    records = []
-    for line in lines[1:]:
-        values = line.split(delimiter)
-        records.append({h: (values[i].strip() if i < len(values) else '') for i, h in enumerate(header)})
-    return records
-
-
-def preview_transform(records: list) -> pd.DataFrame:
-    """process()가 실제로 거치는 변환(collapse_repeated_levels →
-    build_rows_from_records → reparent_orphan_roots →
-    reshape_storage_columns)만 그대로 적용해 결과를 반환한다 — 파일 저장
-    (valid_date 스탬프/톰스톤/DB 반영)은 하지 않는다."""
-    records = collapse_repeated_levels(records)
-    result = build_rows_from_records(records)
-    result = reparent_orphan_roots(result)
-    result = reshape_storage_columns(result)
-    return result
 
 
 if __name__ == '__main__':
