@@ -151,11 +151,19 @@ def _last_day_of_month(year: int, month: int) -> date:
 
 def plan(raw_dir: str) -> tuple[list[tuple[str, date]], list[tuple[str, str]]]:
     """반환: (처리 대상 [(경로, 유효날짜), ...] — 유효날짜 오름차순),
-    (제외된 파일 [(파일명, 사유), ...])."""
+    (제외된 파일 [(파일명, 사유), ...]).
+
+    파일이 많으면(예: ~100개) 전부 읽어서 헤더 검사를 마칠 때까지
+    시간이 걸리는데, 그동안 openpyxl 경고/xlwings 폴백 메시지 외에는
+    화면에 아무것도 안 찍혀 "멈췄나?" 싶을 수 있어(2026-09-17 사용자
+    보고), 파일마다 "[N/전체] 읽는 중: 파일명"을 즉시 출력해 진행 상황을
+    실시간으로 보여준다."""
+    files = _list_source_files(raw_dir)
     planned = []
     skipped = []
-    for path in _list_source_files(raw_dir):
+    for i, path in enumerate(files, start=1):
         name = os.path.basename(path)
+        print(f'[{i}/{len(files)}] 읽는 중: {name}', flush=True)
         try:
             df = _read_source(path)
         except Exception as exc:
