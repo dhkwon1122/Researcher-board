@@ -613,6 +613,9 @@ def _find_source_file(raw_dir: str) -> str | None:
     return candidates[0] if len(candidates) == 1 else None
 
 
+_KNOWN_HEADERS = set(_COL_MAP.keys()) | set(team_refer_intake._SRC_HEADERS)
+
+
 def _read_source(path: str) -> pd.DataFrame:
     """.xlsx는 read_xlsx()(xlwings, DRM 파일용)로, .csv는
     scripts/build_team_refer_intake.py의 산출물과 동일한 방식
@@ -620,17 +623,33 @@ def _read_source(path: str) -> pd.DataFrame:
     행 헤더)으로 읽는다 — xlwings/Excel이 전혀 필요 없어 DRM 자동화 문제와
     무관하다.
 
-    xlsx는 header_row='auto'(공란 행을 건너뛰고 실제 값이 있는 첫 행을
-    헤더로 자동 인식)를 쓴다 — 원본 팀참조시트.xlsx(1행 공란, 2행 헤더)와
-    관리자 화면 "엑셀 다운로드" 산출물(1행이 바로 헤더,
-    services.team_refer_store._build_workbook()) 둘 다 이 업로드 섹션에
-    다시 올릴 수 있어야 하는데, 예전처럼 header_row=1로 고정하면 다운로드
-    파일은 진짜 헤더 행이 통째로 버려지고 첫 데이터 행이 헤더로 잘못
-    읽혀 "[ERROR] 필수 컬럼 없음"으로 실패했다(2026-09-17 실제 재현 후
-    발견 — "엑셀 다운로드 → 그대로 재업로드" 마이그레이션 경로가 이
-    수정 전에는 동작하지 않았다)."""
+    xlsx는 이 업로드 섹션에 올라올 수 있는 3가지 헤더 위치를 순서대로
+    직접 시도해, 그중 "알려진 헤더(_COL_MAP의 9개 또는 team_refer_intake.
+    _SRC_HEADERS의 3개) 중 하나라도 실제로 나오는" 첫 결과를 채택한다
+    (2026-09-17 2차 수정 — header_row='auto', 즉 "공란이 아닌 첫 행을
+    헤더로 인식"하는 방식은 그 행에 제목 등 어떤 셀 하나라도 값이
+    있으면 그 행을 헤더로 잘못 인식해버려, 과거 인력현황 대량 소급 반영
+    중 실제로 "Unnamed: 0"~"Unnamed: 160" 같은 헤더로 잘못 읽혀 실패하는
+    것을 발견했다):
+      1. header_row=1(물리적 2행) — 원본 팀참조시트.xlsx(1행 공란, 2행
+         헤더)와 인력현황 원본(1행 제목/공란, 2행 헤더) 둘 다 여기 해당.
+      2. header_row=0(물리적 1행) — 관리자 화면 "엑셀 다운로드" 산출물
+         (services.team_refer_store._build_workbook())은 1행이 바로
+         헤더라 여기 해당.
+      3. 위 둘 다 알려진 헤더를 못 찾으면(전혀 다른 형식이거나 워크시트가
+         비정상적인 경우) header_row='auto'로 마지막 시도 — 그래도 못
+         찾으면 이 함수가 반환한 DataFrame에서 다음 단계(process())의
+         "[ERROR] 필수 컬럼 없음" 검사가 정확한 실패 사유를 보여준다."""
     if path.lower().endswith('.csv'):
         return pd.read_csv(path, encoding='utf-8-sig', dtype=str).fillna('')
+
+    for header_row in (1, 0):
+        try:
+            df = read_xlsx(path, header_row=header_row)
+        except Exception:
+            continue
+        if {str(c).strip() for c in df.columns} & _KNOWN_HEADERS:
+            return df
     return read_xlsx(path, header_row='auto')
 
 
