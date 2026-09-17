@@ -256,7 +256,26 @@ def save_snapshot(records: list[dict], valid_date: date) -> dict:
     CSV(data/processed/team_refer.csv)에는 항상 반영하고, DB가 설정돼
     있으면 DB에도 반영한다(실패해도 CSV 반영은 이미 끝난 상태이므로 함수
     전체가 실패하지 않는다 — db_ok로 호출부가 구분해서 안내).
+
+    2026-09-17 수정 — collapse_repeated_levels() 추가: list_editable_rows()가
+    이제 team_refer.csv에 저장된 그대로(process_team_refer.reshape_storage_
+    columns()가 재배치한 값, 예: "2D"는 1·2단계 칸에 똑같이 "ADDP")를
+    그리드에 보여주므로(2026-09-17, 사용자 요청 — "그리드에도 team_refer.csv와
+    동일하게 표시"), 그 값을 수정 없이 그대로 다시 제출해도 own_path()가
+    "3칸 다 채워져 있으니 3단계 깊이"로 오인하지 않도록 저장 직전에 먼저
+    이 중복(바로 위 레벨과 같은 값)을 접어 원래 깊이로 되돌린다 — process()
+    (xlsx 일괄 업로드)가 이미 쓰던 것과 동일한 함수를 그대로 재사용한다
+    (collapse_repeated_levels()의 되감기 규칙이 reshape_storage_columns()의
+    중복 생성 규칙과 정확히 역함수라 안전하게 원래 깊이로 복원됨 — "ADDP
+    산하에 우연히 같은 이름 ADDP인 하위조직이 있는" 경우는 없다고 사용자가
+    확인). 그리드에서 사람이 실제로 같은 이름을 반복 타이핑해 "여긴 별도
+    하위 구분이 없다"는 뜻으로 쓰는 경우도 이제 이 로직에 자연스럽게
+    흡수된다(이전엔 그리드에 이 collapse를 적용하지 않기로 했었으나,
+    이제 그리드 자체가 reshape된 값을 그대로 보여주는 이상 저장 시
+    collapse 없이는 재저장할 때마다 조직이 증식하는 문제를 피할 수 없어
+    범위를 그리드 저장까지 넓혔다).
     """
+    records = ptr.collapse_repeated_levels(records)
     result = ptr.build_rows_from_records(records)
     duplicate_dep_ids = ptr.find_duplicate_dep_ids(result)
     # "(SAIT)"/"(기술원)" 태그 제거로 서로 다른 원본이 하나로 합쳐진 경우를

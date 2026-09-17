@@ -281,11 +281,20 @@ def org_tree_html(tree: list, node_content_fn=None) -> str:
     확장/축소). 라벨은 '{과제/파트}({직책} {성명})' 형식(예: '기계시스템연구팀
     (PL 정재원)'). node_content_fn(node) -> str|None: 해당 조직 노드에 붙일
     추가 콘텐츠(nav_items_html로 만든 연구원/과제 목록 등) — 없으면 생략.
-    team_layer 1~2(상위 조직)는 기본으로 펼쳐서 보여준다. 자신에게도, 하위
-    조직 전체(재귀적으로)에도 연결된 콘텐츠가 하나도 없는 노드는 아예
-    생략한다(회색 텍스트로 보여주지 않음) — 실제 매핑된 대상이 없는 조직을
-    구경만 하게 두지 않기 위함. 하위 노드들은 .org-node-body로 감싸 들여쓰기
-    (padding-left/border-left, CONSOLE_STYLE 참고)가 적용되게 한다."""
+    team_layer 1~2(상위 조직)는 기본으로 펼쳐서 보여준다 — 단, 이 노드
+    자신에게 직접 붙은 콘텐츠(연구원 목록 등, node_content_fn(node)가
+    반환한 extra)가 있으면 team_layer와 무관하게 접어서 보여준다
+    (2026-09-17 확정 — 사용자 요청: "하위부서 아래의 연구원들이 디폴트로
+    보이는 중"이라 클릭해서 펼쳐야만 보이게 해달라는 것. team_layer<=2인
+    조직(예: "2D"처럼 그 자체가 리프라 사람이 직접 배정된 2단계 조직)에도
+    연구원 목록이 바로 붙을 수 있어, team_layer만으로 펼침 여부를 정하면
+    그 목록까지 같이 펼쳐져 보였다 — extra 유무로 한 번 더 걸러 순수
+    하위조직 탐색용(자신에게는 목록이 없고 자식만 있는) 노드만 계속
+    기본으로 펼쳐지게 한다). 자신에게도, 하위 조직 전체(재귀적으로)에도
+    연결된 콘텐츠가 하나도 없는 노드는 아예 생략한다(회색 텍스트로
+    보여주지 않음) — 실제 매핑된 대상이 없는 조직을 구경만 하게 두지
+    않기 위함. 하위 노드들은 .org-node-body로 감싸 들여쓰기(padding-left/
+    border-left, CONSOLE_STYLE 참고)가 적용되게 한다."""
     def _label(node: dict) -> str:
         head = html.escape(own_level_name(node) or '')
         assignment = (node.get('assignment_name') or '').strip()
@@ -309,7 +318,7 @@ def org_tree_html(tree: list, node_content_fn=None) -> str:
             # 배정된 하위 조직·연구원은 계속 찾아볼 수 있게 한다.
             return extra + children_html
         body = extra + (f'<div class="org-node-body">{children_html}</div>' if children_html else '')
-        open_attr = ' open' if node['team_layer'] <= 2 else ''
+        open_attr = ' open' if node['team_layer'] <= 2 and not extra else ''
         return f'<details class="org-node"{open_attr}><summary>{_label(node)}</summary>{body}</details>'
 
     return f'<div class="org-tree">{"".join(_node_html(n) for n in tree)}</div>'

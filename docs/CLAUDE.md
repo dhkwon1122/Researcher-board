@@ -12530,3 +12530,38 @@ SAIT 강제 편입 범위(1단계이면서 SAIT/종합기술원이 아닌 orphan
 알고리즘을 자동으로 반영함을 재확인(같은 `reshape_storage_columns()`를
 그대로 호출하므로). `python3 -m py_compile` 전체 통과, `app` import 및
 관리자 화면 렌더링 정상.
+
+**후속 문제(같은 날 실제 배포 후 재현)**: 사용자가 실제로 team_refer
+데이터를 전부 초기화(`scripts/reset_team_refer.py` 신규 추가 — 그리드
+왕복 버그가 고쳐지기 전에 이미 CSV/DB에 박혀버렸을 수 있는 유령 dep_id를
+개별 추적 대신 통째로 비우고 다시 쌓는 방식)한 뒤 재업로드해보니
+team_refer.csv 파일 자체는 정상(2D → ADDP/ADDP/2D)이었지만, **그리드
+화면은 여전히 own-level-only 스타일(2D → ADDP/2D/공란)로 다르게
+보여서** — 그리드도 파일과 동일하게 보여달라는 추가 요청을 받았다.
+
+**구현(2차)**: `team_hierarchy.backfill_full_path()`를 다시 수정 —
+"자기 칸을 먼저 강제로 비우고 재구성"하는 부분을 제거하고, 원래
+설계(비어 있는 칸만 채우고 이미 채워진 칸은 그대로 통과)로 되돌리되,
+조상 이름을 찾을 때는 그 조상의 원본 칸이 아니라 `_true_own_name()`
+(org_name_wd 우선)을 쓰도록 유지 — reshape로 재배치된 노드는 3칸이
+이미 다 채워져 있어 이 함수를 거쳐도 값이 안 바뀌고 그대로 그리드에
+나가 team_refer.csv와 자동으로 일치하게 되고, org_name_wd가 없는
+placeholder 노드만 기존처럼 조상 체인으로 빈 칸이 채워진다.
+
+이 상태로 그리드가 reshape 중복값(예: "2D"의 1·2단계 칸에 똑같이
+"ADDP")을 그대로 보여주게 되므로, **수정 없이 그대로 재저장하면
+own_path()가 다시 다단계 경로로 오인해 증식하는 문제가 재발**한다 —
+`services.team_refer_store.save_snapshot()` 맨 앞에 `process_team_refer.
+collapse_repeated_levels()` 호출을 추가해 막았다(reshape가 만드는
+중복 패턴과 collapse의 되감기 규칙이 정확히 역함수라 안전). 원래
+"그리드에는 collapse를 적용하지 않는다"는 방침이었으나(사람이 반복
+표기를 그대로 입력해 쓸 수 있어야 한다는 이유), 그리드 자체가 이제
+reshape된 값을 보여주는 이상 저장 시 collapse 없이는 재저장 증식을
+피할 수 없어 범위를 그리드 저장까지 넓혔다.
+
+**검증(2차)**: 10개 조직 예시로 `save_snapshot()` 직후 그리드 표시와
+실제 team_refer.csv 파일 내용이 완전히 동일함을 확인(전 항목 일치).
+그 상태로 무수정 재저장 3회 반복해도 10행 유지 확인. org_name_wd 없는
+placeholder 케이스도 무수정 재저장 2회 반복해 3행 유지 확인. 조직도
+라벨도 정상. `python3 -m py_compile` 전체 통과, `app` import 및 관리자
+화면 렌더링 정상.
