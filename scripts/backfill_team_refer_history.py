@@ -103,12 +103,16 @@ def _list_source_files(raw_dir: str) -> list:
 
 
 def _read_source(path: str) -> pd.DataFrame:
-    """DRM이 이미 풀린 원본을 읽는다 — .xlsx는 read_xlsx(header_row='auto')
-    (원본마다 헤더 물리적 위치가 다를 수 있어 자동 인식, xlwings/Excel이
-    없어도 pandas로 폴백), .csv는 1번째 행 헤더로 그대로 읽는다."""
+    """DRM이 이미 풀린 원본을 읽는다 — .xlsx는 read_xlsx(header_row=1)
+    (인력현황 원본 관례: 1행은 공란/제목, 2행이 실제 헤더 — scripts/
+    build_team_refer_intake.py/build_past_team_refer.py와 동일한 고정값.
+    header_row='auto'는 1행에 제목 등 어떤 텍스트라도 있으면 그 1행을
+    헤더로 잘못 인식해버려(2026-09-17 실사용 중 발견 — 전체 파일이
+    "필수 헤더 없음"으로 제외됐음) 쓰지 않는다), xlwings/Excel이 없어도
+    pandas로 폴백한다. .csv는 1번째 행 헤더로 그대로 읽는다."""
     if path.lower().endswith('.csv'):
         return pd.read_csv(path, encoding='utf-8-sig', dtype=str).fillna('')
-    return read_xlsx(path, header_row='auto')
+    return read_xlsx(path, header_row=1)
 
 
 def _clean_numeric_str(val) -> str:
