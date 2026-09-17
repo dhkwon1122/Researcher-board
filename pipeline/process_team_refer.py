@@ -434,9 +434,16 @@ def collapse_repeated_levels(records: list) -> list:
     이 휴리스틱으로 구분할 수 없다는 한계가 있으나, 실제 데이터에는 그런
     경우가 없다고 사용자가 확인함.
 
-    엑셀 일괄 업로드(process()) 전용이다 — 관리자 화면 그리드(services.
-    team_refer_store)에는 적용하지 않는다(사용자 확정 — 그리드에서는
-    사람이 이 반복 표기를 그대로 입력해서 쓸 수 있어야 하므로)."""
+    엑셀 일괄 업로드(process())와 관리자 화면 그리드 저장(services.
+    team_refer_store.save_snapshot()) 양쪽 다 쓴다. 최초엔 그리드에는
+    적용하지 않기로 했었으나(그리드에서 사람이 이 반복 표기를 그대로
+    입력해서 쓸 수 있어야 한다는 이유), 2026-09-17에 "그리드도 team_
+    refer.csv 저장 형식(process_team_refer.reshape_storage_columns())과
+    동일하게 보여달라"는 요청으로 그리드 자체가 이제 재배치된(레벨
+    중복이 생기는) 값을 그대로 보여주게 되면서, 저장 시 그 중복을 다시
+    접어 원래 깊이로 복원해야 own_path()가 오작동하지 않아 범위를
+    넓혔다(save_snapshot() 2026-09-17 수정 참고) — reshape가 만드는
+    중복 패턴과 이 함수의 되감기 규칙이 정확히 역함수 관계라 안전하다."""
     result = []
     for record in records:
         new_record = dict(record)

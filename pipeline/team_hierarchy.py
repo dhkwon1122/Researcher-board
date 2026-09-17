@@ -170,36 +170,43 @@ def backfill_full_path(rows: list) -> list:
     dep_id/upper_dep_id/team_layer 등 각 행 자신의 값은 그대로 두고, 비어 있는
     조상 레벨 이름 필드만 채운다(자기 자신의 값을 덮어쓰지 않음).
 
-    2026-09-17 수정 — 자기 칸부터 org_name_wd 기준으로 강제 재구성:
-    process_team_refer.reshape_storage_columns()가 team_refer.csv 저장
-    형식을 외부 시스템 요구에 맞춰 재배치하면서, 저장된 1/2/3단계부서명
-    칸에 "own-level-only"라는 이 함수의 전제(자기 칸만 채워져 있고 나머지는
-    공백)가 더 이상 성립하지 않게 됐다(예: 2단계 노드의 1단계 칸에도 부모
-    이름이 채워짐). 이 값을 그대로 믿고 "비어 있는 칸만 채운다"를 하면
-    두 가지 문제가 생긴다 — (a) 이미 채워진 칸을 "자기 값"으로 오인해
-    엉뚱한(부모) 이름을 그대로 내보내고, (b) 그 값을 그대로 그리드에
-    보여준 뒤 다시 저장하면 own_path()가 "1/2/3단계 칸에 값이 있으니
-    3단계 깊이 경로"로 오인해(원래는 1~2단계 깊이였는데) 매 저장마다
-    조직이 유령 노드로 계속 쪼개져 증식하는 버그가 있었다(실제 재현:
-    10개 조직을 그리드에서 수정 없이 저장만 다시 눌러도 20행으로 증식).
+    2026-09-17 수정(2차) — "비어 있는 칸만" 채우되, 그 값은 org_name_wd
+    기준(_true_own_name())으로 찾는다: process_team_refer.reshape_storage_
+    columns()가 team_refer.csv 저장 형식을 외부 시스템 요구에 맞춰
+    재배치하면서, 1·2단계 조직도 자기 칸을 포함한 3칸이 전부 채워지게
+    됐다(예: 2단계 노드 "2D"는 dep_1st_name=dep_2nd_name="ADDP",
+    dep_3rd_name="2D"). 그리드도 team_refer.csv와 동일한 값을 보여줘야
+    한다는 요구(2026-09-17)에 맞춰, 이 함수는 **이미 채워진 칸은 그대로
+    둔다** — reshape로 재배치된 노드는 3칸이 이미 다 채워져 있으니
+    이 함수를 거쳐도 값이 안 바뀌고 그대로 그리드에 나간다(=team_refer.csv
+    파일과 그리드가 항상 동일해짐). org_name_wd가 없는 행(경로상으로만
+    존재하는 조상 전용 노드 — reshape가 재배치하지 않고 자기 칸만 채운
+    채 남겨둔 행)만 조상 체인을 걸어 빈 칸을 채운다(기존과 동일한
+    "own-level-only → 전체 경로" 복원).
 
-    그래서 조상 체인을 걷기 전에 먼저 각 행 자신의 칸을 전부 지우고
-    _true_own_name()(org_name_wd 우선)으로 자기 칸 하나만 다시 채운 뒤
-    (재배치로 오염됐을 수 있는 나머지 칸은 확실히 공백이 됨), 그 다음에
-    upper_dep_id 체인을 따라 올라가며 각 조상의 _true_own_name()으로
-    빈 칸을 채운다 — 결과적으로 저장 형식이 어떻게 재배치돼 있든 항상
-    "자기 칸=자기 이름, 그 외 칸=실제 조상 이름 또는 공백"이라는 원래
-    own-level-only 왕복 불변식을 복원한다."""
+    조상 이름을 찾을 때 그 조상 자신의 칸(node.get(field))을 그대로
+    읽지 않고 _true_own_name()(org_name_wd 우선)을 쓰는 이유: 조상이
+    reshape로 재배치된 2단계 노드라면 그 자기 칸(dep_2nd_name)에 이미
+    "자기 부모의 이름"이 들어있어(자기 이름이 아님), 그대로 읽으면 조상
+    이름을 엉뚱하게 한 단계 더 위 것으로 잘못 채운다 — org_name_wd는
+    reshape가 절대 건드리지 않는 별도 컬럼이라 항상 안전하게 그 조상의
+    "진짜 자기 이름"을 준다.
+
+    **그리드 저장 시 주의**: 이 함수가 그대로 통과시킨 reshape 중복값
+    (예: "2D"의 1·2단계 칸에 똑같이 "ADDP")을 그리드가 수정 없이 그대로
+    다시 저장하면, own_path()가 "1/2/3단계 칸에 값이 있으니 3단계 깊이
+    경로"로 오인해 조직이 유령 노드로 계속 쪼개져 증식하는 버그가 있다
+    (2026-09-17 최초 발견 — 10개 조직을 저장만 다시 눌러도 20행으로
+    증식). 이건 이 함수가 아니라 services.team_refer_store.save_snapshot()
+    가 저장 직전에 process_team_refer.collapse_repeated_levels()로 그
+    중복(바로 위 레벨과 같은 값)을 다시 접어서 막는다(collapse_repeated_
+    levels() 2026-09-17 docstring 참고 — reshape의 중복 생성 규칙과
+    collapse의 되감기 규칙이 정확히 역함수 관계라 안전하게 원래 깊이로
+    복원됨)."""
     by_id = {r.get('dep_id'): r for r in rows if r.get('dep_id')}
     result = []
     for row in rows:
         full = dict(row)
-        own_layer = _own_layer(row)
-        if own_layer:
-            own_name = _true_own_name(row)
-            for idx, field in enumerate(LEVEL_FIELDS, start=1):
-                full[field] = own_name if idx == own_layer else ''
-
         node = row
         seen: set = set()
         while node:
