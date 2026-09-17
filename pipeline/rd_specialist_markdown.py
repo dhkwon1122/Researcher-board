@@ -76,28 +76,43 @@ def _period_bound_key(d) -> tuple:
 
 
 def _latest_rows_in_period(rows: list, start, end) -> list:
-    """_latest_current_rows()의 기간(period) 버전(2026-08-29 추가) — 파일
-    전체에서 가장 최근 날짜가 아니라, [start, end] 구간 안에서 dep_id별
-    가장 최근 스냅샷만 "그 기간 기준 현재" 상태로 취급한다(연구원 명단
-    화면의 '누적기준 + 기간 지정' 조회, pages/researcher_list.py의
-    _resolve_period_snapshot()과 동일한 발상 — researchers_history.csv/
-    evaluations_history.csv에 이미 적용된 것과 같은 원리를 team_refer에도
-    적용). 구간 안에 스냅샷이 하나도 없는 dep_id는 제외한다(그 기간에 이
-    조직이 있었는지 이 데이터로는 알 수 없으므로). 구간 안 최신 스냅샷이
-    deleted='Y'면(그 기간 중 삭제 처리됨) 그 dep_id도 제외한다.
-    valid_year 컬럼이 없는 옛 스키마 데이터는 필터 없이 그대로 통과시킨다
-    (_latest_current_rows()와 동일한 폴백)."""
+    """_latest_current_rows()의 기간(period) 버전(2026-08-29 추가) —
+    "그 시점(end) 기준으로 존재했던 dep_id별 가장 최근 스냅샷"을
+    "그 기간 기준 현재" 상태로 취급한다.
+
+    2026-09-17 수정 — start를 하한으로 강제하지 않는다: team_refer는
+    보통 월말에만 스냅샷이 쌓이는데(팀참조시트 업로드/월별 소급 백필),
+    [start, end] 둘 다를 만족해야 한다는 예전 방식은 사용자가 좁은
+    구간(예: 2023-08-10~2023-08-20)을 지정하면 그 구간 안에 월말
+    스냅샷이 하나도 없어 아무 결과도 안 나오는 문제가 있었다(실사용 중
+    발견 — "가장 근접한 이전 시점 데이터로 보여주는 줄 알았는데 그게
+    아니었다"). 이 함수의 원래 취지("그 기간 기준 dep_id별 최신
+    스냅샷")에 맞게, end 이전(포함)의 스냅샷 중 dep_id별 가장 최근
+    것을 그대로 채택한다 — 그 조직이 실제로 그 시점 훨씬 전에 마지막
+    갱신됐어도, 그 뒤로 톰스톤(deleted='Y')되지 않았다면 "그 시점까지도
+    존재했다"고 보는 것이 맞다(실제로 사라졌다면 톰스톤이 이후 시점을
+    지나면서 걸러준다 — process_team_refer.tombstone_missing_dep_ids()/
+    scripts/reconcile_team_refer_tombstones.py 참고). start는 이제
+    이 함수 안에서 쓰이지 않지만(호출부 시그니처 호환을 위해 인자는
+    유지), end 이후 스냅샷은 여전히 제외한다(미래 시점 데이터가 과거
+    조회에 섞여 들어가지 않도록).
+
+    구간(end 이전)에 스냅샷이 하나도 없는 dep_id는 제외한다(그 시점에
+    이 조직이 있었는지 이 데이터로는 알 수 없으므로). end 시점 기준
+    최신 스냅샷이 deleted='Y'면(그 시점 이전에 이미 삭제 처리됨) 그
+    dep_id도 제외한다. valid_year 컬럼이 없는 옛 스키마 데이터는 필터
+    없이 그대로 통과시킨다(_latest_current_rows()와 동일한 폴백)."""
     if not rows or not any('valid_year' in r for r in rows):
         return rows
 
-    start_key, end_key = _period_bound_key(start), _period_bound_key(end)
+    end_key = _period_bound_key(end)
     latest_by_dep: dict = {}
     for row in rows:
         dep_id = (row.get('dep_id') or '').strip()
         if not dep_id:
             continue
         key = _date_key(row)
-        if not (start_key <= key <= end_key):
+        if key > end_key:
             continue
         if dep_id not in latest_by_dep or key > _date_key(latest_by_dep[dep_id]):
             latest_by_dep[dep_id] = row
