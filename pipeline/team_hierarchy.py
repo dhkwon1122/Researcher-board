@@ -134,6 +134,30 @@ def derive_hierarchy(records: list) -> list:
     return result
 
 
+def _own_layer(node: dict) -> int:
+    try:
+        layer = int(node.get('team_layer') or 0)
+    except (TypeError, ValueError):
+        return 0
+    return layer if 1 <= layer <= len(LEVEL_FIELDS) else 0
+
+
+def _true_own_name(node: dict) -> str:
+    """node의 "진짜 자기 이름"을 반환한다 — org_name_wd가 있으면 그 값을
+    쓰고(process_team_refer.reshape_storage_columns()가 절대 건드리지
+    않는 컬럼이라 항상 안전), 없으면(경로상으로만 존재하는 조상 전용
+    노드 — reshape_storage_columns()가 이런 행은 재배치하지 않고 원본
+    그대로 두므로 안전) 자기 team_layer 칸(LEVEL_FIELDS[layer-1])의 값을
+    그대로 쓴다. backfill_full_path()가 own_level_name()과 동일한 원칙을
+    공유하는 헬퍼(rd_specialist_markdown.own_level_name() 2026-09-17 수정
+    참고)."""
+    org_name_wd = str(node.get('org_name_wd') or '').strip()
+    if org_name_wd:
+        return org_name_wd
+    layer = _own_layer(node)
+    return str(node.get(LEVEL_FIELDS[layer - 1]) or '').strip() if layer else ''
+
+
 def backfill_full_path(rows: list) -> list:
     """derive_hierarchy()의 역방향 — 저장 스키마(own-level-only, 각 행이
     자기 team_layer 레벨 이름만 채움)를 받아, upper_dep_id 체인을 따라 올라가며
@@ -144,21 +168,45 @@ def backfill_full_path(rows: list) -> list:
     보여준다 — derive_hierarchy()가 그 결과를 다시 own-level-only로 압축하므로
     왕복해도 안전하다(멱등적: 같은 텍스트 경로는 항상 같은 dep_id로 재계산됨).
     dep_id/upper_dep_id/team_layer 등 각 행 자신의 값은 그대로 두고, 비어 있는
-    조상 레벨 이름 필드만 채운다(자기 자신의 값을 덮어쓰지 않음)."""
+    조상 레벨 이름 필드만 채운다(자기 자신의 값을 덮어쓰지 않음).
+
+    2026-09-17 수정 — 자기 칸부터 org_name_wd 기준으로 강제 재구성:
+    process_team_refer.reshape_storage_columns()가 team_refer.csv 저장
+    형식을 외부 시스템 요구에 맞춰 재배치하면서, 저장된 1/2/3단계부서명
+    칸에 "own-level-only"라는 이 함수의 전제(자기 칸만 채워져 있고 나머지는
+    공백)가 더 이상 성립하지 않게 됐다(예: 2단계 노드의 1단계 칸에도 부모
+    이름이 채워짐). 이 값을 그대로 믿고 "비어 있는 칸만 채운다"를 하면
+    두 가지 문제가 생긴다 — (a) 이미 채워진 칸을 "자기 값"으로 오인해
+    엉뚱한(부모) 이름을 그대로 내보내고, (b) 그 값을 그대로 그리드에
+    보여준 뒤 다시 저장하면 own_path()가 "1/2/3단계 칸에 값이 있으니
+    3단계 깊이 경로"로 오인해(원래는 1~2단계 깊이였는데) 매 저장마다
+    조직이 유령 노드로 계속 쪼개져 증식하는 버그가 있었다(실제 재현:
+    10개 조직을 그리드에서 수정 없이 저장만 다시 눌러도 20행으로 증식).
+
+    그래서 조상 체인을 걷기 전에 먼저 각 행 자신의 칸을 전부 지우고
+    _true_own_name()(org_name_wd 우선)으로 자기 칸 하나만 다시 채운 뒤
+    (재배치로 오염됐을 수 있는 나머지 칸은 확실히 공백이 됨), 그 다음에
+    upper_dep_id 체인을 따라 올라가며 각 조상의 _true_own_name()으로
+    빈 칸을 채운다 — 결과적으로 저장 형식이 어떻게 재배치돼 있든 항상
+    "자기 칸=자기 이름, 그 외 칸=실제 조상 이름 또는 공백"이라는 원래
+    own-level-only 왕복 불변식을 복원한다."""
     by_id = {r.get('dep_id'): r for r in rows if r.get('dep_id')}
     result = []
     for row in rows:
         full = dict(row)
+        own_layer = _own_layer(row)
+        if own_layer:
+            own_name = _true_own_name(row)
+            for idx, field in enumerate(LEVEL_FIELDS, start=1):
+                full[field] = own_name if idx == own_layer else ''
+
         node = row
         seen: set = set()
         while node:
-            try:
-                layer = int(node.get('team_layer') or 0)
-            except (TypeError, ValueError):
-                layer = 0
-            if 1 <= layer <= len(LEVEL_FIELDS):
+            layer = _own_layer(node)
+            if layer:
                 field = LEVEL_FIELDS[layer - 1]
-                value = str(node.get(field) or '').strip()
+                value = _true_own_name(node)
                 if value and not full.get(field):
                     full[field] = value
             upper = str(node.get('upper_dep_id') or '').strip()

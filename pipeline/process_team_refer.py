@@ -457,58 +457,64 @@ _STORAGE_LAYER_IDX = {'1': 0, '2': 1, '3': 2}
 
 
 def reshape_storage_columns(result: pd.DataFrame) -> pd.DataFrame:
-    """team_refer.csv 저장 형식 전용 재배치(2026-09-17 확정) — dep_id/
-    upper_dep_id/team_layer(내부 트리 구조·조직코드 순서 결정에 쓰이는 값)는
-    전혀 건드리지 않고, 1/2/3단계부서명 3개 컬럼의 "표시 값"만 외부 시스템
-    요구사항에 맞춰 다시 채운다: 외부 시스템이 team_refer.csv를 직접 읽는데
-    "비공식소속부서명(org_name_wd)은 무조건 3단계부서명 칸에 있어야 한다"는
-    내부 규정이 있어, own-level-only 저장 스키마(자기 team_layer 칸만 채움)
+    """team_refer.csv 저장 형식 전용 재배치(2026-09-17 확정, 같은 날 2차
+    수정 — "칸 고정 hop" 규칙으로 재정의) — dep_id/upper_dep_id/team_layer
+    (내부 트리 구조·조직코드 순서 결정에 쓰이는 값)는 전혀 건드리지 않고,
+    1/2/3단계부서명 3개 컬럼의 "표시 값"만 외부 시스템 요구사항에 맞춰
+    다시 채운다: 외부 시스템이 team_refer.csv를 직접 읽는데 "비공식소속
+    부서명(org_name_wd)은 무조건 3단계부서명 칸에 있어야 한다"는 내부
+    규정이 있어, own-level-only 저장 스키마(자기 team_layer 칸만 채움)
     그대로는 1·2단계 조직의 org_name_wd가 엉뚱한 칸(1·2단계부서명 칸)에
     남는다.
 
-    규칙(사용자 확정): team_layer=L인 행의 "자기 칸 위치"를 own_idx=L-1이라
-    하면,
-      - own_idx 이상 위치(자기 칸 포함, 그 오른쪽 칸 전부) → 이 조직 자신의
-        이름(org_name_wd)을 그대로 채운다(3단계 칸은 항상 own_idx<=2라
-        무조건 이 규칙에 걸려 자기 이름이 들어간다 — org_name_wd가 무조건
-        3단계에 들어가야 한다는 요구사항이 이렇게 충족된다).
-      - own_idx보다 왼쪽 칸 → 실제 조상 조직의 이름을 채운다(1단계만 있던
-        조직은 2·3단계에 자기 이름을 그대로 복제, 2·3단계만 있던 조직은
-        1단계에 부모 이름을, 3단계만 있던 조직은 2단계에 부모/1단계에
-        조부모 이름을 채우는 것까지 전부 이 한 규칙으로 커버됨).
+    규칙(사용자 확정, 2차): 각 칸은 "자기 자신에서 몇 hop 위 조상을
+    보여줄지"가 칸 위치로 고정된다 — 3단계 칸(i=2)은 0-hop(자기 자신),
+    2단계 칸(i=1)은 1-hop(직속 부모), 1단계 칸(i=0)은 2-hop(조부모).
+    실제 hop 수는 `min(목표 hop, 자기 깊이-1)`로 캡을 건다 — 조부모/부모가
+    없으면(즉 자기 깊이가 그 hop 수보다 얕으면) 있는 데까지만 올라간
+    조상(=가장 가까운 실제 조상, 없으면 자기 자신)을 대신 채운다.
+    예) 2단계(깊이 2) 노드는 조부모가 없으므로 1단계 칸도 1-hop(부모)으로
+    캡돼, 1단계·2단계 칸에 똑같이 부모 이름이 들어간다(2D → 1단계=ADDP,
+    2단계=ADDP, 3단계=2D). 1단계(깊이 1) 노드는 부모도 없어 모든 칸이
+    0-hop(자기 자신)으로 캡돼 3칸 다 자기 이름이 들어간다.
+
+    **1차 버전(own_idx 이상=자기 이름) 대비 달라진 점**: 2단계 노드의
+    2단계부서명 칸이 예전엔 "자기 이름"이었는데 이번엔 "부모 이름"으로
+    바뀐다 — 그 결과 own_level_name()(자기 team_layer 칸만 읽어 조직도
+    라벨을 결정)이 2단계 노드의 라벨로 부모 이름을 잘못 읽는 문제가
+    생긴다. 이건 이 함수가 아니라 own_level_name() 쪽에서 org_name_wd를
+    우선 사용하도록 고쳐서 해결했다(rd_specialist_markdown.py 참고) —
+    "own_idx 칸=항상 자기 이름"이라는 전제가 이제 2단계 노드에는 더 이상
+    성립하지 않기 때문에, 라벨을 그 칸에서 다시 읽어오면 안 된다.
+
     조상 이름은 upper_dep_id 체인을 값을 바꾸기 전 원본 result 기준으로
-    거슬러 올라가 찾는다(자기 칸 위치 차이만큼만 정확히 위로 이동 —
-    reparent_orphan_roots()가 이미 반영한 SAIT 강제 편입 뒤에 이 함수가
-    실행되므로, ADDP/인사처럼 SAIT 밑으로 편입된 1단계 조직은 own_idx=0이라
-    애초에 조상을 조회하지 않아 SAIT 이름이 섞여 들어올 일이 없다).
+    거슬러 올라가 찾는다(reparent_orphan_roots()가 이미 반영한 SAIT 강제
+    편입 뒤에 이 함수가 실행되므로, ADDP/인사처럼 SAIT 밑으로 편입된
+    1단계 조직은 자기 깊이가 1이라 hop 캡이 0에서 멈춰 SAIT 이름이 섞여
+    들어올 일이 없다 — hop 캡은 항상 "SAIT 재편입 이전의 원래 트리 깊이"
+    기준이라는 뜻).
 
-    조상/자신의 "이름"은 org_name_wd가 있으면 그 값을, 없으면(사람 배정이
-    없어 org_name_wd가 비어 있는, 경로상으로만 존재하는 조상 전용 노드 —
-    예: 아무도 1단계 "ADDP" 자체에 직접 소속되지 않고 다들 그 밑 2·3단계에만
-    있는 경우) 원래 own-level-only 스키마에서 그 칸에 있던 값(경로 텍스트,
-    org_name_wd와 무관하게 항상 채워져 있음)을 그대로 쓴다 — 이 폴백이 없으면
-    org_name_wd가 없는 조상 노드의 라벨이 통째로 빈 칸이 돼
-    rd_specialist_markdown.own_level_name()이 읽는 조직도 표시 라벨이
-    사라지는 회귀가 생긴다.
-
-    안전성 확인(2026-09-17): own_level_name()과 team_hierarchy.
-    backfill_full_path()는 둘 다 "그 노드 자신의 team_layer에 해당하는 칸"만
-    읽는데, 이 함수는 own_idx(=자기 칸) 위치에도 항상 "자기 이름"을 넣으므로
-    (own_idx 이상 규칙에 own_idx 자신도 포함) 그 칸의 값은 재배치 전과
-    실질적으로 동일하다(org_name_wd가 있으면 원래 경로 텍스트 대신
-    org_name_wd로 바뀔 뿐, 사람이 org_name_wd를 그 조직의 이름과 다르게
-    입력하는 경우가 없다면 사실상 같은 문자열). services/similarity_map.py의
-    함수들도 정확히 team_layer==1/team_layer==3인 노드만 필터링해 그 칸을
-    읽거나, 비어 있을 때만 조상에서 상속하는 방식이라 마찬가지로 영향 없음
-    (이미 채워진 칸이라 "상속" 분기를 안 타게 될 뿐, 상속했을 값과 동일한
-    값이 이미 들어있어 결과는 같음).
+    **org_name_wd가 없는 행(경로상으로만 존재하는 조상 전용 노드 — 예:
+    아무도 2단계 "공정" 자체에 직접 소속되지 않고 다들 그 밑 3단계에만
+    있는 경우)은 이 함수가 아예 건드리지 않고 원래 값(own-level-only
+    스키마 그대로, 자기 칸=경로 텍스트/나머지 칸=공백) 그대로 둔다.**
+    이유: 조상 조회(`_ancestor_self`)는 org_name_wd가 없으면 그 칸의
+    원래 경로 텍스트로 폴백하지만, 그 폴백은 그 노드 "자신의" 칸이 아직
+    원본 그대로일 때만 유효하다 — 이 노드 자신을 재배치 규칙으로 다시
+    써버리면(위 규칙상 2단계 노드는 자기 칸에 "부모 이름"이 들어갈 수
+    있음) 원래 경로 텍스트가 영영 사라져 그 어디에도 남지 않는다
+    (org_name_wd도 없고, 자기 칸도 부모 이름으로 덮였으므로 복구 불가).
+    반면 org_name_wd가 없는 행은 애초에 외부 시스템이 매칭할 org_name_wd
+    자체가 없어 "org_name_wd를 3단계에 넣어야 한다"는 요구사항이 적용될
+    대상도 아니므로, 건드리지 않아도 요구사항 위반이 아니다.
 
     process()(xlsx 일괄 업로드)와 services.team_refer_store.save_snapshot()
     (관리자 화면 그리드 저장) 양쪽 다 최종 저장 직전에 호출한다 — 외부
     시스템은 두 경로로 저장된 team_refer.csv를 구분하지 않고 읽으므로 저장
-    형식은 항상 일관돼야 한다. 관리자 그리드 자체의 편집 화면(services.
-    team_refer_store.list_editable_rows())은 이 함수가 채운 값과 무관하게
-    항상 자기 칸의 값(=자기 이름)만 보여주므로 그리드 UX는 바뀌지 않는다."""
+    형식은 항상 일관돼야 한다. 관리자 그리드(services.team_refer_store.
+    list_editable_rows())는 이 함수가 물리적으로 재배치한 칸 값을 그대로
+    믿지 않고 org_name_wd 기준으로 매번 다시 복원하므로(team_hierarchy.
+    backfill_full_path() 2026-09-17 수정 참고) 그리드 UX는 바뀌지 않는다."""
     if result.empty:
         return result
     by_dep_id = result.set_index('dep_id', drop=False).to_dict('index')
@@ -532,11 +538,12 @@ def reshape_storage_columns(result: pd.DataFrame) -> pd.DataFrame:
 
     def _reshape(row):
         own_idx = _STORAGE_LAYER_IDX.get(str(row['team_layer']))
-        if own_idx is None:
+        if own_idx is None or not str(row.get('org_name_wd') or '').strip():
             return row
-        self_name = _effective_self(row)
+        depth = own_idx + 1
         for i, col in enumerate(LEVEL_FIELDS):
-            row[col] = self_name if i >= own_idx else _ancestor_self(row['dep_id'], own_idx - i)
+            hops = min(2 - i, depth - 1)
+            row[col] = _ancestor_self(row['dep_id'], hops)
         return row
 
     return result.copy().apply(_reshape, axis=1)
