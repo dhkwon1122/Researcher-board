@@ -152,12 +152,30 @@ _LEVEL_NAME_FIELDS = ('dep_1st_name', 'dep_2nd_name', 'dep_3rd_name')
 
 
 def own_level_name(node: dict) -> str:
-    """team_refer 행(또는 build_org_tree() 노드)에서 자기 team_layer에 해당하는
-    이름 하나만 골라 반환한다 — 저장 스키마가 own-level-only(자기 레벨 컬럼만
-    채움)이므로 team_layer가 1이면 dep_1st_name, 2면 dep_2nd_name, 3이면
-    dep_3rd_name을 본다. team_layer가 이 범위를 벗어나거나 비어 있으면(방어적
-    처리) 채워진 첫 값을 폴백으로 쓴다. org_tree_html._label()과
+    """team_refer 행(또는 build_org_tree() 노드)의 "자기 자신" 표시 라벨을
+    반환한다.
+
+    org_name_wd(비공식소속부서명)가 있으면 그 값을 그대로 쓴다(2026-09-17
+    수정 — 예전엔 저장 스키마가 own-level-only(자기 team_layer 칸만 채움)
+    라는 전제로 그 칸(team_layer 1/2/3 → dep_1st_name/dep_2nd_name/
+    dep_3rd_name)만 읽으면 됐지만, process_team_refer.reshape_storage_
+    columns()가 team_refer.csv 저장 형식을 외부 시스템 요구에 맞춰
+    재배치하면서 "자기 칸=항상 자기 이름"이라는 전제가 2단계 노드에 대해
+    더 이상 성립하지 않게 됐다(2단계 노드의 dep_2nd_name 칸에 부모 이름이
+    들어갈 수 있음) — 그 칸을 그대로 읽으면 라벨이 부모 이름으로 잘못
+    나온다. org_name_wd는 reshape_storage_columns()가 절대 건드리지 않는
+    별도 컬럼이라 항상 안전하게 "진짜 자기 이름"을 담고 있다.
+
+    org_name_wd가 없는 행(경로상으로만 존재하는 조상 전용 노드 — 이런
+    행은 reshape_storage_columns()가 아예 재배치하지 않고 원본 own-level-
+    only 값을 그대로 두므로 이 폴백이 안전하다)만 예전처럼 자기
+    team_layer에 해당하는 칸(dep_1st_name/dep_2nd_name/dep_3rd_name 중
+    하나)을 본다. team_layer가 범위를 벗어나거나 비어 있으면(방어적 처리)
+    채워진 첫 값을 폴백으로 쓴다. org_tree_html._label()과
     services.similarity_map(조직도 드롭다운 라벨)이 공유한다."""
+    org_name_wd = (node.get('org_name_wd') or '').strip()
+    if org_name_wd:
+        return org_name_wd
     try:
         layer = int(node.get('team_layer') or 0)
     except (TypeError, ValueError):
