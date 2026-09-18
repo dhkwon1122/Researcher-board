@@ -153,7 +153,7 @@ def _summarize(page_text: str):
 
 
 def get_project_summary(project_name: str, confl_address: str, page_cache: dict, summary_cache: dict,
-                         force: bool = False):
+                         force: bool = False, skip_confluence: bool = False):
     """요약 캐시를 확인하고, 없으면 원문(page_cache — confl_address가 있으면
     Confluence, 없으면 data/raw/conflue_MPR/{project_name}.pdf 폴백)을 가져와
     LLM으로 요약해 summary_cache에 채워 넣는다. 호출부가 두 캐시의 로드/저장을
@@ -163,10 +163,20 @@ def get_project_summary(project_name: str, confl_address: str, page_cache: dict,
     force=True면 summary_cache에 값이 있어도 무시하고 다시 요약한다(프롬프트가
     바뀌어 예전 캐시에 새 필드가 없을 때 등). 원문 캐시(page_cache)는 그대로
     재사용한다 — 문서 원문 자체는 안 바뀌었으므로 Confluence/PDF를 다시 조회할
-    필요는 없다."""
+    필요는 없다.
+
+    skip_confluence=True면 confl_address가 있는 과제는 Confluence 조회 자체를
+    시도하지 않고 바로 None을 반환한다(캐시에는 아무것도 남기지 않아, 나중에
+    이 옵션 없이 다시 실행하면 정상적으로 재시도된다). confl_address가 없어
+    PDF로 대체되는 과제는 Confluence와 무관하므로 영향받지 않는다. 컨플루언스
+    접근 권한이 일시적으로 막혀 있을 때(예: 보안정책 변경으로 재승인 대기 중)
+    나머지 분석 단계는 정상 진행하기 위해 쓴다."""
     cache_key = _page_cache_key(project_name, confl_address)
     if not force and cache_key in summary_cache:
         return summary_cache[cache_key]
+
+    if skip_confluence and confl_address:
+        return None
 
     page_text = _get_page_text(project_name, confl_address, page_cache)
     if page_text is None:

@@ -22,7 +22,14 @@ process_project_search.py(유사 기업/학계 탐색)는 이 체인에 포함�
 마지막에 단계별 성공/실패를 요약해서 보여준다.
 
 사용법:
-  python pipeline/run_analysis.py [--refresh-journals] [--refresh-judgments] [--top-k 5]
+  python pipeline/run_analysis.py [--refresh-journals] [--refresh-judgments] [--top-k 5] [--skip-confluence]
+
+--skip-confluence : 1단계(과제 문서 상세 분석)에서 confl_address가 있는 과제의
+  Confluence 조회를 건너뛴다(confl_address가 없어 PDF로 대체되는 과제는 영향
+  없음). 사내 Confluence 접근 권한이 일시적으로 막혀 있을 때(예: 보안정책
+  변경으로 재승인 대기 중) 2/3, 3/3단계(연구원 전문성 분석/유사도)는 정상
+  진행하기 위해 쓴다 — 1단계 산출물은 필수 입력이 아니라서 비어도 이후
+  단계에 영향 없다.
 
 run_expertise.py(전처리)까지 포함해 한 번에 순차 실행하려면 pipeline/run_integration.py를
 쓰면 된다. 전체 실행에 수십 분~수 시간이 걸릴 수 있어 도중에 환경 문제로
@@ -45,12 +52,13 @@ def _parse_top_k_arg(argv: list) -> int | None:
     return None
 
 
-def run(refresh_journals: bool = False, refresh_judgments: bool = False, top_k: int | None = None):
+def run(refresh_journals: bool = False, refresh_judgments: bool = False, top_k: int | None = None,
+        skip_confluence: bool = False):
     steps = []  # [(단계명, True/False), ...]
 
-    print('[run_analysis] 1/3 과제 문서 상세 분석')
+    print('[run_analysis] 1/3 과제 문서 상세 분석' + (' (컨플루언스 조회 건너뜀)' if skip_confluence else ''))
     from process_project_expertise import process as process_project_expertise
-    steps.append(('과제 문서 상세 분석', process_project_expertise()))
+    steps.append(('과제 문서 상세 분석', process_project_expertise(skip_confluence=skip_confluence)))
 
     print('[run_analysis] 2/3 연구원 전문성 분석')
     from process_researcher_expertise import process as process_researcher_expertise
@@ -74,4 +82,5 @@ if __name__ == '__main__':
         refresh_journals='--refresh-journals' in _argv,
         refresh_judgments='--refresh-judgments' in _argv,
         top_k=_parse_top_k_arg(_argv),
+        skip_confluence='--skip-confluence' in _argv,
     )

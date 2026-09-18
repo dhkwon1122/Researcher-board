@@ -18,12 +18,17 @@ run_analysis.py 단계는 사내 LLM/BGE-M3 호출이 많아 전체 실행에 �
 
 사용법:
   python pipeline/run_integration.py
-    [--skip-ready] [--force] [--skip-bge]
+    [--skip-ready] [--force] [--skip-bge] [--skip-confluence]
     [--refresh-journals] [--refresh-judgments] [--top-k 5]
 
-  --skip-ready : 0단계(환경 점검) 자체를 건너뛴다.
-  --force      : 0단계에서 FAIL이 나와도 무시하고 1~2단계를 강행한다.
-  --skip-bge   : 0단계 중 BGE-M3 서버 확인/자동기동만 건너뛴다(run_ready.py로 그대로 전달).
+  --skip-ready      : 0단계(환경 점검) 자체를 건너뛴다.
+  --force           : 0단계에서 FAIL이 나와도 무시하고 1~2단계를 강행한다.
+  --skip-bge        : 0단계 중 BGE-M3 서버 확인/자동기동만 건너뛴다(run_ready.py로 그대로 전달).
+  --skip-confluence : 0단계의 Confluence 점검과, 2단계 1/3(과제 문서 상세 분석)의
+    Confluence 조회를 함께 건너뛴다. 사내 Confluence 접근 권한이 일시적으로
+    막혀 있을 때(예: 보안정책 변경으로 재승인 대기 중) 나머지 단계(연구원
+    전문성 분석/유사도)는 정상 진행하기 위해 쓴다. confl_address가 없어
+    PDF로 대체되는 과제는 영향받지 않는다.
   그 외 옵션은 run_analysis.py에 그대로 전달된다(자세한 의미는 그 파일 참고).
 """
 
@@ -45,16 +50,20 @@ def _parse_top_k_arg(argv: list) -> int | None:
     return None
 
 
-def run(skip_ready: bool = False, force: bool = False, skip_bge: bool = False, **analysis_kwargs) -> bool:
+def run(skip_ready: bool = False, force: bool = False, skip_bge: bool = False, skip_confluence: bool = False,
+        **analysis_kwargs) -> bool:
     """0) 환경 점검 → 1) run_expertise → 2) run_analysis 순서로 실행한다.
     환경 점검에서 FAIL이 있고 force가 아니면 여기서 중단하고 False를 반환한다
-    (1~2단계는 아예 실행되지 않음 — 오래 걸리는 실행을 애초에 시작하지 않는다)."""
+    (1~2단계는 아예 실행되지 않음 — 오래 걸리는 실행을 애초에 시작하지 않는다).
+
+    skip_confluence=True면 0단계 Confluence 점검과 2단계 1/3(과제 문서 상세
+    분석)의 Confluence 조회를 함께 건너뛴다(run_ready.py/run_analysis.py 참고)."""
     start = time.monotonic()
 
     if not skip_ready:
         print('[run_integration] 0/2 환경 점검 (run_ready.py)')
         from run_ready import run as run_ready
-        ready = run_ready(skip_bge=skip_bge)
+        ready = run_ready(skip_bge=skip_bge, skip_confluence=skip_confluence)
         if not ready and not force:
             print('\n[run_integration] 환경 점검 실패 — 실행을 중단합니다.')
             print('  위 [실패] 항목을 해결한 뒤 다시 실행하거나, 문제를 알고도 강행하려면 --force를 사용하세요.')
@@ -70,7 +79,7 @@ def run(skip_ready: bool = False, force: bool = False, skip_bge: bool = False, *
 
     print('\n[run_integration] 2/2 전문성 분석 LLM 체인 (run_analysis.py)')
     from run_analysis import run as run_analysis
-    run_analysis(**analysis_kwargs)
+    run_analysis(skip_confluence=skip_confluence, **analysis_kwargs)
 
     elapsed = time.monotonic() - start
     print(f'\n[run_integration] 전체 완료 (총 소요 시간: {elapsed / 60:.1f}분)')
@@ -83,6 +92,7 @@ if __name__ == '__main__':
         skip_ready='--skip-ready' in _argv,
         force='--force' in _argv,
         skip_bge='--skip-bge' in _argv,
+        skip_confluence='--skip-confluence' in _argv,
         refresh_journals='--refresh-journals' in _argv,
         refresh_judgments='--refresh-judgments' in _argv,
         top_k=_parse_top_k_arg(_argv),
