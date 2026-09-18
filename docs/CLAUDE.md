@@ -12840,3 +12840,45 @@ team_refer(work_type=="R&D")/job_type 조건만 걸고 `is_current`는 전혀
 **검증**: 합성 데이터로 `is_current='Y'`/`'N'` 섞인 2명 중 1명만 남는 것,
 `is_current` 컬럼이 아예 없을 때 필터를 건너뛰고 전원 통과시키는 것
 확인. `python3 -m py_compile` 통과.
+
+## 2026-09-18 (8): 신규 `scripts/backfill_researchers_history.py` — 과거
+인력현황 대량 소급을 researchers.csv/researchers_history.csv에도 반영
+
+(15)의 team_refer 백필과 같은 원본 폴더(`data/raw/team_refer_backfill_source`)
+로 인력현황(researchers) 쪽도 소급 반영하고 싶다는 요청(사용자 확정 —
+"동일한 폴더야, 백필 스크립트 만들어줘", 201805~202608 대상). 관리자
+"데이터 업데이트" 탭의 `인력현황` 항목은 `needs_valid_date`가 없고
+`mode='wildcard'`(업로드마다 폴더 전체 삭제 후 새 파일 1개만 저장)라
+여러 달치를 웹에서 미리 쌓아뒀다 한 번에 실행하는 게 애초에 불가능함을
+먼저 확인 — 그래서 team_refer 백필과 같은 "파일 1개당 임시 폴더 1개,
+CLI로 순차 실행" 패턴을 그대로 재사용.
+
+**team_refer 백필과 다른 점 2가지**(스크립트 docstring에도 기록):
+1. `process_researchers.process()`는 team_refer와 달리 valid_date를
+   인자로 안 받는다 — 원본 파일 자체의 "인원실적년도"/"인원실적월"을
+   행마다 그대로 읽어 쓰므로, 이 스크립트가 뽑는 (연,월)은 오직 처리
+   순서 정렬용이다.
+2. 톰스톤 개념이 아예 없다 — `write_merged_with_valid_period()`의
+   "기존 저장값보다 과거 시점이면 건너뜀"(연구자 단위) 보호만 있고,
+   건너뛴 데이터도 `researchers_history.csv`에는 예외 없이 전부 쌓인다.
+   그래서 처리 순서가 실제 결과에 영향을 주지 않는다(확인됨 — 아래 검증).
+
+**발견한 함정**: `process_researchers.process(raw_dir=...)`는 raw_dir이
+기본값(RAW_DIR)이 아니면 `find_latest(raw_dir, RESEARCHERS_PATTERNS)`로
+파일을 찾는데, `RESEARCHERS_PATTERNS`(`*That Month Headcount*.xlsx`,
+`*End of Month Headcount*.xlsx`)에 맞는 **.xlsx 파일명만** 인식한다
+(team_refer의 `_find_source_file()`처럼 "폴더 안 파일 1개면 이름 무관하게
+그거 사용" 방식이 아님). 그래서 임시 폴더에 복사할 때 원본 파일명과
+무관하게 항상 이 패턴에 맞는 고정 이름(`backfill_That Month
+Headcount.xlsx`)으로 다시 저장하도록 처리 — 원본 파일명은 로그에서만
+그대로 보여준다. `.csv` 원본은 이 경로로 반영이 안 되므로(패턴이 .xlsx
+전용) 헤더 검증은 통과해도 반영 단계에서 명시적으로 실패 보고한다.
+
+**검증**: 합성 2개월치(2018-05/06) xlsx로 실제 `--apply` 실행 — 두 달 다
+있는 사람은 최신월(06) 값이 `researchers.csv`에 남고 이전월(05) 값도
+`researchers_history.csv`에 그대로 보존됨, 05월에만 있던 사람은 마지막
+알려진 값 그대로 `is_current='N'`으로 표시됨, 06월에만 있던 신규는
+`is_current='Y'`로 정상 반영됨을 확인. 테스트 후 원본
+`data/processed/researchers.csv`는 백업에서 복원, 테스트로 생성된
+`researchers_history.csv`는 삭제해 저장소 상태 원복. `python3 -m
+py_compile` 통과.
