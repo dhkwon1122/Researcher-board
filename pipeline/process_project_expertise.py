@@ -174,10 +174,14 @@ def build_html(items: list, total_projects: int, include_links: bool = True) -> 
     return mmd.console_page('과제 전문성 분석', sidebar, stats + ''.join(sections))
 
 
-def process(force: bool = False) -> bool:
+def process(force: bool = False, skip_confluence: bool = False) -> bool:
     """force=True(--refresh)면 project_summary_cache.json에 이미 값이 있는
     과제도 무시하고 전체를 다시 요약한다(원문 캐시는 재사용) — 요약 프롬프트가
-    바뀌어 예전 캐시에 새 필드가 비어 있을 때 쓴다."""
+    바뀌어 예전 캐시에 새 필드가 비어 있을 때 쓴다.
+
+    skip_confluence=True면 confl_address가 있는 과제는 Confluence 조회를
+    시도하지 않고 건너뛴다(project_summary.get_project_summary() 참고).
+    confl_address가 없어 PDF로 대체되는 과제는 그대로 정상 분석된다."""
     projects = _read_projects()
     if projects.empty:
         print('[process_project_expertise] project_confl_address.csv 없음 — 종료 '
@@ -201,10 +205,11 @@ def process(force: bool = False) -> bool:
         confl_address = proj['confl_address']
 
         summary = project_summary.get_project_summary(project_name, confl_address, page_cache, summary_cache,
-                                                        force=force)
+                                                        force=force, skip_confluence=skip_confluence)
         completed += 1
         if summary is None:
-            print(f'  [{project_name}] 건너뜀')
+            reason = '컨플루언스 조회 건너뜀(--skip-confluence)' if skip_confluence and confl_address else '건너뜀'
+            print(f'  [{project_name}] {reason}')
             if completed % 5 == 0 or completed == total:
                 print(f'    (진행: {completed}/{total})')
             continue
@@ -289,4 +294,4 @@ if __name__ == '__main__':
         except MailError as exc:
             print(f'[process_project_expertise] 메일 발송 실패: {exc}')
     else:
-        process(force='--refresh' in sys.argv)
+        process(force='--refresh' in sys.argv, skip_confluence='--skip-confluence' in sys.argv)

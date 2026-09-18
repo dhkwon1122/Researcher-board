@@ -12729,3 +12729,46 @@ import 정상.
 조직은 여전히 정상적으로 제외됨을 확인, 조회 종료일 이후의 미래
 스냅샷은 여전히 안 섞여 들어감을 확인. `python3 -m py_compile`/`app`
 import 및 `services.similarity_map` period 계열 함수 스모크 테스트 정상.
+
+## 2026-09-18 (5): run_integration.py — 사내 Confluence 접근 권한 대기 중에도
+나머지 분석 단계는 정상 진행하도록 `--skip-confluence` 옵션 신설
+
+사내 Confluence 보안정책 변경으로 특정 스페이스에 대한 API(PAT) 접근이
+막혀(HTTP 403) 권한 재승인을 요청한 상태 — 승인까지 시간이 걸리는데,
+그동안 `run_integration.py`를 돌리면 과제마다 컨플루언스 조회가 전부
+실패로 찍히며 시간을 낭비한다. (참고: 이 403은 브라우저 세션으로는
+정상 접속되는데 토큰 API 호출만 막히는 패턴이라 프록시/토큰 문제가
+아니라 순수 서버 측 권한 문제로 확인 — 코드 변경 없이 진단만 진행.)
+
+**조사**: Confluence를 실제로 읽는 지점은 `run_analysis.py`의 1/3단계인
+`process_project_expertise.py` → `project_summary.get_project_summary()`
+→ `confluence_client.fetch_page_text()` 한 곳뿐. 2/3(연구원 전문성
+분석), 3/3(연구원 유사도)단계는 1단계 산출물(문서 내 담당 업무)을 있으면
+참고할 뿐 필수 입력이 아니라 이미 비어도 정상 진행되도록 설계돼 있었다
+(`run_analysis.py` 자체 docstring). `process_project_search.py`(유사
+기업/학계 탐색)도 Confluence를 쓰지만 애초에 이 체인에 포함 안 되어
+있어 범위 밖.
+
+**추가**: `project_summary.get_project_summary()`/`process_project_expertise.process()`
+/`run_analysis.run()`/`run_ready.run()`/`run_integration.run()` 전체에
+`skip_confluence` 파라미터를 관통시키고, 각 스크립트의 `__main__`에
+`--skip-confluence` CLI 플래그를 추가했다.
+  - `confl_address`가 있는 과제: Confluence 조회 자체를 시도하지 않고
+    즉시 건너뜀(캐시에는 아무것도 안 남겨 — 나중에 옵션 없이 재실행하면
+    자동으로 정상 재시도됨).
+  - `confl_address`가 없어 PDF로 대체되는 과제: 영향 없이 그대로 정상
+    분석(사용자 확인 사항).
+  - `run_ready.py`의 Confluence 점검 항목도 `--skip-confluence` 시
+    `[실패]`/`[경고]` 대신 명시적으로 "건너뜀(--skip-confluence)"로
+    표시해, 다른 진짜 문제(예: LLM2 설정 누락)와 헷갈리지 않게 구분
+    (사용자 확인 사항 — "헷갈리지 않게 해달라").
+
+**검증**: `get_project_summary(confl_address=있음, skip_confluence=True)`가
+Confluence 호출 없이 즉시 None을 반환하고 `page_cache`/`summary_cache`
+어디에도 흔적을 안 남김을 확인. `get_project_summary(confl_address='',
+skip_confluence=True)`는 스킵 로직과 무관하게 기존 PDF 폴백 경로를
+그대로 타는 것을 확인(테스트 환경엔 PDF 파일이 없어 그 경로 자체는
+실패로 끝나지만, PDF 폴백 시도 자체가 스킵되지 않음을 로그로 확인).
+`run_ready.run(skip_confluence=True)`가 Confluence 항목을 `[경고]
+건너뜀`으로 표시하고 다른 `[실패]` 항목과 구분됨을 확인. 전체 파일
+`python3 -m py_compile` 통과.

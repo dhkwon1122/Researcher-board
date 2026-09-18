@@ -16,8 +16,12 @@ run_analysis.py 체인은 사내 LLM 호출이 많아 전체 실행에 수십 �
      umap-learn/xlwings는 해당 기능 사용 시에만 필요해 경고로만 표시)
 
 사용법:
-  python pipeline/run_ready.py [--skip-bge]
-  --skip-bge : BGE-M3 서버 확인/자동기동을 건너뛴다(다른 항목만 빠르게 보고 싶을 때)
+  python pipeline/run_ready.py [--skip-bge] [--skip-confluence]
+  --skip-bge        : BGE-M3 서버 확인/자동기동을 건너뛴다(다른 항목만 빠르게 보고 싶을 때)
+  --skip-confluence : Confluence 토큰/접속 점검을 건너뛴다(사내 정책 변경 등으로
+    권한 재승인을 기다리는 중이라 실패가 뻔할 때, run_integration.py의
+    --skip-confluence와 맞춰 쓰기 위함 — 이 경우 아래 결과에 [경고] 대신
+    "건너뜀"으로 표시돼 다른 실패와 헷갈리지 않는다)
 
 종료 코드: 문제(FAIL) 없으면 0, 하나라도 있으면 1 — run_integration.py가 이
 값을 보고 본 실행 여부를 판단한다.
@@ -155,7 +159,7 @@ def _check_packages() -> list:
     return checks
 
 
-def run(skip_bge: bool = False) -> bool:
+def run(skip_bge: bool = False, skip_confluence: bool = False) -> bool:
     """모든 점검을 실행하고 결과를 출력한다. FAIL이 하나도 없으면 True."""
     load_env_file()
     results: list = []
@@ -164,7 +168,14 @@ def run(skip_bge: bool = False) -> bool:
     results.append(_check_llm2_fields())
     if os.environ.get('LLM2_API_URL', '').strip():
         results.append(_check_llm2_endpoint())
-    results.extend(_check_confluence())
+    if skip_confluence:
+        results.append(Check(
+            'Confluence 접속', 'warn',
+            '건너뜀(--skip-confluence) — run_integration.py에도 동일 옵션을 주면 '
+            '과제 문서 분석 단계에서 컨플루언스 조회를 건너뛰고 나머지는 정상 진행합니다.',
+        ))
+    else:
+        results.extend(_check_confluence())
 
     if skip_bge:
         results.append(Check('BGE-M3 임베딩 서버', 'warn', '건너뜀(--skip-bge)'))
@@ -192,5 +203,5 @@ def run(skip_bge: bool = False) -> bool:
 
 
 if __name__ == '__main__':
-    ready = run(skip_bge='--skip-bge' in sys.argv)
+    ready = run(skip_bge='--skip-bge' in sys.argv, skip_confluence='--skip-confluence' in sys.argv)
     sys.exit(0 if ready else 1)
