@@ -12817,3 +12817,26 @@ Flask/Werkzeug가 요청을 받는 시점에 체크되므로 콜백 함수
 **검증**: `python3 -m py_compile app.py` 통과, 4개 파일의
 `MAX_CONTENT_LENGTH`/`client_max_body_size` 값이 100MiB/110m로 서로
 일관됨을 grep으로 확인.
+
+## 2026-09-18 (7): 연구원 전문성 분석 — 배치 분석 대상에서 퇴사/전출
+(is_current=='N') 연구원 제외
+
+사용자 질문("과거 시점에 있는 연구원들도 분석을 해?")을 계기로 확인해보니,
+`process_researcher_expertise.py`의 `_filter_eligible_researchers()`가
+team_refer(work_type=="R&D")/job_type 조건만 걸고 `is_current`는 전혀
+보지 않고 있었다. `researchers.csv`는 researcher_id 업서트라 퇴사/전출
+등으로 최근 인력현황 파일에 없는 사람도 행 자체는 안 지워지고 마지막
+시점 값 그대로 남아 `is_current='N'`만 표시되는 구조라(process_researchers.py
+참고), 그런 사람도 org_code/job_type 조건만 맞으면 배치(자동) 전문성
+분석 대상에 포함될 수 있었다(researchers_history.csv는 애초에 이
+배치 경로에서 안 읽으므로 무관 — 별도 온디맨드 과거시점 분석
+`analyze_researchers_as_of()`만 그걸 쓴다).
+
+**수정**: `_filter_eligible_researchers()` 맨 앞에 `is_current` 컬럼이
+있으면 `== 'Y'`인 행만 남기는 필터 추가(컬럼이 없는 구버전 researchers.csv는
+필터 건너뜀 — 하위 호환). `process()`와 `render_html()`이 같은 함수를
+공유하므로 분석 실행/커버리지 통계 양쪽에 일관되게 적용됨.
+
+**검증**: 합성 데이터로 `is_current='Y'`/`'N'` 섞인 2명 중 1명만 남는 것,
+`is_current` 컬럼이 아예 없을 때 필터를 건너뛰고 전원 통과시키는 것
+확인. `python3 -m py_compile` 통과.
