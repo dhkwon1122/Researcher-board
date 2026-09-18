@@ -12772,3 +12772,48 @@ skip_confluence=True)`는 스킵 로직과 무관하게 기존 PDF 폴백 경로
 `run_ready.run(skip_confluence=True)`가 Confluence 항목을 `[경고]
 건너뜀`으로 표시하고 다른 `[실패]` 항목과 구분됨을 확인. 전체 파일
 `python3 -m py_compile` 통과.
+
+## 2026-09-18 (6): 과제별컨플 PDF 첨부 — 여러 파일 동시 업로드 시 조용히
+아무 반응 없던 문제 수정(MAX_CONTENT_LENGTH 상향)
+
+사용자가 관리자 "데이터 업데이트" 탭에서 과제별컨플 PDF를 파일 하나씩
+드래그하면 정상 업로드/목록 표시가 되는데, 여러 개를 한 번에 드래그하면
+저장도 안 되고 알림도 없이 "아무 일도 안 일어난다"고 보고.
+
+**원인**: `dcc.Upload(multiple=True)`로 여러 파일을 한 번에 드롭하면 그
+base64 인코딩된 내용 전부가 **하나의 HTTP 요청**에 실려 서버로 간다.
+`docker-compose.yml`의 `MAX_CONTENT_LENGTH` 기본값이 10MB였는데(코드
+자체 기본값은 70MB지만 docker-compose 환경변수가 이를 덮어씀), 이 한도는
+Flask/Werkzeug가 요청을 받는 시점에 체크되므로 콜백 함수
+(`pages/admin.py`의 `confl_pdf_on_upload`) 안의 어떤 `try/except`나 파일
+크기 검사보다도 먼저 요청 자체가 413로 거부된다 — 그래서 우리 코드가
+만드는 에러 알림조차 뜰 수 없었다. 파일 하나(인코딩 크기가 10MB 미만)만
+성공하고 여러 개를 합친 크기가 10MB를 넘으면 조용히 실패하는 것이 증상과
+정확히 일치함을 확인.
+
+**결정 — 상한 조정**(사용자 확정, "이번만 별도로 많이 올릴 것 같은데
+나중을 생각해서 5개 파일·합계 최대 50MB 정도"): 파일 5개·합계 약 50MB
+(base64 인코딩 오버헤드 약 1.37배 + 여유분 감안)를 기준으로 아래 4곳을
+100MiB(Flask)/110m(nginx)로 통일:
+  - `app.py`: `MAX_CONTENT_LENGTH` 코드 기본값 70MB → 100MB
+  - `docker-compose.yml`: `MAX_CONTENT_LENGTH` 환경변수 기본값 10MB → 100MB
+  - `.env.example`: 문서상 기본값도 동일하게 100MB로 갱신
+  - `deploy/nginx.conf`: `client_max_body_size` 16m → 110m(Flask 한도보다
+    넉넉하게 유지 — nginx가 먼저 잘라내지 않도록)
+
+**참고(수정 안 함)**: `docker-compose.yml`의 `MAX_UPLOAD_BYTES`
+환경변수는 실제 코드(`services/web_pipeline_runner.py`가 읽는
+`WEB_UPDATE_MAX_UPLOAD_BYTES`)와 이름이 달라 사실상 무시되고 있음 —
+다만 이 함수의 코드 자체 기본값(50MB)이 이번 요구사항(파일당 최대
+50MB 이내)에 이미 충분해 이번 수정 범위에서는 건드리지 않음.
+
+**PDF 폴백 조회 방식 확인**(사용자 질문 답변): `pipeline/pdf_reader.py`의
+`fetch_pdf_text()`는 웹 업로드로 들어왔는지 서버 파일시스템에 직접
+갖다 놓았는지 구분하지 않는다 — `data/raw/conflue_MPR/{과제명}.pdf`
+경로만 보고 읽으므로, 관리자 화면을 거치지 않고 서버에 직접 파일을
+넣어도 동일하게 폴백된다(파일명이 project_confl_address.csv의
+"과제명"과 정확히 일치해야 하는 조건은 동일).
+
+**검증**: `python3 -m py_compile app.py` 통과, 4개 파일의
+`MAX_CONTENT_LENGTH`/`client_max_body_size` 값이 100MiB/110m로 서로
+일관됨을 grep으로 확인.

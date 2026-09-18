@@ -101,8 +101,12 @@ app.server.config.update(
     in ('1', 'true', 'yes', 'on'),
     # 관리자 "데이터 업데이트" 탭이 원본 엑셀(최대 50MB, services/web_pipeline_runner.py
     # MAX_UPLOAD_BYTES)을 dcc.Upload로 올린다 — base64 인코딩 오버헤드(약 1.37배)
-    # 감안해 기본 상한을 넉넉히 잡는다.
-    MAX_CONTENT_LENGTH=int(os.environ.get('MAX_CONTENT_LENGTH', str(70 * 1024 * 1024))),
+    # 감안해 기본 상한을 넉넉히 잡는다. 과제별컨플 PDF 첨부는 dcc.Upload(multiple=True)라
+    # 여러 파일을 한 번에 드래그하면 그 내용이 전부 하나의 요청에 실려 가므로(개별
+    # 파일당 한도가 아니라 합산 한도), 총합 약 50MB(파일 5개 기준)까지 한 번에
+    # 올릴 수 있도록 넉넉히 잡음(2026-09-18 — 여러 파일 동시 업로드 시 이 한도
+    # 초과로 요청이 통째로 거부돼 콜백이 실행조차 안 되던 문제 수정, docs/CLAUDE.md 참고).
+    MAX_CONTENT_LENGTH=int(os.environ.get('MAX_CONTENT_LENGTH', str(100 * 1024 * 1024))),
 )
 
 _LOGIN_WINDOW_SECONDS = int(os.environ.get('LOGIN_WINDOW_SECONDS', '900'))
