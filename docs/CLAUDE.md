@@ -12772,3 +12772,113 @@ skip_confluence=True)`는 스킵 로직과 무관하게 기존 PDF 폴백 경로
 `run_ready.run(skip_confluence=True)`가 Confluence 항목을 `[경고]
 건너뜀`으로 표시하고 다른 `[실패]` 항목과 구분됨을 확인. 전체 파일
 `python3 -m py_compile` 통과.
+
+## 2026-09-18 (6): 과제별컨플 PDF 첨부 — 여러 파일 동시 업로드 시 조용히
+아무 반응 없던 문제 수정(MAX_CONTENT_LENGTH 상향)
+
+사용자가 관리자 "데이터 업데이트" 탭에서 과제별컨플 PDF를 파일 하나씩
+드래그하면 정상 업로드/목록 표시가 되는데, 여러 개를 한 번에 드래그하면
+저장도 안 되고 알림도 없이 "아무 일도 안 일어난다"고 보고.
+
+**원인**: `dcc.Upload(multiple=True)`로 여러 파일을 한 번에 드롭하면 그
+base64 인코딩된 내용 전부가 **하나의 HTTP 요청**에 실려 서버로 간다.
+`docker-compose.yml`의 `MAX_CONTENT_LENGTH` 기본값이 10MB였는데(코드
+자체 기본값은 70MB지만 docker-compose 환경변수가 이를 덮어씀), 이 한도는
+Flask/Werkzeug가 요청을 받는 시점에 체크되므로 콜백 함수
+(`pages/admin.py`의 `confl_pdf_on_upload`) 안의 어떤 `try/except`나 파일
+크기 검사보다도 먼저 요청 자체가 413로 거부된다 — 그래서 우리 코드가
+만드는 에러 알림조차 뜰 수 없었다. 파일 하나(인코딩 크기가 10MB 미만)만
+성공하고 여러 개를 합친 크기가 10MB를 넘으면 조용히 실패하는 것이 증상과
+정확히 일치함을 확인.
+
+**결정 — 상한 조정**(사용자 확정, "이번만 별도로 많이 올릴 것 같은데
+나중을 생각해서 5개 파일·합계 최대 50MB 정도"): 파일 5개·합계 약 50MB
+(base64 인코딩 오버헤드 약 1.37배 + 여유분 감안)를 기준으로 아래 4곳을
+100MiB(Flask)/110m(nginx)로 통일:
+  - `app.py`: `MAX_CONTENT_LENGTH` 코드 기본값 70MB → 100MB
+  - `docker-compose.yml`: `MAX_CONTENT_LENGTH` 환경변수 기본값 10MB → 100MB
+  - `.env.example`: 문서상 기본값도 동일하게 100MB로 갱신
+  - `deploy/nginx.conf`: `client_max_body_size` 16m → 110m(Flask 한도보다
+    넉넉하게 유지 — nginx가 먼저 잘라내지 않도록)
+
+**참고(수정 안 함)**: `docker-compose.yml`의 `MAX_UPLOAD_BYTES`
+환경변수는 실제 코드(`services/web_pipeline_runner.py`가 읽는
+`WEB_UPDATE_MAX_UPLOAD_BYTES`)와 이름이 달라 사실상 무시되고 있음 —
+다만 이 함수의 코드 자체 기본값(50MB)이 이번 요구사항(파일당 최대
+50MB 이내)에 이미 충분해 이번 수정 범위에서는 건드리지 않음.
+
+**PDF 폴백 조회 방식 확인**(사용자 질문 답변): `pipeline/pdf_reader.py`의
+`fetch_pdf_text()`는 웹 업로드로 들어왔는지 서버 파일시스템에 직접
+갖다 놓았는지 구분하지 않는다 — `data/raw/conflue_MPR/{과제명}.pdf`
+경로만 보고 읽으므로, 관리자 화면을 거치지 않고 서버에 직접 파일을
+넣어도 동일하게 폴백된다(파일명이 project_confl_address.csv의
+"과제명"과 정확히 일치해야 하는 조건은 동일).
+
+**검증**: `python3 -m py_compile app.py` 통과, 4개 파일의
+`MAX_CONTENT_LENGTH`/`client_max_body_size` 값이 100MiB/110m로 서로
+일관됨을 grep으로 확인.
+
+## 2026-09-18 (7): 연구원 전문성 분석 — 배치 분석 대상에서 퇴사/전출
+(is_current=='N') 연구원 제외
+
+사용자 질문("과거 시점에 있는 연구원들도 분석을 해?")을 계기로 확인해보니,
+`process_researcher_expertise.py`의 `_filter_eligible_researchers()`가
+team_refer(work_type=="R&D")/job_type 조건만 걸고 `is_current`는 전혀
+보지 않고 있었다. `researchers.csv`는 researcher_id 업서트라 퇴사/전출
+등으로 최근 인력현황 파일에 없는 사람도 행 자체는 안 지워지고 마지막
+시점 값 그대로 남아 `is_current='N'`만 표시되는 구조라(process_researchers.py
+참고), 그런 사람도 org_code/job_type 조건만 맞으면 배치(자동) 전문성
+분석 대상에 포함될 수 있었다(researchers_history.csv는 애초에 이
+배치 경로에서 안 읽으므로 무관 — 별도 온디맨드 과거시점 분석
+`analyze_researchers_as_of()`만 그걸 쓴다).
+
+**수정**: `_filter_eligible_researchers()` 맨 앞에 `is_current` 컬럼이
+있으면 `== 'Y'`인 행만 남기는 필터 추가(컬럼이 없는 구버전 researchers.csv는
+필터 건너뜀 — 하위 호환). `process()`와 `render_html()`이 같은 함수를
+공유하므로 분석 실행/커버리지 통계 양쪽에 일관되게 적용됨.
+
+**검증**: 합성 데이터로 `is_current='Y'`/`'N'` 섞인 2명 중 1명만 남는 것,
+`is_current` 컬럼이 아예 없을 때 필터를 건너뛰고 전원 통과시키는 것
+확인. `python3 -m py_compile` 통과.
+
+## 2026-09-18 (8): 신규 `scripts/backfill_researchers_history.py` — 과거
+인력현황 대량 소급을 researchers.csv/researchers_history.csv에도 반영
+
+(15)의 team_refer 백필과 같은 원본 폴더(`data/raw/team_refer_backfill_source`)
+로 인력현황(researchers) 쪽도 소급 반영하고 싶다는 요청(사용자 확정 —
+"동일한 폴더야, 백필 스크립트 만들어줘", 201805~202608 대상). 관리자
+"데이터 업데이트" 탭의 `인력현황` 항목은 `needs_valid_date`가 없고
+`mode='wildcard'`(업로드마다 폴더 전체 삭제 후 새 파일 1개만 저장)라
+여러 달치를 웹에서 미리 쌓아뒀다 한 번에 실행하는 게 애초에 불가능함을
+먼저 확인 — 그래서 team_refer 백필과 같은 "파일 1개당 임시 폴더 1개,
+CLI로 순차 실행" 패턴을 그대로 재사용.
+
+**team_refer 백필과 다른 점 2가지**(스크립트 docstring에도 기록):
+1. `process_researchers.process()`는 team_refer와 달리 valid_date를
+   인자로 안 받는다 — 원본 파일 자체의 "인원실적년도"/"인원실적월"을
+   행마다 그대로 읽어 쓰므로, 이 스크립트가 뽑는 (연,월)은 오직 처리
+   순서 정렬용이다.
+2. 톰스톤 개념이 아예 없다 — `write_merged_with_valid_period()`의
+   "기존 저장값보다 과거 시점이면 건너뜀"(연구자 단위) 보호만 있고,
+   건너뛴 데이터도 `researchers_history.csv`에는 예외 없이 전부 쌓인다.
+   그래서 처리 순서가 실제 결과에 영향을 주지 않는다(확인됨 — 아래 검증).
+
+**발견한 함정**: `process_researchers.process(raw_dir=...)`는 raw_dir이
+기본값(RAW_DIR)이 아니면 `find_latest(raw_dir, RESEARCHERS_PATTERNS)`로
+파일을 찾는데, `RESEARCHERS_PATTERNS`(`*That Month Headcount*.xlsx`,
+`*End of Month Headcount*.xlsx`)에 맞는 **.xlsx 파일명만** 인식한다
+(team_refer의 `_find_source_file()`처럼 "폴더 안 파일 1개면 이름 무관하게
+그거 사용" 방식이 아님). 그래서 임시 폴더에 복사할 때 원본 파일명과
+무관하게 항상 이 패턴에 맞는 고정 이름(`backfill_That Month
+Headcount.xlsx`)으로 다시 저장하도록 처리 — 원본 파일명은 로그에서만
+그대로 보여준다. `.csv` 원본은 이 경로로 반영이 안 되므로(패턴이 .xlsx
+전용) 헤더 검증은 통과해도 반영 단계에서 명시적으로 실패 보고한다.
+
+**검증**: 합성 2개월치(2018-05/06) xlsx로 실제 `--apply` 실행 — 두 달 다
+있는 사람은 최신월(06) 값이 `researchers.csv`에 남고 이전월(05) 값도
+`researchers_history.csv`에 그대로 보존됨, 05월에만 있던 사람은 마지막
+알려진 값 그대로 `is_current='N'`으로 표시됨, 06월에만 있던 신규는
+`is_current='Y'`로 정상 반영됨을 확인. 테스트 후 원본
+`data/processed/researchers.csv`는 백업에서 복원, 테스트로 생성된
+`researchers_history.csv`는 삭제해 저장소 상태 원복. `python3 -m
+py_compile` 통과.

@@ -68,7 +68,11 @@ services:
       # 리버스 프록시를 아직 안 쓰는 지금 단계에서는 0 그대로 둘 것.
       TRUSTED_PROXY_COUNT: ${TRUSTED_PROXY_COUNT:-0}
       ENABLE_WEB_SETUP: ${ENABLE_WEB_SETUP:-false}
-      MAX_CONTENT_LENGTH: ${MAX_CONTENT_LENGTH:-10485760}
+      # PDF 여러 개를 한 번에 드래그 업로드하면 그 내용이 전부 하나의 요청에
+      # 합쳐져 전송된다 — 기본 10MiB로는 파일 2~3개만 겹쳐도 요청 자체가
+      # 거부돼(413) 콜백이 실행조차 안 됨(2026-09-18 확인). 100MiB로 상향해
+      # 5개 파일·합계 약 50MB까지 한 번에 올릴 수 있게 함.
+      MAX_CONTENT_LENGTH: ${MAX_CONTENT_LENGTH:-104857600}
       LOGIN_WINDOW_SECONDS: ${LOGIN_WINDOW_SECONDS:-900}
       LOGIN_MAX_FAILURES: ${LOGIN_MAX_FAILURES:-5}
       MIN_PASSWORD_LENGTH: ${MIN_PASSWORD_LENGTH:-12}

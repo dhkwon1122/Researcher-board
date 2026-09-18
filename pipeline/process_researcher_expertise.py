@@ -576,10 +576,18 @@ def render_html() -> bool:
 
 
 def _filter_eligible_researchers(researchers: pd.DataFrame) -> pd.DataFrame:
-    """team_refer(work_type=="R&D")에 매칭되는 org_code만, job_type='지원'
+    """is_current=='Y'(현재 소속, 최신 인력현황 파일에 있었던 사람)만,
+    team_refer(work_type=="R&D")에 매칭되는 org_code만, job_type='지원'
     (조직총괄/자문위원 예외)는 항상 제외해 분석 대상 연구원만 남긴다.
     process()와 render_html()이 같은 모수를 쓰도록 공유한다 — 커버리지 스탯
     (분석 완료/분석 대상)의 분모가 실행 경로에 따라 달라지면 안 되기 때문.
+
+    is_current 필터(2026-09-18 추가, 사용자 확정): researchers.csv는
+    researcher_id 업서트라 퇴사/전출 등으로 최근 인력현황 파일에 없는
+    사람도 행 자체는 안 지워지고 마지막 시점 값 그대로 남아 is_current='N'만
+    표시된다(process_researchers.py 참고) — 이 필터가 없으면 그런 사람도
+    org_code/job_type 조건만 맞으면 배치 분석 대상에 포함될 수 있었다.
+    is_current 컬럼이 없으면(구버전 researchers.csv) 필터를 건너뛴다.
 
     예전에는 전문성 분석 부서.xlsx(process_analysis_dep.py, department 화이트
     리스트)로 분석 대상 부서를 걸렀지만, team_refer.xlsx에 조직 단위별 R&D
@@ -587,6 +595,14 @@ def _filter_eligible_researchers(researchers: pd.DataFrame) -> pd.DataFrame:
     org_code(team_refer의 org_name_wd)가 매핑되지 않은 연구원은 R&D 여부를
     판단할 근거가 없어 분석 대상에서 제외된다(이전의 "매핑 실패해도 부서
     화이트리스트만 통과하면 포함"과 달리, 이제는 team_refer 매핑이 필수)."""
+    if 'is_current' in researchers.columns:
+        before = len(researchers)
+        researchers = researchers[researchers['is_current'] == 'Y']
+        excluded = before - len(researchers)
+        if excluded:
+            print(f'[process_researcher_expertise] 현재 소속 필터 적용(is_current=="Y"): '
+                  f'{before}명 → {len(researchers)}명 ({excluded}명 제외)')
+
     team_refer_rows = mmd.read_team_refer(OUT_DIR)
     if team_refer_rows:
         rd_org_codes = {
