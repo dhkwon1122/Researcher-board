@@ -81,11 +81,31 @@ def _html_to_text(body_html: str) -> str:
         return re.sub(r'<[^>]+>', ' ', body_html).strip()
 
 
+def _extra_headers() -> dict:
+    """사내 API 게이트웨이가 REST API 호출에 추가로 요구하는 헤더(2026-09-21,
+    보안정책 변경 — 사용자 확인) — 표준 Confluence API 스펙이 아니라 사내
+    정책 헤더라 값이 없으면(둘 다 .env 미설정) 보내지 않는다(기존 동작 유지)."""
+    headers = {}
+    dep_ticket = os.environ.get('CONFLUENCE_DEP_TICKET', '').strip()
+    if dep_ticket:
+        headers['X-Dep-Ticket'] = dep_ticket
+    data_classification = os.environ.get('CONFLUENCE_DATA_CLASSIFICATION', '').strip()
+    if data_classification:
+        headers['X-Data-Classification'] = data_classification
+    return headers
+
+
 def _get_client(base_url: str):
     client = _client_cache.get(base_url)
     if client is None:
         from atlassian import Confluence
         client = Confluence(url=base_url, token=os.environ.get('CONFLUENCE_TOKEN', ''))
+        extra = _extra_headers()
+        if extra:
+            # atlassian-python-api(AtlassianRestAPI)는 내부적으로 requests.Session을
+            # self._session에 들고 있다 — 여기 헤더를 채워두면 이 client로 보내는
+            # 모든 요청(get_page_by_id/get_page_by_title 등)에 자동으로 실린다.
+            client._session.headers.update(extra)
         _client_cache[base_url] = client
     return client
 

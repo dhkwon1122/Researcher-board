@@ -12882,3 +12882,35 @@ Headcount.xlsx`)으로 다시 저장하도록 처리 — 원본 파일명은 로
 `data/processed/researchers.csv`는 백업에서 복원, 테스트로 생성된
 `researchers_history.csv`는 삭제해 저장소 상태 원복. `python3 -m
 py_compile` 통과.
+
+## 2026-09-18~21: Confluence 403 — 사내 보안정책 변경으로 REST API +
+전용 헤더(X-Dep-Ticket/X-Data-Classification) 필요
+
+Confluence "secure space" 403은 (앞서 확인한 대로) 프록시/토큰 문제가
+아니라 사내 보안정책 자체가 바뀐 것으로 확정됨(사용자 확인) — 예전엔
+미러 페이지 URL 직접 접근으로 됐지만, 이제는 정식 REST API 호출만
+허용되고, 그 호출에 사내 API 게이트웨이가 요구하는 커스텀 헤더
+`X-Dep-Ticket`(접근 승인 티켓/부서 식별)과 `X-Data-Classification`
+(데이터 보안등급)를 추가로 실어야 함(사용자 확인, 표준 Confluence
+API 스펙에는 없는 사내 전용 헤더).
+
+**참고**: `pipeline/confluence_client.py`는 애초에 `atlassian-python-api`
+라이브러리로 이미 REST API(`/rest/api/content/...`)를 호출하고 있었음
+(브라우저 페이지 스크레이핑이 아님) — 그래서 `project_confl_address.csv`
+에 넣는 페이지 URL 자체(및 `extract_page_id()`의 URL 패턴 인식)는 바뀔
+필요가 없었다. 바뀐 건 그 REST 요청에 추가 헤더가 필요해졌다는 점뿐.
+
+**추가**: `confluence_client.py`에 `_extra_headers()` 신설 —
+`CONFLUENCE_DEP_TICKET`/`CONFLUENCE_DATA_CLASSIFICATION` 환경변수가
+설정되어 있으면 각각 `X-Dep-Ticket`/`X-Data-Classification` 헤더로,
+`_get_client()`가 생성한 `Confluence` 클라이언트의 내부 `requests.Session`
+(`client._session`, atlassian-python-api 5.0.3 기준)에 심어 이후 모든
+요청(`get_page_by_id`/`get_page_by_title`)에 자동으로 실리게 함. 둘 다
+미설정이면 헤더를 아예 안 보내 기존 동작 그대로 유지(하위 호환).
+`.env.example`/`docker-compose.yml`의 `app` 서비스 환경변수에도 동일하게
+등록(기본값 빈 문자열).
+
+**미확정**: 두 헤더에 실제로 넣을 값(티켓 번호 형식, 분류값 후보)은
+사용자가 사내 보안팀 안내를 받는 대로 `.env`/`docker-compose.yml`
+환경변수에 채우기로 함 — 코드 쪽 반영은 이걸로 완료, 값 확정 후 curl로
+재검증 예정.
