@@ -62,6 +62,7 @@ import researcher_fit as fit  # noqa: E402
 from services import auth  # noqa: E402
 from services import data_labels  # noqa: E402
 from services import data_store  # noqa: E402
+from services import job_category as job_category_service  # noqa: E402
 from services import nl_query_feedback  # noqa: E402
 from services import query_settings  # noqa: E402
 from services import researcher_profile_export as rpe  # noqa: E402
@@ -221,14 +222,39 @@ def _researcher_similarity_table() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _job_category_table() -> pd.DataFrame:
+    """researcher_id별 DS/SAIT 직군을 미리 합쳐(services.job_category.
+    build_job_category_map() — mapping_job_function 매칭 + exception_job_function
+    오버라이드까지 이미 반영된 최종값) researcher_id로 바로 조인 가능한 표로
+    등록한다(2026-09-21, 사용자 요청 — "AI 검색에 SAIT 직군도 검색이 될 수
+    있도록 반영"). mapping_job_function.csv는 researcher_id가 없고
+    job_function 텍스트로만 조인해야 하는 테이블인데, SQL 생성 규칙
+    (_SQL_GEN_SYSTEM_TEMPLATE)이 "항상 researcher_id로 조인"을 전제해 LLM이
+    정확히 조인하기 어렵고, exception_job_function의 SAIT 오버라이드까지
+    SQL에서 직접 재현하게 하면 정확도도 떨어진다 — 그래서 원본 테이블 대신
+    이미 계산된 결과를 별도 표로 노출한다(연구원 개별 프로필과 동일한
+    소스라 화면에 보이는 DS/SAIT 값과 항상 일치)."""
+    researchers_df = data_store.read_processed('researchers')
+    mapping_df = data_store.read_processed('mapping_job_function')
+    exception_df = data_store.read_processed('exception_job_function')
+    category_map = job_category_service.build_job_category_map(researchers_df, mapping_df, exception_df)
+    rows = [
+        {'researcher_id': rid, 'job_category_ds': ds, 'job_category_sait': sait}
+        for rid, (ds, sait) in category_map.items()
+    ]
+    return pd.DataFrame(rows)
+
+
 def _discover_json_tables() -> dict:
-    """연구원 보유 전문성 분석.json/researcher_similarity.json을 평탄화해 CSV
+    """연구원 보유 전문성 분석.json/researcher_similarity.json을 평탄화하고,
+    DS/SAIT 직군(job_category, 위 _job_category_table() 참고)을 합쳐서 CSV
     테이블과 동일한 창구(SQL)로 조회할 수 있게 등록. 한글 파일명은 SQL
     식별자로 쓰기 번거로워 영문 별칭을 붙인다."""
     tables = {}
     for name, builder in (
         ('expertise_profiles', _expertise_profiles_table),
         ('researcher_similarity', _researcher_similarity_table),
+        ('job_category', _job_category_table),
     ):
         df = builder()
         if not df.empty:

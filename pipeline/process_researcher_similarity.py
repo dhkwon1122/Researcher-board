@@ -120,13 +120,15 @@ from services.researcher_profile_export import highest_degree_row, position_year
 DEFAULT_TOP_K = fit.TOP_K
 
 # 그룹별(Senior/Junior 각각) 후보 pool 크기 — 화면 표시 개수(top_k)보다 넉넉히
-# 잡아, 근거 없는 후보가 필터링으로 빠지더라도 표시 개수 토글(3/5/10, 그룹당
-# 개수)의 최댓값(10)을 그룹별로 채울 수 있게 한다.
+# 잡아, 근거 없는 후보가 필터링으로 빠지더라도 MAX_DISPLAY_K를 그룹별로 채울
+# 수 있게 한다.
 _CANDIDATE_POOL_K = 15
 
 # 근거 필터링 후 최종적으로 저장/표시할 연구원 수 상한 — Senior/Junior 그룹별로
-# 각각 이 개수까지 유지한다(표시 개수 토글 3/5/10명은 "그룹당" 개수를 뜻함).
-MAX_DISPLAY_K = 10
+# 각각 이 개수까지 유지한다(총 표시 인원 = 이 값의 2배). 기존 10(총 20명)에서
+# 5(총 10명)로 축소(2026-09-21, 사용자 확정 — "최대 10명으로 줄이자(시니어 5,
+# 주니어 5)").
+MAX_DISPLAY_K = 5
 
 _PAIR_JUDGE_SYSTEM_PROMPT = """# Role
 당신은 두 연구원의 전문성 프로필을 비교해, 실제로 얼마나 유사한 분야/업무를
@@ -393,8 +395,8 @@ def _has_evidence(evidence) -> bool:
 
 def _drop_empty_evidence(results: list, tenure_map: dict, max_per_group: int = MAX_DISPLAY_K) -> list:
     """근거 없이 유사도만 높은 후보는 신뢰도가 낮으므로 최종 목록에서 제외한다
-    (LLM 판정 자체가 실패한 쌍도 evidence가 비어 있어 함께 제외됨). 화면의
-    표시 개수 토글(3/5/10)은 "시니어 N명 + 주니어 N명"을 뜻하므로, Senior와
+    (LLM 판정 자체가 실패한 쌍도 evidence가 비어 있어 함께 제외됨). 최종 표시는
+    "시니어 max_per_group명 + 주니어 max_per_group명"을 뜻하므로, Senior와
     Junior를 서로 밀어내지 않도록 각각 독립적으로 max_per_group까지만 자른다
     (한쪽이 모자라면 다른 쪽에서 채우지 않고 있는 만큼만 남긴다). 대상자 근속을
     몰라 그룹 구분 없이 검색한 폴백 케이스만 별도로 max_per_group까지 자른다."""
