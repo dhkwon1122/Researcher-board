@@ -12975,3 +12975,32 @@ None`도 함께 등록(등록 안 하면 `auth.filter_permitted_tables()`가 "�
 조합(연봉등급 있음/없음 × 예외자 여부 × 상하반기 유무)으로 직접 호출해
 연봉등급 있는 경우만 "ES"로, 나머지는 기존과 동일하게 나오는 것 확인.
 전체 `python3 -m py_compile` 통과.
+
+## 2026-09-21 (2): run_integration.py 기본 실행에서 저널 권위도 조회 제외
+
+`process_researcher_expertise.py`의 `process()`가 매번(run_analysis.py/
+run_integration.py 실행 시마다) `journal_authority.update_authority()`를
+자동으로 호출해 캐시에 없는 저널을 LLM으로 새로 조회하고 있었다 — 사용자
+확정: 추가 LLM 호출 비용이 드는 작업인데 매번 필요한 건 아니므로,
+run_integration.py 기본 실행에서는 빼고 필요할 때만 별도 실행하자는 것.
+
+**수정**: `process_researcher_expertise.process()`에 `skip_journal_
+authority: bool = False` 파라미터 추가 — True면 `journal_authority.
+load_cache()`만 쓰고 `update_authority()` 호출 자체를 건너뛴다(캐시에
+이미 있는 저널 권위도는 그대로 쓰되, 없는 저널은 신규 조회 없이 권위도
+없이 표시됨 — `analyze_researchers_as_of()`의 기존 온디맨드 경로와 동일한
+방식). `run_analysis.py`/`run_integration.py`의 `run()`은 이 파라미터
+기본값을 **True(건너뜀)**로 뒤집어서, 두 스크립트를 그냥 실행하면 이제
+저널 권위도 조회가 자동으로 빠진다. `--with-journal-authority` CLI
+플래그로 다시 켤 수 있고, 필요할 때 `python pipeline/journal_
+authority.py`로 독립 실행하는 기존 방법도 그대로 유효하다.
+`process_researcher_expertise.py`를 직접 실행할 때는(`--skip-journal-
+authority` 플래그를 따로 주지 않는 한) 기존처럼 자동으로 포함됨 — 기본값
+반전은 run_analysis.py/run_integration.py 레이어에서만 적용.
+
+**검증**: `python3 -m py_compile` 통과 3개 파일 전부. `process()`에
+`skip_journal_authority=True`를 직접 넘겨 `journal_authority.
+update_authority()`가 호출되지 않는 것을 mock으로 확인(단, 이 테스트는
+`researchers.csv` 로드 단계에서 조기 종료돼 실제로는 코드 리뷰로 조건문
+배치를 재확인 — 변경 자체가 기존 호출 한 줄을 `if not skip_journal_
+authority:`로 감싼 것뿐이라 저위험).

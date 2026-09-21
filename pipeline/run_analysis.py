@@ -7,8 +7,16 @@ BGE-M3 임베딩)을 호출하므로 비용이 발생한다.
 
   1) process_project_expertise.py   과제 문서 상세 분석 + 인력·담당 업무 매칭
   2) process_researcher_expertise.py 연구원 전문성 분석 (1)의 담당 업무를 새
-     근거로 사용, 저널 권위도 조회 자동 포함)
+     근거로 사용)
   3) process_researcher_similarity.py  연구원 ↔ 연구원 유사도 (BGE-M3 임베딩 서버 자동 기동)
+
+저널 권위도 조회(pipeline/journal_authority.py)는 2단계 실행 시 자동으로
+함께 호출되던 것을 기본에서 뺐다(2026-09-21, 사용자 확정 — 추가 LLM 호출
+비용이 드는데 매번 필요한 건 아니라서). 필요할 때만 아래 중 하나로 별도
+실행:
+  python pipeline/journal_authority.py [--refresh-journals]   (독립 실행)
+  python pipeline/run_analysis.py --with-journal-authority     (이 스크립트에
+    포함해 같이 실행하고 싶을 때 — 아래 사용법 참고)
 
 process_project_search.py(유사 기업/학계 탐색)는 이 체인에 포함되지 않는다 —
 필요하면 별도로 직접 실행: python pipeline/process_project_search.py
@@ -22,7 +30,8 @@ process_project_search.py(유사 기업/학계 탐색)는 이 체인에 포함�
 마지막에 단계별 성공/실패를 요약해서 보여준다.
 
 사용법:
-  python pipeline/run_analysis.py [--refresh-journals] [--refresh-judgments] [--top-k 5] [--skip-confluence]
+  python pipeline/run_analysis.py [--refresh-journals] [--refresh-judgments] [--top-k 5]
+    [--skip-confluence] [--with-journal-authority]
 
 --skip-confluence : 1단계(과제 문서 상세 분석)에서 confl_address가 있는 과제의
   Confluence 조회를 건너뛴다(confl_address가 없어 PDF로 대체되는 과제는 영향
@@ -30,6 +39,9 @@ process_project_search.py(유사 기업/학계 탐색)는 이 체인에 포함�
   변경으로 재승인 대기 중) 2/3, 3/3단계(연구원 전문성 분석/유사도)는 정상
   진행하기 위해 쓴다 — 1단계 산출물은 필수 입력이 아니라서 비어도 이후
   단계에 영향 없다.
+--with-journal-authority : 2단계 실행 시 저널 권위도 조회(위 참고)를 다시
+  포함시킨다(기본값은 건너뜀). --refresh-journals는 이 옵션이 켜져 있을
+  때만 의미가 있다(캐시된 값도 강제 재조회할지 여부).
 
 run_expertise.py(전처리)까지 포함해 한 번에 순차 실행하려면 pipeline/run_integration.py를
 쓰면 된다. 전체 실행에 수십 분~수 시간이 걸릴 수 있어 도중에 환경 문제로
@@ -53,16 +65,17 @@ def _parse_top_k_arg(argv: list) -> int | None:
 
 
 def run(refresh_journals: bool = False, refresh_judgments: bool = False, top_k: int | None = None,
-        skip_confluence: bool = False):
+        skip_confluence: bool = False, skip_journal_authority: bool = True):
     steps = []  # [(단계명, True/False), ...]
 
     print('[run_analysis] 1/3 과제 문서 상세 분석' + (' (컨플루언스 조회 건너뜀)' if skip_confluence else ''))
     from process_project_expertise import process as process_project_expertise
     steps.append(('과제 문서 상세 분석', process_project_expertise(skip_confluence=skip_confluence)))
 
-    print('[run_analysis] 2/3 연구원 전문성 분석')
+    print('[run_analysis] 2/3 연구원 전문성 분석' + (' (저널 권위도 조회 건너뜀)' if skip_journal_authority else ''))
     from process_researcher_expertise import process as process_researcher_expertise
-    steps.append(('연구원 전문성 분석', process_researcher_expertise(refresh_journals=refresh_journals)))
+    steps.append(('연구원 전문성 분석', process_researcher_expertise(
+        refresh_journals=refresh_journals, skip_journal_authority=skip_journal_authority)))
 
     print('[run_analysis] 3/3 연구원 ↔ 연구원 유사도')
     from process_researcher_similarity import process as process_researcher_similarity
@@ -83,4 +96,5 @@ if __name__ == '__main__':
         refresh_judgments='--refresh-judgments' in _argv,
         top_k=_parse_top_k_arg(_argv),
         skip_confluence='--skip-confluence' in _argv,
+        skip_journal_authority='--with-journal-authority' not in _argv,
     )
