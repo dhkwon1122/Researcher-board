@@ -12914,3 +12914,64 @@ API 스펙에는 없는 사내 전용 헤더).
 사용자가 사내 보안팀 안내를 받는 대로 `.env`/`docker-compose.yml`
 환경변수에 채우기로 함 — 코드 쪽 반영은 이걸로 완료, 값 확정 후 curl로
 재검증 예정.
+
+## 2026-09-21: 유사 연구원 최대 인원 20명 → 10명 축소 + AI 검색 SAIT 직군
+지원 + 엑셀 평가 셀 중복 표기 제거 (3건 일괄 반영)
+
+**1) 유사 연구원 표시 상한 축소**(사용자 확정 — "최대 10명으로 줄이자
+(시니어 5, 주니어 5), 현재는 20명"): `pipeline/process_researcher_
+similarity.py`의 `MAX_DISPLAY_K`(근거 필터링 후 최종 저장/표시 상한,
+Senior/Junior 그룹별 각각 이 개수까지)가 10이라 총 20명(10+10)까지
+나오고 있었다 — 5로 낮춰 총 10명(5+5)으로 축소. 후보 pool 크기
+`_CANDIDATE_POOL_K`(15)는 이 값보다 항상 커야 하는 버퍼 용도라 그대로 둠.
+연구원 개별 프로필 배지(`components/detail_tabs.py`의
+`llm_summary_block()`)는 이미 별도로 `[:3]`(시니어 3+주니어 3)로 더 작게
+잘라 보여주고 있어 영향 없음 — 이번 변경은 `researcher_similarity.json`에
+저장/그 외 화면(콘솔 리포트 등)에 노출되는 상한에 적용됨.
+
+**2) AI 검색(open_data_query)에서 SAIT 직군 검색 안 되던 문제**(사용자
+확정 — "AI 검색에 SAIT 직군도 검색이 될 수 있도록 반영"): `job_category_
+DS`/`job_category_SAIT`는 `researchers.csv`의 실제 컬럼이 아니라
+`mapping_job_function.csv`(job_function 텍스트 키, researcher_id 없음) +
+`exception_job_function.csv`(SAIT 오버라이드) 매칭 결과로 매번 계산되는
+파생값(`services/job_category.py`)이다. `mapping_job_function`/
+`exception_job_function` 둘 다 이미 `TABLE_PERMISSIONS`에 등록돼 AI 검색
+스키마에는 노출되고 있었지만, `open_data_query._SQL_GEN_SYSTEM_TEMPLATE`가
+"항상 researcher_id로 조인"을 전제하고 있어(`- Join tables on
+researcher_id when combining data across tables.`) researcher_id가 없는
+`mapping_job_function`을 LLM이 정확히 조인하기 어려웠고, 설령 조인해도
+exception 오버라이드까지 SQL로 재현해야 해 정확도가 떨어졌다.
+
+**해결**: `services/open_data_query.py`에 `_job_category_table()` 신설 —
+`job_category.build_job_category_map()`(오버라이드까지 이미 반영된 최종값,
+연구원 개별 프로필과 동일 소스)으로 `researcher_id, job_category_ds,
+job_category_sait` 3컬럼짜리 합성 표를 만들어 `expertise_profiles`/
+`researcher_similarity`와 동일한 방식(`_discover_json_tables()`)으로
+등록 — 이제 LLM이 다른 모든 테이블과 똑같이 `researcher_id`로만 조인하면
+됨. `config/auth_config.py`의 `TABLE_PERMISSIONS`에 `'job_category':
+None`도 함께 등록(등록 안 하면 `auth.filter_permitted_tables()`가 "민감도
+분류 누락"으로 자동 제외하므로 필수).
+
+**3) 엑셀 다운로드 "평가('24~'26)" 둘째 줄 중복 표기 제거**(사용자 확정
+— "나(ES), 나(ES), 나(ES)" → "ES, ES, ES"): `services/evaluations.py`의
+`format_half_display()`가 `format_evaluation_cell()`을 그대로 위임
+호출하고 있었는데, 그 함수는 "연봉등급(하반기업적)" 형태라 연봉등급이
+있는 해는 "나(ES)"를 돌려준다 — 그런데 이 값이 들어가는 엑셀 셀은 첫째
+줄에 이미 3개년 연봉등급("나/나/나")을 따로 보여주고 있어서, 둘째 줄
+괄호 안에서 또 "나"를 반복 표기하고 있었다(`format_half_display()` 자체
+독스트링엔 "괄호 안에 들어갈 부분만 돌려준다"고 원래 의도가 적혀 있었으나
+구현이 그 의도대로 안 돼 있던 버그). 연봉등급이 있으면 하반기업적만
+(`second_half or '-'`) 반환하도록 수정 — 연봉등급이 없는 두 분기
+(예외자/일반 상하반기 쌍)는 애초에 연봉등급을 안 보여주므로 중복이
+없어 그대로 `format_evaluation_cell()`에 위임. `format_half_display()`는
+이 엑셀 다운로드 컬럼 외에는 호출부가 없음을 grep으로 확인(화면/A4
+인쇄 카드는 `format_evaluation_cell()`을 직접 호출하는 별개 표시 방식이라
+영향 없음).
+
+**검증**: `MAX_DISPLAY_K` 변경 후 `python3 -m py_compile` 통과.
+`_job_category_table()`과 동일한 로직(`build_job_category_map()`)을
+합성 데이터로 직접 호출해 매칭 성공/실패/exception 오버라이드 3가지
+조합이 화면과 동일하게 나오는 것 확인. `format_half_display()`를 8가지
+조합(연봉등급 있음/없음 × 예외자 여부 × 상하반기 유무)으로 직접 호출해
+연봉등급 있는 경우만 "ES"로, 나머지는 기존과 동일하게 나오는 것 확인.
+전체 `python3 -m py_compile` 통과.

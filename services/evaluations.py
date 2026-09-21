@@ -78,7 +78,14 @@ def format_half_display(salary_grade: str, first_half: str, second_half: str,
                          is_exception: bool = False) -> str:
     """엑셀 다운로드의 "평가" 컬럼 둘째 줄(연도별 반기 표기)에 쓰는 조각 —
     format_evaluation_cell()과 같은 판단이지만, 연봉등급 부분은 첫째 줄에
-    이미 따로 있으므로 괄호 안에 들어갈 부분만 돌려준다."""
+    이미 따로 있으므로 괄호 안에 들어갈 부분만 돌려준다(2026-09-21 수정 —
+    이전에는 format_evaluation_cell()을 그대로 위임 호출해 연봉등급 있는
+    해는 "나(ES)"처럼 첫째 줄과 같은 연봉등급을 중복 표기하고 있었다.
+    사용자 확정 — "나/나/나 (ES, ES, ES)"처럼 괄호 안은 하반기업적만 남김).
+    연봉등급 없는 두 분기(예외자/일반)는 애초에 연봉등급을 중복 표기하지
+    않으므로 format_evaluation_cell() 그대로 위임한다."""
+    if (salary_grade or '').strip():
+        return (second_half or '').strip() or '-'
     return format_evaluation_cell(salary_grade, first_half, second_half, is_exception)
 
 

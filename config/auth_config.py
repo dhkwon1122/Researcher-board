@@ -171,6 +171,12 @@ TABLE_PERMISSIONS: dict[str, str | None] = {
     'mapping_job_function':     None,
     'exception_job_function':   None,
 
+    # job_category(2026-09-21, services/open_data_query.py의 _job_category_table())
+    # — 위 두 테이블을 미리 합쳐 researcher_id로 바로 조인 가능하게 만든
+    # AI 검색 전용 합성 테이블(expertise_profiles/researcher_similarity와
+    # 동일한 방식). 원본과 같은 민감도(권한 제한 없음).
+    'job_category':             None,
+
     # 평가표기예외자(2026-09-09, evaluation_exception.csv) — "이 사람은 T&P
     # 평가 표기 방식이 다르다"는 사실 자체가 평가 관련 인사 정보라, evaluations
     # 와 동일한 view_evaluation 권한으로 제한한다.
