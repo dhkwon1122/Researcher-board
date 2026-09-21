@@ -25,9 +25,15 @@ Source:
 저널 권위도 조회/캐시 로직은 pipeline/journal_authority.py로 분리되어 있다.
 평가 값이 실제로 채워진 저널은 건너뛰고, 값이 비어 있는(신규거나 이전 조회
 실패로 남은) 저널만 매번 재조회한다. 캐시와 무관하게 전체 저널을 다시
-확인하려면(둘 다 동일하게 동작 — 이 파일 실행 시 자동으로 함께 호출됨):
+확인하려면(이 파일 실행 시 --skip-journal-authority 없이 실행하면 자동으로
+함께 호출됨):
   python pipeline/process_researcher_expertise.py --refresh-journals
   python pipeline/journal_authority.py --refresh-journals   (독립 실행)
+
+run_integration.py/run_analysis.py의 기본 실행에서는 저널 권위도 조회를
+건너뛴다(2026-09-21, 사용자 확정 — LLM 호출이 추가로 드는 항목이라 필요할
+때만 위 명령으로 별도 실행). 이 파일을 직접 실행할 때는(--skip-journal-authority
+안 주면) 기존처럼 자동으로 함께 조회한다.
 
 Output:
   data/processed/연구원 보유 전문성 분석.json
@@ -780,7 +786,13 @@ def analyze_researchers_as_of(researcher_ids: list, valid_date: date) -> list:
     return results
 
 
-def process(refresh_journals: bool = False) -> bool:
+def process(refresh_journals: bool = False, skip_journal_authority: bool = False) -> bool:
+    """skip_journal_authority=True면 저널 권위도 신규/재조회(journal_authority.
+    update_authority())를 건너뛰고 기존 캐시만 그대로 쓴다(2026-09-21,
+    사용자 확정 — run_integration.py의 기본 실행에서는 제외하고 필요할 때만
+    'python pipeline/journal_authority.py'로 별도 실행하기 위함). refresh_journals는
+    이 옵션이 꺼져 있을 때만 의미가 있다(build_summary 캐시된 값도 강제
+    재조회할지 여부)."""
     reset_truncation_count()
     researchers = _read_csv('researchers')
     if researchers.empty:
@@ -813,8 +825,9 @@ def process(refresh_journals: bool = False) -> bool:
     std_map, sait_map = _build_job_def_maps(std_defs, sait_defs)
 
     journal_cache = journal_authority.load_cache()
-    journal_cache = journal_authority.update_authority(
-        journal_authority.unique_journals(publications), journal_cache, force=refresh_journals)
+    if not skip_journal_authority:
+        journal_cache = journal_authority.update_authority(
+            journal_authority.unique_journals(publications), journal_cache, force=refresh_journals)
 
     rids = researchers['researcher_id'].unique()
     total = len(rids)
@@ -949,4 +962,7 @@ if __name__ == '__main__':
     if '--html-only' in sys.argv:
         render_html()
     else:
-        process(refresh_journals='--refresh-journals' in sys.argv)
+        process(
+            refresh_journals='--refresh-journals' in sys.argv,
+            skip_journal_authority='--skip-journal-authority' in sys.argv,
+        )

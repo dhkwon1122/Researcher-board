@@ -19,7 +19,7 @@ run_analysis.py 단계는 사내 LLM/BGE-M3 호출이 많아 전체 실행에 �
 사용법:
   python pipeline/run_integration.py
     [--skip-ready] [--force] [--skip-bge] [--skip-confluence]
-    [--refresh-journals] [--refresh-judgments] [--top-k 5]
+    [--refresh-journals] [--refresh-judgments] [--top-k 5] [--with-journal-authority]
 
   --skip-ready      : 0단계(환경 점검) 자체를 건너뛴다.
   --force           : 0단계에서 FAIL이 나와도 무시하고 1~2단계를 강행한다.
@@ -29,6 +29,11 @@ run_analysis.py 단계는 사내 LLM/BGE-M3 호출이 많아 전체 실행에 �
     막혀 있을 때(예: 보안정책 변경으로 재승인 대기 중) 나머지 단계(연구원
     전문성 분석/유사도)는 정상 진행하기 위해 쓴다. confl_address가 없어
     PDF로 대체되는 과제는 영향받지 않는다.
+  --with-journal-authority : 저널 권위도 조회(pipeline/journal_authority.py)를
+    2단계 2/3(연구원 전문성 분석)에 포함시킨다 — 기본값은 건너뜀(2026-09-21,
+    사용자 확정 — 추가 LLM 호출 비용이 드는데 매번 필요한 건 아니라서).
+    필요할 때는 이 옵션 없이 'python pipeline/journal_authority.py'로 별도
+    실행해도 된다(run_analysis.py 참고).
   그 외 옵션은 run_analysis.py에 그대로 전달된다(자세한 의미는 그 파일 참고).
 """
 
@@ -96,5 +101,6 @@ if __name__ == '__main__':
         refresh_journals='--refresh-journals' in _argv,
         refresh_judgments='--refresh-judgments' in _argv,
         top_k=_parse_top_k_arg(_argv),
+        skip_journal_authority='--with-journal-authority' not in _argv,
     )
     sys.exit(0 if ok else 1)
