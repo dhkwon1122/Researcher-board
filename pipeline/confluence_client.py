@@ -1,8 +1,14 @@
 """
-사내 Confluence 페이지 조회 공용 유틸리티 (atlassian-python-api, PAT 인증)
+사내 Confluence 페이지 조회 공용 유틸리티 (requests 직접 호출, PAT/게이트웨이 인증)
 
 data/processed/project_confl_address.csv의 confl_address(컨플루언스 페이지 URL)
 에서 base URL과 페이지 ID를 그때그때 추출해 페이지 본문을 가져온다.
+
+2026-09-22부터 atlassian-python-api 라이브러리를 거치지 않고 requests로
+REST API(/rest/api/content/{id} 등)를 직접 호출한다 — 사용자가 curl로 검증한
+요청과 완전히 동일한 URL/헤더를 코드가 그대로 재현하도록 해, 라이브러리
+내부에서 헤더를 어떻게 다루는지 몰라도(추적 불가능한 불확실성) 항상 검증된
+요청 그대로 나가는 것을 보장한다.
 
 CONFLUENCE_GATEWAY_BASE_URL(.env, 2026-09-22 추가 — 사내 API 게이트웨이 경유
 정책 변경)이 설정돼 있으면, confl_address에서 뽑은 호스트 대신 이 값을 실제
@@ -143,32 +149,43 @@ def _auth_header() -> tuple:
     return header_name, value
 
 
-def _get_client(base_url: str):
-    client = _client_cache.get(base_url)
-    if client is None:
-        from atlassian import Confluence
-        client = Confluence(url=base_url)
-        # atlassian-python-api(AtlassianRestAPI)는 내부적으로 requests.Session을
-        # self._session에 들고 있다 — 여기 헤더를 채워두면 이 client로 보내는
-        # 모든 요청(get_page_by_id/get_page_by_title 등)에 자동으로 실린다.
-        # 인증 헤더는 라이브러리의 token= 처리에 맡기지 않고 여기서 직접 설정한다
-        # (_auth_header() 참고 — 헤더명/스킴을 .env로 완전히 통제하기 위함).
-        headers = dict(_extra_headers())
-        auth_name, auth_value = _auth_header()
-        headers[auth_name] = auth_value
-        # Accept: application/json (2026-09-22, 사용자 확인) — 게이트웨이가 낸
-        # 401 fault 응답이 JSON이 아니라 XML(<status><status-code>...)이었는데,
-        # 클라이언트가 원하는 응답 형식을 명시하지 않으면 게이트웨이가 기본값
-        # (XML)으로 응답하는 경우가 흔하다. 인증 실패 자체를 고치는 건 아니지만
-        # 최소한 에러 응답이라도 일관되게 JSON으로 받기 위해 명시한다.
-        headers.setdefault('Accept', 'application/json')
-        client._session.headers.update(headers)
-        _client_cache[base_url] = client
-    return client
+def _request_headers() -> dict:
+    """이번 요청에 실을 헤더 전체(Accept + 인증 + 사내 게이트웨이 추가 헤더)."""
+    headers = dict(_extra_headers())
+    auth_name, auth_value = _auth_header()
+    headers[auth_name] = auth_value
+    # Accept: application/json (2026-09-22, 사용자 확인) — 게이트웨이가 낸
+    # 401 fault 응답이 JSON이 아니라 XML(<status><status-code>...)이었는데,
+    # 클라이언트가 원하는 응답 형식을 명시하지 않으면 게이트웨이가 기본값
+    # (XML)으로 응답하는 경우가 흔하다. 인증 실패 자체를 고치는 건 아니지만
+    # 최소한 에러 응답이라도 일관되게 JSON으로 받기 위해 명시한다.
+    headers.setdefault('Accept', 'application/json')
+    return headers
+
+
+def _get_session():
+    """헤더가 이미 채워진 requests.Session(연결 재사용용, 프로세스당 1개로 캐시)."""
+    session = _client_cache.get('session')
+    if session is None:
+        import requests
+        session = requests.Session()
+        session.headers.update(_request_headers())
+        _client_cache['session'] = session
+    return session
 
 
 def fetch_page_text(confl_address: str) -> str:
-    """confl_address 페이지의 제목+본문을 텍스트로 반환. 실패 시 ConfluenceError."""
+    """confl_address 페이지의 제목+본문을 텍스트로 반환. 실패 시 ConfluenceError.
+
+    2026-09-22 — atlassian-python-api(get_page_by_id/get_page_by_title)를
+    거치지 않고 requests로 REST API를 직접 호출하도록 변경했다. 사용자가
+    curl로 직접 만든 요청(정확히 동일한 URL/헤더)은 200이 오는데 이
+    라이브러리를 거친 호출만 계속 401(HTTPError)이 나는 문제가 있었고,
+    라이브러리 내부에서 세션 헤더를 요청 시점에 다시 만지는지 이 저장소
+    환경에서는 확인할 수 없어(atlassian 패키지가 개발 샌드박스에 설치돼
+    있지 않음) — 라이브러리 내부 동작에 기대지 않고 사용자가 검증한 curl과
+    한 글자도 다르지 않은 요청을 직접 만드는 쪽으로 바꿔 이 불확실성을
+    아예 없앴다."""
     if not confl_address:
         raise ConfluenceError('컨플루언스 주소가 비어 있습니다.')
     if not os.environ.get('CONFLUENCE_TOKEN', '').strip():
@@ -177,20 +194,41 @@ def fetch_page_text(confl_address: str) -> str:
             '.env.example을 참고해 설정하세요.'
         )
 
-    client = _get_client(_base_url(confl_address))
+    base_url = _base_url(confl_address)
+    session = _get_session()
     page_id = extract_page_id(confl_address)
+
     try:
         if page_id:
-            page = client.get_page_by_id(page_id, expand='body.storage,title')
+            url = f'{base_url}/rest/api/content/{page_id}'
+            params = {'expand': 'body.storage,title'}
         else:
             space, title = extract_space_title(confl_address)
             if not space:
                 raise ConfluenceError(f'컨플루언스 주소에서 페이지를 특정하지 못했습니다: {confl_address}')
-            page = client.get_page_by_title(space, title, expand='body.storage,title')
+            url = f'{base_url}/rest/api/content'
+            params = {'spaceKey': space, 'title': title, 'expand': 'body.storage,title'}
+        resp = session.get(url, params=params, timeout=30)
     except ConfluenceError:
         raise
     except Exception as exc:  # noqa: BLE001
         raise ConfluenceError(f'페이지 조회 실패({confl_address}): {type(exc).__name__}: {exc}') from exc
+
+    if resp.status_code != 200:
+        raise ConfluenceError(f'페이지 조회 실패({confl_address}): HTTP {resp.status_code}: {resp.text[:300]}')
+
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        raise ConfluenceError(f'페이지 조회 실패({confl_address}): JSON 응답이 아닙니다: {resp.text[:300]}') from exc
+
+    if page_id:
+        page = data
+    else:
+        # /rest/api/content?spaceKey=...&title=...는 검색형 엔드포인트라
+        # {"results": [...]} 형태로 온다 — 첫 결과를 그 페이지로 본다.
+        results = data.get('results') or []
+        page = results[0] if results else None
 
     if not page:
         raise ConfluenceError(f'페이지를 찾을 수 없습니다: {confl_address}')
