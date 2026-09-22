@@ -160,6 +160,14 @@ def _request_headers() -> dict:
     # (XML)으로 응답하는 경우가 흔하다. 인증 실패 자체를 고치는 건 아니지만
     # 최소한 에러 응답이라도 일관되게 JSON으로 받기 위해 명시한다.
     headers.setdefault('Accept', 'application/json')
+    # User-Agent (2026-09-22, 사용자 확인) — 동일한 URL/인증 헤더로도 curl은
+    # 200이 오는데 requests는 "Remote end closed connection without
+    # response"(연결이 응답 없이 끊김)로 실패 — WAF/게이트웨이가 클라이언트를
+    # User-Agent로 구분해 requests의 기본값("python-requests/x.y.z", 스크립트로
+    # 식별되기 쉬움)을 차단하고 curl의 기본값("curl/x.y.z")은 통과시키는
+    # 경우가 흔하다. CONFLUENCE_USER_AGENT로 다른 값을 쓸 수도 있게 하되,
+    # 기본값은 curl 스타일로 맞춘다.
+    headers.setdefault('User-Agent', os.environ.get('CONFLUENCE_USER_AGENT', '').strip() or 'curl/8.0.0')
     return headers
 
 

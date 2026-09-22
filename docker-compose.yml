@@ -112,6 +112,9 @@ services:
       # 이름이 다르면 바꾼다. 미설정 시 기본값(X-Dep-Ticket/X-Data-Classification).
       CONFLUENCE_DEP_TICKET_HEADER: ${CONFLUENCE_DEP_TICKET_HEADER:-X-Dep-Ticket}
       CONFLUENCE_DATA_CLASSIFICATION_HEADER: ${CONFLUENCE_DATA_CLASSIFICATION_HEADER:-X-Data-Classification}
+      # User-Agent(2026-09-22) — 게이트웨이/WAF가 requests 기본 User-Agent는
+      # 막고 curl 기본값은 통과시키는 것으로 확인돼 curl 스타일로 맞춤(confluence_client.py 참고).
+      CONFLUENCE_USER_AGENT: ${CONFLUENCE_USER_AGENT:-curl/8.0.0}
       # BGE-M3 임베딩 서버(전문성 유사도/Job Market 매칭, services/llm.py의
       # embed()) — 아래 bge-embed 서비스를 도커 네트워크 안에서 서비스명으로
       # 가리킨다(--profile embed로 띄웠을 때만 실제로 응답함, 안 띄웠으면

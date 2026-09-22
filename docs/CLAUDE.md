@@ -13074,6 +13074,38 @@ title`)·헤더(`Authorization`/`X-Dep-Ticket`/`X-Data-Classification`/
 `requirements.txt`에서 아직 안 뺌(다른 곳에서 쓰는지 grep으로 미사용
 확인했지만, 이번 변경 범위 밖이라 별도로 정리하지 않음).
 
+## 2026-09-22 (6): 게이트웨이 포트 오타 확인 후에도 남은 문제 —
+`ConnectionError: Remote end closed connection without response`
+→ `User-Agent`를 curl 스타일로 고정
+
+requests 직접 호출로 바꾼 뒤에도 여전히 실패해 사용자가 실제 요청을
+curl 형태로 출력해 직접 대조 — `CONFLUENCE_GATEWAY_BASE_URL`의 포트가
+`:8000`(LLM2 포트와 혼동해 잘못 입력된 값으로 추정)으로 되어 있어야 할
+`:8833`과 달랐던 것을 발견해 정정. 이후 `.env`를 고쳤는데도 여전히
+`:8000`이 나와 `load_env_file()`이 "이미 OS 환경변수로 설정된 값은
+덮어쓰지 않는다"는 규칙 때문에 예전 진단 때 그 셸에 `export`해뒀던 값이
+남아있던 것으로 확인(새 터미널/`unset`으로 해결 — 코드 문제 아님, 순수
+셸 상태 문제).
+
+포트까지 맞춘 뒤에도 `ConnectionError: ('Connection aborted.',
+RemoteDisconnected('Remote end closed connection without response'))`가
+남음 — 이번엔 401(인증 거부)이 아니라 **TCP 연결 자체가 HTTP 응답 없이
+끊기는 것**으로, 완전히 동일한 URL/헤더로도 curl은 200인데 requests만
+이렇게 실패. 이 패턴은 WAF/게이트웨이가 `User-Agent` 헤더로 클라이언트를
+구분해, `requests`의 기본값(`python-requests/x.y.z`, 스크립트/봇으로
+식별되기 쉬움)은 차단하고 curl의 기본값(`curl/x.y.z`)은 통과시키는
+경우에 흔히 나타남.
+
+**수정**: `_request_headers()`에 `User-Agent` 헤더 추가 — 기본값을
+`curl/8.0.0`(curl 스타일)로 맞추고, `CONFLUENCE_USER_AGENT` 환경변수로
+다른 값도 넣을 수 있게 함. `.env.example`/`docker-compose.yml`에도 등록.
+
+**검증**: `_request_headers()`를 기본값/`CONFLUENCE_USER_AGENT` 커스텀
+값 양쪽으로 호출해 `User-Agent`가 각각 `curl/8.0.0`/커스텀 값으로
+정상 반영되는 것 확인. `python3 -m py_compile`, `docker-compose.yml`
+YAML 구문 검사 통과. (WAF의 User-Agent 차단 여부는 코드로 재현 불가 —
+실제 효과는 사용자 환경에서 재시도로 확인 예정.)
+
 ## 2026-09-21: 유사 연구원 최대 인원 20명 → 10명 축소 + AI 검색 SAIT 직군
 지원 + 엑셀 평가 셀 중복 표기 제거 (3건 일괄 반영)
 
