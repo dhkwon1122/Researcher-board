@@ -12968,6 +12968,45 @@ addr:`도 NaN이 참이라 못 걸러내고, `confluence_client.fetch_page_text(
 'float' object has no attribute 'decode'`를 낸다는 것도 별도로 재현해
 근본 원인 확정. `python3 -m py_compile` 통과.
 
+## 2026-09-22 (3): Confluence 인증/커스텀 헤더 — 헤더 "이름"까지 .env로
+전부 오버라이드 가능하게 확장
+
+게이트웨이 경유(위 (1))·커스텀 헤더(직전 커밋)까지 다 채웠는데도
+`python3 pipeline/run_ready.py`가 `HTTPError: Client must be authenticated
+to access this resource`를 계속 반환. 응답 본문이 JSON이 아니라
+`<status><status-code>401</status-code><message>...` 형태의 **XML**이었는데,
+이건 Confluence 자체가 주는 형식이 아니라 WSO2 API Manager 계열
+게이트웨이의 표준 fault 응답 포맷과 일치 — 즉 요청이 Confluence까지
+가지도 못하고 게이트웨이 자체 인증 단계에서 막히고 있다는 뜻으로
+진단(사용자 확인 필요 항목으로 안내). 사용자가 이어서 "REST API 활용
+시 헤더명이 다르면 접속이 안 될 수도 있냐"고 확인 — 맞다고 답변한 뒤,
+"CONFLUENCE_TOKEN도 Authorization이라는 명칭으로 헤더명을 가져가야
+하는 것 같다"는 추가 확인과 함께 헤더 이름 자체를 환경변수로 빼달라는
+요청을 받음.
+
+**수정**: `pipeline/confluence_client.py`에 두 가지 추가.
+1. `_auth_header()` 신설 — 기존에는 `atlassian.Confluence(token=...)`
+   생성자에 맡겨 라이브러리가 내부적으로 `Authorization` 헤더를 만들게
+   했는데, 이제 그 생성자에는 토큰을 넘기지 않고(`Confluence(url=base_url)`
+   만) **직접 헤더를 만들어 세션에 심는다** — 정확히 어떤 헤더명/형식으로
+   나가는지 코드에서 완전히 통제하기 위함. `CONFLUENCE_AUTH_HEADER`(기본
+   `Authorization`)/`CONFLUENCE_AUTH_SCHEME`(기본 `Bearer`, 빈 문자열로
+   두면 스킴 접두사 없이 토큰 값만 그대로 전송)로 .env에서 바꿀 수 있다.
+2. `_extra_headers()`의 `X-Dep-Ticket`/`X-Data-Classification` 헤더
+   **이름 자체**도 `CONFLUENCE_DEP_TICKET_HEADER`/`CONFLUENCE_DATA_
+   CLASSIFICATION_HEADER`로 오버라이드 가능하게 확장(값은 기존과 동일하게
+   `CONFLUENCE_DEP_TICKET`/`CONFLUENCE_DATA_CLASSIFICATION`). 미설정 시
+   전부 기존 기본값 그대로라 하위 호환.
+
+`.env.example`/`docker-compose.yml`의 `app` 서비스에도 4개 신규 환경변수
+등록(기본값 명시).
+
+**검증**: `_auth_header()`/`_extra_headers()`를 기본값/커스텀 값 양쪽으로
+직접 호출 — 기본은 `('Authorization', 'Bearer <토큰>')`, `CONFLUENCE_
+AUTH_SCHEME=''`로 두면 스킴 없이 토큰만, 커스텀 헤더명 지정 시 그 이름
+그대로 나오는 것 확인. `python3 -m py_compile` 및 `docker-compose.yml`
+YAML 구문 검사 통과.
+
 ## 2026-09-21: 유사 연구원 최대 인원 20명 → 10명 축소 + AI 검색 SAIT 직군
 지원 + 엑셀 평가 셀 중복 표기 제거 (3건 일괄 반영)
 

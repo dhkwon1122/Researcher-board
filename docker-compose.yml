@@ -100,10 +100,18 @@ services:
       # 사내 API 게이트웨이 경유 정책(2026-09-22) — 설정하면 confl_address의
       # 실제 호스트 대신 이 base URL로 REST 요청을 보낸다(confluence_client.py 참고).
       CONFLUENCE_GATEWAY_BASE_URL: ${CONFLUENCE_GATEWAY_BASE_URL:-}
+      # 인증 토큰을 실을 헤더(2026-09-22, 기본 Authorization: Bearer <토큰>) —
+      # 게이트웨이가 다른 헤더명/스킴을 요구하면 바꾼다(confluence_client.py 참고).
+      CONFLUENCE_AUTH_HEADER: ${CONFLUENCE_AUTH_HEADER:-Authorization}
+      CONFLUENCE_AUTH_SCHEME: ${CONFLUENCE_AUTH_SCHEME:-Bearer}
       # 사내 API 게이트웨이가 REST API 호출에 추가로 요구하는 헤더(2026-09-21,
       # 보안정책 변경) — 둘 다 미설정이면 보내지 않는다(confluence_client.py 참고).
       CONFLUENCE_DEP_TICKET: ${CONFLUENCE_DEP_TICKET:-}
       CONFLUENCE_DATA_CLASSIFICATION: ${CONFLUENCE_DATA_CLASSIFICATION:-}
+      # 위 두 값을 실을 실제 헤더 이름(2026-09-22) — 게이트웨이가 요구하는
+      # 이름이 다르면 바꾼다. 미설정 시 기본값(X-Dep-Ticket/X-Data-Classification).
+      CONFLUENCE_DEP_TICKET_HEADER: ${CONFLUENCE_DEP_TICKET_HEADER:-X-Dep-Ticket}
+      CONFLUENCE_DATA_CLASSIFICATION_HEADER: ${CONFLUENCE_DATA_CLASSIFICATION_HEADER:-X-Data-Classification}
       # BGE-M3 임베딩 서버(전문성 유사도/Job Market 매칭, services/llm.py의
       # embed()) — 아래 bge-embed 서비스를 도커 네트워크 안에서 서비스명으로
       # 가리킨다(--profile embed로 띄웠을 때만 실제로 응답함, 안 띄웠으면
