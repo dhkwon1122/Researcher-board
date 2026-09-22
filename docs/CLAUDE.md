@@ -13106,6 +13106,42 @@ RemoteDisconnected('Remote end closed connection without response'))`가
 YAML 구문 검사 통과. (WAF의 User-Agent 차단 여부는 코드로 재현 불가 —
 실제 효과는 사용자 환경에서 재시도로 확인 예정.)
 
+## 2026-09-22 (7): Confluence 게이트웨이 최종 원인 확정 — `CONFLUENCE_
+GATEWAY_BASE_URL`의 http/https 스킴 오타, `_base_url()`에 검증 추가
+
+User-Agent를 curl 스타일로 고정한 뒤에도 여전히 `ConnectionError: Remote
+end closed connection without response`가 나서, curl과 requests가 실제로
+보내는 요청 헤더 전체(`curl -v`의 `>` 줄 vs `session.prepare_request()`로
+뽑은 헤더)를 나란히 비교해보도록 안내 — 사용자가 직접 대조해 **최종
+URL의 스킴이 다르다**(하나는 `http://`, 하나는 `https://`)는 것을 발견,
+`CONFLUENCE_GATEWAY_BASE_URL`에 스킴을 잘못 넣어뒀던 것으로 확정. 스킴을
+바로잡자 정상 조회 성공(사용자 확인 — "드디어 성공했어").
+
+**근본 원인**: `_base_url()`은 `confl_address`(원본 페이지 URL) 쪽엔
+HTTPS 강제 검증(`CONFLUENCE_ALLOW_HTTP`로만 예외)이 있었지만,
+`CONFLUENCE_GATEWAY_BASE_URL`이 설정된 경우엔 **그 값을 검증 없이 그대로
+반환**하고 있어서 스킴 오타가 있어도 바로 알 수 없는 애매한 네트워크
+에러(TLS 핸드셰이크 없이 http로 나가거나, 반대로 http 전용 서버에 https로
+접속 시도 등 — 정확한 실패 지점은 스킴 조합에 따라 다름)로만 나타났다.
+
+**수정**: `_base_url()`에서 `CONFLUENCE_GATEWAY_BASE_URL`을 반환하기 전에도
+`confl_address`와 동일한 스킴 검증(HTTPS만 허용, `CONFLUENCE_ALLOW_HTTP`로
+예외)을 적용 — 앞으로 이 값에 스킴을 잘못 넣으면 애매한 커넥션 에러 대신
+`CONFLUENCE_GATEWAY_BASE_URL은 HTTPS만 허용됩니다(현재: ...)`라는 명확한
+에러가 즉시 뜬다.
+
+**검증**: `_base_url()`을 (1) 게이트웨이 URL이 `http://`일 때 `ConfluenceError`
+로 즉시 거부되는 것, (2) `https://`일 때 정상 통과하는 것 확인.
+`python3 -m py_compile` 통과.
+
+**최종 결론**: 이걸로 Confluence REST API 게이트웨이 경유 인증 전체가
+정상 동작 확인됨(사용자 확인) — 이번 트러블슈팅에서 실제로 반영된 변경
+누적: (1) X-Dep-Ticket/X-Data-Classification 커스텀 헤더 지원, (2)
+게이트웨이 base URL 오버라이드, (3) 인증/커스텀 헤더 이름까지 전부 .env로
+오버라이드 가능, (4) Accept: application/json, (5) atlassian-python-api
+대신 requests 직접 호출로 전면 교체, (6) User-Agent를 curl 스타일로 고정,
+(7) 게이트웨이 URL 스킴 검증 추가.
+
 ## 2026-09-21: 유사 연구원 최대 인원 20명 → 10명 축소 + AI 검색 SAIT 직군
 지원 + 엑셀 평가 셀 중복 표기 제거 (3건 일괄 반영)
 

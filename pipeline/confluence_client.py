@@ -66,7 +66,20 @@ def _base_url(confl_address: str) -> str:
 
     gateway_base_url = os.environ.get('CONFLUENCE_GATEWAY_BASE_URL', '').strip()
     if gateway_base_url:
-        return gateway_base_url.rstrip('/')
+        gateway_base_url = gateway_base_url.rstrip('/')
+        # confl_address와 동일한 스킴 검증을 여기도 적용한다(2026-09-22 추가 —
+        # 실사용 중 CONFLUENCE_GATEWAY_BASE_URL에 실수로 http://를 넣어놓고
+        # "ConnectionError: Remote end closed connection without response"로
+        # 한참 헤맨 사례 발견 — 이 함수는 검증 없이 그 값을 그대로 반환하고
+        # 있었다. confl_address 쪽 HTTPS 강제 검증과 형평을 맞춰, 게이트웨이
+        # 쪽도 스킴이 틀리면 애매한 네트워크 에러 대신 바로 이유를 알 수
+        # 있는 에러를 낸다).
+        gateway_scheme = urlparse(gateway_base_url).scheme
+        if gateway_scheme != 'https' and not (allow_http and gateway_scheme == 'http'):
+            raise ConfluenceError(
+                f'CONFLUENCE_GATEWAY_BASE_URL은 HTTPS만 허용됩니다(현재: {gateway_base_url}).'
+            )
+        return gateway_base_url
     return f'{parsed.scheme}://{parsed.netloc}'
 
 
