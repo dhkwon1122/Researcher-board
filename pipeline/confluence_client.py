@@ -2,8 +2,17 @@
 사내 Confluence 페이지 조회 공용 유틸리티 (atlassian-python-api, PAT 인증)
 
 data/processed/project_confl_address.csv의 confl_address(컨플루언스 페이지 URL)
-에서 base URL과 페이지 ID를 그때그때 추출해 페이지 본문을 가져온다. 별도의
-고정 CONFLUENCE_BASE_URL 설정 없이, 각 행의 실제 URL을 그대로 사용한다.
+에서 base URL과 페이지 ID를 그때그때 추출해 페이지 본문을 가져온다.
+
+CONFLUENCE_GATEWAY_BASE_URL(.env, 2026-09-22 추가 — 사내 API 게이트웨이 경유
+정책 변경)이 설정돼 있으면, confl_address에서 뽑은 호스트 대신 이 값을 실제
+요청 base URL로 쓴다 — REST API 경로 구조(/rest/api/content/{id} 등)는
+게이트웨이도 원본 Confluence와 동일하게 받는다고 확인됨(사용자 확인), 앞단
+호스트만 게이트웨이로 바뀐다. confl_address 자체의 호스트 허용 목록 검사
+(CONFLUENCE_ALLOWED_HOSTS)는 게이트웨이 사용 여부와 무관하게 그대로
+적용된다 — "실제로 어느 페이지를 조회할 수 있는지"와 "그 요청을 네트워크
+상 어디로 보낼지"는 별개 문제이기 때문. 미설정이면 기존처럼 confl_address의
+실제 호스트를 그대로 쓴다(하위 호환).
 
 인증: .env의 CONFLUENCE_TOKEN(개인 액세스 토큰, PAT) 사용.
 """
@@ -41,6 +50,10 @@ def _base_url(confl_address: str) -> str:
         raise ConfluenceError('유효하지 않은 Confluence 주소입니다.')
     if not any(host == suffix or host.endswith('.' + suffix) for suffix in allowed):
         raise ConfluenceError(f'허용되지 않은 Confluence 호스트입니다: {host}')
+
+    gateway_base_url = os.environ.get('CONFLUENCE_GATEWAY_BASE_URL', '').strip()
+    if gateway_base_url:
+        return gateway_base_url.rstrip('/')
     return f'{parsed.scheme}://{parsed.netloc}'
 
 
