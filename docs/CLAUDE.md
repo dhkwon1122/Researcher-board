@@ -12915,6 +12915,31 @@ API 스펙에는 없는 사내 전용 헤더).
 환경변수에 채우기로 함 — 코드 쪽 반영은 이걸로 완료, 값 확정 후 curl로
 재검증 예정.
 
+## 2026-09-22: Confluence 게이트웨이 base URL 오버라이드 추가
+
+사용자 확인 — 위 두 헤더 외에 "base url 설정도 필요"하다고 함(사내 API
+게이트웨이 경유 정책). 게이트웨이의 REST API 경로 구조는 원본 Confluence와
+동일(`/rest/api/content/{id}` 등)하고 앞단 호스트만 게이트웨이로 바뀐다고
+확인(사용자 확인 — "confluence REST API 경로를 그대로 받는 구조").
+
+**추가**: `pipeline/confluence_client.py`의 `_base_url()` 끝에 `CONFLUENCE_
+GATEWAY_BASE_URL` 환경변수 체크를 추가 — 설정돼 있으면 `confl_address`에서
+뽑은 `scheme://host` 대신 이 값을 그대로 REST 요청 base URL로 쓴다(끝
+슬래시는 제거). **`confl_address`의 호스트 허용 목록 검사
+(`CONFLUENCE_ALLOWED_HOSTS`)는 게이트웨이 설정 여부와 무관하게 그대로
+적용**된다 — "이 페이지를 조회할 자격이 있는지"(원본 URL 기준)와 "그
+요청을 네트워크상 어디로 보낼지"(게이트웨이 경유 여부)는 별개로 취급.
+미설정이면 기존처럼 `confl_address`의 실제 호스트를 그대로 씀(하위 호환).
+페이지 ID/공간+제목 추출(`extract_page_id()`/`extract_space_title()`)은
+원본 `confl_address` 문자열을 그대로 파싱하므로 영향 없음. `.env.example`/
+`docker-compose.yml`에도 등록(값은 사용자가 추후 실제 게이트웨이 주소로
+채울 예정 — 사용자 확정 "예시대로 해줘 내가 추후에 수정할게").
+
+**검증**: `_base_url()`을 직접 호출해 (1) 게이트웨이 미설정 시 기존과
+동일하게 원본 호스트 반환, (2) 게이트웨이 설정 시 그 값으로 대체(끝
+슬래시 제거 확인), (3) 허용되지 않은 호스트는 게이트웨이 설정 여부와
+무관하게 여전히 거부됨을 확인. `python3 -m py_compile` 통과.
+
 ## 2026-09-21: 유사 연구원 최대 인원 20명 → 10명 축소 + AI 검색 SAIT 직군
 지원 + 엑셀 평가 셀 중복 표기 제거 (3건 일괄 반영)
 

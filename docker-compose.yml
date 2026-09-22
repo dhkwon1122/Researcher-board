@@ -97,6 +97,9 @@ services:
       # 사내 Confluence PAT — 미설정이면 confl_address 과제는 PDF 폴백 없이 건너뛰어짐.
       CONFLUENCE_TOKEN: ${CONFLUENCE_TOKEN:-}
       CONFLUENCE_ALLOWED_HOSTS: ${CONFLUENCE_ALLOWED_HOSTS:-samsungds.net,samsung.net}
+      # 사내 API 게이트웨이 경유 정책(2026-09-22) — 설정하면 confl_address의
+      # 실제 호스트 대신 이 base URL로 REST 요청을 보낸다(confluence_client.py 참고).
+      CONFLUENCE_GATEWAY_BASE_URL: ${CONFLUENCE_GATEWAY_BASE_URL:-}
       # 사내 API 게이트웨이가 REST API 호출에 추가로 요구하는 헤더(2026-09-21,
       # 보안정책 변경) — 둘 다 미설정이면 보내지 않는다(confluence_client.py 참고).
       CONFLUENCE_DEP_TICKET: ${CONFLUENCE_DEP_TICKET:-}
