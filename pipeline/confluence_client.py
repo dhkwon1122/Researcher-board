@@ -14,7 +14,14 @@ CONFLUENCE_GATEWAY_BASE_URL(.env, 2026-09-22 추가 — 사내 API 게이트웨�
 상 어디로 보낼지"는 별개 문제이기 때문. 미설정이면 기존처럼 confl_address의
 실제 호스트를 그대로 쓴다(하위 호환).
 
-인증: .env의 CONFLUENCE_TOKEN(개인 액세스 토큰, PAT) 사용.
+인증: .env의 CONFLUENCE_TOKEN(개인 액세스 토큰, PAT) 사용. 기본적으로
+"Authorization: Bearer <토큰>" 헤더로 보내지만, CONFLUENCE_AUTH_HEADER/
+CONFLUENCE_AUTH_SCHEME(.env, 2026-09-22 추가)로 헤더명/스킴을 바꿀 수 있다
+(_auth_header() 참고). 사내 게이트웨이가 추가로 요구하는 헤더
+(CONFLUENCE_DEP_TICKET/CONFLUENCE_DATA_CLASSIFICATION)의 실제 헤더명도
+CONFLUENCE_DEP_TICKET_HEADER/CONFLUENCE_DATA_CLASSIFICATION_HEADER로
+바꿀 수 있다(_extra_headers() 참고) — 게이트웨이가 요구하는 정확한
+헤더명이 확인될 때까지 코드 재배포 없이 .env만 고쳐 재시도할 수 있게 함.
 """
 
 import os
@@ -97,28 +104,59 @@ def _html_to_text(body_html: str) -> str:
 def _extra_headers() -> dict:
     """사내 API 게이트웨이가 REST API 호출에 추가로 요구하는 헤더(2026-09-21,
     보안정책 변경 — 사용자 확인) — 표준 Confluence API 스펙이 아니라 사내
-    정책 헤더라 값이 없으면(둘 다 .env 미설정) 보내지 않는다(기존 동작 유지)."""
+    정책 헤더라 값이 없으면(둘 다 .env 미설정) 보내지 않는다(기존 동작 유지).
+
+    헤더 "이름" 자체도 .env로 바꿀 수 있다(2026-09-22 추가 — 사용자 확인,
+    게이트웨이가 요구하는 실제 헤더명이 X-Dep-Ticket/X-Data-Classification과
+    한 글자라도 다르면 게이트웨이가 그 값을 아예 못 알아보고 인증 실패로
+    처리할 수 있어서, 값을 담을 헤더명을 코드 재배포 없이 .env만 고쳐
+    바로 재시도할 수 있게 했다). CONFLUENCE_DEP_TICKET_HEADER/
+    CONFLUENCE_DATA_CLASSIFICATION_HEADER 미설정 시 기존 이름 그대로 사용."""
     headers = {}
     dep_ticket = os.environ.get('CONFLUENCE_DEP_TICKET', '').strip()
     if dep_ticket:
-        headers['X-Dep-Ticket'] = dep_ticket
+        header_name = os.environ.get('CONFLUENCE_DEP_TICKET_HEADER', '').strip() or 'X-Dep-Ticket'
+        headers[header_name] = dep_ticket
     data_classification = os.environ.get('CONFLUENCE_DATA_CLASSIFICATION', '').strip()
     if data_classification:
-        headers['X-Data-Classification'] = data_classification
+        header_name = os.environ.get('CONFLUENCE_DATA_CLASSIFICATION_HEADER', '').strip() or 'X-Data-Classification'
+        headers[header_name] = data_classification
     return headers
+
+
+def _auth_header() -> tuple:
+    """(헤더 이름, 헤더 값) — 인증 토큰을 실을 헤더. 기본은 표준
+    "Authorization: Bearer <토큰>"이지만, 게이트웨이가 다른 헤더명/스킴을
+    요구할 수 있어(2026-09-22, 사용자 확인 — "CONFLUENCE_TOKEN도
+    Authorization이라는 명칭으로 헤더명을 가져가야 하는 것 같다") .env로
+    둘 다 바꿀 수 있게 했다. atlassian-python-api의 Confluence(token=...)
+    생성자가 내부적으로 만드는 Authorization 헤더에 맡기지 않고, 이 값으로
+    직접 덮어써서(client._session.headers.update) 정확히 어떤 이름/형식으로
+    나가는지 완전히 통제한다.
+      CONFLUENCE_AUTH_HEADER : 기본 'Authorization'
+      CONFLUENCE_AUTH_SCHEME : 기본 'Bearer' — 빈 문자열로 두면 토큰 값만
+        그대로 헤더에 싣는다(스킴 접두사 없이)."""
+    header_name = os.environ.get('CONFLUENCE_AUTH_HEADER', '').strip() or 'Authorization'
+    scheme = os.environ.get('CONFLUENCE_AUTH_SCHEME', 'Bearer').strip()
+    token = os.environ.get('CONFLUENCE_TOKEN', '').strip()
+    value = f'{scheme} {token}' if scheme else token
+    return header_name, value
 
 
 def _get_client(base_url: str):
     client = _client_cache.get(base_url)
     if client is None:
         from atlassian import Confluence
-        client = Confluence(url=base_url, token=os.environ.get('CONFLUENCE_TOKEN', ''))
-        extra = _extra_headers()
-        if extra:
-            # atlassian-python-api(AtlassianRestAPI)는 내부적으로 requests.Session을
-            # self._session에 들고 있다 — 여기 헤더를 채워두면 이 client로 보내는
-            # 모든 요청(get_page_by_id/get_page_by_title 등)에 자동으로 실린다.
-            client._session.headers.update(extra)
+        client = Confluence(url=base_url)
+        # atlassian-python-api(AtlassianRestAPI)는 내부적으로 requests.Session을
+        # self._session에 들고 있다 — 여기 헤더를 채워두면 이 client로 보내는
+        # 모든 요청(get_page_by_id/get_page_by_title 등)에 자동으로 실린다.
+        # 인증 헤더는 라이브러리의 token= 처리에 맡기지 않고 여기서 직접 설정한다
+        # (_auth_header() 참고 — 헤더명/스킴을 .env로 완전히 통제하기 위함).
+        headers = dict(_extra_headers())
+        auth_name, auth_value = _auth_header()
+        headers[auth_name] = auth_value
+        client._session.headers.update(headers)
         _client_cache[base_url] = client
     return client
 
