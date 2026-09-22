@@ -1,8 +1,15 @@
 """
 사내 Confluence 페이지 조회 공용 유틸리티 (requests 직접 호출, PAT/게이트웨이 인증)
 
-data/processed/project_confl_address.csv의 confl_address(컨플루언스 페이지 URL)
-에서 base URL과 페이지 ID를 그때그때 추출해 페이지 본문을 가져온다.
+data/processed/project_confl_address.csv의 confl_address에서 base URL과
+페이지 ID를 그때그때 추출해 페이지 본문을 가져온다. confl_address는 두 형식을
+지원한다.
+  1) 페이지 ID 숫자만(예: "1234123456") — 2026-09-22 추가, 사용자 확정.
+     게이트웨이 경유가 기본이 된 뒤로는 전체 URL을 넣을 필요 없이 페이지
+     ID만 넣으면 된다(CONFLUENCE_GATEWAY_BASE_URL이 반드시 설정돼 있어야
+     함 — 호스트 정보가 없어 이 값이 유일한 신뢰 경계가 된다).
+  2) 기존처럼 전체 컨플루언스 페이지 URL(하위 호환, CONFLUENCE_ALLOWED_HOSTS
+     로 호스트를 검증) — 이미 이 형식으로 채워진 데이터도 계속 동작한다.
 
 2026-09-22부터 atlassian-python-api 라이브러리를 거치지 않고 requests로
 REST API(/rest/api/content/{id} 등)를 직접 호출한다 — 사용자가 curl로 검증한
@@ -50,13 +57,42 @@ class ConfluenceError(RuntimeError):
     """Confluence 조회 실패(미설정/인증오류/페이지 없음 등)를 알리는 예외."""
 
 
+def _is_bare_page_id(confl_address: str) -> bool:
+    """confl_address가 전체 URL이 아니라 페이지 ID 숫자만 있는지(2026-09-22
+    추가 — 사용자 확정, 게이트웨이 경유가 기본이 되면서 project_confl_
+    address.csv에 굳이 전체 URL을 넣을 필요 없이 페이지 ID만 넣는 방식으로
+    단순화). 앞뒤 공백만 제거하고 순수 숫자로만 되어 있으면 페이지 ID로 본다."""
+    return confl_address.strip().isdigit()
+
+
+def _validate_https(url: str, allow_http: bool, label: str) -> None:
+    scheme = urlparse(url).scheme
+    if scheme != 'https' and not (allow_http and scheme == 'http'):
+        raise ConfluenceError(f'{label}은(는) HTTPS만 허용됩니다(현재: {url}).')
+
+
 def _base_url(confl_address: str) -> str:
+    allow_http = os.environ.get('CONFLUENCE_ALLOW_HTTP', 'false').lower() in ('1', 'true', 'yes', 'on')
+
+    if _is_bare_page_id(confl_address):
+        # 페이지 ID만 있으면 호스트 정보 자체가 없어 CONFLUENCE_ALLOWED_HOSTS
+        # 검증을 적용할 대상이 없다 — 대신 CONFLUENCE_GATEWAY_BASE_URL이
+        # 반드시 설정돼 있어야 한다(관리자만 바꿀 수 있는 값이라 이게 신뢰
+        # 경계 역할을 한다).
+        gateway_base_url = os.environ.get('CONFLUENCE_GATEWAY_BASE_URL', '').strip().rstrip('/')
+        if not gateway_base_url:
+            raise ConfluenceError(
+                'confl_address가 페이지 ID만 있는 형식인데 CONFLUENCE_GATEWAY_BASE_URL이 '
+                '설정되어 있지 않습니다 — 이 형식은 게이트웨이 경유가 전제입니다.'
+            )
+        _validate_https(gateway_base_url, allow_http, 'CONFLUENCE_GATEWAY_BASE_URL')
+        return gateway_base_url
+
     parsed = urlparse(confl_address)
     host = (parsed.hostname or '').lower().rstrip('.')
     allowed = [h.strip().lower().lstrip('.') for h in
                os.environ.get('CONFLUENCE_ALLOWED_HOSTS', 'samsungds.net,samsung.net').split(',')
                if h.strip()]
-    allow_http = os.environ.get('CONFLUENCE_ALLOW_HTTP', 'false').lower() in ('1', 'true', 'yes', 'on')
     if parsed.scheme != 'https' and not (allow_http and parsed.scheme == 'http'):
         raise ConfluenceError('Confluence 주소는 HTTPS만 허용됩니다.')
     if parsed.username or parsed.password or not host:
@@ -74,22 +110,21 @@ def _base_url(confl_address: str) -> str:
         # 있었다. confl_address 쪽 HTTPS 강제 검증과 형평을 맞춰, 게이트웨이
         # 쪽도 스킴이 틀리면 애매한 네트워크 에러 대신 바로 이유를 알 수
         # 있는 에러를 낸다).
-        gateway_scheme = urlparse(gateway_base_url).scheme
-        if gateway_scheme != 'https' and not (allow_http and gateway_scheme == 'http'):
-            raise ConfluenceError(
-                f'CONFLUENCE_GATEWAY_BASE_URL은 HTTPS만 허용됩니다(현재: {gateway_base_url}).'
-            )
+        _validate_https(gateway_base_url, allow_http, 'CONFLUENCE_GATEWAY_BASE_URL')
         return gateway_base_url
     return f'{parsed.scheme}://{parsed.netloc}'
 
 
 def extract_page_id(confl_address: str) -> str | None:
     """다양한 Confluence URL 형식에서 pageId를 추출한다.
+      - 페이지 ID 숫자만 있는 경우(2026-09-22 추가) — 그대로 반환
       - .../pages/viewpage.action?pageId=123456
       - .../wiki/spaces/{SPACE}/pages/123456/{title}
       - .../pages/123456
     URL 형식이 다르면 이 함수의 정규식을 실제 형식에 맞게 수정하세요.
     """
+    if _is_bare_page_id(confl_address):
+        return confl_address.strip()
     m = re.search(r'[?&]pageId=(\d+)', confl_address)
     if m:
         return m.group(1)

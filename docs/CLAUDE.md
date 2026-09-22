@@ -13142,6 +13142,36 @@ HTTPS 강제 검증(`CONFLUENCE_ALLOW_HTTP`로만 예외)이 있었지만,
 대신 requests 직접 호출로 전면 교체, (6) User-Agent를 curl 스타일로 고정,
 (7) 게이트웨이 URL 스킴 검증 추가.
 
+## 2026-09-22 (8): confl_address — 전체 URL 대신 페이지 ID 숫자만 넣는
+방식 지원 추가
+
+게이트웨이 경유가 기본이 된 뒤로는 confl_address의 실제 호스트가 어차피
+안 쓰이므로(CONFLUENCE_GATEWAY_BASE_URL이 항상 우선), 사용자가 이제부터
+project_confl_address.csv의 confl_address 컬럼에 전체 URL 대신 페이지 ID
+숫자만 넣고 싶다고 요청.
+
+**추가**: `pipeline/confluence_client.py`
+  - `_is_bare_page_id(confl_address)` 신설 — 앞뒤 공백만 제거하고 순수
+    숫자로만 되어 있으면 페이지 ID로 판정.
+  - `extract_page_id()` — 페이지 ID만 있는 경우 그 값을 그대로 반환(기존
+    URL 정규식 매칭보다 먼저 체크).
+  - `_base_url()` — 페이지 ID만 있는 경우 호스트 정보 자체가 없으므로
+    `CONFLUENCE_ALLOWED_HOSTS` 검증을 건너뛰고, 대신
+    `CONFLUENCE_GATEWAY_BASE_URL`이 반드시 설정돼 있어야 한다(없으면
+    "이 형식은 게이트웨이 경유가 전제"라는 명확한 에러) — 관리자만 바꿀
+    수 있는 이 값이 유일한 신뢰 경계 역할을 한다.
+  - 스킴(HTTPS) 검증 로직을 `_validate_https()` 공용 헬퍼로 뽑아 게이트웨이
+    URL 검증 두 곳(신규 페이지ID 경로 + 기존 URL 경로)에서 재사용.
+  - **기존 전체 URL 방식은 완전히 하위 호환** — 이미 URL로 채워진
+    `project_confl_address.csv` 행도 그대로 계속 동작한다(두 형식이
+    행마다 섞여 있어도 무방).
+
+**검증**: `extract_page_id()`/`_base_url()`을 (1) 페이지 ID만 있는 경우
+(공백 포함 케이스도), (2) 기존 전체 URL 방식(하위 호환), (3) 페이지
+ID만 있는데 게이트웨이 미설정 시 명확한 에러, (4) 순수 숫자가 아닌
+문자열은 여전히 URL로 취급(오탐 방지) — 4가지 모두 직접 호출해 확인.
+`python3 -m py_compile` 통과.
+
 ## 2026-09-21: 유사 연구원 최대 인원 20명 → 10명 축소 + AI 검색 SAIT 직군
 지원 + 엑셀 평가 셀 중복 표기 제거 (3건 일괄 반영)
 
