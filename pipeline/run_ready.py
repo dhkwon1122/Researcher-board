@@ -123,7 +123,12 @@ def _check_confluence() -> list:
         return checks
 
     import pandas as pd
-    df = pd.read_csv(csv_path, encoding='utf-8-sig', dtype=str)
+    # dtype=str이어도 빈 셀은 문자열 ''이 아니라 NaN(float)으로 남는다 — .fillna('')
+    # 없이 "if a"로만 거르면 NaN이 파이썬에서 참(bool(float('nan'))==True)으로
+    # 평가돼 그대로 addr에 뽑히고, 그 값을 urlparse()에 넘기는 순간
+    # "'float' object has no attribute 'decode'"로 죽는다(2026-09-22 실사용 중
+    # 발견 — confl_address가 비어있는 과제가 CSV 앞쪽에 있을 때 재현).
+    df = pd.read_csv(csv_path, encoding='utf-8-sig', dtype=str).fillna('')
     addr = next((a for a in df.get('confl_address', []) if a), None)
     if not addr:
         checks.append(Check('Confluence 접속', 'warn', 'project_confl_address.csv에 유효한 주소가 없습니다.'))

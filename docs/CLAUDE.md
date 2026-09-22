@@ -12940,6 +12940,34 @@ GATEWAY_BASE_URL` 환경변수 체크를 추가 — 설정돼 있으면 `confl_a
 슬래시 제거 확인), (3) 허용되지 않은 호스트는 게이트웨이 설정 여부와
 무관하게 여전히 거부됨을 확인. `python3 -m py_compile` 통과.
 
+## 2026-09-22 (2): run_ready.py Confluence 접속 확인 — confl_address 빈 값이
+NaN(float)으로 남아 `'float' object has no attribute 'decode'` 에러
+
+사용자가 게이트웨이/헤더 값을 다 채운 뒤 `python3 pipeline/run_ready.py`를
+돌리자 이 에러가 남. `_check_confluence()`가 `project_confl_address.csv`를
+`pd.read_csv(..., dtype=str)`로 읽는데, **`dtype=str`은 값이 있는 셀만
+문자열로 강제할 뿐 빈 셀은 여전히 `NaN`(float)으로 남는다**는 pandas의
+잘 알려진 함정에 걸림 — `next((a for a in df.get('confl_address', []) if
+a), None)`의 `if a` 판정에서 `bool(float('nan'))`이 파이썬에서 **참**으로
+평가돼(0.0만 거짓), confl_address가 비어있는 과제(PDF 폴백 대상, 실제로
+흔함)가 CSV 앞쪽에 있으면 그 NaN이 그대로 `addr`로 뽑힌다. 이후 `if not
+addr:`도 NaN이 참이라 못 걸러내고, `confluence_client.fetch_page_text(addr)`
+→ `_base_url(addr)` → `urlparse(addr)`에 float를 그대로 넘기면서 죽는다
+(`urlparse(float('nan'))`이 정확히 이 메시지를 냄 — 직접 재현해 확인).
+이번에 게이트웨이 설정 작업으로 새로 생긴 버그가 아니라, 원래도 있었지만
+`CONFLUENCE_TOKEN`이 없어서(설정 이전) 이 지점까지 도달한 적이 없었던
+잠복 버그.
+
+**수정**: `pd.read_csv(...).fillna('')`로 한 줄 추가 — 다른 곳(예:
+`process_project_expertise.py`의 `_read_projects()`)에서 이미 쓰는 것과
+동일한 관용구.
+
+**검증**: 합성 CSV(첫 행 confl_address 빈칸, 둘째 행에 실제 URL)로
+`.fillna('')` 적용 전/후 비교 — 적용 후 정상적으로 둘째 행의 실제 URL이
+`addr`로 뽑히는 것 확인. `urlparse(float('nan'))`이 정확히 `AttributeError:
+'float' object has no attribute 'decode'`를 낸다는 것도 별도로 재현해
+근본 원인 확정. `python3 -m py_compile` 통과.
+
 ## 2026-09-21: 유사 연구원 최대 인원 20명 → 10명 축소 + AI 검색 SAIT 직군
 지원 + 엑셀 평가 셀 중복 표기 제거 (3건 일괄 반영)
 
