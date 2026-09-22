@@ -156,6 +156,12 @@ def _get_client(base_url: str):
         headers = dict(_extra_headers())
         auth_name, auth_value = _auth_header()
         headers[auth_name] = auth_value
+        # Accept: application/json (2026-09-22, 사용자 확인) — 게이트웨이가 낸
+        # 401 fault 응답이 JSON이 아니라 XML(<status><status-code>...)이었는데,
+        # 클라이언트가 원하는 응답 형식을 명시하지 않으면 게이트웨이가 기본값
+        # (XML)으로 응답하는 경우가 흔하다. 인증 실패 자체를 고치는 건 아니지만
+        # 최소한 에러 응답이라도 일관되게 JSON으로 받기 위해 명시한다.
+        headers.setdefault('Accept', 'application/json')
         client._session.headers.update(headers)
         _client_cache[base_url] = client
     return client

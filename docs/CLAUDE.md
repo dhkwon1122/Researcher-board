@@ -13007,6 +13007,26 @@ AUTH_SCHEME=''`로 두면 스킴 없이 토큰만, 커스텀 헤더명 지정 �
 그대로 나오는 것 확인. `python3 -m py_compile` 및 `docker-compose.yml`
 YAML 구문 검사 통과.
 
+## 2026-09-22 (4): Confluence 요청에 `Accept: application/json` 헤더 추가
+
+사용자 확인 — 앞서 401 응답이 JSON이 아니라 XML(`<status><status-code>...`)
+형태였는데, 클라이언트가 원하는 응답 형식을 명시하지 않으면 게이트웨이가
+기본값(XML)으로 응답하는 경우가 흔하다는 점에 착안해 `Accept:
+application/json`을 명시하면 되지 않겠냐는 질문. 인증 실패 자체를
+고치는 건 아니지만(별도 원인), 최소한 에러 응답이라도 일관되게 JSON으로
+받아 원인 파악을 쉽게 하는 데 도움이 되므로 반영.
+
+**수정**: `pipeline/confluence_client.py`의 `_get_client()`에서 헤더 딕셔너리
+구성 시 `headers.setdefault('Accept', 'application/json')` 추가 — 다른
+헤더(Authorization/X-Dep-Ticket/X-Data-Classification)와 동일하게 세션에
+심어 모든 요청에 자동으로 실린다. 별도 환경변수 오버라이드는 두지 않음
+(표준 REST 관례라 커스터마이즈 필요성이 낮다고 판단 — 필요해지면 그때 추가).
+
+**검증**: `_get_client()`가 만드는 헤더 딕셔너리를 직접 구성해 `Authorization`
+과 `Accept: application/json`이 함께 들어가는 것 확인(atlassian 패키지가
+이 샌드박스에 설치돼 있지 않아 `Confluence()` 생성자 자체는 호출 못 하고,
+헤더 구성 로직만 별도로 검증). `python3 -m py_compile` 통과.
+
 ## 2026-09-21: 유사 연구원 최대 인원 20명 → 10명 축소 + AI 검색 SAIT 직군
 지원 + 엑셀 평가 셀 중복 표기 제거 (3건 일괄 반영)
 
