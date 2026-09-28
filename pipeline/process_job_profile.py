@@ -52,8 +52,8 @@ from source_reader import read_source
 
 
 def _parse_date(val):
-    s = str(val).strip() if val is not None else ''
-    if not s or s.lower() in ('nan', 'none', 'nat'):
+    s = _clean(val)
+    if not s:
         return None
     try:
         return pd.Timestamp(s)

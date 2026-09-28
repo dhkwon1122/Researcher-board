@@ -13,6 +13,7 @@ import re
 
 import pandas as pd
 
+from pipeline.excel_reader import clean_str as _clean_str
 from services import data_store
 
 
@@ -25,19 +26,6 @@ def read_rows(researcher_id: str) -> list[dict]:
         return []
     rows = df[df['researcher_id'] == researcher_id]
     return rows.to_dict('records')
-
-
-def _clean_str(val) -> str:
-    """read_processed()로 CSV를 읽을 때 그 컬럼에 빈 셀이 섞여 있으면
-    pandas가 컬럼 전체를 float로 추론해 빈 값이 float('nan')이 되고,
-    str(nan)이 문자열 "nan"이 되어(파이썬에서 NaN은 참으로 평가되므로
-    `or ''` 처리로는 안 걸러짐) 그대로 "nan"으로 새어나갈 수 있다
-    (services/work_experience.py에서 근무경력이 "nan( ~ , nan)"으로
-    새던 것과 동일한 문제, 2026-09-03 — 여기 language/speak_grade는
-    실제로는 파이프라인이 항상 채워서 저장하지만, 만료일과 동일한
-    가드를 예방적으로 함께 적용)."""
-    s = str(val).strip() if val is not None else ''
-    return '' if s.lower() in ('', 'nan', 'none', 'nat') else s
 
 
 _DATE_ONLY_RE = re.compile(r'^(\d{4}-\d{2}-\d{2})(?:[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?)?$')

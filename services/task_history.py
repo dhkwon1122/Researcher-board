@@ -17,17 +17,7 @@ from __future__ import annotations
 
 import math
 
-
-def _s(v) -> str:
-    if v is None:
-        return ''
-    try:
-        if isinstance(v, float) and math.isnan(v):
-            return ''
-    except TypeError:
-        pass
-    s = str(v).strip()
-    return '' if s.lower() in ('nan', 'none', 'nat') else s
+from pipeline.excel_reader import clean_str as _s
 
 
 def task_year(date_str) -> int | None:

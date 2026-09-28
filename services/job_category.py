@@ -29,12 +29,9 @@ researcher_profile.py)과 전문성 MAP 유사 연구원 지도 호버 라벨
 
 import pandas as pd
 
+from pipeline.excel_reader import clean_str as _clean
+
 _BLANK = '-'
-
-
-def _clean(val) -> str:
-    s = str(val or '').strip()
-    return '' if s.lower() in ('nan', 'none', 'nat') else s
 
 
 def _exception_map(exception_df: pd.DataFrame | None) -> dict:

@@ -16,6 +16,7 @@ work_experience.csv를 사람별로 읽어 표시 문자열로 조립하는 역�
 저장하므로(최신 경력이 먼저), 첫 행이 곧 "최근 1건"이다.
 """
 
+from pipeline.excel_reader import clean_str as _clean_str
 from services import data_store
 
 
@@ -26,19 +27,6 @@ def read_rows(researcher_id: str) -> list[dict]:
         return []
     rows = df[df['researcher_id'] == researcher_id]
     return rows.to_dict('records')
-
-
-def _clean_str(val) -> str:
-    """read_processed()가 CSV를 읽을 때, 그 컬럼에 빈 셀이 하나라도 섞여
-    있으면 pandas가 컬럼 전체를 float로 추론해 정상 값도 NaN이 되고 빈
-    값은 float('nan')이 된다 — str(nan)이 문자열 "nan"이 되어(파이썬에서
-    NaN은 참으로 평가되므로 `or ''` 같은 처리로는 안 걸러짐) 그대로
-    화면에 "nan"으로 새어나가는 문제(2026-09-03, 근무경력이 "nan( ~ ,
-    nan)"으로 표시되는 문제로 실제 발견 — company_name/role_name 둘 다
-    이 가드가 없었음). components/profile_sections.py의 동명 헬퍼와
-    동일한 처리."""
-    s = str(val).strip() if val is not None else ''
-    return '' if s.lower() in ('', 'nan', 'none', 'nat') else s
 
 
 def _format_ym(date_str) -> str:

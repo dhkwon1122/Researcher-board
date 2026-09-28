@@ -13290,3 +13290,71 @@ MIN=12/MAX=12가 되어 "12~12자"로 보이고 있었다.
 확인. 이 수정은 컨테이너를 재빌드·재기동해야 반영된다(`.env`에
 `MIN_PASSWORD_LENGTH`를 이미 명시적으로 지정해둔 배포는 그 값이 계속
 우선하므로 영향 없음).
+
+## 2026-09-28: 빈 값/NaN 정리 헬퍼(`_clean_str` 류) 10곳 이상 중복 구현 통합
+
+사용자 요청으로 전체 코드베이스 리팩토링 후보를 조사한 결과("전체적으로
+리팩토링 할 부분이 있을지 확인해줘"), 가장 확실하고 위험도 낮은 후보로
+꼽혔던 항목을 실제로 반영했다. 조사 근거: `pipeline/excel_reader.py`에
+이미 정답 격인 `clean_str()`/`is_blank()`가 있는데(`None` 입력까지
+안전하게 처리, `_BLANK_STRINGS = ('nan', 'none', 'nat', '<na>')`), 이걸
+재사용하는 곳은 `scripts/build_past_team_refer.py` 딱 하나뿐이고 나머지
+10여 곳은 각자 손으로 같은 로직을 다시 구현하고 있었다 — 그것도 서로
+미묘하게 다른 변형으로(`''`을 blank로 볼지, `None`을 어떻게 다룰지,
+`.lower()` 호출 여부 등). 이 중복이 미관 문제만은 아니었다 —
+`docs/CLAUDE.md`에 이미 기록된 "나이 -로 표시"(2026-08-29), "근무경력
+nan( ~ , nan) 노출"(2026-09-03), "어학 만료일 시분초 누출"(2026-09-03)
+버그가 전부 이 로직을 각자 재구현하다 가드를 빠뜨려서 생긴 것들이었다.
+
+**통합한 곳**(전부 로컬 정의를 지우고 `pipeline.excel_reader`의
+`clean_str`/`is_blank`를 import해 기존 로컬 이름으로 별칭 처리 —
+호출부는 그대로 두고 정의만 교체하는 방식으로 diff를 최소화):
+- `components/timeline_data.py`의 `clean()`/`parse_ts()`(대소문자 구분
+  없이 원본 그대로 'nan'/'None'/'NaT' 매칭하던 변형 — 이번 조사의 원래
+  목록에는 없었으나 최종 점검 중 추가로 발견)
+- `components/timeline_view.py`의 `_hr_cell()`
+- `components/profile_sections.py`의 `_clean_str()` + `_TASK_EMPTY` 집합
+  (`_fmt_rate`/`_has_min_duration`/`_fmt_period` 3곳에서 사용)
+- `services/language_qualification.py`/`services/task_history.py`/
+  `services/work_experience.py`/`services/researcher_profile_export.py`의
+  각 `_clean_str`/`_s`
+- `services/job_category.py`의 `_clean()`(기존엔 `val or ''`라 `0`/`False`를
+  blank로 오인할 수 있었던 것도 `is not None` 기준으로 통일되며 함께 정리됨)
+- `pipeline/team_refer_intake.py`의 `_clean_str()` — 이 모듈은 bare
+  import(`import team_refer_intake`)와 dotted import(`from pipeline.
+  team_refer_intake import ...`) 양쪽에서 다 쓰여서, 자체적으로
+  `sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))`를
+  추가해 어느 경로로 로드되든 `from excel_reader import clean_str`
+  (bare)가 항상 resolve되게 함(다른 `pipeline/process_*.py`가 이미 쓰는
+  패턴을 그대로 가져온 것).
+- `pipeline/process_job_profile.py`의 `_parse_date()` — 이미 `_clean`을
+  import해두고도 안 쓰고 인라인으로 다시 구현하고 있던 것을 재사용하도록
+  교체.
+- `pipeline/process_tasks.py`의 `_parse_rate()` + `_EMPTY` 집합(모듈
+  최상단에 `from excel_reader import is_blank` 추가).
+- `pipeline/process_publications.py`의 `_parse_int()`(이 파일은 다른
+  excel_reader import가 전부 `process()` 함수 안에 지연 임포트돼 있어,
+  같은 관례를 따라 함수 안에서 지역 임포트).
+- `pages/researcher_profile.py`의 `_tenure_value()`/`_print_task_hr_
+  timeline()`(내부 `_c()` 클로저 — `'-'` placeholder까지 blank로 보는
+  기존 동작은 `is_blank(s) or s == '-'`로 보존)/`_print_profile_content()`
+  (birth_date 폴백 판정) 3곳.
+
+**의도적으로 통합하지 않은 것**(다른 종류의 문자열 정리라 범위 밖으로
+판단): `pages/org_comparison.py`/`components/detail_tabs.py` 등의
+`not in ('nan',)`류 체크는 리스트 조립 시 항목 자체를 건너뛰는 필터라
+반환 타입이 다르고, `components/profile_sections.py`의 LLM 요약 텍스트
+`not in ('nan', 'None')` 체크는 JSON에서 온 값(`str(None)` == 'None')이라
+pandas NaN 문제와 근본 원인이 다름 — 이번 리팩토링은 "pandas가 CSV의
+빈 셀을 NaN으로 추론해 문자열로 새는" 한 가지 패턴에 한정했다.
+
+**검증**: `pipeline.excel_reader.clean_str`/`is_blank`를 `None`/`''`/
+`'nan'`/`'NaN'`/`'<na>'`/실제 `float('nan')`/`0`/정상 문자열로 직접
+호출해 기대값 확인. 수정한 13개 파일의 함수 전부를 개별적으로 호출해
+리팩토링 전후 동작이 정확히 일치하는지 확인 — 특히 과거 실제 버그였던
+시나리오(근무경력 행이 전부 NaN이면 `None`을 반환해 건너뛰는 것,
+인사발령 이력에서 'nan'/'-' 값이 렌더링 결과에 전혀 안 새는 것)를
+`dash.Dash(use_pages=True, pages_folder='')` 컨텍스트에서 실제
+컴포넌트 트리까지 렌더링해 재확인. `python3 -m app`(전체 페이지·서비스·
+파이프라인 임포트 체인) 정상 로드, 기존 `tests/`(17건) 전체 통과,
+수정한 13개 파일 `py_compile` 통과.

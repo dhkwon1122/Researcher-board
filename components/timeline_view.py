@@ -52,6 +52,7 @@ from components.timeline_data import (
     truncate,
     yymm,
 )
+from pipeline.excel_reader import clean_str
 
 # ── 레이아웃 상수(px) ─────────────────────────────────────────────────────
 _TOP_PAD = 24
@@ -232,8 +233,7 @@ def _accordion_panel(kind, body):
 
 
 def _hr_cell(val) -> str:
-    s = str(val).strip() if val is not None else ''
-    return '-' if s.lower() in ('', 'nan', 'none', 'nat') else s
+    return clean_str(val) or '-'
 
 
 def filter_hr_rows(hr_df, rid):

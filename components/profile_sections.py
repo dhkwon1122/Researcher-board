@@ -9,6 +9,7 @@ import plotly.graph_objects as go
 from dash import html
 
 from components.detail_tabs import plain_indent_list
+from pipeline.excel_reader import clean_str as _clean_str, is_blank
 from services.data_store import ASSETS_DIR, PHOTO_DIR, RAW_DIR
 from services.evaluations import (
     first_half_column, format_evaluation_cell, salary_grade_column, second_half_column,
@@ -246,11 +247,6 @@ def education_block(edu_df: pd.DataFrame, rid: str, *, plain_degree: bool = Fals
     return html.Div(items) if items else html.Div('학력 정보 없음', className='text-muted small')
 
 
-def _clean_str(val) -> str:
-    s = str(val).strip() if val is not None else ''
-    return '' if s.lower() in ('', 'nan', 'none', 'nat') else s
-
-
 def _inc_label(inc: pd.DataFrame, year) -> str:
     """한 해의 인센티브 선정 구분 문자열('-'면 미선정). evaluation_incentive_block()
     (표 형식)과 evaluation_incentive_summary_text()(글자 형식)가 공유한다."""
@@ -477,9 +473,6 @@ def work_experience_block(we_df, rid: str, *, limit: int | None = None, single_l
     return html.Ul([html.Li(t, className='small', style=item_style) for t in texts], className='ps-3 mb-0 small')
 
 
-_TASK_EMPTY = {'', 'nan', 'none', 'nat', 'NaN', 'None', 'NaT'}
-
-
 def _fmt_rate(val) -> str:
     """투입률 표시: 정수% 또는 '-'."""
     if val is None:
@@ -490,7 +483,7 @@ def _fmt_rate(val) -> str:
     except (TypeError, ValueError):
         pass
     s = str(val).strip()
-    if s.lower() in _TASK_EMPTY:
+    if is_blank(s):
         return '-'
     try:
         v = float(s)
@@ -510,7 +503,7 @@ def _has_min_duration(start_raw, end_raw, min_days: int = 30) -> bool:
     if pd.isna(start):
         return False
     end_s = str(end_raw).strip() if end_raw is not None else ''
-    is_empty_end = end_s == '' or end_s.lower() in _TASK_EMPTY
+    is_empty_end = is_blank(end_s)
     end = pd.Timestamp(datetime.now().date()) if is_empty_end else pd.to_datetime(end_s, errors='coerce')
     if pd.isna(end):
         end = pd.Timestamp(datetime.now().date())
@@ -520,14 +513,14 @@ def _has_min_duration(start_raw, end_raw, min_days: int = 30) -> bool:
 def _fmt_period(start_raw, end_raw) -> str:
     """기간 표시: 'YYYY-MM ~ YYYY-MM' 또는 'YYYY-MM ~ 현재'."""
     start = str(start_raw).strip()[:7] if start_raw is not None else ''
-    if start.lower() in _TASK_EMPTY:
+    if is_blank(start):
         start = ''
 
     end_s = str(end_raw).strip() if end_raw is not None else ''
     try:
-        is_empty_end = pd.isna(end_raw) or end_s.lower() in _TASK_EMPTY
+        is_empty_end = pd.isna(end_raw) or is_blank(end_s)
     except (TypeError, ValueError):
-        is_empty_end = end_s.lower() in _TASK_EMPTY
+        is_empty_end = is_blank(end_s)
     end = '' if is_empty_end else end_s[:7]
 
     if start and end:
