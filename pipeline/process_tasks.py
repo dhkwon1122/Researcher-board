@@ -34,6 +34,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from merge_utils import TABLE_KEYS, write_merged  # noqa: E402
+from excel_reader import is_blank  # noqa: E402
 
 SOURCE_FILE = '개인별과제투입기간데이터_260114.xlsb'
 OUTPUT = os.path.join(OUT_DIR, 'tasks.csv')
@@ -50,7 +51,7 @@ def _parse_rate(val) -> str:
     """투입률 → 정수 문자열(%). 알 수 없으면 빈 문자열."""
     try:
         s = str(val).strip()
-        if s.lower() in ('', 'nan', 'none', 'nat'):
+        if is_blank(s):
             return ''
         v = float(s)
         if 0.0 < v <= 1.0:
@@ -58,9 +59,6 @@ def _parse_rate(val) -> str:
         return str(int(round(v)))
     except (TypeError, ValueError):
         return ''
-
-
-_EMPTY = {'', 'nan', 'none', 'nat'}
 
 
 def _same_month(d1: str, d2: str) -> bool:
@@ -81,14 +79,14 @@ def _merge_consecutive_periods(df: pd.DataFrame) -> pd.DataFrame:
         cur_s = str(grp.iloc[0]['start_date']).strip()
         cur_e = str(grp.iloc[0]['end_date']).strip()
         cur_r = str(grp.iloc[0]['input_rate']).strip()
-        if cur_e.lower() in _EMPTY:
+        if is_blank(cur_e):
             cur_e = ''
 
         for i in range(1, len(grp)):
             ns = str(grp.iloc[i]['start_date']).strip()
             ne = str(grp.iloc[i]['end_date']).strip()
             nr = str(grp.iloc[i]['input_rate']).strip()
-            if ne.lower() in _EMPTY:
+            if is_blank(ne):
                 ne = ''
 
             # 연속 조건: 이전 종료일 == 다음 시작일, 또는 같은 달 안에서 재참여

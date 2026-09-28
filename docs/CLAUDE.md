@@ -13106,6 +13106,72 @@ RemoteDisconnected('Remote end closed connection without response'))`가
 YAML 구문 검사 통과. (WAF의 User-Agent 차단 여부는 코드로 재현 불가 —
 실제 효과는 사용자 환경에서 재시도로 확인 예정.)
 
+## 2026-09-22 (7): Confluence 게이트웨이 최종 원인 확정 — `CONFLUENCE_
+GATEWAY_BASE_URL`의 http/https 스킴 오타, `_base_url()`에 검증 추가
+
+User-Agent를 curl 스타일로 고정한 뒤에도 여전히 `ConnectionError: Remote
+end closed connection without response`가 나서, curl과 requests가 실제로
+보내는 요청 헤더 전체(`curl -v`의 `>` 줄 vs `session.prepare_request()`로
+뽑은 헤더)를 나란히 비교해보도록 안내 — 사용자가 직접 대조해 **최종
+URL의 스킴이 다르다**(하나는 `http://`, 하나는 `https://`)는 것을 발견,
+`CONFLUENCE_GATEWAY_BASE_URL`에 스킴을 잘못 넣어뒀던 것으로 확정. 스킴을
+바로잡자 정상 조회 성공(사용자 확인 — "드디어 성공했어").
+
+**근본 원인**: `_base_url()`은 `confl_address`(원본 페이지 URL) 쪽엔
+HTTPS 강제 검증(`CONFLUENCE_ALLOW_HTTP`로만 예외)이 있었지만,
+`CONFLUENCE_GATEWAY_BASE_URL`이 설정된 경우엔 **그 값을 검증 없이 그대로
+반환**하고 있어서 스킴 오타가 있어도 바로 알 수 없는 애매한 네트워크
+에러(TLS 핸드셰이크 없이 http로 나가거나, 반대로 http 전용 서버에 https로
+접속 시도 등 — 정확한 실패 지점은 스킴 조합에 따라 다름)로만 나타났다.
+
+**수정**: `_base_url()`에서 `CONFLUENCE_GATEWAY_BASE_URL`을 반환하기 전에도
+`confl_address`와 동일한 스킴 검증(HTTPS만 허용, `CONFLUENCE_ALLOW_HTTP`로
+예외)을 적용 — 앞으로 이 값에 스킴을 잘못 넣으면 애매한 커넥션 에러 대신
+`CONFLUENCE_GATEWAY_BASE_URL은 HTTPS만 허용됩니다(현재: ...)`라는 명확한
+에러가 즉시 뜬다.
+
+**검증**: `_base_url()`을 (1) 게이트웨이 URL이 `http://`일 때 `ConfluenceError`
+로 즉시 거부되는 것, (2) `https://`일 때 정상 통과하는 것 확인.
+`python3 -m py_compile` 통과.
+
+**최종 결론**: 이걸로 Confluence REST API 게이트웨이 경유 인증 전체가
+정상 동작 확인됨(사용자 확인) — 이번 트러블슈팅에서 실제로 반영된 변경
+누적: (1) X-Dep-Ticket/X-Data-Classification 커스텀 헤더 지원, (2)
+게이트웨이 base URL 오버라이드, (3) 인증/커스텀 헤더 이름까지 전부 .env로
+오버라이드 가능, (4) Accept: application/json, (5) atlassian-python-api
+대신 requests 직접 호출로 전면 교체, (6) User-Agent를 curl 스타일로 고정,
+(7) 게이트웨이 URL 스킴 검증 추가.
+
+## 2026-09-22 (8): confl_address — 전체 URL 대신 페이지 ID 숫자만 넣는
+방식 지원 추가
+
+게이트웨이 경유가 기본이 된 뒤로는 confl_address의 실제 호스트가 어차피
+안 쓰이므로(CONFLUENCE_GATEWAY_BASE_URL이 항상 우선), 사용자가 이제부터
+project_confl_address.csv의 confl_address 컬럼에 전체 URL 대신 페이지 ID
+숫자만 넣고 싶다고 요청.
+
+**추가**: `pipeline/confluence_client.py`
+  - `_is_bare_page_id(confl_address)` 신설 — 앞뒤 공백만 제거하고 순수
+    숫자로만 되어 있으면 페이지 ID로 판정.
+  - `extract_page_id()` — 페이지 ID만 있는 경우 그 값을 그대로 반환(기존
+    URL 정규식 매칭보다 먼저 체크).
+  - `_base_url()` — 페이지 ID만 있는 경우 호스트 정보 자체가 없으므로
+    `CONFLUENCE_ALLOWED_HOSTS` 검증을 건너뛰고, 대신
+    `CONFLUENCE_GATEWAY_BASE_URL`이 반드시 설정돼 있어야 한다(없으면
+    "이 형식은 게이트웨이 경유가 전제"라는 명확한 에러) — 관리자만 바꿀
+    수 있는 이 값이 유일한 신뢰 경계 역할을 한다.
+  - 스킴(HTTPS) 검증 로직을 `_validate_https()` 공용 헬퍼로 뽑아 게이트웨이
+    URL 검증 두 곳(신규 페이지ID 경로 + 기존 URL 경로)에서 재사용.
+  - **기존 전체 URL 방식은 완전히 하위 호환** — 이미 URL로 채워진
+    `project_confl_address.csv` 행도 그대로 계속 동작한다(두 형식이
+    행마다 섞여 있어도 무방).
+
+**검증**: `extract_page_id()`/`_base_url()`을 (1) 페이지 ID만 있는 경우
+(공백 포함 케이스도), (2) 기존 전체 URL 방식(하위 호환), (3) 페이지
+ID만 있는데 게이트웨이 미설정 시 명확한 에러, (4) 순수 숫자가 아닌
+문자열은 여전히 URL로 취급(오탐 방지) — 4가지 모두 직접 호출해 확인.
+`python3 -m py_compile` 통과.
+
 ## 2026-09-21: 유사 연구원 최대 인원 20명 → 10명 축소 + AI 검색 SAIT 직군
 지원 + 엑셀 평가 셀 중복 표기 제거 (3건 일괄 반영)
 
@@ -13195,3 +13261,100 @@ update_authority()`가 호출되지 않는 것을 mock으로 확인(단, 이 테
 `researchers.csv` 로드 단계에서 조기 종료돼 실제로는 코드 리뷰로 조건문
 배치를 재확인 — 변경 자체가 기존 호출 한 줄을 `if not skip_journal_
 authority:`로 감싼 것뿐이라 저위험).
+
+## 2026-09-28: docker-compose.yml — MIN_PASSWORD_LENGTH 기본값 오류(12) 수정
+
+사용자 보고: "사용자/권한 관리" 탭에서 계정 "수정" 시 새 비밀번호 라벨이
+"새 비밀번호(변경 시에만 입력 - 12~12자, 영문/숫자/특수문자 조합)"으로
+표시된다는 것 — "8~12자"여야 정상.
+
+**원인**: `pages/admin.py`(라벨)와 `services/auth.py`의
+`password_validation_error()`(실제 검증 로직)는 둘 다 `MIN_PASSWORD_LENGTH`/
+`MAX_PASSWORD_LENGTH` 환경변수를 그대로 읽어 동적으로 표시·검증한다 —
+코드 자체엔 "12~12자"가 하드코딩된 곳이 없다(레포 전체 검색으로 확인).
+문제는 `docker-compose.yml`의 `app` 서비스 환경변수 —
+`MIN_PASSWORD_LENGTH: ${MIN_PASSWORD_LENGTH:-12}`로 **기본값이 8이 아니라
+12**로 잘못 들어가 있었다(`.env.example`/`services/auth.py`의 코드 기본값은
+둘 다 8로 일치). `MAX_PASSWORD_LENGTH`는 `docker-compose.yml`에 아예
+없어(설정 안 함) `services/auth.py`의 코드 기본값 12로 정상 폴백 —
+결과적으로 `.env`에 이 값을 따로 지정하지 않은 배포 환경에서는
+MIN=12/MAX=12가 되어 "12~12자"로 보이고 있었다.
+
+**수정**: `docker-compose.yml`의 `MIN_PASSWORD_LENGTH` 기본값을
+`${MIN_PASSWORD_LENGTH:-8}`로 정정 — `.env.example`/`services/auth.py`
+코드 기본값과 일치시켰다. `docker-compose.gpu.yml` 등 다른 compose
+파일에는 이 값이 없어 추가 수정 불필요.
+
+**검증**: `grep -rn "PASSWORD_LENGTH" docker-compose*.yml`로 수정 후
+값이 8로 정확히 바뀐 것과 다른 compose 파일에 중복 정의가 없는 것을
+확인. 이 수정은 컨테이너를 재빌드·재기동해야 반영된다(`.env`에
+`MIN_PASSWORD_LENGTH`를 이미 명시적으로 지정해둔 배포는 그 값이 계속
+우선하므로 영향 없음).
+
+## 2026-09-28: 빈 값/NaN 정리 헬퍼(`_clean_str` 류) 10곳 이상 중복 구현 통합
+
+사용자 요청으로 전체 코드베이스 리팩토링 후보를 조사한 결과("전체적으로
+리팩토링 할 부분이 있을지 확인해줘"), 가장 확실하고 위험도 낮은 후보로
+꼽혔던 항목을 실제로 반영했다. 조사 근거: `pipeline/excel_reader.py`에
+이미 정답 격인 `clean_str()`/`is_blank()`가 있는데(`None` 입력까지
+안전하게 처리, `_BLANK_STRINGS = ('nan', 'none', 'nat', '<na>')`), 이걸
+재사용하는 곳은 `scripts/build_past_team_refer.py` 딱 하나뿐이고 나머지
+10여 곳은 각자 손으로 같은 로직을 다시 구현하고 있었다 — 그것도 서로
+미묘하게 다른 변형으로(`''`을 blank로 볼지, `None`을 어떻게 다룰지,
+`.lower()` 호출 여부 등). 이 중복이 미관 문제만은 아니었다 —
+`docs/CLAUDE.md`에 이미 기록된 "나이 -로 표시"(2026-08-29), "근무경력
+nan( ~ , nan) 노출"(2026-09-03), "어학 만료일 시분초 누출"(2026-09-03)
+버그가 전부 이 로직을 각자 재구현하다 가드를 빠뜨려서 생긴 것들이었다.
+
+**통합한 곳**(전부 로컬 정의를 지우고 `pipeline.excel_reader`의
+`clean_str`/`is_blank`를 import해 기존 로컬 이름으로 별칭 처리 —
+호출부는 그대로 두고 정의만 교체하는 방식으로 diff를 최소화):
+- `components/timeline_data.py`의 `clean()`/`parse_ts()`(대소문자 구분
+  없이 원본 그대로 'nan'/'None'/'NaT' 매칭하던 변형 — 이번 조사의 원래
+  목록에는 없었으나 최종 점검 중 추가로 발견)
+- `components/timeline_view.py`의 `_hr_cell()`
+- `components/profile_sections.py`의 `_clean_str()` + `_TASK_EMPTY` 집합
+  (`_fmt_rate`/`_has_min_duration`/`_fmt_period` 3곳에서 사용)
+- `services/language_qualification.py`/`services/task_history.py`/
+  `services/work_experience.py`/`services/researcher_profile_export.py`의
+  각 `_clean_str`/`_s`
+- `services/job_category.py`의 `_clean()`(기존엔 `val or ''`라 `0`/`False`를
+  blank로 오인할 수 있었던 것도 `is not None` 기준으로 통일되며 함께 정리됨)
+- `pipeline/team_refer_intake.py`의 `_clean_str()` — 이 모듈은 bare
+  import(`import team_refer_intake`)와 dotted import(`from pipeline.
+  team_refer_intake import ...`) 양쪽에서 다 쓰여서, 자체적으로
+  `sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))`를
+  추가해 어느 경로로 로드되든 `from excel_reader import clean_str`
+  (bare)가 항상 resolve되게 함(다른 `pipeline/process_*.py`가 이미 쓰는
+  패턴을 그대로 가져온 것).
+- `pipeline/process_job_profile.py`의 `_parse_date()` — 이미 `_clean`을
+  import해두고도 안 쓰고 인라인으로 다시 구현하고 있던 것을 재사용하도록
+  교체.
+- `pipeline/process_tasks.py`의 `_parse_rate()` + `_EMPTY` 집합(모듈
+  최상단에 `from excel_reader import is_blank` 추가).
+- `pipeline/process_publications.py`의 `_parse_int()`(이 파일은 다른
+  excel_reader import가 전부 `process()` 함수 안에 지연 임포트돼 있어,
+  같은 관례를 따라 함수 안에서 지역 임포트).
+- `pages/researcher_profile.py`의 `_tenure_value()`/`_print_task_hr_
+  timeline()`(내부 `_c()` 클로저 — `'-'` placeholder까지 blank로 보는
+  기존 동작은 `is_blank(s) or s == '-'`로 보존)/`_print_profile_content()`
+  (birth_date 폴백 판정) 3곳.
+
+**의도적으로 통합하지 않은 것**(다른 종류의 문자열 정리라 범위 밖으로
+판단): `pages/org_comparison.py`/`components/detail_tabs.py` 등의
+`not in ('nan',)`류 체크는 리스트 조립 시 항목 자체를 건너뛰는 필터라
+반환 타입이 다르고, `components/profile_sections.py`의 LLM 요약 텍스트
+`not in ('nan', 'None')` 체크는 JSON에서 온 값(`str(None)` == 'None')이라
+pandas NaN 문제와 근본 원인이 다름 — 이번 리팩토링은 "pandas가 CSV의
+빈 셀을 NaN으로 추론해 문자열로 새는" 한 가지 패턴에 한정했다.
+
+**검증**: `pipeline.excel_reader.clean_str`/`is_blank`를 `None`/`''`/
+`'nan'`/`'NaN'`/`'<na>'`/실제 `float('nan')`/`0`/정상 문자열로 직접
+호출해 기대값 확인. 수정한 13개 파일의 함수 전부를 개별적으로 호출해
+리팩토링 전후 동작이 정확히 일치하는지 확인 — 특히 과거 실제 버그였던
+시나리오(근무경력 행이 전부 NaN이면 `None`을 반환해 건너뛰는 것,
+인사발령 이력에서 'nan'/'-' 값이 렌더링 결과에 전혀 안 새는 것)를
+`dash.Dash(use_pages=True, pages_folder='')` 컨텍스트에서 실제
+컴포넌트 트리까지 렌더링해 재확인. `python3 -m app`(전체 페이지·서비스·
+파이프라인 임포트 체인) 정상 로드, 기존 `tests/`(17건) 전체 통과,
+수정한 13개 파일 `py_compile` 통과.

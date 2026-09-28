@@ -86,9 +86,10 @@ _CONTRIBUTION_RE = re.compile(r'\(기여도\s*:\s*(\d+)\s*%\)\s*$')
 
 def _parse_int(val) -> str:
     """정수 변환. 실패 시 빈 문자열."""
+    from excel_reader import is_blank
     try:
         s = str(val).strip().split('.')[0]
-        if s.lower() in ('', 'nan', 'none', 'nat'):
+        if is_blank(s):
             return ''
         return str(int(s))
     except (ValueError, TypeError):

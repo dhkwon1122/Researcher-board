@@ -34,6 +34,7 @@ from components.timeline_data import (
     task_points,
 )
 from components.timeline_view import filter_hr_rows, timeline_view
+from pipeline.excel_reader import is_blank
 from services.comments import upsert_comment
 from services.data_store import (
     filter_current,
@@ -738,7 +739,7 @@ def _tenure_value(hire_date_str: str) -> str:
     photo_block()과 동일한 근속연수 계산((오늘 - 입사일)/365, 소수 첫째자리).
     기본정보 표의 "근속" 행 값으로 쓴다(레이블은 표에서 따로 붙는다)."""
     s = str(hire_date_str or '').strip()
-    if not s or s.lower() in ('nan', 'none', 'nat'):
+    if is_blank(s):
         return '정보 없음'
     try:
         hd = date.fromisoformat(s[:10])
@@ -772,7 +773,7 @@ def _print_task_hr_timeline(task_df, hr_df, rid):
 
     def _c(v):
         s = str(v).strip() if v is not None else ''
-        return s if s and s.lower() not in ('nan', 'none', 'nat', '-') else ''
+        return '' if is_blank(s) or s == '-' else s
 
     entries = []
     for t in task_entries:
@@ -1074,7 +1075,7 @@ def _print_profile_content(rid, researcher, tables, profile, name_map,
     # 데이터라 birth_date가 없으면(파이프라인 재실행 전) birth_year만으로
     # "YYYY년생"으로 폴백.
     birth_date_str = str(researcher.get('birth_date', '') or '').strip()
-    if birth_date_str and birth_date_str.lower() not in ('nan', 'none', 'nat'):
+    if not is_blank(birth_date_str):
         bd = date.fromisoformat(birth_date_str[:10])
         birth_label = f'{bd.year}년 {bd.month}월 {bd.day}일'
     else:

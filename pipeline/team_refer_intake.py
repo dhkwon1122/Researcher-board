@@ -59,9 +59,20 @@ org_name_wd로 매칭해 사번/성명/직책 칸을 채우고, 매칭되는 책
 것을 전파 원본으로 쓴다(결정적 동작을 위한 안전망)."""
 from __future__ import annotations
 
+import os
 import re
+import sys
 
 import pandas as pd
+
+# 이 모듈은 bare import(`import team_refer_intake`, pipeline/process_team_refer.py
+# 등 pipeline/*.py 형제 스크립트)와 dotted import(`from pipeline.team_refer_intake
+# import ...`, scripts/build_team_refer_intake.py) 양쪽에서 다 쓰인다 — 어느
+# 경로로 로드되든 excel_reader를 bare import할 수 있도록 pipeline/ 디렉터리를
+# sys.path에 직접 넣어둔다(다른 pipeline/process_*.py가 이미 쓰는 것과 동일한
+# 패턴, 중복 삽입돼도 무해).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from excel_reader import clean_str as _clean_str  # noqa: E402
 
 # 원본에서 찾을 헤더 — 이 3개가 전부 있으면 "인력현황 원본"(변환 필요)으로
 # 판정한다(process_team_refer.py의 is_raw_format() 참고).
@@ -163,13 +174,6 @@ def _build_leader_lookup(df: pd.DataFrame) -> dict:
             '직책': title,
         }
     return lookup
-
-
-def _clean_str(val) -> str:
-    if val is None:
-        return ''
-    s = str(val).strip()
-    return '' if s.lower() in ('nan', 'none', '') else s
 
 
 def is_raw_format(df: pd.DataFrame) -> bool:

@@ -19,6 +19,7 @@ from openpyxl.styles import Alignment, Border, Font, Side
 from openpyxl.utils import get_column_letter
 
 from components.timeline_data import dedupe_patents, job_points
+from pipeline.excel_reader import clean_str as _s
 from services import auth, data_store, evaluations
 from services import language_qualification as language_qual
 from services import work_experience as work_exp
@@ -43,14 +44,6 @@ _EVAL_HALF_YEARS = sorted(evaluations.evaluation_years()[1])
 _EVAL_HEADER = f"평가\n('{str(_EVAL_SALARY_YEARS[0])[-2:]}~'{str(_EVAL_SALARY_YEARS[-1])[-2:]})"
 
 _PROMOTION_REF_BASE = date(2027, 3, 1)
-
-
-def _s(v) -> str:
-    """빈 값/NaN을 빈 문자열로 통일."""
-    if v is None:
-        return ''
-    s = str(v).strip()
-    return '' if s.lower() in ('', 'nan', 'none', 'nat') else s
 
 
 def _or_dash(v) -> str:

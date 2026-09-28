@@ -7,20 +7,17 @@ from datetime import datetime
 
 import pandas as pd
 
+from pipeline.excel_reader import clean_str as clean, is_blank
+
 
 def parse_ts(val):
     s = str(val).strip() if val is not None else ''
-    if not s or s in ('nan', 'None', 'NaT'):
+    if is_blank(s):
         return None
     try:
         return pd.Timestamp(s)
     except (ValueError, TypeError):
         return None
-
-
-def clean(value):
-    s = str(value).strip()
-    return '' if s in ('nan', 'None', 'NaT') else s
 
 
 def cell(row, *keys, default='-'):
