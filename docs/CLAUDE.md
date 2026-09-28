@@ -13261,3 +13261,32 @@ update_authority()`가 호출되지 않는 것을 mock으로 확인(단, 이 테
 `researchers.csv` 로드 단계에서 조기 종료돼 실제로는 코드 리뷰로 조건문
 배치를 재확인 — 변경 자체가 기존 호출 한 줄을 `if not skip_journal_
 authority:`로 감싼 것뿐이라 저위험).
+
+## 2026-09-28: docker-compose.yml — MIN_PASSWORD_LENGTH 기본값 오류(12) 수정
+
+사용자 보고: "사용자/권한 관리" 탭에서 계정 "수정" 시 새 비밀번호 라벨이
+"새 비밀번호(변경 시에만 입력 - 12~12자, 영문/숫자/특수문자 조합)"으로
+표시된다는 것 — "8~12자"여야 정상.
+
+**원인**: `pages/admin.py`(라벨)와 `services/auth.py`의
+`password_validation_error()`(실제 검증 로직)는 둘 다 `MIN_PASSWORD_LENGTH`/
+`MAX_PASSWORD_LENGTH` 환경변수를 그대로 읽어 동적으로 표시·검증한다 —
+코드 자체엔 "12~12자"가 하드코딩된 곳이 없다(레포 전체 검색으로 확인).
+문제는 `docker-compose.yml`의 `app` 서비스 환경변수 —
+`MIN_PASSWORD_LENGTH: ${MIN_PASSWORD_LENGTH:-12}`로 **기본값이 8이 아니라
+12**로 잘못 들어가 있었다(`.env.example`/`services/auth.py`의 코드 기본값은
+둘 다 8로 일치). `MAX_PASSWORD_LENGTH`는 `docker-compose.yml`에 아예
+없어(설정 안 함) `services/auth.py`의 코드 기본값 12로 정상 폴백 —
+결과적으로 `.env`에 이 값을 따로 지정하지 않은 배포 환경에서는
+MIN=12/MAX=12가 되어 "12~12자"로 보이고 있었다.
+
+**수정**: `docker-compose.yml`의 `MIN_PASSWORD_LENGTH` 기본값을
+`${MIN_PASSWORD_LENGTH:-8}`로 정정 — `.env.example`/`services/auth.py`
+코드 기본값과 일치시켰다. `docker-compose.gpu.yml` 등 다른 compose
+파일에는 이 값이 없어 추가 수정 불필요.
+
+**검증**: `grep -rn "PASSWORD_LENGTH" docker-compose*.yml`로 수정 후
+값이 8로 정확히 바뀐 것과 다른 compose 파일에 중복 정의가 없는 것을
+확인. 이 수정은 컨테이너를 재빌드·재기동해야 반영된다(`.env`에
+`MIN_PASSWORD_LENGTH`를 이미 명시적으로 지정해둔 배포는 그 값이 계속
+우선하므로 영향 없음).
