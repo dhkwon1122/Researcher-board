@@ -573,10 +573,16 @@ navbar = dbc.Navbar(
                         [html.I(className='bi bi-signpost-split me-1'), 'JOB Market'],
                         href='/job-market', active='exact', className='text-white',
                     )),
-                    # '조직별 비교'/'과제 직무/대상자 검증' NavLink는 각각
-                    # pages/org_comparison.py, pages/jd_reconciliation.py의
-                    # _FEATURE_HIDDEN(기능 준비 중) 동안 제거됨(data/processed/
-                    # CLAUDE.md에 재오픈 방법 기록).
+                    # '과제 직무/대상자 검증' NavLink는 pages/jd_reconciliation.py의
+                    # _FEATURE_HIDDEN(기능 준비 중) 동안 제거됨(docs/CLAUDE.md에
+                    # 재오픈 방법 기록). '조직별 비교'(pages/org_comparison.py)는
+                    # "리포팅 > 석세션 플랜"으로 되살아나 아래 _navbar-user의
+                    # "리포팅" 드롭다운(can_view_succession_plan()일 때만 노출)
+                    # 으로 옮겨감 — 역할 제한이 있어 다른 고정 NavLink들과 달리
+                    # 로그인한 사용자별로 동적으로 보여줘야 하기 때문(이 navbar
+                    # 변수 자체는 app.py 로드 시 한 번만 만들어지는 정적 객체라,
+                    # 요청/세션마다 달라지는 항목은 반드시 아래 콜백이 채우는
+                    # _navbar-user 안에 둬야 한다).
                     # 관리자 메뉴 + 사용자 정보 (콜백으로 갱신)
                     html.Div(id='_navbar-user', className='d-flex align-items-center ms-3'),
                     # '로그아웃'은 /logout이 Dash 페이지가 아니라 순수 Flask
@@ -619,11 +625,30 @@ app.layout = html.Div(
     Input('_pages_location', 'pathname'),
 )
 def refresh_navbar_user(_):
-    from services.auth import can, get_current_user, role_label
+    from services.auth import can, can_view_succession_plan, get_current_user, role_label
     user = get_current_user()
     if not user:
         return []
     items = []
+    # "리포팅" 상위 메뉴 — 지금은 하위 메뉴가 "석세션 플랜" 하나뿐이지만,
+    # 나중에 다른 리포트가 추가되면 이 DropdownMenu의 children에 더하면 된다.
+    # can_view_succession_plan()이 False면 메뉴 자체를 숨긴다 — 다만 이건
+    # UX일 뿐이고, 실제 접근 차단은 pages/org_comparison.py의 layout()이
+    # 같은 함수로 다시 확인한다(URL 직접 입력 우회 방지, 사용자 요청:
+    # "임원조직 담당자만 조회 가능한 석세션 플랜").
+    if can_view_succession_plan():
+        items.append(dbc.NavItem(dbc.DropdownMenu(
+            label=[html.I(className='bi bi-bar-chart-line me-1'), '리포팅'],
+            children=[
+                dbc.DropdownMenuItem(
+                    [html.I(className='bi bi-person-lines-fill me-1'), '석세션 플랜'],
+                    href='/succession-plan',
+                ),
+            ],
+            nav=True, in_navbar=True,
+            toggle_style={'color': '#fff'},
+            toggleClassName='text-white',
+        )))
     if can('manage_users'):
         items.append(dbc.NavItem(dbc.NavLink(
             [html.I(className='bi bi-gear me-1'), '관리자'],
