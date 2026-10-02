@@ -1,5 +1,7 @@
 """
-화면 1: 조직별 우수 연구원 비교 — 전체 조직 조직장 석세션 후보 카드
+리포팅 > 석세션 플랜 — 전체 조직 조직장 석세션 후보 카드(조직별 우수
+연구원 비교). 임원조직 담당자만 조회할 수 있다(services.auth.
+can_view_succession_plan() 참고, 사용자 요청).
 """
 
 import math
@@ -13,12 +15,14 @@ from dash import ClientsideFunction, Input, Output, clientside_callback, html
 
 from components.profile_sections import load_photo_src
 
-dash.register_page(__name__, path='/org-comparison', name='조직별 비교', title='조직별 우수 연구원 비교')
+dash.register_page(__name__, path='/succession-plan', name='석세션 플랜', title='석세션 플랜')
 
-# 당분간 사용하지 않는 화면이라 숨겨둔 상태 — 나중에 다시 쓰게 되면 이
-# 플래그를 False로 바꾸고 app.py의 '조직별 비교' NavLink를 되살리면 된다
+# 한동안 사용하지 않는 화면이라 숨겨뒀었는데(_FEATURE_HIDDEN=True), 사용자
+# 요청으로 "리포팅 > 석세션 플랜" 메뉴로 되살렸다 — app.py의 네비게이션 바
+# "리포팅" 드롭다운이 can_view_succession_plan()일 때만 이 경로로 가는
+# 링크를 보여준다. 혹시 다시 숨겨야 하면 이 플래그를 True로 되돌리면 된다
 # (docs/CLAUDE.md 참고).
-_FEATURE_HIDDEN = True
+_FEATURE_HIDDEN = False
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'processed')
 
@@ -357,7 +361,14 @@ def _dept_section(dept_name, suc_dept, res, eva, edu, awd, nur, inc,
 def layout():
     if _FEATURE_HIDDEN:
         return dbc.Alert('이 기능은 현재 준비 중입니다.', color='secondary', className='mt-3')
-    from services.auth import can
+    from services.auth import can, can_view_succession_plan
+    # 메뉴(app.py의 "리포팅" 드롭다운)는 can_view_succession_plan()일 때만
+    # 노출되지만, URL(/succession-plan)을 직접 입력하면 메뉴를 거치지 않고도
+    # 들어올 수 있어 여기서도 반드시 다시 확인해야 한다(사용자 요청 —
+    # "임원조직 담당자만 조회 가능한").
+    if not can_view_succession_plan():
+        return dbc.Alert('이 페이지는 임원조직 담당자만 조회할 수 있습니다.',
+                          color='warning', className='mt-3')
     show_eval = can('view_evaluation')
     show_incentive = can('view_incentive')
 
@@ -375,7 +386,7 @@ def layout():
     if suc.empty:
         return html.Div([
             html.H5([html.I(className='bi bi-people-fill me-2 text-primary'),
-                     '조직별 우수 연구원 비교 (조직장 석세션)'],
+                     '석세션 플랜 (조직별 조직장 승계 후보)'],
                     className='fw-bold mb-3 mt-1'),
             dbc.Alert(
                 'succession 데이터가 없습니다. '
@@ -421,7 +432,7 @@ def layout():
             dbc.Col(
                 html.H5(
                     [html.I(className='bi bi-people-fill me-2 text-primary'),
-                     '조직별 우수 연구원 비교 (조직장 석세션)'],
+                     '석세션 플랜 (조직별 조직장 승계 후보)'],
                     className='fw-bold mb-0 mt-1',
                 ),
             ),
