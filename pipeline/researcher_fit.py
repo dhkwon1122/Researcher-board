@@ -78,7 +78,12 @@ def read_education(out_dir: str) -> pd.DataFrame:
 
 
 def researcher_profile_text(profile: dict) -> str:
+    # 현재 주력 분야(2026-10, process_researcher_expertise.py)를 맨 앞에 한 번
+    # 더 넣어 임베딩이 최근 전문성 쪽으로 기울게 한다(JOB Market 매칭·유사
+    # 연구원 공통). 과거 주력 분야(past_fields)는 일부러 넣지 않는다.
     parts = []
+    if profile.get('current_focus_fields'):
+        parts.append('현재 주력 분야: ' + ', '.join(profile['current_focus_fields']))
     if profile.get('strength_fields'):
         parts.append('강점 분야: ' + ', '.join(profile['strength_fields']))
     if profile.get('strength_keywords'):

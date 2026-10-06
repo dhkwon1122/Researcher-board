@@ -215,6 +215,8 @@ COLUMN_LABELS = {
     'fit_score': '적합도',
     'reason': '근거',
     'strength_fields': '강점분야',
+    'current_focus_fields': '현재 주력 분야',
+    'past_fields': '과거 주력 분야',
     'strength_keywords': '강점키워드',
     'key_responsibilities': '주요 역할·책임',
     'domain_knowledge_skill': '전문지식 및 역량',

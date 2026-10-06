@@ -334,6 +334,18 @@ def llm_summary_block(profile: dict | None, similar: list | None = None, name_ma
             children.append(html.Div(
                 [dbc.Badge(k, color='secondary', className='me-1 mb-1') for k in keywords],
             ))
+    # 현재/과거 주력 분야(2026-10) — 재분석 전 결과에는 없으므로 있을 때만.
+    focus = profile.get('current_focus_fields') or []
+    past = profile.get('past_fields') or []
+    if (focus or past) and not deemphasize_strength:
+        line = []
+        if focus:
+            line += [html.Span('현재 주력', className='small text-muted fw-semibold me-1')] + [
+                dbc.Badge(f, color='primary', className='me-1 mb-1') for f in focus]
+        if past:
+            line += [html.Span('과거 주력', className='small text-muted fw-semibold ms-2 me-1')] + [
+                dbc.Badge(f, color='light', text_color='secondary', className='me-1 mb-1') for f in past]
+        children.append(html.Div(line, className='d-flex align-items-center flex-wrap mt-2'))
     if responsibilities and include_responsibilities:
         children.append(html.Div('주요 역할·책임', className='small text-muted fw-semibold mt-2 mb-1'))
         children.append(bullet_list(responsibilities))
