@@ -15,7 +15,7 @@ from dash import Input, Output, State, callback, dcc, html, no_update
 from components import nl_query_bar
 from components.timeline_data import dedupe_patents
 from services import researcher_profile_export, similarity_map
-from services.data_store import filter_current, read_processed
+from services.data_store import filter_current, read_contribution_metrics, read_processed
 from services.evaluations import evaluation_years, salary_grade_column
 from services.period_snapshot import resolve_period_snapshot as _resolve_period_snapshot
 
@@ -85,6 +85,7 @@ def _build_summary_df(current_only: bool = True, period: tuple[date, date] | Non
         pub  = read_processed('publications')
         pat  = read_processed('patents')
         awd  = read_processed('awards')
+        contrib_map = read_contribution_metrics()
         edu  = read_processed('education')
         inc  = read_processed('incentive_selection')
     except Exception:
@@ -195,6 +196,9 @@ def _build_summary_df(current_only: bool = True, period: tuple[date, date] | Non
             '특허(출원)':     pat_app,
             '특허(등록)':     pat_reg,
             '수상':           awd_cnt,
+            # 주도형/참여형(pipeline/process_expertise_metrics.py) — 지표 파일이
+            # 없으면(파이프라인 미실행) '-'
+            '기여유형':       str((contrib_map.get(rid) or {}).get('contribution_type') or '').strip() or '-',
         }
         if period:
             y, m = str(r.get('valid_year', '')).strip(), str(r.get('valid_month', '')).strip()
@@ -298,7 +302,7 @@ _ESSENTIAL_IDS = {col_id for col_id, _ in _ESSENTIAL_COLUMNS}
 
 # 상세 필터 모달에서 값을 고르면(=그 기준으로 비교하고 싶다는 뜻으로 보고)
 # 그 컬럼도 함께 보여준다. 직급/직책/재직상태는 이미 필수 컬럼이라 제외.
-_OPTIONAL_FILTER_COLUMNS = ['성별', '학력', '전공']
+_OPTIONAL_FILTER_COLUMNS = ['성별', '학력', '전공', '기여유형']
 
 _NUMERIC_COLUMNS = {'논문(전체)', '논문(3년)', '특허(출원)', '특허(등록)', '수상'}
 
@@ -445,6 +449,7 @@ def layout():
     degree_opts   = _filter_options(df, '학력')
     major_opts    = _filter_options(df, '전공')
     employ_opts   = _filter_options(df, '재직상태')
+    contrib_opts  = _filter_options(df, '기여유형')
 
     column_defs = _build_column_defs(display_df)
 
@@ -660,6 +665,13 @@ def layout():
                             dcc.Dropdown(id='filter-employment', options=employ_opts, multi=True,
                                          placeholder='전체', clearable=True),
                         ], md=6, className='mb-3'),
+                        dbc.Col([
+                            dbc.Label('연구 기여유형', className='small fw-semibold text-muted mb-1'),
+                            dcc.Dropdown(id='filter-contribution', options=contrib_opts, multi=True,
+                                         placeholder='전체', clearable=True),
+                            html.Div('논문 주저자·교신 / 특허 대표발명 비율 기준 (3건 이상일 때 50% 이상이면 주도형)',
+                                     className='text-muted', style={'fontSize': '0.68rem'}),
+                        ], md=6, className='mb-3'),
                     ], className='g-2'),
                 ),
                 dbc.ModalFooter([
@@ -830,12 +842,13 @@ def toggle_org_filters(mode, period_start, period_end):
     State('filter-major',      'value'),
     State('filter-employment', 'value'),
     State('filter-researcher', 'value'),
+    State('filter-contribution', 'value'),
     State('list-period-range', 'start_date'),
     State('list-period-range', 'end_date'),
     prevent_initial_call=True,
 )
 def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, dept, project, pos, title,
-                  gender, degree, major, employment, researcher, period_start, period_end):
+                  gender, degree, major, employment, researcher, contribution, period_start, period_end):
     from services.auth import can, eval_excluded_dep_ids
     show_eval = can('view_evaluation')
     show_incentive = can('view_incentive')
@@ -873,7 +886,7 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, 
         return records, column_defs, []
 
     # 상세 필터(성별/학력/전공)로 값을 고르면 그 컬럼도 함께 보여준다.
-    optional_values = dict(zip(_OPTIONAL_FILTER_COLUMNS, (gender, degree, major)))
+    optional_values = dict(zip(_OPTIONAL_FILTER_COLUMNS, (gender, degree, major, contribution)))
     optional_ids = [col for col in _OPTIONAL_FILTER_COLUMNS if optional_values[col]]
     column_defs = _build_column_defs(display_df, optional_ids=optional_ids)
     if display_df.empty:
@@ -925,6 +938,8 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, 
         display_df = display_df[display_df['전공'].isin(major)]
     if employment:
         display_df = display_df[display_df['재직상태'].isin(employment)]
+    if contribution:
+        display_df = display_df[display_df['기여유형'].isin(contribution)]
     # 연구원 선택(이름/사번, 다중) — 부서/과제처럼 필터 안전성(filters_active)을
     # 따지지 않는다. researcher_id로 직접 매칭이라 시점에 영향받지 않으며,
     # 다른 필터와 AND로 결합된다(사용자 확정, 2026-09-10) — 아무 조직 필터도
@@ -946,12 +961,13 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, 
     Output('filter-major',      'value'),
     Output('filter-employment', 'value'),
     Output('filter-researcher', 'value'),
+    Output('filter-contribution', 'value'),
     Input('clear-filters-btn', 'n_clicks'),
     Input('filter-modal-clear-btn', 'n_clicks'),
     prevent_initial_call=True,
 )
 def clear_filters(_clear_clicks, _modal_clear_clicks):
-    return None, None, None, None, None, None, None, None, None
+    return None, None, None, None, None, None, None, None, None, None
 
 
 # ── 콜백 3-1: '필터' 버튼 → 상세 필터 모달 열기/닫기 ──────────────────────────

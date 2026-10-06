@@ -193,6 +193,23 @@ COLUMN_LABELS = {
     'dep_2nd_name': '2단계부서명',
     'dep_3rd_name': '3단계부서명',
 
+    # 주도형/참여형 지표 (researcher_contribution_metrics.csv)
+    'pub_count': '논문수',
+    'pub_lead_count': '주저자·교신 논문수',
+    'pub_lead_pct': '주저자·교신 비율(%)',
+    'pub_corr_pct': '교신저자 비율(%)',
+    'pub_avg_contribution': '평균 기여도(%)',
+    'pat_count': '특허수',
+    'pat_lead_count': '대표발명 특허수',
+    'pat_lead_pct': '대표발명 비율(%)',
+    'pat_avg_share': '평균 지분율(%)',
+    'recent_pub_count': '최근5년 논문수',
+    'recent_pub_lead_pct': '최근5년 주저자·교신 비율(%)',
+    'recent_pat_count': '최근5년 특허수',
+    'recent_pat_lead_pct': '최근5년 대표발명 비율(%)',
+    'contribution_type': '연구 기여유형',
+    'contribution_basis': '기여유형 판정근거',
+
     # 과제 전문성/매칭 (LLM 파생)
     'job_title': '직무',
     'fit_score': '적합도',

@@ -103,6 +103,16 @@ def read_similar_researchers() -> dict[str, dict]:
     return {item.get('researcher_id', ''): item for item in results}
 
 
+def read_contribution_metrics() -> dict[str, dict]:
+    """researcher_id -> 주도형/참여형 지표 행(dict). researcher_contribution_
+    metrics.csv(pipeline/process_expertise_metrics.py)를 DB 우선으로 읽는다.
+    없으면 빈 dict."""
+    df = read_processed('researcher_contribution_metrics')
+    if df.empty or 'researcher_id' not in df.columns:
+        return {}
+    return {r['researcher_id']: r for r in df.to_dict('records')}
+
+
 def read_project_expertise_analysis() -> list[dict]:
     """과제별 컨플루언스 분석 항목 리스트(project_name 키). DB(테이블
     project_expertise_analysis)가 있으면 그걸, 없으면 project_expertise_

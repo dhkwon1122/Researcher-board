@@ -13358,3 +13358,30 @@ pandas NaN 문제와 근본 원인이 다름 — 이번 리팩토링은 "pandas�
 컴포넌트 트리까지 렌더링해 재확인. `python3 -m app`(전체 페이지·서비스·
 파이프라인 임포트 체인) 정상 로드, 기존 `tests/`(17건) 전체 통과,
 수정한 13개 파일 `py_compile` 통과.
+
+## 2026-10-06: 전문성 심화 지표 — 0단계(강점 표기 표준화) + ②(주도형/참여형)
+
+사용자 요청("연구원 전문성 심화 분석 … ①~⑤ 적용, 다 추천대로")의 첫 두
+단계. 신규 모듈 `pipeline/process_expertise_metrics.py`를 `run_analysis.py`
+4/4단계로 추가했다(LLM 호출 없음, 임베딩은 0단계 매칭에만 사용).
+
+- **0단계**: `strength_taxonomy.json`(없으면 `build_strength_taxonomy.build()`로
+  부트스트랩)으로 연구원별 strength_fields/keywords를 표준명에 재매핑 →
+  `researcher_strength_std.json`(정확 일치 → 임베딩 코사인 ≥0.85 → 미분류).
+  미분류 값은 `strength_unmapped.json`에 연구원 수와 함께 모아, 사람이
+  표준 목록에 동의어로 추가하도록 한다. 원본 LLM 결과는 그대로 둔다.
+  `load_to_db.JSON_TABLES`에 `researcher_strength_std` 등록(④·⑤가 사용 예정).
+- **②**: `researcher_contribution_metrics.csv` — 논문 주저자(author_rank 1 /
+  author_type 제1·주저자·단독·교신)·교신 비율, 평균 기여도, 특허 대표발명자
+  비율(application_id 중복 제거), 평균 지분율, 최근 5년 비율.
+  판정: 3건 이상인 원천(논문/특허) 중 주도 비율 50% 이상이 하나라도 있으면
+  주도형, 모두 50% 미만이면 참여형, 3건 이상인 원천이 없으면 판정보류.
+  - 연구원 개별 프로필 "전문성 요약" 맨 위에 "연구 기여 유형" 배지 + 수치
+    (마우스오버 시 판정 근거). LLM 분석 데이터가 없어도 표시. 인쇄본은 미적용.
+  - 연구원 명단: 상세 필터에 "연구 기여유형" 추가 — 값을 고르면 `기여유형`
+    컬럼도 함께 노출(성별/학력/전공과 같은 방식).
+  - `load_to_db.TABLES`, AI 검색 화이트리스트(`TABLE_PERMISSIONS`, 권한 제한
+    없음 — 원천 논문/특허와 같은 민감도), `data_labels` 한글 라벨 등록.
+- 검증: 합성 데이터로 판정 규칙(주도/참여/판정보류, 최근 5년, 특허 중복 제거)
+  확인, `generate_sample_data.py` 샘플로 프로필 콜백·명단 레이아웃 렌더링
+  확인, pytest 17 passed.

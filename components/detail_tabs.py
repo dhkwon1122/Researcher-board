@@ -224,8 +224,52 @@ def _ai_tag():
     ], style=_AI_TAG_STYLE)
 
 
+_CONTRIBUTION_COLORS = {'주도형': 'success', '참여형': 'info', '판정보류': 'light'}
+
+
+def _fmt_pct(value) -> str:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return '-'
+    return '-' if v != v else f'{v:.0f}%'
+
+
+def contribution_badge_row(contribution: dict | None):
+    """주도형/참여형 지표(researcher_contribution_metrics.csv, pipeline/
+    process_expertise_metrics.py) 한 줄 — 판정 배지 + 논문 주도·교신 비율,
+    특허 대표발명 비율, 최근 5년 주도 비율. 마우스를 올리면 판정 근거를
+    보여준다. 지표 파일이 없거나 해당 연구원 행이 없으면 None."""
+    if not contribution:
+        return None
+    ctype = str(contribution.get('contribution_type') or '').strip()
+    if not ctype:
+        return None
+
+    def _n(key):
+        try:
+            return int(float(contribution.get(key) or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    parts = []
+    if _n('pub_count'):
+        parts.append(f"논문 {_n('pub_count')}건 · 주저자/교신 {_fmt_pct(contribution.get('pub_lead_pct'))}"
+                     f" (최근5년 {_fmt_pct(contribution.get('recent_pub_lead_pct'))})")
+    if _n('pat_count'):
+        parts.append(f"특허 {_n('pat_count')}건 · 대표발명 {_fmt_pct(contribution.get('pat_lead_pct'))}"
+                     f" (최근5년 {_fmt_pct(contribution.get('recent_pat_lead_pct'))})")
+    color = _CONTRIBUTION_COLORS.get(ctype, 'light')
+    return html.Div([
+        html.Span('연구 기여 유형', className='small text-muted fw-semibold me-2'),
+        dbc.Badge(ctype, color=color, text_color='dark' if color == 'light' else None, className='me-2'),
+        html.Span(' / '.join(parts) or '논문·특허 실적 없음', className='small text-muted'),
+    ], title=str(contribution.get('contribution_basis') or ''), className='d-flex align-items-center flex-wrap mb-2')
+
+
 def llm_summary_block(profile: dict | None, similar: list | None = None, name_map: dict | None = None,
-                       *, include_responsibilities: bool = True, deemphasize_strength: bool = False):
+                       *, include_responsibilities: bool = True, deemphasize_strength: bool = False,
+                       contribution: dict | None = None):
     """전문성 요약(LLM) — 연구원 보유 전문성 분석.json의 핵심 분야(strength_fields)/
     키워드(strength_keywords)를 배지로, 주요 역할·책임(key_responsibilities)과
     전문지식 및 역량(domain_knowledge_skill)은 둘 다 불릿 목록(bullet_list(),
@@ -251,16 +295,22 @@ def llm_summary_block(profile: dict | None, similar: list | None = None, name_ma
     AI 생성 결과임을 표시할 자리가 필요해짐). 화면(라이브) 탭 호출부는 이
     인자를 넘기지 않아 기존
     배지+회색 텍스트 라벨 그대로다(제목 제거·(by AI) 표기 모두 인쇄본
-    전용)."""
+    전용).
+    contribution(researcher_contribution_metrics.csv의 해당 연구원 행 dict,
+    2026-10 추가)이 주어지면 맨 위에 "연구 기여 유형"(주도형/참여형/판정보류)
+    한 줄을 붙인다 — LLM 결과가 아니라 논문·특허 원천 데이터 집계라 LLM
+    분석 데이터가 없어도 표시한다."""
+    contribution_row = contribution_badge_row(contribution)
     if not profile:
-        return html.Div('분석 데이터 없음', className='text-muted small p-1')
+        empty = html.Div('분석 데이터 없음', className='text-muted small p-1')
+        return [contribution_row, empty] if contribution_row else empty
 
     fields = profile.get('strength_fields') or []
     keywords = profile.get('strength_keywords') or []
     responsibilities = profile.get('key_responsibilities') or []
     domain_skill = profile.get('domain_knowledge_skill') or []
 
-    children = []
+    children = [contribution_row] if contribution_row else []
     if fields:
         if deemphasize_strength:
             children.append(html.Div([

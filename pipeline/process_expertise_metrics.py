@@ -18,6 +18,18 @@ process_researcher_expertise.py(LLM 전문성 분석)가 끝난 뒤 run_analysis
      부트스트랩한다(그 함수가 최초 1회만 확정본을 만들고 이후로는 사람이
      수정한 내용을 덮어쓰지 않는다).
 
+  2) 주도형/참여형 지표 → researcher_contribution_metrics.csv
+     publications.csv/patents.csv에서 연구원별 논문 주저자·교신 비율, 평균
+     기여도, 특허 대표발명자 비율, 평균 지분율과 최근 5년치 같은 지표를
+     집계한다.
+       - 주도 논문: author_rank==1 또는 author_type에 제1/주저자/단독/1저자
+         포함, 또는 교신저자(is_corresponding 참)
+       - 주도 특허: is_lead_inventor == 'Y' (application_id 기준 중복 제거)
+       - 판정(contribution_type): 논문·특허 중 건수 3건 이상인 원천이 하나라도
+         있고 그 원천의 주도 비율이 50% 이상이면 '주도형', 3건 이상인 원천이
+         있는데 모두 50% 미만이면 '참여형', 3건 이상인 원천이 없으면
+         '판정보류'(건수가 적어 비율이 의미 없음)
+
 사용법:
   python pipeline/process_expertise_metrics.py
 """
@@ -25,6 +37,9 @@ process_researcher_expertise.py(LLM 전문성 분석)가 끝난 뒤 run_analysis
 import json
 import os
 import sys
+from datetime import date
+
+import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import OUT_DIR  # noqa: E402
@@ -36,7 +51,14 @@ TAXONOMY_FILE = 'strength_taxonomy.json'
 STRENGTH_STD_FILE = 'researcher_strength_std.json'
 UNMAPPED_FILE = 'strength_unmapped.json'
 
+CONTRIBUTION_FILE = 'researcher_contribution_metrics.csv'
+
 STD_EMBED_THRESHOLD = 0.85
+CONTRIB_MIN_ITEMS = 3
+CONTRIB_LEAD_RATIO = 0.5
+RECENT_YEARS = 5
+_LEAD_AUTHOR_MARKERS = ('제1', '주저자', '단독', '1저자', '교신')
+_TRUE_VALUES = {'true', 'y', 'yes', 'o', '1', '참'}
 
 
 def _read_json(name: str, default):
@@ -162,14 +184,144 @@ def run_strength_standardization(profiles: list) -> list:
     return results
 
 
-def process() -> bool:
-    profiles = _read_json(PROFILES_FILE, [])
-    if not profiles:
-        print(f'[process_expertise_metrics] {PROFILES_FILE} 없음 — 종료 '
-              '(process_researcher_expertise.py 먼저 실행)')
+# ── 2) 주도형/참여형 지표 ─────────────────────────────────────────────────────
+
+def _read_csv(name: str) -> pd.DataFrame:
+    path = os.path.join(OUT_DIR, f'{name}.csv')
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    df = pd.read_csv(path, encoding='utf-8-sig', dtype=str).fillna('')
+    if 'researcher_id' in df.columns:
+        df['researcher_id'] = df['researcher_id'].astype(str).str.zfill(8)
+    return df
+
+
+def _year_of(value) -> int | None:
+    text = str(value or '').strip()
+    if len(text) >= 4 and text[:4].isdigit():
+        return int(text[:4])
+    return None
+
+
+def _col(df: pd.DataFrame, name: str) -> pd.Series:
+    return df[name] if name in df.columns else pd.Series([''] * len(df), index=df.index)
+
+
+def _is_lead_paper(row) -> bool:
+    if str(row.get('author_rank', '')).strip() in ('1', '1.0'):
+        return True
+    author_type = str(row.get('author_type', ''))
+    if any(m in author_type for m in _LEAD_AUTHOR_MARKERS):
+        return True
+    return str(row.get('is_corresponding', '')).strip().lower() in _TRUE_VALUES
+
+
+def _mean_numeric(series: pd.Series) -> float | None:
+    vals = pd.to_numeric(series.astype(str).str.replace('%', '', regex=False), errors='coerce').dropna()
+    return round(float(vals.mean()), 1) if len(vals) else None
+
+
+def _pct(part: int, total: int) -> float | None:
+    return round(part * 100.0 / total, 1) if total else None
+
+
+def _classify(pub_n: int, pub_lead: int, pat_n: int, pat_lead: int) -> tuple[str, str]:
+    judged = []
+    for label, n, lead in (('논문', pub_n, pub_lead), ('특허', pat_n, pat_lead)):
+        if n >= CONTRIB_MIN_ITEMS:
+            judged.append((label, n, lead, lead / n))
+    if not judged:
+        return '판정보류', f'논문 {pub_n}건·특허 {pat_n}건(각 {CONTRIB_MIN_ITEMS}건 미만)'
+    basis = ', '.join(f'{label} 주도 {lead}/{n}건({ratio * 100:.0f}%)' for label, n, lead, ratio in judged)
+    if any(ratio >= CONTRIB_LEAD_RATIO for *_, ratio in judged):
+        return '주도형', basis
+    return '참여형', basis
+
+
+def compute_contribution_metrics(researchers: pd.DataFrame, pubs: pd.DataFrame,
+                                 pats: pd.DataFrame, today: date | None = None) -> pd.DataFrame:
+    recent_from = (today or date.today()).year - RECENT_YEARS + 1
+
+    if not pubs.empty:
+        pubs = pubs.copy()
+        pubs['_lead'] = pubs.apply(_is_lead_paper, axis=1)
+        pubs['_corr'] = _col(pubs, 'is_corresponding').astype(str).str.strip().str.lower().isin(_TRUE_VALUES)
+        year_src = _col(pubs, 'pub_year').where(_col(pubs, 'pub_year').astype(str).str.strip() != '',
+                                                _col(pubs, 'pub_date'))
+        pubs['_year'] = year_src.map(_year_of)
+    if not pats.empty:
+        pats = pats.copy()
+        if 'application_id' in pats.columns:
+            pats = pats.drop_duplicates(['application_id', 'researcher_id'])
+        pats['_lead'] = _col(pats, 'is_lead_inventor').astype(str).str.strip().str.upper() == 'Y'
+        pats['_year'] = _col(pats, 'application_date').map(_year_of)
+
+    rids = set()
+    for df in (researchers, pubs, pats):
+        if not df.empty and 'researcher_id' in df.columns:
+            rids.update(df['researcher_id'].astype(str))
+    rids.discard('')
+
+    pub_groups = dict(tuple(pubs.groupby('researcher_id'))) if not pubs.empty else {}
+    pat_groups = dict(tuple(pats.groupby('researcher_id'))) if not pats.empty else {}
+
+    rows = []
+    for rid in sorted(rids):
+        p = pub_groups.get(rid, pd.DataFrame())
+        t = pat_groups.get(rid, pd.DataFrame())
+        pub_n, pat_n = len(p), len(t)
+        pub_lead = int(p['_lead'].sum()) if pub_n else 0
+        pat_lead = int(t['_lead'].sum()) if pat_n else 0
+        p_recent = p[p['_year'].fillna(0) >= recent_from] if pub_n else p
+        t_recent = t[t['_year'].fillna(0) >= recent_from] if pat_n else t
+        ctype, basis = _classify(pub_n, pub_lead, pat_n, pat_lead)
+        rows.append({
+            'researcher_id': rid,
+            'pub_count': pub_n,
+            'pub_lead_count': pub_lead,
+            'pub_lead_pct': _pct(pub_lead, pub_n),
+            'pub_corr_pct': _pct(int(p['_corr'].sum()), pub_n) if pub_n else None,
+            'pub_avg_contribution': _mean_numeric(_col(p, 'contribution')) if pub_n else None,
+            'pat_count': pat_n,
+            'pat_lead_count': pat_lead,
+            'pat_lead_pct': _pct(pat_lead, pat_n),
+            'pat_avg_share': _mean_numeric(_col(t, 'share_ratio')) if pat_n else None,
+            'recent_pub_count': len(p_recent),
+            'recent_pub_lead_pct': _pct(int(p_recent['_lead'].sum()), len(p_recent)) if len(p_recent) else None,
+            'recent_pat_count': len(t_recent),
+            'recent_pat_lead_pct': _pct(int(t_recent['_lead'].sum()), len(t_recent)) if len(t_recent) else None,
+            'contribution_type': ctype,
+            'contribution_basis': basis,
+        })
+    return pd.DataFrame(rows)
+
+
+def run_contribution_metrics() -> bool:
+    researchers = _read_csv('researchers')
+    pubs, pats = _read_csv('publications'), _read_csv('patents')
+    if researchers.empty and pubs.empty and pats.empty:
+        print('  [WARN] researchers/publications/patents.csv 없음 — 주도형/참여형 지표 생략')
         return False
-    run_strength_standardization(profiles)
+    df = compute_contribution_metrics(researchers, pubs, pats)
+    os.makedirs(OUT_DIR, exist_ok=True)
+    df.to_csv(os.path.join(OUT_DIR, CONTRIBUTION_FILE), index=False, encoding='utf-8-sig')
+    counts = df['contribution_type'].value_counts().to_dict() if not df.empty else {}
+    print(f'[OK]   {CONTRIBUTION_FILE} 저장 ({len(df)}명, '
+          + ', '.join(f'{k} {v}명' for k, v in counts.items()) + ')')
     return True
+
+
+def process() -> bool:
+    ok = True
+    profiles = _read_json(PROFILES_FILE, [])
+    if profiles:
+        run_strength_standardization(profiles)
+    else:
+        print(f'[process_expertise_metrics] {PROFILES_FILE} 없음 — 강점 표준화 생략 '
+              '(process_researcher_expertise.py 먼저 실행)')
+        ok = False
+    ok = run_contribution_metrics() and ok
+    return ok
 
 
 if __name__ == '__main__':

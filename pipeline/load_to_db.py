@@ -103,6 +103,10 @@ TABLES = [
     # 경로(process_evaluation_exception.py)만 있으므로 CSV만으로는
     # 부족한 배포 환경 간극을 이 배치 적재가 메운다.
     'evaluation_exception',
+    # 전문성 심화 지표(2026-10, pipeline/process_expertise_metrics.py) —
+    # 논문·특허 원천을 집계한 파생 CSV. 연구원 프로필/명단이 요청 시점에
+    # data_store.read_processed()로 읽으므로 DB에도 넣는다.
+    'researcher_contribution_metrics',
 ]
 
 # (테이블명, data/processed/ 안의 JSON 파일명, 각 항목에서 키로 쓸 필드명).
@@ -112,6 +116,7 @@ JSON_TABLES = [
     ('expertise_profiles', '연구원 보유 전문성 분석.json', 'researcher_id'),
     ('researcher_similarity', 'researcher_similarity.json', 'researcher_id'),
     ('project_expertise_analysis', 'project_expertise_analysis.json', 'project_name'),
+    ('researcher_strength_std', 'researcher_strength_std.json', 'researcher_id'),
 ]
 
 

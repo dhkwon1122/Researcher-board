@@ -38,6 +38,7 @@ from pipeline.excel_reader import is_blank
 from services.comments import upsert_comment
 from services.data_store import (
     filter_current,
+    read_contribution_metrics,
     read_expertise_profiles,
     read_processed,
     read_profile_tables,
@@ -1553,7 +1554,8 @@ def update_profile(rid):
             leadership_options,
             leadership_default,
             comments_content,
-            llm_summary_block(profile, similar, name_map),
+            llm_summary_block(profile, similar, name_map,
+                              contribution=read_contribution_metrics().get(rid)),
             timeline_view(tables['tasks'], tables['hr_orders'], tables['publications'],
                           tables['patents'], tables['job_profile'], tables['tasks_information'], rid),
             owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid,
