@@ -3,13 +3,18 @@
 
 run_expertise.py(전처리, LLM 호출 없음)가 끝난 뒤 사람이 하나씩 실행하던 아래
 단계를 이 스크립트 하나로 순서대로 실행한다. 1~3단계는 사내 LLM(과 일부 단계는
-BGE-M3 임베딩)을 호출하므로 비용이 발생한다(4단계는 집계 계산만 — 비용 없음).
+BGE-M3 임베딩)을 호출하므로 비용이 발생한다(4단계는 집계 계산만 — 비용 없음,
+5단계는 과제당 LLM 1회 — 결과 캐시로 과제 문서가 안 바뀌면 재호출 없음).
 
   1) process_project_expertise.py   과제 문서 상세 분석 + 인력·담당 업무 매칭
   2) process_researcher_expertise.py 연구원 전문성 분석 (1)의 담당 업무를 새
      근거로 사용)
   3) process_researcher_similarity.py  연구원 ↔ 연구원 유사도 (BGE-M3 임베딩 서버 자동 기동)
-  4) process_expertise_metrics.py   전문성 심화 지표(강점 표기 표준화 등, LLM 호출 없음)
+  4) process_expertise_metrics.py   전문성 심화 지표(강점 표기 표준화·주도형/참여형·
+     협업 네트워크·기술별 보유자 수, LLM 호출 없음)
+  5) process_project_competency_gap.py 과제별 역량 갭(필요 역량 LLM 추출 + 임베딩
+     대조). --skip-competency-gap으로 건너뛸 수 있다. 1단계(과제 문서 분석)
+     결과 파일만 읽으므로 Confluence가 막혀 있어도 기존 결과로 동작한다.
 
 저널 권위도 조회(pipeline/journal_authority.py)는 2단계 실행 시 자동으로
 함께 호출되던 것을 기본에서 뺐다(2026-09-21, 사용자 확정 — 추가 LLM 호출
@@ -32,7 +37,7 @@ process_project_search.py(유사 기업/학계 탐색)는 이 체인에 포함�
 
 사용법:
   python pipeline/run_analysis.py [--refresh-journals] [--refresh-judgments] [--top-k 5]
-    [--skip-confluence] [--with-journal-authority]
+    [--skip-confluence] [--with-journal-authority] [--skip-competency-gap]
 
 --skip-confluence : 1단계(과제 문서 상세 분석)에서 confl_address가 있는 과제의
   Confluence 조회를 건너뛴다(confl_address가 없어 PDF로 대체되는 과제는 영향
@@ -66,28 +71,36 @@ def _parse_top_k_arg(argv: list) -> int | None:
 
 
 def run(refresh_journals: bool = False, refresh_judgments: bool = False, top_k: int | None = None,
-        skip_confluence: bool = False, skip_journal_authority: bool = True):
+        skip_confluence: bool = False, skip_journal_authority: bool = True,
+        skip_competency_gap: bool = False):
     steps = []  # [(단계명, True/False), ...]
 
-    print('[run_analysis] 1/4 과제 문서 상세 분석' + (' (컨플루언스 조회 건너뜀)' if skip_confluence else ''))
+    print('[run_analysis] 1/5 과제 문서 상세 분석' + (' (컨플루언스 조회 건너뜀)' if skip_confluence else ''))
     from process_project_expertise import process as process_project_expertise
     steps.append(('과제 문서 상세 분석', process_project_expertise(skip_confluence=skip_confluence)))
 
-    print('[run_analysis] 2/4 연구원 전문성 분석' + (' (저널 권위도 조회 건너뜀)' if skip_journal_authority else ''))
+    print('[run_analysis] 2/5 연구원 전문성 분석' + (' (저널 권위도 조회 건너뜀)' if skip_journal_authority else ''))
     from process_researcher_expertise import process as process_researcher_expertise
     steps.append(('연구원 전문성 분석', process_researcher_expertise(
         refresh_journals=refresh_journals, skip_journal_authority=skip_journal_authority)))
 
-    print('[run_analysis] 3/4 연구원 ↔ 연구원 유사도')
+    print('[run_analysis] 3/5 연구원 ↔ 연구원 유사도')
     from process_researcher_similarity import process as process_researcher_similarity
     similarity_kwargs = {'refresh_judgments': refresh_judgments}
     if top_k is not None:
         similarity_kwargs['top_k'] = top_k
     steps.append(('연구원 유사도', process_researcher_similarity(**similarity_kwargs)))
 
-    print('[run_analysis] 4/4 전문성 심화 지표')
+    print('[run_analysis] 4/5 전문성 심화 지표')
     from process_expertise_metrics import process as process_expertise_metrics
     steps.append(('전문성 심화 지표', process_expertise_metrics()))
+
+    if skip_competency_gap:
+        print('[run_analysis] 5/5 과제별 역량 갭 — 건너뜀(--skip-competency-gap)')
+    else:
+        print('[run_analysis] 5/5 과제별 역량 갭')
+        from process_project_competency_gap import process as process_project_competency_gap
+        steps.append(('과제별 역량 갭', process_project_competency_gap()))
 
     print('\n[run_analysis] 실행 결과 요약:')
     for name, ok in steps:
@@ -102,4 +115,5 @@ if __name__ == '__main__':
         top_k=_parse_top_k_arg(_argv),
         skip_confluence='--skip-confluence' in _argv,
         skip_journal_authority='--with-journal-authority' not in _argv,
+        skip_competency_gap='--skip-competency-gap' in _argv,
     )

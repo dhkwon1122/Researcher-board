@@ -120,6 +120,7 @@ JSON_TABLES = [
     ('researcher_similarity', 'researcher_similarity.json', 'researcher_id'),
     ('project_expertise_analysis', 'project_expertise_analysis.json', 'project_name'),
     ('researcher_strength_std', 'researcher_strength_std.json', 'researcher_id'),
+    ('project_competency_gap', 'project_competency_gap.json', 'project_name'),
 ]
 
 

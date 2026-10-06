@@ -13438,3 +13438,23 @@ pandas NaN 문제와 근본 원인이 다름 — 이번 리팩토링은 "pandas�
 - 등록: `load_to_db.TABLES`, AI 검색 `TABLE_PERMISSIONS`(제한 없음), 라벨.
 - 검증: 합성 데이터로 쌍 집계(논문 제목 정규화, 특허 공동발명, 같은/타 부서)
   확인, 샘플 데이터에 공동 논문을 넣어 프로필 배지·탭 렌더링 확인, pytest 통과.
+
+## 2026-10-06 (5): 전문성 심화 ⑤ — 과제별 역량 갭
+
+- 신규 `pipeline/process_project_competency_gap.py`(run_analysis.py 5/5단계,
+  `--skip-competency-gap`으로 생략 가능 — run_integration.py에도 전달):
+  `project_expertise_analysis.json`의 과제별 핵심기술/산출물/난제/배경/
+  기대효과/키워드로 사내 LLM이 필요 역량 4~8개 추출(입력 해시 캐시
+  `project_competency_cache.json`, `--refresh`로 무시) → 과제 인력(org_code ==
+  project_name 현재 재직자 ∪ project_personnel.csv)의 보유 역량(표준화 강점
+  분야 우선 + 키워드 + 전문지식)과 BGE-M3 임베딩 대조. 최고 유사도 ≥0.75면
+  충족, 아니면 갭 + 과제 밖 재직자 중 ≥0.75 상위 3명을 사내 후보로 기록 →
+  `project_competency_gap.json`(충족률 낮은 순).
+  과제 문서 분석 결과 파일만 읽으므로 Confluence 401 상태에서도 기존 분석
+  결과로 동작한다.
+- 조직 분석 탭 맨 위에 "과제별 역량 갭" 섹션(모든 로그인 사용자): 과제별
+  요약(충족률/갭 수/갭 역량) + 역량별 상세(충족 인력·사내 후보와 근거 항목).
+- 등록: `load_to_db.JSON_TABLES`(project_name 키). 중첩 구조라 AI 검색
+  대상에는 넣지 않았다.
+- 검증: LLM/임베딩 모의 함수로 충족/갭/사내 후보 판정과 캐시 재사용(2회차
+  LLM 호출 0회) 확인, 탭 렌더링 확인, pytest 통과.

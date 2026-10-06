@@ -6,6 +6,8 @@ pipeline/process_expertise_metrics.py 등이 만든 조직 단위 집계 산출�
 
   - 부서 간 협업(collaboration_edges.csv) — 부서 쌍별 공동 논문·특허 건수와
     부서별 타부서 협업 비율. 모든 로그인 사용자.
+  - 과제별 역량 갭(project_competency_gap.json) — 과제 필요 역량 대비 현재
+    인력 충족 여부와 갭 역량의 사내 후보. 모든 로그인 사용자.
   - 기술별 보유자 수(핵심인력 리스크, technology_holder_summary.csv) —
     개인 명단이 들어 있어 관리자(manage_users)에게만 보인다.
 """
@@ -14,7 +16,7 @@ import dash_ag_grid as dag
 import dash_bootstrap_components as dbc
 from dash import html
 
-from services.data_store import read_processed
+from services.data_store import read_processed, read_project_competency_gap
 
 _RISK_STYLE = {
     'styleConditions': [
@@ -164,10 +166,75 @@ def collaboration_section() -> html.Div:
     ], className='g-3'))
 
 
+_STATUS_STYLE = {
+    'styleConditions': [
+        {'condition': "params.value === '갭'", 'style': {'color': '#cf1322', 'fontWeight': 600}},
+        {'condition': "params.value === '충족'", 'style': {'color': '#389e0d'}},
+    ],
+    'defaultStyle': {'textAlign': 'center'},
+}
+
+
+def competency_gap_section() -> html.Div:
+    title = '과제별 역량 갭'
+    hint = ('과제 문서 분석 결과에서 LLM이 뽑은 필요 역량을 과제 현재 인력의 보유 역량(강점 분야·키워드·전문지식)과 '
+            '임베딩 유사도로 대조. 유사도 0.75 이상이면 충족. 갭 역량은 과제 밖 재직자 중 유사도 상위 3명을 사내 후보로 표시.')
+    items = read_project_competency_gap()
+    if not items:
+        return _section(title, hint, _empty('데이터 없음 — pipeline/run_analysis.py(5/5 과제별 역량 갭) 실행 후 표시됩니다.'))
+    name_map = _name_map()
+
+    def _people(lst):
+        return ', '.join(f"{name_map.get(x.get('researcher_id', ''), x.get('researcher_id', ''))}"
+                         f"({x.get('item', '')})" for x in lst or [])
+
+    proj_rows, comp_rows = [], []
+    for it in items:
+        proj_rows.append({
+            'project_name': it.get('project_name', ''), 'dep_name': it.get('dep_name', ''),
+            'member_count': it.get('member_count', 0), 'coverage_pct': it.get('coverage_pct', 0),
+            'gap_count': it.get('gap_count', 0),
+            'gaps': ', '.join(c.get('competency', '') for c in it.get('competencies') or [] if not c.get('covered')),
+        })
+        for c in it.get('competencies') or []:
+            comp_rows.append({
+                'project_name': it.get('project_name', ''),
+                'competency': c.get('competency', ''),
+                'status': '충족' if c.get('covered') else '갭',
+                'best_score': c.get('best_score', 0),
+                'covered_by': _people(c.get('covered_by')),
+                'candidates': _people(c.get('candidates')),
+            })
+    num = {'filter': 'agNumberColumnFilter', 'floatingFilter': True, 'width': 100}
+    txt = {'filter': 'agTextColumnFilter', 'floatingFilter': True, 'minWidth': 150, 'flex': 1,
+           'cellStyle': {'textAlign': 'left'}}
+    proj_grid = _grid('org-gap-project-grid', [
+        {'headerName': '과제', 'field': 'project_name', 'tooltipField': 'project_name', **txt},
+        {'headerName': '부서', 'field': 'dep_name', **txt},
+        {'headerName': '인력', 'field': 'member_count', **num},
+        {'headerName': '충족률(%)', 'field': 'coverage_pct', **num},
+        {'headerName': '갭 수', 'field': 'gap_count', **num},
+        {'headerName': '갭 역량', 'field': 'gaps', 'tooltipField': 'gaps', **txt},
+    ], proj_rows, page_size=10)
+    comp_grid = _grid('org-gap-competency-grid', [
+        {'headerName': '과제', 'field': 'project_name', 'tooltipField': 'project_name', **txt},
+        {'headerName': '필요 역량', 'field': 'competency', 'tooltipField': 'competency', **txt},
+        {'headerName': '상태', 'field': 'status', 'width': 80, 'cellStyle': _STATUS_STYLE,
+         'filter': 'agTextColumnFilter', 'floatingFilter': True},
+        {'headerName': '최고 유사도', 'field': 'best_score', **num},
+        {'headerName': '충족 인력(근거)', 'field': 'covered_by', 'tooltipField': 'covered_by', **txt},
+        {'headerName': '사내 후보(근거)', 'field': 'candidates', 'tooltipField': 'candidates', **txt},
+    ], comp_rows, page_size=15)
+    return _section(title, hint, html.Div([
+        html.Div('과제별 요약 (충족률 낮은 순)', className='small text-muted mb-1'), proj_grid,
+        html.Div('역량별 상세', className='small text-muted mt-3 mb-1'), comp_grid,
+    ]))
+
+
 def org_analysis_content() -> html.Div:
     from services.auth import can
 
-    sections = [collaboration_section()]
+    sections = [competency_gap_section(), collaboration_section()]
     if can('manage_users'):
         sections.append(technology_holder_section())
     if not sections:
