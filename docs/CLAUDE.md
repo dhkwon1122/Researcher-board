@@ -13424,3 +13424,17 @@ pandas NaN 문제와 근본 원인이 다름 — 이번 리팩토링은 "pandas�
 - 등록: `load_to_db.TABLES`, AI 검색 `TABLE_PERMISSIONS`('manage_users'), 라벨.
 - 검증: 합성 core_technology/tech_ownership으로 집계·리스크 판정, 관리자/
   비관리자 탭 렌더링 차이, 페이지 layout 확인, pytest 17 passed.
+
+## 2026-10-06 (4): 전문성 심화 ③ — 협업 네트워크(논문 공저·특허 공동발명)
+
+- `process_expertise_metrics.py`에 `collaboration_edges.csv`(연구원 쌍별 공동
+  논문/특허 수·최근 협업연도·부서·같은 부서 여부)와 `collaboration_metrics.csv`
+  (연구원별 협업자 수, 타부서 협업자 수/비율, 상위 5명) 추가. 같은 논문 =
+  제목(공백·대소문자 무시) + 게재일, 같은 특허 = application_id. 사내 저자
+  20명 초과 대형 공저 1건은 관계 폭증 방지로 제외.
+- 연구원 프로필 전문성 요약에 "주요 협업자" 배지(이름 · 협업 횟수, 상위 5명).
+- 조직 분석 탭에 "부서 간 협업" 섹션(모든 로그인 사용자): 부서별 타부서 협업
+  비율 + 부서 쌍별 협업량(타부서만). 부서는 researchers.department 기준.
+- 등록: `load_to_db.TABLES`, AI 검색 `TABLE_PERMISSIONS`(제한 없음), 라벨.
+- 검증: 합성 데이터로 쌍 집계(논문 제목 정규화, 특허 공동발명, 같은/타 부서)
+  확인, 샘플 데이터에 공동 논문을 넣어 프로필 배지·탭 렌더링 확인, pytest 통과.

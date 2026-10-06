@@ -4,6 +4,8 @@
 pipeline/process_expertise_metrics.py 등이 만든 조직 단위 집계 산출물을
 보여준다. 산출물이 없으면(파이프라인 미실행) 섹션마다 안내 문구만 표시한다.
 
+  - 부서 간 협업(collaboration_edges.csv) — 부서 쌍별 공동 논문·특허 건수와
+    부서별 타부서 협업 비율. 모든 로그인 사용자.
   - 기술별 보유자 수(핵심인력 리스크, technology_holder_summary.csv) —
     개인 명단이 들어 있어 관리자(manage_users)에게만 보인다.
 """
@@ -98,10 +100,74 @@ def technology_holder_section() -> html.Div:
     return _section('기술별 보유자 수 (핵심인력 리스크)', hint, html.Div([summary, grid]))
 
 
+def _grid(grid_id: str, column_defs: list, rows: list, page_size: int = 15) -> dag.AgGrid:
+    return dag.AgGrid(
+        id=grid_id, className='gs-ag-grid', columnDefs=column_defs, rowData=rows,
+        defaultColDef={'resizable': True, 'sortable': True, 'wrapHeaderText': True, 'autoHeaderHeight': True,
+                       'cellStyle': {'textAlign': 'center'}},
+        dashGridOptions={'pagination': True, 'paginationPageSize': page_size, 'domLayout': 'autoHeight',
+                         'tooltipShowDelay': 0},
+    )
+
+
+def collaboration_section() -> html.Div:
+    title = '부서 간 협업 (논문 공저·특허 공동발명)'
+    hint = ('같은 논문에 함께 이름을 올리거나 같은 특허의 공동발명자인 사내 연구원 쌍을 협업으로 집계. '
+            '부서는 연구원 인사정보의 현재 부서 기준.')
+    edges = read_processed('collaboration_edges')
+    if edges.empty:
+        return _section(title, hint, _empty('데이터 없음 — pipeline/run_analysis.py(4/4 전문성 심화 지표) 실행 후 표시됩니다.'))
+    edges = edges.fillna('')
+    edges['total_count'] = edges['total_count'].map(lambda v: int(float(v or 0)))
+    edges = edges[(edges['department_a'] != '') & (edges['department_b'] != '')]
+
+    # 부서별: 협업 관계 중 타부서 비율
+    dept_rows = {}
+    for r in edges.to_dict('records'):
+        cross = r['department_a'] != r['department_b']
+        for d in {r['department_a'], r['department_b']}:
+            item = dept_rows.setdefault(d, {'department': d, 'pair_count': 0, 'cross_pair_count': 0})
+            item['pair_count'] += 1
+            item['cross_pair_count'] += int(cross)
+    dept_list = sorted(dept_rows.values(), key=lambda x: -x['pair_count'])
+    for item in dept_list:
+        item['cross_ratio'] = round(item['cross_pair_count'] * 100.0 / item['pair_count'], 1) if item['pair_count'] else 0
+
+    # 부서 쌍별(타부서만)
+    cross = edges[edges['department_a'] != edges['department_b']].copy()
+    pair_rows = []
+    if not cross.empty:
+        cross['_pair'] = cross.apply(lambda r: tuple(sorted((r['department_a'], r['department_b']))), axis=1)
+        for (da, db), g in cross.groupby('_pair'):
+            pair_rows.append({'department_a': da, 'department_b': db,
+                              'pair_count': len(g), 'total_count': int(g['total_count'].sum())})
+        pair_rows.sort(key=lambda x: -x['total_count'])
+
+    num = {'filter': 'agNumberColumnFilter', 'floatingFilter': True, 'width': 120}
+    txt = {'filter': 'agTextColumnFilter', 'floatingFilter': True, 'minWidth': 160, 'flex': 1,
+           'cellStyle': {'textAlign': 'left'}}
+    dept_grid = _grid('org-collab-dept-grid', [
+        {'headerName': '부서', 'field': 'department', **txt},
+        {'headerName': '협업 쌍', 'field': 'pair_count', **num},
+        {'headerName': '타부서 협업 쌍', 'field': 'cross_pair_count', **num},
+        {'headerName': '타부서 비율(%)', 'field': 'cross_ratio', **num},
+    ], dept_list, page_size=10)
+    pair_grid = (_grid('org-collab-pair-grid', [
+        {'headerName': '부서 A', 'field': 'department_a', **txt},
+        {'headerName': '부서 B', 'field': 'department_b', **txt},
+        {'headerName': '연구원 쌍', 'field': 'pair_count', **num},
+        {'headerName': '공동 논문+특허', 'field': 'total_count', **num},
+    ], pair_rows, page_size=10) if pair_rows else _empty('타부서 협업 관계가 없습니다.'))
+    return _section(title, hint, dbc.Row([
+        dbc.Col([html.Div('부서별 타부서 협업 비율', className='small text-muted mb-1'), dept_grid], md=5),
+        dbc.Col([html.Div('부서 쌍별 협업량(타부서만)', className='small text-muted mb-1'), pair_grid], md=7),
+    ], className='g-3'))
+
+
 def org_analysis_content() -> html.Div:
     from services.auth import can
 
-    sections = []
+    sections = [collaboration_section()]
     if can('manage_users'):
         sections.append(technology_holder_section())
     if not sections:

@@ -210,6 +210,22 @@ COLUMN_LABELS = {
     'contribution_type': '연구 기여유형',
     'contribution_basis': '기여유형 판정근거',
 
+    # 협업 네트워크 (collaboration_edges.csv / collaboration_metrics.csv)
+    'researcher_a': '연구원 A 사번',
+    'researcher_b': '연구원 B 사번',
+    'paper_count': '공동 논문수',
+    'patent_count': '공동 특허수',
+    'total_count': '공동 논문+특허수',
+    'last_year': '최근 협업연도',
+    'department_a': '연구원 A 부서',
+    'department_b': '연구원 B 부서',
+    'same_department': '같은 부서 여부',
+    'collaborator_count': '협업자 수',
+    'cross_dept_collaborator_count': '타부서 협업자 수',
+    'cross_dept_ratio': '타부서 협업 비율(%)',
+    'top_collaborators': '주요 협업자 사번',
+    'top_collaborator_counts': '주요 협업자별 협업수',
+
     # 기술별 보유자 수 (technology_holder_summary.csv)
     'source': '출처',
     'technology': '기술',

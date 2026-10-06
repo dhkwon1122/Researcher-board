@@ -113,6 +113,28 @@ def read_contribution_metrics() -> dict[str, dict]:
     return {r['researcher_id']: r for r in df.to_dict('records')}
 
 
+def read_top_collaborators(rid: str) -> list[tuple[str, int]]:
+    """collaboration_metrics.csv(pipeline/process_expertise_metrics.py)의 그
+    연구원 상위 협업자 [(researcher_id, 공동 논문+특허 수), ...]. 없으면 []."""
+    df = read_processed('collaboration_metrics')
+    if df.empty or 'researcher_id' not in df.columns:
+        return []
+    rows = df[df['researcher_id'] == str(rid).zfill(8)]
+    if rows.empty:
+        return []
+    r = rows.iloc[0]
+    ids = [x for x in str(r.get('top_collaborators') or '').split(';') if x and x != 'nan']
+    counts = str(r.get('top_collaborator_counts') or '').split(';')
+    out = []
+    for i, x in enumerate(ids):
+        try:
+            n = int(float(counts[i]))
+        except (IndexError, ValueError):
+            n = 0
+        out.append((x.zfill(8), n))
+    return out
+
+
 def read_project_expertise_analysis() -> list[dict]:
     """과제별 컨플루언스 분석 항목 리스트(project_name 키). DB(테이블
     project_expertise_analysis)가 있으면 그걸, 없으면 project_expertise_

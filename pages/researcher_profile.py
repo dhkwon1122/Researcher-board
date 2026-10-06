@@ -43,6 +43,7 @@ from services.data_store import (
     read_processed,
     read_profile_tables,
     read_similar_researchers,
+    read_top_collaborators,
 )
 from services.evaluations import evaluation_years
 from services import job_category, similarity_map
@@ -1555,7 +1556,8 @@ def update_profile(rid):
             leadership_default,
             comments_content,
             llm_summary_block(profile, similar, name_map,
-                              contribution=read_contribution_metrics().get(rid)),
+                              contribution=read_contribution_metrics().get(rid),
+                              collaborators=read_top_collaborators(rid)),
             timeline_view(tables['tasks'], tables['hr_orders'], tables['publications'],
                           tables['patents'], tables['job_profile'], tables['tasks_information'], rid),
             owned_expertise_block(tables['core_technology'], tables['tech_ownership'], rid,

@@ -267,9 +267,22 @@ def contribution_badge_row(contribution: dict | None):
     ], title=str(contribution.get('contribution_basis') or ''), className='d-flex align-items-center flex-wrap mb-2')
 
 
+def collaborator_row(collaborators: list | None, name_map: dict | None = None):
+    """주요 협업자(collaboration_metrics.csv 상위 5명 — 같은 논문 공저/특허
+    공동발명 횟수 기준). 없으면 None."""
+    if not collaborators:
+        return None
+    name_map = name_map or {}
+    return html.Div([
+        html.Span('주요 협업자', className='small text-muted fw-semibold me-2'),
+        *[dbc.Badge(f'{name_map.get(rid, rid)} · {n}', color='light', text_color='dark',
+                    className='me-1 mb-1 border') for rid, n in collaborators],
+    ], title='같은 논문 공저·특허 공동발명 횟수 기준 상위 5명', className='d-flex align-items-center flex-wrap mb-2')
+
+
 def llm_summary_block(profile: dict | None, similar: list | None = None, name_map: dict | None = None,
                        *, include_responsibilities: bool = True, deemphasize_strength: bool = False,
-                       contribution: dict | None = None):
+                       contribution: dict | None = None, collaborators: list | None = None):
     """전문성 요약(LLM) — 연구원 보유 전문성 분석.json의 핵심 분야(strength_fields)/
     키워드(strength_keywords)를 배지로, 주요 역할·책임(key_responsibilities)과
     전문지식 및 역량(domain_knowledge_skill)은 둘 다 불릿 목록(bullet_list(),
@@ -301,16 +314,18 @@ def llm_summary_block(profile: dict | None, similar: list | None = None, name_ma
     한 줄을 붙인다 — LLM 결과가 아니라 논문·특허 원천 데이터 집계라 LLM
     분석 데이터가 없어도 표시한다."""
     contribution_row = contribution_badge_row(contribution)
+    collab_row = collaborator_row(collaborators, name_map)
+    extra_rows = [r for r in (contribution_row, collab_row) if r]
     if not profile:
         empty = html.Div('분석 데이터 없음', className='text-muted small p-1')
-        return [contribution_row, empty] if contribution_row else empty
+        return extra_rows + [empty] if extra_rows else empty
 
     fields = profile.get('strength_fields') or []
     keywords = profile.get('strength_keywords') or []
     responsibilities = profile.get('key_responsibilities') or []
     domain_skill = profile.get('domain_knowledge_skill') or []
 
-    children = [contribution_row] if contribution_row else []
+    children = list(extra_rows)
     if fields:
         if deemphasize_strength:
             children.append(html.Div([

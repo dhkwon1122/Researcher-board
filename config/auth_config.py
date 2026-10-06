@@ -188,4 +188,7 @@ TABLE_PERMISSIONS: dict[str, str | None] = {
     # 기술별 보유자 수 — 기술별 개인 명단(holder_ids)이 담긴 조직 리스크
     # 정보라 화면("조직 분석" 탭)과 동일하게 관리자 계정(is_admin)만 조회.
     'technology_holder_summary':       'manage_users',
+    # 협업 네트워크 — 논문·특허 원천(권한 제한 없음)의 공저 관계 집계.
+    'collaboration_edges':             None,
+    'collaboration_metrics':           None,
 }

@@ -30,6 +30,14 @@ process_researcher_expertise.py(LLM 전문성 분석)가 끝난 뒤 run_analysis
          있는데 모두 50% 미만이면 '참여형', 3건 이상인 원천이 없으면
          '판정보류'(건수가 적어 비율이 의미 없음)
 
+  3) 협업 네트워크 → collaboration_edges.csv / collaboration_metrics.csv
+     같은 논문(제목 공백·대소문자 무시 + 게재일)에 함께 이름을 올린 사내
+     연구원, 같은 특허(application_id)의 공동발명자를 협업 관계로 본다.
+     edges: 연구원 쌍별 공동 논문/특허 수·최근 연도·같은 부서 여부.
+     metrics: 연구원별 협업자 수, 타부서 협업자 수/비율, 상위 5명.
+     사내 저자가 COLLAB_MAX_GROUP명을 넘는 대형 공저 1건은 관계 폭증을
+     막기 위해 제외한다.
+
   4) 기술별 보유자 수(핵심인력 리스크) → technology_holder_summary.csv
      현재 재직자 기준으로 기술(핵심기술 tech_name / 보유기술 tech_1~5 / 표준화된
      강점 분야)별 보유자 수와 고수준 보유자 수(핵심기술 등급 A 이상, 보유기술
@@ -60,6 +68,10 @@ UNMAPPED_FILE = 'strength_unmapped.json'
 
 CONTRIBUTION_FILE = 'researcher_contribution_metrics.csv'
 TECH_HOLDER_FILE = 'technology_holder_summary.csv'
+COLLAB_EDGES_FILE = 'collaboration_edges.csv'
+COLLAB_METRICS_FILE = 'collaboration_metrics.csv'
+COLLAB_MAX_GROUP = 20
+COLLAB_TOP_N = 5
 
 STD_EMBED_THRESHOLD = 0.85
 CONTRIB_MIN_ITEMS = 3
@@ -323,6 +335,97 @@ def run_contribution_metrics() -> bool:
     return True
 
 
+# ── 3) 협업 네트워크 ─────────────────────────────────────────────────────────
+
+def _collab_groups(pubs: pd.DataFrame, pats: pd.DataFrame) -> list:
+    """[(kind, members(sorted list), year), ...] — 사내 연구원 2명 이상인 건만."""
+    groups = []
+    if not pubs.empty and 'title' in pubs.columns:
+        p = pubs.assign(_key=pubs['title'].map(_norm) + '|' + _col(pubs, 'pub_date').astype(str).str[:10])
+        p = p[p['title'].astype(str).str.strip() != '']
+        for _, g in p.groupby('_key'):
+            members = sorted(set(g['researcher_id']))
+            year = max((y for y in (_year_of(v) for v in list(_col(g, 'pub_year')) + list(_col(g, 'pub_date'))) if y),
+                       default=None)
+            groups.append(('paper', members, year))
+    if not pats.empty and 'application_id' in pats.columns:
+        t = pats[pats['application_id'].astype(str).str.strip() != '']
+        for _, g in t.groupby('application_id'):
+            members = sorted(set(g['researcher_id']))
+            year = max((y for y in map(_year_of, _col(g, 'application_date')) if y), default=None)
+            groups.append(('patent', members, year))
+    return [(k, m, y) for k, m, y in groups if 2 <= len(m) <= COLLAB_MAX_GROUP]
+
+
+def compute_collaboration(researchers: pd.DataFrame, pubs: pd.DataFrame,
+                          pats: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    dept = {}
+    if not researchers.empty and 'department' in researchers.columns:
+        dept = dict(zip(researchers['researcher_id'], researchers['department'].astype(str).str.strip()))
+
+    edges: dict = {}
+    for kind, members, year in _collab_groups(pubs, pats):
+        for i, a in enumerate(members):
+            for b in members[i + 1:]:
+                e = edges.setdefault((a, b), {'paper_count': 0, 'patent_count': 0, 'last_year': None})
+                e[f'{kind}_count'] += 1
+                if year and (e['last_year'] is None or year > e['last_year']):
+                    e['last_year'] = year
+
+    edge_rows = []
+    for (a, b), e in edges.items():
+        da, db = dept.get(a, ''), dept.get(b, '')
+        edge_rows.append({
+            'researcher_a': a, 'researcher_b': b,
+            'paper_count': e['paper_count'], 'patent_count': e['patent_count'],
+            'total_count': e['paper_count'] + e['patent_count'],
+            'last_year': e['last_year'] or '',
+            'department_a': da, 'department_b': db,
+            'same_department': 'Y' if da and da == db else 'N',
+        })
+    edges_df = pd.DataFrame(edge_rows, columns=[
+        'researcher_a', 'researcher_b', 'paper_count', 'patent_count', 'total_count',
+        'last_year', 'department_a', 'department_b', 'same_department'])
+    if not edges_df.empty:
+        edges_df = edges_df.sort_values('total_count', ascending=False).reset_index(drop=True)
+
+    partners: dict = {}
+    for r in edge_rows:
+        for me, other in ((r['researcher_a'], r['researcher_b']), (r['researcher_b'], r['researcher_a'])):
+            partners.setdefault(me, []).append((other, r['total_count'], r['same_department'] == 'N'))
+    metric_rows = []
+    for rid, lst in sorted(partners.items()):
+        lst.sort(key=lambda x: -x[1])
+        cross = sum(1 for _, _, c in lst if c)
+        top = lst[:COLLAB_TOP_N]
+        metric_rows.append({
+            'researcher_id': rid,
+            'collaborator_count': len(lst),
+            'cross_dept_collaborator_count': cross,
+            'cross_dept_ratio': round(cross * 100.0 / len(lst), 1),
+            'top_collaborators': ';'.join(o for o, _, _ in top),
+            'top_collaborator_counts': ';'.join(str(n) for _, n, _ in top),
+        })
+    return edges_df, pd.DataFrame(metric_rows, columns=[
+        'researcher_id', 'collaborator_count', 'cross_dept_collaborator_count', 'cross_dept_ratio',
+        'top_collaborators', 'top_collaborator_counts'])
+
+
+def run_collaboration() -> bool:
+    researchers = _read_csv('researchers')
+    pubs, pats = _read_csv('publications'), _read_csv('patents')
+    if pubs.empty and pats.empty:
+        print('  [WARN] publications/patents.csv 없음 — 협업 네트워크 생략')
+        return False
+    edges_df, metrics_df = compute_collaboration(researchers, pubs, pats)
+    os.makedirs(OUT_DIR, exist_ok=True)
+    edges_df.to_csv(os.path.join(OUT_DIR, COLLAB_EDGES_FILE), index=False, encoding='utf-8-sig')
+    metrics_df.to_csv(os.path.join(OUT_DIR, COLLAB_METRICS_FILE), index=False, encoding='utf-8-sig')
+    print(f'[OK]   {COLLAB_EDGES_FILE}/{COLLAB_METRICS_FILE} 저장 '
+          f'(협업 관계 {len(edges_df)}건, 협업자 있는 연구원 {len(metrics_df)}명)')
+    return True
+
+
 # ── 4) 기술별 보유자 수 ───────────────────────────────────────────────────────
 
 def _risk_level(holders: int, high: int | None) -> str:
@@ -428,6 +531,7 @@ def process() -> bool:
               '(process_researcher_expertise.py 먼저 실행)')
         ok = False
     ok = run_contribution_metrics() and ok
+    ok = run_collaboration() and ok
     ok = run_technology_holders(strength_std) and ok
     return ok
 
