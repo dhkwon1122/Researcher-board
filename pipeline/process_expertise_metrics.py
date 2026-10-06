@@ -30,6 +30,13 @@ process_researcher_expertise.py(LLM 전문성 분석)가 끝난 뒤 run_analysis
          있는데 모두 50% 미만이면 '참여형', 3건 이상인 원천이 없으면
          '판정보류'(건수가 적어 비율이 의미 없음)
 
+  4) 기술별 보유자 수(핵심인력 리스크) → technology_holder_summary.csv
+     현재 재직자 기준으로 기술(핵심기술 tech_name / 보유기술 tech_1~5 / 표준화된
+     강점 분야)별 보유자 수와 고수준 보유자 수(핵심기술 등급 A 이상, 보유기술
+     Lv 3 이상)를 센다. risk_level: 보유자 2명 이하 '위험', 고수준 보유자
+     1명 이하 '주의', 그 외 '정상'. 개인 명단(holder_ids)이 들어 있어 화면/AI
+     검색 모두 관리자(manage_users)에게만 보인다.
+
 사용법:
   python pipeline/process_expertise_metrics.py
 """
@@ -52,11 +59,16 @@ STRENGTH_STD_FILE = 'researcher_strength_std.json'
 UNMAPPED_FILE = 'strength_unmapped.json'
 
 CONTRIBUTION_FILE = 'researcher_contribution_metrics.csv'
+TECH_HOLDER_FILE = 'technology_holder_summary.csv'
 
 STD_EMBED_THRESHOLD = 0.85
 CONTRIB_MIN_ITEMS = 3
 CONTRIB_LEAD_RATIO = 0.5
 RECENT_YEARS = 5
+RISK_HOLDER_MAX = 2
+CAUTION_HIGH_LEVEL_MAX = 1
+_HIGH_CORE_GRADES = {'S', 'A'}
+HIGH_LV_MIN = 3
 _LEAD_AUTHOR_MARKERS = ('제1', '주저자', '단독', '1저자', '교신')
 _TRUE_VALUES = {'true', 'y', 'yes', 'o', '1', '참'}
 
@@ -311,16 +323,112 @@ def run_contribution_metrics() -> bool:
     return True
 
 
+# ── 4) 기술별 보유자 수 ───────────────────────────────────────────────────────
+
+def _risk_level(holders: int, high: int | None) -> str:
+    if holders <= RISK_HOLDER_MAX:
+        return '위험'
+    if high is not None and high <= CAUTION_HIGH_LEVEL_MAX:
+        return '주의'
+    return '정상'
+
+
+def compute_technology_holders(researchers: pd.DataFrame, core: pd.DataFrame, own: pd.DataFrame,
+                               strength_std: list) -> pd.DataFrame:
+    """(출처, 기술) → 보유자/고수준 보유자. 이름 비교는 공백·대소문자 무시."""
+    current = set()
+    dept_by_id = {}
+    if not researchers.empty:
+        cur = researchers
+        if 'is_current' in cur.columns:
+            cur = cur[cur['is_current'].astype(str).str.upper() != 'N']
+        current = set(cur['researcher_id'])
+        if 'department' in cur.columns:
+            dept_by_id = dict(zip(cur['researcher_id'], cur['department'].astype(str)))
+
+    groups: dict = {}  # (source, norm) -> {'technology', 'tech_field', 'holders': set, 'high': set|None}
+
+    def _add(source, name, rid, high: bool | None, field=''):
+        name = str(name or '').strip()
+        if not name or name == '-' or (current and rid not in current):
+            return
+        g = groups.setdefault((source, _norm(name)), {
+            'technology': name, 'tech_field': field, 'holders': set(),
+            'high': set() if high is not None else None})
+        g['holders'].add(rid)
+        if high and g['high'] is not None:
+            g['high'].add(rid)
+        if field and not g['tech_field']:
+            g['tech_field'] = field
+
+    for _, r in core.iterrows():
+        grade = str(r.get('tech_grade', '')).strip().upper()
+        _add('핵심기술', r.get('tech_name'), r['researcher_id'], grade in _HIGH_CORE_GRADES,
+             str(r.get('tech_field', '')).strip())
+    if not own.empty:
+        slots = sorted({int(c.split('_')[1]) for c in own.columns
+                        if c.startswith('tech_') and c.split('_')[1].isdigit()})
+        for _, r in own.iterrows():
+            for i in slots:
+                try:
+                    lv = float(str(r.get(f'lv_{i}', '')).strip())
+                except ValueError:
+                    lv = 0
+                _add('보유기술', r.get(f'tech_{i}'), r['researcher_id'], lv >= HIGH_LV_MIN)
+    for item in strength_std or []:
+        rid = str(item.get('researcher_id', '')).zfill(8)
+        for f in item.get('strength_fields_std') or []:
+            _add('강점분야', f, rid, None)
+
+    rows = []
+    for (source, _), g in groups.items():
+        holders = sorted(g['holders'])
+        high = sorted(g['high']) if g['high'] is not None else None
+        rows.append({
+            'source': source,
+            'technology': g['technology'],
+            'tech_field': g['tech_field'],
+            'holder_count': len(holders),
+            'high_level_count': len(high) if high is not None else '',
+            'department_count': len({dept_by_id.get(x, '') for x in holders} - {''}),
+            'risk_level': _risk_level(len(holders), len(high) if high is not None else None),
+            'holder_ids': ';'.join(holders),
+            'high_level_ids': ';'.join(high) if high is not None else '',
+        })
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        order = {'위험': 0, '주의': 1, '정상': 2}
+        df = df.sort_values(['risk_level', 'holder_count', 'source'],
+                            key=lambda c: c.map(order) if c.name == 'risk_level' else c).reset_index(drop=True)
+    return df
+
+
+def run_technology_holders(strength_std: list) -> bool:
+    researchers = _read_csv('researchers')
+    core, own = _read_csv('core_technology'), _read_csv('tech_ownership')
+    if core.empty and own.empty and not strength_std:
+        print('  [WARN] core_technology/tech_ownership/강점 표준화 결과 없음 — 기술별 보유자 수 생략')
+        return False
+    df = compute_technology_holders(researchers, core, own, strength_std)
+    os.makedirs(OUT_DIR, exist_ok=True)
+    df.to_csv(os.path.join(OUT_DIR, TECH_HOLDER_FILE), index=False, encoding='utf-8-sig')
+    risk = int((df['risk_level'] == '위험').sum()) if not df.empty else 0
+    print(f'[OK]   {TECH_HOLDER_FILE} 저장 ({len(df)}개 기술, 위험 {risk}개)')
+    return True
+
+
 def process() -> bool:
     ok = True
     profiles = _read_json(PROFILES_FILE, [])
+    strength_std = []
     if profiles:
-        run_strength_standardization(profiles)
+        strength_std = run_strength_standardization(profiles)
     else:
         print(f'[process_expertise_metrics] {PROFILES_FILE} 없음 — 강점 표준화 생략 '
               '(process_researcher_expertise.py 먼저 실행)')
         ok = False
     ok = run_contribution_metrics() and ok
+    ok = run_technology_holders(strength_std) and ok
     return ok
 
 

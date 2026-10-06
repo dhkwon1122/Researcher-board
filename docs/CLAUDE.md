@@ -13409,3 +13409,18 @@ pandas NaN 문제와 근본 원인이 다름 — 이번 리팩토링은 "pandas�
 - 검증: LLM을 모의 응답으로 바꿔 샘플 데이터로 process()/
   analyze_researchers_as_of() 실행 → 프롬프트 내 시기/M/M/양성 표시와 새 출력
   필드 저장 확인, 프로필 콜백 렌더링 확인, pytest 17 passed.
+
+## 2026-10-06 (3): 전문성 심화 ④ — 기술별 보유자 수(핵심인력 리스크) + "조직 분석" 탭
+
+- `process_expertise_metrics.py`에 `technology_holder_summary.csv` 추가:
+  현재 재직자 기준 (출처: 핵심기술/보유기술/표준화된 강점분야, 기술)별
+  보유자 수·고수준 보유자 수(핵심기술 등급 S/A, 보유기술 Lv 3 이상 —
+  강점분야는 해당 없음)·보유 부서 수·명단. risk_level: 보유자 2명 이하
+  '위험', 고수준 1명 이하 '주의', 그 외 '정상'. 기술명은 공백·대소문자 무시로 묶는다.
+- "보유 전문성" 페이지에 **조직 분석** 탭 신설(`components/org_analysis_tab.py`).
+  탭이 2개가 되어 탭 막대가 다시 보인다(전문성 MAP은 계속 숨김).
+  기술별 보유자 섹션은 개인 명단이 있어 **관리자 계정(manage_users)만** 보인다
+  (보수적으로 정한 기준 — 필요하면 `org_analysis_content()`의 조건만 바꾸면 됨).
+- 등록: `load_to_db.TABLES`, AI 검색 `TABLE_PERMISSIONS`('manage_users'), 라벨.
+- 검증: 합성 core_technology/tech_ownership으로 집계·리스크 판정, 관리자/
+  비관리자 탭 렌더링 차이, 페이지 layout 확인, pytest 17 passed.

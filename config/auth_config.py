@@ -185,4 +185,7 @@ TABLE_PERMISSIONS: dict[str, str | None] = {
     # 전문성 심화 지표(2026-10, pipeline/process_expertise_metrics.py) —
     # 논문·특허 원천(권한 제한 없음)을 집계만 한 파생 지표라 같은 민감도.
     'researcher_contribution_metrics': None,
+    # 기술별 보유자 수 — 기술별 개인 명단(holder_ids)이 담긴 조직 리스크
+    # 정보라 화면("조직 분석" 탭)과 동일하게 관리자 계정(is_admin)만 조회.
+    'technology_holder_summary':       'manage_users',
 }

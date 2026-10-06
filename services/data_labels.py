@@ -210,6 +210,16 @@ COLUMN_LABELS = {
     'contribution_type': '연구 기여유형',
     'contribution_basis': '기여유형 판정근거',
 
+    # 기술별 보유자 수 (technology_holder_summary.csv)
+    'source': '출처',
+    'technology': '기술',
+    'holder_count': '보유자 수',
+    'high_level_count': '고수준 보유자 수',
+    'department_count': '보유 부서 수',
+    'risk_level': '리스크',
+    'holder_ids': '보유자 사번',
+    'high_level_ids': '고수준 보유자 사번',
+
     # 과제 전문성/매칭 (LLM 파생)
     'job_title': '직무',
     'fit_score': '적합도',

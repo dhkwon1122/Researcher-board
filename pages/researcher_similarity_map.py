@@ -862,6 +862,9 @@ def layout(highlight_researcher=None, mail_rid=None, **_kwargs):
     ]
     if not _MAP_TAB_HIDDEN:
         tabs.append(dbc.Tab(label='전문성 MAP', tab_id='map'))
+    # 조직 분석(2026-10, 전문성 심화 지표 — components/org_analysis_tab.py).
+    # 탭이 2개가 되므로 아래 tabs_style 규칙에 따라 탭 막대가 다시 보인다.
+    tabs.append(dbc.Tab(label='조직 분석', tab_id='org'))
     # "연구원 ↔ 연구원" 탭이 "연구원" 탭에 통합되면서(2026-09-01), 전문성 MAP
     # 탭도 숨겨져 있는 동안은 탭이 하나뿐이라 탭 막대 자체가 무의미해진다 —
     # 이 경우엔 탭 막대(dbc.Tabs)를 숨기고 바로 내용을 보여준다(사용자 확정).
@@ -924,6 +927,9 @@ def _render_expertise_tab(active_tab, mode, pending_highlight, scroll_target):
     않고 이후 탭/모드 클릭에만 반응한다."""
     if active_tab == 'map':
         return _map_tab_content(highlighted_rid=pending_highlight), dash.no_update
+    if active_tab == 'org':
+        from components.org_analysis_tab import org_analysis_content
+        return org_analysis_content(), dash.no_update
     if active_tab in _REPORT_TABS:
         if mode == 'historical':
             return _historical_search_panel(), dash.no_update

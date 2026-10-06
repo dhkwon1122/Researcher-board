@@ -107,6 +107,7 @@ TABLES = [
     # 논문·특허 원천을 집계한 파생 CSV. 연구원 프로필/명단이 요청 시점에
     # data_store.read_processed()로 읽으므로 DB에도 넣는다.
     'researcher_contribution_metrics',
+    'technology_holder_summary',
 ]
 
 # (테이블명, data/processed/ 안의 JSON 파일명, 각 항목에서 키로 쓸 필드명).
