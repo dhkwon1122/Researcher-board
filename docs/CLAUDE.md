@@ -13592,3 +13592,11 @@ project_confl_address.csv의 `.0`은 클라이언트 쪽 보정으로 바로 동
 - 검증: 모의 세션으로 3단계 트리/페이징(limit=2)/깊이 제한/상한/엑셀 텍스트 셀/UI 콜백 확인,
   tests/test_confl_tree.py 추가. **실제 사내 컨플루언스 응답은 이 환경에서 확인 불가** — `child/page`
   엔드포인트가 게이트웨이에서 허용되는지는 서버에서 첫 실행으로 확인 필요.
+
+## 2026-10-07 (8): 웹 앱에서만 "CONFLUENCE_GATEWAY_BASE_URL은 HTTPS만 허용" — compose가 ALLOW_HTTP를 전달 안 함
+
+run_integration.py(서버 셸, .env 직접 읽음)는 CONFLUENCE_ALLOW_HTTP=true로 통과하는데 웹 화면(하위 페이지
+추출)은 같은 메시지로 실패. 원인: 웹 앱은 docker 컨테이너라 `docker-compose.yml`의 environment에 적힌
+변수만 받는데 CONFLUENCE_ALLOW_HTTP가 목록에 없었다. docker-compose.yml에 추가(기본 false)하고
+.env.example에 설명 추가. 적용하려면 `docker compose up -d`로 앱 컨테이너를 다시 만들어야 한다
+(단순 restart는 환경변수를 다시 읽지 않음).
