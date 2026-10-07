@@ -17,7 +17,7 @@ from components.admin_shared import (
     _alert, _ensure_rid, _mark_stale_rows, _renumbered, _run_status_view, _split_hidden_rows,
     _STATUS_COLORS, _upload_box,
 )
-from services import team_refer_store
+from services import confl_match, confl_tree, team_refer_store
 from services import web_pipeline_runner as wpr
 
 
@@ -231,9 +231,11 @@ def _confl_pdf_upload_section():
     pdfs = wpr.list_confl_pdfs()
     missing = wpr.confl_projects_missing_pdf()
 
-    pdf_list_view = (
-        html.Div([
+    if pdfs:
+        rows_view = html.Div([
             html.Div([
+                dbc.Checkbox(id={'type': 'confl-pdf-check', 'name': p['filename']}, value=False,
+                             className='me-2 mb-0'),
                 html.I(className='bi bi-file-earmark-pdf me-1 text-danger'),
                 html.Span(p['filename'], className='me-2'),
                 html.Span(f"{p['size_kb']}KB · {p['uploaded_at']}",
@@ -244,8 +246,28 @@ def _confl_pdf_upload_section():
                            title='삭제'),
             ], className='d-flex align-items-center mb-1')
             for p in pdfs
-        ]) if pdfs else html.Div('업로드된 PDF 없음', className='small text-muted')
-    )
+        ], style={'maxHeight': '260px', 'overflowY': 'auto'})
+        # 선택/전체 삭제(2026-10, 사용자 요청) — 파일마다 X를 누르지 않아도 되게 한다.
+        # 되돌릴 수 없는 삭제라 확인창(ConfirmDialogProvider)을 거친다.
+        toolbar = html.Div([
+            dbc.Checkbox(id='confl-pdf-select-all', label=f'전체 선택 ({len(pdfs)}건)', value=False,
+                         className='small me-3 mb-0'),
+            dcc.ConfirmDialogProvider(
+                children=dbc.Button([html.I(className='bi bi-trash me-1'), '선택 삭제'],
+                                    color='danger', outline=True, size='sm', className='me-2'),
+                id='confl-pdf-del-selected-confirm',
+                message='선택한 PDF를 삭제할까요? 되돌릴 수 없습니다.',
+            ),
+            dcc.ConfirmDialogProvider(
+                children=dbc.Button([html.I(className='bi bi-trash3 me-1'), '전체 삭제'],
+                                    color='danger', size='sm'),
+                id='confl-pdf-del-all-confirm',
+                message=f'업로드된 PDF {len(pdfs)}건을 전부 삭제할까요? 되돌릴 수 없습니다.',
+            ),
+        ], className='d-flex align-items-center mb-2')
+        pdf_list_view = html.Div([toolbar, rows_view])
+    else:
+        pdf_list_view = html.Div('업로드된 PDF 없음', className='small text-muted')
 
     missing_view = None
     if missing:
@@ -290,6 +312,78 @@ def _confl_pdf_upload_section():
     ]), className='shadow-sm mb-3')
 
 
+def _confl_tree_status_view():
+    """하위 페이지 추출 진행/결과 한 줄."""
+    st = confl_tree.snapshot()
+    if st['status'] == 'running':
+        return html.Div([html.Span(className='spinner-border spinner-border-sm me-2'),
+                         f"추출 중(서버에서 계속 실행 — 다른 화면으로 이동해도 됩니다) · 상위 {st['root']} · "
+                         f"경과 {st['elapsed']}초 · {st['count']}개 수집 · {st['message']}"],
+                        className='small text-primary fw-semibold')
+    if st['status'] == 'done':
+        return html.Div([html.I(className='bi bi-check-circle-fill text-success me-1'),
+                         f"완료 — 상위 페이지 {st['root']} 아래 {st['count']}개 페이지 ({st['finished_at']})"],
+                        className='small')
+    if st['status'] == 'error':
+        return html.Div([html.I(className='bi bi-exclamation-triangle-fill text-danger me-1'),
+                         f"실패 — {st['message']}"], className='small text-danger')
+    return html.Div('상위 페이지를 입력하고 "추출"을 누르세요.', className='small text-muted')
+
+
+def _confl_tree_section():
+    """"컨플 하위 페이지 목록 추출"(2026-10, 사용자 요청) — 상위 페이지 하나의 주소/ID를
+    넣으면 그 아래 모든 하위 페이지의 제목·페이지 ID(10자리)를 엑셀로 내려받는다.
+    백엔드는 services/confl_tree.py(백그라운드 스레드 + 폴링)."""
+    return dbc.Card(dbc.CardBody([
+        html.Div([
+            html.I(className='bi bi-diagram-3 me-2 text-primary'),
+            html.Span('컨플 하위 페이지 목록 추출 — 제목 · 페이지 ID 엑셀', className='fw-semibold small'),
+            html.I(className='bi bi-question-circle ms-1', id='confl-tree-hint-icon',
+                   style={'fontSize': '0.75rem', 'color': '#6c757d', 'cursor': 'help'}),
+            dbc.Tooltip(
+                '상위 컨플 페이지의 페이지 ID(숫자) 또는 pageId가 들어간 주소를 넣으면, 그 아래 모든 '
+                '하위 페이지(최하위까지)의 제목과 페이지 ID를 엑셀로 뽑습니다. 이 ID를 과제별컨플의 '
+                '"컨플 주소"에 그대로 쓸 수 있습니다. 사내 컨플루언스 접속 설정(.env)이 필요합니다. '
+                '게이트웨이 호출 제한(분당 10회로 간격 조절, CONFLUENCE_MAX_CALLS_PER_MINUTE) 때문에 '
+                '페이지가 많으면 시간이 걸리며, 추출은 서버에서 계속 실행되므로 화면을 닫아도 됩니다.',
+                target='confl-tree-hint-icon', placement='right',
+            ),
+        ], className='mb-2'),
+        dbc.Row([
+            dbc.Col(dbc.Input(id='confl-tree-root', placeholder='상위 페이지 ID(예: 3862782334) 또는 주소',
+                              type='text', size='sm', debounce=False), md=5),
+            dbc.Col(dcc.Dropdown(
+                id='confl-tree-depth', value='all', clearable=False,
+                options=[{'label': '최하위까지 전부', 'value': 'all'},
+                         {'label': '1단계 아래까지', 'value': '1'},
+                         {'label': '2단계 아래까지', 'value': '2'},
+                         {'label': '3단계 아래까지', 'value': '3'}],
+            ), md=3),
+            dbc.Col(dbc.ButtonGroup([
+                dbc.Button([html.I(className='bi bi-search me-1'), '추출'], id='confl-tree-run-btn',
+                           color='primary', size='sm'),
+                dbc.Button([html.I(className='bi bi-file-earmark-excel me-1'), '엑셀 다운로드'],
+                           id='confl-tree-download-btn', color='success', outline=True, size='sm',
+                           disabled=not confl_tree.snapshot()['has_result']),
+            ]), md=4),
+        ], className='g-2 align-items-center'),
+        html.Div(_confl_tree_status_view(), id='confl-tree-status', className='mt-2'),
+        html.Hr(className='my-2'),
+        html.Div([
+            dbc.Button([html.I(className='bi bi-link-45deg me-1'), '과제별컨플에 반영(엑셀)'],
+                       id='confl-tree-apply-btn', color='primary', outline=True, size='sm', className='me-2',
+                       disabled=not confl_tree.snapshot()['has_result']),
+            html.Span('추출 결과(단계 2 = 과제)의 제목을 과제별컨플의 "과제명"과 비교해 "컨플 주소"에 페이지 ID를 넣고, '
+                      '"추출 결과(성공/실패)" 열을 붙인 엑셀을 내려받습니다. 확인 후 과제별컨플로 다시 업로드하세요.',
+                      className='small text-muted'),
+        ], className='d-flex align-items-center flex-wrap'),
+        html.Div(id='confl-tree-apply-msg', className='mt-2'),
+        dcc.Download(id='confl-tree-apply-download'),
+        dcc.Download(id='confl-tree-download'),
+        dcc.Interval(id='confl-tree-interval', interval=2000, disabled=not confl_tree.is_running()),
+    ]), className='shadow-sm mb-3')
+
+
 def _data_update_tab() -> html.Div:
     """매니페스트 등록 파일 중 20개(리더십진단·comments 제외)를 웹에서 직접
     업로드→실행할 수 있는 탭. 실제 실행/락/로그는 services/web_pipeline_runner.py.
@@ -328,6 +422,8 @@ def _data_update_tab() -> html.Div:
 
         html.Div(_confl_pdf_upload_section(), id='confl-pdf-section-container'),
         html.Div(id='confl-pdf-status', className='mt-2'),
+
+        html.Div(_confl_tree_section(), id='confl-tree-section-container'),
     ], className='pt-3')
 
 
@@ -462,6 +558,139 @@ def confl_pdf_on_delete(n_clicks_list):
     ok = wpr.delete_confl_pdf(trig['name'])
     msg, color = (f"{trig['name']} 삭제했습니다.", 'success') if ok else ('파일을 찾지 못했습니다.', 'warning')
     return _confl_pdf_upload_section(), _alert(msg, color)
+
+
+# ── 콜백: 컨플 PDF — 전체 선택 체크박스 → 각 파일 체크박스 일괄 토글 ───────────
+@callback(
+    Output({'type': 'confl-pdf-check', 'name': ALL}, 'value'),
+    Input('confl-pdf-select-all', 'value'),
+    State({'type': 'confl-pdf-check', 'name': ALL}, 'id'),
+    prevent_initial_call=True,
+)
+def confl_pdf_select_all(checked, ids):
+    return [bool(checked)] * len(ids)
+
+
+# ── 콜백: 컨플 PDF — 선택 삭제 ────────────────────────────────────────────────
+@callback(
+    Output('confl-pdf-section-container', 'children', allow_duplicate=True),
+    Output('confl-pdf-status', 'children', allow_duplicate=True),
+    Input('confl-pdf-del-selected-confirm', 'submit_n_clicks'),
+    State({'type': 'confl-pdf-check', 'name': ALL}, 'value'),
+    State({'type': 'confl-pdf-check', 'name': ALL}, 'id'),
+    prevent_initial_call=True,
+)
+def confl_pdf_delete_selected(submit_n_clicks, values, ids):
+    from services.auth import can
+    if not submit_n_clicks:
+        return no_update, no_update
+    if not can('manage_users'):
+        return no_update, _alert('관리자만 삭제할 수 있습니다.', 'danger')
+    names = [i['name'] for i, v in zip(ids or [], values or []) if v]
+    if not names:
+        return no_update, _alert('선택된 PDF가 없습니다. 삭제할 파일을 체크해주세요.', 'warning')
+    done, failed = wpr.delete_confl_pdfs(names)
+    msg = f'{done}건 삭제했습니다.' + (f' (찾지 못한 파일 {failed}건)' if failed else '')
+    return _confl_pdf_upload_section(), _alert(msg, 'success' if done else 'warning')
+
+
+# ── 콜백: 컨플 PDF — 전체 삭제 ────────────────────────────────────────────────
+@callback(
+    Output('confl-pdf-section-container', 'children', allow_duplicate=True),
+    Output('confl-pdf-status', 'children', allow_duplicate=True),
+    Input('confl-pdf-del-all-confirm', 'submit_n_clicks'),
+    prevent_initial_call=True,
+)
+def confl_pdf_delete_all(submit_n_clicks):
+    from services.auth import can
+    if not submit_n_clicks:
+        return no_update, no_update
+    if not can('manage_users'):
+        return no_update, _alert('관리자만 삭제할 수 있습니다.', 'danger')
+    names = [p['filename'] for p in wpr.list_confl_pdfs()]
+    if not names:
+        return no_update, _alert('삭제할 PDF가 없습니다.', 'warning')
+    done, failed = wpr.delete_confl_pdfs(names)
+    msg = f'PDF {done}건을 전부 삭제했습니다.' + (f' (실패 {failed}건)' if failed else '')
+    return _confl_pdf_upload_section(), _alert(msg, 'success' if done else 'warning')
+
+
+# ── 콜백: 컨플 하위 페이지 목록 추출 ─────────────────────────────────────────
+@callback(
+    Output('confl-tree-status', 'children', allow_duplicate=True),
+    Output('confl-tree-interval', 'disabled', allow_duplicate=True),
+    Output('confl-tree-download-btn', 'disabled', allow_duplicate=True),
+    Output('confl-tree-apply-btn', 'disabled', allow_duplicate=True),
+    Input('confl-tree-run-btn', 'n_clicks'),
+    State('confl-tree-root', 'value'),
+    State('confl-tree-depth', 'value'),
+    prevent_initial_call=True,
+)
+def confl_tree_start(n_clicks, root, depth):
+    from services.auth import can
+    if not n_clicks:
+        return no_update, no_update, no_update, no_update
+    if not can('manage_users'):
+        return _alert('관리자만 실행할 수 있습니다.', 'danger'), True, True, True
+    ok, reason = confl_tree.start(root or '', None if depth in (None, 'all') else int(depth))
+    if not ok:
+        return _alert(reason, 'warning'), not confl_tree.is_running(), True, True
+    return _confl_tree_status_view(), False, True, True
+
+
+@callback(
+    Output('confl-tree-status', 'children', allow_duplicate=True),
+    Output('confl-tree-interval', 'disabled', allow_duplicate=True),
+    Output('confl-tree-download-btn', 'disabled', allow_duplicate=True),
+    Output('confl-tree-apply-btn', 'disabled', allow_duplicate=True),
+    Input('confl-tree-interval', 'n_intervals'),
+    prevent_initial_call=True,
+)
+def confl_tree_poll(_n):
+    st = confl_tree.snapshot()
+    return _confl_tree_status_view(), st['status'] != 'running', not st['has_result'], not st['has_result']
+
+
+@callback(
+    Output('confl-tree-download', 'data'),
+    Input('confl-tree-download-btn', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def confl_tree_download(n_clicks):
+    from services.auth import can
+    if not n_clicks or not can('manage_users'):
+        return no_update
+    result = confl_tree.result_workbook()
+    if result is None:
+        return no_update
+    filename, data = result
+    return dcc.send_bytes(data, filename)
+
+
+@callback(
+    Output('confl-tree-apply-download', 'data'),
+    Output('confl-tree-apply-msg', 'children'),
+    Input('confl-tree-apply-btn', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def confl_tree_apply(n_clicks):
+    from datetime import datetime
+    from services.auth import can
+    if not n_clicks:
+        return no_update, no_update
+    if not can('manage_users'):
+        return no_update, _alert('관리자만 실행할 수 있습니다.', 'danger')
+    try:
+        data, summary, source = confl_match.build_updated_workbook(confl_tree.load_rows())
+    except ValueError as exc:
+        return no_update, _alert(str(exc), 'warning')
+    except Exception as exc:  # noqa: BLE001 — 파일 손상/형식 오류 등 사유를 그대로 보여준다
+        return no_update, _alert(f'반영 실패: {type(exc).__name__}: {exc}', 'danger')
+    msg = (f"{source} 기준 — 성공 {summary['success']}건 · 실패 {summary['fail']}건 · "
+           f"미매칭 페이지 {summary['unmatched_pages']}건(후보 {summary['candidates']}개). "
+           f"\"추출 결과\" 열은 {summary['result_column']}열입니다. 엑셀을 확인한 뒤 과제별컨플로 업로드하세요.")
+    filename = f"과제별컨플_추출반영_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+    return dcc.send_bytes(data, filename), _alert(msg, 'success')
 
 
 # ── 콜백: 데이터 업데이트 — 전체/선택 실행 ─────────────────────────────────────

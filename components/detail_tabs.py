@@ -6,11 +6,11 @@ from dash import html
 
 from components.timeline_data import (
     cell,
-    count_true,
-    count_us_registered,
     dedupe_patents,
     is_registered,
-    share_sum,
+    is_strategic_patent,
+    patent_summary,
+    patent_title,
 )
 
 _LEGEND_NEUTRAL = '#8c8c8c'
@@ -83,8 +83,30 @@ def publications_tab(pub_df, rid):
        style={'tableLayout': 'fixed', 'width': '100%'})])
 
 
+def strategic_badge(small: bool = True):
+    """'전략출원' 건 등급 옆에 붙이는 빨간 알약 배지("전략")."""
+    return dbc.Badge('전략', color='danger', pill=True, className='ms-1',
+                     style={'fontSize': '0.65rem'} if small else {})
+
+
+def patent_grade_cell(row):
+    """등급 셀 — 현재등급만 보여주고, 'A급구분'이 '전략출원'일 때만 뒤에 빨간
+    "전략" 배지를 붙인다(그 밖의 A급구분 값 — '없음' 포함 — 은 표시하지 않음)."""
+    grade = str(row.get('patent_grade', '')).strip()
+    grade = '' if grade in ('nan', 'None') else grade
+    parts = [grade or '-']
+    if is_strategic_patent(row):
+        parts.append(strategic_badge())
+    return parts
+
+
+def is_lead_value(value) -> bool:
+    return str(value).strip() in ('Y', 'y', '1', 'True', 'true')
+
+
 def patents_tab(pat_df, rid):
-    """연구원의 특허 실적 목록 (data/processed/patents.csv)."""
+    """연구원의 특허 실적 목록 (data/processed/patents.csv — 기술건(representative_
+    invention)이 Y인 유효 발명만 들어 있음, pipeline/process_patents.py)."""
     if pat_df.empty:
         return html.Div('특허 데이터 없음', className='text-muted p-3')
     pat = pat_df[pat_df['researcher_id'] == rid].copy()
@@ -92,56 +114,45 @@ def patents_tab(pat_df, rid):
         return html.Div('특허 실적 없음', className='text-muted p-3')
 
     pat_dedup = dedupe_patents(pat)
-    total_cnt = len(pat_dedup)
-    reg_cnt = int(pat_dedup['status'].apply(is_registered).sum()) if 'status' in pat_dedup.columns else 0
-    lead_cnt = count_true(pat_dedup, 'is_lead_inventor')
-    strat_cnt = int((pat_dedup.get('patent_grade_a_sub', pd.Series(dtype=str)).astype(str).str.strip() == '전략출원').sum())
-    us_reg_cnt = count_us_registered(pat_dedup)
-    share_sum_val = share_sum(pat_dedup)
+    st = patent_summary(pat_dedup)
 
     summary = dbc.Row([
-        dbc.Col(_dual_card(total_cnt, '전체 발명', 'text-dark',
-                           lead_cnt, '대표 발명', 'text-secondary'), md=3),
-        dbc.Col(_dual_card(total_cnt, '출원', 'text-primary',
-                           reg_cnt, '등록', 'text-success'), md=3),
-        dbc.Col(_single_card(strat_cnt, '전략 출원', 'text-warning'), md=2),
-        dbc.Col(_single_card(us_reg_cnt, '미국 등록', 'text-info'), md=2),
-        dbc.Col(_single_card(share_sum_val, '지분율 합계', 'text-danger'), md=2),
+        dbc.Col(_dual_card(st['total'], '전체 발명', 'text-dark',
+                           st['lead'], '대표 발명', 'text-secondary'), md=4),
+        dbc.Col(_dual_card(f"{st['applied']}({st['registered']})", '출원(등록)', 'text-primary',
+                           st['applied_share'], '출원 지분율', 'text-danger'), md=4),
+        dbc.Col(_dual_card(st['strategic'], '전략출원', 'text-warning',
+                           st['strategic_share'], '전략 지분율', 'text-danger'), md=4),
     ], className='mb-3 g-2')
 
     sort_col = 'application_date' if 'application_date' in pat_dedup.columns else pat_dedup.columns[0]
     rows = []
     for _, row in pat_dedup.sort_values(sort_col, ascending=False).iterrows():
         status_val = str(row.get('status', ''))
-        lead = str(row.get('is_lead_inventor', ''))
-        grade = str(row.get('patent_grade', ''))
-        grade_a = str(row.get('patent_grade_a_sub', ''))
-        grade_str = grade + (f'({grade_a})' if grade_a and grade_a not in ('', 'nan') else '')
         share_val = row.get('share_ratio', '')
         share_str = f'{share_val}%' if str(share_val).replace('.', '').isdigit() else '-'
         rows.append(html.Tr([
             html.Td(cell(row, 'application_date')[:7], style={'wordBreak': 'break-word'}),
-            html.Td(cell(row, 'title', 'title_ko'), style={'wordBreak': 'break-word'}),
+            html.Td(patent_title(row), style={'wordBreak': 'break-word'}),
             html.Td(dbc.Badge('등록', color='success') if is_registered(status_val)
                     else dbc.Badge(status_val or '출원', color='primary')),
-            html.Td(cell(row, 'application_id', 'application_no'), style={'wordBreak': 'break-word'}),
+            html.Td(cell(row, 'application_no', 'application_id'), style={'wordBreak': 'break-word'}),
             html.Td(dbc.Badge('대표', color='warning', text_color='dark')
-                    if lead in ('Y', 'y', '1', 'True', 'true') else ''),
+                    if is_lead_value(row.get('is_lead_inventor', ''))
+                    else dbc.Badge('참여', color='secondary')),
             html.Td(share_str),
-            html.Td(grade_str or '-', style={'wordBreak': 'break-word'}),
-            html.Td(cell(row, 'country'), style={'wordBreak': 'break-word'}),
+            html.Td(patent_grade_cell(row), style={'wordBreak': 'break-word'}),
         ]))
 
     return html.Div([summary, dbc.Table([
         html.Thead(html.Tr([
-            html.Th('출원일', style={'width': '9%'}),
-            html.Th('발명 명칭', style={'width': '24%'}),
-            html.Th('상태', style={'width': '9%'}),
-            html.Th('접수ID/출원번호', style={'width': '14%'}),
-            html.Th('대표발명자', style={'width': '9%'}),
-            html.Th('지분율', style={'width': '8%'}),
-            html.Th('등급', style={'width': '12%'}),
-            html.Th('출원 국가', style={'width': '15%'}),
+            html.Th('출원일', style={'width': '10%'}),
+            html.Th('발명 명칭', style={'width': '32%'}),
+            html.Th('상태', style={'width': '10%'}),
+            html.Th('출원번호/접수ID', style={'width': '18%'}),
+            html.Th('발명자 구분', style={'width': '10%'}),
+            html.Th('지분율', style={'width': '9%'}),
+            html.Th('등급', style={'width': '11%'}),
         ])),
         html.Tbody(rows),
     ], bordered=False, hover=True, size='sm',
@@ -224,8 +235,65 @@ def _ai_tag():
     ], style=_AI_TAG_STYLE)
 
 
+_CONTRIBUTION_COLORS = {'주도형': 'success', '참여형': 'info', '판정보류': 'light'}
+
+
+def _fmt_pct(value) -> str:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return '-'
+    return '-' if v != v else f'{v:.0f}%'
+
+
+def contribution_badge_row(contribution: dict | None):
+    """주도형/참여형 지표(researcher_contribution_metrics.csv, pipeline/
+    process_expertise_metrics.py) 한 줄 — 판정 배지 + 논문 주도·교신 비율,
+    특허 대표발명 비율, 최근 5년 주도 비율. 마우스를 올리면 판정 근거를
+    보여준다. 지표 파일이 없거나 해당 연구원 행이 없으면 None."""
+    if not contribution:
+        return None
+    ctype = str(contribution.get('contribution_type') or '').strip()
+    if not ctype:
+        return None
+
+    def _n(key):
+        try:
+            return int(float(contribution.get(key) or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    parts = []
+    if _n('pub_count'):
+        parts.append(f"논문 {_n('pub_count')}건 · 주저자/교신 {_fmt_pct(contribution.get('pub_lead_pct'))}"
+                     f" (최근5년 {_fmt_pct(contribution.get('recent_pub_lead_pct'))})")
+    if _n('pat_count'):
+        parts.append(f"특허 {_n('pat_count')}건 · 대표발명 {_fmt_pct(contribution.get('pat_lead_pct'))}"
+                     f" (최근5년 {_fmt_pct(contribution.get('recent_pat_lead_pct'))})")
+    color = _CONTRIBUTION_COLORS.get(ctype, 'light')
+    return html.Div([
+        html.Span('연구 기여 유형', className='small text-muted fw-semibold me-2'),
+        dbc.Badge(ctype, color=color, text_color='dark' if color == 'light' else None, className='me-2'),
+        html.Span(' / '.join(parts) or '논문·특허 실적 없음', className='small text-muted'),
+    ], title=str(contribution.get('contribution_basis') or ''), className='d-flex align-items-center flex-wrap mb-2')
+
+
+def collaborator_row(collaborators: list | None, name_map: dict | None = None):
+    """주요 협업자(collaboration_metrics.csv 상위 5명 — 같은 논문 공저/특허
+    공동발명 횟수 기준). 없으면 None."""
+    if not collaborators:
+        return None
+    name_map = name_map or {}
+    return html.Div([
+        html.Span('주요 협업자', className='small text-muted fw-semibold me-2'),
+        *[dbc.Badge(f'{name_map.get(rid, rid)} · {n}', color='light', text_color='dark',
+                    className='me-1 mb-1 border') for rid, n in collaborators],
+    ], title='같은 논문 공저·특허 공동발명 횟수 기준 상위 5명', className='d-flex align-items-center flex-wrap mb-2')
+
+
 def llm_summary_block(profile: dict | None, similar: list | None = None, name_map: dict | None = None,
-                       *, include_responsibilities: bool = True, deemphasize_strength: bool = False):
+                       *, include_responsibilities: bool = True, deemphasize_strength: bool = False,
+                       contribution: dict | None = None, collaborators: list | None = None):
     """전문성 요약(LLM) — 연구원 보유 전문성 분석.json의 핵심 분야(strength_fields)/
     키워드(strength_keywords)를 배지로, 주요 역할·책임(key_responsibilities)과
     전문지식 및 역량(domain_knowledge_skill)은 둘 다 불릿 목록(bullet_list(),
@@ -251,16 +319,24 @@ def llm_summary_block(profile: dict | None, similar: list | None = None, name_ma
     AI 생성 결과임을 표시할 자리가 필요해짐). 화면(라이브) 탭 호출부는 이
     인자를 넘기지 않아 기존
     배지+회색 텍스트 라벨 그대로다(제목 제거·(by AI) 표기 모두 인쇄본
-    전용)."""
+    전용).
+    contribution(researcher_contribution_metrics.csv의 해당 연구원 행 dict,
+    2026-10 추가)이 주어지면 맨 위에 "연구 기여 유형"(주도형/참여형/판정보류)
+    한 줄을 붙인다 — LLM 결과가 아니라 논문·특허 원천 데이터 집계라 LLM
+    분석 데이터가 없어도 표시한다."""
+    contribution_row = contribution_badge_row(contribution)
+    collab_row = collaborator_row(collaborators, name_map)
+    extra_rows = [r for r in (contribution_row, collab_row) if r]
     if not profile:
-        return html.Div('분석 데이터 없음', className='text-muted small p-1')
+        empty = html.Div('분석 데이터 없음', className='text-muted small p-1')
+        return extra_rows + [empty] if extra_rows else empty
 
     fields = profile.get('strength_fields') or []
     keywords = profile.get('strength_keywords') or []
     responsibilities = profile.get('key_responsibilities') or []
     domain_skill = profile.get('domain_knowledge_skill') or []
 
-    children = []
+    children = list(extra_rows)
     if fields:
         if deemphasize_strength:
             children.append(html.Div([
@@ -284,6 +360,18 @@ def llm_summary_block(profile: dict | None, similar: list | None = None, name_ma
             children.append(html.Div(
                 [dbc.Badge(k, color='secondary', className='me-1 mb-1') for k in keywords],
             ))
+    # 현재/과거 주력 분야(2026-10) — 재분석 전 결과에는 없으므로 있을 때만.
+    focus = profile.get('current_focus_fields') or []
+    past = profile.get('past_fields') or []
+    if (focus or past) and not deemphasize_strength:
+        line = []
+        if focus:
+            line += [html.Span('현재 주력', className='small text-muted fw-semibold me-1')] + [
+                dbc.Badge(f, color='primary', className='me-1 mb-1') for f in focus]
+        if past:
+            line += [html.Span('과거 주력', className='small text-muted fw-semibold ms-2 me-1')] + [
+                dbc.Badge(f, color='light', text_color='secondary', className='me-1 mb-1') for f in past]
+        children.append(html.Div(line, className='d-flex align-items-center flex-wrap mt-2'))
     if responsibilities and include_responsibilities:
         children.append(html.Div('주요 역할·책임', className='small text-muted fw-semibold mt-2 mb-1'))
         children.append(bullet_list(responsibilities))

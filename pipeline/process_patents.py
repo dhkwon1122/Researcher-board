@@ -13,6 +13,15 @@
       등록번호 있음        → '등록'
       등록번호 없고 출원번호 있음 → '출원'
       둘 다 없음           → '' (공란)
+  - 기술건(representative_invention, 2026-10 추가): 같은 특허를 여러 나라에
+    출원하면 국가별로 여러 행이 생기는데, 그중 이 특허를 대표하는 행만
+    'Y'/'y'로 표시한다. **Y/y인 행만 유효한 발명건으로 저장**하고 나머지는
+    버린다(건수·지분율이 국가 수만큼 부풀지 않도록). 원본에 '기술건' 컬럼이
+    없으면 모든 행이 유효하지 않은 것으로 보고, 기존 patents.csv를 지우는
+    사고를 막기 위해 아무것도 저장하지 않고 중단한다. 기존 patents.csv에
+    이 컬럼이 없던 시절(legacy)에 쌓인 행은 이번 실행에서 함께 삭제한다.
+  - 발명 명칭: title=발명명칭 - 영문, title_ko=발명명칭 - 국문. 화면은 국문을
+    우선하고 비어 있으면 영문으로 대체한다.
   - project_name/project_code: 원본에 '과제명'/'과제코드' 컬럼이 있으면 함께
     저장(OPTIONAL_COLS). 타임라인(components/timeline_data.py)에서 이 특허가
     어떤 과제(task_name/task_code)에 속하는지 연결하는 데 쓰인다. 원본에
@@ -23,7 +32,8 @@
   COL_ID      : 사번 컬럼명
   COL_APP_ID  : 접수ID 컬럼명
   COL_TITLE   : 발명명칭 - 영문 컬럼명
-  COL_TITLE_KO: 발명명칭(한글) 컬럼명
+  COL_TITLE_KO: 발명명칭 - 국문 컬럼명
+  COL_REP     : 기술건(유효 발명건 Y/y) 컬럼명
   COL_SHARE   : 지분율 컬럼명
   COL_LEAD    : 대표발명자여부 컬럼명
   COL_GRADE   : 현재등급 컬럼명
@@ -42,7 +52,8 @@ _PATENT_HEADER_ROW = 0  # sources.py 매니페스트 기준 (1번째 행)
 COL_ID       = '사번'
 COL_APP_ID   = '접수ID'
 COL_TITLE    = '발명명칭 - 영문'
-COL_TITLE_KO = '발명명칭'
+COL_TITLE_KO = '발명명칭 - 국문'
+COL_REP      = '기술건'
 COL_SHARE    = '지분율'
 COL_LEAD     = '대표발명자여부'
 COL_GRADE    = '현재등급'
@@ -68,11 +79,34 @@ OPTIONAL_COLS = [
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
+from source_files import resolve_excel  # noqa: E402
 from excel_reader import is_blank, parse_yyyymmdd, read_xlsx, norm_id
 from merge_utils import TABLE_KEYS, write_merged
 from source_reader import read_source
 
 _DATE_DST_COLS = {'application_date', 'registration_date'}
+
+
+def _purge_stale_rows(out_path: str, new_file_app_ids: set) -> None:
+    """병합 전에 기존 patents.csv에서 (1) 기술건 컬럼이 없던 시절의 legacy 행 전체,
+    (2) 이번 파일에 다시 등장한 접수ID의 기존 행(유효 여부가 바뀌었을 수 있음)을
+    지운다. 나머지 기존 유효 행은 그대로 두고 write_merged()가 업서트한다."""
+    import csv as _csv
+    from merge_utils import read_existing
+
+    existing = read_existing(out_path)
+    if existing.empty:
+        return
+    if 'representative_invention' not in existing.columns:
+        kept = existing.iloc[0:0]
+        print(f'[patents] 기존 patents.csv {len(existing)}행은 기술건 도입 이전 데이터라 삭제합니다.')
+    else:
+        keep = (existing['representative_invention'].astype(str).str.strip().str.upper() == 'Y') \
+            & ~existing['application_id'].astype(str).str.strip().isin(new_file_app_ids)
+        kept = existing[keep]
+        if len(kept) != len(existing):
+            print(f'[patents] 기존 {len(existing) - len(kept)}행 정리(재등장 접수ID/유효하지 않은 행).')
+    kept.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=_csv.QUOTE_NONNUMERIC)
 
 
 def process(raw_dir: str = RAW_DIR) -> bool:
@@ -82,7 +116,7 @@ def process(raw_dir: str = RAW_DIR) -> bool:
             print('[SKIP] patents 원천 데이터 없음 '
                   '(DB patents_stg 또는 data/raw_csv/patents.csv) — patents_raw 폴백 시도')
     else:
-        raw_path = os.path.join(raw_dir, PATENT_FILE)
+        raw_path = resolve_excel(raw_dir, PATENT_FILE)
         if os.path.exists(raw_path):
             df = read_xlsx(raw_path, header_row=_PATENT_HEADER_ROW)
         else:
@@ -104,9 +138,26 @@ def process(raw_dir: str = RAW_DIR) -> bool:
         )
         return False
 
+    if COL_REP not in df.columns:
+        print(
+            f'[ERROR] 필수 컬럼 없음: [{COL_REP}] — 기술건이 Y/y인 행만 유효한 발명건이라 '
+            f'이 컬럼이 없으면 저장할 데이터가 없습니다(기존 patents.csv는 그대로 둡니다).\n'
+            f'  현재 파일 헤더: {list(df.columns)}'
+        )
+        return False
+
     # 사번 정규화
     df['researcher_id'] = df[COL_ID].apply(norm_id)
     df = df[df['researcher_id'] != ''].copy()
+
+    # 기술건(대표 행) 필터 — 국가별로 여러 행인 같은 특허가 여러 건으로 보이지 않게
+    # Y/y인 행만 남긴다. 이번 파일에 등장한 접수ID는(유효 행이 없더라도) 기존
+    # 저장분에서 먼저 지워 두어, 예전에 유효로 저장됐던 행이 남지 않게 한다.
+    all_app_ids = set(df[COL_APP_ID].astype(str).str.strip())
+    df = df[df[COL_REP].astype(str).str.strip().str.upper() == 'Y'].copy()
+    if df.empty:
+        print('[ERROR] 기술건이 Y인 유효 발명건이 없습니다 — 기존 patents.csv는 그대로 둡니다.')
+        return False
 
     # ── 핵심 컬럼 매핑 ─────────────────────────────────────────────────────────
     def _col(name):
@@ -115,6 +166,7 @@ def process(raw_dir: str = RAW_DIR) -> bool:
     result = pd.DataFrame({
         'researcher_id':      df['researcher_id'],
         'application_id':     _col(COL_APP_ID),
+        'representative_invention': 'Y',
         'title':              _col(COL_TITLE),
         'title_ko':           _col(COL_TITLE_KO),
         'share_ratio':        _col(COL_SHARE),
@@ -150,6 +202,7 @@ def process(raw_dir: str = RAW_DIR) -> bool:
     result = result.sort_values(['researcher_id', 'application_id']).reset_index(drop=True)
 
     out_path = os.path.join(OUT_DIR, 'patents.csv')
+    _purge_stale_rows(out_path, all_app_ids)
     merged = write_merged(out_path, result, TABLE_KEYS['patents'])
 
     n_patents   = merged['application_id'].nunique()

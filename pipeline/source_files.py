@@ -28,6 +28,8 @@ import os
 
 PatternLike = str | list[str] | tuple[str, ...]
 
+EXCEL_EXTS = ('.xlsx', '.xlsb')
+
 
 def _as_pattern_list(pattern: PatternLike) -> list[str]:
     if isinstance(pattern, (list, tuple)):
@@ -35,12 +37,46 @@ def _as_pattern_list(pattern: PatternLike) -> list[str]:
     return [pattern]
 
 
+def _with_xlsb_variants(patterns: list[str]) -> list[str]:
+    """'*.xlsx'로 끝나는 패턴/파일명에는 같은 이름의 '.xlsb' 변형도 함께 매칭시킨다
+    (2026-10, 사용자 확정 — 모든 데이터 항목이 xlsx·xlsb 어느 쪽이든 허용).
+    반대로 '*.xlsb'로 끝나면 '.xlsx' 변형을 추가한다."""
+    out: list[str] = []
+    for pat in patterns:
+        for variant in (pat, *_alt_excel_names(pat)):
+            if variant not in out:
+                out.append(variant)
+    return out
+
+
+def _alt_excel_names(name: str) -> list[str]:
+    stem, ext = os.path.splitext(name)
+    if ext.lower() in EXCEL_EXTS:
+        return [stem + alt for alt in EXCEL_EXTS if alt != ext.lower()]
+    return []
+
+
+def resolve_excel(directory: str, filename: str) -> str:
+    """정확한 파일명(예: '특허 리스트.xlsx')의 전체 경로를 반환하되, 그 파일이 없고
+    같은 이름의 다른 엑셀 확장자(.xlsb/.xlsx) 파일이 있으면 그 경로를 반환한다.
+    둘 다 없으면 원래 경로를 그대로 돌려줘 호출부의 기존 '파일 없음' 처리가
+    그대로 동작한다."""
+    exact = os.path.join(directory, filename)
+    if os.path.exists(exact):
+        return exact
+    for alt in _alt_excel_names(filename):
+        cand = os.path.join(directory, alt)
+        if os.path.exists(cand):
+            return cand
+    return exact
+
+
 def find_matches(directory: str, pattern: PatternLike, exclude: str | None = None) -> list[str]:
     """directory 안에서 pattern(문자열 또는 문자열 리스트)에 맞는 파일의 전체
     경로를, 수정시각(mtime) 오름차순으로 반환한다. 디렉터리가 없으면 빈 리스트."""
     if not os.path.isdir(directory):
         return []
-    patterns = _as_pattern_list(pattern)
+    patterns = _with_xlsb_variants(_as_pattern_list(pattern))
     matched = []
     for name in os.listdir(directory):
         if exclude and exclude in name:

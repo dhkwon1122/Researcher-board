@@ -6,6 +6,8 @@ __pycache__/
 data/raw/
 data/raw_csv/
 data/raw_archive/
+# 웹 화면 업로드/실행 상태(런타임 파일 — 업로드 원본, 잠금, 추출 상태/결과)는 서버마다 달라 형상관리 제외
+data/web_updates/
 data/photo/
 data/processed/*
 *.csv

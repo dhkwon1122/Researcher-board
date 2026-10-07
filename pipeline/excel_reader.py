@@ -57,6 +57,20 @@ def clean_str(val) -> str:
     return '' if s.lower() in _BLANK_STRINGS else s
 
 
+def _excel_serial_to_date(s: str) -> str:
+    """엑셀 날짜 일련번호('45678' 또는 '45678.0', 대략 1954~2064년)를 'YYYY-MM-DD'로.
+    .xlsb를 리눅스에서 pyxlsb로 읽으면 날짜 셀이 서식 정보 없이 일련번호 숫자로
+    들어와(xlsx는 날짜 객체로 읽힘) 이를 되돌리는 용도(2026-10). 8자리 YYYYMMDD와
+    겹치지 않도록 정확히 5자리 정수 범위(20000~60000)만 변환하고, 아니면 ''."""
+    try:
+        v = float(s)
+    except (TypeError, ValueError):
+        return ''
+    if not (20000 <= v < 60000):
+        return ''
+    return (pd.Timestamp('1899-12-30') + pd.to_timedelta(int(v), unit='D')).strftime('%Y-%m-%d')
+
+
 def parse_yyyymmdd(val) -> str:
     """YYYYMMDD(숫자 또는 문자열) 또는 이미 YYYY-MM-DD 형식인 값 → 'YYYY-MM-DD'.
     변환 불가/빈 값이면 빈 문자열. (실수형으로 읽힌 20230101.0 도 처리)"""
@@ -65,6 +79,10 @@ def parse_yyyymmdd(val) -> str:
     s = str(val).strip().split('.')[0]
     if is_blank(s):
         return ''
+    if len(s) == 5 and s.isdigit():
+        serial = _excel_serial_to_date(s)
+        if serial:
+            return serial
     if len(s) == 8 and s.isdigit():
         return f'{s[:4]}-{s[4:6]}-{s[6:]}'
     if len(s) >= 10 and s[4] == '-':
@@ -93,6 +111,9 @@ def parse_flexible_date(val) -> str:
     s = str(val).strip()
     if is_blank(s):
         return ''
+    serial = _excel_serial_to_date(s) if s.replace('.', '', 1).isdigit() else ''
+    if serial:
+        return serial
     try:
         return pd.to_datetime(s).strftime('%Y-%m-%d')
     except Exception:
@@ -308,10 +329,16 @@ def _read_with_pandas(file_path: str, sheet: int | str = 0, header_row: int | st
         else:
             df = pd.read_excel(file_path, sheet_name=sheet, header=header_row, engine=engine)
     except Exception:
+        # pyxlsb가 실제로 설치돼 있지 않을 때만 설치 안내를 보여준다(2026-10 수정 —
+        # 예전엔 xlsb 읽기가 어떤 이유로 실패하든 이 안내로 바꿔 던져, 패키지가
+        # 있는데도 손상/형식 오류 파일이 "pyxlsb 필요"로 오인됐다).
         if engine == 'pyxlsb':
-            raise ImportError(
-                '.xlsb 파일 읽기에 pyxlsb 패키지가 필요합니다: pip install pyxlsb'
-            )
+            try:
+                import pyxlsb  # noqa: F401
+            except ImportError:
+                raise ImportError(
+                    '.xlsb 파일 읽기에 pyxlsb 패키지가 필요합니다: pip install pyxlsb'
+                )
         raise
     df.columns = [str(c).strip() for c in df.columns]
     return df

@@ -16,12 +16,14 @@
 """
 
 import os
+import re
 import sys
 
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
+from source_files import resolve_excel  # noqa: E402
 from excel_reader import clean_str as _clean, read_xlsx
 from merge_utils import TABLE_KEYS, write_merged
 from source_reader import read_source
@@ -35,6 +37,15 @@ COL_CONFL = '컨플 주소'
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _clean_confl_address(val) -> str:
+    """컨플 주소 셀 정리 — 페이지 ID만 숫자로 적힌 셀이 엑셀에서 실수로 읽혀
+    '3957970224.0'이 되면 소수부(.0)를 떼어 '3957970224'로 저장한다(전체 URL은 그대로)."""
+    s = _clean(val)
+    if re.fullmatch(r'\d+\.0+', s):
+        return s.split('.')[0]
+    return s
+
+
 def process(raw_dir: str = RAW_DIR) -> bool:
     if raw_dir == RAW_DIR:
         df = read_source('project_confl_address')
@@ -43,7 +54,7 @@ def process(raw_dir: str = RAW_DIR) -> bool:
                   '(DB project_confl_address_stg 또는 data/raw_csv/project_confl_address.csv)')
             return False
     else:
-        raw_path = os.path.join(raw_dir, SOURCE_FILE)
+        raw_path = resolve_excel(raw_dir, SOURCE_FILE)
         if not os.path.exists(raw_path):
             print(f'[SKIP] {SOURCE_FILE} 파일 없음')
             return False
@@ -63,7 +74,7 @@ def process(raw_dir: str = RAW_DIR) -> bool:
     result = pd.DataFrame({
         'dep_name': df[COL_DEP].apply(_clean),
         'project_name': df[COL_PROJECT].apply(_clean),
-        'confl_address': df[COL_CONFL].apply(_clean),
+        'confl_address': df[COL_CONFL].apply(_clean_confl_address),
     })
     result = result[result['project_name'] != ''].reset_index(drop=True)
 

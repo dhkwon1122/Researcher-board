@@ -25,6 +25,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
+from source_files import resolve_excel  # noqa: E402
 from excel_reader import clean_str as _clean, read_xlsx
 from source_reader import read_source
 
@@ -45,7 +46,7 @@ def process(raw_dir: str = RAW_DIR) -> bool:
                   '(DB job_profile_info_sait_stg 또는 data/raw_csv/job_profile_info_sait.csv)')
             return False
     else:
-        raw_path = os.path.join(raw_dir, SOURCE_FILE)
+        raw_path = resolve_excel(raw_dir, SOURCE_FILE)
         if not os.path.exists(raw_path):
             print(f'[SKIP] {SOURCE_FILE} 파일 없음')
             return False

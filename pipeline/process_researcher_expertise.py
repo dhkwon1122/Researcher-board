@@ -21,6 +21,14 @@ Source:
   data/processed/publications.csv                    (저널 권위도는 journal_authority.py가 별도 조회/캐시)
   data/processed/patents.csv
   data/processed/work_objective.csv                  (24~26년 업무목표, process_work_objective.py가 생성)
+  data/processed/work_experience.csv                 (입사 전 근무 경력, 2026-10 추가)
+  data/processed/nurturing.csv                       (양성 이력 — 위탁교육/학위과정, 2026-10 추가)
+
+과제/직무/논문/특허 항목에는 기준일 대비 시기 표시([최근 3년]/[3~6년 전]/
+[6년 이전])를, 과제에는 기간·평균 투입률·환산 M/M을 붙여 LLM이 최근에
+깊게 수행한 분야를 강점으로 우선하도록 한다(2026-10, 사용자 확정 — 가중치
+1.0/0.5/0.25). 출력에 current_focus_fields(현재 주력)/past_fields(과거 주력)
+가 추가됐다.
 
 저널 권위도 조회/캐시 로직은 pipeline/journal_authority.py로 분리되어 있다.
 평가 값이 실제로 채워진 저널은 건너뛰고, 값이 비어 있는(신규거나 이전 조회
@@ -76,7 +84,8 @@ from services.period_snapshot import resolve_period_snapshot  # noqa: E402
 _SYSTEM_PROMPT = """# Role
 당신은 R&D 인재 전문성 분석 전문가인 "R&D Talent Profiling Agent"입니다.
 입력된 한 연구원의 학력, 과제 수행 이력, 직무 이력, 핵심기술, 보유기술, 논문,
-특허, 업무목표 데이터를 정밀 분석하여, 이 연구원이 실제로 맡아온 역할·업무와
+특허, 업무목표, 입사 전 근무 경력, 양성(위탁교육·학위과정) 이력 데이터를 정밀
+분석하여, 이 연구원이 실제로 맡아온 역할·업무와
 보유한 전문성을 오직 팩트(Fact) 기반으로 도출하는 역할을 수행합니다.
 
 # Goal
@@ -113,18 +122,71 @@ HR 담당자와 R&D 부서장이 이 연구원이 "실제로 어떤 일을 해�
 6. key_responsibilities와 domain_knowledge_skill은 관점이 다릅니다 —
    전자는 "실제 수행 업무(무엇을 했는가)", 후자는 "보유 지식·역량(무엇을
    아는가/할 수 있는가)"입니다. 같은 내용을 두 필드에 중복해서 넣지 마세요.
-7. 반드시 아래 JSON 형식으로만 출력하고, 그 외 텍스트는 출력하지 마세요.
+7. 최근성·깊이 가중: 과제/직무/논문/특허 항목에는 [최근 3년]/[3~6년 전]/
+   [6년 이전] 시기 표시와(과제는) 투입률·환산 M/M(맨먼스)이 붙어 있습니다.
+   strength_fields/strength_keywords를 정할 때 시기별 가중치를 최근 3년 1.0,
+   3~6년 전 0.5, 6년 이전 0.25로 보고, 같은 시기라면 환산 M/M이 큰(오래·
+   깊게 수행한) 분야를 우선하세요. 오래전에 짧게 참여한 분야만으로 강점을
+   정하지 마세요.
+8. current_focus_fields(현재 주력 분야)는 최근 3년 근거로 뒷받침되는 분야만
+   1~3개, past_fields(과거 주력 분야)는 예전에는 깊게 수행했지만 최근 3년
+   근거가 약한 분야를 0~3개 쓰세요. 두 필드에 같은 분야를 넣지 마세요.
+   시기 정보가 없어 판단할 수 없으면 빈 배열로 두세요.
+9. [입사 전 근무 경력]은 이 연구원의 실제 경력이므로 strength_fields와
+   domain_knowledge_skill의 근거로 활용하되, 사내 과제 근거보다 낮은
+   비중(6년 이전 수준)으로 보세요. 출력에 회사명을 그대로 쓰지 마세요.
+   [양성 이력](박사과정·위탁교육 등)은 해당 전공·분야의 학술적 지식 근거로
+   domain_knowledge_skill에 반영할 수 있습니다.
+10. 반드시 아래 JSON 형식으로만 출력하고, 그 외 텍스트는 출력하지 마세요.
 
 # Output Format (JSON)
 {
   "strength_fields": ["강점 분야1", "강점 분야2"],
   "strength_keywords": ["키워드1", "키워드2", "키워드3"],
   "key_responsibilities": ["주요 역할/책임 1", "주요 역할/책임 2"],
-  "domain_knowledge_skill": ["전문지식/역량 1", "전문지식/역량 2"]
+  "domain_knowledge_skill": ["전문지식/역량 1", "전문지식/역량 2"],
+  "current_focus_fields": ["현재 주력 분야1"],
+  "past_fields": ["과거 주력 분야1"]
 }
 """
 
-_PROFILE_LIST_FIELDS = ('strength_fields', 'strength_keywords', 'key_responsibilities', 'domain_knowledge_skill')
+_PROFILE_LIST_FIELDS = ('strength_fields', 'strength_keywords', 'key_responsibilities', 'domain_knowledge_skill',
+                        'current_focus_fields', 'past_fields')
+
+# 최근성 구간(2026-10, 사용자 확정): 기준일로부터 3년 이내 / 3~6년 / 그 이전.
+# 가중치(1.0/0.5/0.25)는 프롬프트 지침 7번에 그대로 적혀 있다.
+_RECENT_YEARS = 3
+_MID_YEARS = 6
+_NO_DATA = '(데이터 없음)'
+
+
+def _parse_date(value) -> date | None:
+    """'20200801'/'2020-08-01'/'2020.08'/'2020' 등 원천마다 다른 날짜 표기를
+    date로. 연/월만 있으면 1일, 연도만 있으면 그해 중간(7월 1일)으로 본다
+    (연도만 있는 논문이 실제보다 오래된 것으로 분류되지 않게)."""
+    digits = re.sub(r'\D', '', _clean(value))
+    try:
+        if len(digits) >= 8:
+            return date(int(digits[:4]), int(digits[4:6]), int(digits[6:8]))
+        if len(digits) >= 6:
+            return date(int(digits[:4]), int(digits[4:6]), 1)
+        if len(digits) == 4:
+            return date(int(digits), 7, 1)
+    except ValueError:
+        return None
+    return None
+
+
+def _recency_label(last: date | None, ref_date: date) -> str:
+    """마지막 활동일(진행 중이면 기준일) 기준 시기 표시. 날짜가 없으면 ''."""
+    if last is None:
+        return ''
+    years = (ref_date - last).days / 365.25
+    if years <= _RECENT_YEARS:
+        return '[최근 3년]'
+    if years <= _MID_YEARS:
+        return '[3~6년 전]'
+    return '[6년 이전]'
 
 
 def _read_csv(name: str) -> pd.DataFrame:
@@ -181,27 +243,103 @@ def _education_text(edu_rows: pd.DataFrame) -> str:
     return '\n'.join(lines) if lines else '(데이터 없음)'
 
 
-def _task_history_text(task_rows: pd.DataFrame, info_df: pd.DataFrame) -> str:
+def _task_history_text(task_rows: pd.DataFrame, info_df: pd.DataFrame, ref_date: date | None = None) -> str:
+    """과제별로 수행 기간(가장 이른 시작 ~ 가장 늦은 종료, 비어 있으면 진행중),
+    평균 투입률, 환산 M/M(행별 개월수 × 투입률 합), 시기 표시를 붙인다
+    (2026-10 — 전문성 깊이·최근성 반영). 최근 활동 순으로 정렬한다."""
     if task_rows.empty:
-        return '(데이터 없음)'
+        return _NO_DATA
+    ref_date = ref_date or date.today()
     info_by_name = info_df.drop_duplicates('task_name').set_index('task_name') if not info_df.empty else pd.DataFrame()
-    lines = []
-    for name in task_rows['task_name'].dropna().unique():
-        name = _clean(name)
+
+    summary = {}  # name -> {start, end, ongoing, rates, mm}
+    for _, r in task_rows.iterrows():
+        name = _clean(r.get('task_name'))
         if not name:
             continue
-        block = [f'- 과제명: {name}']
+        st = _parse_date(r.get('start_date'))
+        en = _parse_date(r.get('end_date'))
+        ongoing = en is None or en > ref_date
+        en_eff = ref_date if ongoing else en
+        try:
+            rate = float(str(r.get('input_rate', '')).replace('%', '').strip())
+        except ValueError:
+            rate = None
+        item = summary.setdefault(name, {'start': None, 'end': None, 'ongoing': False, 'rates': [], 'mm': 0.0})
+        if st and (item['start'] is None or st < item['start']):
+            item['start'] = st
+        if en_eff and (item['end'] is None or en_eff > item['end']):
+            item['end'] = en_eff
+        item['ongoing'] = item['ongoing'] or (st is not None and ongoing)
+        if rate is not None:
+            item['rates'].append(rate)
+        if st and en_eff and en_eff >= st:
+            months = (en_eff - st).days / 30.44
+            item['mm'] += months * (rate if rate is not None else 100.0) / 100.0
+
+    lines = []
+    total_mm = 0.0
+    ordered = sorted(summary.items(), key=lambda kv: kv[1]['end'] or date.min, reverse=True)
+    for name, item in ordered:
+        label = _recency_label(item['end'], ref_date) if item['start'] else ''
+        head = f'- {label + " " if label else ""}과제명: {name}'
+        meta = []
+        if item['start']:
+            end_txt = '진행중' if item['ongoing'] else item['end'].strftime('%Y.%m')
+            meta.append(f'기간 {item["start"].strftime("%Y.%m")}~{end_txt}')
+        if item['rates']:
+            meta.append(f'평균 투입률 {sum(item["rates"]) / len(item["rates"]):.0f}%')
+        if item['mm']:
+            meta.append(f'환산 {item["mm"]:.1f} M/M')
+            total_mm += item['mm']
+        block = [head + (f' ({", ".join(meta)})' if meta else '')]
         if not info_by_name.empty and name in info_by_name.index:
             info_row = info_by_name.loc[name]
-            for label, col in (
+            for lbl, col in (
                 ('수행목적', 'task_goal'), ('가치', 'task_value'), ('확보전략', 'task_howtoget'),
                 ('예상문제', 'task_expectissue'), ('활용계획', 'task_Activityplan'), ('향후활용계획', 'task_futureusage'),
             ):
                 val = _clean(info_row.get(col, ''))
                 if val:
-                    block.append(f'  {label}: {val}')
+                    block.append(f'  {lbl}: {val}')
         lines.append('\n'.join(block))
-    return '\n'.join(lines) if lines else '(데이터 없음)'
+    if not lines:
+        return _NO_DATA
+    if total_mm:
+        lines.append(f'(과제 합계 환산 {total_mm:.1f} M/M)')
+    return '\n'.join(lines)
+
+
+def _work_experience_text(rows: pd.DataFrame) -> str:
+    """입사 전 근무 경력(work_experience.csv) — 회사/직무명/기간."""
+    if rows.empty:
+        return _NO_DATA
+    lines = []
+    for _, r in rows.iterrows():
+        company, role = _clean(r.get('company_name')), _clean(r.get('role_name'))
+        if not (company or role):
+            continue
+        start, end = _clean(r.get('work_start_date')), _clean(r.get('work_end_date'))
+        period = f' ({start}~{end})' if start or end else ''
+        lines.append(f'- {company or "-"}: {role or "직무 미기재"}{period}')
+    return '\n'.join(lines) if lines else _NO_DATA
+
+
+def _nurturing_text(rows: pd.DataFrame) -> str:
+    """양성 이력(nurturing.csv) — 위탁교육/학위과정 구분·기관·전공·기간."""
+    if rows.empty:
+        return _NO_DATA
+    lines = []
+    for _, r in rows.iterrows():
+        kind = ' / '.join(v for v in (_clean(r.get('category')), _clean(r.get('subcategory'))) if v)
+        inst, major = _clean(r.get('institution')), _clean(r.get('major'))
+        if not (kind or inst or major):
+            continue
+        start, end = _clean(r.get('start_date')), _clean(r.get('end_date'))
+        period = f' ({start}~{end})' if start or end else ''
+        detail = ', '.join(v for v in (inst, f'전공 {major}' if major else '') if v)
+        lines.append(f'- [{kind or "양성"}] {detail or "-"}{period}')
+    return '\n'.join(lines) if lines else _NO_DATA
 
 
 def _project_role_text(role_rows: pd.DataFrame) -> str:
@@ -220,7 +358,8 @@ def _project_role_text(role_rows: pd.DataFrame) -> str:
     return '\n'.join(lines) if lines else '(데이터 없음)'
 
 
-def _job_history_text(job_row: pd.Series, std_map: dict, sait_map: dict) -> str:
+def _job_history_text(job_row: pd.Series, std_map: dict, sait_map: dict, ref_date: date | None = None) -> str:
+    ref_date = ref_date or date.today()
     if job_row is None:
         return '(데이터 없음)'
     slot_idxs = _job_slot_indices(job_row.index)
@@ -231,7 +370,9 @@ def _job_history_text(job_row: pd.Series, std_map: dict, sait_map: dict) -> str:
             continue
         start = _clean(job_row.get(f'job_start_date_{i}', ''))
         end = _clean(job_row.get(f'job_end_date_{i}', '')) or '진행중'
-        block = [f'- {name} ({start}~{end})']
+        end_d = _parse_date(end)
+        label = _recency_label(ref_date if end_d is None or end_d > ref_date else end_d, ref_date) if start else ''
+        block = [f'- {label + " " if label else ""}{name} ({start}~{end})']
         if name in std_map and std_map[name]:
             block.append(f'  표준 직무 정의: {std_map[name]}')
         if name in sait_map:
@@ -272,7 +413,8 @@ def _tech_ownership_text(row, lv_map: dict) -> str:
     return '\n'.join(lines) if lines else '(데이터 없음)'
 
 
-def _publications_text(pub_rows: pd.DataFrame, journal_authority: dict) -> str:
+def _publications_text(pub_rows: pd.DataFrame, journal_authority: dict, ref_date: date | None = None) -> str:
+    ref_date = ref_date or date.today()
     if pub_rows.empty:
         return '(데이터 없음)'
     lines = []
@@ -284,7 +426,8 @@ def _publications_text(pub_rows: pd.DataFrame, journal_authority: dict) -> str:
         year = _clean(r.get('pub_year'))
         author_type = _clean(r.get('author_type'))
         is_corr = str(r.get('is_corresponding', '')).strip().lower() in ('true', 'o', 'y', '1')
-        line = f'- {title} ({year}, {journal or "-"}), 저자유형: {author_type or "-"}, 교신저자: {"O" if is_corr else "X"}'
+        label = _recency_label(_parse_date(year) or _parse_date(r.get('pub_date')), ref_date)
+        line = f'- {label + " " if label else ""}{title} ({year}, {journal or "-"}), 저자유형: {author_type or "-"}, 교신저자: {"O" if is_corr else "X"}'
         authority = journal_authority.get(journal, '')
         if authority:
             line += f'\n  저널 권위도: {authority}'
@@ -292,21 +435,26 @@ def _publications_text(pub_rows: pd.DataFrame, journal_authority: dict) -> str:
     return '\n'.join(lines) if lines else '(데이터 없음)'
 
 
-def _patents_text(pat_rows: pd.DataFrame) -> str:
+def _patents_text(pat_rows: pd.DataFrame, ref_date: date | None = None) -> str:
+    ref_date = ref_date or date.today()
     if pat_rows.empty:
         return '(데이터 없음)'
     lines = []
     for _, r in pat_rows.iterrows():
-        title = _clean(r.get('title')) or _clean(r.get('title_ko'))
+        title = _clean(r.get('title_ko')) or _clean(r.get('title'))
         if not title:
             continue
         grade = _clean(r.get('patent_grade'))
         grade_a = _clean(r.get('patent_grade_a_sub'))
         is_lead = str(r.get('is_lead_inventor', '')).strip().upper() == 'Y'
         grade_disp = f'{grade}({grade_a})' if grade and grade_a and grade_a != '없음' else (grade or '-')
-        line = f'- {title} (등급 {grade_disp}, {"대표발명자" if is_lead else "참여발명자"})'
-        if grade_a == 'A1':
-            line += '\n  A1은 그중 특히 우수하여 경영효과 기여가 예상되는 전략출원 특허임'
+        app_date = _parse_date(r.get('application_date'))
+        label = _recency_label(app_date, ref_date)
+        year_txt = f'{app_date.year}년 출원, ' if app_date else ''
+        line = (f'- {label + " " if label else ""}{title} ({year_txt}등급 {grade_disp}, '
+                f'{"대표발명자" if is_lead else "참여발명자"})')
+        if grade_a in ('A1', '전략출원'):
+            line += '\n  경영효과 기여가 예상되는 전략출원 특허임'
         lines.append(line)
     return '\n'.join(lines) if lines else '(데이터 없음)'
 
@@ -323,7 +471,8 @@ def _work_objective_text(row) -> str:
     return '\n'.join(lines) if lines else '(데이터 없음)'
 
 
-def _build_prompt(edu_text, task_text, role_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text) -> str:
+def _build_prompt(edu_text, task_text, role_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text,
+                  work_text=_NO_DATA, nurt_text=_NO_DATA) -> str:
     return f"""아래는 한 연구원의 이력 데이터입니다. 개인 식별 정보(이름/사번 등)는 제외되어 있습니다.
 
 [학력]
@@ -352,6 +501,12 @@ def _build_prompt(edu_text, task_text, role_text, job_text, core_text, tech_text
 
 [업무목표 (24~26년, 참고용 — 작성 분량은 개인차가 크므로 보조 자료로만 활용)]
 {obj_text}
+
+[입사 전 근무 경력]
+{work_text}
+
+[양성 이력 (위탁교육·학위과정 등)]
+{nurt_text}
 """
 
 
@@ -415,7 +570,9 @@ def researcher_card_html(item: dict, name_map: dict, anchor: str = '', include_l
     chip_row = mmd.strength_section_html(fields, keywords)
 
     kv_blocks = (
-        _list_block_html('주요 역할·책임', item.get('key_responsibilities') or [])
+        _list_block_html('현재 주력 분야', item.get('current_focus_fields') or [])
+        + _list_block_html('과거 주력 분야', item.get('past_fields') or [])
+        + _list_block_html('주요 역할·책임', item.get('key_responsibilities') or [])
         + _list_block_html('전문지식 및 역량', item.get('domain_knowledge_skill') or [])
     )
     body_html = f'<div class="kv-grid">{kv_blocks}</div>' if kv_blocks else '<p class="empty">세부 항목 데이터 없음</p>'
@@ -703,6 +860,8 @@ def analyze_researchers_as_of(researcher_ids: list, valid_date: date) -> list:
     project_personnel = _read_csv('project_personnel')
     publications = _filter_as_of(_read_csv('publications'), 'pub_date', valid_date)
     patents = _filter_as_of(_read_csv('patents'), 'application_date', valid_date)
+    work_experience = _filter_as_of(_read_csv('work_experience'), 'work_start_date', valid_date)
+    nurturing = _filter_as_of(_read_csv('nurturing'), 'start_date', valid_date)
 
     job_profile = _snapshot_rows_as_of('job_profile', researcher_ids, valid_date)
     core_tech = _snapshot_rows_as_of('core_technology', researcher_ids, valid_date)
@@ -728,7 +887,8 @@ def analyze_researchers_as_of(researcher_ids: list, valid_date: date) -> list:
     for idx, rid in enumerate(researcher_ids):
         edu_text = _education_text(education[education['researcher_id'] == rid]) if not education.empty else '(데이터 없음)'
         task_text = _task_history_text(
-            tasks[tasks['researcher_id'] == rid] if not tasks.empty else pd.DataFrame(), tasks_info)
+            tasks[tasks['researcher_id'] == rid] if not tasks.empty else pd.DataFrame(), tasks_info,
+            ref_date=valid_date)
         role_text = _project_role_text(
             project_personnel[project_personnel['researcher_id'] == rid]
             if not project_personnel.empty else pd.DataFrame())
@@ -736,7 +896,7 @@ def analyze_researchers_as_of(researcher_ids: list, valid_date: date) -> list:
         if not job_profile.empty:
             rows = job_profile[job_profile['researcher_id'] == rid]
             job_row = rows.iloc[0] if not rows.empty else None
-        job_text = _job_history_text(job_row, std_map, sait_map)
+        job_text = _job_history_text(job_row, std_map, sait_map, ref_date=valid_date)
 
         core_row = None
         if not core_tech.empty:
@@ -751,10 +911,15 @@ def analyze_researchers_as_of(researcher_ids: list, valid_date: date) -> list:
         tech_text = _tech_ownership_text(tech_row, lv_map)
 
         pub_rows = publications[publications['researcher_id'] == rid] if not publications.empty else pd.DataFrame()
-        pub_text = _publications_text(pub_rows, journal_cache)
+        pub_text = _publications_text(pub_rows, journal_cache, ref_date=valid_date)
 
         pat_rows = patents[patents['researcher_id'] == rid] if not patents.empty else pd.DataFrame()
-        pat_text = _patents_text(pat_rows)
+        pat_text = _patents_text(pat_rows, ref_date=valid_date)
+
+        work_text = _work_experience_text(
+            work_experience[work_experience['researcher_id'] == rid] if not work_experience.empty else pd.DataFrame())
+        nurt_text = _nurturing_text(
+            nurturing[nurturing['researcher_id'] == rid] if not nurturing.empty else pd.DataFrame())
 
         obj_row = None
         if not work_objective.empty:
@@ -763,12 +928,14 @@ def analyze_researchers_as_of(researcher_ids: list, valid_date: date) -> list:
         obj_text = _work_objective_text(obj_row)
 
         if all(t == '(데이터 없음)' for t in
-               (edu_text, task_text, role_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text)):
+               (edu_text, task_text, role_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text,
+                work_text, nurt_text)):
             results[idx] = {'researcher_id': rid, 'as_of': valid_str,
                              'error': f'{valid_str} 시점 기준으로 분석할 데이터가 없습니다.'}
             continue
 
-        prompt = _build_prompt(edu_text, task_text, role_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text)
+        prompt = _build_prompt(edu_text, task_text, role_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text,
+                               work_text, nurt_text)
         prepared.append((idx, rid, prompt))
 
     if prepared:
@@ -814,6 +981,9 @@ def process(refresh_journals: bool = False, skip_journal_authority: bool = False
     publications = _read_csv('publications')
     patents = _read_csv('patents')
     work_objective = _read_csv('work_objective')
+    work_experience = _read_csv('work_experience')
+    nurturing = _read_csv('nurturing')
+    today = date.today()
 
     grade_info = _read_json('core_technology_grade_info')
     lv_info = _read_json('tech_ownership_lv_info')
@@ -848,7 +1018,8 @@ def process(refresh_journals: bool = False, skip_journal_authority: bool = False
     for rid in rids:
         edu_text = _education_text(education[education['researcher_id'] == rid]) if not education.empty else '(데이터 없음)'
         task_text = _task_history_text(
-            tasks[tasks['researcher_id'] == rid] if not tasks.empty else pd.DataFrame(), tasks_info
+            tasks[tasks['researcher_id'] == rid] if not tasks.empty else pd.DataFrame(), tasks_info,
+            ref_date=today,
         )
         role_text = _project_role_text(
             project_personnel[project_personnel['researcher_id'] == rid]
@@ -858,7 +1029,7 @@ def process(refresh_journals: bool = False, skip_journal_authority: bool = False
         if not job_profile.empty:
             rows = job_profile[job_profile['researcher_id'] == rid]
             job_row = rows.iloc[0] if not rows.empty else None
-        job_text = _job_history_text(job_row, std_map, sait_map)
+        job_text = _job_history_text(job_row, std_map, sait_map, ref_date=today)
 
         core_row = None
         if not core_tech.empty:
@@ -873,10 +1044,15 @@ def process(refresh_journals: bool = False, skip_journal_authority: bool = False
         tech_text = _tech_ownership_text(tech_row, lv_map)
 
         pub_rows = publications[publications['researcher_id'] == rid] if not publications.empty else pd.DataFrame()
-        pub_text = _publications_text(pub_rows, journal_cache)
+        pub_text = _publications_text(pub_rows, journal_cache, ref_date=today)
 
         pat_rows = patents[patents['researcher_id'] == rid] if not patents.empty else pd.DataFrame()
-        pat_text = _patents_text(pat_rows)
+        pat_text = _patents_text(pat_rows, ref_date=today)
+
+        work_text = _work_experience_text(
+            work_experience[work_experience['researcher_id'] == rid] if not work_experience.empty else pd.DataFrame())
+        nurt_text = _nurturing_text(
+            nurturing[nurturing['researcher_id'] == rid] if not nurturing.empty else pd.DataFrame())
 
         obj_row = None
         if not work_objective.empty:
@@ -886,14 +1062,16 @@ def process(refresh_journals: bool = False, skip_journal_authority: bool = False
 
         # 판단 근거가 될 데이터가 전혀 없으면 LLM 호출 자체를 건너뛴다.
         if all(t == '(데이터 없음)' for t in
-               (edu_text, task_text, role_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text)):
+               (edu_text, task_text, role_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text,
+                work_text, nurt_text)):
             print(f'    [{rid}] 데이터 없음 — 건너뜀')
             skip_count += 1
             completed += 1
             _progress_checkpoint()
             continue
 
-        prompt = _build_prompt(edu_text, task_text, role_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text)
+        prompt = _build_prompt(edu_text, task_text, role_text, job_text, core_text, tech_text, pub_text, pat_text, obj_text,
+                               work_text, nurt_text)
         prepared.append((rid, prompt))
 
     # 2단계: 실제 LLM 분석은 동시 호출 허용치만큼 동시에 실행한다.

@@ -13435,3 +13435,312 @@ pandas NaN 문제와 근본 원인이 다름 — 이번 리팩토링은 "pandas�
     무관).
 - `python3 -m py_compile`로 수정한 5개 파일 전부 컴파일 확인.
 - 테스트 데이터(`data/`, `config/users.json`)·서버 모두 정리.
+
+## 2026-10-06: 전문성 심화 지표 — 0단계(강점 표기 표준화) + ②(주도형/참여형)
+
+사용자 요청("연구원 전문성 심화 분석 … ①~⑤ 적용, 다 추천대로")의 첫 두
+단계. 신규 모듈 `pipeline/process_expertise_metrics.py`를 `run_analysis.py`
+4/4단계로 추가했다(LLM 호출 없음, 임베딩은 0단계 매칭에만 사용).
+
+- **0단계**: `strength_taxonomy.json`(없으면 `build_strength_taxonomy.build()`로
+  부트스트랩)으로 연구원별 strength_fields/keywords를 표준명에 재매핑 →
+  `researcher_strength_std.json`(정확 일치 → 임베딩 코사인 ≥0.85 → 미분류).
+  미분류 값은 `strength_unmapped.json`에 연구원 수와 함께 모아, 사람이
+  표준 목록에 동의어로 추가하도록 한다. 원본 LLM 결과는 그대로 둔다.
+  `load_to_db.JSON_TABLES`에 `researcher_strength_std` 등록(④·⑤가 사용 예정).
+- **②**: `researcher_contribution_metrics.csv` — 논문 주저자(author_rank 1 /
+  author_type 제1·주저자·단독·교신)·교신 비율, 평균 기여도, 특허 대표발명자
+  비율(application_id 중복 제거), 평균 지분율, 최근 5년 비율.
+  판정: 3건 이상인 원천(논문/특허) 중 주도 비율 50% 이상이 하나라도 있으면
+  주도형, 모두 50% 미만이면 참여형, 3건 이상인 원천이 없으면 판정보류.
+  - 연구원 개별 프로필 "전문성 요약" 맨 위에 "연구 기여 유형" 배지 + 수치
+    (마우스오버 시 판정 근거). LLM 분석 데이터가 없어도 표시. 인쇄본은 미적용.
+  - 연구원 명단: 상세 필터에 "연구 기여유형" 추가 — 값을 고르면 `기여유형`
+    컬럼도 함께 노출(성별/학력/전공과 같은 방식).
+  - `load_to_db.TABLES`, AI 검색 화이트리스트(`TABLE_PERMISSIONS`, 권한 제한
+    없음 — 원천 논문/특허와 같은 민감도), `data_labels` 한글 라벨 등록.
+- 검증: 합성 데이터로 판정 규칙(주도/참여/판정보류, 최근 5년, 특허 중복 제거)
+  확인, `generate_sample_data.py` 샘플로 프로필 콜백·명단 레이아웃 렌더링
+  확인, pytest 17 passed.
+
+## 2026-10-06 (2): 전문성 심화 ①+⑥ — 깊이·최근성 가중 + 입사 전 경력/양성 이력 반영
+
+`pipeline/process_researcher_expertise.py` 프롬프트 변경(**반영하려면 전문성
+분석 전체 재실행 1회 필요** — `run_analysis.py` 2~4단계).
+
+- 과제 이력: 과제별 기간(최초 시작~최종 종료/진행중), 평균 투입률, 환산 M/M
+  (행별 개월수 × 투입률 합), 시기 표시 [최근 3년]/[3~6년 전]/[6년 이전]을
+  붙이고 최근 활동 순으로 정렬, 합계 M/M 한 줄 추가. 직무/논문/특허에도
+  시기 표시(특허는 출원연도 추가). 연도만 있는 날짜는 7월 1일로 본다.
+- 신규 입력: `[입사 전 근무 경력]`(work_experience.csv), `[양성 이력]`
+  (nurturing.csv). 과거 시점 온디맨드 분석은 시작일 기준으로 걸러 쓴다.
+- 지침 7~9 추가: 시기 가중치 1.0/0.5/0.25 + M/M 큰 분야 우선, 현재/과거 주력
+  분야 구분, 입사 전 경력은 낮은 비중의 근거(회사명 출력 금지), 양성 이력은
+  학술 지식 근거.
+- 출력 필드 추가: `current_focus_fields`(최근 3년 근거 1~3개), `past_fields`
+  (0~3개, 중복 금지). 프로필 전문성 요약·HTML 리포트 카드에 표시(재분석 전
+  결과에는 없어 자동 생략), AI 검색 `expertise_profiles` 컬럼·라벨 추가.
+- `researcher_fit.researcher_profile_text()`가 현재 주력 분야를 맨 앞에 넣어
+  JOB Market 매칭·유사 연구원 임베딩이 최근 전문성 쪽으로 기울게 했다
+  (텍스트가 바뀌므로 임베딩 캐시는 자연히 다시 계산됨).
+- 검증: LLM을 모의 응답으로 바꿔 샘플 데이터로 process()/
+  analyze_researchers_as_of() 실행 → 프롬프트 내 시기/M/M/양성 표시와 새 출력
+  필드 저장 확인, 프로필 콜백 렌더링 확인, pytest 17 passed.
+
+## 2026-10-06 (3): 전문성 심화 ④ — 기술별 보유자 수(핵심인력 리스크) + "조직 분석" 탭
+
+- `process_expertise_metrics.py`에 `technology_holder_summary.csv` 추가:
+  현재 재직자 기준 (출처: 핵심기술/보유기술/표준화된 강점분야, 기술)별
+  보유자 수·고수준 보유자 수(핵심기술 등급 S/A, 보유기술 Lv 3 이상 —
+  강점분야는 해당 없음)·보유 부서 수·명단. risk_level: 보유자 2명 이하
+  '위험', 고수준 1명 이하 '주의', 그 외 '정상'. 기술명은 공백·대소문자 무시로 묶는다.
+- "보유 전문성" 페이지에 **조직 분석** 탭 신설(`components/org_analysis_tab.py`).
+  탭이 2개가 되어 탭 막대가 다시 보인다(전문성 MAP은 계속 숨김).
+  기술별 보유자 섹션은 개인 명단이 있어 **관리자 계정(manage_users)만** 보인다
+  (보수적으로 정한 기준 — 필요하면 `org_analysis_content()`의 조건만 바꾸면 됨).
+- 등록: `load_to_db.TABLES`, AI 검색 `TABLE_PERMISSIONS`('manage_users'), 라벨.
+- 검증: 합성 core_technology/tech_ownership으로 집계·리스크 판정, 관리자/
+  비관리자 탭 렌더링 차이, 페이지 layout 확인, pytest 17 passed.
+
+## 2026-10-06 (4): 전문성 심화 ③ — 협업 네트워크(논문 공저·특허 공동발명)
+
+- `process_expertise_metrics.py`에 `collaboration_edges.csv`(연구원 쌍별 공동
+  논문/특허 수·최근 협업연도·부서·같은 부서 여부)와 `collaboration_metrics.csv`
+  (연구원별 협업자 수, 타부서 협업자 수/비율, 상위 5명) 추가. 같은 논문 =
+  제목(공백·대소문자 무시) + 게재일, 같은 특허 = application_id. 사내 저자
+  20명 초과 대형 공저 1건은 관계 폭증 방지로 제외.
+- 연구원 프로필 전문성 요약에 "주요 협업자" 배지(이름 · 협업 횟수, 상위 5명).
+- 조직 분석 탭에 "부서 간 협업" 섹션(모든 로그인 사용자): 부서별 타부서 협업
+  비율 + 부서 쌍별 협업량(타부서만). 부서는 researchers.department 기준.
+- 등록: `load_to_db.TABLES`, AI 검색 `TABLE_PERMISSIONS`(제한 없음), 라벨.
+- 검증: 합성 데이터로 쌍 집계(논문 제목 정규화, 특허 공동발명, 같은/타 부서)
+  확인, 샘플 데이터에 공동 논문을 넣어 프로필 배지·탭 렌더링 확인, pytest 통과.
+
+## 2026-10-06 (5): 전문성 심화 ⑤ — 과제별 역량 갭
+
+- 신규 `pipeline/process_project_competency_gap.py`(run_analysis.py 5/5단계,
+  `--skip-competency-gap`으로 생략 가능 — run_integration.py에도 전달):
+  `project_expertise_analysis.json`의 과제별 핵심기술/산출물/난제/배경/
+  기대효과/키워드로 사내 LLM이 필요 역량 4~8개 추출(입력 해시 캐시
+  `project_competency_cache.json`, `--refresh`로 무시) → 과제 인력(org_code ==
+  project_name 현재 재직자 ∪ project_personnel.csv)의 보유 역량(표준화 강점
+  분야 우선 + 키워드 + 전문지식)과 BGE-M3 임베딩 대조. 최고 유사도 ≥0.75면
+  충족, 아니면 갭 + 과제 밖 재직자 중 ≥0.75 상위 3명을 사내 후보로 기록 →
+  `project_competency_gap.json`(충족률 낮은 순).
+  과제 문서 분석 결과 파일만 읽으므로 Confluence 401 상태에서도 기존 분석
+  결과로 동작한다.
+- 조직 분석 탭 맨 위에 "과제별 역량 갭" 섹션(모든 로그인 사용자): 과제별
+  요약(충족률/갭 수/갭 역량) + 역량별 상세(충족 인력·사내 후보와 근거 항목).
+- 등록: `load_to_db.JSON_TABLES`(project_name 키). 중첩 구조라 AI 검색
+  대상에는 넣지 않았다.
+- 검증: LLM/임베딩 모의 함수로 충족/갭/사내 후보 판정과 캐시 재사용(2회차
+  LLM 호출 0회) 확인, 탭 렌더링 확인, pytest 통과.
+
+## 2026-10-07: 특허 — 기술건(유효 발명건) 필터 + 특허 탭/표 개편
+
+사용자 요청으로 `특허 리스트.xlsx` 전처리와 특허 표시를 바꿨다.
+
+**전처리(`pipeline/process_patents.py`)**
+- 원본 헤더 `기술건`(CSV 컬럼 `representative_invention`)이 `Y/y`인 행만 유효한
+  발명건으로 저장한다. 같은 특허를 여러 나라에 출원해 국가별 행이 여러 개일 때
+  대표 행만 세기 위함(안 하면 한 특허가 여러 건으로 보임). 건수 단위 = 기술건.
+- 원본에 `기술건` 컬럼이 없거나 유효 행이 하나도 없으면 에러를 내고 **저장하지
+  않는다**(기존 patents.csv 보호). 기존 patents.csv 중 `representative_invention`이
+  없는 legacy 행은 이번 실행에서 삭제하고, 이번 파일에 다시 나온 접수ID의 기존
+  행도 병합 전에 지운다.
+- `title_ko` = `발명명칭 - 국문`(이전: `발명명칭`), `title` = `발명명칭 - 영문`.
+  화면은 국문 우선, 비면 영문(`components.timeline_data.patent_title`).
+
+**화면(프로필 특허 탭/타임라인 표, A4 인쇄본, 연구원 명단, 엑셀)** — 정의는
+`timeline_data.patent_summary()` 한 곳에 모았다.
+- 카드: [전체 발명 | 대표 발명] [출원(등록) | 출원 지분율] [전략출원 | 전략 지분율].
+  출원 = 출원번호가 있는 건(등록 건 포함), 등록 = 출원번호·등록번호가 모두 있는 건,
+  출원 지분율 = 출원 건 지분율 합, 전략출원 = `현재등급 - A급구분`이 "전략출원"인
+  건(지분율은 그 건들의 합). 미국 등록 카드 삭제. 명단의 `특허(출원)/(등록)`도
+  같은 정의(이전: status 기준이라 등록 건이 출원 수에서 빠졌음).
+- 표: 출원일(YYYY-MM)/발명 명칭/상태/접수ID·출원번호/발명자 구분(대표·참여, 대표발명자여부
+  Y 기준)/지분율/등급(전략출원일 때만 빨간 "전략" 배지)/— 출원 국가 열 삭제.
+  타임라인 과제 카드의 특허 pill, 엑셀 "특허 실적" 열, LLM 입력 텍스트도 국문 우선·
+  전략출원 표기를 같은 기준으로 맞췄다.
+- 샘플 데이터 생성기도 `representative_invention`/`전략출원·없음` 값을 쓰도록 수정.
+- **배포 시**: 새 엑셀(기술건 포함)로 전처리를 다시 실행해야 기존 데이터가 정리된다.
+- 검증: 합성 xlsx로 필터/legacy 삭제/컬럼 없음 중단, 카드 수치(3·1·2(1)·80%·1·50%),
+  프로필·인쇄·엑셀 렌더링 확인, tests/test_patents.py 추가, pytest 19 passed.
+
+## 2026-10-07 (2): 특허 탭 — "출원번호/접수ID" 열 표시 순서 변경
+
+`components/detail_tabs.py` `patents_tab()`의 식별 번호 열을 출원번호 우선으로 변경:
+출원번호가 있으면 출원번호, 없으면 접수ID, 둘 다 없으면 "-". 헤더는 "출원번호/접수ID".
+(이 열은 프로필 특허 탭/타임라인 특허 표에만 있고 인쇄본·엑셀에는 해당 열이 없다.)
+
+## 2026-10-07 (3): 데이터 업데이트 탭 — 컨플 주소 없는 과제 PDF "선택 삭제/전체 삭제"
+
+`components/admin_data_update_tab.py`의 "컨플 주소 없는 과제 PDF 첨부" 섹션에서
+PDF를 파일마다 X로 하나씩만 지울 수 있던 것을 보완했다.
+- 각 파일 앞에 체크박스, 상단에 "전체 선택(N건)" 체크박스와 "선택 삭제"/"전체 삭제"
+  버튼 추가(개별 X 삭제는 그대로). 삭제는 되돌릴 수 없어 브라우저 확인창
+  (`dcc.ConfirmDialogProvider`)을 거친다. 목록이 길면 260px 스크롤.
+- 관리자(manage_users)만 가능, 선택 없이 "선택 삭제"면 안내 경고, 파일이 없으면 경고.
+- `services/web_pipeline_runner.delete_confl_pdfs()` 신설(중복 이름 1회 처리, 성공/
+  실패 수 반환). 파일 삭제만 하며 이미 만들어진 과제 분석 결과(캐시)는 건드리지 않는다.
+- 검증: 임시 PDF 4개로 전체 선택/선택 삭제(2건)/미선택 경고/전체 삭제/빈 목록/
+  비관리자 거부 확인, pytest 19 passed.
+
+(참고 — 같은 날 문의: 팀/리더 참조 엑셀 반영 후 사라진 3단계 부서가 남던 건. 합성
+ 데이터로 process_team_refer를 두 번 돌려 보면 사라진 조직이 deleted=Y로 정상
+ 톰스톤 처리되어 코드 경로 자체는 이상 없음 — 환경 데이터(DB 동기화 순서/날짜) 쪽
+ 원인으로 추정. 사용자 확인 대기.)
+
+## 2026-10-07 (4): 과제참여이력(tasks) 업로드 — pyxlsb 누락 + 파일명/확장자 유연화
+
+증상: 데이터 업데이트 탭에서 과제참여이력을 xlsx/xlsb 어느 걸 올려도 실패,
+메시지 ".xlsb 파일 읽기에 pyxlsb 패키지가 필요합니다 … 'NoneType' object has no
+attribute 'apps'". 원인 두 가지:
+1. **pyxlsb가 requirements.txt에 없었다**(서버 이미지에 미설치) → `requirements.txt`에
+   `pyxlsb==1.0.10` 추가. **Docker 이미지를 다시 빌드/설치해야 반영된다.**
+   (`'NoneType' … 'apps'`는 리눅스에 Excel이 없어 xlwings가 실패하고 pandas로 폴백했다는
+   로그일 뿐 — 폴백 자체는 정상 경로.)
+2. 업로드 모드가 'exact'라 어떤 파일을 올려도 고정 이름 `개인별과제투입기간데이터_260114.xlsb`로
+   저장 → xlsx를 올려도 xlsb 엔진으로 읽다 실패.
+
+변경:
+- 웹 업로드 항목 `tasks`를 'wildcard'(원본 이름·확장자 보존)로 변경, hint는
+  "개인별과제투입기간데이터.xlsb 또는 .xlsx".
+- `process_tasks._find_source_file()`: `개인별과제투입기간데이터*.xlsb|xlsx` 중 수정시각이
+  가장 최근 것, 없으면 폴더에 xlsb/xlsx가 정확히 1개일 때 그 파일(`~$` 제외).
+  파일명 접미사(_260114)와 확장자는 가리지 않는다.
+- 1단계 변환(`sources.py`)도 같은 패턴(xlsb·xlsx), 샘플 생성기·안내 문구 갱신.
+- `excel_reader._read_with_pandas`: pyxlsb가 실제로 없을 때만 "pip install pyxlsb"
+  안내를 내고, 있는데 파일이 손상/형식 오류면 진짜 에러("File is not a zip file" 등)를 보여준다.
+- 검증: 합성 xlsx를 3가지 이름으로 업로드→실행 성공(wildcard 경로), 잘못된 xlsb는
+  실제 에러 메시지 확인, tests/test_tasks_source.py 추가. **실제 .xlsb 파일은 이
+  환경에서 만들 수 없어 pyxlsb 읽기 자체는 서버에서 확인 필요.**
+
+## 2026-10-07 (5): 데이터 업데이트 전 항목 — xlsx/xlsb 모두 허용
+
+사용자 요청("모든 데이터 항목이 xlsx/xlsb 둘 다 호환"). 과제참여이력(tasks)만 먼저 바꿨던 것을
+전 항목으로 일반화했다.
+- **업로드 저장**(`services/web_pipeline_runner.save_upload`): 고정 이름 항목('exact'
+  모드)은 이름(stem)은 기존 그대로, 확장자는 **올린 파일의 확장자**(.xlsx/.xlsb)로 저장
+  (`_dest_with_upload_ext`). 이전엔 .xlsb를 올려도 .xlsx 이름으로 저장돼 xlsx 파서가
+  깨졌다. 직무이력 legacy 슬롯은 이름(stem)으로 구분(`_is_legacy_job_profile`)하고 확장자가
+  바뀌면 이전 파일을 교체. 백필(`_YYYYMM`) 임시 폴더 복사도 같은 규칙. 화면 안내(툴팁)에
+  ".xlsx" 항목마다 "(.xlsb도 가능)" 자동 부기.
+- **읽기**: `pipeline/source_files.py`에 `resolve_excel()` 추가(정확한 이름 → 같은 이름의
+  다른 엑셀 확장자 순) + `find_matches()/find_latest()`가 `*.xlsx` 패턴에 `.xlsb` 변형을 자동
+  포함. 정확한 파일명을 쓰던 16개 `process_*.py`와 `merge_job_profile_source`(legacy),
+  `xlsx_to_raw_csv._resolve`(1단계 변환), `process_team_refer`(xlsx/csv/xlsb)가 이를 사용.
+  패턴(wildcard) 항목(인력현황·T&P·시상·학력·인사발령·어학·근무경력 등)은 자동 호환.
+- **날짜 일련번호**: 리눅스에서 pyxlsb는 날짜 셀을 서식 없이 일련번호(예: 45678)로 읽는다 —
+  `parse_yyyymmdd/parse_flexible_date`가 5자리 엑셀 일련번호(20000~60000)를 날짜로 변환
+  (8자리 YYYYMMDD와 겹치지 않음). 이 두 함수를 거치지 않고 날짜를 직접 파싱하는 열이 있다면
+  xlsb에서 숫자로 남을 수 있으니, 실제 xlsb 업로드 후 날짜 열을 확인할 것.
+- 전제: 서버에 `pyxlsb` 설치(requirements.txt, 이미지 재빌드).
+- 검증: 모든 exact 항목에 .xlsb→.xlsx 번갈아 업로드해 이름/교체/has_upload 확인, 직무이력 두
+  슬롯 xlsb, 패턴 확장, 일련번호 변환 테스트(tests/test_excel_formats.py), 전 process 모듈
+  import 확인, pytest 27 passed. **실제 .xlsb 파일은 만들 수 없어 pyxlsb 실읽기는 미검증.**
+
+## 2026-10-07 (6): Confluence "주소는 HTTPS만 허용됩니다" — 페이지 ID에 ".0"이 붙어 URL로 오인
+
+증상: run_ready.py에서 `Confluence 접속 :3957970224.0 조회 실패 : Confluence 주소는 HTTPS만
+허용됩니다` (CONFLUENCE_ALLOW_HTTP=true를 넣은 뒤에도 발생).
+원인: project_confl_address의 컨플 주소 셀이 숫자(페이지 ID)라 엑셀에서 실수로 읽혀
+`3957970224.0`이 됐고, `_is_bare_page_id()`(`isdigit()`)가 이를 페이지 ID로 못 알아봐
+"전체 URL" 분기로 가서 스킴이 없다는 이유로 HTTPS 에러가 났다. ALLOW_HTTP와 무관.
+수정: `confluence_client._bare_page_id()`가 `\d+(\.0+)?`를 페이지 ID로 인식(extract_page_id도
+정수부만 반환), `process_project_confl`이 저장 시 `.0`을 제거. 기존에 저장된
+project_confl_address.csv의 `.0`은 클라이언트 쪽 보정으로 바로 동작하고, 과제별컨플을
+다시 업로드하면 CSV도 깨끗해진다. (참고: .env 변수명은 CONFLUENCE_ALLOW_HTTP — 철자 주의.)
+
+## 2026-10-07 (7): Confluence 하위 페이지 목록 추출 + 페이지 ID 표기 정리
+
+- **표기 정리**: run_ready.py가 `페이지 조회 성공 (3957970224.0)`처럼 소수점이 붙은 값을 그대로 보여주던
+  것을 `confluence_client.normalize_address()`로 정수 문자열(`3957970224`)로 표시·조회하도록 수정.
+- **하위 페이지 추출 기능**(데이터 업데이트 탭 맨 아래 "컨플 하위 페이지 목록 추출", 관리자 전용):
+  상위 페이지 ID(또는 pageId가 든 주소)를 넣고 단계(최하위까지/1~3단계)를 고르면 그 아래 모든
+  하위 페이지의 제목·페이지 ID를 엑셀로 내려받는다. 엑셀 열: 단계(루트=0)/제목/페이지 ID/상위 페이지 제목/
+  상위 페이지 ID/경로("루트 > … > 제목"), 문서 순서(깊이 우선). 페이지 ID는 텍스트 셀(지수/실수 방지).
+  - `confluence_client.crawl_descendants()`: `GET /rest/api/content/{id}/child/page?limit=100&start=`를
+    페이징으로 끝까지 따라가며 재귀. 기존 게이트웨이/헤더/세션(`fetch_page_text`와 동일) 사용, 순환
+    방지(visited), 5000쪽 초과 시 중단(폭주 방지).
+  - `services/confl_tree.py`: 백그라운드 스레드 1개만 허용 + 2초 폴링(진행 개수/마지막 제목 표시),
+    결과는 메모리에만 보관(서버에 목록 파일을 남기지 않음).
+  - 산출 ID를 과제별컨플의 "컨플 주소"(페이지 ID)에 그대로 쓸 수 있다.
+- 검증: 모의 세션으로 3단계 트리/페이징(limit=2)/깊이 제한/상한/엑셀 텍스트 셀/UI 콜백 확인,
+  tests/test_confl_tree.py 추가. **실제 사내 컨플루언스 응답은 이 환경에서 확인 불가** — `child/page`
+  엔드포인트가 게이트웨이에서 허용되는지는 서버에서 첫 실행으로 확인 필요.
+
+## 2026-10-07 (8): 웹 앱에서만 "CONFLUENCE_GATEWAY_BASE_URL은 HTTPS만 허용" — compose가 ALLOW_HTTP를 전달 안 함
+
+run_integration.py(서버 셸, .env 직접 읽음)는 CONFLUENCE_ALLOW_HTTP=true로 통과하는데 웹 화면(하위 페이지
+추출)은 같은 메시지로 실패. 원인: 웹 앱은 docker 컨테이너라 `docker-compose.yml`의 environment에 적힌
+변수만 받는데 CONFLUENCE_ALLOW_HTTP가 목록에 없었다. docker-compose.yml에 추가(기본 false)하고
+.env.example에 설명 추가. 적용하려면 `docker compose up -d`로 앱 컨테이너를 다시 만들어야 한다
+(단순 restart는 환경변수를 다시 읽지 않음).
+
+## 2026-10-07 (9): 하위 페이지 추출 — 진행 상태가 "대기 중"으로 보이던 문제(워커 간 상태 불일치)
+
+증상: "추출"을 눌러도 추출 중인지 아닌지 알 수 없음. 원인: 앱이 gunicorn 워커 2개로 도는데
+작업 상태를 프로세스 메모리(`services/confl_tree._state`)에만 뒀다 → 폴링 요청이 시작을 받은
+워커가 아닌 쪽으로 가면 "대기 중"으로 응답하고 폴링도 꺼졌다. 수정: 상태/결과를
+`data/web_updates/confl_tree/state.json`·`rows.json`(원자적 쓰기, 0600)에 저장해 어느
+워커가 응답해도 같은 상태를 본다(다음 실행 시 덮어씀). 진행 줄에 경과 시간(초)을 추가하고,
+2분 이상 갱신이 없는 'running'은 워커 중단으로 보고 오류로 표시한다. 결과 엑셀은 이제
+서버 파일로도 남는다(기존 "메모리에만" 설명은 이 항목으로 대체).
+
+## 2026-10-07 (10): Confluence 호출 빈도 제한(HTTP 429) 대응 + 하위 페이지 추출 호출 수 절감
+
+증상: 하위 페이지 추출이 `HTTP 429 rate limit exceeded`로 실패. 게이트웨이가 분당 15회 초과 시 429.
+- **호출 빈도 제한**(`pipeline/confluence_client.py`): 모든 Confluence REST 호출(`fetch_page_text` 포함)이
+  `_throttle()`을 거쳐 분당 N회(기본 10 → 호출 간격 6초, `CONFLUENCE_MAX_CALLS_PER_MINUTE`, 0 이하면 끔)를
+  지킨다. 429를 받으면 `Retry-After`(없으면 60초, 최대 120초)만큼 쉬었다 최대 3번 재시도.
+  제한은 프로세스 안에서만 공유된다 — 파이프라인(run_integration)과 웹 추출을 동시에 돌리면 합산이 한도를
+  넘을 수 있으니 동시에 돌리지 말 것. **파이프라인의 과제 문서 조회도 과제당 최소 6초 간격이 된다**
+  (429로 실패하는 것보다 안전하다고 판단; 필요하면 변수로 조정). `docker-compose.yml`에 변수 전달 추가
+  (전달 안 하면 웹 컨테이너는 기본값 10 그대로).
+- **하위 페이지 추출 호출 수 절감**: `descendant/page?expand=ancestors`로 하위 전체를 100개씩 한 번에
+  받아 ancestors로 트리를 복원(호출 ≈ 1 + 페이지수/100). 엔드포인트가 없거나(400/404/405/501) 응답에
+  ancestors가 없으면 기존 `child/page` 재귀로 자동 폴백(호출 ≈ 페이지당 1회 → 100페이지면 약 10분).
+- **서버에서 계속 실행**: 추출은 이미 서버 백그라운드 스레드 + 파일 상태(워커 공유)라 다른 화면으로
+  이동하거나 브라우저를 닫아도 계속된다. 데이터 업데이트 탭에 돌아오면 진행 상태(상위 페이지, 경과, 수집 수,
+  호출 제한 대기 사유)가 이어서 표시되고 완료 후 엑셀을 받을 수 있다. 호출 제한으로 쉬는 동안에도
+  상태 파일을 계속 갱신(heartbeat)하고, 5분 이상 갱신이 없으면 중단으로 본다. 서버(컨테이너) 재시작 시에는
+  작업이 끊긴다.
+- 검증: 모의 세션으로 descendant 경로(호출 3회 이하)/폴백/깊이 제한, 간격(6초)·429 재시도 확인,
+  pytest 35 passed. **실제 게이트웨이의 descendant/page 지원 여부는 서버에서 확인 필요.**
+
+## 2026-10-07 (11): 하위 페이지 추출 — 진행 표시가 아예 안 뜨던 진짜 원인(Spinner 인자 오류)
+
+"추출 중… 경과 N초" 문구가 전혀 안 보이던 원인: `_confl_tree_status_view()`가 진행 중 상태에서
+`dbc.Spinner(size='sm', className='me-2')`를 만드는데 dbc 2.x의 Spinner는 `className` 인자를 받지 않아
+TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실패해 화면이 그대로였다(추출 스레드는 정상
+실행). 앞서 고친 워커 간 상태 공유는 별개의 실제 결함이었고, 이 오류가 겹쳐 있었다.
+수정: 부트스트랩 CSS 스피너(`<span class="spinner-border spinner-border-sm">`)로 교체. 테스트
+(tests/test_confl_tree.py)에 idle/running/done/error 네 상태 렌더링 회귀 테스트 추가 — 당시 테스트는 진행 중
+상태를 그려보지 않아 놓쳤다.
+
+## 2026-10-07 (12): 추출한 하위 페이지 → 과제별컨플 "컨플 주소" 자동 반영(엑셀)
+
+"컨플 하위 페이지 목록 추출" 카드 아래 "과제별컨플에 반영(엑셀)" 버튼(`services/confl_match.py`).
+- 후보: 추출 결과 중 단계==2(0=월별 페이지, 1=부서, 2=과제)만. 후보의 "상위 페이지 제목"이 부서명.
+- 비교: 제목에서 `|` 뒤(월)·맨 앞 `[연구]` 꼬리표·공백/기호를 지우고 `difflib` 유사도. 과제명 유사도
+  **0.7 이상**만 인정, 순위 = 과제명 80% + 소속↔부서명 20%(같은 과제명이 여러 부서에 있을 때 구분),
+  한 페이지는 한 행에만(점수 높은 쌍부터).
+- 반영: 매칭된 행의 "컨플 주소"를 **기존 값이 있어도 덮어쓴다**(월별 갱신) — 페이지 ID는 텍스트 셀.
+  매칭 실패 행은 컨플 주소를 건드리지 않는다(기존 값 유지, 원래 비어 있으면 공란).
+- 결과 열: 마지막 열 다음(최소 L열)에 "추출 결과"(성공/실패, 실패는 노란 표시)·"매칭된 제목"·"유사도".
+  이미 "추출 결과" 열이 있는 파일(재반영)은 그 자리를 다시 쓴다. "미매칭 페이지" 시트에 어느 행에도
+  못 붙은 과제 페이지(가장 비슷한 과제명·유사도 포함)를 모은다.
+- 입력: 서버에 마지막으로 올라간 과제별컨플 원본(xlsx는 서식 유지, xlsb는 값만 xlsx로 변환)을 쓰고,
+  원본이 없으면 처리된 project_confl_address 데이터로 3열 표를 만든다. 결과 엑셀을 확인한 뒤 데이터
+  업데이트의 과제별컨플로 다시 올린다(자동 업로드는 하지 않음).
+- 검증: 합성 데이터로 접두사/월 표기 차이, 같은 과제명·다른 부서, 덮어쓰기, 실패 시 기존 값 유지, 결과 열
+  위치(L/넓은 파일/재사용), 미매칭 시트 확인(tests/test_confl_match.py). 실제 과제별컨플로는 미검증.
+
+## 2026-10-07 (13): data/web_updates/ 런타임 파일이 커밋돼 git pull이 막힌 문제
+
+`data/web_updates/confl_tree/state.json`(하위 페이지 추출 상태 파일)이 실수로 커밋(cbd433d)돼, 서버가
+같은 경로에 만든 파일과 충돌해 `git pull`이 "untracked working tree files would be overwritten"으로 막혔다.
+원인: 개발 중 스모크 테스트가 저장소의 data/web_updates에 상태 파일을 썼고 `.gitignore`에 그 폴더가 없어
+`git add -A`에 딸려 들어갔다. 조치: 추적 해제(`git rm --cached`) + `.gitignore`에 `data/web_updates/` 추가.
+이 폴더는 업로드 원본·잠금 파일·추출 상태 등 서버 런타임 데이터라 앞으로도 커밋하지 않는다.

@@ -135,6 +135,7 @@ def _check_confluence() -> list:
         return checks
 
     import confluence_client
+    addr = confluence_client.normalize_address(addr)   # '3957970224.0' → '3957970224' (표시용 포함)
     try:
         confluence_client.fetch_page_text(addr)
         checks.append(Check('Confluence 접속', 'ok', f'페이지 조회 성공 ({addr})'))

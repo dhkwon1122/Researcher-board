@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import llm_client  # noqa: E402
 from paths import RAW_DIR as DATA_RAW, OUT_DIR as DATA_OUT  # noqa: E402
 from excel_reader import is_blank, read_xlsx, norm_researcher_id_col
+from source_files import resolve_excel
 from merge_utils import TABLE_KEYS, write_merged
 from source_reader import read_source
 
@@ -168,7 +169,7 @@ def process(use_llm: bool = False, raw_dir: str = DATA_RAW):
     if raw_dir == DATA_RAW:
         df = read_source('comments')
     else:
-        raw_path = os.path.join(raw_dir, 'comments_raw.xlsx')
+        raw_path = resolve_excel(raw_dir, 'comments_raw.xlsx')
         df = read_xlsx(raw_path) if os.path.exists(raw_path) else None
 
     if df is not None:
