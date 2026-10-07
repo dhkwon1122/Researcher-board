@@ -146,3 +146,19 @@ def test_rate_limit_spacing_and_429_retry(monkeypatch):
     clock['slept'].clear()
     assert cc._get_json(Flaky(), 'http://x/rest/api/content/1') == {'ok': 1}
     assert 7.0 in clock['slept']         # Retry-After만큼 쉬고 재시도
+
+
+def test_status_view_renders_in_every_state(monkeypatch, tmp_path):
+    """진행 중 표시가 컴포넌트 인자 오류(dbc.Spinner에 className 등)로 예외를 내면 Dash 콜백이
+    조용히 실패해 화면에 아무것도 안 나온다 — 모든 상태가 예외 없이 그려지는지 확인."""
+    import time
+    from services import web_pipeline_runner as wpr
+    monkeypatch.setattr(wpr, 'WEB_UPDATES_DIR', str(tmp_path))
+    import app  # noqa: F401  (페이지 등록 후 컴포넌트 모듈 import)
+    import components.admin_data_update_tab as tab
+    for state in (dict(status='idle'),
+                  dict(status='running', message='제목', count=3, root='123', started_at=time.time() - 5),
+                  dict(status='done', count=2, root='123', finished_at='t'),
+                  dict(status='error', message='boom')):
+        confl_tree._save_state(**state)
+        assert tab._confl_tree_status_view() is not None

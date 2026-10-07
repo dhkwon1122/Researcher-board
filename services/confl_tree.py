@@ -166,6 +166,17 @@ def build_workbook_bytes(rows: list[dict]) -> bytes:
     return buf.getvalue()
 
 
+def load_rows() -> list[dict]:
+    """마지막으로 완료된 추출 결과 행(없으면 [])."""
+    if _read_state()['status'] != 'done':
+        return []
+    try:
+        with open(_rows_path(), encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return []
+
+
 def result_workbook() -> tuple[str, bytes] | None:
     """(파일명, 바이트) — 결과가 없으면 None."""
     st = _read_state()
