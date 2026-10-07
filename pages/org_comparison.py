@@ -547,8 +547,9 @@ def _toggle_succession_edit(n_clicks, is_open):
 
 
 @callback(
-    [Output(f'succession-slot-{key}-researcher', 'options') for key, _, _, _ in _SLOT_SPECS],
+    [Output(f'succession-slot-{key}-researcher', 'options', allow_duplicate=True) for key, _, _, _ in _SLOT_SPECS],
     Input('succession-edit-dept', 'value'),
+    prevent_initial_call='initial_duplicate',
 )
 def _update_succession_slot_options(department):
     from services import succession_store
@@ -557,7 +558,8 @@ def _update_succession_slot_options(department):
 
 
 @callback(
-    [Output(f'succession-slot-{key}-researcher', 'value') for key, _, _, _ in _SLOT_SPECS]
+    [Output(f'succession-slot-{key}-researcher', 'options', allow_duplicate=True) for key, _, _, _ in _SLOT_SPECS]
+    + [Output(f'succession-slot-{key}-researcher', 'value') for key, _, _, _ in _SLOT_SPECS]
     + [Output(f'succession-slot-{key}-comment', 'value') for key, _, _, _ in _SLOT_SPECS]
     + [Output('succession-edit-msg', 'children', allow_duplicate=True)],
     Input('succession-edit-load-btn', 'n_clicks'),
@@ -566,9 +568,16 @@ def _update_succession_slot_options(department):
     prevent_initial_call=True,
 )
 def _load_succession_slots(n_clicks, department, year):
+    """"불러오기" — 값뿐 아니라 각 연구원 드롭다운의 옵션 목록도 이 콜백이
+    직접 다시 채운다(departament 변경 시 옵션을 갱신하는
+    _update_succession_slot_options()에만 맡기지 않음). 옵션이 비어있는
+    상태에서 값만 설정하면 드롭다운이 "목록에 없는 값"으로 보고 조용히
+    빈 칸으로 보일 수 있어, 불러오기 한 번으로 옵션+값이 항상 같이
+    맞아떨어지도록 한다."""
     from services import succession_store
     from services.auth import can_view_succession_plan
-    blank = [no_update] * (len(_SLOT_SPECS) * 2)
+    n = len(_SLOT_SPECS)
+    blank = [no_update] * (n * 3)
     if not n_clicks:
         return blank + [no_update]
     if not can_view_succession_plan():
@@ -578,16 +587,21 @@ def _load_succession_slots(n_clicks, department, year):
         return blank + [dbc.Alert('부서와 연도를 먼저 선택해주세요.', color='warning',
                                    className='py-2 small mb-0')]
 
+    options = succession_store.department_researcher_options(department)
+    option_lists = [options] * n
     slots = succession_store.load_slots(department, year)
     researcher_vals = [slots.get((rt, ro), {}).get('researcher_id') for _, _, rt, ro in _SLOT_SPECS]
     comment_vals = [slots.get((rt, ro), {}).get('comment', '') for _, _, rt, ro in _SLOT_SPECS]
-    found = sum(1 for v in researcher_vals if v)
+
+    opt_labels = {o['value']: o['label'] for o in options}
+    found_labels = [opt_labels.get(v, v) for v in researcher_vals if v]
     msg = dbc.Alert(
-        f'{department} {year}년 — {found}개 순위를 불러왔습니다.' if found
+        f'{department} {year}년 — {len(found_labels)}개 순위를 불러왔습니다: '
+        + ', '.join(found_labels) if found_labels
         else f'{department} {year}년에 저장된 데이터가 없습니다. 새로 입력할 수 있습니다.',
         color='info', className='py-2 small mb-0',
     )
-    return researcher_vals + comment_vals + [msg]
+    return option_lists + researcher_vals + comment_vals + [msg]
 
 
 @callback(
@@ -626,10 +640,19 @@ def _save_succession_slots(n_clicks, department, year, tick, *slot_values):
     except ValueError as exc:
         return (dbc.Alert(str(exc), color='warning', className='py-2 small mb-0'), no_update)
 
+    # 저장 직후 실제로 무엇이 반영됐는지 슬롯별로 명시해, 드롭다운 선택이
+    # 제대로 안 됐는데 "저장 완료"만 보고 넘어가는 혼란을 막는다(예: 연구원을
+    # 못 고른 채 저장하면 그 슬롯은 "(비움)"으로 그대로 표시된다).
+    options = succession_store.department_researcher_options(department)
+    opt_labels = {o['value']: o['label'] for o in options}
+    slot_summary = ', '.join(
+        f"{label}: {opt_labels.get(researcher_values[i], researcher_values[i]) if researcher_values[i] else '(비움)'}"
+        for i, (_, label, _, _) in enumerate(_SLOT_SPECS)
+    )
     msg = (
         f"저장 완료 — {department} {year}년 {result['saved_rows']}건 반영"
         f"({result['cleared_rows']}건 교체)"
-        + ('' if result['db_ok'] else ' (DB 미반영, CSV에는 반영됨)') + '.'
+        + ('' if result['db_ok'] else ' (DB 미반영, CSV에는 반영됨)') + f'. [{slot_summary}]'
     )
     return (dbc.Alert(msg, color='success', dismissable=True, className='py-2 small mb-0'),
             (tick or 0) + 1)
