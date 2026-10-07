@@ -13631,3 +13631,13 @@ run_integration.py(서버 셸, .env 직접 읽음)는 CONFLUENCE_ALLOW_HTTP=true
   작업이 끊긴다.
 - 검증: 모의 세션으로 descendant 경로(호출 3회 이하)/폴백/깊이 제한, 간격(6초)·429 재시도 확인,
   pytest 35 passed. **실제 게이트웨이의 descendant/page 지원 여부는 서버에서 확인 필요.**
+
+## 2026-10-07 (11): 하위 페이지 추출 — 진행 표시가 아예 안 뜨던 진짜 원인(Spinner 인자 오류)
+
+"추출 중… 경과 N초" 문구가 전혀 안 보이던 원인: `_confl_tree_status_view()`가 진행 중 상태에서
+`dbc.Spinner(size='sm', className='me-2')`를 만드는데 dbc 2.x의 Spinner는 `className` 인자를 받지 않아
+TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실패해 화면이 그대로였다(추출 스레드는 정상
+실행). 앞서 고친 워커 간 상태 공유는 별개의 실제 결함이었고, 이 오류가 겹쳐 있었다.
+수정: 부트스트랩 CSS 스피너(`<span class="spinner-border spinner-border-sm">`)로 교체. 테스트
+(tests/test_confl_tree.py)에 idle/running/done/error 네 상태 렌더링 회귀 테스트 추가 — 당시 테스트는 진행 중
+상태를 그려보지 않아 놓쳤다.

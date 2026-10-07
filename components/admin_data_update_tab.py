@@ -316,7 +316,7 @@ def _confl_tree_status_view():
     """하위 페이지 추출 진행/결과 한 줄."""
     st = confl_tree.snapshot()
     if st['status'] == 'running':
-        return html.Div([dbc.Spinner(size='sm', className='me-2'),
+        return html.Div([html.Span(className='spinner-border spinner-border-sm me-2'),
                          f"추출 중(서버에서 계속 실행 — 다른 화면으로 이동해도 됩니다) · 상위 {st['root']} · "
                          f"경과 {st['elapsed']}초 · {st['count']}개 수집 · {st['message']}"],
                         className='small text-primary fw-semibold')
