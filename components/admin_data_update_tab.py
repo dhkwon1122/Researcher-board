@@ -17,7 +17,7 @@ from components.admin_shared import (
     _alert, _ensure_rid, _mark_stale_rows, _renumbered, _run_status_view, _split_hidden_rows,
     _STATUS_COLORS, _upload_box,
 )
-from services import team_refer_store
+from services import confl_tree, team_refer_store
 from services import web_pipeline_runner as wpr
 
 
@@ -312,6 +312,63 @@ def _confl_pdf_upload_section():
     ]), className='shadow-sm mb-3')
 
 
+def _confl_tree_status_view():
+    """하위 페이지 추출 진행/결과 한 줄."""
+    st = confl_tree.snapshot()
+    if st['status'] == 'running':
+        return html.Div([dbc.Spinner(size='sm', className='me-2'),
+                         f"추출 중… {st['count']}개 수집 (마지막: {st['message']})"], className='small text-primary')
+    if st['status'] == 'done':
+        return html.Div([html.I(className='bi bi-check-circle-fill text-success me-1'),
+                         f"완료 — 상위 페이지 {st['root']} 아래 {st['count']}개 페이지 ({st['finished_at']})"],
+                        className='small')
+    if st['status'] == 'error':
+        return html.Div([html.I(className='bi bi-exclamation-triangle-fill text-danger me-1'),
+                         f"실패 — {st['message']}"], className='small text-danger')
+    return html.Div('상위 페이지를 입력하고 "추출"을 누르세요.', className='small text-muted')
+
+
+def _confl_tree_section():
+    """"컨플 하위 페이지 목록 추출"(2026-10, 사용자 요청) — 상위 페이지 하나의 주소/ID를
+    넣으면 그 아래 모든 하위 페이지의 제목·페이지 ID(10자리)를 엑셀로 내려받는다.
+    백엔드는 services/confl_tree.py(백그라운드 스레드 + 폴링)."""
+    return dbc.Card(dbc.CardBody([
+        html.Div([
+            html.I(className='bi bi-diagram-3 me-2 text-primary'),
+            html.Span('컨플 하위 페이지 목록 추출 — 제목 · 페이지 ID 엑셀', className='fw-semibold small'),
+            html.I(className='bi bi-question-circle ms-1', id='confl-tree-hint-icon',
+                   style={'fontSize': '0.75rem', 'color': '#6c757d', 'cursor': 'help'}),
+            dbc.Tooltip(
+                '상위 컨플 페이지의 페이지 ID(숫자) 또는 pageId가 들어간 주소를 넣으면, 그 아래 모든 '
+                '하위 페이지(최하위까지)의 제목과 페이지 ID를 엑셀로 뽑습니다. 이 ID를 과제별컨플의 '
+                '"컨플 주소"에 그대로 쓸 수 있습니다. 사내 컨플루언스 접속 설정(.env)이 필요합니다.',
+                target='confl-tree-hint-icon', placement='right',
+            ),
+        ], className='mb-2'),
+        dbc.Row([
+            dbc.Col(dbc.Input(id='confl-tree-root', placeholder='상위 페이지 ID(예: 3862782334) 또는 주소',
+                              type='text', size='sm', debounce=False), md=5),
+            dbc.Col(dcc.Dropdown(
+                id='confl-tree-depth', value='all', clearable=False,
+                options=[{'label': '최하위까지 전부', 'value': 'all'},
+                         {'label': '1단계 아래까지', 'value': '1'},
+                         {'label': '2단계 아래까지', 'value': '2'},
+                         {'label': '3단계 아래까지', 'value': '3'}],
+            ), md=3),
+            dbc.Col(dbc.ButtonGroup([
+                dbc.Button([html.I(className='bi bi-search me-1'), '추출'], id='confl-tree-run-btn',
+                           color='primary', size='sm'),
+                dbc.Button([html.I(className='bi bi-file-earmark-excel me-1'), '엑셀 다운로드'],
+                           id='confl-tree-download-btn', color='success', outline=True, size='sm',
+                           disabled=not confl_tree.snapshot()['has_result']),
+            ]), md=4),
+        ], className='g-2 align-items-center'),
+        html.Div(_confl_tree_status_view(), id='confl-tree-status', className='mt-2'),
+        dcc.Download(id='confl-tree-download'),
+        dcc.Interval(id='confl-tree-interval', interval=2000, disabled=not confl_tree.is_running()),
+    ]), className='shadow-sm mb-3')
+
+
 def _data_update_tab() -> html.Div:
     """매니페스트 등록 파일 중 20개(리더십진단·comments 제외)를 웹에서 직접
     업로드→실행할 수 있는 탭. 실제 실행/락/로그는 services/web_pipeline_runner.py.
@@ -350,6 +407,8 @@ def _data_update_tab() -> html.Div:
 
         html.Div(_confl_pdf_upload_section(), id='confl-pdf-section-container'),
         html.Div(id='confl-pdf-status', className='mt-2'),
+
+        html.Div(_confl_tree_section(), id='confl-tree-section-container'),
     ], className='pt-3')
 
 
@@ -539,6 +598,56 @@ def confl_pdf_delete_all(submit_n_clicks):
     done, failed = wpr.delete_confl_pdfs(names)
     msg = f'PDF {done}건을 전부 삭제했습니다.' + (f' (실패 {failed}건)' if failed else '')
     return _confl_pdf_upload_section(), _alert(msg, 'success' if done else 'warning')
+
+
+# ── 콜백: 컨플 하위 페이지 목록 추출 ─────────────────────────────────────────
+@callback(
+    Output('confl-tree-status', 'children', allow_duplicate=True),
+    Output('confl-tree-interval', 'disabled', allow_duplicate=True),
+    Output('confl-tree-download-btn', 'disabled', allow_duplicate=True),
+    Input('confl-tree-run-btn', 'n_clicks'),
+    State('confl-tree-root', 'value'),
+    State('confl-tree-depth', 'value'),
+    prevent_initial_call=True,
+)
+def confl_tree_start(n_clicks, root, depth):
+    from services.auth import can
+    if not n_clicks:
+        return no_update, no_update, no_update
+    if not can('manage_users'):
+        return _alert('관리자만 실행할 수 있습니다.', 'danger'), True, True
+    ok, reason = confl_tree.start(root or '', None if depth in (None, 'all') else int(depth))
+    if not ok:
+        return _alert(reason, 'warning'), not confl_tree.is_running(), True
+    return _confl_tree_status_view(), False, True
+
+
+@callback(
+    Output('confl-tree-status', 'children', allow_duplicate=True),
+    Output('confl-tree-interval', 'disabled', allow_duplicate=True),
+    Output('confl-tree-download-btn', 'disabled', allow_duplicate=True),
+    Input('confl-tree-interval', 'n_intervals'),
+    prevent_initial_call=True,
+)
+def confl_tree_poll(_n):
+    st = confl_tree.snapshot()
+    return _confl_tree_status_view(), st['status'] != 'running', not st['has_result']
+
+
+@callback(
+    Output('confl-tree-download', 'data'),
+    Input('confl-tree-download-btn', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def confl_tree_download(n_clicks):
+    from services.auth import can
+    if not n_clicks or not can('manage_users'):
+        return no_update
+    result = confl_tree.result_workbook()
+    if result is None:
+        return no_update
+    filename, data = result
+    return dcc.send_bytes(data, filename)
 
 
 # ── 콜백: 데이터 업데이트 — 전체/선택 실행 ─────────────────────────────────────
