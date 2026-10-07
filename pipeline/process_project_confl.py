@@ -16,6 +16,7 @@
 """
 
 import os
+import re
 import sys
 
 import pandas as pd
@@ -34,6 +35,15 @@ COL_DEP = '소속'
 COL_PROJECT = '과제명'
 COL_CONFL = '컨플 주소'
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+def _clean_confl_address(val) -> str:
+    """컨플 주소 셀 정리 — 페이지 ID만 숫자로 적힌 셀이 엑셀에서 실수로 읽혀
+    '3957970224.0'이 되면 소수부(.0)를 떼어 '3957970224'로 저장한다(전체 URL은 그대로)."""
+    s = _clean(val)
+    if re.fullmatch(r'\d+\.0+', s):
+        return s.split('.')[0]
+    return s
 
 
 def process(raw_dir: str = RAW_DIR) -> bool:
@@ -64,7 +74,7 @@ def process(raw_dir: str = RAW_DIR) -> bool:
     result = pd.DataFrame({
         'dep_name': df[COL_DEP].apply(_clean),
         'project_name': df[COL_PROJECT].apply(_clean),
-        'confl_address': df[COL_CONFL].apply(_clean),
+        'confl_address': df[COL_CONFL].apply(_clean_confl_address),
     })
     result = result[result['project_name'] != ''].reset_index(drop=True)
 

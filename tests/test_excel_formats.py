@@ -59,3 +59,11 @@ def test_excel_serial_dates_are_converted():
     assert excel_reader.parse_yyyymmdd('20240101') == '2024-01-01'
     assert excel_reader.parse_flexible_date(45678) == '2025-01-21'
     assert excel_reader.parse_flexible_date('2024/03/05') == '2024-03-05'
+
+
+def test_confluence_float_page_id_is_treated_as_bare_id():
+    import confluence_client as cc
+    assert cc.extract_page_id('3957970224.0') == '3957970224'
+    assert cc._is_bare_page_id(' 3957970224.00 ')
+    assert not cc._is_bare_page_id('12.5')
+    assert cc.extract_page_id('https://h.samsungds.net/pages/viewpage.action?pageId=123') == '123'

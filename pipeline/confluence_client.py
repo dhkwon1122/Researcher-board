@@ -62,7 +62,19 @@ def _is_bare_page_id(confl_address: str) -> bool:
     추가 — 사용자 확정, 게이트웨이 경유가 기본이 되면서 project_confl_
     address.csv에 굳이 전체 URL을 넣을 필요 없이 페이지 ID만 넣는 방식으로
     단순화). 앞뒤 공백만 제거하고 순수 숫자로만 되어 있으면 페이지 ID로 본다."""
-    return confl_address.strip().isdigit()
+    return _bare_page_id(confl_address) is not None
+
+
+_BARE_ID_RE = re.compile(r'^(\d+)(?:\.0+)?$')
+
+
+def _bare_page_id(confl_address: str) -> str | None:
+    """페이지 ID만 있는 값이면 그 숫자 문자열을, 아니면 None. 엑셀 숫자 셀이
+    실수로 읽혀 '3957970224.0'처럼 ".0"이 붙어 들어온 경우도 같은 ID로 본다
+    (2026-10 — 이 값이 전체 URL로 오인돼 "Confluence 주소는 HTTPS만 허용됩니다"가
+    나던 문제, CONFLUENCE_ALLOW_HTTP와 무관)."""
+    m = _BARE_ID_RE.match((confl_address or '').strip())
+    return m.group(1) if m else None
 
 
 def _validate_https(url: str, allow_http: bool, label: str) -> None:
@@ -123,8 +135,9 @@ def extract_page_id(confl_address: str) -> str | None:
       - .../pages/123456
     URL 형식이 다르면 이 함수의 정규식을 실제 형식에 맞게 수정하세요.
     """
-    if _is_bare_page_id(confl_address):
-        return confl_address.strip()
+    bare = _bare_page_id(confl_address)
+    if bare:
+        return bare
     m = re.search(r'[?&]pageId=(\d+)', confl_address)
     if m:
         return m.group(1)
