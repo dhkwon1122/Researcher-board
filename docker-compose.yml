@@ -104,6 +104,9 @@ services:
       # 이 값이 컨테이너에 전달되지 않으면 .env에 적어도 웹 앱(하위 페이지 추출 등)은
       # "HTTPS만 허용됩니다"로 거부한다(2026-10) — confluence_client.py 참고.
       CONFLUENCE_ALLOW_HTTP: ${CONFLUENCE_ALLOW_HTTP:-false}
+      # 게이트웨이 호출 빈도 제한(분당 15회 초과 시 HTTP 429) 대응 — 분당 최대 호출 수(기본 10,
+      # 0이하면 제한 끔). confluence_client.py의 _throttle() 참고.
+      CONFLUENCE_MAX_CALLS_PER_MINUTE: ${CONFLUENCE_MAX_CALLS_PER_MINUTE:-10}
       # 인증 토큰을 실을 헤더(2026-09-22, 기본 Authorization: Bearer <토큰>) —
       # 게이트웨이가 다른 헤더명/스킴을 요구하면 바꾼다(confluence_client.py 참고).
       CONFLUENCE_AUTH_HEADER: ${CONFLUENCE_AUTH_HEADER:-Authorization}

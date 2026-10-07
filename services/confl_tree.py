@@ -31,7 +31,7 @@ import confluence_client  # noqa: E402
 EXCEL_HEADERS = ['단계', '제목', '페이지 ID', '상위 페이지 제목', '상위 페이지 ID', '경로']
 
 # 'running' 상태가 이 시간(초) 이상 갱신되지 않으면 워커가 죽은 것으로 보고 중단 처리한다.
-_STALE_SECONDS = 120
+_STALE_SECONDS = 300
 _WRITE_INTERVAL = 0.5   # 진행 상황 파일 갱신 최소 간격(초)
 
 _lock = threading.Lock()
@@ -126,7 +126,11 @@ def _run(root: str, max_depth: int | None) -> None:
             _save_state(count=count, message=title)
 
     try:
-        rows = confluence_client.crawl_descendants(root, max_depth=max_depth, progress=_progress)
+        def _on_wait(left: float) -> None:   # 호출 제한으로 쉬는 중에도 상태 파일을 갱신(heartbeat)
+            _save_state(message=f'호출 제한(분당 한도) 대기 중 — {int(left)}초')
+
+        rows = confluence_client.crawl_descendants(root, max_depth=max_depth, progress=_progress,
+                                                   on_wait=_on_wait)
         _write_json_atomic(_rows_path(), rows)
         _save_state(status='done', count=len(rows), message='완료',
                     finished_at=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))

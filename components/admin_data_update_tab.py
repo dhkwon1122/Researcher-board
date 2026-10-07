@@ -317,7 +317,8 @@ def _confl_tree_status_view():
     st = confl_tree.snapshot()
     if st['status'] == 'running':
         return html.Div([dbc.Spinner(size='sm', className='me-2'),
-                         f"추출 중… 경과 {st['elapsed']}초 · {st['count']}개 수집 (마지막: {st['message']})"],
+                         f"추출 중(서버에서 계속 실행 — 다른 화면으로 이동해도 됩니다) · 상위 {st['root']} · "
+                         f"경과 {st['elapsed']}초 · {st['count']}개 수집 · {st['message']}"],
                         className='small text-primary fw-semibold')
     if st['status'] == 'done':
         return html.Div([html.I(className='bi bi-check-circle-fill text-success me-1'),
@@ -342,7 +343,9 @@ def _confl_tree_section():
             dbc.Tooltip(
                 '상위 컨플 페이지의 페이지 ID(숫자) 또는 pageId가 들어간 주소를 넣으면, 그 아래 모든 '
                 '하위 페이지(최하위까지)의 제목과 페이지 ID를 엑셀로 뽑습니다. 이 ID를 과제별컨플의 '
-                '"컨플 주소"에 그대로 쓸 수 있습니다. 사내 컨플루언스 접속 설정(.env)이 필요합니다.',
+                '"컨플 주소"에 그대로 쓸 수 있습니다. 사내 컨플루언스 접속 설정(.env)이 필요합니다. '
+                '게이트웨이 호출 제한(분당 10회로 간격 조절, CONFLUENCE_MAX_CALLS_PER_MINUTE) 때문에 '
+                '페이지가 많으면 시간이 걸리며, 추출은 서버에서 계속 실행되므로 화면을 닫아도 됩니다.',
                 target='confl-tree-hint-icon', placement='right',
             ),
         ], className='mb-2'),
