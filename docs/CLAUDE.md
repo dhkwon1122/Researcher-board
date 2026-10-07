@@ -13592,3 +13592,21 @@ project_confl_address.csv의 `.0`은 클라이언트 쪽 보정으로 바로 동
 - 검증: 모의 세션으로 3단계 트리/페이징(limit=2)/깊이 제한/상한/엑셀 텍스트 셀/UI 콜백 확인,
   tests/test_confl_tree.py 추가. **실제 사내 컨플루언스 응답은 이 환경에서 확인 불가** — `child/page`
   엔드포인트가 게이트웨이에서 허용되는지는 서버에서 첫 실행으로 확인 필요.
+
+## 2026-10-07 (8): 웹 앱에서만 "CONFLUENCE_GATEWAY_BASE_URL은 HTTPS만 허용" — compose가 ALLOW_HTTP를 전달 안 함
+
+run_integration.py(서버 셸, .env 직접 읽음)는 CONFLUENCE_ALLOW_HTTP=true로 통과하는데 웹 화면(하위 페이지
+추출)은 같은 메시지로 실패. 원인: 웹 앱은 docker 컨테이너라 `docker-compose.yml`의 environment에 적힌
+변수만 받는데 CONFLUENCE_ALLOW_HTTP가 목록에 없었다. docker-compose.yml에 추가(기본 false)하고
+.env.example에 설명 추가. 적용하려면 `docker compose up -d`로 앱 컨테이너를 다시 만들어야 한다
+(단순 restart는 환경변수를 다시 읽지 않음).
+
+## 2026-10-07 (9): 하위 페이지 추출 — 진행 상태가 "대기 중"으로 보이던 문제(워커 간 상태 불일치)
+
+증상: "추출"을 눌러도 추출 중인지 아닌지 알 수 없음. 원인: 앱이 gunicorn 워커 2개로 도는데
+작업 상태를 프로세스 메모리(`services/confl_tree._state`)에만 뒀다 → 폴링 요청이 시작을 받은
+워커가 아닌 쪽으로 가면 "대기 중"으로 응답하고 폴링도 꺼졌다. 수정: 상태/결과를
+`data/web_updates/confl_tree/state.json`·`rows.json`(원자적 쓰기, 0600)에 저장해 어느
+워커가 응답해도 같은 상태를 본다(다음 실행 시 덮어씀). 진행 줄에 경과 시간(초)을 추가하고,
+2분 이상 갱신이 없는 'running'은 워커 중단으로 보고 오류로 표시한다. 결과 엑셀은 이제
+서버 파일로도 남는다(기존 "메모리에만" 설명은 이 항목으로 대체).

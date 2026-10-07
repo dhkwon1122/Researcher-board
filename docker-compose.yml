@@ -100,6 +100,10 @@ services:
       # 사내 API 게이트웨이 경유 정책(2026-09-22) — 설정하면 confl_address의
       # 실제 호스트 대신 이 base URL로 REST 요청을 보낸다(confluence_client.py 참고).
       CONFLUENCE_GATEWAY_BASE_URL: ${CONFLUENCE_GATEWAY_BASE_URL:-}
+      # 게이트웨이가 http://(평문) 주소일 때만 true — 기본 false(HTTPS만 허용).
+      # 이 값이 컨테이너에 전달되지 않으면 .env에 적어도 웹 앱(하위 페이지 추출 등)은
+      # "HTTPS만 허용됩니다"로 거부한다(2026-10) — confluence_client.py 참고.
+      CONFLUENCE_ALLOW_HTTP: ${CONFLUENCE_ALLOW_HTTP:-false}
       # 인증 토큰을 실을 헤더(2026-09-22, 기본 Authorization: Bearer <토큰>) —
       # 게이트웨이가 다른 헤더명/스킴을 요구하면 바꾼다(confluence_client.py 참고).
       CONFLUENCE_AUTH_HEADER: ${CONFLUENCE_AUTH_HEADER:-Authorization}

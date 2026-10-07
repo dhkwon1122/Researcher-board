@@ -317,7 +317,8 @@ def _confl_tree_status_view():
     st = confl_tree.snapshot()
     if st['status'] == 'running':
         return html.Div([dbc.Spinner(size='sm', className='me-2'),
-                         f"추출 중… {st['count']}개 수집 (마지막: {st['message']})"], className='small text-primary')
+                         f"추출 중… 경과 {st['elapsed']}초 · {st['count']}개 수집 (마지막: {st['message']})"],
+                        className='small text-primary fw-semibold')
     if st['status'] == 'done':
         return html.Div([html.I(className='bi bi-check-circle-fill text-success me-1'),
                          f"완료 — 상위 페이지 {st['root']} 아래 {st['count']}개 페이지 ({st['finished_at']})"],

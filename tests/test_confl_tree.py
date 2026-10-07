@@ -62,3 +62,35 @@ def test_workbook_keeps_ids_as_text(monkeypatch):
     ws = load_workbook(io.BytesIO(confl_tree.build_workbook_bytes(cc.crawl_descendants('100')))).active
     assert [c.value for c in ws[1]] == confl_tree.EXCEL_HEADERS
     assert ws['C2'].value == '100' and ws['C2'].data_type == 's'
+
+
+def test_job_state_is_file_based_and_survives_across_workers(monkeypatch, tmp_path):
+    import time
+    from services import web_pipeline_runner as wpr
+    _setup(monkeypatch)
+    monkeypatch.setattr(wpr, 'WEB_UPDATES_DIR', str(tmp_path))
+    ok, _ = confl_tree.start('100', None)
+    assert ok
+    for _ in range(100):
+        if not confl_tree.is_running():
+            break
+        time.sleep(0.05)
+    # 다른 워커 프로세스가 같은 파일을 읽는 상황 — 상태는 파일에서만 온다
+    st = confl_tree.snapshot()
+    assert st['status'] == 'done' and st['count'] == 6 and st['has_result']
+    name, data = confl_tree.result_workbook()
+    assert name.startswith('컨플_하위페이지_100_') and data[:2] == b'PK'
+
+
+def test_stale_running_state_is_reported_as_error(monkeypatch, tmp_path):
+    from services import web_pipeline_runner as wpr
+    monkeypatch.setattr(wpr, 'WEB_UPDATES_DIR', str(tmp_path))
+    confl_tree._save_state(status='running', started_at=1.0)
+    st = confl_tree._read_state()
+    st_path = confl_tree._state_path()
+    import json
+    raw = json.load(open(st_path, encoding='utf-8'))
+    raw['updated_at'] = 1.0
+    json.dump(raw, open(st_path, 'w', encoding='utf-8'))
+    assert confl_tree.snapshot()['status'] == 'error'
+    assert not confl_tree.is_running()
