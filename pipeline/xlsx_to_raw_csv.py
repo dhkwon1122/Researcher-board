@@ -40,8 +40,8 @@ def _resolve(raw_dir: str, pattern) -> list[str]:
     파일이 있을 때만 [경로] 하나를 반환한다."""
     if is_wildcard(pattern):
         return find_matches(raw_dir, pattern)
-    single = os.path.join(raw_dir, pattern)
-    return [single] if os.path.exists(single) else []
+    # 고정 파일명도 같은 이름의 .xlsx/.xlsb 중 있는 쪽을 쓴다(2026-10, source_files 참고).
+    return find_matches(raw_dir, pattern)
 
 
 def run():

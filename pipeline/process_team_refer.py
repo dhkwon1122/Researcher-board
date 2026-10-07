@@ -97,6 +97,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from excel_reader import clean_str as _clean, norm_id, read_xlsx  # noqa: E402
+from source_files import resolve_excel  # noqa: E402
 from merge_utils import TABLE_KEYS, write_merged  # noqa: E402
 from team_hierarchy import FIELDS, LEVEL_FIELDS, derive_hierarchy, own_path, slug  # noqa: E402
 import team_refer_intake  # noqa: E402
@@ -599,7 +600,7 @@ def _find_source_file(raw_dir: str) -> str | None:
     파일명을 그대로 보존해 저장한다) 그 폴더 안의 xlsx/csv 파일이 정확히
     1개뿐이면 그걸 쓴다(임시 잠금 파일 '~$*' 제외) — 여러 개면 어느 걸
     읽어야 할지 알 수 없으므로 실패 처리."""
-    exact_xlsx = os.path.join(raw_dir, SOURCE_FILE)
+    exact_xlsx = resolve_excel(raw_dir, SOURCE_FILE)   # 팀참조시트.xlsx 또는 .xlsb
     if os.path.exists(exact_xlsx):
         return exact_xlsx
     exact_csv = os.path.join(raw_dir, SOURCE_FILE_CSV)
@@ -607,7 +608,8 @@ def _find_source_file(raw_dir: str) -> str | None:
         return exact_csv
 
     candidates = sorted(
-        p for p in glob.glob(os.path.join(raw_dir, '*.xlsx')) + glob.glob(os.path.join(raw_dir, '*.csv'))
+        p for p in (glob.glob(os.path.join(raw_dir, '*.xlsx')) + glob.glob(os.path.join(raw_dir, '*.xlsb'))
+                    + glob.glob(os.path.join(raw_dir, '*.csv')))
         if not os.path.basename(p).startswith('~$')
     )
     return candidates[0] if len(candidates) == 1 else None
@@ -677,7 +679,8 @@ def process(raw_dir: str = RAW_DIR, valid_date: date | None = None, skip_tombsto
     if not raw_path:
         others = sorted(
             os.path.basename(p) for p in
-            glob.glob(os.path.join(raw_dir, '*.xlsx')) + glob.glob(os.path.join(raw_dir, '*.csv'))
+            glob.glob(os.path.join(raw_dir, '*.xlsx')) + glob.glob(os.path.join(raw_dir, '*.xlsb'))
+            + glob.glob(os.path.join(raw_dir, '*.csv'))
             if not os.path.basename(p).startswith('~$')
         )
         if others:

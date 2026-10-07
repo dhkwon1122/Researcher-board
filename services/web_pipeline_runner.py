@@ -271,9 +271,37 @@ def _resolve_item(key: str) -> dict:
     fname = f'업무목표{year % 100:02d}.xlsx'
     patched = dict(item)
     patched['label'] = f'업무목표{year % 100:02d}'
-    patched['hint'] = fname
+    patched['hint'] = _hint_with_xlsb(fname)
     patched['dest_filename'] = fname
     return patched
+
+
+_EXCEL_EXTS = ('.xlsx', '.xlsb')
+
+
+def _dest_with_upload_ext(dest_filename: str, upload_filename: str) -> str:
+    """exact 모드에서 저장 이름의 확장자를 "올린 파일의 확장자"로 맞춘다(2026-10,
+    사용자 확정 — 모든 항목이 xlsx·xlsb 둘 다 허용). 예: dest '특허 리스트.xlsx' +
+    업로드 'abc.xlsb' → '특허 리스트.xlsb'. 둘 중 하나가 엑셀 확장자가 아니면
+    (csv 등) dest를 그대로 쓴다. 읽는 쪽(pipeline/source_files.resolve_excel)이
+    같은 이름의 .xlsx/.xlsb 중 있는 쪽을 찾는다."""
+    stem, dest_ext = os.path.splitext(dest_filename)
+    upload_ext = os.path.splitext(upload_filename or '')[1].lower()
+    if dest_ext.lower() in _EXCEL_EXTS and upload_ext in _EXCEL_EXTS:
+        return stem + upload_ext
+    return dest_filename
+
+
+def _is_legacy_job_profile(basename: str) -> bool:
+    """직무이력 legacy 슬롯 파일인지 — 확장자(xlsx/xlsb)와 무관하게 이름(stem)으로 판정."""
+    return os.path.splitext(basename)[0] == os.path.splitext(JOB_PROFILE_LEGACY_FILE)[0]
+
+
+def _hint_with_xlsb(hint: str) -> str:
+    """안내문구에 .xlsx가 들어 있으면 xlsb도 가능하다는 말을 덧붙인다."""
+    if '.xlsx' in hint and 'xlsb' not in hint:
+        return f'{hint} (.xlsb도 가능)'
+    return hint
 
 
 def _key_dir(key: str) -> str:
@@ -350,7 +378,7 @@ def save_upload(key: str, filename: str, content_bytes: bytes, slot: str | None 
         for stale in glob.glob(os.path.join(d, '*')):
             if os.path.basename(stale) not in ('.uploaded_at',):
                 os.remove(stale)
-        dest = os.path.join(d, item['dest_filename'])
+        dest = os.path.join(d, _dest_with_upload_ext(item['dest_filename'], filename))
 
     elif item['mode'] == 'wildcard':
         for stale in glob.glob(os.path.join(d, '*')):
@@ -359,11 +387,14 @@ def save_upload(key: str, filename: str, content_bytes: bytes, slot: str | None 
 
     elif item['mode'] == 'dual':
         if slot == 'legacy':
-            dest = os.path.join(d, JOB_PROFILE_LEGACY_FILE)
+            for stale in glob.glob(os.path.join(d, '*')):  # 다른 확장자의 이전 legacy 파일 정리
+                if _is_legacy_job_profile(os.path.basename(stale)):
+                    os.remove(stale)
+            dest = os.path.join(d, _dest_with_upload_ext(JOB_PROFILE_LEGACY_FILE, filename))
         elif slot == 'new':
             for stale in glob.glob(os.path.join(d, '*')):
                 base = os.path.basename(stale)
-                if base != JOB_PROFILE_LEGACY_FILE:
+                if not _is_legacy_job_profile(base):
                     os.remove(stale)
             dest = os.path.join(d, filename)
         else:
@@ -408,8 +439,8 @@ def has_upload(key: str) -> bool:
         # 항상 필요한 데이터로 승격. legacy는 한 번 올리면 폴더에 계속 남아
         # 재사용되므로, 매번 다시 올릴 필요는 없다 — 그 폴더에 남아있기만
         # 하면 이 조건을 계속 만족한다).
-        has_legacy = any(os.path.basename(p) == JOB_PROFILE_LEGACY_FILE for p in files)
-        has_new = any(os.path.basename(p) != JOB_PROFILE_LEGACY_FILE for p in files)
+        has_legacy = any(_is_legacy_job_profile(os.path.basename(p)) for p in files)
+        has_new = any(not _is_legacy_job_profile(os.path.basename(p)) for p in files)
         return has_legacy and has_new
     return bool(files)
 
@@ -548,7 +579,8 @@ def _run_backfill_batch(key: str, item: dict) -> list[tuple[str, bool, str]]:
         filename = os.path.basename(path)
         tmp_dir = tempfile.mkdtemp(prefix='backfill_')
         try:
-            tmp_name = item['dest_filename'] if item['mode'] == 'exact' else filename
+            tmp_name = (_dest_with_upload_ext(item['dest_filename'], filename)
+                        if item['mode'] == 'exact' else filename)
             shutil.copy2(path, os.path.join(tmp_dir, tmp_name))
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
@@ -723,7 +755,7 @@ def snapshot() -> list[dict]:
         rows.append({
             'key': item['key'],
             'label': item['label'],
-            'hint': item['hint'],
+            'hint': _hint_with_xlsb(item['hint']),
             'mode': item['mode'],
             'needs_valid_date': item['needs_valid_date'],
             'hidden_from_table': item['hidden_from_table'],

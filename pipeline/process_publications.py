@@ -41,6 +41,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR, OUT_DIR  # noqa: E402
+from source_files import resolve_excel  # noqa: E402
 from merge_utils import TABLE_KEYS, write_merged  # noqa: E402
 
 SOURCE_FILE = '개인별논문현황_2016_2026.xlsx'
@@ -129,7 +130,7 @@ def process(raw_dir: str = RAW_DIR) -> bool:
                   '(DB publications_stg 또는 data/raw_csv/publications.csv)')
             return False
     else:
-        source = os.path.join(raw_dir, SOURCE_FILE)
+        source = resolve_excel(raw_dir, SOURCE_FILE)
         if not os.path.exists(source):
             print(f'[process_publications] 파일 없음: {source}')
             return False

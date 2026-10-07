@@ -57,6 +57,20 @@ def clean_str(val) -> str:
     return '' if s.lower() in _BLANK_STRINGS else s
 
 
+def _excel_serial_to_date(s: str) -> str:
+    """엑셀 날짜 일련번호('45678' 또는 '45678.0', 대략 1954~2064년)를 'YYYY-MM-DD'로.
+    .xlsb를 리눅스에서 pyxlsb로 읽으면 날짜 셀이 서식 정보 없이 일련번호 숫자로
+    들어와(xlsx는 날짜 객체로 읽힘) 이를 되돌리는 용도(2026-10). 8자리 YYYYMMDD와
+    겹치지 않도록 정확히 5자리 정수 범위(20000~60000)만 변환하고, 아니면 ''."""
+    try:
+        v = float(s)
+    except (TypeError, ValueError):
+        return ''
+    if not (20000 <= v < 60000):
+        return ''
+    return (pd.Timestamp('1899-12-30') + pd.to_timedelta(int(v), unit='D')).strftime('%Y-%m-%d')
+
+
 def parse_yyyymmdd(val) -> str:
     """YYYYMMDD(숫자 또는 문자열) 또는 이미 YYYY-MM-DD 형식인 값 → 'YYYY-MM-DD'.
     변환 불가/빈 값이면 빈 문자열. (실수형으로 읽힌 20230101.0 도 처리)"""
@@ -65,6 +79,10 @@ def parse_yyyymmdd(val) -> str:
     s = str(val).strip().split('.')[0]
     if is_blank(s):
         return ''
+    if len(s) == 5 and s.isdigit():
+        serial = _excel_serial_to_date(s)
+        if serial:
+            return serial
     if len(s) == 8 and s.isdigit():
         return f'{s[:4]}-{s[4:6]}-{s[6:]}'
     if len(s) >= 10 and s[4] == '-':
@@ -93,6 +111,9 @@ def parse_flexible_date(val) -> str:
     s = str(val).strip()
     if is_blank(s):
         return ''
+    serial = _excel_serial_to_date(s) if s.replace('.', '', 1).isdigit() else ''
+    if serial:
+        return serial
     try:
         return pd.to_datetime(s).strftime('%Y-%m-%d')
     except Exception:
