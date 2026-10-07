@@ -17,7 +17,7 @@ from components.admin_shared import (
     _alert, _ensure_rid, _mark_stale_rows, _renumbered, _run_status_view, _split_hidden_rows,
     _STATUS_COLORS, _upload_box,
 )
-from services import confl_tree, team_refer_store
+from services import confl_match, confl_tree, team_refer_store
 from services import web_pipeline_runner as wpr
 
 
@@ -368,6 +368,17 @@ def _confl_tree_section():
             ]), md=4),
         ], className='g-2 align-items-center'),
         html.Div(_confl_tree_status_view(), id='confl-tree-status', className='mt-2'),
+        html.Hr(className='my-2'),
+        html.Div([
+            dbc.Button([html.I(className='bi bi-link-45deg me-1'), '과제별컨플에 반영(엑셀)'],
+                       id='confl-tree-apply-btn', color='primary', outline=True, size='sm', className='me-2',
+                       disabled=not confl_tree.snapshot()['has_result']),
+            html.Span('추출 결과(단계 2 = 과제)의 제목을 과제별컨플의 "과제명"과 비교해 "컨플 주소"에 페이지 ID를 넣고, '
+                      '"추출 결과(성공/실패)" 열을 붙인 엑셀을 내려받습니다. 확인 후 과제별컨플로 다시 업로드하세요.',
+                      className='small text-muted'),
+        ], className='d-flex align-items-center flex-wrap'),
+        html.Div(id='confl-tree-apply-msg', className='mt-2'),
+        dcc.Download(id='confl-tree-apply-download'),
         dcc.Download(id='confl-tree-download'),
         dcc.Interval(id='confl-tree-interval', interval=2000, disabled=not confl_tree.is_running()),
     ]), className='shadow-sm mb-3')
@@ -609,6 +620,7 @@ def confl_pdf_delete_all(submit_n_clicks):
     Output('confl-tree-status', 'children', allow_duplicate=True),
     Output('confl-tree-interval', 'disabled', allow_duplicate=True),
     Output('confl-tree-download-btn', 'disabled', allow_duplicate=True),
+    Output('confl-tree-apply-btn', 'disabled', allow_duplicate=True),
     Input('confl-tree-run-btn', 'n_clicks'),
     State('confl-tree-root', 'value'),
     State('confl-tree-depth', 'value'),
@@ -617,25 +629,26 @@ def confl_pdf_delete_all(submit_n_clicks):
 def confl_tree_start(n_clicks, root, depth):
     from services.auth import can
     if not n_clicks:
-        return no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update
     if not can('manage_users'):
-        return _alert('관리자만 실행할 수 있습니다.', 'danger'), True, True
+        return _alert('관리자만 실행할 수 있습니다.', 'danger'), True, True, True
     ok, reason = confl_tree.start(root or '', None if depth in (None, 'all') else int(depth))
     if not ok:
-        return _alert(reason, 'warning'), not confl_tree.is_running(), True
-    return _confl_tree_status_view(), False, True
+        return _alert(reason, 'warning'), not confl_tree.is_running(), True, True
+    return _confl_tree_status_view(), False, True, True
 
 
 @callback(
     Output('confl-tree-status', 'children', allow_duplicate=True),
     Output('confl-tree-interval', 'disabled', allow_duplicate=True),
     Output('confl-tree-download-btn', 'disabled', allow_duplicate=True),
+    Output('confl-tree-apply-btn', 'disabled', allow_duplicate=True),
     Input('confl-tree-interval', 'n_intervals'),
     prevent_initial_call=True,
 )
 def confl_tree_poll(_n):
     st = confl_tree.snapshot()
-    return _confl_tree_status_view(), st['status'] != 'running', not st['has_result']
+    return _confl_tree_status_view(), st['status'] != 'running', not st['has_result'], not st['has_result']
 
 
 @callback(
@@ -652,6 +665,32 @@ def confl_tree_download(n_clicks):
         return no_update
     filename, data = result
     return dcc.send_bytes(data, filename)
+
+
+@callback(
+    Output('confl-tree-apply-download', 'data'),
+    Output('confl-tree-apply-msg', 'children'),
+    Input('confl-tree-apply-btn', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def confl_tree_apply(n_clicks):
+    from datetime import datetime
+    from services.auth import can
+    if not n_clicks:
+        return no_update, no_update
+    if not can('manage_users'):
+        return no_update, _alert('관리자만 실행할 수 있습니다.', 'danger')
+    try:
+        data, summary, source = confl_match.build_updated_workbook(confl_tree.load_rows())
+    except ValueError as exc:
+        return no_update, _alert(str(exc), 'warning')
+    except Exception as exc:  # noqa: BLE001 — 파일 손상/형식 오류 등 사유를 그대로 보여준다
+        return no_update, _alert(f'반영 실패: {type(exc).__name__}: {exc}', 'danger')
+    msg = (f"{source} 기준 — 성공 {summary['success']}건 · 실패 {summary['fail']}건 · "
+           f"미매칭 페이지 {summary['unmatched_pages']}건(후보 {summary['candidates']}개). "
+           f"\"추출 결과\" 열은 {summary['result_column']}열입니다. 엑셀을 확인한 뒤 과제별컨플로 업로드하세요.")
+    filename = f"과제별컨플_추출반영_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+    return dcc.send_bytes(data, filename), _alert(msg, 'success')
 
 
 # ── 콜백: 데이터 업데이트 — 전체/선택 실행 ─────────────────────────────────────
