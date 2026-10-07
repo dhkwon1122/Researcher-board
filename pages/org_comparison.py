@@ -112,11 +112,25 @@ def _info_lines(r_info):
 
 
 def _eval_string(r_eva):
-    """최근 3년 평가 등급을 '가나다' 형태로 연결. 없으면 'O'."""
+    """최근 3년(회계연도 기준) 연봉등급을 '가나다' 형태로 연결. 없으면 'O'.
+
+    2026-10-07 수정: evaluations.csv는 이미 오래전에 researcher_id당 1행인
+    와이드 스키마({연도}_salary_grade 등, services/evaluations.py 참고)로
+    바뀌었는데, 이 함수는 옛 롱 포맷(researcher_id/year/grade)을 그대로
+    참조하고 있어 실제 평가 데이터가 있으면 KeyError: 'year'로 이
+    페이지(/succession-plan) 전체가 500 에러로 죽었다 — 석세션 데이터
+    입력 기능을 추가하면서(저장 후 조회 화면을 다시 그리는 경로가 새로
+    생겨) 이 잠재 버그가 실제로 터지는 것을 확인해 바로잡았다. 연구원
+    명단(pages/researcher_list.py) 등 다른 화면이 이미 쓰는 것과 동일하게
+    services.evaluations의 회계연도 계산을 재사용한다."""
+    from services.evaluations import evaluation_years, salary_grade_column
+    years = sorted(evaluation_years()[0])
+    if r_eva.empty:
+        return 'O' * len(years)
+    row = r_eva.iloc[0]
     chars = []
-    for yr in ['2024', '2025', '2026']:
-        row = r_eva[r_eva['year'].astype(str) == yr] if not r_eva.empty else pd.DataFrame()
-        g = str(row.iloc[0]['grade']).strip() if not row.empty else ''
+    for yr in years:
+        g = str(row.get(salary_grade_column(yr), '') or '').strip()
         chars.append(g if g and g not in ('nan', '-', '') else 'O')
     return ''.join(chars)
 
