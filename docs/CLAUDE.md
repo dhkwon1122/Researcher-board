@@ -13562,3 +13562,15 @@ attribute 'apps'". 원인 두 가지:
 - 검증: 모든 exact 항목에 .xlsb→.xlsx 번갈아 업로드해 이름/교체/has_upload 확인, 직무이력 두
   슬롯 xlsb, 패턴 확장, 일련번호 변환 테스트(tests/test_excel_formats.py), 전 process 모듈
   import 확인, pytest 27 passed. **실제 .xlsb 파일은 만들 수 없어 pyxlsb 실읽기는 미검증.**
+
+## 2026-10-07 (6): Confluence "주소는 HTTPS만 허용됩니다" — 페이지 ID에 ".0"이 붙어 URL로 오인
+
+증상: run_ready.py에서 `Confluence 접속 :3957970224.0 조회 실패 : Confluence 주소는 HTTPS만
+허용됩니다` (CONFLUENCE_ALLOW_HTTP=true를 넣은 뒤에도 발생).
+원인: project_confl_address의 컨플 주소 셀이 숫자(페이지 ID)라 엑셀에서 실수로 읽혀
+`3957970224.0`이 됐고, `_is_bare_page_id()`(`isdigit()`)가 이를 페이지 ID로 못 알아봐
+"전체 URL" 분기로 가서 스킴이 없다는 이유로 HTTPS 에러가 났다. ALLOW_HTTP와 무관.
+수정: `confluence_client._bare_page_id()`가 `\d+(\.0+)?`를 페이지 ID로 인식(extract_page_id도
+정수부만 반환), `process_project_confl`이 저장 시 `.0`을 제거. 기존에 저장된
+project_confl_address.csv의 `.0`은 클라이언트 쪽 보정으로 바로 동작하고, 과제별컨플을
+다시 업로드하면 CSV도 깨끗해진다. (참고: .env 변수명은 CONFLUENCE_ALLOW_HTTP — 철자 주의.)
