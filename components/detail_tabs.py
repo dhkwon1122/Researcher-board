@@ -136,7 +136,7 @@ def patents_tab(pat_df, rid):
             html.Td(patent_title(row), style={'wordBreak': 'break-word'}),
             html.Td(dbc.Badge('등록', color='success') if is_registered(status_val)
                     else dbc.Badge(status_val or '출원', color='primary')),
-            html.Td(cell(row, 'application_id', 'application_no'), style={'wordBreak': 'break-word'}),
+            html.Td(cell(row, 'application_no', 'application_id'), style={'wordBreak': 'break-word'}),
             html.Td(dbc.Badge('대표', color='warning', text_color='dark')
                     if is_lead_value(row.get('is_lead_inventor', ''))
                     else dbc.Badge('참여', color='secondary')),
@@ -149,7 +149,7 @@ def patents_tab(pat_df, rid):
             html.Th('출원일', style={'width': '10%'}),
             html.Th('발명 명칭', style={'width': '32%'}),
             html.Th('상태', style={'width': '10%'}),
-            html.Th('접수ID/출원번호', style={'width': '18%'}),
+            html.Th('출원번호/접수ID', style={'width': '18%'}),
             html.Th('발명자 구분', style={'width': '10%'}),
             html.Th('지분율', style={'width': '9%'}),
             html.Th('등급', style={'width': '11%'}),
