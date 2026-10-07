@@ -124,9 +124,12 @@ MANIFEST = [
          hint='(연도는 자동 계산)', mode='exact', dest_filename='', needs_valid_date=True),
     dict(key='work_objective_3', label='업무목표', module='process_work_objective',
          hint='(연도는 자동 계산)', mode='exact', dest_filename='', needs_valid_date=True),
+    # 파일명은 "개인별과제투입기간데이터"(접미사 허용), 확장자는 xlsb/xlsx 모두 가능
+    # (2026-10, 사용자 확정). 'exact'면 업로드 내용과 무관하게 고정 이름·.xlsb 확장자로
+    # 저장돼 xlsx를 올려도 xlsb 엔진으로 읽다 실패했다 — 원본 이름·확장자를 보존하는
+    # 'wildcard'로 바꾸고 process_tasks._find_source_file()이 확장자로 구분한다.
     dict(key='tasks', label='과제참여이력', module='process_tasks',
-         hint='개인별과제투입기간데이터_260114.xlsb', mode='exact',
-         dest_filename='개인별과제투입기간데이터_260114.xlsb'),
+         hint='개인별과제투입기간데이터.xlsb 또는 .xlsx', mode='wildcard'),
     dict(key='project_confl_address', label='과제별컨플', module='process_project_confl',
          hint='과제별컨플.xlsx', mode='exact', dest_filename='과제별컨플.xlsx'),
     dict(key='job_profile_info_standard', label='직무정보(DS)', module='process_job_profile_standard',

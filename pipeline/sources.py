@@ -87,7 +87,8 @@ SOURCES = [
     ('tech_ownership', '보유기술.xlsx', 0),              # 1번째 행
     ('job_profile', '내 리포트 *_병합.xlsx', 5),         # 6번째 행 (병합 산출물, 위 참고)
     *_WORK_OBJECTIVE_SOURCES,                            # 업무목표(회계연도 기준 최근 3개년, 위 설명 참고)
-    ('tasks', '개인별과제투입기간데이터_260114.xlsb', 0),  # 1번째 행 (xlsb)
+    # 파일명 접미사(_260114 등)와 확장자(xlsb/xlsx)는 가리지 않는다(2026-10, 사용자 확정)
+    ('tasks', ['개인별과제투입기간데이터*.xlsb', '개인별과제투입기간데이터*.xlsx'], 0),  # 1번째 행
     ('project_confl_address', '과제별컨플.xlsx', 0),     # 1번째 행
     ('job_profile_info_standard', '직무정보_표준.xlsx', 0),  # 1번째 행
     ('job_profile_info_sait', '직무정보_부서.xlsx', 0),  # 1번째 행

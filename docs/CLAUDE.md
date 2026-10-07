@@ -13513,3 +13513,28 @@ PDF를 파일마다 X로 하나씩만 지울 수 있던 것을 보완했다.
  데이터로 process_team_refer를 두 번 돌려 보면 사라진 조직이 deleted=Y로 정상
  톰스톤 처리되어 코드 경로 자체는 이상 없음 — 환경 데이터(DB 동기화 순서/날짜) 쪽
  원인으로 추정. 사용자 확인 대기.)
+
+## 2026-10-07 (4): 과제참여이력(tasks) 업로드 — pyxlsb 누락 + 파일명/확장자 유연화
+
+증상: 데이터 업데이트 탭에서 과제참여이력을 xlsx/xlsb 어느 걸 올려도 실패,
+메시지 ".xlsb 파일 읽기에 pyxlsb 패키지가 필요합니다 … 'NoneType' object has no
+attribute 'apps'". 원인 두 가지:
+1. **pyxlsb가 requirements.txt에 없었다**(서버 이미지에 미설치) → `requirements.txt`에
+   `pyxlsb==1.0.10` 추가. **Docker 이미지를 다시 빌드/설치해야 반영된다.**
+   (`'NoneType' … 'apps'`는 리눅스에 Excel이 없어 xlwings가 실패하고 pandas로 폴백했다는
+   로그일 뿐 — 폴백 자체는 정상 경로.)
+2. 업로드 모드가 'exact'라 어떤 파일을 올려도 고정 이름 `개인별과제투입기간데이터_260114.xlsb`로
+   저장 → xlsx를 올려도 xlsb 엔진으로 읽다 실패.
+
+변경:
+- 웹 업로드 항목 `tasks`를 'wildcard'(원본 이름·확장자 보존)로 변경, hint는
+  "개인별과제투입기간데이터.xlsb 또는 .xlsx".
+- `process_tasks._find_source_file()`: `개인별과제투입기간데이터*.xlsb|xlsx` 중 수정시각이
+  가장 최근 것, 없으면 폴더에 xlsb/xlsx가 정확히 1개일 때 그 파일(`~$` 제외).
+  파일명 접미사(_260114)와 확장자는 가리지 않는다.
+- 1단계 변환(`sources.py`)도 같은 패턴(xlsb·xlsx), 샘플 생성기·안내 문구 갱신.
+- `excel_reader._read_with_pandas`: pyxlsb가 실제로 없을 때만 "pip install pyxlsb"
+  안내를 내고, 있는데 파일이 손상/형식 오류면 진짜 에러("File is not a zip file" 등)를 보여준다.
+- 검증: 합성 xlsx를 3가지 이름으로 업로드→실행 성공(wildcard 경로), 잘못된 xlsb는
+  실제 에러 메시지 확인, tests/test_tasks_source.py 추가. **실제 .xlsb 파일은 이
+  환경에서 만들 수 없어 pyxlsb 읽기 자체는 서버에서 확인 필요.**

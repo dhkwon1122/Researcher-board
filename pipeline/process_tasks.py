@@ -2,8 +2,8 @@
 과제 수행 이력 전처리
 Source : source_reader.read_source('tasks')
   → DB tasks_stg 테이블 또는 data/raw_csv/tasks.csv
-  (1단계 xlsx_to_raw_csv.py가 data/raw/개인별과제투입기간데이터_260114.xlsb를
-   DRM 제거해 만든 사본)
+  (1단계 xlsx_to_raw_csv.py가 data/raw/개인별과제투입기간데이터*.xlsb|xlsx를
+   DRM 제거해 만든 사본 — 파일명 접미사/확장자는 가리지 않는다, _find_source_file() 참고)
 Output : data/processed/tasks.csv
 
 컬럼 매핑:
@@ -25,6 +25,7 @@ tasks_information.csv가 없으면 원본 task_name 그대로 the_task_name에 �
 (정보 유실 방지, 사용자 확정).
 """
 
+import glob
 import os
 import sys
 from datetime import datetime, timedelta
@@ -36,7 +37,8 @@ from paths import RAW_DIR, OUT_DIR  # noqa: E402
 from merge_utils import TABLE_KEYS, write_merged  # noqa: E402
 from excel_reader import is_blank  # noqa: E402
 
-SOURCE_FILE = '개인별과제투입기간데이터_260114.xlsb'
+SOURCE_BASENAME = '개인별과제투입기간데이터'   # 접미사(_260114 등)·확장자(xlsb/xlsx)는 가리지 않음
+_SOURCE_EXTS = ('.xlsb', '.xlsx')
 OUTPUT = os.path.join(OUT_DIR, 'tasks.csv')
 TASKS_INFO_PATH = os.path.join(OUT_DIR, 'tasks_information.csv')
 
@@ -225,6 +227,27 @@ def _apply_name_history(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=columns)
 
 
+def _find_source_file(raw_dir: str) -> str | None:
+    """raw_dir에서 과제 수행 이력 원본 하나를 찾는다(2026-10 — xlsb/xlsx 모두 허용).
+    1) '개인별과제투입기간데이터'로 시작하는 xlsb/xlsx 중 수정시각이 가장 최근 것
+       (예: 개인별과제투입기간데이터.xlsx, 개인별과제투입기간데이터_260114.xlsb)
+    2) 없으면(웹 업로드 폴더처럼 이 항목 파일만 있는 폴더) xlsb/xlsx가 정확히 1개일 때 그 파일.
+    임시 잠금 파일('~$*')은 제외한다."""
+    def _usable(paths):
+        return [p for p in paths if not os.path.basename(p).startswith('~$')]
+
+    named = _usable(
+        p for ext in _SOURCE_EXTS
+        for p in glob.glob(os.path.join(raw_dir, f'{SOURCE_BASENAME}*{ext}'))
+    )
+    if named:
+        return max(named, key=os.path.getmtime)
+    anyfile = _usable(
+        p for ext in _SOURCE_EXTS for p in glob.glob(os.path.join(raw_dir, f'*{ext}'))
+    )
+    return anyfile[0] if len(anyfile) == 1 else None
+
+
 def process(raw_dir: str = RAW_DIR) -> bool:
     from excel_reader import norm_id, parse_yyyymmdd, read_xlsx
     from source_reader import read_source
@@ -236,9 +259,9 @@ def process(raw_dir: str = RAW_DIR) -> bool:
                   '(DB tasks_stg 또는 data/raw_csv/tasks.csv)')
             return False
     else:
-        source = os.path.join(raw_dir, SOURCE_FILE)
-        if not os.path.exists(source):
-            print(f'[process_tasks] 파일 없음: {source}')
+        source = _find_source_file(raw_dir)
+        if not source:
+            print(f'[process_tasks] 파일 없음: {raw_dir} 안에 {SOURCE_BASENAME}*.xlsb/.xlsx 가 없습니다')
             return False
         print(f'[process_tasks] 읽는 중: {source}')
         df = read_xlsx(source)

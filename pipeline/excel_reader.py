@@ -308,10 +308,16 @@ def _read_with_pandas(file_path: str, sheet: int | str = 0, header_row: int | st
         else:
             df = pd.read_excel(file_path, sheet_name=sheet, header=header_row, engine=engine)
     except Exception:
+        # pyxlsb가 실제로 설치돼 있지 않을 때만 설치 안내를 보여준다(2026-10 수정 —
+        # 예전엔 xlsb 읽기가 어떤 이유로 실패하든 이 안내로 바꿔 던져, 패키지가
+        # 있는데도 손상/형식 오류 파일이 "pyxlsb 필요"로 오인됐다).
         if engine == 'pyxlsb':
-            raise ImportError(
-                '.xlsb 파일 읽기에 pyxlsb 패키지가 필요합니다: pip install pyxlsb'
-            )
+            try:
+                import pyxlsb  # noqa: F401
+            except ImportError:
+                raise ImportError(
+                    '.xlsb 파일 읽기에 pyxlsb 패키지가 필요합니다: pip install pyxlsb'
+                )
         raise
     df.columns = [str(c).strip() for c in df.columns]
     return df
