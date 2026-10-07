@@ -6,11 +6,11 @@ from dash import html
 
 from components.timeline_data import (
     cell,
-    count_true,
-    count_us_registered,
     dedupe_patents,
     is_registered,
-    share_sum,
+    is_strategic_patent,
+    patent_summary,
+    patent_title,
 )
 
 _LEGEND_NEUTRAL = '#8c8c8c'
@@ -83,8 +83,30 @@ def publications_tab(pub_df, rid):
        style={'tableLayout': 'fixed', 'width': '100%'})])
 
 
+def strategic_badge(small: bool = True):
+    """'전략출원' 건 등급 옆에 붙이는 빨간 알약 배지("전략")."""
+    return dbc.Badge('전략', color='danger', pill=True, className='ms-1',
+                     style={'fontSize': '0.65rem'} if small else {})
+
+
+def patent_grade_cell(row):
+    """등급 셀 — 현재등급만 보여주고, 'A급구분'이 '전략출원'일 때만 뒤에 빨간
+    "전략" 배지를 붙인다(그 밖의 A급구분 값 — '없음' 포함 — 은 표시하지 않음)."""
+    grade = str(row.get('patent_grade', '')).strip()
+    grade = '' if grade in ('nan', 'None') else grade
+    parts = [grade or '-']
+    if is_strategic_patent(row):
+        parts.append(strategic_badge())
+    return parts
+
+
+def is_lead_value(value) -> bool:
+    return str(value).strip() in ('Y', 'y', '1', 'True', 'true')
+
+
 def patents_tab(pat_df, rid):
-    """연구원의 특허 실적 목록 (data/processed/patents.csv)."""
+    """연구원의 특허 실적 목록 (data/processed/patents.csv — 기술건(representative_
+    invention)이 Y인 유효 발명만 들어 있음, pipeline/process_patents.py)."""
     if pat_df.empty:
         return html.Div('특허 데이터 없음', className='text-muted p-3')
     pat = pat_df[pat_df['researcher_id'] == rid].copy()
@@ -92,56 +114,45 @@ def patents_tab(pat_df, rid):
         return html.Div('특허 실적 없음', className='text-muted p-3')
 
     pat_dedup = dedupe_patents(pat)
-    total_cnt = len(pat_dedup)
-    reg_cnt = int(pat_dedup['status'].apply(is_registered).sum()) if 'status' in pat_dedup.columns else 0
-    lead_cnt = count_true(pat_dedup, 'is_lead_inventor')
-    strat_cnt = int((pat_dedup.get('patent_grade_a_sub', pd.Series(dtype=str)).astype(str).str.strip() == '전략출원').sum())
-    us_reg_cnt = count_us_registered(pat_dedup)
-    share_sum_val = share_sum(pat_dedup)
+    st = patent_summary(pat_dedup)
 
     summary = dbc.Row([
-        dbc.Col(_dual_card(total_cnt, '전체 발명', 'text-dark',
-                           lead_cnt, '대표 발명', 'text-secondary'), md=3),
-        dbc.Col(_dual_card(total_cnt, '출원', 'text-primary',
-                           reg_cnt, '등록', 'text-success'), md=3),
-        dbc.Col(_single_card(strat_cnt, '전략 출원', 'text-warning'), md=2),
-        dbc.Col(_single_card(us_reg_cnt, '미국 등록', 'text-info'), md=2),
-        dbc.Col(_single_card(share_sum_val, '지분율 합계', 'text-danger'), md=2),
+        dbc.Col(_dual_card(st['total'], '전체 발명', 'text-dark',
+                           st['lead'], '대표 발명', 'text-secondary'), md=4),
+        dbc.Col(_dual_card(f"{st['applied']}({st['registered']})", '출원(등록)', 'text-primary',
+                           st['applied_share'], '출원 지분율', 'text-danger'), md=4),
+        dbc.Col(_dual_card(st['strategic'], '전략출원', 'text-warning',
+                           st['strategic_share'], '전략 지분율', 'text-danger'), md=4),
     ], className='mb-3 g-2')
 
     sort_col = 'application_date' if 'application_date' in pat_dedup.columns else pat_dedup.columns[0]
     rows = []
     for _, row in pat_dedup.sort_values(sort_col, ascending=False).iterrows():
         status_val = str(row.get('status', ''))
-        lead = str(row.get('is_lead_inventor', ''))
-        grade = str(row.get('patent_grade', ''))
-        grade_a = str(row.get('patent_grade_a_sub', ''))
-        grade_str = grade + (f'({grade_a})' if grade_a and grade_a not in ('', 'nan') else '')
         share_val = row.get('share_ratio', '')
         share_str = f'{share_val}%' if str(share_val).replace('.', '').isdigit() else '-'
         rows.append(html.Tr([
             html.Td(cell(row, 'application_date')[:7], style={'wordBreak': 'break-word'}),
-            html.Td(cell(row, 'title', 'title_ko'), style={'wordBreak': 'break-word'}),
+            html.Td(patent_title(row), style={'wordBreak': 'break-word'}),
             html.Td(dbc.Badge('등록', color='success') if is_registered(status_val)
                     else dbc.Badge(status_val or '출원', color='primary')),
             html.Td(cell(row, 'application_id', 'application_no'), style={'wordBreak': 'break-word'}),
             html.Td(dbc.Badge('대표', color='warning', text_color='dark')
-                    if lead in ('Y', 'y', '1', 'True', 'true') else ''),
+                    if is_lead_value(row.get('is_lead_inventor', ''))
+                    else dbc.Badge('참여', color='secondary')),
             html.Td(share_str),
-            html.Td(grade_str or '-', style={'wordBreak': 'break-word'}),
-            html.Td(cell(row, 'country'), style={'wordBreak': 'break-word'}),
+            html.Td(patent_grade_cell(row), style={'wordBreak': 'break-word'}),
         ]))
 
     return html.Div([summary, dbc.Table([
         html.Thead(html.Tr([
-            html.Th('출원일', style={'width': '9%'}),
-            html.Th('발명 명칭', style={'width': '24%'}),
-            html.Th('상태', style={'width': '9%'}),
-            html.Th('접수ID/출원번호', style={'width': '14%'}),
-            html.Th('대표발명자', style={'width': '9%'}),
-            html.Th('지분율', style={'width': '8%'}),
-            html.Th('등급', style={'width': '12%'}),
-            html.Th('출원 국가', style={'width': '15%'}),
+            html.Th('출원일', style={'width': '10%'}),
+            html.Th('발명 명칭', style={'width': '32%'}),
+            html.Th('상태', style={'width': '10%'}),
+            html.Th('접수ID/출원번호', style={'width': '18%'}),
+            html.Th('발명자 구분', style={'width': '10%'}),
+            html.Th('지분율', style={'width': '9%'}),
+            html.Th('등급', style={'width': '11%'}),
         ])),
         html.Tbody(rows),
     ], bordered=False, hover=True, size='sm',

@@ -441,7 +441,7 @@ def _patents_text(pat_rows: pd.DataFrame, ref_date: date | None = None) -> str:
         return '(데이터 없음)'
     lines = []
     for _, r in pat_rows.iterrows():
-        title = _clean(r.get('title')) or _clean(r.get('title_ko'))
+        title = _clean(r.get('title_ko')) or _clean(r.get('title'))
         if not title:
             continue
         grade = _clean(r.get('patent_grade'))
@@ -453,8 +453,8 @@ def _patents_text(pat_rows: pd.DataFrame, ref_date: date | None = None) -> str:
         year_txt = f'{app_date.year}년 출원, ' if app_date else ''
         line = (f'- {label + " " if label else ""}{title} ({year_txt}등급 {grade_disp}, '
                 f'{"대표발명자" if is_lead else "참여발명자"})')
-        if grade_a == 'A1':
-            line += '\n  A1은 그중 특히 우수하여 경영효과 기여가 예상되는 전략출원 특허임'
+        if grade_a in ('A1', '전략출원'):
+            line += '\n  경영효과 기여가 예상되는 전략출원 특허임'
         lines.append(line)
     return '\n'.join(lines) if lines else '(데이터 없음)'
 

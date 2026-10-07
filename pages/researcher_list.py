@@ -13,7 +13,7 @@ import pandas as pd
 from dash import Input, Output, State, callback, dcc, html, no_update
 
 from components import nl_query_bar
-from components.timeline_data import dedupe_patents
+from components.timeline_data import dedupe_patents, patent_summary
 from services import researcher_profile_export, similarity_map
 from services.data_store import filter_current, read_contribution_metrics, read_processed
 from services.evaluations import evaluation_years, salary_grade_column
@@ -157,8 +157,10 @@ def _build_summary_df(current_only: bool = True, period: tuple[date, date] | Non
         # 타임라인과 동일하게 application_id 기준으로 중복(공동발명자 등) 제거 후 집계
         pats = pat[pat['researcher_id'] == rid]
         pats_dedup = dedupe_patents(pats) if not pats.empty else pats
-        pat_app = int((pats_dedup['status'] == '출원').sum()) if not pats_dedup.empty else 0
-        pat_reg = int((pats_dedup['status'] == '등록').sum()) if not pats_dedup.empty else 0
+        # 출원 = 출원번호가 있는 건, 등록 = 그중 등록번호도 있는 건(프로필 특허 탭과
+        # 동일 정의 — components.timeline_data.patent_summary). 등록 건도 출원 수에 포함.
+        pat_stats = patent_summary(pats_dedup)
+        pat_app, pat_reg = pat_stats['applied'], pat_stats['registered']
 
         # ── 수상 ───────────────────────────────────────────────────────────
         awd_cnt = len(awd[awd['researcher_id'] == rid])
