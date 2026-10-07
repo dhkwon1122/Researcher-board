@@ -13659,3 +13659,11 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   업데이트의 과제별컨플로 다시 올린다(자동 업로드는 하지 않음).
 - 검증: 합성 데이터로 접두사/월 표기 차이, 같은 과제명·다른 부서, 덮어쓰기, 실패 시 기존 값 유지, 결과 열
   위치(L/넓은 파일/재사용), 미매칭 시트 확인(tests/test_confl_match.py). 실제 과제별컨플로는 미검증.
+
+## 2026-10-07 (13): data/web_updates/ 런타임 파일이 커밋돼 git pull이 막힌 문제
+
+`data/web_updates/confl_tree/state.json`(하위 페이지 추출 상태 파일)이 실수로 커밋(cbd433d)돼, 서버가
+같은 경로에 만든 파일과 충돌해 `git pull`이 "untracked working tree files would be overwritten"으로 막혔다.
+원인: 개발 중 스모크 테스트가 저장소의 data/web_updates에 상태 파일을 썼고 `.gitignore`에 그 폴더가 없어
+`git add -A`에 딸려 들어갔다. 조치: 추적 해제(`git rm --cached`) + `.gitignore`에 `data/web_updates/` 추가.
+이 폴더는 업로드 원본·잠금 파일·추출 상태 등 서버 런타임 데이터라 앞으로도 커밋하지 않는다.
