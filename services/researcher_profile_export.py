@@ -18,7 +18,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, Side
 from openpyxl.utils import get_column_letter
 
-from components.timeline_data import dedupe_patents, job_points
+from components.timeline_data import dedupe_patents, is_strategic_patent, job_points, patent_title
 from pipeline.excel_reader import clean_str as _s
 from services import auth, data_store, evaluations
 from services import language_qualification as language_qual
@@ -402,7 +402,7 @@ _EXPERTISE_COLUMNS = [
 def _col_patents(_rid, rows):
     """특허 실적 — components/detail_tabs.py의 patents_tab()과 동일하게
     dedupe_patents()로 국가별 중복 출원 행을 하나로 합친 뒤, 출원일 내림차순으로
-    "출원일 : 발명명칭 (상태, 대표발명자, 지분율%, 등급)"를 한 셀에 줄바꿈 나열."""
+    "출원일 : 발명명칭(국문 우선) (상태, 대표/참여, 지분율%, 등급)"를 한 셀에 줄바꿈 나열."""
     pat = rows.get('patents_df')
     if pat is None or pat.empty:
         return '-'
@@ -411,14 +411,14 @@ def _col_patents(_rid, rows):
     lines = []
     for _, p in pat_dedup.sort_values(sort_col, ascending=False).iterrows():
         date = _s(p.get('application_date'))[:7] or '-'
-        title = _s(p.get('title')) or _s(p.get('title_ko')) or '-'
+        title = _s(patent_title(p)) or '-'
         status = _s(p.get('status')) or '-'
-        lead = '대표' if _s(p.get('is_lead_inventor')).lower() in ('y', '1', 'true') else ''
+        lead = '대표' if _s(p.get('is_lead_inventor')).lower() in ('y', '1', 'true') else '참여'
         share = _s(p.get('share_ratio'))
         share_disp = f'{share}%' if share else ''
         grade = _s(p.get('patent_grade'))
-        grade_a = _s(p.get('patent_grade_a_sub'))
-        grade_disp = grade + (f'({grade_a})' if grade_a else '') if grade else ''
+        # '전략출원'일 때만 (전략출원)을 덧붙인다(화면의 빨간 "전략" 배지에 해당).
+        grade_disp = grade + ('(전략출원)' if is_strategic_patent(p) else '') if grade else ''
         extras = ', '.join(v for v in (status, lead, share_disp, grade_disp) if v)
         lines.append(f'{date} : {title}' + (f' ({extras})' if extras else ''))
     return '\n'.join(lines) if lines else '-'

@@ -157,10 +157,10 @@ def pat_points(pat_df):
         date = parse_ts(reg_date if reg_date else app_date)
         if date is None:
             continue
-        title = cell(row, 'title', 'title_ko')
+        title = patent_title(row)
         grade = clean(row.get('patent_grade', ''))
         grade_a = clean(row.get('patent_grade_a_sub', ''))
-        grade_a = '' if grade_a == '없음' else grade_a
+        grade_a = grade_a if grade_a == '전략출원' else ''  # 전략출원일 때만 표기(2026-10)
         share = clean(row.get('share_ratio', ''))
         is_lead = clean(row.get('is_lead_inventor', ''))
         points.append({
@@ -235,12 +235,75 @@ def dedupe_patents(pat):
                 return value
         return values[0] if values else ''
 
+    def _first_filled(series):
+        for value in series:
+            if not is_blank(value):
+                return value
+        return ''
+
     agg_dict = {col: 'first' for col in pat.columns if col not in (id_col, 'researcher_id', 'country', 'status')}
+    # 출원번호/등록번호는 국가별 행 중 값이 있는 첫 행을 쓴다 — 출원·등록 건수를
+    # "번호 유무"로 세므로(2026-10) 첫 행이 비어 있다고 번호가 없는 것으로
+    # 오인되면 안 된다.
+    for col in ('application_no', 'registration_no'):
+        if col in pat.columns:
+            agg_dict[col] = _first_filled
     if 'status' in pat.columns:
         agg_dict['status'] = _agg_status
     if 'country' in pat.columns:
         agg_dict['country'] = _merge_countries
     return pat.groupby(id_col, sort=False).agg(agg_dict).reset_index()
+
+
+def patent_title(row):
+    """발명 명칭 표시값 — 국문(title_ko)을 우선하고 비어 있으면 영문(title)으로
+    대체한다(2026-10, 사용자 확정)."""
+    return cell(row, 'title_ko', 'title')
+
+
+def is_strategic_patent(row):
+    """'현재등급 - A급구분'(patent_grade_a_sub)이 '전략출원'인 건."""
+    return str(row.get('patent_grade_a_sub', '')).strip() == '전략출원'
+
+
+def _has_number(df, col):
+    if col not in df.columns:
+        return pd.Series(False, index=df.index)
+    return ~df[col].apply(is_blank)
+
+
+def _share_total(df):
+    if df.empty or 'share_ratio' not in df.columns:
+        return '-'
+    shares = pd.to_numeric(df['share_ratio'], errors='coerce').dropna()
+    return f'{round(shares.sum(), 1)}%' if not shares.empty else '-'
+
+
+def patent_summary(pat_dedup):
+    """dedupe_patents() 결과(기술건 Y만 남은 접수ID당 1건)에서 특허 요약 수치를
+    한 곳에서 계산한다 — 프로필 특허 탭/인쇄본/명단/엑셀이 같은 정의를 쓰도록.
+      total          : 전체 발명 수
+      lead           : 대표 발명 수(대표발명자여부 Y)
+      applied        : 출원 수(출원번호가 있는 건)
+      registered     : 등록 수(등록번호가 있는 건 — 출원번호도 있는 건만)
+      applied_share  : 출원 건 지분율 합계('12.3%' 또는 '-')
+      strategic      : 전략출원 수(A급구분 == '전략출원')
+      strategic_share: 전략출원 건 지분율 합계"""
+    if pat_dedup.empty:
+        return {'total': 0, 'lead': 0, 'applied': 0, 'registered': 0,
+                'applied_share': '-', 'strategic': 0, 'strategic_share': '-'}
+    applied_mask = _has_number(pat_dedup, 'application_no')
+    registered_mask = applied_mask & _has_number(pat_dedup, 'registration_no')
+    strategic_mask = pat_dedup.apply(is_strategic_patent, axis=1)
+    return {
+        'total': len(pat_dedup),
+        'lead': count_true(pat_dedup, 'is_lead_inventor'),
+        'applied': int(applied_mask.sum()),
+        'registered': int(registered_mask.sum()),
+        'applied_share': _share_total(pat_dedup[applied_mask]),
+        'strategic': int(strategic_mask.sum()),
+        'strategic_share': _share_total(pat_dedup[strategic_mask]),
+    }
 
 
 def count_true(df, col):

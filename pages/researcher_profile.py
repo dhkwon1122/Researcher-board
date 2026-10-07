@@ -26,11 +26,11 @@ from components.profile_sections import (
 )
 from components.timeline_data import (
     cell,
-    count_true,
-    count_us_registered,
     dedupe_patents,
     is_registered,
-    share_sum,
+    is_strategic_patent,
+    patent_summary,
+    patent_title,
     task_points,
 )
 from components.timeline_view import filter_hr_rows, timeline_view
@@ -848,7 +848,7 @@ def _print_publication_summary(pub_df, rid):
 
 def _print_patent_summary(pat_df, rid):
     """특허 실적 요약 — components/detail_tabs.py의 patents_tab()과 같은
-    집계(전체/등록/대표발명/전략출원/미국등록/지분율합계)만 "~건" 한 줄로
+    집계(전체/대표/출원(등록)/출원 지분율/전략출원/전략 지분율)만 한 줄로
     보여주고, 개별 특허 목록(발명 명칭 등 세부 내역)은 인쇄본에서는
     생략한다. "특허 실적" 라벨은 `_print_publication_summary()`와 마찬가지로
     호출부가 `print_sub_heading()`으로 붙이고, 내용도 같은 이유로
@@ -856,17 +856,10 @@ def _print_patent_summary(pat_df, rid):
     pat = pat_df[pat_df['researcher_id'] == rid] if not pat_df.empty else pat_df
     if pat is None or pat.empty:
         return html.Div('없음', className='small', style={'marginLeft': '10px'})
-    pat_dedup = dedupe_patents(pat)
-    total_cnt = len(pat_dedup)
-    reg_cnt = int(pat_dedup['status'].apply(is_registered).sum()) if 'status' in pat_dedup.columns else 0
-    lead_cnt = count_true(pat_dedup, 'is_lead_inventor')
-    strat_cnt = int((pat_dedup.get('patent_grade_a_sub', pd.Series(dtype=str)).astype(str).str.strip()
-                     == '전략출원').sum())
-    us_reg_cnt = count_us_registered(pat_dedup)
-    share_sum_val = share_sum(pat_dedup)
+    st = patent_summary(dedupe_patents(pat))
     return html.Div(
-        f'{total_cnt}건 (등록 {reg_cnt} · 출원중 {total_cnt - reg_cnt}) · '
-        f'대표발명 {lead_cnt}건 · 전략출원 {strat_cnt}건 · 미국등록 {us_reg_cnt}건 · 지분율 합계 {share_sum_val}',
+        f"전체 {st['total']}건 (대표 {st['lead']}) · 출원 {st['applied']}건(등록 {st['registered']}) "
+        f"지분율 {st['applied_share']} · 전략출원 {st['strategic']}건 지분율 {st['strategic_share']}",
         className='small', style={'marginLeft': '10px'},
     )
 
@@ -996,21 +989,24 @@ def _print_patent_detail_table(pat_df, rid):
     for _, row in pat_dedup.iterrows():
         status_val = str(row.get('status', ''))
         status_label = '등록' if is_registered(status_val) else (status_val or '출원')
-        grade_a = str(row.get('patent_grade_a_sub', '')).strip()
-        if grade_a == '전략출원':
-            status_label += '(전략)'
         lead = str(row.get('is_lead_inventor', ''))
-        lead_label = '대표' if lead in ('Y', 'y', '1', 'True', 'true') else '-'
+        lead_label = '대표' if lead in ('Y', 'y', '1', 'True', 'true') else '참여'
+        grade = str(row.get('patent_grade', '')).strip()
+        grade_cell = [grade if grade not in ('', 'nan', 'None') else '-']
+        if is_strategic_patent(row):
+            grade_cell.append(html.Span('전략', style={
+                'marginLeft': '3px', 'padding': '0 5px', 'borderRadius': '999px',
+                'backgroundColor': '#cf1322', 'color': '#ffffff', 'fontSize': '0.62rem', 'fontWeight': 700}))
         share_val = row.get('share_ratio', '')
         share_str = f'{share_val}%' if str(share_val).replace('.', '').isdigit() else '-'
         date_label = cell(row, 'application_date')[:7]
         rows.append(html.Tr([
             html.Td(date_label, style={**_PRINT_TABLE_TD_STYLE, 'whiteSpace': 'nowrap'}),
-            html.Td(cell(row, 'title', 'title_ko'), style=_PRINT_TABLE_TD_STYLE),
+            html.Td(patent_title(row), style=_PRINT_TABLE_TD_STYLE),
             html.Td(status_label, style={**_PRINT_TABLE_TD_STYLE, 'textAlign': 'center', 'whiteSpace': 'nowrap'}),
             html.Td(lead_label, style={**_PRINT_TABLE_TD_STYLE, 'textAlign': 'center', 'whiteSpace': 'nowrap'}),
             html.Td(share_str, style={**_PRINT_TABLE_TD_STYLE, 'textAlign': 'center', 'whiteSpace': 'nowrap'}),
-            html.Td(cell(row, 'country'), style={**_PRINT_TABLE_TD_STYLE, 'whiteSpace': 'nowrap'}),
+            html.Td(grade_cell, style={**_PRINT_TABLE_TD_STYLE, 'textAlign': 'center', 'whiteSpace': 'nowrap'}),
         ]))
 
     table = html.Table([
@@ -1018,9 +1014,9 @@ def _print_patent_detail_table(pat_df, rid):
             html.Th('출원일', style=_PRINT_TABLE_TH_STYLE),
             html.Th('발명 명칭', style=_PRINT_TABLE_TH_STYLE),
             html.Th('상태', style={**_PRINT_TABLE_TH_STYLE, 'textAlign': 'center'}),
-            html.Th('대표발명', style={**_PRINT_TABLE_TH_STYLE, 'textAlign': 'center'}),
+            html.Th('발명자 구분', style={**_PRINT_TABLE_TH_STYLE, 'textAlign': 'center'}),
             html.Th('지분율', style={**_PRINT_TABLE_TH_STYLE, 'textAlign': 'center'}),
-            html.Th('출원국가', style=_PRINT_TABLE_TH_STYLE),
+            html.Th('등급', style={**_PRINT_TABLE_TH_STYLE, 'textAlign': 'center'}),
         ])),
         html.Tbody(rows, className='print-autofit-body'),
     ], className='print-autofit-table', style={'width': '100%', 'borderCollapse': 'collapse'})

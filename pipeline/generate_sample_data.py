@@ -271,7 +271,7 @@ def generate_publications(researchers_df, tasks_df=None):
 
 def generate_patents(researchers_df, tasks_df=None):
     grades = ['S', 'A', 'B', 'C', '']
-    grade_a_subs = ['A1', 'A2', '']
+    grade_a_subs = ['전략출원', '없음', '']
     task_names_by_researcher = _researcher_task_names(tasks_df)
     rows = []
     app_id_counter = 10000
@@ -291,6 +291,7 @@ def generate_patents(researchers_df, tasks_df=None):
             rows.append({
                 'researcher_id':      r['researcher_id'],
                 'application_id':     f'APP{app_id_counter + i:06d}',
+                'representative_invention': 'Y',
                 'title':              f'{random.choice(names)} Method {i + 1:02d}',
                 'title_ko':           f'{random.choice(names)} {i + 1:02d}',
                 'status':             '등록' if is_reg else '출원',
