@@ -57,6 +57,13 @@ class ConfluenceError(RuntimeError):
     """Confluence 조회 실패(미설정/인증오류/페이지 없음 등)를 알리는 예외."""
 
 
+def normalize_address(confl_address: str) -> str:
+    """화면/로그 표시용 정리 — 페이지 ID(소수부 .0 포함)면 정수 문자열로, 그 외(URL
+    등)는 앞뒤 공백만 제거해 반환한다(2026-10)."""
+    text = (confl_address or '').strip()
+    return _bare_page_id(text) or text
+
+
 def _is_bare_page_id(confl_address: str) -> bool:
     """confl_address가 전체 URL이 아니라 페이지 ID 숫자만 있는지(2026-09-22
     추가 — 사용자 확정, 게이트웨이 경유가 기본이 되면서 project_confl_
@@ -306,3 +313,85 @@ def fetch_page_text(confl_address: str) -> str:
     body_html = page.get('body', {}).get('storage', {}).get('value', '')
     body_text = _html_to_text(body_html)
     return f'{title}\n\n{body_text}'.strip()
+
+
+
+# ── 하위 페이지 목록 추출(2026-10, 사용자 요청) ───────────────────────────────
+# 특정 상위 페이지 아래 모든 하위 페이지(자식 → 손자 → … 최하위)의 제목/페이지 ID를
+# 뽑는다 — 과제별컨플의 컨플 주소(10자리 페이지 ID)를 일일이 확인하지 않아도 되게.
+# 표준 REST: GET /rest/api/content/{id}/child/page?limit=&start= (페이지 단위
+# 페이징). fetch_page_text()와 같은 게이트웨이/헤더/세션을 쓴다.
+_CHILD_PAGE_LIMIT = 100
+
+
+def _get_json(session, url: str, params: dict | None = None) -> dict:
+    try:
+        resp = session.get(url, params=params, timeout=30)
+    except Exception as exc:  # noqa: BLE001
+        raise ConfluenceError(f'요청 실패({url}): {type(exc).__name__}: {exc}') from exc
+    if resp.status_code != 200:
+        raise ConfluenceError(f'요청 실패({url}): HTTP {resp.status_code}: {resp.text[:300]}')
+    try:
+        return resp.json()
+    except ValueError as exc:
+        raise ConfluenceError(f'JSON 응답이 아닙니다({url}): {resp.text[:300]}') from exc
+
+
+def list_child_pages(page_id: str, session=None, base_url: str | None = None) -> list[dict]:
+    """page_id의 직계 하위 페이지 [{'id', 'title'}, ...] (페이징을 끝까지 따라감)."""
+    session = session or _get_session()
+    base_url = base_url or _base_url(page_id)
+    out, start = [], 0
+    while True:
+        data = _get_json(session, f'{base_url}/rest/api/content/{page_id}/child/page',
+                         {'limit': _CHILD_PAGE_LIMIT, 'start': start})
+        results = data.get('results') or []
+        out.extend({'id': str(r.get('id', '')), 'title': str(r.get('title', ''))} for r in results)
+        if len(results) < _CHILD_PAGE_LIMIT:
+            return out
+        start += len(results)
+
+
+def crawl_descendants(root_address: str, max_depth: int | None = None, max_pages: int = 5000,
+                      progress=None) -> list[dict]:
+    """root_address(페이지 ID 또는 URL) 아래 모든 하위 페이지를 깊이 우선(문서 순서)으로
+    수집한다. 반환 행: {depth(루트=0), id, title, parent_id, parent_title, path}.
+    max_depth=None이면 최하위까지, max_pages를 넘으면 ConfluenceError(폭주 방지).
+    progress(count, last_title)가 있으면 페이지를 하나 담을 때마다 호출한다."""
+    if not os.environ.get('CONFLUENCE_TOKEN', '').strip():
+        raise ConfluenceError('.env에 CONFLUENCE_TOKEN이 설정되어 있지 않습니다.')
+    root_id = extract_page_id(root_address or '')
+    if not root_id:
+        raise ConfluenceError('상위 페이지의 페이지 ID(숫자) 또는 pageId가 들어 있는 주소를 입력하세요.')
+
+    base_url = _base_url(root_address)
+    session = _get_session()
+    root = _get_json(session, f'{base_url}/rest/api/content/{root_id}')
+    root_title = str(root.get('title', ''))
+
+    rows: list[dict] = []
+    seen = {root_id}
+
+    def _add(page_id, title, depth, parent_id, parent_title, parent_path):
+        path = f'{parent_path} > {title}' if parent_path else title
+        rows.append({'depth': depth, 'id': page_id, 'title': title, 'parent_id': parent_id,
+                     'parent_title': parent_title, 'path': path})
+        if progress:
+            progress(len(rows), title)
+        if len(rows) > max_pages:
+            raise ConfluenceError(f'하위 페이지가 {max_pages}개를 넘어 중단했습니다 — 더 아래 단계의 페이지를 지정하세요.')
+        return path
+
+    def _walk(page_id, title, depth, path):
+        if max_depth is not None and depth >= max_depth:
+            return
+        for child in list_child_pages(page_id, session, base_url):
+            if child['id'] in seen:
+                continue
+            seen.add(child['id'])
+            child_path = _add(child['id'], child['title'], depth + 1, page_id, title, path)
+            _walk(child['id'], child['title'], depth + 1, child_path)
+
+    root_path = _add(root_id, root_title, 0, '', '', '')
+    _walk(root_id, root_title, 0, root_path)
+    return rows
