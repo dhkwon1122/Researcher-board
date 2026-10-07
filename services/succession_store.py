@@ -41,8 +41,10 @@ import os
 import sys
 
 import pandas as pd
+from sqlalchemy import Column, MetaData, String, Table, and_, func, or_
 
 from services.data_store import filter_current, read_processed
+from services.db import get_engine
 
 _PIPELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'pipeline')
 sys.path.insert(0, os.path.abspath(_PIPELINE_DIR))
@@ -153,16 +155,76 @@ def load_slots(department: str, year: str) -> dict:
     return result
 
 
-def _db_sync() -> bool:
-    from services.db import get_engine
-    if get_engine() is None:
-        return False
+_db_metadata = MetaData()
+
+# load_to_db.py의 배치 적재(to_sql(if_exists='replace'))가 CSV 컬럼 그대로
+# TEXT 컬럼만 만드는 테이블과 컬럼 구성을 맞춘다 — 그래야 이 Table()로
+# 부분 삭제+삽입을 해도, 나중에 배치 적재가 다시 돌아 테이블을 통째로
+# 교체해도 서로 같은 스키마를 보게 된다(단, 배치 적재는 PK/제약을 두지
+# 않으므로 여기서도 PK를 걸지 않고 "범위를 지정한 delete + insert"로만
+# 동작한다 — ON CONFLICT 업서트에 의존하지 않음).
+_succession_table = Table(
+    'succession', _db_metadata,
+    Column('researcher_id', String),
+    Column('org_code', String),
+    Column('rank_type', String),
+    Column('rank_order', String),
+    Column('nominated_year', String),
+    Column('comment', String),
+)
+
+
+def _ensure_db_table(engine) -> bool:
     try:
-        from load_to_db import load as _load_to_db
-        _load_to_db(tables=['succession'])
+        _db_metadata.create_all(engine, tables=[_succession_table])
         return True
     except Exception as exc:
-        print(f'[succession_store] DB 반영 실패(CSV에는 반영됨): {exc}')
+        print(f'[succession_store] succession 테이블 준비 실패: {exc}')
+        return False
+
+
+def _db_write(dept_ids: set, year: str, new_rows: list[dict]) -> bool:
+    """부서(dept_ids) × 연도 × 4슬롯 범위를 DB succession 테이블에서 직접
+    지우고 이번에 채운 슬롯만 다시 넣는다 — CSV 저장 성공 여부와 무관하게
+    항상 시도한다.
+
+    2026-10-07 수정(사용자 요청): 예전엔 CSV를 먼저 쓴 뒤 pipeline.
+    load_to_db.load(tables=['succession'])로 "방금 쓴 CSV 파일을 다시 읽어
+    DB 테이블 전체를 교체"했다 — 그래서 CSV 쓰기가 실패하면(운영 환경에서
+    data/processed 디렉터리 쓰기 권한이 없는 경우) DB 반영까지 같이
+    막혔다. services.data_store.read_processed()는 DATABASE_URL이 설정돼
+    있으면 항상 DB를 먼저 읽으므로(CSV는 DB 미설정 시 폴백일 뿐), 조회/
+    불러오기 화면은 이미 DB를 보고 있는 셈이다 — 그래서 이 함수는 CSV
+    파일을 전혀 거치지 않고, 이번 저장 내용을 바로 DB에 반영한다
+    (team_refer_store.py가 CSV와 DB에 각각 독립적으로 쓰는 것과 같은
+    원칙). rank_type/rank_order/연도 표기가 섞여 있어도 안정적으로
+    지워지도록 DB 쪽 비교도 trim/lower로 정규화한다."""
+    engine = get_engine()
+    if engine is None:
+        return False
+    if not _ensure_db_table(engine):
+        return False
+    try:
+        with engine.begin() as conn:
+            if dept_ids:
+                rank_type_norm = func.lower(func.trim(_succession_table.c.rank_type))
+                rank_order_norm = func.trim(_succession_table.c.rank_order)
+                year_norm = func.trim(_succession_table.c.nominated_year)
+                slot_conditions = or_(*[
+                    and_(rank_type_norm == rt.lower(), rank_order_norm == str(ro))
+                    for rt, ro in SLOTS
+                ])
+                conditions = and_(
+                    _succession_table.c.researcher_id.in_(dept_ids),
+                    year_norm == str(year),
+                    slot_conditions,
+                )
+                conn.execute(_succession_table.delete().where(conditions))
+            if new_rows:
+                conn.execute(_succession_table.insert(), new_rows)
+        return True
+    except Exception as exc:
+        print(f'[succession_store] DB 반영 실패: {exc}')
         return False
 
 
@@ -170,7 +232,15 @@ def save_slots(department: str, year: str, assignments: dict) -> dict:
     """assignments: {(rank_type, rank_order): {'researcher_id': rid_or_empty,
     'comment': text}}. 그 부서(현재 소속 기준) × 연도 × 4슬롯 범위만 지우고
     이번에 채운 슬롯만 다시 넣는다 — 다른 부서/다른 연도 데이터는 그대로
-    둔다. 반환: {'saved_rows': int, 'cleared_rows': int, 'db_ok': bool}."""
+    둔다.
+
+    CSV 저장과 DB 저장을 서로 독립적으로 시도한다(2026-10-07 수정) — CSV
+    쓰기가 권한 문제 등으로 실패해도 DATABASE_URL이 설정된 환경이면 DB
+    저장은 그대로 진행되고(화면은 DB를 먼저 읽으므로 정상 동작), 반대로
+    DB가 설정 안 돼 있으면 CSV 저장만으로도 정상 동작한다. 둘 다 실패하면
+    아무 것도 반영되지 않은 것이므로 예외를 올려 호출부가 에러를 보여준다.
+
+    반환: {'saved_rows': int, 'cleared_rows': int, 'db_ok': bool, 'csv_ok': bool}."""
     department = str(department or '').strip()
     year = str(year or '').strip()
     if not department or not year:
@@ -180,6 +250,20 @@ def save_slots(department: str, year: str, assignments: dict) -> dict:
     dept_ids = set(
         res.loc[res['department'].astype(str).str.strip() == department, 'researcher_id']
     ) if not res.empty else set()
+
+    new_rows = []
+    for (rank_type, rank_order), slot in (assignments or {}).items():
+        rid = str((slot or {}).get('researcher_id') or '').strip()
+        if not rid:
+            continue
+        new_rows.append({
+            'researcher_id': rid,
+            'org_code': _org_code_for(res, rid),
+            'rank_type': rank_type,
+            'rank_order': str(rank_order),
+            'nominated_year': year,
+            'comment': str((slot or {}).get('comment') or '').strip(),
+        })
 
     suc = _read_succession()
     if dept_ids:
@@ -201,26 +285,26 @@ def save_slots(department: str, year: str, assignments: dict) -> dict:
     cleared_rows = int(in_scope.sum())
     kept = suc[~in_scope].copy()
 
-    new_rows = []
-    for (rank_type, rank_order), slot in (assignments or {}).items():
-        rid = str((slot or {}).get('researcher_id') or '').strip()
-        if not rid:
-            continue
-        new_rows.append({
-            'researcher_id': rid,
-            'org_code': _org_code_for(res, rid),
-            'rank_type': rank_type,
-            'rank_order': str(rank_order),
-            'nominated_year': year,
-            'comment': str((slot or {}).get('comment') or '').strip(),
-        })
-
     result = pd.concat([kept, pd.DataFrame(new_rows, columns=_COLUMNS)], ignore_index=True) \
         if new_rows else kept
-
-    os.makedirs(OUT_DIR, exist_ok=True)
     result = result[_COLUMNS]
-    result.to_csv(_SUCCESSION_PATH, index=False, encoding='utf-8-sig')
 
-    db_ok = _db_sync()
-    return {'saved_rows': len(new_rows), 'cleared_rows': cleared_rows, 'db_ok': db_ok}
+    csv_ok = True
+    csv_error = None
+    try:
+        os.makedirs(OUT_DIR, exist_ok=True)
+        result.to_csv(_SUCCESSION_PATH, index=False, encoding='utf-8-sig')
+    except Exception as exc:
+        csv_ok = False
+        csv_error = exc
+        print(f'[succession_store] CSV 저장 실패(DB 반영은 별도로 시도): {exc}')
+
+    db_ok = _db_write(dept_ids, year, new_rows)
+
+    if not csv_ok and not db_ok:
+        raise RuntimeError(f'CSV와 DB 저장이 모두 실패했습니다: {csv_error}')
+
+    return {
+        'saved_rows': len(new_rows), 'cleared_rows': cleared_rows,
+        'db_ok': db_ok, 'csv_ok': csv_ok,
+    }

@@ -673,10 +673,18 @@ def _save_succession_slots(n_clicks, department, year, tick, *slot_values):
             f"{label}: {opt_labels.get(researcher_values[i], researcher_values[i]) if researcher_values[i] else '(비움)'}"
             for i, (_, label, _, _) in enumerate(_SLOT_SPECS)
         )
+        # CSV/DB 저장을 서로 독립적으로 시도하므로(services/succession_store.py
+        # save_slots() 참고), 어느 한쪽이 실패해도 다른 쪽이 성공했으면 저장은
+        # 전체적으로 성공한 것이다 — 실패한 쪽만 괄호로 알려준다.
+        caveats = []
+        if not result['csv_ok']:
+            caveats.append('CSV 파일 저장 실패(권한 문제일 수 있음)')
+        if not result['db_ok']:
+            caveats.append('DB 미반영')
+        caveat_text = f" ({', '.join(caveats)}, 나머지 저장소에는 반영됨)" if caveats else ''
         msg = (
             f"저장 완료 — {department} {year}년 {result['saved_rows']}건 반영"
-            f"({result['cleared_rows']}건 교체)"
-            + ('' if result['db_ok'] else ' (DB 미반영, CSV에는 반영됨)') + f'. [{slot_summary}]'
+            f"({result['cleared_rows']}건 교체){caveat_text}. [{slot_summary}]"
         )
     except ValueError as exc:
         return (dbc.Alert(str(exc), color='warning', className='py-2 small mb-0'), no_update)
