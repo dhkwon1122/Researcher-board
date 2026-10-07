@@ -101,7 +101,7 @@
        (사번/목표명/상세설명 컬럼명 등 설정은 해당 파일 상단에서 변경)
 
 [과제 수행 이력] ★ 전용 원천 파일에서 자동 추출 (별도 raw 불필요, 폴백 없음)
-  개인별과제투입기간데이터_260114.xlsb (KNOXID, 과제명, 시작일, 해제일, 투입률)
+  개인별과제투입기간데이터*.xlsb|xlsx (KNOXID, 과제명, 시작일, 해제일, 투입률)
     → data/processed/tasks.csv (researcher_id, task_name, start_date, end_date,
       input_rate). 대시보드 타임라인과 process_researcher_expertise.py의
       과제 수행 이력 입력 소스로 모두 쓰인다.
@@ -422,9 +422,9 @@ def run():
     _run_with_fallback(process_publications, 'publications',
                         '개인별논문현황_2016_2026.xlsx 또는 publications_raw', results)
 
-    # ── 9-6. 과제 수행 이력: 개인별과제투입기간데이터_260114.xlsb (LLM 호출 없음, 폴백 없음) ─
+    # ── 9-6. 과제 수행 이력: 개인별과제투입기간데이터*.xlsb|xlsx (LLM 호출 없음, 폴백 없음) ─
     from process_tasks import process as process_tasks
-    _run_step('tasks', process_tasks, results, skip_hint='개인별과제투입기간데이터_260114.xlsb 없음')
+    _run_step('tasks', process_tasks, results, skip_hint='개인별과제투입기간데이터*.xlsb|xlsx 없음')
 
     # ── 9-7. 어학자격: 어학자격 *.xlsx (LLM 호출 없음, 폴백 없음, 누적하지
     # 않고 매번 전체 교체 — process_language_qualification.py 참고) ──────

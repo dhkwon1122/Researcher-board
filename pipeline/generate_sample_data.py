@@ -770,13 +770,14 @@ def main():
     # 과제 수행 이력: xlsb 파일 우선, 없으면 샘플 생성
     # (논문/특허 샘플이 project_name/project_code로 실제 과제와 연결되도록,
     #  논문/특허보다 먼저 생성해 tasks를 넘겨준다.)
-    tasks_file = os.path.join(RAW_DIR, '개인별과제투입기간데이터_260114.xlsb')
-    if os.path.exists(tasks_file):
+    from process_tasks import _find_source_file as _find_tasks_source
+    tasks_file = _find_tasks_source(RAW_DIR)
+    if tasks_file:
         from process_tasks import process as _process_tasks
         _process_tasks()
         tasks = pd.read_csv(os.path.join(OUTPUT_DIR, 'tasks.csv'),
                             encoding='utf-8-sig', dtype=str)
-        log['tasks'] = '[RAW]   개인별과제투입기간데이터_260114.xlsb'
+        log['tasks'] = f'[RAW]   {os.path.basename(tasks_file)}'
         skip_tasks_save = True
     else:
         tasks, log['tasks'] = _load_or_gen('tasks', generate_tasks, researchers)

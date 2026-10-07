@@ -33,7 +33,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import RAW_DIR  # noqa: E402
 from excel_reader import read_xlsx, read_xlsx_matrix  # noqa: E402
-from source_files import find_latest  # noqa: E402
+from source_files import find_latest, resolve_excel  # noqa: E402
 
 LEGACY_FILE = "임직원_직무이력('18.5월_이전).xlsx"
 LEGACY_HEADER_ROW = 1   # 2번째 행
@@ -70,7 +70,7 @@ def run(raw_dir: str = RAW_DIR) -> str | None:
     new_df.columns = [str(c).strip() for c in new_df.columns]
     new_df = new_df.drop(columns=[c for c in NEW_DROP_COLS if c in new_df.columns])
 
-    legacy_path = os.path.join(raw_dir, LEGACY_FILE)
+    legacy_path = resolve_excel(raw_dir, LEGACY_FILE)
     if os.path.exists(legacy_path):
         legacy_df = read_xlsx(legacy_path, header_row=LEGACY_HEADER_ROW)
         legacy_df.columns = [str(c).strip() for c in legacy_df.columns]

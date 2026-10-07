@@ -45,6 +45,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import BASE_DIR, RAW_DIR, OUT_DIR  # noqa: E402
+from source_files import resolve_excel  # noqa: E402
 from excel_reader import clean_str, read_xlsx, norm_id
 from merge_utils import TABLE_KEYS, read_existing, write_merged_with_valid_period
 from source_reader import read_source
@@ -126,7 +127,7 @@ def _read_year_file(year: int, filename: str, raw_dir: str) -> pd.DataFrame:
                   f'(DB {source_name}_stg 또는 data/raw_csv/{source_name}.csv)')
             return empty
     else:
-        path = os.path.join(raw_dir, filename)
+        path = resolve_excel(raw_dir, filename)
         if not os.path.exists(path):
             print(f'[SKIP] {path} 파일 없음')
             return empty

@@ -13495,3 +13495,70 @@ pandas NaN 문제와 근본 원인이 다름 — 이번 리팩토링은 "pandas�
 `components/detail_tabs.py` `patents_tab()`의 식별 번호 열을 출원번호 우선으로 변경:
 출원번호가 있으면 출원번호, 없으면 접수ID, 둘 다 없으면 "-". 헤더는 "출원번호/접수ID".
 (이 열은 프로필 특허 탭/타임라인 특허 표에만 있고 인쇄본·엑셀에는 해당 열이 없다.)
+
+## 2026-10-07 (3): 데이터 업데이트 탭 — 컨플 주소 없는 과제 PDF "선택 삭제/전체 삭제"
+
+`components/admin_data_update_tab.py`의 "컨플 주소 없는 과제 PDF 첨부" 섹션에서
+PDF를 파일마다 X로 하나씩만 지울 수 있던 것을 보완했다.
+- 각 파일 앞에 체크박스, 상단에 "전체 선택(N건)" 체크박스와 "선택 삭제"/"전체 삭제"
+  버튼 추가(개별 X 삭제는 그대로). 삭제는 되돌릴 수 없어 브라우저 확인창
+  (`dcc.ConfirmDialogProvider`)을 거친다. 목록이 길면 260px 스크롤.
+- 관리자(manage_users)만 가능, 선택 없이 "선택 삭제"면 안내 경고, 파일이 없으면 경고.
+- `services/web_pipeline_runner.delete_confl_pdfs()` 신설(중복 이름 1회 처리, 성공/
+  실패 수 반환). 파일 삭제만 하며 이미 만들어진 과제 분석 결과(캐시)는 건드리지 않는다.
+- 검증: 임시 PDF 4개로 전체 선택/선택 삭제(2건)/미선택 경고/전체 삭제/빈 목록/
+  비관리자 거부 확인, pytest 19 passed.
+
+(참고 — 같은 날 문의: 팀/리더 참조 엑셀 반영 후 사라진 3단계 부서가 남던 건. 합성
+ 데이터로 process_team_refer를 두 번 돌려 보면 사라진 조직이 deleted=Y로 정상
+ 톰스톤 처리되어 코드 경로 자체는 이상 없음 — 환경 데이터(DB 동기화 순서/날짜) 쪽
+ 원인으로 추정. 사용자 확인 대기.)
+
+## 2026-10-07 (4): 과제참여이력(tasks) 업로드 — pyxlsb 누락 + 파일명/확장자 유연화
+
+증상: 데이터 업데이트 탭에서 과제참여이력을 xlsx/xlsb 어느 걸 올려도 실패,
+메시지 ".xlsb 파일 읽기에 pyxlsb 패키지가 필요합니다 … 'NoneType' object has no
+attribute 'apps'". 원인 두 가지:
+1. **pyxlsb가 requirements.txt에 없었다**(서버 이미지에 미설치) → `requirements.txt`에
+   `pyxlsb==1.0.10` 추가. **Docker 이미지를 다시 빌드/설치해야 반영된다.**
+   (`'NoneType' … 'apps'`는 리눅스에 Excel이 없어 xlwings가 실패하고 pandas로 폴백했다는
+   로그일 뿐 — 폴백 자체는 정상 경로.)
+2. 업로드 모드가 'exact'라 어떤 파일을 올려도 고정 이름 `개인별과제투입기간데이터_260114.xlsb`로
+   저장 → xlsx를 올려도 xlsb 엔진으로 읽다 실패.
+
+변경:
+- 웹 업로드 항목 `tasks`를 'wildcard'(원본 이름·확장자 보존)로 변경, hint는
+  "개인별과제투입기간데이터.xlsb 또는 .xlsx".
+- `process_tasks._find_source_file()`: `개인별과제투입기간데이터*.xlsb|xlsx` 중 수정시각이
+  가장 최근 것, 없으면 폴더에 xlsb/xlsx가 정확히 1개일 때 그 파일(`~$` 제외).
+  파일명 접미사(_260114)와 확장자는 가리지 않는다.
+- 1단계 변환(`sources.py`)도 같은 패턴(xlsb·xlsx), 샘플 생성기·안내 문구 갱신.
+- `excel_reader._read_with_pandas`: pyxlsb가 실제로 없을 때만 "pip install pyxlsb"
+  안내를 내고, 있는데 파일이 손상/형식 오류면 진짜 에러("File is not a zip file" 등)를 보여준다.
+- 검증: 합성 xlsx를 3가지 이름으로 업로드→실행 성공(wildcard 경로), 잘못된 xlsb는
+  실제 에러 메시지 확인, tests/test_tasks_source.py 추가. **실제 .xlsb 파일은 이
+  환경에서 만들 수 없어 pyxlsb 읽기 자체는 서버에서 확인 필요.**
+
+## 2026-10-07 (5): 데이터 업데이트 전 항목 — xlsx/xlsb 모두 허용
+
+사용자 요청("모든 데이터 항목이 xlsx/xlsb 둘 다 호환"). 과제참여이력(tasks)만 먼저 바꿨던 것을
+전 항목으로 일반화했다.
+- **업로드 저장**(`services/web_pipeline_runner.save_upload`): 고정 이름 항목('exact'
+  모드)은 이름(stem)은 기존 그대로, 확장자는 **올린 파일의 확장자**(.xlsx/.xlsb)로 저장
+  (`_dest_with_upload_ext`). 이전엔 .xlsb를 올려도 .xlsx 이름으로 저장돼 xlsx 파서가
+  깨졌다. 직무이력 legacy 슬롯은 이름(stem)으로 구분(`_is_legacy_job_profile`)하고 확장자가
+  바뀌면 이전 파일을 교체. 백필(`_YYYYMM`) 임시 폴더 복사도 같은 규칙. 화면 안내(툴팁)에
+  ".xlsx" 항목마다 "(.xlsb도 가능)" 자동 부기.
+- **읽기**: `pipeline/source_files.py`에 `resolve_excel()` 추가(정확한 이름 → 같은 이름의
+  다른 엑셀 확장자 순) + `find_matches()/find_latest()`가 `*.xlsx` 패턴에 `.xlsb` 변형을 자동
+  포함. 정확한 파일명을 쓰던 16개 `process_*.py`와 `merge_job_profile_source`(legacy),
+  `xlsx_to_raw_csv._resolve`(1단계 변환), `process_team_refer`(xlsx/csv/xlsb)가 이를 사용.
+  패턴(wildcard) 항목(인력현황·T&P·시상·학력·인사발령·어학·근무경력 등)은 자동 호환.
+- **날짜 일련번호**: 리눅스에서 pyxlsb는 날짜 셀을 서식 없이 일련번호(예: 45678)로 읽는다 —
+  `parse_yyyymmdd/parse_flexible_date`가 5자리 엑셀 일련번호(20000~60000)를 날짜로 변환
+  (8자리 YYYYMMDD와 겹치지 않음). 이 두 함수를 거치지 않고 날짜를 직접 파싱하는 열이 있다면
+  xlsb에서 숫자로 남을 수 있으니, 실제 xlsb 업로드 후 날짜 열을 확인할 것.
+- 전제: 서버에 `pyxlsb` 설치(requirements.txt, 이미지 재빌드).
+- 검증: 모든 exact 항목에 .xlsb→.xlsx 번갈아 업로드해 이름/교체/has_upload 확인, 직무이력 두
+  슬롯 xlsb, 패턴 확장, 일련번호 변환 테스트(tests/test_excel_formats.py), 전 process 모듈
+  import 확인, pytest 27 passed. **실제 .xlsb 파일은 만들 수 없어 pyxlsb 실읽기는 미검증.**
