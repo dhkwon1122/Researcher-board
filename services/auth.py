@@ -9,6 +9,8 @@ config/users.json을 사용한다. 비밀번호는 두 백엔드 모두 Werkzeug
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
 import os
 
@@ -307,7 +309,25 @@ def delete_user(user_id: str) -> bool:
 
 # ── Flask 세션 ────────────────────────────────────────────────────────────────
 
+# 백그라운드 스레드(Flask 요청 컨텍스트 없음)에서 "특정 사용자 권한으로" 일을 해야 할 때
+# (관리자 "AI 검색 테스트"의 일괄 실행 등) acting_as()로 그 사용자 dict를 지정한다 —
+# 지정돼 있으면 get_current_user()가 세션 대신 이 값을 돌려준다(2026-10).
+_acting_user: contextvars.ContextVar = contextvars.ContextVar('acting_user', default=None)
+
+
+@contextlib.contextmanager
+def acting_as(user: dict | None):
+    token = _acting_user.set(user)
+    try:
+        yield
+    finally:
+        _acting_user.reset(token)
+
+
 def get_current_user() -> dict | None:
+    acting = _acting_user.get()
+    if acting is not None:
+        return acting
     if 'user_id' not in flask.session:
         return None
     return {

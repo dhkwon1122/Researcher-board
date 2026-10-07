@@ -22,6 +22,7 @@ import dash
 import dash_bootstrap_components as dbc
 from dash import html
 
+from components.admin_ai_search_lab_tab import _ai_search_lab_tab
 from components.admin_ai_search_log_tab import _ai_search_log_tab
 from components.admin_data_update_tab import _data_update_tab
 from components.admin_dev_updates_tab import _dev_updates_tab
@@ -59,6 +60,8 @@ def layout():
                     tab_id='tab-data-update', label_style={'fontWeight': '600'}),
             dbc.Tab(_ai_search_log_tab(), label='AI 검색 로그',
                     tab_id='tab-ai-search-log', label_style={'fontWeight': '600'}),
+            dbc.Tab(_ai_search_lab_tab(), label='AI 검색 테스트',
+                    tab_id='tab-ai-search-lab', label_style={'fontWeight': '600'}),
             dbc.Tab(_dev_updates_tab(), label='개발업데이트 이력',
                     tab_id='tab-dev-updates', label_style={'fontWeight': '600'}),
         ], id='admin-tabs', active_tab='tab-users'),
