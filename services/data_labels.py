@@ -152,6 +152,7 @@ COLUMN_LABELS = {
     'rank_type': '후보구분',
     'rank_order': '순위',
     'nominated_year': '지명연도',
+    'comment': '코멘트',
 
     # 리더십진단 (leadership.csv)
     'overall_score': '종합점수',
