@@ -938,6 +938,19 @@ def delete_confl_pdf(filename: str) -> bool:
     return False
 
 
+def delete_confl_pdfs(filenames: list[str]) -> tuple[int, int]:
+    """여러 PDF를 한 번에 삭제한다(2026-10 — 선택/전체 삭제 버튼용). 반환: (삭제 성공 수,
+    파일 없음 등 실패 수). 파일명은 delete_confl_pdf()와 동일하게 basename만 쓰고,
+    중복 이름은 한 번만 처리한다."""
+    done = failed = 0
+    for name in dict.fromkeys(filenames):
+        if delete_confl_pdf(name):
+            done += 1
+        else:
+            failed += 1
+    return done, failed
+
+
 def confl_projects_missing_pdf() -> list[str]:
     """project_confl_address.csv에서 컨플 주소가 비어 있는 과제명 중, 아직
     PDF가 없는 것들(오름차순) — 관리자가 뭘 더 올려야 하는지 바로 보여주기

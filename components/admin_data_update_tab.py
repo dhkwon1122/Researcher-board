@@ -231,9 +231,11 @@ def _confl_pdf_upload_section():
     pdfs = wpr.list_confl_pdfs()
     missing = wpr.confl_projects_missing_pdf()
 
-    pdf_list_view = (
-        html.Div([
+    if pdfs:
+        rows_view = html.Div([
             html.Div([
+                dbc.Checkbox(id={'type': 'confl-pdf-check', 'name': p['filename']}, value=False,
+                             className='me-2 mb-0'),
                 html.I(className='bi bi-file-earmark-pdf me-1 text-danger'),
                 html.Span(p['filename'], className='me-2'),
                 html.Span(f"{p['size_kb']}KB · {p['uploaded_at']}",
@@ -244,8 +246,28 @@ def _confl_pdf_upload_section():
                            title='삭제'),
             ], className='d-flex align-items-center mb-1')
             for p in pdfs
-        ]) if pdfs else html.Div('업로드된 PDF 없음', className='small text-muted')
-    )
+        ], style={'maxHeight': '260px', 'overflowY': 'auto'})
+        # 선택/전체 삭제(2026-10, 사용자 요청) — 파일마다 X를 누르지 않아도 되게 한다.
+        # 되돌릴 수 없는 삭제라 확인창(ConfirmDialogProvider)을 거친다.
+        toolbar = html.Div([
+            dbc.Checkbox(id='confl-pdf-select-all', label=f'전체 선택 ({len(pdfs)}건)', value=False,
+                         className='small me-3 mb-0'),
+            dcc.ConfirmDialogProvider(
+                children=dbc.Button([html.I(className='bi bi-trash me-1'), '선택 삭제'],
+                                    color='danger', outline=True, size='sm', className='me-2'),
+                id='confl-pdf-del-selected-confirm',
+                message='선택한 PDF를 삭제할까요? 되돌릴 수 없습니다.',
+            ),
+            dcc.ConfirmDialogProvider(
+                children=dbc.Button([html.I(className='bi bi-trash3 me-1'), '전체 삭제'],
+                                    color='danger', size='sm'),
+                id='confl-pdf-del-all-confirm',
+                message=f'업로드된 PDF {len(pdfs)}건을 전부 삭제할까요? 되돌릴 수 없습니다.',
+            ),
+        ], className='d-flex align-items-center mb-2')
+        pdf_list_view = html.Div([toolbar, rows_view])
+    else:
+        pdf_list_view = html.Div('업로드된 PDF 없음', className='small text-muted')
 
     missing_view = None
     if missing:
@@ -462,6 +484,61 @@ def confl_pdf_on_delete(n_clicks_list):
     ok = wpr.delete_confl_pdf(trig['name'])
     msg, color = (f"{trig['name']} 삭제했습니다.", 'success') if ok else ('파일을 찾지 못했습니다.', 'warning')
     return _confl_pdf_upload_section(), _alert(msg, color)
+
+
+# ── 콜백: 컨플 PDF — 전체 선택 체크박스 → 각 파일 체크박스 일괄 토글 ───────────
+@callback(
+    Output({'type': 'confl-pdf-check', 'name': ALL}, 'value'),
+    Input('confl-pdf-select-all', 'value'),
+    State({'type': 'confl-pdf-check', 'name': ALL}, 'id'),
+    prevent_initial_call=True,
+)
+def confl_pdf_select_all(checked, ids):
+    return [bool(checked)] * len(ids)
+
+
+# ── 콜백: 컨플 PDF — 선택 삭제 ────────────────────────────────────────────────
+@callback(
+    Output('confl-pdf-section-container', 'children', allow_duplicate=True),
+    Output('confl-pdf-status', 'children', allow_duplicate=True),
+    Input('confl-pdf-del-selected-confirm', 'submit_n_clicks'),
+    State({'type': 'confl-pdf-check', 'name': ALL}, 'value'),
+    State({'type': 'confl-pdf-check', 'name': ALL}, 'id'),
+    prevent_initial_call=True,
+)
+def confl_pdf_delete_selected(submit_n_clicks, values, ids):
+    from services.auth import can
+    if not submit_n_clicks:
+        return no_update, no_update
+    if not can('manage_users'):
+        return no_update, _alert('관리자만 삭제할 수 있습니다.', 'danger')
+    names = [i['name'] for i, v in zip(ids or [], values or []) if v]
+    if not names:
+        return no_update, _alert('선택된 PDF가 없습니다. 삭제할 파일을 체크해주세요.', 'warning')
+    done, failed = wpr.delete_confl_pdfs(names)
+    msg = f'{done}건 삭제했습니다.' + (f' (찾지 못한 파일 {failed}건)' if failed else '')
+    return _confl_pdf_upload_section(), _alert(msg, 'success' if done else 'warning')
+
+
+# ── 콜백: 컨플 PDF — 전체 삭제 ────────────────────────────────────────────────
+@callback(
+    Output('confl-pdf-section-container', 'children', allow_duplicate=True),
+    Output('confl-pdf-status', 'children', allow_duplicate=True),
+    Input('confl-pdf-del-all-confirm', 'submit_n_clicks'),
+    prevent_initial_call=True,
+)
+def confl_pdf_delete_all(submit_n_clicks):
+    from services.auth import can
+    if not submit_n_clicks:
+        return no_update, no_update
+    if not can('manage_users'):
+        return no_update, _alert('관리자만 삭제할 수 있습니다.', 'danger')
+    names = [p['filename'] for p in wpr.list_confl_pdfs()]
+    if not names:
+        return no_update, _alert('삭제할 PDF가 없습니다.', 'warning')
+    done, failed = wpr.delete_confl_pdfs(names)
+    msg = f'PDF {done}건을 전부 삭제했습니다.' + (f' (실패 {failed}건)' if failed else '')
+    return _confl_pdf_upload_section(), _alert(msg, 'success' if done else 'warning')
 
 
 # ── 콜백: 데이터 업데이트 — 전체/선택 실행 ─────────────────────────────────────
