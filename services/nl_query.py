@@ -63,6 +63,7 @@ from services.llm import LLMError  # noqa: E402
 from services import auth  # noqa: E402
 from services import data_labels  # noqa: E402
 from services import data_store  # noqa: E402
+from services import nl_query_curation  # noqa: E402
 from services import nl_query_feedback  # noqa: E402
 from services import nl_query_log  # noqa: E402
 from services import open_data_query  # noqa: E402
@@ -569,7 +570,8 @@ def parse_question(question: str) -> dict:
     grade_override = _regex_grade_criteria(question)
 
     max_wait = llm_client.query_max_wait()
-    system_prompt = query_settings.apply(QUERY_SYSTEM_PROMPT) + nl_query_feedback.feedback_hint_for(question)
+    system_prompt = (query_settings.apply(QUERY_SYSTEM_PROMPT) + nl_query_feedback.feedback_hint_for(question)
+                     + nl_query_curation.examples_hint_for(question, for_router=True))
     raw = llm_client.call_llm(question, system_prompt, temperature=0.0, max_tokens=400, max_wait=max_wait)
     if not raw:
         if grade_override:
