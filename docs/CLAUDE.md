@@ -13358,3 +13358,103 @@ pandas NaN 문제와 근본 원인이 다름 — 이번 리팩토링은 "pandas�
 컴포넌트 트리까지 렌더링해 재확인. `python3 -m app`(전체 페이지·서비스·
 파이프라인 임포트 체인) 정상 로드, 기존 `tests/`(17건) 전체 통과,
 수정한 13개 파일 `py_compile` 통과.
+
+## 2026-10-06: 전문성 심화 지표 — 0단계(강점 표기 표준화) + ②(주도형/참여형)
+
+사용자 요청("연구원 전문성 심화 분석 … ①~⑤ 적용, 다 추천대로")의 첫 두
+단계. 신규 모듈 `pipeline/process_expertise_metrics.py`를 `run_analysis.py`
+4/4단계로 추가했다(LLM 호출 없음, 임베딩은 0단계 매칭에만 사용).
+
+- **0단계**: `strength_taxonomy.json`(없으면 `build_strength_taxonomy.build()`로
+  부트스트랩)으로 연구원별 strength_fields/keywords를 표준명에 재매핑 →
+  `researcher_strength_std.json`(정확 일치 → 임베딩 코사인 ≥0.85 → 미분류).
+  미분류 값은 `strength_unmapped.json`에 연구원 수와 함께 모아, 사람이
+  표준 목록에 동의어로 추가하도록 한다. 원본 LLM 결과는 그대로 둔다.
+  `load_to_db.JSON_TABLES`에 `researcher_strength_std` 등록(④·⑤가 사용 예정).
+- **②**: `researcher_contribution_metrics.csv` — 논문 주저자(author_rank 1 /
+  author_type 제1·주저자·단독·교신)·교신 비율, 평균 기여도, 특허 대표발명자
+  비율(application_id 중복 제거), 평균 지분율, 최근 5년 비율.
+  판정: 3건 이상인 원천(논문/특허) 중 주도 비율 50% 이상이 하나라도 있으면
+  주도형, 모두 50% 미만이면 참여형, 3건 이상인 원천이 없으면 판정보류.
+  - 연구원 개별 프로필 "전문성 요약" 맨 위에 "연구 기여 유형" 배지 + 수치
+    (마우스오버 시 판정 근거). LLM 분석 데이터가 없어도 표시. 인쇄본은 미적용.
+  - 연구원 명단: 상세 필터에 "연구 기여유형" 추가 — 값을 고르면 `기여유형`
+    컬럼도 함께 노출(성별/학력/전공과 같은 방식).
+  - `load_to_db.TABLES`, AI 검색 화이트리스트(`TABLE_PERMISSIONS`, 권한 제한
+    없음 — 원천 논문/특허와 같은 민감도), `data_labels` 한글 라벨 등록.
+- 검증: 합성 데이터로 판정 규칙(주도/참여/판정보류, 최근 5년, 특허 중복 제거)
+  확인, `generate_sample_data.py` 샘플로 프로필 콜백·명단 레이아웃 렌더링
+  확인, pytest 17 passed.
+
+## 2026-10-06 (2): 전문성 심화 ①+⑥ — 깊이·최근성 가중 + 입사 전 경력/양성 이력 반영
+
+`pipeline/process_researcher_expertise.py` 프롬프트 변경(**반영하려면 전문성
+분석 전체 재실행 1회 필요** — `run_analysis.py` 2~4단계).
+
+- 과제 이력: 과제별 기간(최초 시작~최종 종료/진행중), 평균 투입률, 환산 M/M
+  (행별 개월수 × 투입률 합), 시기 표시 [최근 3년]/[3~6년 전]/[6년 이전]을
+  붙이고 최근 활동 순으로 정렬, 합계 M/M 한 줄 추가. 직무/논문/특허에도
+  시기 표시(특허는 출원연도 추가). 연도만 있는 날짜는 7월 1일로 본다.
+- 신규 입력: `[입사 전 근무 경력]`(work_experience.csv), `[양성 이력]`
+  (nurturing.csv). 과거 시점 온디맨드 분석은 시작일 기준으로 걸러 쓴다.
+- 지침 7~9 추가: 시기 가중치 1.0/0.5/0.25 + M/M 큰 분야 우선, 현재/과거 주력
+  분야 구분, 입사 전 경력은 낮은 비중의 근거(회사명 출력 금지), 양성 이력은
+  학술 지식 근거.
+- 출력 필드 추가: `current_focus_fields`(최근 3년 근거 1~3개), `past_fields`
+  (0~3개, 중복 금지). 프로필 전문성 요약·HTML 리포트 카드에 표시(재분석 전
+  결과에는 없어 자동 생략), AI 검색 `expertise_profiles` 컬럼·라벨 추가.
+- `researcher_fit.researcher_profile_text()`가 현재 주력 분야를 맨 앞에 넣어
+  JOB Market 매칭·유사 연구원 임베딩이 최근 전문성 쪽으로 기울게 했다
+  (텍스트가 바뀌므로 임베딩 캐시는 자연히 다시 계산됨).
+- 검증: LLM을 모의 응답으로 바꿔 샘플 데이터로 process()/
+  analyze_researchers_as_of() 실행 → 프롬프트 내 시기/M/M/양성 표시와 새 출력
+  필드 저장 확인, 프로필 콜백 렌더링 확인, pytest 17 passed.
+
+## 2026-10-06 (3): 전문성 심화 ④ — 기술별 보유자 수(핵심인력 리스크) + "조직 분석" 탭
+
+- `process_expertise_metrics.py`에 `technology_holder_summary.csv` 추가:
+  현재 재직자 기준 (출처: 핵심기술/보유기술/표준화된 강점분야, 기술)별
+  보유자 수·고수준 보유자 수(핵심기술 등급 S/A, 보유기술 Lv 3 이상 —
+  강점분야는 해당 없음)·보유 부서 수·명단. risk_level: 보유자 2명 이하
+  '위험', 고수준 1명 이하 '주의', 그 외 '정상'. 기술명은 공백·대소문자 무시로 묶는다.
+- "보유 전문성" 페이지에 **조직 분석** 탭 신설(`components/org_analysis_tab.py`).
+  탭이 2개가 되어 탭 막대가 다시 보인다(전문성 MAP은 계속 숨김).
+  기술별 보유자 섹션은 개인 명단이 있어 **관리자 계정(manage_users)만** 보인다
+  (보수적으로 정한 기준 — 필요하면 `org_analysis_content()`의 조건만 바꾸면 됨).
+- 등록: `load_to_db.TABLES`, AI 검색 `TABLE_PERMISSIONS`('manage_users'), 라벨.
+- 검증: 합성 core_technology/tech_ownership으로 집계·리스크 판정, 관리자/
+  비관리자 탭 렌더링 차이, 페이지 layout 확인, pytest 17 passed.
+
+## 2026-10-06 (4): 전문성 심화 ③ — 협업 네트워크(논문 공저·특허 공동발명)
+
+- `process_expertise_metrics.py`에 `collaboration_edges.csv`(연구원 쌍별 공동
+  논문/특허 수·최근 협업연도·부서·같은 부서 여부)와 `collaboration_metrics.csv`
+  (연구원별 협업자 수, 타부서 협업자 수/비율, 상위 5명) 추가. 같은 논문 =
+  제목(공백·대소문자 무시) + 게재일, 같은 특허 = application_id. 사내 저자
+  20명 초과 대형 공저 1건은 관계 폭증 방지로 제외.
+- 연구원 프로필 전문성 요약에 "주요 협업자" 배지(이름 · 협업 횟수, 상위 5명).
+- 조직 분석 탭에 "부서 간 협업" 섹션(모든 로그인 사용자): 부서별 타부서 협업
+  비율 + 부서 쌍별 협업량(타부서만). 부서는 researchers.department 기준.
+- 등록: `load_to_db.TABLES`, AI 검색 `TABLE_PERMISSIONS`(제한 없음), 라벨.
+- 검증: 합성 데이터로 쌍 집계(논문 제목 정규화, 특허 공동발명, 같은/타 부서)
+  확인, 샘플 데이터에 공동 논문을 넣어 프로필 배지·탭 렌더링 확인, pytest 통과.
+
+## 2026-10-06 (5): 전문성 심화 ⑤ — 과제별 역량 갭
+
+- 신규 `pipeline/process_project_competency_gap.py`(run_analysis.py 5/5단계,
+  `--skip-competency-gap`으로 생략 가능 — run_integration.py에도 전달):
+  `project_expertise_analysis.json`의 과제별 핵심기술/산출물/난제/배경/
+  기대효과/키워드로 사내 LLM이 필요 역량 4~8개 추출(입력 해시 캐시
+  `project_competency_cache.json`, `--refresh`로 무시) → 과제 인력(org_code ==
+  project_name 현재 재직자 ∪ project_personnel.csv)의 보유 역량(표준화 강점
+  분야 우선 + 키워드 + 전문지식)과 BGE-M3 임베딩 대조. 최고 유사도 ≥0.75면
+  충족, 아니면 갭 + 과제 밖 재직자 중 ≥0.75 상위 3명을 사내 후보로 기록 →
+  `project_competency_gap.json`(충족률 낮은 순).
+  과제 문서 분석 결과 파일만 읽으므로 Confluence 401 상태에서도 기존 분석
+  결과로 동작한다.
+- 조직 분석 탭 맨 위에 "과제별 역량 갭" 섹션(모든 로그인 사용자): 과제별
+  요약(충족률/갭 수/갭 역량) + 역량별 상세(충족 인력·사내 후보와 근거 항목).
+- 등록: `load_to_db.JSON_TABLES`(project_name 키). 중첩 구조라 AI 검색
+  대상에는 넣지 않았다.
+- 검증: LLM/임베딩 모의 함수로 충족/갭/사내 후보 판정과 캐시 재사용(2회차
+  LLM 호출 0회) 확인, 탭 렌더링 확인, pytest 통과.

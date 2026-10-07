@@ -181,4 +181,14 @@ TABLE_PERMISSIONS: dict[str, str | None] = {
     # 평가 표기 방식이 다르다"는 사실 자체가 평가 관련 인사 정보라, evaluations
     # 와 동일한 view_evaluation 권한으로 제한한다.
     'evaluation_exception':     'view_evaluation',
+
+    # 전문성 심화 지표(2026-10, pipeline/process_expertise_metrics.py) —
+    # 논문·특허 원천(권한 제한 없음)을 집계만 한 파생 지표라 같은 민감도.
+    'researcher_contribution_metrics': None,
+    # 기술별 보유자 수 — 기술별 개인 명단(holder_ids)이 담긴 조직 리스크
+    # 정보라 화면("조직 분석" 탭)과 동일하게 관리자 계정(is_admin)만 조회.
+    'technology_holder_summary':       'manage_users',
+    # 협업 네트워크 — 논문·특허 원천(권한 제한 없음)의 공저 관계 집계.
+    'collaboration_edges':             None,
+    'collaboration_metrics':           None,
 }

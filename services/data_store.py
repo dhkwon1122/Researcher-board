@@ -103,6 +103,44 @@ def read_similar_researchers() -> dict[str, dict]:
     return {item.get('researcher_id', ''): item for item in results}
 
 
+def read_contribution_metrics() -> dict[str, dict]:
+    """researcher_id -> 주도형/참여형 지표 행(dict). researcher_contribution_
+    metrics.csv(pipeline/process_expertise_metrics.py)를 DB 우선으로 읽는다.
+    없으면 빈 dict."""
+    df = read_processed('researcher_contribution_metrics')
+    if df.empty or 'researcher_id' not in df.columns:
+        return {}
+    return {r['researcher_id']: r for r in df.to_dict('records')}
+
+
+def read_top_collaborators(rid: str) -> list[tuple[str, int]]:
+    """collaboration_metrics.csv(pipeline/process_expertise_metrics.py)의 그
+    연구원 상위 협업자 [(researcher_id, 공동 논문+특허 수), ...]. 없으면 []."""
+    df = read_processed('collaboration_metrics')
+    if df.empty or 'researcher_id' not in df.columns:
+        return []
+    rows = df[df['researcher_id'] == str(rid).zfill(8)]
+    if rows.empty:
+        return []
+    r = rows.iloc[0]
+    ids = [x for x in str(r.get('top_collaborators') or '').split(';') if x and x != 'nan']
+    counts = str(r.get('top_collaborator_counts') or '').split(';')
+    out = []
+    for i, x in enumerate(ids):
+        try:
+            n = int(float(counts[i]))
+        except (IndexError, ValueError):
+            n = 0
+        out.append((x.zfill(8), n))
+    return out
+
+
+def read_project_competency_gap() -> list[dict]:
+    """과제별 역량 갭(pipeline/process_project_competency_gap.py) 항목 리스트.
+    DB(테이블 project_competency_gap) 우선, 없으면 JSON 파일. 둘 다 없으면 []."""
+    return _read_json_records('project_competency_gap', 'project_competency_gap.json')
+
+
 def read_project_expertise_analysis() -> list[dict]:
     """과제별 컨플루언스 분석 항목 리스트(project_name 키). DB(테이블
     project_expertise_analysis)가 있으면 그걸, 없으면 project_expertise_

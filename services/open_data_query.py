@@ -200,6 +200,8 @@ def _expertise_profiles_table() -> pd.DataFrame:
             'strength_keywords': '; '.join(p.get('strength_keywords') or []),
             'key_responsibilities': '; '.join(p.get('key_responsibilities') or []),
             'domain_knowledge_skill': '; '.join(p.get('domain_knowledge_skill') or []),
+            'current_focus_fields': '; '.join(p.get('current_focus_fields') or []),
+            'past_fields': '; '.join(p.get('past_fields') or []),
         }
         for rid, p in profiles.items()
     ]

@@ -14,11 +14,11 @@ run_analysis.py 단계는 사내 LLM/BGE-M3 호출이 많아 전체 실행에 �
 실행 순서:
   0) pipeline/run_ready.py  환경 점검 (--skip-ready 아니면 항상 먼저 실행)
   1) pipeline/run_expertise.py  원천 데이터 전처리 (LLM 호출 없음)
-  2) pipeline/run_analysis.py   전문성 분석 LLM 체인 (4단계, 비용 발생)
+  2) pipeline/run_analysis.py   전문성 분석 LLM 체인 (5단계, 비용 발생)
 
 사용법:
   python pipeline/run_integration.py
-    [--skip-ready] [--force] [--skip-bge] [--skip-confluence]
+    [--skip-ready] [--force] [--skip-bge] [--skip-confluence] [--skip-competency-gap]
     [--refresh-journals] [--refresh-judgments] [--top-k 5] [--with-journal-authority]
 
   --skip-ready      : 0단계(환경 점검) 자체를 건너뛴다.
@@ -102,5 +102,6 @@ if __name__ == '__main__':
         refresh_judgments='--refresh-judgments' in _argv,
         top_k=_parse_top_k_arg(_argv),
         skip_journal_authority='--with-journal-authority' not in _argv,
+        skip_competency_gap='--skip-competency-gap' in _argv,
     )
     sys.exit(0 if ok else 1)
