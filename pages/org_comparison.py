@@ -601,20 +601,24 @@ def _load_succession_slots(n_clicks, department, year):
         return blank + [dbc.Alert('부서와 연도를 먼저 선택해주세요.', color='warning',
                                    className='py-2 small mb-0')]
 
-    options = succession_store.department_researcher_options(department)
-    option_lists = [options] * n
-    slots = succession_store.load_slots(department, year)
-    researcher_vals = [slots.get((rt, ro), {}).get('researcher_id') for _, _, rt, ro in _SLOT_SPECS]
-    comment_vals = [slots.get((rt, ro), {}).get('comment', '') for _, _, rt, ro in _SLOT_SPECS]
+    try:
+        options = succession_store.department_researcher_options(department)
+        option_lists = [options] * n
+        slots = succession_store.load_slots(department, year)
+        researcher_vals = [slots.get((rt, ro), {}).get('researcher_id') for _, _, rt, ro in _SLOT_SPECS]
+        comment_vals = [slots.get((rt, ro), {}).get('comment', '') for _, _, rt, ro in _SLOT_SPECS]
 
-    opt_labels = {o['value']: o['label'] for o in options}
-    found_labels = [opt_labels.get(v, v) for v in researcher_vals if v]
-    msg = dbc.Alert(
-        f'{department} {year}년 — {len(found_labels)}개 순위를 불러왔습니다: '
-        + ', '.join(found_labels) if found_labels
-        else f'{department} {year}년에 저장된 데이터가 없습니다. 새로 입력할 수 있습니다.',
-        color='info', className='py-2 small mb-0',
-    )
+        opt_labels = {o['value']: o['label'] for o in options}
+        found_labels = [opt_labels.get(v, v) for v in researcher_vals if v]
+        msg = dbc.Alert(
+            f'{department} {year}년 — {len(found_labels)}개 순위를 불러왔습니다: '
+            + ', '.join(found_labels) if found_labels
+            else f'{department} {year}년에 저장된 데이터가 없습니다. 새로 입력할 수 있습니다.',
+            color='info', className='py-2 small mb-0',
+        )
+    except Exception as exc:
+        return blank + [dbc.Alert(f'불러오기 중 오류가 발생했습니다: {exc}', color='danger',
+                                   className='py-2 small mb-0')]
     return option_lists + researcher_vals + comment_vals + [msg]
 
 
@@ -649,25 +653,37 @@ def _save_succession_slots(n_clicks, department, year, tick, *slot_values):
         for i, (_, _, rt, ro) in enumerate(_SLOT_SPECS)
     }
 
+    # 2026-10-07: 이 콜백이 예상 못 한 예외로 끝까지 못 가면(운영 모드
+    # debug=False) Output이 아예 갱신되지 않아 "저장을 눌러도 아무 반응이
+    # 없는" 것처럼 보인다(이 저장소에 이미 같은 증상으로 기록된 사례 —
+    # JOB Market 2026-08-21 "검색 콜백 전체를 감싸는 최종 안전망" 항목과
+    # 동일한 원인·해법). ValueError(부서/연도 누락)만 잡던 좁은 처리를
+    # Exception 전체로 넓혀, 원인이 무엇이든 최소한 에러 문구는 항상
+    # 화면에 뜨게 한다.
     try:
         result = succession_store.save_slots(department, year, assignments)
+
+        # 저장 직후 실제로 무엇이 반영됐는지 슬롯별로 명시해, 드롭다운
+        # 선택이 제대로 안 됐는데 "저장 완료"만 보고 넘어가는 혼란을
+        # 막는다(예: 연구원을 못 고른 채 저장하면 그 슬롯은 "(비움)"으로
+        # 그대로 표시된다).
+        options = succession_store.department_researcher_options(department)
+        opt_labels = {o['value']: o['label'] for o in options}
+        slot_summary = ', '.join(
+            f"{label}: {opt_labels.get(researcher_values[i], researcher_values[i]) if researcher_values[i] else '(비움)'}"
+            for i, (_, label, _, _) in enumerate(_SLOT_SPECS)
+        )
+        msg = (
+            f"저장 완료 — {department} {year}년 {result['saved_rows']}건 반영"
+            f"({result['cleared_rows']}건 교체)"
+            + ('' if result['db_ok'] else ' (DB 미반영, CSV에는 반영됨)') + f'. [{slot_summary}]'
+        )
     except ValueError as exc:
         return (dbc.Alert(str(exc), color='warning', className='py-2 small mb-0'), no_update)
+    except Exception as exc:
+        return (dbc.Alert(f'저장 중 오류가 발생했습니다: {exc}', color='danger',
+                           className='py-2 small mb-0'), no_update)
 
-    # 저장 직후 실제로 무엇이 반영됐는지 슬롯별로 명시해, 드롭다운 선택이
-    # 제대로 안 됐는데 "저장 완료"만 보고 넘어가는 혼란을 막는다(예: 연구원을
-    # 못 고른 채 저장하면 그 슬롯은 "(비움)"으로 그대로 표시된다).
-    options = succession_store.department_researcher_options(department)
-    opt_labels = {o['value']: o['label'] for o in options}
-    slot_summary = ', '.join(
-        f"{label}: {opt_labels.get(researcher_values[i], researcher_values[i]) if researcher_values[i] else '(비움)'}"
-        for i, (_, label, _, _) in enumerate(_SLOT_SPECS)
-    )
-    msg = (
-        f"저장 완료 — {department} {year}년 {result['saved_rows']}건 반영"
-        f"({result['cleared_rows']}건 교체)"
-        + ('' if result['db_ok'] else ' (DB 미반영, CSV에는 반영됨)') + f'. [{slot_summary}]'
-    )
     return (dbc.Alert(msg, color='success', dismissable=True, className='py-2 small mb-0'),
             (tick or 0) + 1)
 
@@ -678,7 +694,11 @@ def _save_succession_slots(n_clicks, department, year, tick, *slot_values):
     prevent_initial_call=True,
 )
 def _refresh_succession_view(_tick):
-    return _render_dashboard()
+    try:
+        return _render_dashboard()
+    except Exception as exc:
+        return dbc.Alert(f'조회 화면을 다시 그리는 중 오류가 발생했습니다: {exc}',
+                          color='danger', className='mt-3')
 
 
 def layout():
