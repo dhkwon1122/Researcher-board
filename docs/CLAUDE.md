@@ -13735,3 +13735,9 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 수정: `services/ai_search_lab.py`에 `_xl_clean/_xl_append` 추가, 시트에 쓰는 모든 값에서 제어문자 제거.
   (제안 시트·요약·작성 방법 포함.) 제어문자가 든 합성 실행으로 생성 확인, tests/test_ai_search_lab.py 통과.
 - 참고: 다운로드는 "④ 결과"의 **실행 선택** 드롭다운에서 실행을 고른 상태여야 동작한다(미선택이면 아무 반응 없음).
+
+## 2026-10-08 (3): 결과 엑셀 다운로드 — 결과 일부(sample_rows)에 None 셀이 있으면 실패하던 문제
+
+- 서버 로그: `TypeError: sequence item 7: expected str instance, NoneType found` (`build_run_workbook`의 `', '.join(row)`).
+  결과 표에 빈 값(NULL) 셀이 있으면 발생. `None`은 빈 문자열, 그 외는 `str()`로 바꿔 이어붙이도록 수정.
+- 앞선 제어문자 수정과는 별개의 원인이었다(코드는 이미지에 포함되므로 `docker compose up -d --build app` 필요).
