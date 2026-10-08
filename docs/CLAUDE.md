@@ -13826,3 +13826,4 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - `services/task_history.close_stale_open_rows` 추가: 종료일이 빈 행이라도 같은 과제명으로 더 늦게 시작해 이미 종료된 행이 있으면 낡은 진행중 행으로 보고 닫음. `merge_task_rows`(프로필 표/엑셀)와 `timeline_data.task_points`(타임라인)에 적용.
 - `pipeline/excel_reader.parse_yyyymmdd`: `2026.09.22`, `2026/9/22` 형식도 `YYYY-MM-DD`로 정규화(기존엔 '2026'으로 깨져 종료일이 사라질 수 있었음).
 - 반영: 서버 `git pull` → `docker compose up -d --build app`. 날짜 형식 문제였다면 과제참여이력을 다시 업로드/업데이트 후 DB 반영.
+- (12 추가) `process_tasks._collapse_same_start`: 원본에 같은 (연구원, 과제, 시작일) 행이 여럿(해제일 빈 줄 + 해제일 있는 줄)이면 해제일 있는 값을 채택. 기존엔 정렬/중복제거(keep='last') 순서에 따라 빈 해제일 행이 이겨 tasks.csv에 해제일이 빠질 수 있었음.

@@ -68,6 +68,21 @@ def _same_month(d1: str, d2: str) -> bool:
     return len(d1) >= 7 and len(d2) >= 7 and d1[:7] == d2[:7]
 
 
+def _collapse_same_start(grp: pd.DataFrame) -> pd.DataFrame:
+    """같은 시작일 행이 여럿이면(원본에 투입/해제 이력이 따로 줄로 있는 경우 등) 하나로 합치되,
+    해제일이 있는 행이 있으면 그 해제일(가장 늦은 값)을 채택한다. 해제일 빈 행이 뒤에 있다는
+    이유로 해제일이 지워져 '진행중'으로 남던 문제(2026-10-08) 방지."""
+    if not grp['start_date'].duplicated().any():
+        return grp
+    rows = []
+    for _, sub in grp.groupby('start_date', sort=True):
+        ends = [str(e).strip() for e in sub['end_date'] if not is_blank(e) and str(e).strip()]
+        last = sub.iloc[-1].copy()
+        last['end_date'] = max(ends) if ends else ''
+        rows.append(last)
+    return pd.DataFrame(rows).reset_index(drop=True)
+
+
 def _merge_consecutive_periods(df: pd.DataFrame) -> pd.DataFrame:
     """같은 (researcher_id, task_name) 내에서 이어지는 구간을 하나로 병합.
     "이어짐"의 기준: 종료일 == 다음 시작일(정확히 일치)이거나, 종료월과 다음
@@ -76,7 +91,8 @@ def _merge_consecutive_periods(df: pd.DataFrame) -> pd.DataFrame:
     """
     result = []
     for (rid, task), grp in df.groupby(['researcher_id', 'task_name'], sort=False):
-        grp = grp.sort_values('start_date').reset_index(drop=True)
+        grp = grp.sort_values('start_date', kind='stable').reset_index(drop=True)
+        grp = _collapse_same_start(grp)
 
         cur_s = str(grp.iloc[0]['start_date']).strip()
         cur_e = str(grp.iloc[0]['end_date']).strip()
