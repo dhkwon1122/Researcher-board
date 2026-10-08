@@ -204,7 +204,7 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur, inc,
             className='small',
             style={
                 'display': '-webkit-box',
-                'WebkitLineClamp': '2',
+                'WebkitLineClamp': '1',
                 'WebkitBoxOrient': 'vertical',
                 'overflow': 'hidden',
                 'textOverflow': 'ellipsis',
@@ -225,17 +225,15 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur, inc,
 
     grade_items = []
     if show_eval and eval_str is not None:
-        grade_items += [
-            html.Span('평가 ', className='text-muted small'),
+        grade_items.append(
             html.Span(eval_str, className='small fw-bold me-3',
                       style={'letterSpacing': '0.15em'}),
-        ]
+        )
     if show_incentive and inc_str is not None:
-        grade_items += [
-            html.Span('인센티브 ', className='text-muted small'),
+        grade_items.append(
             html.Span(inc_str, className='small fw-bold',
                       style={'letterSpacing': '0.15em'}),
-        ]
+        )
     if not grade_items:
         grade_items = [
             html.I(className='bi bi-lock-fill me-1 text-secondary'),
