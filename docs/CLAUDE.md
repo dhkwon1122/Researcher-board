@@ -13804,3 +13804,11 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
     nginx/ollama는 앱 시각과 무관해 제외.
   - 적용: `git pull` 후 `docker compose up -d --build`(tzdata 설치 때문에 이미지 재빌드 필요). 확인: `docker compose exec app date`.
   - 이미 저장된 시각(실행 이력 CSV, 로그 파일)은 변환되지 않는다 — 앞으로 기록되는 값부터 KST.
+
+## 2026-10-08 (2): AI 검색 테스트 결과 엑셀 다운로드 실패 수정
+
+- 원인: LLM 설명/SQL/심사 이유에 섞인 제어문자(예: \x07, \x0b)를 openpyxl이 셀에 쓰지 못해(`IllegalCharacterError`)
+  `build_run_workbook()`이 예외 → 다운로드 콜백이 조용히 실패. 질문 수가 많고 LLM 출력이 길수록 걸릴 확률이 높다.
+- 수정: `services/ai_search_lab.py`에 `_xl_clean/_xl_append` 추가, 시트에 쓰는 모든 값에서 제어문자 제거.
+  (제안 시트·요약·작성 방법 포함.) 제어문자가 든 합성 실행으로 생성 확인, tests/test_ai_search_lab.py 통과.
+- 참고: 다운로드는 "④ 결과"의 **실행 선택** 드롭다운에서 실행을 고른 상태여야 동작한다(미선택이면 아무 반응 없음).

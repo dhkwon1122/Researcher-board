@@ -632,6 +632,16 @@ def start_generate(categories: list[str], per_category: int, include_golden: boo
 
 # ── 엑셀 ─────────────────────────────────────────────────────────────────────
 
+def _xl_clean(v):
+    """LLM 응답/SQL에 섞인 제어문자는 openpyxl이 거부(IllegalCharacterError)하므로 제거한다."""
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+    return ILLEGAL_CHARACTERS_RE.sub('', v) if isinstance(v, str) else v
+
+
+def _xl_append(ws, row):
+    ws.append([_xl_clean(v) for v in row])
+
+
 def build_run_workbook(run: dict) -> bytes:
     from openpyxl import Workbook
     from openpyxl.styles import Font
@@ -646,7 +656,7 @@ def build_run_workbook(run: dict) -> bytes:
     for r in run.get('results') or []:
         g, j = r.get('golden') or {}, r.get('judge') or {}
         sample = '\n'.join(', '.join(row) for row in (r.get('sample_rows') or [])[:5])
-        ws.append([len(ws['A']), r['category'], r['question'], r['status'], r['intent'], r['row_count'],
+        _xl_append(ws, [len(ws['A']), r['category'], r['question'], r['status'], r['intent'], r['row_count'],
                    r['total_rows'], r['seconds'], g.get('f1'), g.get('precision'), g.get('recall'),
                    j.get('score'), j.get('issue_type'), j.get('reason'), ', '.join(r['flags']), r.get('sql'),
                    (r.get('answer') or r.get('note') or ''), sample])
@@ -674,16 +684,16 @@ def build_run_workbook(run: dict) -> bytes:
 
     s = run.get('summary') or summarize(run)
     ws2 = wb.create_sheet('요약')
-    ws2.append(['항목', '값'])
+    _xl_append(ws2, ['항목', '값'])
     for k, v in (('실행 이름', run.get('label')), ('시작', run.get('started')), ('종료', run.get('finished')),
                  ('질문 수', s['n']), ('양호', s['양호']), ('주의', s['주의']), ('실패', s['실패']),
                  ('평균 심사 점수', s['avg_score']), ('평균 정답 대조 F1', s['avg_f1']),
                  ('평균 응답 시간(초)', s['avg_seconds'])):
-        ws2.append([k, v])
-    ws2.append([])
-    ws2.append(['카테고리', '질문 수', '양호', '주의', '실패'])
+        _xl_append(ws2, [k, v])
+    _xl_append(ws2, [])
+    _xl_append(ws2, ['카테고리', '질문 수', '양호', '주의', '실패'])
     for cat, c in s['by_category'].items():
-        ws2.append([cat, c['n'], c.get('양호', 0), c.get('주의', 0), c.get('실패', 0)])
+        _xl_append(ws2, [cat, c['n'], c.get('양호', 0), c.get('주의', 0), c.get('실패', 0)])
     guide = wb.create_sheet('작성 방법')
     for line in ['결과가 잘못된 질문의 노란 열(오른쪽 끝 5개)을 채워 AI 검색 테스트 탭에 다시 올리세요.', '',
                  '올바른 결과/접근방법 : 이 질문은 어떻게 풀어야 하는지 자유롭게 서술',
@@ -694,12 +704,12 @@ def build_run_workbook(run: dict) -> bytes:
                  '   예시 = 이 질문의 올바른 접근/SQL을 검증된 예시로 저장 → 비슷한 질문에 예시로 붙음',
                  '   코드 = 프롬프트로 해결 불가, 스크립트 수정 필요 → 코드 수정 요청서로 내려받아 개발 쪽에 전달',
                  '규칙 문장 : 반영 구분이 "규칙"일 때 쓸 한 줄(300자 이내)']:
-        guide.append([line])
+        _xl_append(guide, [line])
     guide.column_dimensions['A'].width = 110
     if run.get('suggestion'):
         ws3 = wb.create_sheet('개선 제안')
         for line in run['suggestion'].splitlines():
-            ws3.append([line])
+            _xl_append(ws3, [line])
         ws3.column_dimensions['A'].width = 120
     buf = io.BytesIO()
     wb.save(buf)
