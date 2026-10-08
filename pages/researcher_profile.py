@@ -146,6 +146,23 @@ def _load_selector_data(current_only: bool = True):
         return [], [], {}
 
 
+def _filtered_researcher_opts(current_only: bool, l1=None, l2=None, l3=None) -> list:
+    """플랫폼/팀(l1) · 플랫폼/그룹(l2) · 과제/파트(l3) 선택에 맞는 연구원 옵션
+    (2026-10-08 — 예전 '부서' 하나를 팀 레벨 3단계로 나눴다). 선택이 없으면 전체."""
+    try:
+        full_df = read_processed('researchers')
+        if full_df.empty:
+            return []
+        res_df = filter_current(full_df, current_only)
+        dep_map, pjt_map = similarity_map.org_code_label_maps()
+        codes = similarity_map.org_codes_for_levels(l1, l2, l3)
+        if codes is not None:
+            res_df = res_df[res_df['org_code'].isin(codes)] if 'org_code' in res_df.columns else res_df.iloc[0:0]
+        return [_opt(row, dep_map, pjt_map) for _, row in res_df.sort_values(['department', 'name']).iterrows()]
+    except Exception:
+        return []
+
+
 def _mail_profile_modal():
     """"프로필 인쇄 (A4)"가 화면에 만드는 것과 동일한 콘텐츠를 헤드리스
     브라우저(Playwright, services/profile_pdf.py)로 PDF 캡처해 메일에
@@ -283,6 +300,8 @@ def layout(id=None, ids=None, **_kwargs):
     # 그대로 해당 인물을 연다.
     default_rid = None
     default_dept = ''
+    default_group = ''
+    default_project = ''
     res_opts = all_opts
 
     if id is not None:
@@ -299,8 +318,10 @@ def layout(id=None, ids=None, **_kwargs):
                 res_df = read_processed('researchers')
                 match = res_df[res_df['researcher_id'] == id]
                 if not match.empty:
-                    default_dept = similarity_map.dep_name_for_org_code(str(match.iloc[0].get('org_code', '')))
-                    res_opts = by_dept.get(default_dept, all_opts)
+                    default_dept, default_group, default_project = similarity_map.org_code_level_names(
+                        str(match.iloc[0].get('org_code', '')))
+                    res_opts = _filtered_researcher_opts(default_mode != 'all', default_dept or None,
+                                                         default_group or None, default_project or None) or all_opts
             except Exception:
                 pass
 
@@ -331,7 +352,8 @@ def layout(id=None, ids=None, **_kwargs):
         _print_progress_overlay(),
         dcc.Store(id='print-ready', data=False),
         html.Div([
-            _selector_card(dept_opts, res_opts, default_dept, default_rid, default_mode),
+            _selector_card(dept_opts, res_opts, default_dept, default_rid, default_mode,
+                           default_group, default_project),
             dbc.Row([
                 _left_stack_col(show_eval, show_comments),
                 _right_column(),
@@ -425,7 +447,8 @@ def _bulk_layout(ids_param):
     ])
 
 
-def _selector_card(dept_opts, res_opts, default_dept, default_rid, default_mode='current'):
+def _selector_card(dept_opts, res_opts, default_dept, default_rid, default_mode='current',
+                   default_group='', default_project=''):
     return dbc.Card(
         dbc.CardBody([
             dbc.Row([
@@ -443,14 +466,37 @@ def _selector_card(dept_opts, res_opts, default_dept, default_rid, default_mode=
                     ),
                 ], width='auto'),
                 dbc.Col([
-                    dbc.Label('부서', className='fw-semibold small text-muted mb-1'),
+                    dbc.Label('플랫폼/팀', className='fw-semibold small text-muted mb-1'),
                     dcc.Dropdown(
                         id='dept-select',
-                        options=dept_opts,
+                        options=[o for o in dept_opts if o.get('value')],
                         value=default_dept or None,
                         clearable=True,
                         placeholder='전체',
-                        style={'minWidth': '200px'},
+                        style={'minWidth': '170px'},
+                    ),
+                ], width='auto'),
+                dbc.Col([
+                    dbc.Label('플랫폼/그룹', className='fw-semibold small text-muted mb-1'),
+                    dcc.Dropdown(
+                        id='group-select',
+                        options=similarity_map.level_filter_options(2, {1: default_dept} if default_dept else None),
+                        value=default_group or None,
+                        clearable=True,
+                        placeholder='전체',
+                        style={'minWidth': '170px'},
+                    ),
+                ], width='auto'),
+                dbc.Col([
+                    dbc.Label('과제/파트', className='fw-semibold small text-muted mb-1'),
+                    dcc.Dropdown(
+                        id='project-select',
+                        options=similarity_map.level_filter_options(
+                            3, {k: v for k, v in ((1, default_dept), (2, default_group)) if v} or None),
+                        value=default_project or None,
+                        clearable=True,
+                        placeholder='전체',
+                        style={'minWidth': '170px'},
                     ),
                 ], width='auto'),
                 dbc.Col([
@@ -1296,16 +1342,45 @@ def _current_status_badge(researcher):
 
 
 @callback(
+    Output('group-select', 'options'),
+    Output('group-select', 'value'),
+    Input('dept-select', 'value'),
+    State('group-select', 'value'),
+    prevent_initial_call=True,
+)
+def update_group_options(dept, current_group):
+    """플랫폼/팀을 고르면 그 아래 플랫폼/그룹만 보이게(캐스케이딩). 현재 선택값이
+    새 옵션에 아직 있으면 유지한다(최근 검색 칩이 세 값을 한꺼번에 채울 때 필요)."""
+    opts = similarity_map.level_filter_options(2, {1: dept} if dept else None)
+    return opts, (current_group if current_group in {o['value'] for o in opts} else None)
+
+
+@callback(
+    Output('project-select', 'options'),
+    Output('project-select', 'value'),
+    Input('dept-select', 'value'),
+    Input('group-select', 'value'),
+    State('project-select', 'value'),
+    prevent_initial_call=True,
+)
+def update_project_options(dept, group, current_project):
+    parents = {k: v for k, v in ((1, dept), (2, group)) if v}
+    opts = similarity_map.level_filter_options(3, parents or None)
+    return opts, (current_project if current_project in {o['value'] for o in opts} else None)
+
+
+@callback(
     Output('researcher-select', 'options'),
     Output('researcher-select', 'value'),
     Input('dept-select', 'value'),
+    Input('group-select', 'value'),
+    Input('project-select', 'value'),
     Input('profile-search-mode', 'value'),
     State('researcher-select', 'value'),
     prevent_initial_call=True,
 )
-def filter_by_dept(dept, mode, current_rid):
-    _, all_opts, by_dept = _load_selector_data(current_only=(mode != 'all'))
-    opts = by_dept.get(dept, all_opts) if dept else all_opts
+def filter_by_dept(dept, group, project, mode, current_rid):
+    opts = _filtered_researcher_opts(mode != 'all', dept, group, project)
     valid_ids = {o['value'] for o in opts}
     new_value = current_rid if current_rid in valid_ids else (opts[0]['value'] if opts else None)
     return opts, new_value
@@ -1419,6 +1494,8 @@ def _clear_history(n_clicks):
 
 @callback(
     Output('dept-select', 'value'),
+    Output('group-select', 'value', allow_duplicate=True),
+    Output('project-select', 'value', allow_duplicate=True),
     Output('researcher-select', 'value', allow_duplicate=True),
     Input({'type': 'researcher-history-chip', 'rid': dash.ALL}, 'n_clicks'),
     State({'type': 'researcher-history-chip', 'rid': dash.ALL}, 'id'),
@@ -1431,15 +1508,16 @@ def _select_from_history(n_clicks_list, ids):
     빠져 있어 선택이 무시될 수 있다."""
     triggered_id = dash.ctx.triggered_id
     if not triggered_id:
-        return no_update, no_update
+        return no_update, no_update, no_update, no_update
     idx = next((i for i, d in enumerate(ids) if d == triggered_id), None)
     if idx is None or not n_clicks_list[idx]:
-        return no_update, no_update
+        return no_update, no_update, no_update, no_update
     rid = triggered_id['rid']
     res_df = read_processed('researchers')
     match = res_df[res_df['researcher_id'] == rid]
-    dept = similarity_map.dep_name_for_org_code(str(match.iloc[0].get('org_code', ''))) if not match.empty else None
-    return (dept or None), rid
+    l1, l2, l3 = (similarity_map.org_code_level_names(str(match.iloc[0].get('org_code', '')))
+                  if not match.empty else ('', '', ''))
+    return (l1 or None), (l2 or None), (l3 or None), rid
 
 
 def _build_print_block(rid, tables, researchers, name_map, show_eval):

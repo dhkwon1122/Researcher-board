@@ -145,6 +145,14 @@ def _code_to_history_map(tasks_info_df: pd.DataFrame) -> dict:
         history.setdefault(code, []).append((wd, name))
     for code in history:
         history[code].sort(key=lambda pair: pair[0])
+        # 작성일 기준 전후 과제명이 같으면(재작성/재제출) 같은 과제로 보고 가장 이른
+        # 작성일 하나만 남긴다 — 이름이 실제로 바뀐 시점만 구간 경계가 되도록.
+        collapsed = []
+        for wd, name in history[code]:
+            if collapsed and collapsed[-1][1] == name:
+                continue
+            collapsed.append((wd, name))
+        history[code] = collapsed
     return history
 
 

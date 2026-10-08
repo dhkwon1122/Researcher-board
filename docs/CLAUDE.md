@@ -13747,3 +13747,19 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 앱은 DATABASE_URL이 있으면 파일보다 DB를 먼저 읽는데, 파이프라인은 파일만 저장해 분석 결과가 화면에 반영되지 않았다.
 - `run_integration.py` 3/3단계로 `load_to_db.load()`를 호출. DATABASE_URL 미설정이면 안내만 출력하고 정상 종료,
   DB 접속 실패 등 예외도 실행 실패로 취급하지 않고 안내만(파일 결과는 이미 저장됨). `--skip-db-load`로 건너뛸 수 있다.
+
+## 2026-10-08 (5): 타임라인 과제명 구간 병합 + 부서 검색을 1·2·3단계(플랫폼/팀·플랫폼/그룹·과제/파트)로 분리
+
+1. **과제명 이력(타임라인/과제 표)**: 같은 과제코드의 개명 이력(`tasks_information` 작성일×과제명)에서 작성일 기준
+   **전후 과제명이 같으면 같은 과제로 보고 가장 이른 작성일만** 경계로 쓴다(`process_tasks._code_to_history_map`).
+   예) 머터리얼2(2026-03-08/2025-02-04/2024-11-01)+머터리얼(2023-01-01) → 머터리얼 '23.01~'24.10, 머터리얼2 '24.11~진행중.
+   **반영하려면 과제참여이력(tasks)을 다시 실행**해야 한다(tasks.csv의 the_task_name이 바뀜).
+2. **부서 검색 3단계화**: 연구원 프로필 검색·연구원 명단 검색 모두 '부서' 하나 → 플랫폼/팀(1단계)·플랫폼/그룹(2단계)·
+   과제/파트(3단계) 세 드롭다운(상위 선택 시 하위 옵션이 좁혀지는 캐스케이딩, 선택값이 새 옵션에 없으면 해제).
+   - `services/similarity_map`: `level_filter_options(level, parents, period)`, `org_codes_for_levels(l1,l2,l3,period)`
+     (선택 단계끼리 AND), `org_code_level_names(org_code)`; 과거포함 조회(`researcher_ids_ever_matching_org_field`)도
+     `dep_2nd_name` 지원(타임라인을 (팀,그룹,과제) 3단계 이름으로 확장). 각 단계 이름은 `own_level_name`(org_name_wd 우선).
+   - 연구원 프로필: `dept-select`(팀) + `group-select` + `project-select`, 최근 검색 칩이 세 값을 함께 채움.
+   - 연구원 명단: `filter-dept`(팀)·`filter-group`·`filter-project`, 필터 초기화/기간 지정/모드 전환 콜백 연동.
+   - 직책 단위 리프가 2단계 조직(직접 소속)이면 과제/파트는 비어 있다(그룹까지만 선택 가능).
+3. 검증: 합성 조직도로 옵션/캐스케이딩/org_code 집합, 샘플 데이터로 명단 필터(전체 50 / 팀 20 / 그룹 10 / 불일치 AND 0), 두 페이지 레이아웃 렌더링, pytest 55 passed.
