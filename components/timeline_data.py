@@ -52,7 +52,9 @@ def task_points(task_df):
         return []
     today = pd.Timestamp(datetime.now().date())
     points = []
-    for _, row in task_df.iterrows():
+    from services.task_history import close_stale_open_rows
+    rows = close_stale_open_rows(task_df.to_dict('records'), close_with='start')
+    for row in rows:
         start = parse_ts(row.get('start_date'))
         if start is None:
             continue

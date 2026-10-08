@@ -35,6 +35,33 @@ def task_display_name(row: dict, name_key: str = 'the_task_name', fallback_key: 
     return _s(row.get(name_key)) or _s(row.get(fallback_key)) or '-'
 
 
+def close_stale_open_rows(items: list, *, name_key: str = 'the_task_name', fallback_key: str = 'task_name',
+                          start_key: str = 'start_date', end_key: str = 'end_date',
+                          close_with: str = 'end') -> list:
+    """종료일이 비어 있는('진행중') 행이라도, 같은 과제명으로 그보다 *나중에 시작해서
+    이미 종료된* 행이 있으면 그 진행중 행은 낡은 데이터(재업로드 후 남은 잔재 등)로
+    보고 종료 처리한다 — 이후 구간이 끝났는데 앞 구간만 계속 '진행중'으로 남아
+    과제 전체가 진행중으로 보이던 문제(2026-10-08, 종료 20260922 과제)를 막는다.
+
+    close_with='end'면 나중 행의 종료일, 'start'면 나중 행의 시작일로 닫는다.
+    원본은 건드리지 않고 복사본 리스트를 반환한다."""
+    from pipeline.excel_reader import parse_yyyymmdd
+    out = [dict(t) for t in items]
+    info = []
+    for t in out:
+        info.append((task_display_name(t, name_key, fallback_key),
+                     parse_yyyymmdd(t.get(start_key)), parse_yyyymmdd(t.get(end_key))))
+    for i, (name, st, en) in enumerate(info):
+        if en or not st:
+            continue
+        later = [info[j] for j in range(len(out))
+                 if j != i and info[j][0] == name and info[j][2] and info[j][1] and info[j][1] > st]
+        if later:
+            later.sort(key=lambda x: x[1])
+            out[i][end_key] = later[-1][2] if close_with == 'end' else later[0][1]
+    return out
+
+
 def merge_task_rows(items: list, *, name_key: str = 'the_task_name', fallback_key: str = 'task_name',
                      start_key: str = 'start_date', end_key: str = 'end_date') -> list:
     """과제명별로 참여 구간을 연도 기준으로 병합한다(모듈 독스트링 참고).
@@ -53,6 +80,8 @@ def merge_task_rows(items: list, *, name_key: str = 'the_task_name', fallback_ke
     불가능하므로 병합하지 않고 하나씩 그대로 남긴다."""
     by_name: dict = {}
     order: list = []
+    items = close_stale_open_rows(items, name_key=name_key, fallback_key=fallback_key,
+                                  start_key=start_key, end_key=end_key)
     for t in items:
         name = task_display_name(t, name_key, fallback_key)
         by_name.setdefault(name, []).append(t)

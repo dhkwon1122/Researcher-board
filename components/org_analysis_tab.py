@@ -235,21 +235,33 @@ def _competency_table(item: dict) -> html.Div:
                      style={'fontSize': '0.78rem', 'tableLayout': 'fixed'})
 
 
+def _project_options(l1, l2) -> list:
+    """플랫폼/그룹 선택에 속하는 과제 옵션. 연구원 프로필·연구원 명단과 같은 기준(팀/리더 참조의
+    1/2/3단계부서명 칸 값 → org_code)으로 고른 뒤, 과제명(꼬리표·공백 제거)이 그 org_code와
+    일치하는 분석 과제만 남긴다. 아무것도 선택하지 않으면 전체(팀/리더 참조에 없는 과제 포함)."""
+    from pipeline.researcher_fit import normalize_org_code
+    from services import similarity_map as sm
+
+    items = _gap_items()
+    codes = sm.org_codes_for_levels(l1, l2, None)
+    if codes is not None:
+        wanted = {normalize_org_code(c) for c in codes}
+        items = [i for i in items if normalize_org_code(i.get('project_name', '')) in wanted]
+    return sorted(({'label': i.get('project_name', ''), 'value': i.get('project_name', '')} for i in items),
+                  key=lambda o: o['label'])
+
+
 @callback(Output('org-gap-l2', 'options'), Output('org-gap-l2', 'value'),
           Input('org-gap-l1', 'value'))
 def _gap_l2_options(l1):
-    items = [i for i in _gap_items() if not l1 or _lv(i, 'level1') == l1]
-    return _opts(_lv(i, 'level2') for i in items), None
+    from services import similarity_map as sm
+    return sm.level_filter_options(2, {1: l1} if l1 else None), None
 
 
 @callback(Output('org-gap-project', 'options'), Output('org-gap-project', 'value'),
           Input('org-gap-l1', 'value'), Input('org-gap-l2', 'value'))
 def _gap_project_options(l1, l2):
-    items = [i for i in _gap_items()
-             if (not l1 or _lv(i, 'level1') == l1) and (not l2 or _lv(i, 'level2') == l2)]
-    opts = [{'label': (_lv(i, 'level3') if _lv(i, 'level3') != _NO_LEVEL else i.get('project_name', '')),
-             'value': i.get('project_name', '')} for i in items]
-    return sorted(opts, key=lambda o: o['label']), None
+    return _project_options(l1, l2), None
 
 
 @callback(Output('org-gap-detail', 'children'), Input('org-gap-project', 'value'))
@@ -279,16 +291,15 @@ def competency_gap_section() -> html.Div:
     items = _gap_items()
     if not items:
         return _section(title, hint, _empty('데이터 없음 — pipeline/run_analysis.py(5/5 과제별 역량 갭) 실행 후 표시됩니다.'))
+    from services import similarity_map as sm
     drop = lambda id_, label, opts: dbc.Col([
         dbc.Label(label, className='small fw-semibold text-muted mb-1'),
         dcc.Dropdown(id=id_, options=opts, placeholder='전체' if id_ != 'org-gap-project' else '과제 선택', clearable=True),
     ], md=4)
     controls = dbc.Row([
-        drop('org-gap-l1', '플랫폼', _opts(_lv(i, 'level1') for i in items)),
-        drop('org-gap-l2', '그룹', _opts(_lv(i, 'level2') for i in items)),
-        drop('org-gap-project', '과제', sorted(
-            ({'label': (_lv(i, 'level3') if _lv(i, 'level3') != _NO_LEVEL else i.get('project_name', '')),
-              'value': i.get('project_name', '')} for i in items), key=lambda o: o['label'])),
+        drop('org-gap-l1', '플랫폼', sm.level_filter_options(1)),
+        drop('org-gap-l2', '그룹', sm.level_filter_options(2)),
+        drop('org-gap-project', '과제', _project_options(None, None)),
     ], className='g-2 mb-3')
     return _section(title, hint, html.Div([controls, html.Div(id='org-gap-detail')]))
 
