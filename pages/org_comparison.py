@@ -76,6 +76,17 @@ def _section(title, body):
     ], className='bg-light rounded p-2')
 
 
+def _pad_li_slots(items: list, n: int = 3) -> list:
+    """목록 항목을 최소 n개 슬롯으로 맞춘다 — 실제 항목이 n개보다 적으면
+    보이지 않는(visibility: hidden) 빈 <li>로 채워 칸을 고정한다(2026-10-08,
+    사용자 요청 — 학력·시상이력 줄 수가 카드마다 다르면 그 위의 사진 위치도
+    카드마다 달라져, 항상 n줄만큼 높이를 차지하게 한다)."""
+    padded = list(items)
+    while len(padded) < n:
+        padded.append(html.Li(' ', className='small', style={'visibility': 'hidden'}))
+    return padded
+
+
 def _parse_date(v):
     if v is None:
         return None
@@ -182,8 +193,10 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur, inc,
                 f"{deg}  {r0.get('school', '-')}  {r0.get('major', '-')}",
                 className='small',
             ))
+    if not edu_items:
+        edu_items = [html.Li('데이터 없음', className='small text-muted')]
     edu_section = _section('학력', html.Ul(
-        edu_items or [html.Li('데이터 없음', className='small text-muted')],
+        _pad_li_slots(edu_items),
         className='ps-3 mb-0 small',
     ))
 
@@ -199,19 +212,26 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur, inc,
         desc  = str(aw.get('description', '')).strip()
         yr_label = f"'{yr[-2:]}" if len(yr) >= 2 else yr
         parts = [p for p in [yr_label, aname, desc] if p and p not in ('nan',)]
+        # line-clamp 스타일을 <li>에 직접 주면 display:-webkit-box가 기본
+        # list-item 표시를 덮어써 목록 점(•)이 사라진다 — 안쪽 <span>에만
+        # 적용해 <li>는 기본 표시를 유지하도록 분리한다(2026-10-08 수정).
         award_items.append(html.Li(
-            ' / '.join(parts) if parts else '-',
+            html.Span(
+                ' / '.join(parts) if parts else '-',
+                style={
+                    'display': '-webkit-box',
+                    'WebkitLineClamp': '1',
+                    'WebkitBoxOrient': 'vertical',
+                    'overflow': 'hidden',
+                    'textOverflow': 'ellipsis',
+                },
+            ),
             className='small',
-            style={
-                'display': '-webkit-box',
-                'WebkitLineClamp': '1',
-                'WebkitBoxOrient': 'vertical',
-                'overflow': 'hidden',
-                'textOverflow': 'ellipsis',
-            },
         ))
+    if not award_items:
+        award_items = [html.Li('해당 없음', className='small text-muted')]
     award_section = _section('주요 시상이력', html.Ul(
-        award_items or [html.Li('해당 없음', className='small text-muted')],
+        _pad_li_slots(award_items),
         className='ps-3 mb-0 small',
     ))
 
