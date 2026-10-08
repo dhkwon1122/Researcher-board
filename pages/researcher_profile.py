@@ -68,7 +68,7 @@ TABS_CONTENT_HEIGHT = 260
 
 # 우측 타임라인 카드 맨 위에 얹는 LLM 요약 블록의 고정 높이. 나머지는 타임라인이
 # flex:1로 채운다(SECTION_HEIGHT 총합 자체는 바꾸지 않아 좌측 스택과 하단이 계속 맞음).
-LLM_SUMMARY_HEIGHT = 150
+LLM_SUMMARY_HEIGHT = 300  # 기본 높이(2026-10-08 150→300). 화면에서 아래 모서리를 끌어 조절 가능
 
 
 def _locked_block(label: str = '', *, icon_only: bool = False):
@@ -599,10 +599,14 @@ def _right_column():
                 html.Div([
                     html.P('전문성 요약(LLM)', style={'fontSize': '0.85rem', 'fontWeight': 600,
                                             'color': '#1f1f1f'}, className='mb-1'),
-                    html.Div(id='llm-summary-block', style={'maxHeight': f'{LLM_SUMMARY_HEIGHT - 28}px',
-                                                             'overflowY': 'auto'}),
-                ], style={'flex': '0 0 auto', 'height': f'{LLM_SUMMARY_HEIGHT}px',
-                          'overflow': 'hidden', 'marginBottom': '8px'}),
+                    html.Div(id='llm-summary-block', style={'height': 'calc(100% - 28px)', 'overflowY': 'auto'}),
+                # 오른쪽 아래 모서리를 끌어 전문성 요약 높이를 조절한다 — 타임라인은 남는 높이를
+                # 자동으로 채운다(flex 1). 기본 높이는 LLM_SUMMARY_HEIGHT.
+                ], className='llm-summary-resizable',
+                   style={'flex': '0 0 auto', 'height': f'{LLM_SUMMARY_HEIGHT}px', 'minHeight': '90px',
+                          'maxHeight': f'{SECTION_HEIGHT - 150}px',
+                          'resize': 'vertical', 'overflow': 'hidden', 'marginBottom': '8px',
+                          'borderBottom': '1px dashed #d9d9d9'}),
                 html.P('타임라인', style={'fontSize': '0.85rem', 'fontWeight': 600,
                                        'color': '#1f1f1f', 'flex': '0 0 auto'}, className='mb-2'),
                 html.Div(id='tab-timeline', style={'flex': '1 1 auto', 'minHeight': '0', 'overflow': 'hidden'}),

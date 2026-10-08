@@ -235,6 +235,13 @@ def _ai_tag():
     ], style=_AI_TAG_STYLE)
 
 
+_CONTRIBUTION_DEFS = {
+    '주도형': '주도형 : 논문 주저자·교신 비율 또는 특허 대표발명자 비율이 50% 이상 (실적 3건 이상인 원천 기준)',
+    '참여형': '참여형 : 실적 3건 이상인 원천의 주도 비율이 모두 50% 미만 (공저·참여 중심)',
+    '판정보류': '판정보류 : 논문·특허 실적이 3건 미만이라 유형을 판단하지 않음',
+}
+TENURE_DEFS = {'Junior': '주니어 : CL3-4년차 이하', 'Senior': '시니어 : CL3-5년차 이상'}
+
 _CONTRIBUTION_COLORS = {'주도형': 'success', '참여형': 'info', '판정보류': 'light'}
 
 
@@ -273,7 +280,8 @@ def contribution_badge_row(contribution: dict | None):
     color = _CONTRIBUTION_COLORS.get(ctype, 'light')
     return html.Div([
         html.Span('연구 기여 유형', className='small text-muted fw-semibold me-2'),
-        dbc.Badge(ctype, color=color, text_color='dark' if color == 'light' else None, className='me-2'),
+        html.Span(dbc.Badge(ctype, color=color, text_color='dark' if color == 'light' else None, className='me-2'),
+                  title=_CONTRIBUTION_DEFS.get(ctype, ''), style={'cursor': 'help'}),
         html.Span(' / '.join(parts) or '논문·특허 실적 없음', className='small text-muted'),
     ], title=str(contribution.get('contribution_basis') or ''), className='d-flex align-items-center flex-wrap mb-2')
 
@@ -364,14 +372,17 @@ def llm_summary_block(profile: dict | None, similar: list | None = None, name_ma
     focus = profile.get('current_focus_fields') or []
     past = profile.get('past_fields') or []
     if (focus or past) and not deemphasize_strength:
-        line = []
+        # 현재(위)·과거(아래)를 한 카드로 합쳐 보여준다(2026-10-08).
+        rows = []
         if focus:
-            line += [html.Span('현재 주력', className='small text-muted fw-semibold me-1')] + [
-                dbc.Badge(f, color='primary', className='me-1 mb-1') for f in focus]
+            rows.append(html.Div([html.Span('현재 주력', className='small text-muted fw-semibold me-2')] + [
+                dbc.Badge(f, color='primary', className='me-1 mb-1') for f in focus],
+                className='d-flex align-items-center flex-wrap'))
         if past:
-            line += [html.Span('과거 주력', className='small text-muted fw-semibold ms-2 me-1')] + [
-                dbc.Badge(f, color='light', text_color='secondary', className='me-1 mb-1') for f in past]
-        children.append(html.Div(line, className='d-flex align-items-center flex-wrap mt-2'))
+            rows.append(html.Div([html.Span('과거 주력', className='small text-muted fw-semibold me-2')] + [
+                dbc.Badge(f, color='light', text_color='secondary', className='me-1 mb-1 border') for f in past],
+                className='d-flex align-items-center flex-wrap'))
+        children.append(html.Div(rows, className='border rounded p-2 mt-2'))
     if responsibilities and include_responsibilities:
         children.append(html.Div('주요 역할·책임', className='small text-muted fw-semibold mt-2 mb-1'))
         children.append(bullet_list(responsibilities))
@@ -388,7 +399,8 @@ def llm_summary_block(profile: dict | None, similar: list | None = None, name_ma
     if senior or junior:
         def _badge(s, color):
             rid = s.get('researcher_id', '')
-            return dbc.Badge(name_map.get(rid, rid), color=color, className='me-1 mb-1')
+            return dbc.Badge(name_map.get(rid, rid), color=color, className='me-1 mb-1',
+                             title=TENURE_DEFS['Senior' if color == 'primary' else 'Junior'])
 
         # 시니어=파란색(primary)/주니어=하늘색(info) 배지 색 구분을 처음 보는
         # 사람은 알 수 없어(2026-09-02, 사용자 확정) 라벨 옆에 색상이 일치하는
@@ -399,8 +411,9 @@ def llm_summary_block(profile: dict | None, similar: list | None = None, name_ma
             html.Div([
                 html.Span('유사 연구원', className='small text-muted fw-semibold'),
                 html.Span([
-                    legend_dot('primary'), '시니어',
-                    html.Span(legend_dot('info'), className='ms-2'), '주니어',
+                    html.Span([legend_dot('primary'), '시니어'], title=TENURE_DEFS['Senior'], style={'cursor': 'help'}),
+                    html.Span([legend_dot('info'), '주니어'], title=TENURE_DEFS['Junior'],
+                              className='ms-2', style={'cursor': 'help'}),
                 ], className='small text-muted ms-2 d-inline-flex align-items-center'),
             ], className='d-flex align-items-center mt-2 mb-1'),
             html.Div([_badge(s, 'primary') for s in senior] + [_badge(s, 'info') for s in junior]),
