@@ -13792,3 +13792,15 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 검증: 규칙 블록 보존/롤백/상한, 예시 힌트(임베딩 없이 정확 일치), 프롬프트 주입, 엑셀 왕복, 코드 요청서/정답 편입을
   테스트(tests/test_nl_query_curation.py)로 확인, 샘플 데이터로 SQL 실행 검증과 UI 콜백 전 흐름 확인, pytest 55 passed.
   **실제 내부 LLM에서 예시/규칙이 점수를 올리는지는 서버에서 같은 질문 세트로 반영 전후를 비교해 확인 필요.**
+
+## 2026-10-08: AI 검색 테스트 가이드 HTML + 컨테이너 시간대를 서울(KST)로 고정
+
+- **가이드 문서**: `docs/AI검색_테스트_가이드.html` 신설 — 관리자 "AI 검색 테스트" 탭의 질문 만들기/일괄 실행/품질 평가/
+  결과·비교·엑셀/개선 반영(규칙·예시·코드 요청서)/관리·이력/운영 순서를 한 문서로 정리(브라우저로 열어 읽는 정적 HTML).
+- **시간대**: 앱 로그·실행 이력·화면의 시각이 `datetime.now()`(서비스/파이프라인 57곳)라 컨테이너 TZ를 따르는데,
+  python:3.11-slim 이미지는 기본 UTC + tzdata 없음이라 서울 기준보다 9시간 늦게 보였다.
+  - `Dockerfile`/`Dockerfile.embed`: `tzdata` 설치 + `ENV TZ=Asia/Seoul`.
+  - `docker-compose.yml`: `db`(`TZ`, `PGTZ`)·`app`·`bge-embed`에 `TZ: ${TZ:-Asia/Seoul}` — `.env`에 `TZ=`를 넣으면 덮어씀.
+    nginx/ollama는 앱 시각과 무관해 제외.
+  - 적용: `git pull` 후 `docker compose up -d --build`(tzdata 설치 때문에 이미지 재빌드 필요). 확인: `docker compose exec app date`.
+  - 이미 저장된 시각(실행 이력 CSV, 로그 파일)은 변환되지 않는다 — 앞으로 기록되는 값부터 KST.

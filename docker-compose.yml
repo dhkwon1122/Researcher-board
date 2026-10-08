@@ -7,6 +7,9 @@ services:
     container_name: researcher_board_db
     profiles: ["bundled-db"]
     environment:
+      # 한국 표준시 — DB 로그/now() 시각 기준(PGTZ는 클라이언트 세션 기본 시간대)
+      TZ: ${TZ:-Asia/Seoul}
+      PGTZ: ${TZ:-Asia/Seoul}
       POSTGRES_USER: postgres
       # 기본값 "postgres"는 개발용 임시값 — 운영/외부 노출 환경에서는 반드시
       # .env 에 POSTGRES_PASSWORD 를 직접 채워 넣을 것(하드코딩된 기본 비밀번호를
@@ -51,6 +54,8 @@ services:
     # 도커 네트워크 안에서 컨테이너끼리 통신하는 내부 포트라 위 5433(호스트 노출
     # 포트)과는 별개이며 그대로 5432를 쓴다(db 서비스의 ports 설명 참고).
     environment:
+      # 한국 표준시(KST) — 로그/화면/실행 이력 시각 기준. .env에 TZ를 넣으면 덮어쓴다.
+      TZ: ${TZ:-Asia/Seoul}
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set in .env}
       PORT: "8501"
       # gunicorn 워커 타임아웃(초) — Dockerfile의 CMD 참고. LLM2_TIMEOUT보다
@@ -227,6 +232,7 @@ services:
     container_name: researcher_board_bge_embed
     profiles: ["embed"]
     environment:
+      TZ: ${TZ:-Asia/Seoul}
       EMBED_MODEL: ${EMBED_MODEL:-bge-m3}
       EMBED_API_KEY: ${EMBED_API_KEY:?EMBED_API_KEY must be set in .env}
       EMBED_MAX_ITEMS: ${EMBED_MAX_ITEMS:-64}

@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 검색 테스트 · 개선 가이드</title>
+<style>
+  :root {
+    --bg: #f3f4f7; --panel: #ffffff; --line: #e2e4ea;
+    --ink: #1a1d29; --ink-soft: #6b7080;
+    --accent: #4453d6; --accent-weak: rgba(68,83,214,0.08);
+    --good: #1f8a5f; --good-weak: rgba(31,138,95,0.1);
+    --warn: #a3720a; --warn-weak: rgba(163,114,10,0.1);
+    --bad: #c23b3b; --bad-weak: rgba(194,59,59,0.09);
+    --code-bg: #eef0f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101218; --panel: #171a22; --line: #272b36;
+      --ink: #e7e8ee; --ink-soft: #8b8fa3;
+      --accent: #8b97f5; --accent-weak: rgba(139,151,245,0.12);
+      --good: #5fbf90; --good-weak: rgba(95,191,144,0.12);
+      --warn: #d1a444; --warn-weak: rgba(209,164,68,0.12);
+      --bad: #e87a7a; --bad-weak: rgba(232,122,122,0.12);
+      --code-bg: #20242f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--ink); margin: 0; line-height: 1.65;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 48px 24px 100px; }
+  h1 { font-size: 1.65rem; font-weight: 800; letter-spacing: -0.01em; margin: 0 0 6px; }
+  .subtitle { color: var(--ink-soft); font-size: 0.95rem; margin: 0 0 28px; }
+  nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 36px; }
+  nav a { font-size: 0.8rem; font-weight: 600; color: var(--accent); background: var(--accent-weak);
+    border-radius: 999px; padding: 5px 13px; text-decoration: none; }
+  h2 { font-size: 1.08rem; font-weight: 800; margin: 52px 0 16px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+  h2 .num { color: var(--accent); margin-right: 6px; }
+  h3 { font-size: 0.93rem; font-weight: 700; margin: 22px 0 8px; }
+  p { margin: 0 0 12px; }
+  ul, ol { margin: 0 0 12px; padding-left: 22px; }
+  li { margin-bottom: 5px; }
+  code { background: var(--code-bg); border-radius: 5px; padding: 1px 6px; font-size: 0.84em;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  pre { background: var(--code-bg); border-radius: 10px; padding: 14px 16px; overflow-x: auto; font-size: 0.82rem;
+    line-height: 1.55; margin: 0 0 14px; }
+  pre code { background: none; padding: 0; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 12px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 14px; margin-bottom: 14px; }
+  .grid .card { margin: 0; }
+  .grid .card h3 { margin-top: 0; font-size: 0.98rem; }
+  .grid .card p, .grid .card li { font-size: 0.86rem; color: var(--ink-soft); }
+  .badge { display: inline-block; font-size: 0.68rem; font-weight: 700; border-radius: 999px; padding: 3px 10px; margin-bottom: 10px;
+    color: var(--accent); background: var(--accent-weak); }
+  .badge.good { color: var(--good); background: var(--good-weak); }
+  .badge.warn { color: var(--warn); background: var(--warn-weak); }
+  .badge.bad { color: var(--bad); background: var(--bad-weak); }
+  .flow { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0; align-items: stretch; }
+  .step { flex: 1 1 140px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 13px 15px;
+    font-size: 0.82rem; position: relative; }
+  .step b { display: block; font-size: 0.86rem; margin-bottom: 4px; color: var(--accent); }
+  .step span { color: var(--ink-soft); }
+  .step + .step::before { content: "›"; position: absolute; left: -11px; top: 50%; transform: translateY(-50%);
+    color: var(--ink-soft); font-size: 1.1rem; }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; overflow: hidden; font-size: 0.84rem; margin-bottom: 14px; display: block; overflow-x: auto; }
+  th, td { text-align: left; padding: 9px 13px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: var(--accent-weak); font-weight: 700; white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  .note { border-left: 3px solid var(--warn); background: var(--warn-weak); border-radius: 0 10px 10px 0;
+    padding: 12px 16px; font-size: 0.86rem; margin: 14px 0; }
+  .note.good { border-color: var(--good); background: var(--good-weak); }
+  .note.bad { border-color: var(--bad); background: var(--bad-weak); }
+  .st { font-weight: 700; } .st.ok { color: var(--good); } .st.mid { color: var(--warn); } .st.no { color: var(--bad); }
+  @media print { body { background: #fff; } nav { display: none; } .wrap { padding-top: 12px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>AI 검색 테스트 · 개선 가이드</h1>
+<p class="subtitle">연구원 명단 AI 검색의 질문/답변 품질을 높이기 위한 관리자 도구 — 질문 자동 생성 · 일괄 실행 · 품질 평가 · 개선 반영 (관리자 페이지 › "AI 검색 테스트" 탭)</p>
+
+<nav>
+  <a href="#overview">1. 한눈에 보기</a><a href="#generate">2. 질문 만들기</a><a href="#run">3. 일괄 실행</a>
+  <a href="#eval">4. 품질 평가</a><a href="#result">5. 결과 · 비교</a><a href="#improve">6. 개선 반영</a>
+  <a href="#manage">7. 관리 · 이력</a><a href="#ops">8. 운영 가이드</a>
+</nav>
+
+<!-- ───────────────────────── 1 ───────────────────────── -->
+<h2 id="overview"><span class="num">1</span>한눈에 보기</h2>
+<p>보유 데이터로 내부 LLM이 <b>사전 질문</b>을 만들고, 그 질문을 <b>실제 AI 검색과 똑같은 경로</b>로 실행해 결과를 평가합니다. 문제가 있는 질문은 엑셀에서 올바른 접근방법을 직접 적어 <b>규칙 · 예시 · 코드 수정 요청서</b>로 반영하고, 같은 질문 세트를 다시 돌려 전후 점수를 비교합니다.</p>
+
+<div class="flow">
+  <div class="step"><b>① 질문 만들기</b><span>LLM 생성 + 데이터로 정답을 계산하는 "정답 대조" 질문</span></div>
+  <div class="step"><b>② 목록 편집</b><span>수정·추가·삭제, 세트로 저장</span></div>
+  <div class="step"><b>③ 일괄 실행</b><span>서버 백그라운드, 오래 걸려도 OK</span></div>
+  <div class="step"><b>④ 결과 확인</b><span>정답 F1 · LLM 심사 · SQL · 엑셀</span></div>
+  <div class="step"><b>⑤ 개선 반영</b><span>엑셀 수정 후 업로드 → 규칙/예시/코드</span></div>
+  <div class="step"><b>⑥ 재실행·비교</b><span>이전 실행과 점수 변화 확인</span></div>
+</div>
+
+<div class="grid">
+  <div class="card"><span class="badge">안전</span><h3>실제 사용자 검색에 영향 없음</h3>
+    <p>테스트 실행은 일반 AI 검색 로그에 남지 않고, 시작한 관리자의 권한 범위에서만 조회합니다.</p></div>
+  <div class="card"><span class="badge">서버 실행</span><h3>화면을 닫아도 계속</h3>
+    <p>상태/결과를 서버 파일에 저장하므로 다른 화면으로 이동하거나 브라우저를 닫아도 이어집니다. 중지 버튼도 있습니다.</p></div>
+  <div class="card"><span class="badge warn">주의</span><h3>자동 코드 수정은 없음</h3>
+    <p>코드 수정이 필요한 건은 "코드 수정 요청서"로 내려받아 개발 쪽에서 테스트와 함께 고칩니다.</p></div>
+</div>
+
+<!-- ───────────────────────── 2 ───────────────────────── -->
+<h2 id="generate"><span class="num">2</span>질문 만들기</h2>
+<h3>LLM 생성 질문 — 8개 카테고리</h3>
+<table>
+  <tr><th>카테고리</th><th>무엇을 확인하나</th></tr>
+  <tr><td>전문성 검색</td><td>특정 기술·연구 분야 보유자 찾기</td></tr>
+  <tr><td>학력·나이·직급 조건</td><td>학위, 전공, 나이대, 직급(CL) 같은 인사 기본 조건</td></tr>
+  <tr><td>유사 연구원</td><td>비슷한 전문성을 가진 사람 찾기</td></tr>
+  <tr><td>논문·특허</td><td>논문 편수, 저널, 특허 건수·등급, 대표발명자</td></tr>
+  <tr><td>조직·과제</td><td>부서·과제·팀 소속, 조직별 인원</td></tr>
+  <tr><td>복합 조건</td><td>조건 2~3개를 조합한 질문</td></tr>
+  <tr><td>동의어·오타·모호한 표현</td><td>구어체·줄임말·오타·영한 혼용으로 같은 의도를 묻는 질문</td></tr>
+  <tr><td>지원하지 않는 질문</td><td>이 데이터로 답할 수 없는 질문 — <b>정중히 거절하는 것이 정답</b></td></tr>
+</table>
+<p>카테고리를 고르고 개수(카테고리당 1~30)를 정해 생성합니다. LLM에는 <b>부서·직급·강점 분야·키워드·전공·학위·과제명 같은 용어 목록만</b> 전달하고 개인 이름·평가 정보는 보내지 않습니다.</p>
+
+<h3>정답 대조 질문 — 데이터로 정답을 직접 계산</h3>
+<p>코드가 데이터에서 정답 사번 집합을 계산해 질문과 함께 저장합니다. AI 검색 결과와 사번 단위로 비교하므로 가장 신뢰할 수 있는 평가입니다.</p>
+<ul>
+  <li>"박사 학위를 가진 연구원" · "전공이 OO인 연구원" · "OO팀 소속 연구원 명단" · "직급이 OO인 연구원"</li>
+  <li>"논문을 N편 이상 쓴 연구원" · "특허가 N건 이상인 연구원" · "OO 분야 전문가를 찾아줘"</li>
+</ul>
+<div class="note">"OO 분야 전문가" 질문의 정답은 강점 분야에 그 표기가 <b>정확히 들어간 사람</b>입니다. 의미가 비슷한 표기까지 찾는 AI 검색은 재현율이 낮게 나올 수 있으니 점수는 참고로만 보세요.</div>
+
+<h3>질문 목록 관리</h3>
+<ul>
+  <li>표에서 셀을 더블클릭해 질문·카테고리를 수정, 행 추가, 체크한 행 삭제</li>
+  <li><b>작업 목록 저장</b>(자동 불러옴) · <b>세트로 저장/불러오기</b>(이름 붙여 재사용 — 전후 비교용 고정 세트로 유용)</li>
+  <li>생성 시 "기존 목록 교체"를 끄면 뒤에 추가됩니다.</li>
+</ul>
+
+<!-- ───────────────────────── 3 ───────────────────────── -->
+<h2 id="run"><span class="num">3</span>일괄 실행</h2>
+<table>
+  <tr><th>옵션</th><th>설명</th></tr>
+  <tr><td>실행 이름</td><td>예: "규칙 추가 전" — 나중에 실행 이력·비교에서 구분</td></tr>
+  <tr><td>검색 기준</td><td>현재 / 누적 (실제 AI 검색의 토글과 동일)</td></tr>
+  <tr><td>대상</td><td>전체 또는 체크한 행만</td></tr>
+  <tr><td>LLM 심사</td><td>켜면 정확성 점수까지 매김(질문당 LLM 호출이 늘어 느려짐)</td></tr>
+</table>
+<ul>
+  <li>질문마다 <code>질문 분류 → 조회(SQL 등) → 결과 설명</code>을 실제 AI 검색과 같은 함수로 실행하고, 분류된 유형·SQL·결과 일부·설명·소요 시간을 기록합니다.</li>
+  <li>한 번에 한 작업만 실행됩니다(이미 실행 중이면 안내). 진행 줄에 <b>경과 시간·완료 개수·현재 질문</b>이 표시됩니다.</li>
+  <li>서버 재시작 등으로 5분 넘게 갱신이 없으면 중단된 것으로 표시합니다. 중지 시 지금까지의 결과는 저장됩니다.</li>
+</ul>
+
+<!-- ───────────────────────── 4 ───────────────────────── -->
+<h2 id="eval"><span class="num">4</span>품질 평가 — 세 겹</h2>
+<div class="grid">
+  <div class="card"><span class="badge">1</span><h3>기계적 검사</h3>
+    <ul><li><code>error</code> 오류</li><li><code>unsupported</code> 미지원 답변</li><li><code>empty</code> 0건</li>
+      <li><code>slow</code> 60초 초과</li><li><code>truncated</code> 결과 잘림</li><li><code>no_answer_text</code> 설명 없음</li></ul></div>
+  <div class="card"><span class="badge good">2</span><h3>정답 대조</h3>
+    <p>기대 사번과 반환 사번을 비교해 <b>정밀도 · 재현율 · F1</b>을 계산하고, 빠진 사번/기대에 없던 사번 예시를 보여줍니다.</p></div>
+  <div class="card"><span class="badge warn">3</span><h3>LLM 심사</h3>
+    <p>질문 · 분류 유형 · SQL · 결과 상위 10행 · 설명을 보고 <b>1~5점 + 문제 유형 + 이유</b>를 냅니다. 참고용 점수입니다.</p></div>
+</div>
+<h3>상태 판정</h3>
+<table>
+  <tr><th>상태</th><th>조건(요약)</th></tr>
+  <tr><td class="st ok">양호</td><td>오류·0건·잘림 없음, 정답 F1 0.8 이상, 심사 4점 이상</td></tr>
+  <tr><td class="st mid">주의</td><td>0건 / 60초 초과 / 결과 잘림 / F1 0.5~0.8 / 심사 3점</td></tr>
+  <tr><td class="st no">실패</td><td>오류 / 미지원 답변 / F1 0.5 미만 / 심사 2점 이하</td></tr>
+  <tr><td>지원하지 않는 질문</td><td>거절하거나 0건이면 양호, 결과를 내놓으면 실패(심사 4점 이상이면 주의)</td></tr>
+</table>
+<p>문제 유형(심사): 조건 누락 · 조건 오해석 · 컬럼/표 선택 오류 · 결과 과다 · 결과 없음 · 거절해야 하는데 답함 · 거절이 부적절 · 기타</p>
+
+<!-- ───────────────────────── 5 ───────────────────────── -->
+<h2 id="result"><span class="num">5</span>결과 · 비교 · 엑셀</h2>
+<ul>
+  <li><b>결과 표</b>: 상태 · 카테고리 · 질문 · 유형 · 건수 · 시간 · 정답 F1 · 심사 · 문제 유형 · 플래그 (정렬/필터). 요약 배지에 양호/주의/실패 개수와 평균 점수.</li>
+  <li><b>상세</b>: 행을 클릭하면 생성된 SQL, 결과 일부, 시스템 설명, 심사 이유, 정답 대조(빠진/초과 사번 예시)가 나옵니다.</li>
+  <li><b>이전 실행과 비교</b>: 비교할 실행을 고르면 질문별 이전 상태·이전 심사·심사 변화 열이 표시됩니다.</li>
+  <li><b>엑셀</b>: <code>결과</code> / <code>요약</code>(카테고리별) / <code>작성 방법</code> / <code>개선 제안</code> 시트.</li>
+  <li><b>개선 제안</b>: 양호가 아닌 질문들을 묶어 LLM이 "규칙 설정"에 넣을 규칙 문장 3~8개를 제안합니다(자동 적용 안 됨 — 검토 후 반영).</li>
+</ul>
+
+<!-- ───────────────────────── 6 ───────────────────────── -->
+<h2 id="improve"><span class="num">6</span>개선 반영 — 엑셀을 직접 수정해서 올리기</h2>
+<p>결과 엑셀의 <b>"결과" 시트 오른쪽 끝 노란 열 5개</b>를 잘못된 질문의 행에만 채웁니다.</p>
+<table>
+  <tr><th>열</th><th>내용</th></tr>
+  <tr><td>올바른 결과/접근방법</td><td>이 질문은 어떻게 풀어야 하는지 자유롭게 서술</td></tr>
+  <tr><td>올바른 SQL</td><td>(선택) 정답을 만드는 읽기 전용 SELECT — 올리면 실제로 실행해 검증</td></tr>
+  <tr><td>기대 사번</td><td>(선택) 정답 사번 목록(쉼표/줄바꿈 구분) — 정답 대조 질문으로 자동 편입</td></tr>
+  <tr><td>반영 구분</td><td><b>규칙 / 예시 / 코드 / 무시</b> (드롭다운, 비우면 건너뜀)</td></tr>
+  <tr><td>규칙 문장</td><td>반영 구분이 "규칙"일 때 쓸 한 줄(300자 이내)</td></tr>
+</table>
+
+<h3>업로드 후 — 미리보기와 검증</h3>
+<p>수정한 엑셀을 ⑤ 영역에 올리면 항목마다 반영될 내용과 <b>검증 결과</b>가 표로 나옵니다. 올바른 SQL은 허용 여부를 확인한 뒤 읽기 전용으로 실행해 <b>건수와(기대 사번이 있으면) 정답 대조 F1</b>을 보여줍니다. 체크한 항목만 "선택 항목 반영"으로 적용하며, 검증에 실패한 항목은 반영되지 않습니다.</p>
+
+<div class="grid">
+  <div class="card"><span class="badge good">규칙</span><h3>모든 질문에 즉시 적용</h3>
+    <ul><li>"규칙 설정"의 <b>자동 관리 블록</b>에 한 줄씩 추가 — 수기 규칙은 건드리지 않음</li>
+      <li>같은 문장은 중복 건너뜀</li><li>전체가 4000자를 넘으면 <b>아무것도 바꾸지 않고 거부</b></li></ul></div>
+  <div class="card"><span class="badge">예시</span><h3>비슷한 질문에 예시로 첨부</h3>
+    <ul><li>질문 → 올바른 접근/SQL을 "검증된 예시"로 저장</li>
+      <li>비슷한 질문(임베딩 유사도 0.75 이상, 정확히 같으면 임베딩 없이도)이 오면 <b>최대 3건</b>을 질문 분류·SQL 생성 프롬프트에 첨부</li>
+      <li>같은 질문 재반영 시 갱신</li></ul></div>
+  <div class="card"><span class="badge warn">코드</span><h3>코드 수정 요청서</h3>
+    <ul><li>서버는 코드를 바꾸지 않음</li><li>질문 · 시스템 판정 · 심사 이유 · 시스템 SQL · 올바른 접근/SQL · 기대 사번이 담긴 <b>마크다운 문서</b>를 내려받음</li>
+      <li>개발 쪽에서 스크립트 수정 + 테스트 + 커밋</li></ul></div>
+</div>
+<p><b>무시</b>는 기록만 남깁니다. 기대 사번을 적은 항목은 반영 구분과 무관하게 테스트 질문 목록의 정답 대조 질문으로 편입/갱신됩니다.</p>
+
+<div class="note good"><b>규칙 vs 예시, 어떻게 고를까?</b> 여러 질문에 공통으로 적용되는 용어 정의·해석 기준이면 <b>규칙</b>("상위평가는 가/나 등급이다"). 특정 유형의 질문을 이렇게 풀라는 구체 사례면 <b>예시</b>. 프롬프트로 해결이 안 되는 로직 문제면 <b>코드</b>.</div>
+
+<!-- ───────────────────────── 7 ───────────────────────── -->
+<h2 id="manage"><span class="num">7</span>관리 · 이력 (⑥ 영역)</h2>
+<ul>
+  <li>반영된 규칙/예시를 표로 보고 <b>켜기 · 끄기 · 삭제</b> — 끄면 즉시 AI 검색에서 빠지고(기록 유지), 삭제하면 목록에서도 사라집니다.</li>
+  <li>모든 반영·변경은 이력 파일에 남습니다(누가 · 언제 · 어떤 질문 때문에).</li>
+  <li>규칙을 켜거나 추가할 때 4000자를 넘으면 처리하지 않고 사유를 알려줍니다.</li>
+</ul>
+<h3>데이터 저장 위치 (서버)</h3>
+<table>
+  <tr><th>경로</th><th>내용</th></tr>
+  <tr><td><code>data/web_updates/ai_search_lab/</code></td><td>작업 목록(draft.json) · 세트(sets/) · 실행 결과(runs/) · 진행 상태(job.json)</td></tr>
+  <tr><td><code>data/processed/nl_query_custom_rules.txt</code></td><td>규칙 설정 본문(수기 규칙 + 자동 관리 블록)</td></tr>
+  <tr><td><code>data/processed/nl_query_curated_rules.json</code></td><td>화면에서 반영한 규칙 목록(켜짐/꺼짐)</td></tr>
+  <tr><td><code>data/processed/nl_query_verified_examples.json</code></td><td>검증된 예시</td></tr>
+  <tr><td><code>data/processed/nl_query_curation_history.jsonl</code></td><td>반영·변경 이력</td></tr>
+</table>
+<p>모두 저장소(git)에는 올라가지 않는 서버 런타임 데이터입니다.</p>
+
+<!-- ───────────────────────── 8 ───────────────────────── -->
+<h2 id="ops"><span class="num">8</span>운영 가이드</h2>
+<h3>권장 사용 순서</h3>
+<ol>
+  <li>처음에는 <b>카테고리당 3~5개</b>만 생성하고 5~10개 질문으로 실행해 흐름과 소요 시간을 확인합니다.</li>
+  <li>질문 세트를 다듬어 <b>이름 붙인 세트로 저장</b>(전후 비교의 기준이 됨).</li>
+  <li>"반영 전" 이름으로 실행 → 실패/주의 질문을 엑셀에서 수정 → 업로드·반영.</li>
+  <li>같은 세트를 "반영 후"로 다시 실행하고 <b>이전 실행과 비교</b>해 점수가 올랐는지 확인.</li>
+  <li>점수가 오르지 않거나 다른 질문이 나빠졌으면 ⑥에서 해당 규칙/예시를 끄고 다시 비교.</li>
+</ol>
+<h3>서버 반영</h3>
+<pre><code>git pull
+docker compose up -d --build</code></pre>
+<div class="note"><b>알아두세요</b>
+  <ul>
+    <li>규칙과 예시는 <b>모든 사용자의 검색</b>에 영향을 줍니다. 한 번에 여러 개를 넣기보다 소수씩 반영하고 전후를 비교하세요.</li>
+    <li>LLM 심사 점수는 참고용입니다. 정답 대조(F1)가 있는 질문을 최우선 지표로 보세요.</li>
+    <li>하위 화면에서 보이는 권한 범위(평가 등 권한이 필요한 데이터)는 실행한 관리자 계정 기준입니다. 권한/대상자별 필터링은 추후 확장 항목입니다.</li>
+    <li>LLM 동시 호출 슬롯은 실제 검색과 공유됩니다. 업무 시간 중 대량 실행은 피하는 것이 좋습니다.</li>
+  </ul>
+</div>
+<h3>관련 코드</h3>
+<table>
+  <tr><th>파일</th><th>역할</th></tr>
+  <tr><td><code>services/ai_search_lab.py</code></td><td>질문 생성 · 정답 대조 질문 · 일괄 실행 · 평가 · 실행 비교 · 엑셀 · 개선 제안</td></tr>
+  <tr><td><code>services/nl_query_curation.py</code></td><td>엑셀 파싱/검증 · 규칙 블록 · 검증된 예시 · 코드 수정 요청서 · 이력</td></tr>
+  <tr><td><code>components/admin_ai_search_lab_tab.py</code></td><td>관리자 탭 화면과 콜백</td></tr>
+  <tr><td><code>services/auth.py</code> <code>acting_as()</code></td><td>백그라운드 스레드에서 관리자 권한으로 조회</td></tr>
+</table>
+
+</div>
+</body>
+</html>
