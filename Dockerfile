@@ -30,6 +30,9 @@ ARG HTTP_PROXY=http://12.26.204.100:8080
 ARG HTTPS_PROXY=http://12.26.204.100:8080
 ARG NO_PROXY=localhost,127.0.0.1,db,::1,samsungds.net,*.samsungds.net,*.samsung.net,12.0.0.0/8,10.0.0.0/8,192.0.0.0/8,172.0.0.0/8
 
+# 한국 표준시(KST) — 로그/화면/기록 시각(datetime.now())이 컨테이너 기본값 UTC가 아니라 서울 기준이 되게 한다.
+# tzdata 패키지(아래 apt-get)가 있어야 TZ가 적용된다. docker-compose.yml의 TZ로 덮어쓸 수 있다.
+ENV TZ=Asia/Seoul
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
@@ -46,7 +49,7 @@ WORKDIR /app
 COPY certs/ /tmp/corp-certs/
 RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
     apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates vim git curl \
+    && apt-get install -y --no-install-recommends ca-certificates vim git curl tzdata \
     && for f in /tmp/corp-certs/*.crt; do \
          [ -e "$f" ] || continue; \
          case "$f" in */ca-bundle.crt) continue ;; esac; \
