@@ -13741,3 +13741,9 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 서버 로그: `TypeError: sequence item 7: expected str instance, NoneType found` (`build_run_workbook`의 `', '.join(row)`).
   결과 표에 빈 값(NULL) 셀이 있으면 발생. `None`은 빈 문자열, 그 외는 `str()`로 바꿔 이어붙이도록 수정.
 - 앞선 제어문자 수정과는 별개의 원인이었다(코드는 이미지에 포함되므로 `docker compose up -d --build app` 필요).
+
+## 2026-10-08 (4): run_integration.py 마지막에 DB 반영 단계 추가
+
+- 앱은 DATABASE_URL이 있으면 파일보다 DB를 먼저 읽는데, 파이프라인은 파일만 저장해 분석 결과가 화면에 반영되지 않았다.
+- `run_integration.py` 3/3단계로 `load_to_db.load()`를 호출. DATABASE_URL 미설정이면 안내만 출력하고 정상 종료,
+  DB 접속 실패 등 예외도 실행 실패로 취급하지 않고 안내만(파일 결과는 이미 저장됨). `--skip-db-load`로 건너뛸 수 있다.
