@@ -404,6 +404,38 @@ def _dept_section(dept_name, suc_dept, res, eva, edu, awd, nur, inc,
 
 # ─── 레이아웃 ────────────────────────────────────────────────────────────────────
 
+def _department_order_map() -> dict:
+    """부서 섹션을 "조직 건제순"(조직도 상 순서)으로 정렬하기 위한
+    department명 → dep_code(조직코드) 매핑(2026-10-08, 사용자 요청).
+
+    이 화면이 그룹화 기준으로 쓰는 researchers.csv의 department(원본 헤더
+    "현소속부서명")는 team_refer.csv 3단계 부서 체계에서 2단계부서명
+    (dep_2nd_name)에 해당한다(docs/CLAUDE.md 2026-09-11 (4) 항목 — 1단계가
+    4개 루트 마커가 아닌 일반 조직이면 2단계부서명이 곧 현소속부서명).
+    그래서 team_refer의 2단계(team_layer=='2') 행에서 dep_2nd_name →
+    dep_code를 모아, 그 조직코드 오름차순으로 부서 섹션을 정렬한다
+    (services/similarity_map.py의 department_filter_options()가 1단계에
+    대해 쓰는 것과 같은 원리). team_refer 데이터가 없으면 빈 dict를
+    반환해 호출부가 가나다순으로 폴백하게 한다."""
+    try:
+        from pipeline.rd_specialist_markdown import read_team_refer
+        from services.data_store import DATA_DIR
+        rows = read_team_refer(DATA_DIR)
+    except Exception:
+        return {}
+    order: dict[str, str] = {}
+    for r in rows:
+        if str(r.get('team_layer') or '').strip() != '2':
+            continue
+        name = str(r.get('dep_2nd_name') or '').strip()
+        code = str(r.get('dep_code') or '').strip()
+        if not name or not code:
+            continue
+        if name not in order or code < order[name]:
+            order[name] = code
+    return order
+
+
 def _render_dashboard():
     """석세션 플랜 조회 콘텐츠(H5 제목 + A3 인쇄 버튼 + 부서별 카드) — layout()
     최초 렌더와, 편집 패널에서 "저장" 성공 후 즉시 갱신하는 콜백
@@ -450,8 +482,16 @@ def _render_dashboard():
     suc = suc.copy()
     suc['department'] = suc['researcher_id'].astype(str).map(dept_map).fillna('(소속부서 미상)')
 
+    order_map = _department_order_map()
+    # 조직도에서 못 찾은 부서(team_refer 미설정 등)는 뒤로 보내되, 그런
+    # 부서끼리는 가나다순으로 안정적으로 정렬되게 이름을 2차 정렬키로 둔다.
+    dept_names = sorted(
+        suc['department'].unique(),
+        key=lambda n: (order_map.get(n, '9999'), n),
+    )
+
     sections = []
-    for dept_name in sorted(suc['department'].unique()):
+    for dept_name in dept_names:
         suc_dept = suc[suc['department'] == dept_name]
         sec = _dept_section(dept_name, suc_dept, res, eva, edu, awd, nur, inc,
                             show_eval=show_eval, show_incentive=show_incentive)
