@@ -655,7 +655,8 @@ def build_run_workbook(run: dict) -> bytes:
     ws.append(head)
     for r in run.get('results') or []:
         g, j = r.get('golden') or {}, r.get('judge') or {}
-        sample = '\n'.join(', '.join(row) for row in (r.get('sample_rows') or [])[:5])
+        sample = '\n'.join(', '.join('' if v is None else str(v) for v in row)
+                           for row in (r.get('sample_rows') or [])[:5])
         _xl_append(ws, [len(ws['A']), r['category'], r['question'], r['status'], r['intent'], r['row_count'],
                    r['total_rows'], r['seconds'], g.get('f1'), g.get('precision'), g.get('recall'),
                    j.get('score'), j.get('issue_type'), j.get('reason'), ', '.join(r['flags']), r.get('sql'),
