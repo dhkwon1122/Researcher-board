@@ -402,7 +402,16 @@ def _build_main_spine(tasks, jobs, hrs, pubs, pats, code_map, today, rid):
 
     # 오늘을 높이 0짜리 anchor로 포함시켜, 스파인이 정확히 현재 시점에서 끝나도록
     # 한다(마지막 실제 항목 이후로 미래 방향 여백이 무한정 늘어나지 않게).
-    anchors = [{'date': it['anchor'], 'height': it['height']} for it in spine_items] + [{'date': today, 'height': 0}]
+    # 같은 날짜의 항목(예: 같은 날 시작한 과제 + 인사발령)은 세로 축에서 같은 위치로
+    # 합쳐져 서로 겹치고 뒤에 깔린 쪽(보통 인사발령 pill)이 안 보였다(2026-10-08).
+    # 같은 날짜 안에서는 1초씩 어긋난 축 전용 날짜(axis_date)를 줘 각자 한 줄을
+    # 차지하게 한다(나중 항목이 위). 일 단위 간격 계산(.days)에는 영향이 없다.
+    seen_per_date: dict = {}
+    for it in spine_items:
+        k = seen_per_date.get(it['anchor'], 0)
+        seen_per_date[it['anchor']] = k + 1
+        it['axis_date'] = it['anchor'] + pd.Timedelta(seconds=k)
+    anchors = [{'date': it['axis_date'], 'height': it['height']} for it in spine_items] + [{'date': today, 'height': 0}]
     pos_fn, total_height = _build_time_axis(anchors)
 
     min_year = min([d.year for d in dates] + [today.year])
@@ -426,7 +435,7 @@ def _build_main_spine(tasks, jobs, hrs, pubs, pats, code_map, today, rid):
         # 정렬한다. 랭크는 겹침 그룹 내 z-index(맨 앞으로 가져오기)에만 쓰인다.
         x_px = _STACK_BASE_X
         z_index = 100 - rank
-        y_px = pos_fn(it['anchor'])
+        y_px = pos_fn(it['axis_date'])
 
         if it['kind'] == 'task':
             t = it['payload']
