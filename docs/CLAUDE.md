@@ -13820,3 +13820,9 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 수정: 드롭다운을 연구원 프로필/명단과 같은 함수(`similarity_map.level_filter_options`·`org_codes_for_levels`, 팀/리더 참조의
   1/2/3단계부서명 칸)로 만들고, 선택한 플랫폼/그룹의 org_code와 분석 과제명을 `normalize_org_code`(꼬리표·공백 제거)로 맞춰
   과제 목록을 좁힌다. 팀/리더 참조에 없는 과제는 선택 없음(전체)일 때만 보인다. 파이프라인 재실행 불필요.
+
+## (12) 종료된 과제가 '진행중'으로 남는 문제 (2026-10-08)
+- 원인: 같은 과제명의 앞 구간이 종료일 없이(잔재/미종료) 남아 있으면 병합 시 그룹 전체가 '진행중'이 됨(종료 20260922 과제 사례).
+- `services/task_history.close_stale_open_rows` 추가: 종료일이 빈 행이라도 같은 과제명으로 더 늦게 시작해 이미 종료된 행이 있으면 낡은 진행중 행으로 보고 닫음. `merge_task_rows`(프로필 표/엑셀)와 `timeline_data.task_points`(타임라인)에 적용.
+- `pipeline/excel_reader.parse_yyyymmdd`: `2026.09.22`, `2026/9/22` 형식도 `YYYY-MM-DD`로 정규화(기존엔 '2026'으로 깨져 종료일이 사라질 수 있었음).
+- 반영: 서버 `git pull` → `docker compose up -d --build app`. 날짜 형식 문제였다면 과제참여이력을 다시 업로드/업데이트 후 DB 반영.
