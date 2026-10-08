@@ -59,9 +59,12 @@ def task_points(task_df):
         end_raw = row.get('end_date')
         end = parse_ts(end_raw)
         end_label = end.strftime('%Y-%m-%d') if end is not None else '진행중'
-        if end is None or end < start:
+        ongoing = end is None or end < start
+        if ongoing:
             end = today
-        if (end - start).days <= 30:
+        # 참여기간 30일 이하의 짧은 과제는 제외하되, 진행중인 과제는 방금 시작했어도
+        # 항상 보여준다(2026-10-08 — 10월 1일 시작 과제가 30일 규칙 때문에 빠지던 문제).
+        if not ongoing and (end - start).days <= 30:
             continue
         # the_task_name(pipeline/process_tasks.py가 tasks_information.csv 개명
         # 이력으로 보정한, 참여 당시 실제 과제명)이 있으면 그걸 쓰고, 없으면

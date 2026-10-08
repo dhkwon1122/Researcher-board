@@ -6,15 +6,16 @@ pipeline/process_expertise_metrics.py 등이 만든 조직 단위 집계 산출�
 
   - 부서 간 협업(collaboration_edges.csv) — 부서 쌍별 공동 논문·특허 건수와
     부서별 타부서 협업 비율. 모든 로그인 사용자.
-  - 과제별 역량 갭(project_competency_gap.json) — 과제 필요 역량 대비 현재
-    인력 충족 여부와 갭 역량의 사내 후보. 모든 로그인 사용자.
+  - 과제별 역량(project_competency_gap.json) — 플랫폼/그룹/과제 캐스케이딩으로 과제를 고르면
+    필요 역량별 소속 과제원(유사도 구간)과 비소속 적합 임직원. 모든 로그인 사용자.
+    (2026-10-08부터 하위 탭 3개: 과제별 역량 / 부서 간 협업 / 기술별 보유자 수)
   - 기술별 보유자 수(핵심인력 리스크, technology_holder_summary.csv) —
     개인 명단이 들어 있어 관리자(manage_users)에게만 보인다.
 """
 
 import dash_ag_grid as dag
 import dash_bootstrap_components as dbc
-from dash import html
+from dash import Input, Output, callback, dcc, html
 
 from services.data_store import read_processed, read_project_competency_gap
 
@@ -166,77 +167,137 @@ def collaboration_section() -> html.Div:
     ], className='g-3'))
 
 
-_STATUS_STYLE = {
-    'styleConditions': [
-        {'condition': "params.value === '갭'", 'style': {'color': '#cf1322', 'fontWeight': 600}},
-        {'condition': "params.value === '충족'", 'style': {'color': '#389e0d'}},
-    ],
-    'defaultStyle': {'textAlign': 'center'},
-}
+# ── 과제별 역량(2026-10-08 개편) ────────────────────────────────────────────────
+# 플랫폼(1단계부서명) → 그룹(2단계부서명) → 과제(3단계부서명) 캐스케이딩으로 과제를 고르면,
+# 그 과제의 필요 역량을 행별로 보여주고 역량마다 (a) 소속 과제원을 임베딩 유사도 구간
+# (0~0.25/0.25~0.5/0.5~0.75/0.75~1)별로, (b) 비소속이지만 전문성이 맞는 임직원
+# (0.75 이상, 없으면 0.75 미만 대표 최대 5명)을 보여준다. 데이터는
+# pipeline/process_project_competency_gap.py 산출물(project_competency_gap.json).
+
+_BANDS = [(0.75, 1.01, '0.75~1', 'success'), (0.5, 0.75, '0.5~0.75', 'primary'),
+          (0.25, 0.5, '0.25~0.5', 'warning'), (0.0, 0.25, '0~0.25', 'secondary')]
+_NO_LEVEL = '(미분류)'
+
+
+def _lv(it: dict, key: str) -> str:
+    return str(it.get(key) or '').strip() or _NO_LEVEL
+
+
+def _opts(values) -> list:
+    return [{'label': v, 'value': v} for v in sorted(set(values))]
+
+
+def _gap_items() -> list:
+    return read_project_competency_gap() or []
+
+
+def _person_badge(x: dict, name_map: dict, color: str) -> html.Span:
+    rid = x.get('researcher_id', '')
+    return dbc.Badge(f"{name_map.get(rid, rid)} {x.get('score', 0):.2f}", color=color, className='me-1 mb-1',
+                     title=f"근거 항목: {x.get('item', '')}", text_color='dark' if color == 'warning' else None)
+
+
+def _competency_table(item: dict) -> html.Div:
+    name_map = _name_map()
+    rows = []
+    for c in item.get('competencies') or []:
+        members = c.get('members')
+        if members is None:   # 구버전 산출물(재실행 전) — 충족 인력만 있음
+            members = c.get('covered_by') or []
+        band_cells = []
+        for lo, hi, _label, color in _BANDS:
+            people = [m for m in members if lo <= float(m.get('score', 0)) < hi]
+            band_cells.append(html.Td([_person_badge(m, name_map, color) for m in people] or
+                                      html.Span('-', className='text-muted'), style={'verticalAlign': 'top'}))
+        outsiders = c.get('outsiders')
+        if outsiders is None:
+            outsiders = c.get('candidates') or []
+        low = bool(c.get('outsider_low'))
+        out_cell = html.Td([
+            *[_person_badge(x, name_map, 'secondary' if low else 'success') for x in outsiders],
+            *([html.Div('0.75 미만 대표', className='text-muted', style={'fontSize': '0.68rem'})] if low and outsiders else []),
+        ] or html.Span('-', className='text-muted'), style={'verticalAlign': 'top'})
+        covered = bool(c.get('covered'))
+        rows.append(html.Tr([
+            html.Td([html.Div(c.get('competency', ''), className='fw-semibold'),
+                     dbc.Badge('충족' if covered else '갭', color='success' if covered else 'danger', className='mt-1')],
+                    style={'verticalAlign': 'top'}),
+            *band_cells, out_cell,
+        ]))
+    head = html.Thead(html.Tr([
+        html.Th('필요 역량', style={'width': '16%'}),
+        *[html.Th([html.Div('소속 과제원', style={'fontSize': '0.65rem'}), f'{label}'], className='text-center',
+                  style={'width': '13%'}) for _lo, _hi, label, _c in _BANDS],
+        html.Th([html.Div('비소속 적합 임직원', style={'fontSize': '0.65rem'}), '0.75~1'], className='text-center',
+                style={'width': '20%'}),
+    ]))
+    return dbc.Table([head, html.Tbody(rows)], bordered=True, size='sm', className='mb-0 align-middle',
+                     style={'fontSize': '0.78rem', 'tableLayout': 'fixed'})
+
+
+@callback(Output('org-gap-l2', 'options'), Output('org-gap-l2', 'value'),
+          Input('org-gap-l1', 'value'))
+def _gap_l2_options(l1):
+    items = [i for i in _gap_items() if not l1 or _lv(i, 'level1') == l1]
+    return _opts(_lv(i, 'level2') for i in items), None
+
+
+@callback(Output('org-gap-project', 'options'), Output('org-gap-project', 'value'),
+          Input('org-gap-l1', 'value'), Input('org-gap-l2', 'value'))
+def _gap_project_options(l1, l2):
+    items = [i for i in _gap_items()
+             if (not l1 or _lv(i, 'level1') == l1) and (not l2 or _lv(i, 'level2') == l2)]
+    opts = [{'label': (_lv(i, 'level3') if _lv(i, 'level3') != _NO_LEVEL else i.get('project_name', '')),
+             'value': i.get('project_name', '')} for i in items]
+    return sorted(opts, key=lambda o: o['label']), None
+
+
+@callback(Output('org-gap-detail', 'children'), Input('org-gap-project', 'value'))
+def _gap_detail(project):
+    if not project:
+        return _empty('위에서 플랫폼 → 그룹 → 과제를 선택하면 그 과제의 필요 역량별 인력 현황이 표시됩니다.')
+    item = next((i for i in _gap_items() if i.get('project_name') == project), None)
+    if not item:
+        return _empty('선택한 과제의 분석 결과가 없습니다.')
+    comps = item.get('competencies') or []
+    summary = html.Div([
+        dbc.Badge(f"충족률 {item.get('coverage_pct', 0)}%", color='primary', className='me-1'),
+        dbc.Badge(f"갭 {item.get('gap_count', 0)}개", color='danger', className='me-1'),
+        dbc.Badge(f"과제원 {item.get('member_count', 0)}명(분석 {item.get('analyzed_member_count', 0)}명)",
+                  color='secondary', className='me-1'),
+        html.Span(item.get('project_name', ''), className='small text-muted ms-1'),
+    ], className='mb-2')
+    if not comps:
+        return html.Div([summary, _empty('이 과제의 필요 역량이 없습니다.')])
+    return html.Div([summary, _competency_table(item)])
 
 
 def competency_gap_section() -> html.Div:
-    title = '과제별 역량 갭'
-    hint = ('과제 문서 분석 결과에서 LLM이 뽑은 필요 역량을 과제 현재 인력의 보유 역량(강점 분야·키워드·전문지식)과 '
-            '임베딩 유사도로 대조. 유사도 0.75 이상이면 충족. 갭 역량은 과제 밖 재직자 중 유사도 상위 3명을 사내 후보로 표시.')
-    items = read_project_competency_gap()
+    title = '과제별 역량'
+    hint = ('과제 문서 분석에서 LLM이 뽑은 필요 역량을 행별로 보여주고, 역량마다 소속 과제원을 임베딩 유사도 구간별로, '
+            '비소속 임직원은 유사도 0.75 이상(없으면 미만 대표 최대 5명)으로 보여줍니다. 배지 숫자는 유사도, 마우스를 올리면 근거 항목.')
+    items = _gap_items()
     if not items:
         return _section(title, hint, _empty('데이터 없음 — pipeline/run_analysis.py(5/5 과제별 역량 갭) 실행 후 표시됩니다.'))
-    name_map = _name_map()
-
-    def _people(lst):
-        return ', '.join(f"{name_map.get(x.get('researcher_id', ''), x.get('researcher_id', ''))}"
-                         f"({x.get('item', '')})" for x in lst or [])
-
-    proj_rows, comp_rows = [], []
-    for it in items:
-        proj_rows.append({
-            'project_name': it.get('project_name', ''), 'dep_name': it.get('dep_name', ''),
-            'member_count': it.get('member_count', 0), 'coverage_pct': it.get('coverage_pct', 0),
-            'gap_count': it.get('gap_count', 0),
-            'gaps': ', '.join(c.get('competency', '') for c in it.get('competencies') or [] if not c.get('covered')),
-        })
-        for c in it.get('competencies') or []:
-            comp_rows.append({
-                'project_name': it.get('project_name', ''),
-                'competency': c.get('competency', ''),
-                'status': '충족' if c.get('covered') else '갭',
-                'best_score': c.get('best_score', 0),
-                'covered_by': _people(c.get('covered_by')),
-                'candidates': _people(c.get('candidates')),
-            })
-    num = {'filter': 'agNumberColumnFilter', 'floatingFilter': True, 'width': 100}
-    txt = {'filter': 'agTextColumnFilter', 'floatingFilter': True, 'minWidth': 150, 'flex': 1,
-           'cellStyle': {'textAlign': 'left'}}
-    proj_grid = _grid('org-gap-project-grid', [
-        {'headerName': '과제', 'field': 'project_name', 'tooltipField': 'project_name', **txt},
-        {'headerName': '부서', 'field': 'dep_name', **txt},
-        {'headerName': '인력', 'field': 'member_count', **num},
-        {'headerName': '충족률(%)', 'field': 'coverage_pct', **num},
-        {'headerName': '갭 수', 'field': 'gap_count', **num},
-        {'headerName': '갭 역량', 'field': 'gaps', 'tooltipField': 'gaps', **txt},
-    ], proj_rows, page_size=10)
-    comp_grid = _grid('org-gap-competency-grid', [
-        {'headerName': '과제', 'field': 'project_name', 'tooltipField': 'project_name', **txt},
-        {'headerName': '필요 역량', 'field': 'competency', 'tooltipField': 'competency', **txt},
-        {'headerName': '상태', 'field': 'status', 'width': 80, 'cellStyle': _STATUS_STYLE,
-         'filter': 'agTextColumnFilter', 'floatingFilter': True},
-        {'headerName': '최고 유사도', 'field': 'best_score', **num},
-        {'headerName': '충족 인력(근거)', 'field': 'covered_by', 'tooltipField': 'covered_by', **txt},
-        {'headerName': '사내 후보(근거)', 'field': 'candidates', 'tooltipField': 'candidates', **txt},
-    ], comp_rows, page_size=15)
-    return _section(title, hint, html.Div([
-        html.Div('과제별 요약 (충족률 낮은 순)', className='small text-muted mb-1'), proj_grid,
-        html.Div('역량별 상세', className='small text-muted mt-3 mb-1'), comp_grid,
-    ]))
+    drop = lambda id_, label, opts: dbc.Col([
+        dbc.Label(label, className='small fw-semibold text-muted mb-1'),
+        dcc.Dropdown(id=id_, options=opts, placeholder='전체' if id_ != 'org-gap-project' else '과제 선택', clearable=True),
+    ], md=4)
+    controls = dbc.Row([
+        drop('org-gap-l1', '플랫폼', _opts(_lv(i, 'level1') for i in items)),
+        drop('org-gap-l2', '그룹', _opts(_lv(i, 'level2') for i in items)),
+        drop('org-gap-project', '과제', sorted(
+            ({'label': (_lv(i, 'level3') if _lv(i, 'level3') != _NO_LEVEL else i.get('project_name', '')),
+              'value': i.get('project_name', '')} for i in items), key=lambda o: o['label'])),
+    ], className='g-2 mb-3')
+    return _section(title, hint, html.Div([controls, html.Div(id='org-gap-detail')]))
 
 
 def org_analysis_content() -> html.Div:
     from services.auth import can
 
-    sections = [competency_gap_section(), collaboration_section()]
+    tabs = [dbc.Tab(competency_gap_section(), label='과제별 역량', tab_id='org-sub-gap'),
+            dbc.Tab(collaboration_section(), label='부서 간 협업', tab_id='org-sub-collab')]
     if can('manage_users'):
-        sections.append(technology_holder_section())
-    if not sections:
-        sections.append(_empty('표시할 조직 분석 항목이 없습니다.'))
-    return html.Div(sections)
+        tabs.append(dbc.Tab(technology_holder_section(), label='기술별 보유자 수', tab_id='org-sub-tech'))
+    return dbc.Tabs(tabs, id='org-sub-tabs', active_tab='org-sub-gap', className='mt-2')

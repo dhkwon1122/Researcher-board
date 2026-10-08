@@ -36,6 +36,7 @@ import plotly.graph_objects as go
 from dash import Input, Output, Patch, State, callback, dcc, html
 
 from components.detail_tabs import llm_summary_block
+from components import org_analysis_tab  # noqa: F401  (조직 분석 탭 콜백 등록)
 from pipeline.process_researcher_expertise import (
     build_html as _build_researcher_html,
     researcher_card_html as _historical_card_html,

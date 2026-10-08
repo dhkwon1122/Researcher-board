@@ -12,7 +12,11 @@ analysis.json)에서 과제별 "필요 역량"을 사내 LLM으로 4~8개 뽑고
   - 필요 역량마다 인력 보유 항목 중 코사인 유사도 최고값이 GAP_THRESHOLD
     (0.75) 이상이면 "충족"(충족자 목록), 미만이면 "갭"
   - 갭 역량은 과제 밖 현재 재직자 중 유사도 GAP_THRESHOLD 이상인 상위 3명을
-    "사내 후보"로 함께 기록(이동·협업 검토용)
+    "사내 후보"(candidates)로 함께 기록(이동·협업 검토용)
+  - (2026-10-08) 역량별 상세 화면용으로 `members`(과제원 전원의 최고 유사도 — 화면이
+    0~0.25/0.25~0.5/0.5~0.75/0.75~1 구간으로 나눠 보여줌)와 `outsiders`(비소속 재직자 중
+    0.75 이상 상위 OUTSIDER_TOP_N명, 없으면 0.75 미만 대표 최대 5명 — outsider_low=True)를 추가로
+    기록하고, 과제의 소속 단계(level1/2/3 = 플랫폼/그룹/과제)도 함께 저장한다.
 
 Source:
   data/processed/project_expertise_analysis.json
@@ -53,6 +57,8 @@ CACHE_FILE = 'project_competency_cache.json'
 
 GAP_THRESHOLD = 0.75
 CANDIDATE_TOP_N = 3
+OUTSIDER_TOP_N = 10      # 0.75 이상 비소속 적합자 표시 상한
+OUTSIDER_LOW_N = 5       # 0.75 이상이 없을 때 0.75 미만 대표 인원
 
 _SYSTEM_PROMPT = """# Role
 당신은 R&D 과제 인력 구성 전문가입니다. 과제 문서 요약을 읽고 이 과제를
@@ -148,9 +154,11 @@ def _researcher_items(profiles: list, strength_std: list) -> dict:
     return items
 
 
-def analyze_gaps(projects: list, required: dict, members: dict, items: dict, current: set) -> list:
+def analyze_gaps(projects: list, required: dict, members: dict, items: dict, current: set,
+                 levels: dict | None = None) -> list:
     """required: project_name -> [역량], members: project_name -> set(rid).
     임베딩은 fit.cached_embed(실패 시 LLMError 전파)."""
+    levels = levels or {}
     flat = [(rid, v) for rid, vals in items.items() for v in vals]
     comp_all = sorted({c for vals in required.values() for c in vals})
     if not flat or not comp_all:
@@ -166,7 +174,7 @@ def analyze_gaps(projects: list, required: dict, members: dict, items: dict, cur
         comps = required.get(name) or []
         if not comps:
             continue
-        team = members.get(name, set())
+        team = members.get(fit.normalize_org_code(name), set())
         rows = []
         for c in comps:
             row_sims = sims[comp_idx[c]]
@@ -187,17 +195,26 @@ def analyze_gaps(projects: list, required: dict, members: dict, items: dict, cur
                                for rid, v, sc in team_hits if sc >= GAP_THRESHOLD][:5],
                 'candidates': [],
             }
+            outside_all = sorted(((rid, v, sc) for rid, (v, sc) in best_by_rid.items()
+                                  if rid not in team and rid in current), key=lambda x: -x[2])
+            high = [x for x in outside_all if x[2] >= GAP_THRESHOLD]
             if not covered:
-                outside = sorted(((rid, v, sc) for rid, (v, sc) in best_by_rid.items()
-                                  if rid not in team and rid in current and sc >= GAP_THRESHOLD),
-                                 key=lambda x: -x[2])
                 entry['candidates'] = [{'researcher_id': rid, 'item': v, 'score': round(sc, 3)}
-                                       for rid, v, sc in outside[:CANDIDATE_TOP_N]]
+                                       for rid, v, sc in high[:CANDIDATE_TOP_N]]
+            # 역량별 상세 화면용: 과제원 전원 점수 + 비소속 적합자(0.75 이상, 없으면 미만 대표)
+            entry['members'] = [{'researcher_id': rid, 'item': v, 'score': round(sc, 3)}
+                                for rid, v, sc in team_hits]
+            shown = high[:OUTSIDER_TOP_N] if high else outside_all[:OUTSIDER_LOW_N]
+            entry['outsiders'] = [{'researcher_id': rid, 'item': v, 'score': round(sc, 3)}
+                                  for rid, v, sc in shown]
+            entry['outsider_low'] = bool(shown) and not high
             rows.append(entry)
         n_cov = sum(1 for r in rows if r['covered'])
+        l1, l2, l3 = levels.get(name, ('', '', ''))
         results.append({
             'project_name': name,
             'dep_name': proj.get('dep_name', ''),
+            'level1': l1, 'level2': l2, 'level3': l3,
             'member_count': len(team),
             'analyzed_member_count': len([r for r in team if r in items]),
             'coverage_pct': round(n_cov * 100.0 / len(rows), 1) if rows else 0.0,
@@ -206,6 +223,18 @@ def analyze_gaps(projects: list, required: dict, members: dict, items: dict, cur
         })
     results.sort(key=lambda r: (r['coverage_pct'], -r['gap_count']))
     return results
+
+
+def _project_levels(projects: list) -> dict:
+    """project_name -> (플랫폼, 그룹, 과제) — team_refer의 1/2/3단계부서명 칸 값(과제명을
+    org_name_wd로 매칭). team_refer가 없거나 매칭이 없으면 ('', '', '')."""
+    try:
+        from services import similarity_map as sm
+        return {p.get('project_name', ''): sm.org_code_level_names(fit.normalize_org_code(p.get('project_name', '')))
+                for p in projects}
+    except Exception as exc:  # team_refer 없음 등 — 단계 구분 없이 진행
+        print(f'  [WARN] 과제 소속 단계 조회 실패(단계 없이 저장): {exc}')
+        return {}
 
 
 def process(refresh: bool = False) -> bool:
@@ -227,12 +256,12 @@ def process(refresh: bool = False) -> bool:
     if not researchers.empty and 'org_code' in researchers.columns:
         for rid, org in zip(researchers['researcher_id'], researchers['org_code']):
             if rid in current and str(org).strip():
-                members.setdefault(str(org).strip(), set()).add(rid)
+                members.setdefault(fit.normalize_org_code(str(org)), set()).add(rid)
     personnel = _read_csv('project_personnel')
     if not personnel.empty and 'project_name' in personnel.columns:
         for rid, pname in zip(personnel['researcher_id'], personnel['project_name']):
             if rid and rid != '00000000' and str(pname).strip():
-                members.setdefault(str(pname).strip(), set()).add(rid)
+                members.setdefault(fit.normalize_org_code(str(pname)), set()).add(rid)
 
     cache = _read_json(CACHE_FILE, {})
     required = {}
@@ -252,8 +281,9 @@ def process(refresh: bool = False) -> bool:
     _write_json(CACHE_FILE, cache)
 
     items = _researcher_items(profiles, _read_json(STRENGTH_STD_FILE, []))
+    levels = _project_levels(projects)
     try:
-        results = analyze_gaps(projects, required, members, items, current)
+        results = analyze_gaps(projects, required, members, items, current, levels)
     except LLMError as exc:
         print(f'  [WARN] 임베딩 실패 — 역량 갭 분석 중단: {exc}')
         return False

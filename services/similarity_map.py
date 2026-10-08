@@ -495,34 +495,15 @@ def org_codes_for_pjt_part_names(pjt_part_names, period: tuple | None = None) ->
 
 
 # ── 1·2·3단계(플랫폼/팀 · 플랫폼/그룹 · 과제/파트) 단계별 필터 ─────────────────
-# 연구원 프로필 검색과 연구원 명단 검색이 함께 쓴다(2026-10-08). 저장 스키마가
-# own-level-only라 조직도 트리를 걸어 team_layer(1/2/3) 노드의 자기 이름
-# (own_level_name)과 조상 체인으로 판정한다.
+# 연구원 프로필 검색과 연구원 명단 검색이 함께 쓴다. 팀/리더 참조 화면·team_refer.csv에
+# 보이는 1단계부서명/2단계부서명/3단계부서명 **칸(컬럼) 값을 그대로** 각각 플랫폼/팀,
+# 플랫폼/그룹, 과제/파트에 매핑한다(2026-10-08 수정 — 처음엔 조직도 트리의 team_layer로
+# 단계를 판정했는데, 비공식소속부서명 행은 저장 시 3단계 칸에 자기 이름이 들어가므로
+# 대부분의 조직이 3단계(과제/파트)로 보이는 팀/리더 참조와 어긋났다). org_code는
+# 비공식소속부서명(org_name_wd)이 있는 행(= 실제 소속자가 붙는 조직)만 쓴다.
 
 LEVEL_LABELS = {1: '플랫폼/팀', 2: '플랫폼/그룹', 3: '과제/파트'}
-
-
-def _walk_layered(nodes: list, ancestors: tuple, visit) -> None:
-    """모든 노드를 순회하며 visit(node, ancestors)를 호출한다. ancestors는
-    [(team_layer 정수, 자기 이름), ...] — 가장 가까운 조상이 뒤에 온다."""
-    for node in nodes:
-        visit(node, ancestors)
-        try:
-            layer = int(str(node.get('team_layer') or '0').strip() or 0)
-        except ValueError:
-            layer = 0
-        entry = (layer, own_level_name(node))
-        _walk_layered(node.get('children') or [], ancestors + (entry,), visit)
-
-
-def _ancestors_match(ancestors: tuple, parents: dict) -> bool:
-    """parents={상위 단계(int): 이름 집합}의 모든 조건을 조상 중에 만족하는지."""
-    for lvl, names in (parents or {}).items():
-        if not names:
-            continue
-        if not any(l == lvl and n in names for l, n in ancestors):
-            return False
-    return True
+_LEVEL_FIELD = {1: 'dep_1st_name', 2: 'dep_2nd_name', 3: 'dep_3rd_name'}
 
 
 def _as_name_set(v) -> set:
@@ -531,71 +512,54 @@ def _as_name_set(v) -> set:
     return {v} if isinstance(v, str) else set(v)
 
 
+def _org_rows(period: tuple | None = None) -> list:
+    """org_name_wd가 있는 현재(또는 period 기준) team_refer 행."""
+    return [r for r in read_team_refer(DATA_DIR, period=period) if (r.get('org_name_wd') or '').strip()]
+
+
+def _cell(row: dict, level: int) -> str:
+    return (row.get(_LEVEL_FIELD[level]) or '').strip()
+
+
 def level_filter_options(level: int, parents: dict | None = None, period: tuple | None = None) -> list:
-    """level(1/2/3) 단계 드롭다운 옵션. parents={1: 선택된 팀 이름들, 2: 선택된
-    그룹 이름들}을 주면 그 아래(조직도 조상 기준)에 있는 노드만 남긴다
-    (캐스케이딩). 정렬은 조직코드(dep_code) 오름차순."""
+    """level(1/2/3) 단계 드롭다운 옵션 — team_refer의 해당 단계 부서명 칸 고유값.
+    parents={1: 선택된 팀들, 2: 선택된 그룹들}을 주면 그 상위 칸 값이 일치하는 행만
+    남긴다(캐스케이딩). 정렬은 조직코드(dep_code) 오름차순."""
     parents = {k: _as_name_set(v) for k, v in (parents or {}).items()}
-    tree = build_org_tree(read_team_refer(DATA_DIR, period=period))
-    rows: list = []
-
-    def _visit(node, ancestors):
-        if str(node.get('team_layer') or '').strip() != str(level):
-            return
-        name = own_level_name(node)
-        if name and _ancestors_match(ancestors, parents):
-            rows.append({'name': name, 'dep_code': node.get('dep_code')})
-
-    _walk_layered(tree, (), _visit)
+    rows = []
+    for r in _org_rows(period):
+        name = _cell(r, level)
+        if not name:
+            continue
+        if any(names and _cell(r, lvl) not in names for lvl, names in parents.items() if lvl < level):
+            continue
+        rows.append({'name': name, 'dep_code': r.get('dep_code')})
     names = _labels_sorted_by_dep_code(rows, 'name')
     return [{'label': n, 'value': n} for n in names]
 
 
 def org_codes_for_levels(l1=None, l2=None, l3=None, period: tuple | None = None):
-    """선택된 1/2/3단계 이름에 해당하는 org_code(=org_name_wd) 집합. 선택한
-    단계끼리는 AND(교집합) — 캐스케이딩 덕에 보통 가장 깊은 선택이 결정한다.
-    아무것도 선택하지 않았으면 None(필터 없음)."""
+    """선택된 1/2/3단계 부서명에 해당하는 org_code(=org_name_wd) 집합. 선택한 단계끼리는
+    AND. 아무것도 선택하지 않았으면 None(필터 없음)."""
     sel = {1: _as_name_set(l1), 2: _as_name_set(l2), 3: _as_name_set(l3)}
     if not any(sel.values()):
         return None
-    tree = build_org_tree(read_team_refer(DATA_DIR, period=period))
-    result = None
-    for lvl, names in sel.items():
-        if not names:
-            continue
-        codes: set = set()
-
-        def _visit(node, ancestors, lvl=lvl, names=names, codes=codes):
-            if str(node.get('team_layer') or '').strip() == str(lvl) and own_level_name(node) in names:
-                codes.update(_collect_org_codes(node, include_children=True))
-
-        _walk_layered(tree, (), _visit)
-        result = codes if result is None else (result & codes)
-    return result or set()
+    codes: set = set()
+    for r in _org_rows(period):
+        if all(_cell(r, lvl) in names for lvl, names in sel.items() if names):
+            codes.add((r.get('org_name_wd') or '').strip())
+    return codes
 
 
 def org_code_level_names(org_code: str) -> tuple[str, str, str]:
-    """org_code가 속한 (플랫폼/팀, 플랫폼/그룹, 과제/파트) 이름 — 각 단계에서
-    가장 가까운 조상(자기 자신 포함)의 이름, 없으면 ''."""
+    """org_code가 속한 (1단계, 2단계, 3단계) 부서명 — team_refer 칸 값 그대로."""
     org_code = (org_code or '').strip()
-    found: list = []
-
-    def _visit(node, ancestors):
-        if found or (node.get('org_name_wd') or '').strip() != org_code or not org_code:
-            return
-        try:
-            layer = int(str(node.get('team_layer') or '0').strip() or 0)
-        except ValueError:
-            layer = 0
-        chain = ancestors + ((layer, own_level_name(node)),)
-        names = {1: '', 2: '', 3: ''}
-        for l, n in chain:
-            if l in names:
-                names[l] = n
-        found.append((names[1], names[2], names[3]))
-
-    _walk_layered(_org_tree(), (), _visit)
-    return found[0] if found else ('', '', '')
+    if not org_code:
+        return ('', '', '')
+    for r in _org_rows():
+        if (r.get('org_name_wd') or '').strip() == org_code:
+            return (_cell(r, 1), _cell(r, 2), _cell(r, 3))
+    return ('', '', '')
 
 
 def _team_refer_org_code_timeline() -> dict:
@@ -622,23 +586,10 @@ def _team_refer_org_code_timeline() -> dict:
     timeline: dict = {}
 
     for key in sorted(dates):
-        snapshot_rows = _latest_rows_in_period(all_rows, key, key)
-
-        def _visit(node, ancestors, key=key):
-            org_code = (node.get('org_name_wd') or '').strip()
-            if not org_code:
-                return
-            try:
-                layer = int(str(node.get('team_layer') or '0').strip() or 0)
-            except ValueError:
-                layer = 0
-            names = {1: '', 2: '', 3: ''}
-            for l, n in ancestors + ((layer, own_level_name(node)),):
-                if l in names:
-                    names[l] = n
-            timeline.setdefault(org_code, []).append((key, names[1], names[2], names[3]))
-
-        _walk_layered(build_org_tree(snapshot_rows), (), _visit)
+        for r in _latest_rows_in_period(all_rows, key, key):
+            org_code = (r.get('org_name_wd') or '').strip()
+            if org_code:
+                timeline.setdefault(org_code, []).append((key, _cell(r, 1), _cell(r, 2), _cell(r, 3)))
 
     for entries in timeline.values():
         entries.sort(key=lambda t: t[0])
