@@ -13818,3 +13818,44 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 서버 로그: `TypeError: sequence item 7: expected str instance, NoneType found` (`build_run_workbook`의 `', '.join(row)`).
   결과 표에 빈 값(NULL) 셀이 있으면 발생. `None`은 빈 문자열, 그 외는 `str()`로 바꿔 이어붙이도록 수정.
 - 앞선 제어문자 수정과는 별개의 원인이었다(코드는 이미지에 포함되므로 `docker compose up -d --build app` 필요).
+
+## 2026-10-08 (4): run_integration.py 마지막에 DB 반영 단계 추가
+
+- 앱은 DATABASE_URL이 있으면 파일보다 DB를 먼저 읽는데, 파이프라인은 파일만 저장해 분석 결과가 화면에 반영되지 않았다.
+- `run_integration.py` 3/3단계로 `load_to_db.load()`를 호출. DATABASE_URL 미설정이면 안내만 출력하고 정상 종료,
+  DB 접속 실패 등 예외도 실행 실패로 취급하지 않고 안내만(파일 결과는 이미 저장됨). `--skip-db-load`로 건너뛸 수 있다.
+
+## 2026-10-08 (5): 타임라인 과제명 구간 병합 + 부서 검색을 1·2·3단계(플랫폼/팀·플랫폼/그룹·과제/파트)로 분리
+
+1. **과제명 이력(타임라인/과제 표)**: 같은 과제코드의 개명 이력(`tasks_information` 작성일×과제명)에서 작성일 기준
+   **전후 과제명이 같으면 같은 과제로 보고 가장 이른 작성일만** 경계로 쓴다(`process_tasks._code_to_history_map`).
+   예) 머터리얼2(2026-03-08/2025-02-04/2024-11-01)+머터리얼(2023-01-01) → 머터리얼 '23.01~'24.10, 머터리얼2 '24.11~진행중.
+   **반영하려면 과제참여이력(tasks)을 다시 실행**해야 한다(tasks.csv의 the_task_name이 바뀜).
+2. **부서 검색 3단계화**: 연구원 프로필 검색·연구원 명단 검색 모두 '부서' 하나 → 플랫폼/팀(1단계)·플랫폼/그룹(2단계)·
+   과제/파트(3단계) 세 드롭다운(상위 선택 시 하위 옵션이 좁혀지는 캐스케이딩, 선택값이 새 옵션에 없으면 해제).
+   - `services/similarity_map`: `level_filter_options(level, parents, period)`, `org_codes_for_levels(l1,l2,l3,period)`
+     (선택 단계끼리 AND), `org_code_level_names(org_code)`; 과거포함 조회(`researcher_ids_ever_matching_org_field`)도
+     `dep_2nd_name` 지원(타임라인을 (팀,그룹,과제) 3단계 이름으로 확장). 각 단계 이름은 `own_level_name`(org_name_wd 우선).
+   - 연구원 프로필: `dept-select`(팀) + `group-select` + `project-select`, 최근 검색 칩이 세 값을 함께 채움.
+   - 연구원 명단: `filter-dept`(팀)·`filter-group`·`filter-project`, 필터 초기화/기간 지정/모드 전환 콜백 연동.
+   - 직책 단위 리프가 2단계 조직(직접 소속)이면 과제/파트는 비어 있다(그룹까지만 선택 가능).
+3. 검증: 합성 조직도로 옵션/캐스케이딩/org_code 집합, 샘플 데이터로 명단 필터(전체 50 / 팀 20 / 그룹 10 / 불일치 AND 0), 두 페이지 레이아웃 렌더링, pytest 55 passed.
+
+## 2026-10-08 (6): 프로필/보유 전문성 UI 4건
+
+1. **현재·과거 주력 분야 한 카드**: 보유 전문성 리포트 카드(`process_researcher_expertise._focus_block_html`)와 프로필 전문성 요약(`llm_summary_block`)에서
+   현재(위)/과거(아래)를 하나의 카드로 합쳤다. 재분석 전 결과(필드 없음)는 블록 생략.
+2. **전문성 요약↔타임라인 높이**: 전문성 요약 기본 높이 150→300px(2배), 요약 박스 아래 모서리를 끌어 높이 조절(CSS `resize: vertical`),
+   타임라인은 남는 높이를 자동으로 채움.
+3. **정의 툴팁**: 연구 기여 유형 배지(주도형/참여형/판정보류)와 유사 연구원 시니어/주니어(프로필 범례·배지, 보유 전문성 리포트 배지)에
+   마우스 오버 시 정의 표시(주니어 CL3-4년차 이하 / 시니어 CL3-5년차 이상).
+
+## 2026-10-08 (7): 타임라인 과제 카드 — 데이터 갱신 경로 점검 + tasks 중복 구간 정리
+
+- 과제 카드를 누르면 보이는 목록은 **그 과제에 연결된 논문/특허**다(`timeline_view._task_expand_body`). 연결은 논문/특허의
+  `project_code`(없으면 `project_name`)와 과제의 코드(`tasks_information.csv`의 과제명→과제코드)를 맞춘다
+  (`timeline_data.linked_task_names`). 그래서 최신 반영에는 **과제참여이력(tasks) + 과제정보(tasks_information) + 논문 + 특허**가
+  모두 업로드·실행되어야 하고(인사발령은 카드 목록이 아니라 타임라인 점 표시), 마지막에 DB 반영이 필요하다.
+- tasks는 자연키 `(researcher_id, task_name, start_date)` 업서트라, 연속기간 병합/과제명 이력 보정으로 구간 시작일이 달라지면
+  예전 구간 행이 남아 같은 과제가 겹쳐 보일 수 있었다. `process_tasks._drop_stale_task_rows()`: 이번 파일에 다시 나온
+  (사번, 과제명) 조합의 기존 행을 먼저 지우고 업서트한다(이번 파일에 없는 과제/사람은 그대로 보존).

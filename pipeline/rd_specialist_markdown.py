@@ -661,6 +661,7 @@ CONSOLE_STYLE = """
     font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent);
     font-weight: 700; margin-bottom: 6px;
   }
+  .kv-block .kv-sub { font-size: 0.72rem; font-weight: 700; color: var(--ink-soft); margin: 6px 0 2px; }
   dl.kv { margin: 0; font-size: 0.78rem; }
   dl.kv dt { color: var(--ink-soft); font-weight: 600; margin-top: 6px; }
   dl.kv dt:first-child { margin-top: 0; }

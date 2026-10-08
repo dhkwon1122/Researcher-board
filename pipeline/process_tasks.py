@@ -145,6 +145,14 @@ def _code_to_history_map(tasks_info_df: pd.DataFrame) -> dict:
         history.setdefault(code, []).append((wd, name))
     for code in history:
         history[code].sort(key=lambda pair: pair[0])
+        # 작성일 기준 전후 과제명이 같으면(재작성/재제출) 같은 과제로 보고 가장 이른
+        # 작성일 하나만 남긴다 — 이름이 실제로 바뀐 시점만 구간 경계가 되도록.
+        collapsed = []
+        for wd, name in history[code]:
+            if collapsed and collapsed[-1][1] == name:
+                continue
+            collapsed.append((wd, name))
+        history[code] = collapsed
     return history
 
 
@@ -248,6 +256,29 @@ def _find_source_file(raw_dir: str) -> str | None:
     return anyfile[0] if len(anyfile) == 1 else None
 
 
+def _drop_stale_task_rows(result: pd.DataFrame) -> None:
+    """기존 tasks.csv에서, 이번 파일에 다시 나온 (researcher_id, task_name) 조합의 행을
+    먼저 지운다. 자연키가 (researcher_id, task_name, start_date)라서, 연속 기간 병합이나
+    과제명 이력 보정으로 구간 경계(start_date)가 달라지면 예전 경계의 행이 지워지지 않고
+    새 행과 겹쳐 남기 때문이다(같은 과제가 두 번 보이는 문제). 이번 파일에 없는 과제/사람의
+    행은 그대로 보존한다(기존 '없으면 보존' 원칙)."""
+    if result.empty or not os.path.exists(OUTPUT):
+        return
+    try:
+        existing = pd.read_csv(OUTPUT, encoding='utf-8-sig', dtype=str, keep_default_na=False)
+    except Exception:
+        return
+    if not {'researcher_id', 'task_name'} <= set(existing.columns):
+        return
+    fresh = set(zip(result['researcher_id'].astype(str), result['task_name'].astype(str)))
+    mask = [(r, t) in fresh for r, t in zip(existing['researcher_id'], existing['task_name'])]
+    if not any(mask):
+        return
+    import csv as _csv
+    existing[[not m for m in mask]].to_csv(OUTPUT, index=False, encoding='utf-8-sig', quoting=_csv.QUOTE_NONNUMERIC)
+    print(f'[process_tasks] 이번 파일에 다시 나온 과제의 기존 {sum(mask)}행을 먼저 정리(구간 경계 변경으로 인한 중복 방지)')
+
+
 def process(raw_dir: str = RAW_DIR) -> bool:
     from excel_reader import norm_id, parse_yyyymmdd, read_xlsx
     from source_reader import read_source
@@ -297,6 +328,7 @@ def process(raw_dir: str = RAW_DIR) -> bool:
 
     result = result.sort_values(['researcher_id', 'start_date']).reset_index(drop=True)
 
+    _drop_stale_task_rows(result)
     merged = write_merged(OUTPUT, result, TABLE_KEYS['tasks'])
     print(f'[process_tasks] 저장 완료: {OUTPUT}  (총 {len(merged)}행, 이번 파일 {len(result)}행 반영)')
     return True

@@ -504,7 +504,8 @@ def _tenure_badge_html(tenure_level: str) -> str:
     if not tenure_level:
         return ''
     css = _TENURE_CLASS.get(tenure_level, 'junior')
-    return f'<span class="badge {css}">{html.escape(tenure_level)}</span>'
+    tip = {'Junior': '주니어 : CL3-4년차 이하', 'Senior': '시니어 : CL3-5년차 이상'}.get(tenure_level, '')
+    return f'<span class="badge {css}" title="{html.escape(tip)}">{html.escape(tenure_level)}</span>'
 
 
 def _evidence_html(evidence, surface_only: bool) -> str:
