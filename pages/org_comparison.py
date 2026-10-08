@@ -202,6 +202,13 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur, inc,
         award_items.append(html.Li(
             ' / '.join(parts) if parts else '-',
             className='small',
+            style={
+                'display': '-webkit-box',
+                'WebkitLineClamp': '2',
+                'WebkitBoxOrient': 'vertical',
+                'overflow': 'hidden',
+                'textOverflow': 'ellipsis',
+            },
         ))
     award_section = _section('주요 시상이력', html.Ul(
         award_items or [html.Li('해당 없음', className='small text-muted')],
@@ -239,7 +246,7 @@ def _candidate_card(r_info, rank_type, rank_order, eva, edu, awd, nur, inc,
     basic_section = html.Div([
         html.P(line1, className='small fw-bold mb-0 text-center'),
         html.P(line2, className='small text-muted mb-2 text-center'),
-        html.Div(grade_items, className='d-flex flex-wrap align-items-center'),
+        html.Div(grade_items, className='d-flex flex-wrap align-items-center justify-content-center'),
     ], className='bg-light rounded p-2')
 
     # 주요 양성이력
