@@ -13840,3 +13840,9 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - **기술명 통합**: `pipeline/tech_canonical.py` — 기술명 임베딩(코사인 ≥0.88)으로 후보 묶음 → LLM이 확실히 같은 것만 묶고 대표 이름 결정(보수적; LLM/임베딩 실패 시 통합 안 함, 캐시 `tech_canonical_cache.json`). `technology_holder_summary.csv`에 `aliases`(통합된 표기) 추가, 보유자는 합집합(중복 1명). 재실행: `run_analysis.py` 4단계.
 - 반영: 서버 `git pull` → `docker compose up -d --build app` → `run_analysis.py`(4·5단계, LLM 호출) → DB 반영.
 - run_expertise.py: 과제정보(process_task_information)를 과제참여이력(process_tasks)보다 먼저 실행하도록 순서 변경(개명 이력 파일을 같은 실행에서 반영).
+
+## (15) 프로필 검색/일괄 인쇄/PDF 파일명/AI 검색 테스트 정리 (2026-10-09)
+- **최근 검색 칩·`?id=` 딥링크**: 부서 3개 드롭다운을 그 사람 부서로 채우지 않고 비운다 → 연구원 이름/사번 검색이 항상 전체 대상(연구원 검색 최우선).
+- **일괄 인쇄 진행률 0 고정**: 200ms 인터벌 틱마다 한 명씩 만들었는데, 실제 데이터에서 한 명이 200ms보다 오래 걸리면 Dash가 앞선 응답을 새 틱에 밀려난 것으로 보고 버려 첫 사람만 반복 생성(`[photo]` 로그 반복). 인터벌은 `max_intervals=1` 시작 신호만, 이후 `_append_bulk_print_block`(Input `bulk-print-step`) → `bulk-print-progress` 갱신 → `_bulk_next_step`이 step 갱신 → 재호출의 직렬 연쇄로 변경. (서버 로그에 오류가 없고 같은 첫 사람 `[photo]`만 반복되던 증상과 일치하는 추정 원인 — 샘플 데이터로는 재현 불가, 서버에서 확인 필요.)
+- **PDF 저장 기본 파일명**: 프로필 인쇄 시 `document.title`을 `성명(사번)_프로필`(메일 첨부와 동일)로, 일괄 인쇄는 `연구원 프로필_일괄(N명)`으로 인쇄 중에만 설정.
+- **AI 검색 테스트 ⑤ 개선 반영 / ⑥ 반영된 규칙·예시 관리 삭제**: 카드·콜백 제거. `nl_query_curation.disable_all_once()`가 앱 로딩 시 1회(표식 `nl_query_curation_disabled.flag`) 기존 규칙·예시를 전부 끔(삭제 아님, 기록 보존). 결과 엑셀의 노란 입력 열은 메모용으로 유지(작성 방법 시트·가이드 HTML 문구 수정).
