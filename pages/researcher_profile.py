@@ -439,7 +439,7 @@ def _bulk_layout(ids_param):
         # (바로 아래 disabled=not rid_list) 버튼이 영원히 비활성 상태로 남는다.
         dcc.Store(id='print-ready', data=not rid_list),
         dcc.Interval(id='bulk-print-build-interval', interval=200, n_intervals=0,
-                     max_intervals=1, disabled=not rid_list),
+                     disabled=not rid_list),
         html.Div(id='profile-print-content', className='profile-print-only', children=[]),
     ])
 
@@ -1666,7 +1666,7 @@ def update_profile(rid):
 @callback(
     Output('profile-print-content', 'children', allow_duplicate=True),
     Output('bulk-print-progress', 'data'),
-    Output('bulk-print-build-interval', 'disabled'),
+    Output('bulk-print-build-interval', 'disabled', allow_duplicate=True),
     Output('bulk-build-progress-text', 'children'),
     Output('bulk-build-progress-fill', 'style'),
     Output('bulk-build-progress-overlay', 'style'),
@@ -1685,11 +1685,12 @@ def _append_bulk_print_block(_step, rid_list, progress):
     보였다(사용자 리포트, 16명 테스트). 한 명씩 나눠 붙이면 그 사이사이
     브라우저가 다른 작업(그리기, 다음 요청)을 처리할 틈이 생긴다.
 
-    (2026-10-09) 예전에는 200ms 인터벌 틱마다 호출됐는데, 실제 데이터에서 한 명 만드는 데 200ms보다
-    오래 걸리면 Dash가 앞선 응답을 새 틱에 밀려난 것으로 보고 버려 진행률이 0에서 멈추고 같은 첫 사람만
-    계속 다시 만들었다. 인터벌은 max_intervals=1로 시작 신호만 주고, 이후에는 이 콜백이 갱신한
-    bulk-print-progress → _bulk_next_step이 bulk-print-step을 갱신 → 이 콜백 재호출의 직렬 연쇄라
-    서로 밀어내지 않는다."""
+    (2026-10-09) 예전에는 200ms 인터벌 틱마다 이 콜백이 직접 호출됐는데, 실제 데이터에서 한 명 만드는 데
+    200ms보다 오래 걸리면 Dash가 앞선 응답을 새 틱에 밀려난 것으로 보고 버려 진행률이 0에서 멈추고 같은
+    첫 사람만 계속 다시 만들었다. 서버 콜백 두 개를 서로의 출력→입력으로 잇는 연쇄도 시도했지만 Dash가
+    순환을 이어주지 않아 1명 뒤에 멈췄다. 지금 방식: 틱마다 클라이언트사이드 콜백이 *먼저 인터벌을 끄고*
+    bulk-print-step을 갱신 → 이 콜백이 한 명을 만든 뒤 인터벌을 다시 켠다(끝나면 끈 채로 둔다). 요청이
+    진행 중인 동안에는 틱이 없으므로 응답이 버려지지 않고, 콜백 그래프에 순환도 없다."""
     from services.auth import can_view_evaluation, get_current_user
 
     fallback = (no_update, no_update, True, no_update, no_update, _BULK_BUILD_OVERLAY_HIDDEN_STYLE)
@@ -1743,16 +1744,19 @@ def _append_bulk_print_block(_step, rid_list, progress):
     return patch, new_idx, done, text, fill_style, overlay_style, done
 
 
-@callback(
+# 일괄 인쇄 틱 → (브라우저에서 즉시) 인터벌 끄기 + 다음 한 명 요청. 서버 콜백
+# _append_bulk_print_block이 그 한 명을 붙인 뒤 인터벌을 다시 켠다(위 docstring 참고).
+clientside_callback(
+    """
+    function(n) {
+        return [true, n];
+    }
+    """,
+    Output('bulk-print-build-interval', 'disabled', allow_duplicate=True),
     Output('bulk-print-step', 'data'),
     Input('bulk-print-build-interval', 'n_intervals'),
-    Input('bulk-print-progress', 'data'),
     prevent_initial_call=True,
 )
-def _bulk_next_step(_n_intervals, progress):
-    """일괄 인쇄 직렬 연쇄의 고리: 시작 신호(인터벌 1회)와 진행 갱신 때마다 다음 한 명을 만들라고
-    bulk-print-step을 갱신한다(_append_bulk_print_block 참고)."""
-    return progress or 0
 
 
 @callback(
