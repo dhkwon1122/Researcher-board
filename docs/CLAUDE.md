@@ -13839,3 +13839,4 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - **부서/과제간 협업**: `collaboration_edges.csv`에 `recent_count`(최근 5년 공동 논문+특허), `level1_a/b`(1단계부서명), `level3_a/b`(3단계부서명=org_code 기준) 추가. `services/collab_graph.py`가 단위(부서/과제)별 합산(같은 단위·빈 값 제외) 후 네트워크 그래프 + 히트맵 생성(둘 다 표시, 상위 N개 선택). "과제"는 연구원의 현재 org_code(3단계부서명) 기준으로 해석 — 진행중 과제(tasks.csv) 기준 아님.
 - **기술명 통합**: `pipeline/tech_canonical.py` — 기술명 임베딩(코사인 ≥0.88)으로 후보 묶음 → LLM이 확실히 같은 것만 묶고 대표 이름 결정(보수적; LLM/임베딩 실패 시 통합 안 함, 캐시 `tech_canonical_cache.json`). `technology_holder_summary.csv`에 `aliases`(통합된 표기) 추가, 보유자는 합집합(중복 1명). 재실행: `run_analysis.py` 4단계.
 - 반영: 서버 `git pull` → `docker compose up -d --build app` → `run_analysis.py`(4·5단계, LLM 호출) → DB 반영.
+- run_expertise.py: 과제정보(process_task_information)를 과제참여이력(process_tasks)보다 먼저 실행하도록 순서 변경(개명 이력 파일을 같은 실행에서 반영).
