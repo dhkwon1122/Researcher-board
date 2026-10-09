@@ -110,9 +110,17 @@ RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
 # 실패해도(|| true) 전체 빌드는 계속되고 나머지 기능은 정상 배포되며,
 # PDF 첨부 메일만 "PDF 생성 실패" 에러로 비활성 상태가 된다 — 사내 미러가
 # 있다면 PLAYWRIGHT_DOWNLOAD_HOST로 지정해 재시도할 것.
+#
+# 브라우저 설치 경로(2026-10-09): 설치는 root로 하지만 앱은 비root 사용자(app)로
+# 실행된다. 기본 경로(~/.cache/ms-playwright)에 깔면 root 홈(/root/.cache)에만
+# 있어 실행 시 "/home/app/.cache/ms-playwright/... executable doesn't exist"로
+# PDF 생성이 실패했다. 모든 사용자가 읽을 수 있는 고정 경로에 설치하고, 이
+# ENV가 런타임에도 유지돼 같은 경로를 쓴다.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
     NODE_EXTRA_CA_CERTS="/etc/ssl/certs/ca-certificates.crt" \
     playwright install --with-deps chromium \
+    && chmod -R a+rX /ms-playwright \
     || echo "[build] Playwright 브라우저 설치 실패 — PDF 첨부 메일 기능은 비활성화된 채로 나머지는 정상 빌드합니다. 원인은 보통 사내망에서 Chromium 다운로드 호스트가 막혀 있는 경우입니다."
 
 # ── 3) 앱 소스 복사 ──

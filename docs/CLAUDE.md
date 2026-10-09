@@ -13904,3 +13904,8 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - `pipeline/excel_reader.parse_yyyymmdd`: `2026.09.22`, `2026/9/22` 형식도 `YYYY-MM-DD`로 정규화(기존엔 '2026'으로 깨져 종료일이 사라질 수 있었음).
 - 반영: 서버 `git pull` → `docker compose up -d --build app`. 날짜 형식 문제였다면 과제참여이력을 다시 업로드/업데이트 후 DB 반영.
 - (12 추가) `process_tasks._collapse_same_start`: 원본에 같은 (연구원, 과제, 시작일) 행이 여럿(해제일 빈 줄 + 해제일 있는 줄)이면 해제일 있는 값을 채택. 기존엔 정렬/중복제거(keep='last') 순서에 따라 빈 해제일 행이 이겨 tasks.csv에 해제일이 빠질 수 있었음.
+
+## (13) 과제명 개명 이력 + 메일 PDF (2026-10-09)
+- 원인: `process_task_information`이 과제명 기준 중복 제거 시 "내용이 가장 많이 채워진 행"을 남겨, `[연구]발광소재개발`의 최초 작성일(2022-12-15)이 재작성본(2025-06-17)으로 대체 → 개명 시점이 틀어짐.
+- 수정: 중복 제거 전 원본 (task_code, task_name, write_date)를 `data/processed/task_name_history.csv`로 저장(TABLE_KEYS['task_name_history']). `process_tasks._apply_name_history`는 이 파일이 있으면 그걸로 개명 시점 계산(연속 동일명은 최초 작성일로 collapse), 없으면 기존 tasks_information 폴백. 반영: 과제정보 업데이트 → 과제참여이력 업데이트(순서) → DB 반영.
+- PDF 메일 실패("/home/app/.cache/ms-playwright ... doesn't exist"): root로 설치한 Chromium을 비root(app) 런타임이 못 찾음 → Dockerfile에 `PLAYWRIGHT_BROWSERS_PATH=/ms-playwright` + `chmod -R a+rX`. 이미지 재빌드 필요.
