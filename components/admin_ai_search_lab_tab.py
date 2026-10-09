@@ -14,6 +14,11 @@ from components.admin_shared import _alert
 from services import ai_search_lab as lab
 from services import nl_query_curation as cur
 
+try:  # 개선 반영 기능 제거(2026-10-09) — 이미 반영돼 있던 규칙/예시를 1회 전부 끈다(표식 파일로 중복 방지)
+    cur.disable_all_once()
+except Exception as _exc:  # 데이터 폴더 접근 불가 등 — 화면 로딩을 막지 않는다
+    print(f'[ai_search_lab] 반영 규칙/예시 비활성화 실패: {_exc}')
+
 _STATUS_COLOR = {'양호': 'success', '주의': 'warning', '실패': 'danger'}
 _STATUS_STYLE = {
     'styleConditions': [
@@ -116,20 +121,6 @@ def _result_grid():
     )
 
 
-def _managed_rows() -> list[dict]:
-    rows = []
-    for r in cur.list_rules():
-        rows.append({'key': r['id'], 'type': '규칙', 'id': r['id'], 'state': '켜짐' if r.get('active', True) else '꺼짐',
-                     'content': r['text'], 'question': r.get('question', ''), 'when': r.get('created_at', '')[:16].replace('T', ' '),
-                     'who': r.get('created_by', '')})
-    for e in cur.list_examples():
-        content = ' / '.join(x for x in (e.get('approach', ''), f"SQL: {e['sql']}" if e.get('sql') else '') if x)
-        rows.append({'key': e['id'], 'type': '예시', 'id': e['id'], 'state': '켜짐' if e.get('active', True) else '꺼짐',
-                     'content': content, 'question': e['question'], 'when': e.get('created_at', '')[:16].replace('T', ' '),
-                     'who': e.get('created_by', '')})
-    return rows
-
-
 def _ai_search_lab_tab() -> html.Div:
     return html.Div([
         dcc.Interval(id='lab-interval', interval=2500, disabled=not lab.is_busy()),
@@ -227,72 +218,6 @@ def _ai_search_lab_tab() -> html.Div:
             _result_grid(),
             html.Div(id='lab-detail', className='mt-3'),
             html.Div(id='lab-suggestion', className='mt-3'),
-        ]), className='shadow-sm mb-3'),
-        dbc.Card(dbc.CardBody([
-            html.Div('⑤ 개선 반영 — 수정한 엑셀 올리기', className='fw-semibold small mb-1'),
-            html.Div('결과 엑셀의 노란 열(올바른 결과/접근방법 · 올바른 SQL · 기대 사번 · 반영 구분 · 규칙 문장)을 채워 올리면 '
-                     '아래에서 검증 결과를 보고 항목별로 반영합니다. 규칙=모든 질문에 적용, 예시=비슷한 질문에 예시로 첨부, '
-                     '코드=코드 수정 요청서로 개발 쪽에 전달.', className='small text-muted mb-2'),
-            dcc.Upload(
-                id='lab-cur-upload', accept='.xlsx',
-                children=html.Div([html.I(className='bi bi-cloud-arrow-up me-1'), '수정한 결과 엑셀(.xlsx)을 끌어놓거나 클릭해 업로드'],
-                                  className='small text-muted'),
-                style={'padding': '8px', 'border': '1px dashed #adb5bd', 'borderRadius': '4px',
-                       'textAlign': 'center', 'cursor': 'pointer'}),
-            html.Div(id='lab-cur-msg', className='mt-2'),
-            dag.AgGrid(
-                id='lab-cur-grid', className='gs-ag-grid', rowData=[], defaultColDef=_GRID_DEFAULT,
-                getRowId='params.data.rid',
-                columnDefs=[
-                    {'headerName': '행', 'field': 'row', 'width': 80, 'checkboxSelection': False},
-                    {'headerName': '반영 구분', 'field': 'kind', 'width': 100},
-                    {'headerName': '질문', 'field': 'question', 'flex': 1, 'minWidth': 240, 'cellStyle': {'textAlign': 'left'},
-                     'tooltipField': 'question'},
-                    {'headerName': '반영될 내용', 'field': 'content', 'flex': 1, 'minWidth': 260,
-                     'cellStyle': {'textAlign': 'left'}, 'tooltipField': 'content'},
-                    {'headerName': '검증', 'field': 'check', 'width': 240, 'cellStyle': {'textAlign': 'left'},
-                     'tooltipField': 'check'},
-                    {'headerName': '문제', 'field': 'problem', 'width': 260,
-                     'cellStyle': {'textAlign': 'left', 'color': '#cf1322'}, 'tooltipField': 'problem'},
-                ],
-                dashGridOptions={'rowSelection': {'mode': 'multiRow', 'checkboxes': True, 'headerCheckbox': True},
-                                 'tooltipShowDelay': 0, 'domLayout': 'autoHeight'}),
-            dbc.ButtonGroup([
-                dbc.Button([html.I(className='bi bi-check2-square me-1'), '선택 항목 반영'], id='lab-cur-apply-btn',
-                           color='primary', size='sm'),
-                dbc.Button([html.I(className='bi bi-file-earmark-code me-1'), '코드 수정 요청서 내려받기'],
-                           id='lab-cur-code-btn', color='secondary', outline=True, size='sm'),
-            ], className='mt-2'),
-            dcc.Download(id='lab-cur-download'),
-        ]), className='shadow-sm mb-3'),
-
-        dbc.Card(dbc.CardBody([
-            html.Div('⑥ 반영된 규칙 · 검증된 예시 관리', className='fw-semibold small mb-1'),
-            html.Div('끄면 즉시 AI 검색에서 빠지고(기록은 남음), 삭제하면 목록에서도 사라집니다. 규칙은 "규칙 설정"의 '
-                     '자동 관리 블록에 들어가며 수기로 쓴 규칙은 건드리지 않습니다.', className='small text-muted mb-2'),
-            dag.AgGrid(
-                id='lab-cur-managed', className='gs-ag-grid', rowData=_managed_rows(), defaultColDef=_GRID_DEFAULT,
-                getRowId='params.data.key',
-                columnDefs=[
-                    {'headerName': '종류', 'field': 'type', 'width': 80},
-                    {'headerName': 'ID', 'field': 'id', 'width': 70},
-                    {'headerName': '상태', 'field': 'state', 'width': 80},
-                    {'headerName': '내용', 'field': 'content', 'flex': 1, 'minWidth': 320, 'cellStyle': {'textAlign': 'left'},
-                     'tooltipField': 'content'},
-                    {'headerName': '근거 질문', 'field': 'question', 'flex': 1, 'minWidth': 220,
-                     'cellStyle': {'textAlign': 'left'}, 'tooltipField': 'question'},
-                    {'headerName': '반영', 'field': 'when', 'width': 150},
-                    {'headerName': '반영자', 'field': 'who', 'width': 100},
-                ],
-                dashGridOptions={'rowSelection': {'mode': 'multiRow', 'checkboxes': True, 'headerCheckbox': True},
-                                 'tooltipShowDelay': 0, 'pagination': True, 'paginationPageSize': 15},
-                style={'height': '420px'}),
-            dbc.ButtonGroup([
-                dbc.Button('켜기', id='lab-cur-on-btn', color='success', outline=True, size='sm'),
-                dbc.Button('끄기', id='lab-cur-off-btn', color='warning', outline=True, size='sm'),
-                dbc.Button('삭제', id='lab-cur-del-btn', color='danger', outline=True, size='sm'),
-            ], className='mt-2'),
-            html.Div(id='lab-cur-manage-msg', className='mt-2'),
         ]), className='shadow-sm mb-3'),
     ], className='pt-3')
 
@@ -582,145 +507,3 @@ def lab_suggest(n_clicks, run_id):
     if not ok:
         return _alert(reason, 'warning'), not lab.is_busy()
     return _job_view(), False
-
-
-# ── 콜백: 개선 반영(⑤⑥) ──────────────────────────────────────────────────────
-
-def _preview_rows(entries: list[dict]) -> list[dict]:
-    rows = []
-    for e in entries:
-        if e['kind'] == '규칙':
-            content = e['rule_text']
-        elif e['kind'] in ('예시', '코드'):
-            content = ' / '.join(x for x in (e['approach'], f"SQL: {e['sql']}" if e['sql'] else '') if x)
-        else:
-            content = '(기록만, 반영 안 함)'
-        rows.append({'rid': str(e['row']), 'row': e['row'], 'kind': e['kind'], 'question': e['question'],
-                     'content': content, 'check': e.get('check', ''), 'problem': e.get('problem', ''),
-                     '_entry': e})
-    return rows
-
-
-@callback(
-    Output('lab-cur-grid', 'rowData'),
-    Output('lab-cur-grid', 'selectedRows'),
-    Output('lab-cur-msg', 'children', allow_duplicate=True),
-    Input('lab-cur-upload', 'contents'),
-    State('lab-cur-upload', 'filename'),
-    prevent_initial_call=True,
-)
-def lab_cur_upload(contents, filename):
-    import base64
-    from services.auth import can
-    if not contents:
-        return no_update, no_update, no_update
-    if not can('manage_users'):
-        return no_update, no_update, _alert('관리자만 사용할 수 있습니다.', 'danger')
-    try:
-        data = base64.b64decode(contents.split(',', 1)[1], validate=True)
-    except (ValueError, IndexError):
-        return [], [], _alert('파일을 읽지 못했습니다.', 'danger')
-    entries, notes = cur.parse_upload(data)
-    if not entries:
-        return [], [], _alert(' '.join(notes) or '반영할 행이 없습니다 — "반영 구분"을 채운 행이 있어야 합니다.', 'warning')
-    cur.validate(entries, run_sql=True)
-    rows = _preview_rows(entries)
-    ok = [r for r in rows if r['_entry']['ok'] and r['kind'] != '무시']
-    bad = sum(1 for r in rows if not r['_entry']['ok'])
-    msg = f'{filename}: {len(rows)}행 중 반영 가능 {len(ok)}건' + (f', 문제 {bad}건(수정 후 다시 올려주세요)' if bad else '')
-    return rows, ok, _alert(' '.join([msg, *notes]), 'warning' if bad else 'info')
-
-
-@callback(
-    Output('lab-cur-msg', 'children', allow_duplicate=True),
-    Output('lab-cur-managed', 'rowData', allow_duplicate=True),
-    Output('lab-cur-download', 'data', allow_duplicate=True),
-    Output('lab-question-grid', 'rowData', allow_duplicate=True),
-    Input('lab-cur-apply-btn', 'n_clicks'),
-    State('lab-cur-grid', 'selectedRows'),
-    State('lab-run-select', 'value'),
-    prevent_initial_call=True,
-)
-def lab_cur_apply(n_clicks, selected, run_id):
-    from datetime import datetime
-    from services.auth import can, get_current_user
-    if not n_clicks:
-        return no_update, no_update, no_update, no_update
-    if not can('manage_users'):
-        return _alert('관리자만 사용할 수 있습니다.', 'danger'), no_update, no_update, no_update
-    entries = [r['_entry'] for r in (selected or []) if r.get('_entry')]
-    if not entries:
-        return _alert('반영할 행을 체크하세요.', 'warning'), no_update, no_update, no_update
-    cur.validate(entries, run_sql=False)
-    user = (get_current_user() or {}).get('user_id', '')
-    try:
-        res = cur.apply_entries(entries, user_id=user, run_id=run_id or '')
-    except ValueError as exc:
-        return _alert(f'반영하지 않았습니다: {exc}', 'danger'), no_update, no_update, no_update
-    parts = [f"규칙 {res['rules']}건", f"예시 {res['examples']}건" + (f"(갱신 {res['examples_updated']})" if res['examples_updated'] else ''),
-             f"코드 요청 {res['code']}건", f"무시 {res['ignored']}건"]
-    if res['golden']:
-        parts.append(f"정답 대조 질문 {res['golden']}건 편입")
-    if res['skipped_duplicate_rules']:
-        parts.append(f"중복 규칙 {res['skipped_duplicate_rules']}건 건너뜀")
-    invalid = sum(1 for e in entries if not e.get('ok', True))
-    msg = '반영 완료 — ' + ', '.join(parts) + (f' · 검증 실패 {invalid}건은 반영하지 않음' if invalid else '')
-    download = no_update
-    if res['code_request']:
-        download = dcc.send_string(res['code_request'], f"코드수정요청서_{datetime.now().strftime('%Y%m%d_%H%M')}.md")
-        msg += ' · 코드 수정 요청서를 내려받았습니다. 개발 쪽에 전달해 주세요.'
-    return _alert(msg, 'success'), _managed_rows(), download, _question_rows(lab.load_draft())
-
-
-@callback(
-    Output('lab-cur-download', 'data', allow_duplicate=True),
-    Output('lab-cur-msg', 'children', allow_duplicate=True),
-    Input('lab-cur-code-btn', 'n_clicks'),
-    State('lab-cur-grid', 'rowData'),
-    prevent_initial_call=True,
-)
-def lab_cur_code_request(n_clicks, rows):
-    from datetime import datetime
-    from services.auth import can
-    if not n_clicks:
-        return no_update, no_update
-    if not can('manage_users'):
-        return no_update, _alert('관리자만 사용할 수 있습니다.', 'danger')
-    entries = [r['_entry'] for r in (rows or []) if r.get('_entry', {}).get('kind') == '코드']
-    if not entries:
-        return no_update, _alert('업로드한 엑셀에 반영 구분이 "코드"인 행이 없습니다.', 'warning')
-    return (dcc.send_string(cur.build_code_request(entries), f"코드수정요청서_{datetime.now().strftime('%Y%m%d_%H%M')}.md"),
-            no_update)
-
-
-@callback(
-    Output('lab-cur-managed', 'rowData', allow_duplicate=True),
-    Output('lab-cur-manage-msg', 'children'),
-    Input('lab-cur-on-btn', 'n_clicks'),
-    Input('lab-cur-off-btn', 'n_clicks'),
-    Input('lab-cur-del-btn', 'n_clicks'),
-    State('lab-cur-managed', 'selectedRows'),
-    prevent_initial_call=True,
-)
-def lab_cur_manage(_on, _off, _del, selected):
-    from services.auth import can, get_current_user
-    if not can('manage_users'):
-        return no_update, _alert('관리자만 사용할 수 있습니다.', 'danger')
-    if not selected:
-        return no_update, _alert('대상 행을 체크하세요.', 'warning')
-    trig = dash.ctx.triggered_id
-    user = (get_current_user() or {}).get('user_id', '')
-    n = 0
-    try:
-        for kind, label in (('rule', '규칙'), ('example', '예시')):
-            ids = [r['id'] for r in selected if r['type'] == label]
-            if not ids:
-                continue
-            if trig == 'lab-cur-del-btn':
-                n += cur.delete(kind, ids, user)
-            else:
-                n += cur.set_active(kind, ids, trig == 'lab-cur-on-btn', user)
-    except ValueError as exc:
-        return no_update, _alert(f'처리하지 않았습니다: {exc}', 'danger')
-    verb = {'lab-cur-del-btn': '삭제', 'lab-cur-on-btn': '켜기', 'lab-cur-off-btn': '끄기'}[trig]
-    return _managed_rows(), _alert(f'{n}건 {verb} 처리했습니다.', 'success')

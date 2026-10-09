@@ -317,11 +317,7 @@ def layout(id=None, ids=None, **_kwargs):
             try:
                 res_df = read_processed('researchers')
                 match = res_df[res_df['researcher_id'] == id]
-                if not match.empty:
-                    default_dept, default_group, default_project = similarity_map.org_code_level_names(
-                        str(match.iloc[0].get('org_code', '')))
-                    res_opts = _filtered_researcher_opts(default_mode != 'all', default_dept or None,
-                                                         default_group or None, default_project or None) or all_opts
+                # (2026-10-09) 딥링크도 부서를 고정하지 않는다 — 전체 연구원이 검색 대상(연구원 검색 최우선).
             except Exception:
                 pass
 
@@ -437,12 +433,13 @@ def _bulk_layout(ids_param):
         ], className='no-print'),
         dcc.Store(id='bulk-print-ids', data=rid_list),
         dcc.Store(id='bulk-print-progress', data=0),
+        dcc.Store(id='bulk-print-step', data=None),
         # 만들 사람이 아예 없으면(예: 잘못된 ?ids=) 기다릴 것도 없으므로
         # 처음부터 준비된 것으로 둔다 — 안 그러면 인터벌이 아예 안 돌아
         # (바로 아래 disabled=not rid_list) 버튼이 영원히 비활성 상태로 남는다.
         dcc.Store(id='print-ready', data=not rid_list),
         dcc.Interval(id='bulk-print-build-interval', interval=200, n_intervals=0,
-                     disabled=not rid_list),
+                     max_intervals=1, disabled=not rid_list),
         html.Div(id='profile-print-content', className='profile-print-only', children=[]),
     ])
 
@@ -1509,7 +1506,10 @@ def _select_from_history(n_clicks_list, ids):
     """"최근 검색" 칩을 누르면 그 사람의 부서로 '부서' 드롭다운을 같이 옮겨줘야
     (layout()의 id= 딥링크와 동일한 이유로) researcher-select 옵션 목록에 그
     사람이 실제로 들어있는 상태가 된다 — 부서만 안 맞추면 필터링된 옵션에서
-    빠져 있어 선택이 무시될 수 있다."""
+    빠져 있어 선택이 무시될 수 있다.
+    (2026-10-09 변경) 반대로 부서를 그 사람 부서로 고정하면 다른 부서 연구원을 이름/사번으로
+    검색할 수 없게 되므로(사용자 요청: 연구원 검색이 최우선), 이제는 세 부서 드롭다운을 비워
+    전체 연구원이 검색 대상이 되게 하고 그 사람만 선택한다."""
     triggered_id = dash.ctx.triggered_id
     if not triggered_id:
         return no_update, no_update, no_update, no_update
@@ -1521,7 +1521,7 @@ def _select_from_history(n_clicks_list, ids):
     match = res_df[res_df['researcher_id'] == rid]
     l1, l2, l3 = (similarity_map.org_code_level_names(str(match.iloc[0].get('org_code', '')))
                   if not match.empty else ('', '', ''))
-    return (l1 or None), (l2 or None), (l3 or None), rid
+    return None, None, None, rid
 
 
 def _build_print_block(rid, tables, researchers, name_map, show_eval):
@@ -1671,19 +1671,25 @@ def update_profile(rid):
     Output('bulk-build-progress-fill', 'style'),
     Output('bulk-build-progress-overlay', 'style'),
     Output('print-ready', 'data', allow_duplicate=True),
-    Input('bulk-print-build-interval', 'n_intervals'),
+    Input('bulk-print-step', 'data'),
     State('bulk-print-ids', 'data'),
     State('bulk-print-progress', 'data'),
     prevent_initial_call=True,
 )
-def _append_bulk_print_block(_n_intervals, rid_list, progress):
+def _append_bulk_print_block(_step, rid_list, progress):
     """일괄 인쇄 화면이 뜨자마자 bulk-print-build-interval이 주기적으로
     틱을 보내고, 매 틱마다 딱 한 명의 인쇄 콘텐츠만 만들어 Patch로
     이어붙인다 — build_bulk_print_content(이전 버전)처럼 인원 전체를 한
     콜백에서 만들어 한 번에 렌더링하면, 그 최종 DOM 반영 자체가 무겁고
     긴 동기 작업이라 브라우저가 "응답 없음"을 띄울 정도로 멈춘 것처럼
     보였다(사용자 리포트, 16명 테스트). 한 명씩 나눠 붙이면 그 사이사이
-    브라우저가 다른 작업(그리기, 다음 요청)을 처리할 틈이 생긴다."""
+    브라우저가 다른 작업(그리기, 다음 요청)을 처리할 틈이 생긴다.
+
+    (2026-10-09) 예전에는 200ms 인터벌 틱마다 호출됐는데, 실제 데이터에서 한 명 만드는 데 200ms보다
+    오래 걸리면 Dash가 앞선 응답을 새 틱에 밀려난 것으로 보고 버려 진행률이 0에서 멈추고 같은 첫 사람만
+    계속 다시 만들었다. 인터벌은 max_intervals=1로 시작 신호만 주고, 이후에는 이 콜백이 갱신한
+    bulk-print-progress → _bulk_next_step이 bulk-print-step을 갱신 → 이 콜백 재호출의 직렬 연쇄라
+    서로 밀어내지 않는다."""
     from services.auth import can_view_evaluation, get_current_user
 
     fallback = (no_update, no_update, True, no_update, no_update, _BULK_BUILD_OVERLAY_HIDDEN_STYLE)
@@ -1738,6 +1744,18 @@ def _append_bulk_print_block(_n_intervals, rid_list, progress):
 
 
 @callback(
+    Output('bulk-print-step', 'data'),
+    Input('bulk-print-build-interval', 'n_intervals'),
+    Input('bulk-print-progress', 'data'),
+    prevent_initial_call=True,
+)
+def _bulk_next_step(_n_intervals, progress):
+    """일괄 인쇄 직렬 연쇄의 고리: 시작 신호(인터벌 1회)와 진행 갱신 때마다 다음 한 명을 만들라고
+    bulk-print-step을 갱신한다(_append_bulk_print_block 참고)."""
+    return progress or 0
+
+
+@callback(
     Output('profile-print-btn', 'disabled'),
     Input('print-ready', 'data'),
 )
@@ -1761,7 +1779,7 @@ def update_leadership(rid, year):
 
 clientside_callback(
     """
-    async function(n) {
+    async function(n, rid_value, opts_value) {
         if (n > 0) {
             // Dash가 클릭 한 번에 이 콜백을 두 번 발생시키는 경우가 있어(이
             // 프로젝트에서 기존부터 있던 동작 — 이전 동기 버전에서는 두
@@ -1799,7 +1817,18 @@ clientside_callback(
             // 있어, 인쇄 직전에 제목을 고정해두고 인쇄 후 원래 제목으로
             // 되돌린다.
             var originalTitle = document.title;
-            document.title = '연구원 프로필';
+            // PDF 저장 기본 파일명 = 문서 제목: 단일 조회는 "성명(사번)_프로필"(메일 첨부 이름과 동일),
+            // 일괄 인쇄(연구원 선택 박스 없음)는 "연구원 프로필_일괄(N명)".
+            var pdfTitle = '연구원 프로필';
+            if (rid_value && opts_value) {
+                var o = (opts_value || []).find(function(x) { return x.value === rid_value; });
+                var nm = o && o.label ? String(o.label).split(' [')[0].split('  (')[0].trim() : '';
+                pdfTitle = (nm ? nm : '') + '(' + rid_value + ')_프로필';
+            } else if (document.getElementById('bulk-print-ids')) {
+                var n = document.querySelectorAll('#profile-print-content > div').length;
+                pdfTitle = '연구원 프로필_일괄(' + n + '명)';
+            }
+            document.title = pdfTitle;
 
             var cleanup = function() {
                 var el = document.getElementById('profile-print-a4-page-size');
@@ -1817,6 +1846,8 @@ clientside_callback(
     """,
     Output('profile-print-dummy', 'children'),
     Input('profile-print-btn', 'n_clicks'),
+    State('researcher-select', 'value'),
+    State('researcher-select', 'options'),
     prevent_initial_call=True,
 )
 

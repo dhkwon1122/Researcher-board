@@ -412,3 +412,30 @@ def delete(kind: str, ids: list[str], user_id: str = '') -> int:
     for i in ids:
         _history('삭제', 종류=kind, id=i, 반영자=user_id)
     return len(items) - len(kept)
+
+
+def disable_all_once(user_id: str = 'system') -> int:
+    """2026-10-09 사용자 확정: 관리자 화면의 "개선 반영/반영된 규칙·예시 관리"를 없애면서, 이미 반영돼
+    있던 규칙·검증된 예시를 전부 끈다(삭제하지 않고 기록은 보존). 표식 파일이 있으면 다시 하지 않는다
+    (이후 코드에서 직접 켠 항목은 건드리지 않기 위해). 반환: 이번에 끈 항목 수."""
+    marker = _path('nl_query_curation_disabled.flag')
+    if os.path.exists(marker):
+        return 0
+    n = 0
+    with _lock:
+        for kind, name in (('rule', 'nl_query_curated_rules.json'), ('example', 'nl_query_verified_examples.json')):
+            items = _read(name)
+            changed = False
+            for it in items:
+                if it.get('active', True):
+                    it['active'] = False
+                    changed = True
+                    n += 1
+                    _history('비활성화', 종류=kind, id=it.get('id', ''), 반영자=user_id)
+            if changed:
+                if kind == 'rule':
+                    _sync_rules(items)
+                _write(name, items)
+        with open(marker, 'w', encoding='utf-8') as f:
+            f.write('disabled 2026-10-09\n')
+    return n

@@ -13909,3 +13909,17 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 원인: `process_task_information`이 과제명 기준 중복 제거 시 "내용이 가장 많이 채워진 행"을 남겨, `[연구]발광소재개발`의 최초 작성일(2022-12-15)이 재작성본(2025-06-17)으로 대체 → 개명 시점이 틀어짐.
 - 수정: 중복 제거 전 원본 (task_code, task_name, write_date)를 `data/processed/task_name_history.csv`로 저장(TABLE_KEYS['task_name_history']). `process_tasks._apply_name_history`는 이 파일이 있으면 그걸로 개명 시점 계산(연속 동일명은 최초 작성일로 collapse), 없으면 기존 tasks_information 폴백. 반영: 과제정보 업데이트 → 과제참여이력 업데이트(순서) → DB 반영.
 - PDF 메일 실패("/home/app/.cache/ms-playwright ... doesn't exist"): root로 설치한 Chromium을 비root(app) 런타임이 못 찾음 → Dockerfile에 `PLAYWRIGHT_BROWSERS_PATH=/ms-playwright` + `chmod -R a+rX`. 이미지 재빌드 필요.
+
+## (14) 타임라인 *N 삭제 + 조직 분석 개편 (2026-10-09)
+- 타임라인 논문/특허 pill의 `*과제미연결수` 표기 삭제(`timeline_view._accordion_pill`). 과제 카드 클릭 시 연결 논문/특허 표시는 유지.
+- **과제별 필요 역량**(구 과제별 역량): 충족/갭 판정·구간 표시 삭제. `process_project_competency_gap.py`가 LLM으로 필요 역량 + 쉬운 설명(`description`, 캐시 키 `v2:`)을 뽑고, 과제원(`members`)·비과제원 상위 10명(`outsiders`)마다 임베딩 유사도 + 가까운 보유 항목 `top_items` + LLM 근거 `reason`(`attach_evidence`, (과제,역량) 단위 1회 호출, 연구원 ID/이름 없이 순번만, 캐시 `project_competency_evidence_cache.json`). 화면 배지에 유사도, 마우스 오버로 근거(비과제원은 1·3단계부서명 포함). 재실행 필요: `run_analysis.py` 5단계.
+- **부서/과제간 협업**: `collaboration_edges.csv`에 `recent_count`(최근 5년 공동 논문+특허), `level1_a/b`(1단계부서명), `level3_a/b`(3단계부서명=org_code 기준) 추가. `services/collab_graph.py`가 단위(부서/과제)별 합산(같은 단위·빈 값 제외) 후 네트워크 그래프 + 히트맵 생성(둘 다 표시, 상위 N개 선택). "과제"는 연구원의 현재 org_code(3단계부서명) 기준으로 해석 — 진행중 과제(tasks.csv) 기준 아님.
+- **기술명 통합**: `pipeline/tech_canonical.py` — 기술명 임베딩(코사인 ≥0.88)으로 후보 묶음 → LLM이 확실히 같은 것만 묶고 대표 이름 결정(보수적; LLM/임베딩 실패 시 통합 안 함, 캐시 `tech_canonical_cache.json`). `technology_holder_summary.csv`에 `aliases`(통합된 표기) 추가, 보유자는 합집합(중복 1명). 재실행: `run_analysis.py` 4단계.
+- 반영: 서버 `git pull` → `docker compose up -d --build app` → `run_analysis.py`(4·5단계, LLM 호출) → DB 반영.
+- run_expertise.py: 과제정보(process_task_information)를 과제참여이력(process_tasks)보다 먼저 실행하도록 순서 변경(개명 이력 파일을 같은 실행에서 반영).
+
+## (15) 프로필 검색/일괄 인쇄/PDF 파일명/AI 검색 테스트 정리 (2026-10-09)
+- **최근 검색 칩·`?id=` 딥링크**: 부서 3개 드롭다운을 그 사람 부서로 채우지 않고 비운다 → 연구원 이름/사번 검색이 항상 전체 대상(연구원 검색 최우선).
+- **일괄 인쇄 진행률 0 고정**: 200ms 인터벌 틱마다 한 명씩 만들었는데, 실제 데이터에서 한 명이 200ms보다 오래 걸리면 Dash가 앞선 응답을 새 틱에 밀려난 것으로 보고 버려 첫 사람만 반복 생성(`[photo]` 로그 반복). 인터벌은 `max_intervals=1` 시작 신호만, 이후 `_append_bulk_print_block`(Input `bulk-print-step`) → `bulk-print-progress` 갱신 → `_bulk_next_step`이 step 갱신 → 재호출의 직렬 연쇄로 변경. (서버 로그에 오류가 없고 같은 첫 사람 `[photo]`만 반복되던 증상과 일치하는 추정 원인 — 샘플 데이터로는 재현 불가, 서버에서 확인 필요.)
+- **PDF 저장 기본 파일명**: 프로필 인쇄 시 `document.title`을 `성명(사번)_프로필`(메일 첨부와 동일)로, 일괄 인쇄는 `연구원 프로필_일괄(N명)`으로 인쇄 중에만 설정.
+- **AI 검색 테스트 ⑤ 개선 반영 / ⑥ 반영된 규칙·예시 관리 삭제**: 카드·콜백 제거. `nl_query_curation.disable_all_once()`가 앱 로딩 시 1회(표식 `nl_query_curation_disabled.flag`) 기존 규칙·예시를 전부 끔(삭제 아님, 기록 보존). 결과 엑셀의 노란 입력 열은 메모용으로 유지(작성 방법 시트·가이드 HTML 문구 수정).

@@ -18,6 +18,10 @@ analysis.json)에서 과제별 "필요 역량"을 사내 LLM으로 4~8개 뽑고
     0.75 이상 상위 OUTSIDER_TOP_N명, 없으면 0.75 미만 대표 최대 5명 — outsider_low=True)를 추가로
     기록하고, 과제의 소속 단계(level1/2/3 = 플랫폼/그룹/과제)도 함께 저장한다.
 
+  - (2026-10-09) "과제별 필요 역량"으로 목적 변경: 충족/갭 판정 대신 필요 역량 이름 + 쉬운 설명(LLM),
+    과제원별 임베딩 유사도 + LLM 근거 한 줄, 비소속 상위 OUTSIDER_TOP_N(10)명(+근거)을 기록한다.
+    LLM 프롬프트에는 연구원 ID/이름을 넣지 않는다(순번만 사용).
+
 Source:
   data/processed/project_expertise_analysis.json
   data/processed/researchers.csv, project_personnel.csv
@@ -46,7 +50,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import OUT_DIR  # noqa: E402
 import researcher_fit as fit  # noqa: E402
-from llm_client import call_llm, extract_json  # noqa: E402
+from llm_client import call_llm, extract_json, max_concurrency, run_concurrent  # noqa: E402
 from services.llm import LLMError  # noqa: E402
 
 ANALYSIS_FILE = 'project_expertise_analysis.json'
@@ -57,8 +61,10 @@ CACHE_FILE = 'project_competency_cache.json'
 
 GAP_THRESHOLD = 0.75
 CANDIDATE_TOP_N = 3
-OUTSIDER_TOP_N = 10      # 0.75 이상 비소속 적합자 표시 상한
-OUTSIDER_LOW_N = 5       # 0.75 이상이 없을 때 0.75 미만 대표 인원
+OUTSIDER_TOP_N = 10      # 비소속 적합자 표시 인원(유사도 상위, 2026-10-09 사용자 확정)
+EVIDENCE_MEMBER_MAX = 30  # LLM 근거를 붙이는 과제원 상한(유사도 상위)
+EVIDENCE_TOP_ITEMS = 3   # 후보자당 LLM에 넘기는 가까운 보유 항목 수
+EVIDENCE_CACHE_FILE = 'project_competency_evidence_cache.json'
 
 _SYSTEM_PROMPT = """# Role
 당신은 R&D 과제 인력 구성 전문가입니다. 과제 문서 요약을 읽고 이 과제를
@@ -66,14 +72,30 @@ _SYSTEM_PROMPT = """# Role
 
 # Guidelines
 1. 문서에 드러난 핵심 기술·산출물·기술적 난제를 근거로 4~8개를 도출하세요.
-2. 각 역량은 "무엇을 할 수 있어야 하는가"가 드러나는 짧은 명사구로 쓰세요
+2. 각 역량의 name은 "무엇을 할 수 있어야 하는가"가 드러나는 짧은 명사구로 쓰세요
    (예: "SLAM 알고리즘 설계", "배터리 양극재 합성", "FPGA 하드웨어 가속").
    "소통 능력" 같은 일반 역량은 넣지 마세요.
-3. 문서 근거가 부족하면 개수를 줄이세요(지어내지 마세요).
-4. 반드시 아래 JSON 형식으로만 출력하세요.
+3. 각 역량의 description은 비전공자도 이해할 수 있게 1~2문장으로 쉽게 설명하세요
+   (전문 용어는 풀어 쓰고, 이 과제에서 왜 필요한지를 포함).
+4. 문서 근거가 부족하면 개수를 줄이세요(지어내지 마세요).
+5. 반드시 아래 JSON 형식으로만 출력하세요.
 
 # Output Format (JSON)
-{"required_competencies": ["역량1", "역량2"]}
+{"required_competencies": [{"name": "역량1", "description": "쉬운 설명"}]}
+"""
+
+_EVIDENCE_SYSTEM_PROMPT = """# Role
+당신은 R&D 인력 매칭 전문가입니다. 하나의 "필요 역량"과, 후보자별로 임베딩으로 찾은
+"가장 가까운 보유 역량 항목(유사도 포함)"이 주어집니다.
+
+# Guidelines
+1. 후보자마다 왜 이 필요 역량을 갖췄다고 볼 수 있는지(또는 어느 부분이 가까운지)를
+   보유 항목에 근거해 1문장(60자 안팎)으로 쓰세요. 항목에 없는 내용을 지어내지 마세요.
+2. 유사도가 낮으면(0.5 미만) "관련성이 낮음"을 솔직히 밝히세요.
+3. 후보자는 idx(번호)로만 식별합니다. 반드시 아래 JSON 형식으로만 출력하세요.
+
+# Output Format (JSON)
+{"evidence": [{"idx": 0, "reason": "근거 한 문장"}]}
 """
 
 
@@ -116,24 +138,37 @@ def _project_text(item: dict) -> str:
 
 
 def _required_competencies(text: str, cache: dict, refresh: bool) -> list | None:
-    key = hashlib.sha256(text.encode('utf-8')).hexdigest()
+    """[{'name','description'}, ...]. 캐시 키는 v2 접두(설명 포함 형식)."""
+    key = 'v2:' + hashlib.sha256(text.encode('utf-8')).hexdigest()
     if not refresh and key in cache:
         return cache[key]
     raw = call_llm(f'아래는 한 R&D 과제 문서의 분석 요약입니다.\n\n{text}', _SYSTEM_PROMPT,
-                   temperature=0.1, max_tokens=2000)
+                   temperature=0.1, max_tokens=3000)
     if not raw:
         return None
     try:
         data = json.loads(extract_json(raw))
     except json.JSONDecodeError:
         return None
-    values = []
+    values, seen = [], set()
     for v in data.get('required_competencies') or []:
-        v = str(v).strip()
-        if v and v not in values:
-            values.append(v)
+        if isinstance(v, dict):
+            name, desc = str(v.get('name') or '').strip(), str(v.get('description') or '').strip()
+        else:
+            name, desc = str(v).strip(), ''
+        if name and name not in seen:
+            seen.add(name)
+            values.append({'name': name, 'description': desc})
     cache[key] = values
     return values
+
+
+def _comp_name(c) -> str:
+    return str(c.get('name') if isinstance(c, dict) else c).strip()
+
+
+def _comp_desc(c) -> str:
+    return str(c.get('description') or '').strip() if isinstance(c, dict) else ''
 
 
 def _researcher_items(profiles: list, strength_std: list) -> dict:
@@ -160,13 +195,20 @@ def analyze_gaps(projects: list, required: dict, members: dict, items: dict, cur
     임베딩은 fit.cached_embed(실패 시 LLMError 전파)."""
     levels = levels or {}
     flat = [(rid, v) for rid, vals in items.items() for v in vals]
-    comp_all = sorted({c for vals in required.values() for c in vals})
+    comp_all = sorted({_comp_name(c) for vals in required.values() for c in vals})
     if not flat or not comp_all:
         return []
     item_vec = fit.cached_embed([v for _, v in flat])
     comp_vec = fit.cached_embed(comp_all)
     sims = fit.cosine_sim_matrix(comp_vec, item_vec)  # (역량, 항목)
     comp_idx = {c: i for i, c in enumerate(comp_all)}
+    idx_by_rid: dict = {}
+    for j, (rid, _v) in enumerate(flat):
+        idx_by_rid.setdefault(rid, []).append(j)
+
+    def _top_items(rid, row_sims):
+        js = sorted(idx_by_rid.get(rid, []), key=lambda j: -float(row_sims[j]))[:EVIDENCE_TOP_ITEMS]
+        return [{'item': flat[j][1], 'score': round(float(row_sims[j]), 3)} for j in js]
 
     results = []
     for proj in projects:
@@ -176,7 +218,8 @@ def analyze_gaps(projects: list, required: dict, members: dict, items: dict, cur
             continue
         team = members.get(fit.normalize_org_code(name), set())
         rows = []
-        for c in comps:
+        for comp in comps:
+            c, desc = _comp_name(comp), _comp_desc(comp)
             row_sims = sims[comp_idx[c]]
             best_by_rid: dict = {}
             for j, (rid, v) in enumerate(flat):
@@ -189,6 +232,7 @@ def analyze_gaps(projects: list, required: dict, members: dict, items: dict, cur
             covered = best >= GAP_THRESHOLD
             entry = {
                 'competency': c,
+                'description': desc,
                 'covered': covered,
                 'best_score': round(best, 3),
                 'covered_by': [{'researcher_id': rid, 'item': v, 'score': round(sc, 3)}
@@ -201,13 +245,14 @@ def analyze_gaps(projects: list, required: dict, members: dict, items: dict, cur
             if not covered:
                 entry['candidates'] = [{'researcher_id': rid, 'item': v, 'score': round(sc, 3)}
                                        for rid, v, sc in high[:CANDIDATE_TOP_N]]
-            # 역량별 상세 화면용: 과제원 전원 점수 + 비소속 적합자(0.75 이상, 없으면 미만 대표)
-            entry['members'] = [{'researcher_id': rid, 'item': v, 'score': round(sc, 3)}
+            # 역량별 상세 화면용: 과제원(유사도 순) + 비소속 재직자 유사도 상위 OUTSIDER_TOP_N명
+            entry['members'] = [{'researcher_id': rid, 'item': v, 'score': round(sc, 3),
+                                 'top_items': _top_items(rid, row_sims)}
                                 for rid, v, sc in team_hits]
-            shown = high[:OUTSIDER_TOP_N] if high else outside_all[:OUTSIDER_LOW_N]
-            entry['outsiders'] = [{'researcher_id': rid, 'item': v, 'score': round(sc, 3)}
-                                  for rid, v, sc in shown]
-            entry['outsider_low'] = bool(shown) and not high
+            entry['outsiders'] = [{'researcher_id': rid, 'item': v, 'score': round(sc, 3),
+                                   'top_items': _top_items(rid, row_sims)}
+                                  for rid, v, sc in outside_all[:OUTSIDER_TOP_N]]
+            entry['outsider_low'] = False
             rows.append(entry)
         n_cov = sum(1 for r in rows if r['covered'])
         l1, l2, l3 = levels.get(name, ('', '', ''))
@@ -223,6 +268,58 @@ def analyze_gaps(projects: list, required: dict, members: dict, items: dict, cur
         })
     results.sort(key=lambda r: (r['coverage_pct'], -r['gap_count']))
     return results
+
+
+def _evidence_task(comp: str, desc: str, persons: list, cache: dict):
+    """한 (과제, 역량)의 후보자들에 대한 LLM 근거 {idx: reason}. persons: [{'top_items': [...]}, ...]
+    (순번 idx = 리스트 위치). 캐시는 프롬프트 해시 기준."""
+    lines = []
+    for i, p in enumerate(persons):
+        its = '; '.join(f"{t['item']}({t['score']:.2f})" for t in p.get('top_items') or [])
+        lines.append(f'[{i}] {its or "(보유 항목 없음)"}')
+    prompt = (f'필요 역량: {comp}\n설명: {desc}\n\n후보자별 가까운 보유 항목(유사도):\n' + '\n'.join(lines))
+    key = hashlib.sha256(prompt.encode('utf-8')).hexdigest()
+    if key in cache:
+        return cache[key]
+    raw = call_llm(prompt, _EVIDENCE_SYSTEM_PROMPT, temperature=0.1, max_tokens=3000)
+    if not raw:
+        return None
+    try:
+        data = json.loads(extract_json(raw))
+    except json.JSONDecodeError:
+        return None
+    out = {}
+    for e in data.get('evidence') or []:
+        try:
+            out[int(e.get('idx'))] = str(e.get('reason') or '').strip()
+        except (TypeError, ValueError):
+            continue
+    cache[key] = {str(k): v for k, v in out.items()}
+    return cache[key]
+
+
+def attach_evidence(results: list, cache: dict) -> int:
+    """results의 역량별 members(상위 EVIDENCE_MEMBER_MAX명)+outsiders에 LLM 근거(reason)를 붙인다.
+    LLM 실패 시 해당 역량은 근거 없이 둔다(화면은 가까운 항목으로 대체). 반환: 성공 건수."""
+    jobs = []
+    for r in results:
+        for c in r.get('competencies') or []:
+            persons = (c.get('members') or [])[:EVIDENCE_MEMBER_MAX] + (c.get('outsiders') or [])
+            if persons:
+                jobs.append((c, persons))
+    tasks = [(lambda c=c, ps=ps: _evidence_task(c.get('competency', ''), c.get('description', ''), ps, cache))
+             for c, ps in jobs]
+    done = 0
+    for (c, persons), (res, err) in zip(jobs, run_concurrent(tasks, max_workers=max_concurrency())):
+        if err or not res:
+            continue
+        for i, p in enumerate(persons):
+            reason = res.get(str(i)) if isinstance(res, dict) and str(i) in res else (res.get(i) if isinstance(res, dict) else None)
+            if reason:
+                p['reason'] = reason
+        done += 1
+    print(f'  근거 생성 {done}/{len(jobs)}건')
+    return done
 
 
 def _project_levels(projects: list) -> dict:
@@ -287,6 +384,9 @@ def process(refresh: bool = False) -> bool:
     except LLMError as exc:
         print(f'  [WARN] 임베딩 실패 — 역량 갭 분석 중단: {exc}')
         return False
+    ev_cache = _read_json(EVIDENCE_CACHE_FILE, {})
+    attach_evidence(results, ev_cache)
+    _write_json(EVIDENCE_CACHE_FILE, ev_cache)
     computed_at = datetime.now().strftime('%Y-%m-%d %H:%M')
     for r in results:
         r['computed_at'] = computed_at
