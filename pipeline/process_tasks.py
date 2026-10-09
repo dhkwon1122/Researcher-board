@@ -134,6 +134,18 @@ def _read_tasks_information() -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _read_task_name_history() -> pd.DataFrame:
+    """process_task_information이 중복 제거 전 원본 행으로 만든 (task_code, task_name,
+    write_date) 이력. 없으면 빈 DataFrame."""
+    path = os.path.join(OUT_DIR, 'task_name_history.csv')
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path, encoding='utf-8-sig', dtype=str).fillna('')
+    except Exception:
+        return pd.DataFrame()
+
+
 def _name_to_code_map(tasks_info_df: pd.DataFrame) -> dict:
     """task_name → task_code. tasks_information.csv는 이미 task_name 기준
     중복 제거가 돼 있어(process_task_information.py) 1:1로 안전하게 매핑된다."""
@@ -229,8 +241,15 @@ def _apply_name_history(df: pd.DataFrame) -> pd.DataFrame:
     반환한다(원본보다 행 수가 늘어날 수 있음). tasks_information.csv가 없으면
     전부 the_task_name=task_name, task_code=''로 그대로 통과시킨다."""
     tasks_info_df = _read_tasks_information()
-    name_to_code = _name_to_code_map(tasks_info_df)
-    code_history = _code_to_history_map(tasks_info_df)
+    hist_df = _read_task_name_history()
+    if hist_df.empty:
+        name_to_code = _name_to_code_map(tasks_info_df)
+        code_history = _code_to_history_map(tasks_info_df)
+    else:
+        # 이력 파일이 있으면 그것으로 개명 시점을 계산(과제정보의 중복 제거 영향 배제),
+        # 이름→코드 매핑은 두 소스를 합쳐 쓴다.
+        name_to_code = {**_name_to_code_map(hist_df), **_name_to_code_map(tasks_info_df)}
+        code_history = _code_to_history_map(hist_df)
 
     rows = []
     for _, row in df.iterrows():

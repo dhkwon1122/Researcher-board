@@ -50,6 +50,7 @@ TABLE_KEYS: dict[str, list[str]] = {
     # 이번 파일에 없는 사람(전배·퇴직 등)의 기존 행은 삭제되지 않고 보존된다.
     'work_experience':      ['researcher_id', 'company_name', 'work_start_date'],
     'tasks_information':    ['task_name'],
+    'task_name_history':    ['task_code', 'task_name', 'write_date'],
     'project_confl_address': ['dep_name', 'project_name'],
     # 날짜 기반 누적 테이블 — dep_id별로 valid_year/month/day가 다르면 별개
     # 행으로 계속 쌓인다(같은 날 재저장만 upsert). "현재" 상태는 dep_id별
