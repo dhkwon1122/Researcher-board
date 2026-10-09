@@ -215,8 +215,7 @@ def _accordion_pill(kind, count, color, radius='999px', border_width='1.5px', un
     unlinked가 0보다 크면(논문/특허) '(전체) *과제미연결수'를 덧붙인다. 미연결이
     하나도 없으면(0) 굳이 표시하지 않는다."""
     label = f'{kind} ({count})'
-    if unlinked:
-        label += f' *{unlinked}'
+    # 과제 미연결 건수('*N') 표기는 2026-10-09 사용자 요청으로 제거(인자는 호환용으로 유지).
     return html.Div(label, id={'type': 'tl-header-pill', 'kind': kind}, n_clicks=0, style={
         'border': f'{border_width} solid {color}', 'borderRadius': radius,
         'padding': '4px 14px', 'fontSize': '0.78rem', 'fontWeight': 600, 'color': color,

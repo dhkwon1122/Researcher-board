@@ -13832,3 +13832,10 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 원인: `process_task_information`이 과제명 기준 중복 제거 시 "내용이 가장 많이 채워진 행"을 남겨, `[연구]발광소재개발`의 최초 작성일(2022-12-15)이 재작성본(2025-06-17)으로 대체 → 개명 시점이 틀어짐.
 - 수정: 중복 제거 전 원본 (task_code, task_name, write_date)를 `data/processed/task_name_history.csv`로 저장(TABLE_KEYS['task_name_history']). `process_tasks._apply_name_history`는 이 파일이 있으면 그걸로 개명 시점 계산(연속 동일명은 최초 작성일로 collapse), 없으면 기존 tasks_information 폴백. 반영: 과제정보 업데이트 → 과제참여이력 업데이트(순서) → DB 반영.
 - PDF 메일 실패("/home/app/.cache/ms-playwright ... doesn't exist"): root로 설치한 Chromium을 비root(app) 런타임이 못 찾음 → Dockerfile에 `PLAYWRIGHT_BROWSERS_PATH=/ms-playwright` + `chmod -R a+rX`. 이미지 재빌드 필요.
+
+## (14) 타임라인 *N 삭제 + 조직 분석 개편 (2026-10-09)
+- 타임라인 논문/특허 pill의 `*과제미연결수` 표기 삭제(`timeline_view._accordion_pill`). 과제 카드 클릭 시 연결 논문/특허 표시는 유지.
+- **과제별 필요 역량**(구 과제별 역량): 충족/갭 판정·구간 표시 삭제. `process_project_competency_gap.py`가 LLM으로 필요 역량 + 쉬운 설명(`description`, 캐시 키 `v2:`)을 뽑고, 과제원(`members`)·비과제원 상위 10명(`outsiders`)마다 임베딩 유사도 + 가까운 보유 항목 `top_items` + LLM 근거 `reason`(`attach_evidence`, (과제,역량) 단위 1회 호출, 연구원 ID/이름 없이 순번만, 캐시 `project_competency_evidence_cache.json`). 화면 배지에 유사도, 마우스 오버로 근거(비과제원은 1·3단계부서명 포함). 재실행 필요: `run_analysis.py` 5단계.
+- **부서/과제간 협업**: `collaboration_edges.csv`에 `recent_count`(최근 5년 공동 논문+특허), `level1_a/b`(1단계부서명), `level3_a/b`(3단계부서명=org_code 기준) 추가. `services/collab_graph.py`가 단위(부서/과제)별 합산(같은 단위·빈 값 제외) 후 네트워크 그래프 + 히트맵 생성(둘 다 표시, 상위 N개 선택). "과제"는 연구원의 현재 org_code(3단계부서명) 기준으로 해석 — 진행중 과제(tasks.csv) 기준 아님.
+- **기술명 통합**: `pipeline/tech_canonical.py` — 기술명 임베딩(코사인 ≥0.88)으로 후보 묶음 → LLM이 확실히 같은 것만 묶고 대표 이름 결정(보수적; LLM/임베딩 실패 시 통합 안 함, 캐시 `tech_canonical_cache.json`). `technology_holder_summary.csv`에 `aliases`(통합된 표기) 추가, 보유자는 합집합(중복 1명). 재실행: `run_analysis.py` 4단계.
+- 반영: 서버 `git pull` → `docker compose up -d --build app` → `run_analysis.py`(4·5단계, LLM 호출) → DB 반영.

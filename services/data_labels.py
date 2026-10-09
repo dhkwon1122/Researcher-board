@@ -225,6 +225,9 @@ COLUMN_LABELS = {
     'cross_dept_ratio': '타부서 협업 비율(%)',
     'top_collaborators': '주요 협업자 사번',
     'top_collaborator_counts': '주요 협업자별 협업수',
+    'recent_count': '최근 5년 협업 건수',
+    'level1_a': '1단계부서명(A)', 'level1_b': '1단계부서명(B)',
+    'level3_a': '3단계부서명(A)', 'level3_b': '3단계부서명(B)',
 
     # 기술별 보유자 수 (technology_holder_summary.csv)
     'source': '출처',
@@ -235,6 +238,7 @@ COLUMN_LABELS = {
     'risk_level': '리스크',
     'holder_ids': '보유자 사번',
     'high_level_ids': '고수준 보유자 사번',
+    'aliases': '통합된 표기',
 
     # 과제 전문성/매칭 (LLM 파생)
     'job_title': '직무',
