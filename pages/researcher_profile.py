@@ -347,6 +347,7 @@ def layout(id=None, ids=None, **_kwargs):
         html.Div(id='profile-print-dummy', style={'display': 'none'}),
         _print_progress_overlay(),
         dcc.Store(id='print-ready', data=False),
+        dcc.Store(id='profile-print-title', data='연구원 프로필'),
         html.Div([
             _selector_card(dept_opts, res_opts, default_dept, default_rid, default_mode,
                            default_group, default_project),
@@ -438,6 +439,7 @@ def _bulk_layout(ids_param):
         # 처음부터 준비된 것으로 둔다 — 안 그러면 인터벌이 아예 안 돌아
         # (바로 아래 disabled=not rid_list) 버튼이 영원히 비활성 상태로 남는다.
         dcc.Store(id='print-ready', data=not rid_list),
+        dcc.Store(id='profile-print-title', data=f'연구원 프로필_일괄({len(rid_list)}명)'),
         dcc.Interval(id='bulk-print-build-interval', interval=200, n_intervals=0,
                      disabled=not rid_list),
         html.Div(id='profile-print-content', className='profile-print-only', children=[]),
@@ -1744,6 +1746,21 @@ def _append_bulk_print_block(_step, rid_list, progress):
     return patch, new_idx, done, text, fill_style, overlay_style, done
 
 
+@callback(
+    Output('profile-print-title', 'data'),
+    Input('researcher-select', 'value'),
+)
+def _profile_print_title(rid):
+    """단일 프로필 인쇄 시 PDF 기본 파일명(문서 제목) — 메일 첨부와 같은 "성명(사번)_프로필"."""
+    if not rid:
+        return '연구원 프로필'
+    rid = str(rid).zfill(8)
+    df = read_processed('researchers')
+    match = df[df['researcher_id'] == rid] if not df.empty else df
+    name = str(match.iloc[0].get('name', '')).strip() if not match.empty else ''
+    return f'{name}({rid})_프로필' if name else f'{rid}_프로필'
+
+
 # 일괄 인쇄 틱 → (브라우저에서 즉시) 인터벌 끄기 + 다음 한 명 요청. 서버 콜백
 # _append_bulk_print_block이 그 한 명을 붙인 뒤 인터벌을 다시 켠다(위 docstring 참고).
 clientside_callback(
@@ -1783,7 +1800,7 @@ def update_leadership(rid, year):
 
 clientside_callback(
     """
-    async function(n, rid_value, opts_value) {
+    async function(n, pdf_title) {
         if (n > 0) {
             // Dash가 클릭 한 번에 이 콜백을 두 번 발생시키는 경우가 있어(이
             // 프로젝트에서 기존부터 있던 동작 — 이전 동기 버전에서는 두
@@ -1822,16 +1839,10 @@ clientside_callback(
             // 되돌린다.
             var originalTitle = document.title;
             // PDF 저장 기본 파일명 = 문서 제목: 단일 조회는 "성명(사번)_프로필"(메일 첨부 이름과 동일),
-            // 일괄 인쇄(연구원 선택 박스 없음)는 "연구원 프로필_일괄(N명)".
-            var pdfTitle = '연구원 프로필';
-            if (rid_value && opts_value) {
-                var o = (opts_value || []).find(function(x) { return x.value === rid_value; });
-                var nm = o && o.label ? String(o.label).split(' [')[0].split('  (')[0].trim() : '';
-                pdfTitle = (nm ? nm : '') + '(' + rid_value + ')_프로필';
-            } else if (document.getElementById('bulk-print-ids')) {
-                var n = document.querySelectorAll('#profile-print-content > div').length;
-                pdfTitle = '연구원 프로필_일괄(' + n + '명)';
-            }
+            // 일괄 인쇄는 "연구원 프로필_일괄(N명)" — 두 화면 모두에 있는 profile-print-title Store 값.
+            // (연구원 선택 박스를 State로 쓰면 그 박스가 없는 일괄 인쇄 화면에서 Dash가 이 콜백을
+            // 아예 실행하지 않아 인쇄 버튼이 먹통이 됐다 — 2026-10-09)
+            var pdfTitle = pdf_title || '연구원 프로필';
             document.title = pdfTitle;
 
             var cleanup = function() {
@@ -1850,8 +1861,7 @@ clientside_callback(
     """,
     Output('profile-print-dummy', 'children'),
     Input('profile-print-btn', 'n_clicks'),
-    State('researcher-select', 'value'),
-    State('researcher-select', 'options'),
+    State('profile-print-title', 'data'),
     prevent_initial_call=True,
 )
 
