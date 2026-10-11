@@ -18,6 +18,22 @@ from services.db import get_engine
 
 metadata = MetaData()
 
+# 2026-10-10: 사용자 요청 — "다른 시스템과 사용자 DB(app_users)를 함께
+# 읽고 쓰는데, 그래서인지 admin 페이지가 비정상적으로 오래 걸린다." 이
+# 테이블을 다른 시스템도 함께 쓰면, 그쪽이 같은 테이블/행에 장시간 트랜잭션을
+# 걸어 둔 순간 이 앱의 SELECT가 그 잠금이 풀릴 때까지 무한정 대기할 수
+# 있다(connect_args의 connect_timeout=5는 최초 TCP 연결에만 적용되고, 이미
+# 맺어진 연결에서 실행 중인 쿼리가 잠금 때문에 멈춰 있는 상황은 전혀 막지
+# 못한다 — services/db.py 참고). 이 모듈의 모든 쿼리 앞에
+# SET LOCAL statement_timeout을 걸어, 다른 시스템의 잠금 때문에 막히더라도
+# "화면이 영원히 멈춘 것처럼 보이는" 대신 몇 초 안에 분명한 오류로 끝나게
+# 한다(PostgreSQL 전용 구문 — services/db.py가 PostgreSQL만 지원).
+_STATEMENT_TIMEOUT_MS = 8000
+
+
+def _bound_statement_timeout(conn) -> None:
+    conn.execute(text(f'SET LOCAL statement_timeout = {_STATEMENT_TIMEOUT_MS}'))
+
 # 계정별 권한 재정의(2026-08-31) — NULL이면 "역할 기본값을 따른다"는 뜻이고,
 # True/False가 명시적으로 저장돼 있으면 역할이 바뀌어도 그 값을 그대로
 # 유지한다(사용자 확정 — 관리자가 개별 조정해 둔 값은 역할 변경과 무관하게
@@ -70,6 +86,7 @@ def _ensure_column(engine, column_name: str, ddl: str, *, backfill_sql: str | No
     실행하면, 나중에 관리자가 값을 일부러 바꿔둔 걸 재기동 때마다 덮어써버릴
     수 있다(예: is_admin 백필). 이미 컬럼이 있으면 아무 것도 하지 않는다."""
     with engine.begin() as conn:
+        _bound_statement_timeout(conn)
         exists = conn.execute(text(
             "SELECT 1 FROM information_schema.columns "
             "WHERE table_name = 'app_users' AND column_name = :col"
@@ -82,14 +99,27 @@ def _ensure_column(engine, column_name: str, ddl: str, *, backfill_sql: str | No
 
 
 def available() -> bool:
-    """DB 엔진이 있고 app_users 테이블이 준비돼 있으면 True."""
+    """DB 엔진이 있고 app_users 테이블이 준비돼 있으면 True.
+
+    2026-10-11 수정: get_user()/list_all() 등 개별 쿼리에는 지난번에 이미
+    SET LOCAL statement_timeout을 걸었는데(2026-10-10), 정작 그 함수들이
+    맨 먼저 호출하는 이 available()의 DDL 확인 경로(create_all/
+    _ensure_column의 ALTER TABLE)에는 빠져 있었다 — _table_ready가 아직
+    True로 캐시되지 않은 상태(앱 재시작 직후, 또는 매번 이 단계에서 계속
+    실패해 온 경우)라면 매 요청마다 이 경로를 다시 타는데, 여기서 다른
+    시스템이 app_users에 걸어 둔 잠금 때문에 멈추면 이 함수가 아예 끝나지
+    않아 뒤쪽 statement_timeout은 영원히 호출될 기회조차 없었다(지난
+    수정이 실제 증상을 못 고친 이유). create_all도 엔진이 아니라 타임아웃을
+    건 커넥션에 바인딩해 같은 보호를 받게 한다."""
     global _table_ready
     engine = get_engine()
     if engine is None:
         return False
     if not _table_ready:
         try:
-            metadata.create_all(engine, tables=[users])
+            with engine.begin() as conn:
+                _bound_statement_timeout(conn)
+                metadata.create_all(conn, tables=[users])
             _ensure_column(engine, 'must_change_password',
                             'must_change_password BOOLEAN NOT NULL DEFAULT FALSE')
             # is_admin이 이번에 처음 추가되는 경우, 이전까지는 role='executive_org'면
@@ -140,6 +170,7 @@ def get_user(user_id: str) -> dict | None:
         return None
     try:
         with get_engine().connect() as conn:
+            _bound_statement_timeout(conn)
             row = conn.execute(
                 select(users).where(users.c.user_id == user_id)
             ).mappings().first()
@@ -154,6 +185,7 @@ def list_all() -> list[dict]:
         return []
     try:
         with get_engine().connect() as conn:
+            _bound_statement_timeout(conn)
             rows = conn.execute(select(users)).mappings().all()
             return [_row_to_dict(r) for r in rows]
     except Exception as exc:
@@ -172,6 +204,7 @@ def create(user_id: str, password_hash: str, display_name: str,
         return False
     try:
         with get_engine().begin() as conn:
+            _bound_statement_timeout(conn)
             conn.execute(users.insert().values(
                 user_id=user_id,
                 password_hash=password_hash,
@@ -206,6 +239,7 @@ def update_fields(user_id: str, display_name: str | None = None,
         return True
     try:
         with get_engine().begin() as conn:
+            _bound_statement_timeout(conn)
             result = conn.execute(
                 update(users).where(users.c.user_id == user_id).values(**values)
             )
@@ -228,6 +262,7 @@ def update_permissions(user_id: str, permissions: dict, eval_excluded_dep_ids: l
     values['eval_excluded_dep_ids'] = json.dumps(list(eval_excluded_dep_ids or []), ensure_ascii=False)
     try:
         with get_engine().begin() as conn:
+            _bound_statement_timeout(conn)
             result = conn.execute(
                 update(users).where(users.c.user_id == user_id).values(**values)
             )
@@ -244,6 +279,7 @@ def set_password_hash(user_id: str, password_hash: str) -> bool:
         return False
     try:
         with get_engine().begin() as conn:
+            _bound_statement_timeout(conn)
             result = conn.execute(
                 update(users).where(users.c.user_id == user_id)
                 .values(password_hash=password_hash, must_change_password=False)
@@ -259,6 +295,7 @@ def delete_user(user_id: str) -> bool:
         return False
     try:
         with get_engine().begin() as conn:
+            _bound_statement_timeout(conn)
             result = conn.execute(delete(users).where(users.c.user_id == user_id))
             return result.rowcount > 0
     except Exception as exc:
