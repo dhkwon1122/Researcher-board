@@ -86,6 +86,7 @@ def _ensure_column(engine, column_name: str, ddl: str, *, backfill_sql: str | No
     실행하면, 나중에 관리자가 값을 일부러 바꿔둔 걸 재기동 때마다 덮어써버릴
     수 있다(예: is_admin 백필). 이미 컬럼이 있으면 아무 것도 하지 않는다."""
     with engine.begin() as conn:
+        _bound_statement_timeout(conn)
         exists = conn.execute(text(
             "SELECT 1 FROM information_schema.columns "
             "WHERE table_name = 'app_users' AND column_name = :col"
@@ -98,14 +99,27 @@ def _ensure_column(engine, column_name: str, ddl: str, *, backfill_sql: str | No
 
 
 def available() -> bool:
-    """DB 엔진이 있고 app_users 테이블이 준비돼 있으면 True."""
+    """DB 엔진이 있고 app_users 테이블이 준비돼 있으면 True.
+
+    2026-10-11 수정: get_user()/list_all() 등 개별 쿼리에는 지난번에 이미
+    SET LOCAL statement_timeout을 걸었는데(2026-10-10), 정작 그 함수들이
+    맨 먼저 호출하는 이 available()의 DDL 확인 경로(create_all/
+    _ensure_column의 ALTER TABLE)에는 빠져 있었다 — _table_ready가 아직
+    True로 캐시되지 않은 상태(앱 재시작 직후, 또는 매번 이 단계에서 계속
+    실패해 온 경우)라면 매 요청마다 이 경로를 다시 타는데, 여기서 다른
+    시스템이 app_users에 걸어 둔 잠금 때문에 멈추면 이 함수가 아예 끝나지
+    않아 뒤쪽 statement_timeout은 영원히 호출될 기회조차 없었다(지난
+    수정이 실제 증상을 못 고친 이유). create_all도 엔진이 아니라 타임아웃을
+    건 커넥션에 바인딩해 같은 보호를 받게 한다."""
     global _table_ready
     engine = get_engine()
     if engine is None:
         return False
     if not _table_ready:
         try:
-            metadata.create_all(engine, tables=[users])
+            with engine.begin() as conn:
+                _bound_statement_timeout(conn)
+                metadata.create_all(conn, tables=[users])
             _ensure_column(engine, 'must_change_password',
                             'must_change_password BOOLEAN NOT NULL DEFAULT FALSE')
             # is_admin이 이번에 처음 추가되는 경우, 이전까지는 role='executive_org'면
