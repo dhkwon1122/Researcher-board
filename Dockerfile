@@ -30,6 +30,9 @@ ARG HTTP_PROXY=http://12.26.204.100:8080
 ARG HTTPS_PROXY=http://12.26.204.100:8080
 ARG NO_PROXY=localhost,127.0.0.1,db,::1,samsungds.net,*.samsungds.net,*.samsung.net,12.0.0.0/8,10.0.0.0/8,192.0.0.0/8,172.0.0.0/8
 
+# 한국 표준시(KST) — 로그/화면/기록 시각(datetime.now())이 컨테이너 기본값 UTC가 아니라 서울 기준이 되게 한다.
+# tzdata 패키지(아래 apt-get)가 있어야 TZ가 적용된다. docker-compose.yml의 TZ로 덮어쓸 수 있다.
+ENV TZ=Asia/Seoul
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
@@ -46,7 +49,7 @@ WORKDIR /app
 COPY certs/ /tmp/corp-certs/
 RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
     apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates vim git curl \
+    && apt-get install -y --no-install-recommends ca-certificates vim git curl tzdata \
     && for f in /tmp/corp-certs/*.crt; do \
          [ -e "$f" ] || continue; \
          case "$f" in */ca-bundle.crt) continue ;; esac; \
@@ -107,9 +110,17 @@ RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
 # 실패해도(|| true) 전체 빌드는 계속되고 나머지 기능은 정상 배포되며,
 # PDF 첨부 메일만 "PDF 생성 실패" 에러로 비활성 상태가 된다 — 사내 미러가
 # 있다면 PLAYWRIGHT_DOWNLOAD_HOST로 지정해 재시도할 것.
+#
+# 브라우저 설치 경로(2026-10-09): 설치는 root로 하지만 앱은 비root 사용자(app)로
+# 실행된다. 기본 경로(~/.cache/ms-playwright)에 깔면 root 홈(/root/.cache)에만
+# 있어 실행 시 "/home/app/.cache/ms-playwright/... executable doesn't exist"로
+# PDF 생성이 실패했다. 모든 사용자가 읽을 수 있는 고정 경로에 설치하고, 이
+# ENV가 런타임에도 유지돼 같은 경로를 쓴다.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY" \
     NODE_EXTRA_CA_CERTS="/etc/ssl/certs/ca-certificates.crt" \
     playwright install --with-deps chromium \
+    && chmod -R a+rX /ms-playwright \
     || echo "[build] Playwright 브라우저 설치 실패 — PDF 첨부 메일 기능은 비활성화된 채로 나머지는 정상 빌드합니다. 원인은 보통 사내망에서 Chromium 다운로드 호스트가 막혀 있는 경우입니다."
 
 # ── 3) 앱 소스 복사 ──

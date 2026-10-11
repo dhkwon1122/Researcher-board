@@ -15,10 +15,14 @@ run_analysis.py 단계는 사내 LLM/BGE-M3 호출이 많아 전체 실행에 �
   0) pipeline/run_ready.py  환경 점검 (--skip-ready 아니면 항상 먼저 실행)
   1) pipeline/run_expertise.py  원천 데이터 전처리 (LLM 호출 없음)
   2) pipeline/run_analysis.py   전문성 분석 LLM 체인 (5단계, 비용 발생)
+  3) pipeline/load_to_db.py     결과를 DB에 반영 — DATABASE_URL이 설정된 환경에서만.
+     미설정이면 안내만 하고 그냥 끝난다(앱이 파일을 직접 읽으므로 불필요).
+     앱은 DB가 있으면 파일보다 DB를 먼저 읽으므로, 이 단계가 없으면 분석 결과가
+     화면에 반영되지 않는다.
 
 사용법:
   python pipeline/run_integration.py
-    [--skip-ready] [--force] [--skip-bge] [--skip-confluence] [--skip-competency-gap]
+    [--skip-ready] [--force] [--skip-bge] [--skip-confluence] [--skip-competency-gap] [--skip-db-load]
     [--refresh-journals] [--refresh-judgments] [--top-k 5] [--with-journal-authority]
 
   --skip-ready      : 0단계(환경 점검) 자체를 건너뛴다.
@@ -34,6 +38,7 @@ run_analysis.py 단계는 사내 LLM/BGE-M3 호출이 많아 전체 실행에 �
     사용자 확정 — 추가 LLM 호출 비용이 드는데 매번 필요한 건 아니라서).
     필요할 때는 이 옵션 없이 'python pipeline/journal_authority.py'로 별도
     실행해도 된다(run_analysis.py 참고).
+  --skip-db-load    : 3단계(DB 반영)를 건너뛴다.
   그 외 옵션은 run_analysis.py에 그대로 전달된다(자세한 의미는 그 파일 참고).
 """
 
@@ -56,7 +61,7 @@ def _parse_top_k_arg(argv: list) -> int | None:
 
 
 def run(skip_ready: bool = False, force: bool = False, skip_bge: bool = False, skip_confluence: bool = False,
-        **analysis_kwargs) -> bool:
+        skip_db_load: bool = False, **analysis_kwargs) -> bool:
     """0) 환경 점검 → 1) run_expertise → 2) run_analysis 순서로 실행한다.
     환경 점검에서 FAIL이 있고 force가 아니면 여기서 중단하고 False를 반환한다
     (1~2단계는 아예 실행되지 않음 — 오래 걸리는 실행을 애초에 시작하지 않는다).
@@ -66,7 +71,7 @@ def run(skip_ready: bool = False, force: bool = False, skip_bge: bool = False, s
     start = time.monotonic()
 
     if not skip_ready:
-        print('[run_integration] 0/2 환경 점검 (run_ready.py)')
+        print('[run_integration] 0/3 환경 점검 (run_ready.py)')
         from run_ready import run as run_ready
         ready = run_ready(skip_bge=skip_bge, skip_confluence=skip_confluence)
         if not ready and not force:
@@ -76,15 +81,27 @@ def run(skip_ready: bool = False, force: bool = False, skip_bge: bool = False, s
         if not ready and force:
             print('\n[run_integration] 환경 점검 실패했지만 --force로 강행합니다.')
     else:
-        print('[run_integration] 0/2 환경 점검 — 건너뜀(--skip-ready)')
+        print('[run_integration] 0/3 환경 점검 — 건너뜀(--skip-ready)')
 
-    print('\n[run_integration] 1/2 전처리 (run_expertise.py)')
+    print('\n[run_integration] 1/3 전처리 (run_expertise.py)')
     from run_expertise import run as run_expertise
     run_expertise()
 
-    print('\n[run_integration] 2/2 전문성 분석 LLM 체인 (run_analysis.py)')
+    print('\n[run_integration] 2/3 전문성 분석 LLM 체인 (run_analysis.py)')
     from run_analysis import run as run_analysis
     run_analysis(skip_confluence=skip_confluence, **analysis_kwargs)
+
+    if skip_db_load:
+        print('\n[run_integration] 3/3 DB 반영 — 건너뜀(--skip-db-load)')
+    else:
+        print('\n[run_integration] 3/3 DB 반영 (load_to_db.py)')
+        try:
+            from load_to_db import load as load_to_db  # 임포트 시 프로젝트 루트를 sys.path에 추가한다
+            from services.db import load_env_file
+            load_env_file()
+            load_to_db()  # DATABASE_URL 미설정이면 안내만 출력하고 바로 반환
+        except Exception as e:  # DB 접속 실패 등 — 분석 결과(파일)는 이미 저장됐으므로 실행 자체는 성공 처리
+            print(f'[run_integration] DB 반영 실패 — 파일 결과는 저장됨. 관리자 화면 "DB 반영"으로 다시 시도하세요: {type(e).__name__}: {e}')
 
     elapsed = time.monotonic() - start
     print(f'\n[run_integration] 전체 완료 (총 소요 시간: {elapsed / 60:.1f}분)')
@@ -103,5 +120,6 @@ if __name__ == '__main__':
         top_k=_parse_top_k_arg(_argv),
         skip_journal_authority='--with-journal-authority' not in _argv,
         skip_competency_gap='--skip-competency-gap' in _argv,
+        skip_db_load='--skip-db-load' in _argv,
     )
     sys.exit(0 if ok else 1)

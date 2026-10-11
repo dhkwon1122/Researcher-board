@@ -357,8 +357,37 @@ def _collab_groups(pubs: pd.DataFrame, pats: pd.DataFrame) -> list:
     return [(k, m, y) for k, m, y in groups if 2 <= len(m) <= COLLAB_MAX_GROUP]
 
 
+COLLAB_RECENT_YEARS = 5   # 부서/과제간 협업 그래프는 최근 5년(올해 포함) 협업 건만 집계(2026-10-09)
+
+
+def current_levels(researchers: pd.DataFrame) -> dict:
+    """현재 재직자 researcher_id -> (1단계부서명, 3단계부서명) — 팀/리더 참조 칸 값 기준(연구원 프로필·
+    명단·과제별 필요 역량과 동일). 매칭 안 되면 빈 문자열. team_refer가 없으면 {}."""
+    if researchers.empty or 'org_code' not in researchers.columns:
+        return {}
+    try:
+        from services import similarity_map as sm
+    except Exception as exc:
+        print(f'  [WARN] 부서 단계 조회 불가(부서/과제간 협업 그래프용 열 생략): {exc}')
+        return {}
+    cur = researchers
+    if 'is_current' in cur.columns:
+        cur = cur[cur['is_current'].astype(str).str.upper() != 'N']
+    cache: dict = {}
+    out = {}
+    for rid, org in zip(cur['researcher_id'], cur['org_code'].astype(str).str.strip()):
+        if org not in cache:
+            l1, _l2, l3 = sm.org_code_level_names(org)
+            cache[org] = (l1, l3)
+        out[rid] = cache[org]
+    return out
+
+
 def compute_collaboration(researchers: pd.DataFrame, pubs: pd.DataFrame,
-                          pats: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+                          pats: pd.DataFrame, levels: dict | None = None,
+                          today_year: int | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
+    levels = levels or {}
+    min_year = (today_year or date.today().year) - COLLAB_RECENT_YEARS + 1
     dept = {}
     if not researchers.empty and 'department' in researchers.columns:
         dept = dict(zip(researchers['researcher_id'], researchers['department'].astype(str).str.strip()))
@@ -367,8 +396,11 @@ def compute_collaboration(researchers: pd.DataFrame, pubs: pd.DataFrame,
     for kind, members, year in _collab_groups(pubs, pats):
         for i, a in enumerate(members):
             for b in members[i + 1:]:
-                e = edges.setdefault((a, b), {'paper_count': 0, 'patent_count': 0, 'last_year': None})
+                e = edges.setdefault((a, b), {'paper_count': 0, 'patent_count': 0, 'last_year': None,
+                                              'paper_recent': 0, 'patent_recent': 0})
                 e[f'{kind}_count'] += 1
+                if year and year >= min_year:
+                    e[f'{kind}_recent'] += 1
                 if year and (e['last_year'] is None or year > e['last_year']):
                     e['last_year'] = year
 
@@ -382,10 +414,14 @@ def compute_collaboration(researchers: pd.DataFrame, pubs: pd.DataFrame,
             'last_year': e['last_year'] or '',
             'department_a': da, 'department_b': db,
             'same_department': 'Y' if da and da == db else 'N',
+            'recent_count': e['paper_recent'] + e['patent_recent'],
+            'level1_a': levels.get(a, ('', ''))[0], 'level1_b': levels.get(b, ('', ''))[0],
+            'level3_a': levels.get(a, ('', ''))[1], 'level3_b': levels.get(b, ('', ''))[1],
         })
     edges_df = pd.DataFrame(edge_rows, columns=[
         'researcher_a', 'researcher_b', 'paper_count', 'patent_count', 'total_count',
-        'last_year', 'department_a', 'department_b', 'same_department'])
+        'last_year', 'department_a', 'department_b', 'same_department',
+        'recent_count', 'level1_a', 'level1_b', 'level3_a', 'level3_b'])
     if not edges_df.empty:
         edges_df = edges_df.sort_values('total_count', ascending=False).reset_index(drop=True)
 
@@ -417,7 +453,7 @@ def run_collaboration() -> bool:
     if pubs.empty and pats.empty:
         print('  [WARN] publications/patents.csv 없음 — 협업 네트워크 생략')
         return False
-    edges_df, metrics_df = compute_collaboration(researchers, pubs, pats)
+    edges_df, metrics_df = compute_collaboration(researchers, pubs, pats, current_levels(researchers))
     os.makedirs(OUT_DIR, exist_ok=True)
     edges_df.to_csv(os.path.join(OUT_DIR, COLLAB_EDGES_FILE), index=False, encoding='utf-8-sig')
     metrics_df.to_csv(os.path.join(OUT_DIR, COLLAB_METRICS_FILE), index=False, encoding='utf-8-sig')
@@ -437,8 +473,10 @@ def _risk_level(holders: int, high: int | None) -> str:
 
 
 def compute_technology_holders(researchers: pd.DataFrame, core: pd.DataFrame, own: pd.DataFrame,
-                               strength_std: list) -> pd.DataFrame:
-    """(출처, 기술) → 보유자/고수준 보유자. 이름 비교는 공백·대소문자 무시."""
+                               strength_std: list, canonicalize=None) -> pd.DataFrame:
+    """(출처, 기술) → 보유자/고수준 보유자. 이름 비교는 공백·대소문자 무시.
+    canonicalize(names:list)->{원본이름:대표이름}를 주면(2026-10-09) 표기만 다른 같은 기술을 한
+    행으로 합친다(보유자 합집합, 중복 인원은 1명). 합쳐진 원본 이름은 aliases 열에 남긴다."""
     current = set()
     dept_by_id = {}
     if not researchers.empty:
@@ -483,6 +521,23 @@ def compute_technology_holders(researchers: pd.DataFrame, core: pd.DataFrame, ow
         for f in item.get('strength_fields_std') or []:
             _add('강점분야', f, rid, None)
 
+    if canonicalize is not None:
+        canon = canonicalize(sorted({g['technology'] for g in groups.values()})) or {}
+        merged: dict = {}
+        for (source, nk), g in groups.items():
+            target = canon.get(g['technology'], g['technology'])
+            m = merged.setdefault((source, _norm(target)), {
+                'technology': target, 'tech_field': g['tech_field'], 'holders': set(),
+                'high': None if g['high'] is None else set(), 'aliases': []})
+            m['holders'] |= g['holders']
+            if g['high'] is not None:
+                m['high'] = (m['high'] or set()) | g['high']
+            if not m['tech_field']:
+                m['tech_field'] = g['tech_field']
+            if g['technology'] != target and g['technology'] not in m['aliases']:
+                m['aliases'].append(g['technology'])
+        groups = merged
+
     rows = []
     for (source, _), g in groups.items():
         holders = sorted(g['holders'])
@@ -497,6 +552,7 @@ def compute_technology_holders(researchers: pd.DataFrame, core: pd.DataFrame, ow
             'risk_level': _risk_level(len(holders), len(high) if high is not None else None),
             'holder_ids': ';'.join(holders),
             'high_level_ids': ';'.join(high) if high is not None else '',
+            'aliases': ' | '.join(g.get('aliases') or []),
         })
     df = pd.DataFrame(rows)
     if not df.empty:
@@ -512,7 +568,13 @@ def run_technology_holders(strength_std: list) -> bool:
     if core.empty and own.empty and not strength_std:
         print('  [WARN] core_technology/tech_ownership/강점 표준화 결과 없음 — 기술별 보유자 수 생략')
         return False
-    df = compute_technology_holders(researchers, core, own, strength_std)
+    try:
+        from tech_canonical import build_canonical_map
+        canonicalize = build_canonical_map
+    except Exception as exc:
+        print(f'  [WARN] 기술명 통합 모듈 로드 실패 — 통합 없이 집계: {exc}')
+        canonicalize = None
+    df = compute_technology_holders(researchers, core, own, strength_std, canonicalize)
     os.makedirs(OUT_DIR, exist_ok=True)
     df.to_csv(os.path.join(OUT_DIR, TECH_HOLDER_FILE), index=False, encoding='utf-8-sig')
     risk = int((df['risk_level'] == '위험').sum()) if not df.empty else 0

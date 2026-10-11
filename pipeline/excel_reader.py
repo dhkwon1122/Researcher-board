@@ -76,7 +76,11 @@ def parse_yyyymmdd(val) -> str:
     변환 불가/빈 값이면 빈 문자열. (실수형으로 읽힌 20230101.0 도 처리)"""
     if val is None:
         return ''
-    s = str(val).strip().split('.')[0]
+    s = str(val).strip()
+    m = re.match(r'^(\d{4})[./](\d{1,2})[./](\d{1,2})(?:\s.*)?$', s)
+    if m:  # 2026.09.22 / 2026/9/22
+        return f'{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}'
+    s = s.split('.')[0]
     if is_blank(s):
         return ''
     if len(s) == 5 and s.isdigit():

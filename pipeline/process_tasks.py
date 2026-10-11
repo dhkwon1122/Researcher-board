@@ -68,6 +68,21 @@ def _same_month(d1: str, d2: str) -> bool:
     return len(d1) >= 7 and len(d2) >= 7 and d1[:7] == d2[:7]
 
 
+def _collapse_same_start(grp: pd.DataFrame) -> pd.DataFrame:
+    """같은 시작일 행이 여럿이면(원본에 투입/해제 이력이 따로 줄로 있는 경우 등) 하나로 합치되,
+    해제일이 있는 행이 있으면 그 해제일(가장 늦은 값)을 채택한다. 해제일 빈 행이 뒤에 있다는
+    이유로 해제일이 지워져 '진행중'으로 남던 문제(2026-10-08) 방지."""
+    if not grp['start_date'].duplicated().any():
+        return grp
+    rows = []
+    for _, sub in grp.groupby('start_date', sort=True):
+        ends = [str(e).strip() for e in sub['end_date'] if not is_blank(e) and str(e).strip()]
+        last = sub.iloc[-1].copy()
+        last['end_date'] = max(ends) if ends else ''
+        rows.append(last)
+    return pd.DataFrame(rows).reset_index(drop=True)
+
+
 def _merge_consecutive_periods(df: pd.DataFrame) -> pd.DataFrame:
     """같은 (researcher_id, task_name) 내에서 이어지는 구간을 하나로 병합.
     "이어짐"의 기준: 종료일 == 다음 시작일(정확히 일치)이거나, 종료월과 다음
@@ -76,7 +91,8 @@ def _merge_consecutive_periods(df: pd.DataFrame) -> pd.DataFrame:
     """
     result = []
     for (rid, task), grp in df.groupby(['researcher_id', 'task_name'], sort=False):
-        grp = grp.sort_values('start_date').reset_index(drop=True)
+        grp = grp.sort_values('start_date', kind='stable').reset_index(drop=True)
+        grp = _collapse_same_start(grp)
 
         cur_s = str(grp.iloc[0]['start_date']).strip()
         cur_e = str(grp.iloc[0]['end_date']).strip()
@@ -118,6 +134,18 @@ def _read_tasks_information() -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _read_task_name_history() -> pd.DataFrame:
+    """process_task_information이 중복 제거 전 원본 행으로 만든 (task_code, task_name,
+    write_date) 이력. 없으면 빈 DataFrame."""
+    path = os.path.join(OUT_DIR, 'task_name_history.csv')
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path, encoding='utf-8-sig', dtype=str).fillna('')
+    except Exception:
+        return pd.DataFrame()
+
+
 def _name_to_code_map(tasks_info_df: pd.DataFrame) -> dict:
     """task_name → task_code. tasks_information.csv는 이미 task_name 기준
     중복 제거가 돼 있어(process_task_information.py) 1:1로 안전하게 매핑된다."""
@@ -145,6 +173,14 @@ def _code_to_history_map(tasks_info_df: pd.DataFrame) -> dict:
         history.setdefault(code, []).append((wd, name))
     for code in history:
         history[code].sort(key=lambda pair: pair[0])
+        # 작성일 기준 전후 과제명이 같으면(재작성/재제출) 같은 과제로 보고 가장 이른
+        # 작성일 하나만 남긴다 — 이름이 실제로 바뀐 시점만 구간 경계가 되도록.
+        collapsed = []
+        for wd, name in history[code]:
+            if collapsed and collapsed[-1][1] == name:
+                continue
+            collapsed.append((wd, name))
+        history[code] = collapsed
     return history
 
 
@@ -205,8 +241,15 @@ def _apply_name_history(df: pd.DataFrame) -> pd.DataFrame:
     반환한다(원본보다 행 수가 늘어날 수 있음). tasks_information.csv가 없으면
     전부 the_task_name=task_name, task_code=''로 그대로 통과시킨다."""
     tasks_info_df = _read_tasks_information()
-    name_to_code = _name_to_code_map(tasks_info_df)
-    code_history = _code_to_history_map(tasks_info_df)
+    hist_df = _read_task_name_history()
+    if hist_df.empty:
+        name_to_code = _name_to_code_map(tasks_info_df)
+        code_history = _code_to_history_map(tasks_info_df)
+    else:
+        # 이력 파일이 있으면 그것으로 개명 시점을 계산(과제정보의 중복 제거 영향 배제),
+        # 이름→코드 매핑은 두 소스를 합쳐 쓴다.
+        name_to_code = {**_name_to_code_map(hist_df), **_name_to_code_map(tasks_info_df)}
+        code_history = _code_to_history_map(hist_df)
 
     rows = []
     for _, row in df.iterrows():
@@ -246,6 +289,29 @@ def _find_source_file(raw_dir: str) -> str | None:
         p for ext in _SOURCE_EXTS for p in glob.glob(os.path.join(raw_dir, f'*{ext}'))
     )
     return anyfile[0] if len(anyfile) == 1 else None
+
+
+def _drop_stale_task_rows(result: pd.DataFrame) -> None:
+    """기존 tasks.csv에서, 이번 파일에 다시 나온 (researcher_id, task_name) 조합의 행을
+    먼저 지운다. 자연키가 (researcher_id, task_name, start_date)라서, 연속 기간 병합이나
+    과제명 이력 보정으로 구간 경계(start_date)가 달라지면 예전 경계의 행이 지워지지 않고
+    새 행과 겹쳐 남기 때문이다(같은 과제가 두 번 보이는 문제). 이번 파일에 없는 과제/사람의
+    행은 그대로 보존한다(기존 '없으면 보존' 원칙)."""
+    if result.empty or not os.path.exists(OUTPUT):
+        return
+    try:
+        existing = pd.read_csv(OUTPUT, encoding='utf-8-sig', dtype=str, keep_default_na=False)
+    except Exception:
+        return
+    if not {'researcher_id', 'task_name'} <= set(existing.columns):
+        return
+    fresh = set(zip(result['researcher_id'].astype(str), result['task_name'].astype(str)))
+    mask = [(r, t) in fresh for r, t in zip(existing['researcher_id'], existing['task_name'])]
+    if not any(mask):
+        return
+    import csv as _csv
+    existing[[not m for m in mask]].to_csv(OUTPUT, index=False, encoding='utf-8-sig', quoting=_csv.QUOTE_NONNUMERIC)
+    print(f'[process_tasks] 이번 파일에 다시 나온 과제의 기존 {sum(mask)}행을 먼저 정리(구간 경계 변경으로 인한 중복 방지)')
 
 
 def process(raw_dir: str = RAW_DIR) -> bool:
@@ -297,6 +363,7 @@ def process(raw_dir: str = RAW_DIR) -> bool:
 
     result = result.sort_values(['researcher_id', 'start_date']).reset_index(drop=True)
 
+    _drop_stale_task_rows(result)
     merged = write_merged(OUTPUT, result, TABLE_KEYS['tasks'])
     print(f'[process_tasks] 저장 완료: {OUTPUT}  (총 {len(merged)}행, 이번 파일 {len(result)}행 반영)')
     return True

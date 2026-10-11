@@ -494,6 +494,74 @@ def org_codes_for_pjt_part_names(pjt_part_names, period: tuple | None = None) ->
     return codes
 
 
+# ── 1·2·3단계(플랫폼/팀 · 플랫폼/그룹 · 과제/파트) 단계별 필터 ─────────────────
+# 연구원 프로필 검색과 연구원 명단 검색이 함께 쓴다. 팀/리더 참조 화면·team_refer.csv에
+# 보이는 1단계부서명/2단계부서명/3단계부서명 **칸(컬럼) 값을 그대로** 각각 플랫폼/팀,
+# 플랫폼/그룹, 과제/파트에 매핑한다(2026-10-08 수정 — 처음엔 조직도 트리의 team_layer로
+# 단계를 판정했는데, 비공식소속부서명 행은 저장 시 3단계 칸에 자기 이름이 들어가므로
+# 대부분의 조직이 3단계(과제/파트)로 보이는 팀/리더 참조와 어긋났다). org_code는
+# 비공식소속부서명(org_name_wd)이 있는 행(= 실제 소속자가 붙는 조직)만 쓴다.
+
+LEVEL_LABELS = {1: '플랫폼/팀', 2: '플랫폼/그룹', 3: '과제/파트'}
+_LEVEL_FIELD = {1: 'dep_1st_name', 2: 'dep_2nd_name', 3: 'dep_3rd_name'}
+
+
+def _as_name_set(v) -> set:
+    if not v:
+        return set()
+    return {v} if isinstance(v, str) else set(v)
+
+
+def _org_rows(period: tuple | None = None) -> list:
+    """org_name_wd가 있는 현재(또는 period 기준) team_refer 행."""
+    return [r for r in read_team_refer(DATA_DIR, period=period) if (r.get('org_name_wd') or '').strip()]
+
+
+def _cell(row: dict, level: int) -> str:
+    return (row.get(_LEVEL_FIELD[level]) or '').strip()
+
+
+def level_filter_options(level: int, parents: dict | None = None, period: tuple | None = None) -> list:
+    """level(1/2/3) 단계 드롭다운 옵션 — team_refer의 해당 단계 부서명 칸 고유값.
+    parents={1: 선택된 팀들, 2: 선택된 그룹들}을 주면 그 상위 칸 값이 일치하는 행만
+    남긴다(캐스케이딩). 정렬은 조직코드(dep_code) 오름차순."""
+    parents = {k: _as_name_set(v) for k, v in (parents or {}).items()}
+    rows = []
+    for r in _org_rows(period):
+        name = _cell(r, level)
+        if not name:
+            continue
+        if any(names and _cell(r, lvl) not in names for lvl, names in parents.items() if lvl < level):
+            continue
+        rows.append({'name': name, 'dep_code': r.get('dep_code')})
+    names = _labels_sorted_by_dep_code(rows, 'name')
+    return [{'label': n, 'value': n} for n in names]
+
+
+def org_codes_for_levels(l1=None, l2=None, l3=None, period: tuple | None = None):
+    """선택된 1/2/3단계 부서명에 해당하는 org_code(=org_name_wd) 집합. 선택한 단계끼리는
+    AND. 아무것도 선택하지 않았으면 None(필터 없음)."""
+    sel = {1: _as_name_set(l1), 2: _as_name_set(l2), 3: _as_name_set(l3)}
+    if not any(sel.values()):
+        return None
+    codes: set = set()
+    for r in _org_rows(period):
+        if all(_cell(r, lvl) in names for lvl, names in sel.items() if names):
+            codes.add((r.get('org_name_wd') or '').strip())
+    return codes
+
+
+def org_code_level_names(org_code: str) -> tuple[str, str, str]:
+    """org_code가 속한 (1단계, 2단계, 3단계) 부서명 — team_refer 칸 값 그대로."""
+    org_code = (org_code or '').strip()
+    if not org_code:
+        return ('', '', '')
+    for r in _org_rows():
+        if (r.get('org_name_wd') or '').strip() == org_code:
+            return (_cell(r, 1), _cell(r, 2), _cell(r, 3))
+    return ('', '', '')
+
+
 def _team_refer_org_code_timeline() -> dict:
     """org_code(=org_name_wd)별로 [(valid_date_tuple, dep_1st_name,
     dep_3rd_name), ...] 타임라인을 만든다 — researcher_ids_ever_matching_org_field()
@@ -517,33 +585,26 @@ def _team_refer_org_code_timeline() -> dict:
 
     timeline: dict = {}
 
-    def _walk(nodes: list, ancestor_dep1: str, key: tuple) -> None:
-        for node in nodes:
-            dep1 = (node.get('dep_1st_name') or '').strip() or ancestor_dep1
-            org_code = (node.get('org_name_wd') or '').strip()
-            if org_code:
-                dep3 = (node.get('dep_3rd_name') or '').strip()
-                timeline.setdefault(org_code, []).append((key, dep1, dep3))
-            _walk(node.get('children') or [], dep1, key)
-
     for key in sorted(dates):
-        snapshot_rows = _latest_rows_in_period(all_rows, key, key)
-        _walk(build_org_tree(snapshot_rows), '', key)
+        for r in _latest_rows_in_period(all_rows, key, key):
+            org_code = (r.get('org_name_wd') or '').strip()
+            if org_code:
+                timeline.setdefault(org_code, []).append((key, _cell(r, 1), _cell(r, 2), _cell(r, 3)))
 
     for entries in timeline.values():
         entries.sort(key=lambda t: t[0])
     return timeline
 
 
-def _dep_pjt_name_at(entries: list, as_of_key: tuple) -> tuple[str, str]:
+def _dep_pjt_name_at(entries: list, as_of_key: tuple) -> tuple[str, str, str]:
     """entries(valid_date 오름차순 [(key, dep_1st_name, dep_3rd_name), ...])에서
     as_of_key(연,월,일) 이하인 것 중 가장 최근 항목의 (dep_1st_name,
     dep_3rd_name)을 반환한다. 해당 시점보다 이전 이력이 아예 없으면
     ('', '')."""
-    result = ('', '')
-    for key, dep1, dep3 in entries:
+    result = ('', '', '')
+    for key, n1, n2, n3 in entries:
         if key <= as_of_key:
-            result = (dep1, dep3)
+            result = (n1, n2, n3)
         else:
             break
     return result
@@ -562,7 +623,7 @@ def researcher_ids_ever_matching_org_field(field: str, names) -> set:
     valid_month) 스냅샷마다, 그 시점(그 달 말일로 간주) 기준
     _team_refer_org_code_timeline()으로 org_code → dep_1st_name/dep_3rd_name을
     구해 names와 비교한다 — 한 번이라도 일치하면 그 사람을 포함시킨다.
-    field: 'dep_1st_name' 또는 'dep_3rd_name'."""
+    field: 'dep_1st_name'(플랫폼/팀) / 'dep_2nd_name'(플랫폼/그룹) / 'dep_3rd_name'(과제/파트)."""
     if not names:
         return set()
     wanted = {names} if isinstance(names, str) else set(names)
@@ -576,7 +637,7 @@ def researcher_ids_ever_matching_org_field(field: str, names) -> set:
         return set()
 
     matched: set = set()
-    name_idx = 0 if field == 'dep_1st_name' else 1
+    name_idx = {'dep_1st_name': 0, 'dep_2nd_name': 1, 'dep_3rd_name': 2}.get(field, 2)
     for _, row in hist.iterrows():
         rid = str(row.get('researcher_id', '') or '').strip()
         if not rid or rid in matched:

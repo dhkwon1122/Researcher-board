@@ -442,8 +442,9 @@ def layout():
         excluded_dep_ids, similarity_map.org_code_dep_id_map(),
     )
 
-    dept_opts     = similarity_map.department_filter_options()
-    project_opts  = similarity_map.pjt_part_filter_options()
+    dept_opts     = similarity_map.level_filter_options(1)
+    group_opts    = similarity_map.level_filter_options(2)
+    project_opts  = similarity_map.level_filter_options(3)
     researcher_opts = similarity_map.individual_search_options(current_only=True)
     pos_opts      = _filter_options(df, '직급')
     title_opts    = _filter_options(df, '직책')
@@ -529,15 +530,20 @@ def layout():
                         ], id='list-period-range-wrap', style={'display': 'none'}),
                     ], md=3),
                     dbc.Col([
-                        dbc.Label('부서', className='small fw-semibold text-muted mb-1'),
+                        dbc.Label('플랫폼/팀', className='small fw-semibold text-muted mb-1'),
                         dcc.Dropdown(id='filter-dept', options=dept_opts, multi=True,
                                      placeholder='전체', clearable=True),
-                    ], md=3, id='filter-dept-col'),
+                    ], md=2, id='filter-dept-col'),
+                    dbc.Col([
+                        dbc.Label('플랫폼/그룹', className='small fw-semibold text-muted mb-1'),
+                        dcc.Dropdown(id='filter-group', options=group_opts, multi=True,
+                                     placeholder='전체', clearable=True),
+                    ], md=2, id='filter-group-col'),
                     dbc.Col([
                         dbc.Label('과제/파트', className='small fw-semibold text-muted mb-1'),
                         dcc.Dropdown(id='filter-project', options=project_opts, multi=True,
                                      placeholder='전체', clearable=True),
-                    ], md=3, id='filter-project-col'),
+                    ], md=2, id='filter-project-col'),
                     dbc.Col([
                         dbc.Label(' ', className='small d-block mb-1'),  # 라벨 줄 높이 맞춤
                         dbc.ButtonGroup([
@@ -735,15 +741,41 @@ def layout():
 # 이 콜백을 다시 트리거해 최종적으로는 항상 "선택된 부서 + 현재 기간"
 # 기준으로 수렴한다.
 @callback(
-    Output('filter-project', 'options'),
+    Output('filter-group', 'options'),
+    Output('filter-group', 'value', allow_duplicate=True),
     Input('filter-dept', 'value'),
     Input('list-search-mode', 'value'),
     Input('list-period-range', 'start_date'),
     Input('list-period-range', 'end_date'),
+    State('filter-group', 'value'),
+    prevent_initial_call=True,
 )
-def update_project_options(dept, mode, period_start, period_end):
+def update_group_options(dept, mode, period_start, period_end, current):
     period = _active_period(mode, period_start, period_end)
-    return similarity_map.pjt_part_filter_options(dept, period=period)
+    opts = similarity_map.level_filter_options(2, {1: dept} if dept else None, period=period)
+    valid = {o['value'] for o in opts}
+    kept = [v for v in (current or []) if v in valid]
+    return opts, (kept or None)
+
+
+@callback(
+    Output('filter-project', 'options'),
+    Output('filter-project', 'value', allow_duplicate=True),
+    Input('filter-dept', 'value'),
+    Input('filter-group', 'value'),
+    Input('list-search-mode', 'value'),
+    Input('list-period-range', 'start_date'),
+    Input('list-period-range', 'end_date'),
+    State('filter-project', 'value'),
+    prevent_initial_call=True,
+)
+def update_project_options(dept, group, mode, period_start, period_end, current):
+    period = _active_period(mode, period_start, period_end)
+    parents = {k: v for k, v in ((1, dept), (2, group)) if v}
+    opts = similarity_map.level_filter_options(3, parents or None, period=period)
+    valid = {o['value'] for o in opts}
+    kept = [v for v in (current or []) if v in valid]
+    return opts, (kept or None)
 
 
 # ── 콜백 1-1: 검색 기준(현재/과거포함) → 부서·과제·직급·직책 필터 비활성화 +
@@ -772,11 +804,13 @@ def update_project_options(dept, mode, period_start, period_end):
 # 무관해 값을 그대로 둔다.
 @callback(
     Output('filter-dept', 'disabled'),
+    Output('filter-group', 'disabled'),
     Output('filter-project', 'disabled'),
     Output('filter-pos', 'disabled'),
     Output('filter-title', 'disabled'),
     Output('filter-dept', 'options'),
     Output('filter-dept', 'value', allow_duplicate=True),
+    Output('filter-group', 'value', allow_duplicate=True),
     Output('filter-project', 'value', allow_duplicate=True),
     Output('filter-pos', 'value', allow_duplicate=True),
     Output('filter-title', 'value', allow_duplicate=True),
@@ -784,6 +818,7 @@ def update_project_options(dept, mode, period_start, period_end):
     Output('list-period-hint', 'style'),
     Output('list-period-range-wrap', 'style'),
     Output('filter-dept-col', 'style'),
+    Output('filter-group-col', 'style'),
     Output('filter-project-col', 'style'),
     Output('filter-researcher', 'options'),
     Input('list-search-mode', 'value'),
@@ -796,7 +831,7 @@ def toggle_org_filters(mode, period_start, period_end):
     is_cumulative = (mode == 'all')
     has_period = period is not None
     hint_style = {'fontSize': '0.68rem', 'display': 'block' if has_period else 'none'}
-    dept_options = similarity_map.department_filter_options(period=period)
+    dept_options = similarity_map.level_filter_options(1, period=period)
     # "연구원 선택"(이름/사번) 후보 목록은 부서/과제와 달리 모드와 무관하게
     # 항상 켜져 있다 — 누적기준일 때 오히려 이 필터가 주력이 되도록 한다
     # (사용자 요청, 2026-09-10). current_only만 모드에 맞춰 바꿔 전배·퇴사자
@@ -811,15 +846,15 @@ def toggle_org_filters(mode, period_start, period_end):
     org_col_style = {}
 
     if has_period:
-        return (False, False, False, False, dept_options, None, None, no_update, no_update,
-                False, hint_style, period_wrap_style, org_col_style, org_col_style, researcher_options)
+        return (False, False, False, False, False, dept_options, None, None, None, no_update, no_update,
+                False, hint_style, period_wrap_style, org_col_style, org_col_style, org_col_style, researcher_options)
     if is_cumulative:
         # 부서/과제(dept/project)는 더 이상 비활성화하지 않는다(disabled=False) —
         # 직급/직책(pos/title)만 기존처럼 비활성화 + 값 초기화.
-        return (False, False, True, True, dept_options, None, None, None, None, False, hint_style,
-                period_wrap_style, org_col_style, org_col_style, researcher_options)
-    return (False, False, False, False, dept_options, no_update, no_update, no_update, no_update,
-            True, hint_style, period_wrap_style, org_col_style, org_col_style, researcher_options)
+        return (False, False, False, True, True, dept_options, None, None, None, None, None, False, hint_style,
+                period_wrap_style, org_col_style, org_col_style, org_col_style, researcher_options)
+    return (False, False, False, False, False, dept_options, no_update, no_update, no_update, no_update, no_update,
+            True, hint_style, period_wrap_style, org_col_style, org_col_style, org_col_style, researcher_options)
 
 
 # ── 콜백 2: 검색 버튼(필터 적용) / 필터 초기화 버튼 → 테이블 데이터 갱신 ──────
@@ -836,6 +871,7 @@ def toggle_org_filters(mode, period_start, period_end):
     Input('list-search-mode',  'value'),
     Input('nl-query-full-result', 'data'),
     State('filter-dept',       'value'),
+    State('filter-group',      'value'),
     State('filter-project',    'value'),
     State('filter-pos',        'value'),
     State('filter-title',      'value'),
@@ -849,7 +885,7 @@ def toggle_org_filters(mode, period_start, period_end):
     State('list-period-range', 'end_date'),
     prevent_initial_call=True,
 )
-def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, dept, project, pos, title,
+def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, dept, group, project, pos, title,
                   gender, degree, major, employment, researcher, contribution, period_start, period_end):
     from services.auth import can, eval_excluded_dep_ids
     show_eval = can('view_evaluation')
@@ -909,25 +945,21 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, 
     # period가 주어지면(누적기준 + 기간 지정) 그 기간 기준 team_refer로
     # 매칭한다(2026-08-29 추가) — 선택한 부서/과제 이름이 그 시점에 실제로
     # 그 org_code를 가리켰는지 오늘 기준이 아니라 그 시점 기준으로 판단한다.
-    if dept:
+    selected_levels = [(lv, v, f) for lv, v, f in ((1, dept, 'dep_1st_name'), (2, group, 'dep_2nd_name'),
+                                                     (3, project, 'dep_3rd_name')) if v]
+    if selected_levels:
         if filters_active:
-            org_codes = similarity_map.org_codes_for_dep_names(dept, period=period)
-            display_df = display_df[display_df['_org_code'].isin(org_codes)]
+            org_codes = similarity_map.org_codes_for_levels(dept, group, project, period=period)
+            display_df = display_df[display_df['_org_code'].isin(org_codes or set())]
         elif is_cumulative:
-            # 과거포함(기간 미지정) — "지금" 그 부서인 사람이 아니라, 재직
-            # 기간 중 한 번이라도 그 부서였던 사람 전부(사용자 확정,
-            # 2026-09-10). _org_code는 researchers.csv의 현재 org_code
-            # 하나뿐이라 이 판정에 못 쓰고, researchers_history.csv 전체
-            # 이력 + team_refer 전체 이력을 함께 보는 전용 함수를 쓴다.
-            matched_ids = similarity_map.researcher_ids_ever_matching_org_field('dep_1st_name', dept)
-            display_df = display_df[display_df['researcher_id'].isin(matched_ids)]
-    if project:
-        if filters_active:
-            org_codes = similarity_map.org_codes_for_pjt_part_names(project, period=period)
-            display_df = display_df[display_df['_org_code'].isin(org_codes)]
-        elif is_cumulative:
-            matched_ids = similarity_map.researcher_ids_ever_matching_org_field('dep_3rd_name', project)
-            display_df = display_df[display_df['researcher_id'].isin(matched_ids)]
+            # 과거포함(기간 미지정) — "지금" 그 소속인 사람이 아니라, 재직 기간 중
+            # 한 번이라도 그 팀/그룹/과제였던 사람 전부(2026-09-10 확정). 선택한
+            # 단계끼리는 AND.
+            matched_ids = None
+            for _lv, names, field in selected_levels:
+                ids = similarity_map.researcher_ids_ever_matching_org_field(field, names)
+                matched_ids = ids if matched_ids is None else (matched_ids & ids)
+            display_df = display_df[display_df['researcher_id'].isin(matched_ids or set())]
     if pos and filters_active:
         display_df = display_df[display_df['직급'].isin(pos)]
     if title and filters_active:
@@ -955,6 +987,7 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, 
 # ── 콜백 3: 필터 초기화 버튼 → 드롭다운 값 비우기(메인 화면 + 필터 모달) ─────
 @callback(
     Output('filter-dept',       'value'),
+    Output('filter-group',      'value'),
     Output('filter-project',    'value'),
     Output('filter-pos',        'value'),
     Output('filter-title',      'value'),
@@ -969,7 +1002,7 @@ def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, 
     prevent_initial_call=True,
 )
 def clear_filters(_clear_clicks, _modal_clear_clicks):
-    return None, None, None, None, None, None, None, None, None, None
+    return None, None, None, None, None, None, None, None, None, None, None
 
 
 # ── 콜백 3-1: '필터' 버튼 → 상세 필터 모달 열기/닫기 ──────────────────────────

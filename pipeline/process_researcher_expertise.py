@@ -543,6 +543,22 @@ def _list_block_html(title: str, items: list) -> str:
     return f'<div class="kv-block"><div class="kv-title">{title}</div><ul class="kv-list">{lis}</ul></div>'
 
 
+def _focus_block_html(current: list, past: list) -> str:
+    """현재 주력 분야(위) + 과거 주력 분야(아래)를 한 카드로 합쳐 보여준다(2026-10-08).
+    둘 다 비어 있으면(재분석 전 결과 등) 블록 자체를 표시하지 않는다."""
+    if not current and not past:
+        return ''
+
+    def _part(label, items):
+        if not items:
+            return ''
+        lis = ''.join(f'<li>{html.escape(v)}</li>' for v in items)
+        return f'<div class="kv-sub">{label}</div><ul class="kv-list">{lis}</ul>'
+
+    return ('<div class="kv-block"><div class="kv-title">주력 분야</div>'
+            + _part('현재', current) + _part('과거', past) + '</div>')
+
+
 def researcher_card_html(item: dict, name_map: dict, anchor: str = '', include_links: bool = True,
                           similarity_item: dict | None = None, dept_map: dict | None = None,
                           org_map: dict | None = None) -> str:
@@ -570,8 +586,7 @@ def researcher_card_html(item: dict, name_map: dict, anchor: str = '', include_l
     chip_row = mmd.strength_section_html(fields, keywords)
 
     kv_blocks = (
-        _list_block_html('현재 주력 분야', item.get('current_focus_fields') or [])
-        + _list_block_html('과거 주력 분야', item.get('past_fields') or [])
+        _focus_block_html(item.get('current_focus_fields') or [], item.get('past_fields') or [])
         + _list_block_html('주요 역할·책임', item.get('key_responsibilities') or [])
         + _list_block_html('전문지식 및 역량', item.get('domain_knowledge_skill') or [])
     )

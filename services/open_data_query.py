@@ -63,6 +63,7 @@ from services import auth  # noqa: E402
 from services import data_labels  # noqa: E402
 from services import data_store  # noqa: E402
 from services import job_category as job_category_service  # noqa: E402
+from services import nl_query_curation  # noqa: E402
 from services import nl_query_feedback  # noqa: E402
 from services import query_settings  # noqa: E402
 from services import researcher_profile_export as rpe  # noqa: E402
@@ -370,7 +371,7 @@ def _generate_sql(question: str, schema: str, max_wait, current_only: bool = Tru
                    period: tuple[str, str] | None = None) -> dict | None:
     rule = _period_or_current_rule(current_only, period)
     system = query_settings.apply(_SQL_GEN_SYSTEM_TEMPLATE.format(schema=schema, current_only_rule=rule))
-    system += nl_query_feedback.feedback_hint_for(question)
+    system += nl_query_feedback.feedback_hint_for(question) + nl_query_curation.examples_hint_for(question)
     raw = llm_client.call_llm(question, system, temperature=0.0, max_tokens=700, max_wait=max_wait)
     return _parse_gen_response(raw)
 
@@ -384,7 +385,7 @@ def _generate_sql_repair(question: str, schema: str, max_wait, current_only: boo
     rule = _period_or_current_rule(current_only, period)
     base = _SQL_GEN_SYSTEM_TEMPLATE.format(schema=schema, current_only_rule=rule)
     system = query_settings.apply(base) + _REPAIR_SYSTEM_SUFFIX.format(bad_sql=bad_sql, error=error[:500])
-    system += nl_query_feedback.feedback_hint_for(question)
+    system += nl_query_feedback.feedback_hint_for(question) + nl_query_curation.examples_hint_for(question)
     raw = llm_client.call_llm(question, system, temperature=0.0, max_tokens=700, max_wait=max_wait)
     return _parse_gen_response(raw)
 

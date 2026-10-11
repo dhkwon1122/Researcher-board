@@ -68,7 +68,7 @@ TABS_CONTENT_HEIGHT = 260
 
 # 우측 타임라인 카드 맨 위에 얹는 LLM 요약 블록의 고정 높이. 나머지는 타임라인이
 # flex:1로 채운다(SECTION_HEIGHT 총합 자체는 바꾸지 않아 좌측 스택과 하단이 계속 맞음).
-LLM_SUMMARY_HEIGHT = 150
+LLM_SUMMARY_HEIGHT = 300  # 기본 높이(2026-10-08 150→300). 화면에서 아래 모서리를 끌어 조절 가능
 
 
 def _locked_block(label: str = '', *, icon_only: bool = False):
@@ -144,6 +144,23 @@ def _load_selector_data(current_only: bool = True):
         return dept_opts, all_opts, by_dept
     except Exception:
         return [], [], {}
+
+
+def _filtered_researcher_opts(current_only: bool, l1=None, l2=None, l3=None) -> list:
+    """플랫폼/팀(l1) · 플랫폼/그룹(l2) · 과제/파트(l3) 선택에 맞는 연구원 옵션
+    (2026-10-08 — 예전 '부서' 하나를 팀 레벨 3단계로 나눴다). 선택이 없으면 전체."""
+    try:
+        full_df = read_processed('researchers')
+        if full_df.empty:
+            return []
+        res_df = filter_current(full_df, current_only)
+        dep_map, pjt_map = similarity_map.org_code_label_maps()
+        codes = similarity_map.org_codes_for_levels(l1, l2, l3)
+        if codes is not None:
+            res_df = res_df[res_df['org_code'].isin(codes)] if 'org_code' in res_df.columns else res_df.iloc[0:0]
+        return [_opt(row, dep_map, pjt_map) for _, row in res_df.sort_values(['department', 'name']).iterrows()]
+    except Exception:
+        return []
 
 
 def _mail_profile_modal():
@@ -283,6 +300,8 @@ def layout(id=None, ids=None, **_kwargs):
     # 그대로 해당 인물을 연다.
     default_rid = None
     default_dept = ''
+    default_group = ''
+    default_project = ''
     res_opts = all_opts
 
     if id is not None:
@@ -298,9 +317,7 @@ def layout(id=None, ids=None, **_kwargs):
             try:
                 res_df = read_processed('researchers')
                 match = res_df[res_df['researcher_id'] == id]
-                if not match.empty:
-                    default_dept = similarity_map.dep_name_for_org_code(str(match.iloc[0].get('org_code', '')))
-                    res_opts = by_dept.get(default_dept, all_opts)
+                # (2026-10-09) 딥링크도 부서를 고정하지 않는다 — 전체 연구원이 검색 대상(연구원 검색 최우선).
             except Exception:
                 pass
 
@@ -330,8 +347,10 @@ def layout(id=None, ids=None, **_kwargs):
         html.Div(id='profile-print-dummy', style={'display': 'none'}),
         _print_progress_overlay(),
         dcc.Store(id='print-ready', data=False),
+        dcc.Store(id='profile-print-title', data='연구원 프로필'),
         html.Div([
-            _selector_card(dept_opts, res_opts, default_dept, default_rid, default_mode),
+            _selector_card(dept_opts, res_opts, default_dept, default_rid, default_mode,
+                           default_group, default_project),
             dbc.Row([
                 _left_stack_col(show_eval, show_comments),
                 _right_column(),
@@ -415,17 +434,20 @@ def _bulk_layout(ids_param):
         ], className='no-print'),
         dcc.Store(id='bulk-print-ids', data=rid_list),
         dcc.Store(id='bulk-print-progress', data=0),
+        dcc.Store(id='bulk-print-step', data=None),
         # 만들 사람이 아예 없으면(예: 잘못된 ?ids=) 기다릴 것도 없으므로
         # 처음부터 준비된 것으로 둔다 — 안 그러면 인터벌이 아예 안 돌아
         # (바로 아래 disabled=not rid_list) 버튼이 영원히 비활성 상태로 남는다.
         dcc.Store(id='print-ready', data=not rid_list),
+        dcc.Store(id='profile-print-title', data=f'연구원 프로필_일괄({len(rid_list)}명)'),
         dcc.Interval(id='bulk-print-build-interval', interval=200, n_intervals=0,
                      disabled=not rid_list),
         html.Div(id='profile-print-content', className='profile-print-only', children=[]),
     ])
 
 
-def _selector_card(dept_opts, res_opts, default_dept, default_rid, default_mode='current'):
+def _selector_card(dept_opts, res_opts, default_dept, default_rid, default_mode='current',
+                   default_group='', default_project=''):
     return dbc.Card(
         dbc.CardBody([
             dbc.Row([
@@ -443,14 +465,37 @@ def _selector_card(dept_opts, res_opts, default_dept, default_rid, default_mode=
                     ),
                 ], width='auto'),
                 dbc.Col([
-                    dbc.Label('부서', className='fw-semibold small text-muted mb-1'),
+                    dbc.Label('플랫폼/팀', className='fw-semibold small text-muted mb-1'),
                     dcc.Dropdown(
                         id='dept-select',
-                        options=dept_opts,
+                        options=[o for o in dept_opts if o.get('value')],
                         value=default_dept or None,
                         clearable=True,
                         placeholder='전체',
-                        style={'minWidth': '200px'},
+                        style={'minWidth': '170px'},
+                    ),
+                ], width='auto'),
+                dbc.Col([
+                    dbc.Label('플랫폼/그룹', className='fw-semibold small text-muted mb-1'),
+                    dcc.Dropdown(
+                        id='group-select',
+                        options=similarity_map.level_filter_options(2, {1: default_dept} if default_dept else None),
+                        value=default_group or None,
+                        clearable=True,
+                        placeholder='전체',
+                        style={'minWidth': '170px'},
+                    ),
+                ], width='auto'),
+                dbc.Col([
+                    dbc.Label('과제/파트', className='fw-semibold small text-muted mb-1'),
+                    dcc.Dropdown(
+                        id='project-select',
+                        options=similarity_map.level_filter_options(
+                            3, {k: v for k, v in ((1, default_dept), (2, default_group)) if v} or None),
+                        value=default_project or None,
+                        clearable=True,
+                        placeholder='전체',
+                        style={'minWidth': '170px'},
                     ),
                 ], width='auto'),
                 dbc.Col([
@@ -553,10 +598,14 @@ def _right_column():
                 html.Div([
                     html.P('전문성 요약(LLM)', style={'fontSize': '0.85rem', 'fontWeight': 600,
                                             'color': '#1f1f1f'}, className='mb-1'),
-                    html.Div(id='llm-summary-block', style={'maxHeight': f'{LLM_SUMMARY_HEIGHT - 28}px',
-                                                             'overflowY': 'auto'}),
-                ], style={'flex': '0 0 auto', 'height': f'{LLM_SUMMARY_HEIGHT}px',
-                          'overflow': 'hidden', 'marginBottom': '8px'}),
+                    html.Div(id='llm-summary-block', style={'height': 'calc(100% - 28px)', 'overflowY': 'auto'}),
+                # 오른쪽 아래 모서리를 끌어 전문성 요약 높이를 조절한다 — 타임라인은 남는 높이를
+                # 자동으로 채운다(flex 1). 기본 높이는 LLM_SUMMARY_HEIGHT.
+                ], className='llm-summary-resizable',
+                   style={'flex': '0 0 auto', 'height': f'{LLM_SUMMARY_HEIGHT}px', 'minHeight': '90px',
+                          'maxHeight': f'{SECTION_HEIGHT - 150}px',
+                          'resize': 'vertical', 'overflow': 'hidden', 'marginBottom': '8px',
+                          'borderBottom': '1px dashed #d9d9d9'}),
                 html.P('타임라인', style={'fontSize': '0.85rem', 'fontWeight': 600,
                                        'color': '#1f1f1f', 'flex': '0 0 auto'}, className='mb-2'),
                 html.Div(id='tab-timeline', style={'flex': '1 1 auto', 'minHeight': '0', 'overflow': 'hidden'}),
@@ -1296,16 +1345,45 @@ def _current_status_badge(researcher):
 
 
 @callback(
+    Output('group-select', 'options'),
+    Output('group-select', 'value'),
+    Input('dept-select', 'value'),
+    State('group-select', 'value'),
+    prevent_initial_call=True,
+)
+def update_group_options(dept, current_group):
+    """플랫폼/팀을 고르면 그 아래 플랫폼/그룹만 보이게(캐스케이딩). 현재 선택값이
+    새 옵션에 아직 있으면 유지한다(최근 검색 칩이 세 값을 한꺼번에 채울 때 필요)."""
+    opts = similarity_map.level_filter_options(2, {1: dept} if dept else None)
+    return opts, (current_group if current_group in {o['value'] for o in opts} else None)
+
+
+@callback(
+    Output('project-select', 'options'),
+    Output('project-select', 'value'),
+    Input('dept-select', 'value'),
+    Input('group-select', 'value'),
+    State('project-select', 'value'),
+    prevent_initial_call=True,
+)
+def update_project_options(dept, group, current_project):
+    parents = {k: v for k, v in ((1, dept), (2, group)) if v}
+    opts = similarity_map.level_filter_options(3, parents or None)
+    return opts, (current_project if current_project in {o['value'] for o in opts} else None)
+
+
+@callback(
     Output('researcher-select', 'options'),
     Output('researcher-select', 'value'),
     Input('dept-select', 'value'),
+    Input('group-select', 'value'),
+    Input('project-select', 'value'),
     Input('profile-search-mode', 'value'),
     State('researcher-select', 'value'),
     prevent_initial_call=True,
 )
-def filter_by_dept(dept, mode, current_rid):
-    _, all_opts, by_dept = _load_selector_data(current_only=(mode != 'all'))
-    opts = by_dept.get(dept, all_opts) if dept else all_opts
+def filter_by_dept(dept, group, project, mode, current_rid):
+    opts = _filtered_researcher_opts(mode != 'all', dept, group, project)
     valid_ids = {o['value'] for o in opts}
     new_value = current_rid if current_rid in valid_ids else (opts[0]['value'] if opts else None)
     return opts, new_value
@@ -1419,6 +1497,8 @@ def _clear_history(n_clicks):
 
 @callback(
     Output('dept-select', 'value'),
+    Output('group-select', 'value', allow_duplicate=True),
+    Output('project-select', 'value', allow_duplicate=True),
     Output('researcher-select', 'value', allow_duplicate=True),
     Input({'type': 'researcher-history-chip', 'rid': dash.ALL}, 'n_clicks'),
     State({'type': 'researcher-history-chip', 'rid': dash.ALL}, 'id'),
@@ -1428,18 +1508,22 @@ def _select_from_history(n_clicks_list, ids):
     """"최근 검색" 칩을 누르면 그 사람의 부서로 '부서' 드롭다운을 같이 옮겨줘야
     (layout()의 id= 딥링크와 동일한 이유로) researcher-select 옵션 목록에 그
     사람이 실제로 들어있는 상태가 된다 — 부서만 안 맞추면 필터링된 옵션에서
-    빠져 있어 선택이 무시될 수 있다."""
+    빠져 있어 선택이 무시될 수 있다.
+    (2026-10-09 변경) 반대로 부서를 그 사람 부서로 고정하면 다른 부서 연구원을 이름/사번으로
+    검색할 수 없게 되므로(사용자 요청: 연구원 검색이 최우선), 이제는 세 부서 드롭다운을 비워
+    전체 연구원이 검색 대상이 되게 하고 그 사람만 선택한다."""
     triggered_id = dash.ctx.triggered_id
     if not triggered_id:
-        return no_update, no_update
+        return no_update, no_update, no_update, no_update
     idx = next((i for i, d in enumerate(ids) if d == triggered_id), None)
     if idx is None or not n_clicks_list[idx]:
-        return no_update, no_update
+        return no_update, no_update, no_update, no_update
     rid = triggered_id['rid']
     res_df = read_processed('researchers')
     match = res_df[res_df['researcher_id'] == rid]
-    dept = similarity_map.dep_name_for_org_code(str(match.iloc[0].get('org_code', ''))) if not match.empty else None
-    return (dept or None), rid
+    l1, l2, l3 = (similarity_map.org_code_level_names(str(match.iloc[0].get('org_code', '')))
+                  if not match.empty else ('', '', ''))
+    return None, None, None, rid
 
 
 def _build_print_block(rid, tables, researchers, name_map, show_eval):
@@ -1584,24 +1668,31 @@ def update_profile(rid):
 @callback(
     Output('profile-print-content', 'children', allow_duplicate=True),
     Output('bulk-print-progress', 'data'),
-    Output('bulk-print-build-interval', 'disabled'),
+    Output('bulk-print-build-interval', 'disabled', allow_duplicate=True),
     Output('bulk-build-progress-text', 'children'),
     Output('bulk-build-progress-fill', 'style'),
     Output('bulk-build-progress-overlay', 'style'),
     Output('print-ready', 'data', allow_duplicate=True),
-    Input('bulk-print-build-interval', 'n_intervals'),
+    Input('bulk-print-step', 'data'),
     State('bulk-print-ids', 'data'),
     State('bulk-print-progress', 'data'),
     prevent_initial_call=True,
 )
-def _append_bulk_print_block(_n_intervals, rid_list, progress):
+def _append_bulk_print_block(_step, rid_list, progress):
     """일괄 인쇄 화면이 뜨자마자 bulk-print-build-interval이 주기적으로
     틱을 보내고, 매 틱마다 딱 한 명의 인쇄 콘텐츠만 만들어 Patch로
     이어붙인다 — build_bulk_print_content(이전 버전)처럼 인원 전체를 한
     콜백에서 만들어 한 번에 렌더링하면, 그 최종 DOM 반영 자체가 무겁고
     긴 동기 작업이라 브라우저가 "응답 없음"을 띄울 정도로 멈춘 것처럼
     보였다(사용자 리포트, 16명 테스트). 한 명씩 나눠 붙이면 그 사이사이
-    브라우저가 다른 작업(그리기, 다음 요청)을 처리할 틈이 생긴다."""
+    브라우저가 다른 작업(그리기, 다음 요청)을 처리할 틈이 생긴다.
+
+    (2026-10-09) 예전에는 200ms 인터벌 틱마다 이 콜백이 직접 호출됐는데, 실제 데이터에서 한 명 만드는 데
+    200ms보다 오래 걸리면 Dash가 앞선 응답을 새 틱에 밀려난 것으로 보고 버려 진행률이 0에서 멈추고 같은
+    첫 사람만 계속 다시 만들었다. 서버 콜백 두 개를 서로의 출력→입력으로 잇는 연쇄도 시도했지만 Dash가
+    순환을 이어주지 않아 1명 뒤에 멈췄다. 지금 방식: 틱마다 클라이언트사이드 콜백이 *먼저 인터벌을 끄고*
+    bulk-print-step을 갱신 → 이 콜백이 한 명을 만든 뒤 인터벌을 다시 켠다(끝나면 끈 채로 둔다). 요청이
+    진행 중인 동안에는 틱이 없으므로 응답이 버려지지 않고, 콜백 그래프에 순환도 없다."""
     from services.auth import can_view_evaluation, get_current_user
 
     fallback = (no_update, no_update, True, no_update, no_update, _BULK_BUILD_OVERLAY_HIDDEN_STYLE)
@@ -1656,6 +1747,36 @@ def _append_bulk_print_block(_n_intervals, rid_list, progress):
 
 
 @callback(
+    Output('profile-print-title', 'data'),
+    Input('researcher-select', 'value'),
+)
+def _profile_print_title(rid):
+    """단일 프로필 인쇄 시 PDF 기본 파일명(문서 제목) — 메일 첨부와 같은 "성명(사번)_프로필"."""
+    if not rid:
+        return '연구원 프로필'
+    rid = str(rid).zfill(8)
+    df = read_processed('researchers')
+    match = df[df['researcher_id'] == rid] if not df.empty else df
+    name = str(match.iloc[0].get('name', '')).strip() if not match.empty else ''
+    return f'{name}({rid})_프로필' if name else f'{rid}_프로필'
+
+
+# 일괄 인쇄 틱 → (브라우저에서 즉시) 인터벌 끄기 + 다음 한 명 요청. 서버 콜백
+# _append_bulk_print_block이 그 한 명을 붙인 뒤 인터벌을 다시 켠다(위 docstring 참고).
+clientside_callback(
+    """
+    function(n) {
+        return [true, n];
+    }
+    """,
+    Output('bulk-print-build-interval', 'disabled', allow_duplicate=True),
+    Output('bulk-print-step', 'data'),
+    Input('bulk-print-build-interval', 'n_intervals'),
+    prevent_initial_call=True,
+)
+
+
+@callback(
     Output('profile-print-btn', 'disabled'),
     Input('print-ready', 'data'),
 )
@@ -1679,7 +1800,7 @@ def update_leadership(rid, year):
 
 clientside_callback(
     """
-    async function(n) {
+    async function(n, pdf_title) {
         if (n > 0) {
             // Dash가 클릭 한 번에 이 콜백을 두 번 발생시키는 경우가 있어(이
             // 프로젝트에서 기존부터 있던 동작 — 이전 동기 버전에서는 두
@@ -1717,7 +1838,12 @@ clientside_callback(
             // 있어, 인쇄 직전에 제목을 고정해두고 인쇄 후 원래 제목으로
             // 되돌린다.
             var originalTitle = document.title;
-            document.title = '연구원 프로필';
+            // PDF 저장 기본 파일명 = 문서 제목: 단일 조회는 "성명(사번)_프로필"(메일 첨부 이름과 동일),
+            // 일괄 인쇄는 "연구원 프로필_일괄(N명)" — 두 화면 모두에 있는 profile-print-title Store 값.
+            // (연구원 선택 박스를 State로 쓰면 그 박스가 없는 일괄 인쇄 화면에서 Dash가 이 콜백을
+            // 아예 실행하지 않아 인쇄 버튼이 먹통이 됐다 — 2026-10-09)
+            var pdfTitle = pdf_title || '연구원 프로필';
+            document.title = pdfTitle;
 
             var cleanup = function() {
                 var el = document.getElementById('profile-print-a4-page-size');
@@ -1735,6 +1861,7 @@ clientside_callback(
     """,
     Output('profile-print-dummy', 'children'),
     Input('profile-print-btn', 'n_clicks'),
+    State('profile-print-title', 'data'),
     prevent_initial_call=True,
 )
 

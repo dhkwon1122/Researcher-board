@@ -116,15 +116,16 @@ def run():
     from process_education import process as process_education
     _run_with_fallback(process_education, 'education', '임직원_학력.xlsx 또는 education_raw', missing)
 
-    # ── 3. 과제 수행 이력: 개인별과제투입기간데이터*.xlsb|xlsx (폴백 없음) ─
-    from process_tasks import process as process_tasks
-    if not process_tasks():
-        missing.append('tasks (개인별과제투입기간데이터*.xlsb|xlsx)')
-
-    # ── 4. 과제 정보: 과제정보.xlsx 우선, 없으면 tasks_information_raw 폴백 ─
+    # ── 3. 과제 정보: 과제정보.xlsx 우선, 없으면 tasks_information_raw 폴백 ─
+    # (과제 수행 이력보다 먼저 — process_tasks가 개명 이력 task_name_history.csv를 참조, 2026-10-09)
     from process_task_information import process as process_task_information
     _run_with_fallback(process_task_information, 'tasks_information',
                         '과제정보.xlsx 또는 tasks_information_raw', missing)
+
+    # ── 4. 과제 수행 이력: 개인별과제투입기간데이터*.xlsb|xlsx (폴백 없음) ─
+    from process_tasks import process as process_tasks
+    if not process_tasks():
+        missing.append('tasks (개인별과제투입기간데이터*.xlsb|xlsx)')
 
     # ── 5. 직무이력: 임직원_직무이력.xlsx 우선, 없으면 job_profile_raw 폴백 ─
     from process_job_profile import process as process_job_profile

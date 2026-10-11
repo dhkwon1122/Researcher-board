@@ -2,10 +2,10 @@
 관리자 페이지: 사용자 계정 관리 (추가 / 수정 / 삭제)
 manage_users 권한이 있는 계정만 접근 가능.
 
-2026-09-28: 6개 탭(사용자/권한 관리, 팀/리더 참조, 직군 예외자, 데이터
-업데이트, AI 검색 로그, 개발업데이트 이력)의 구현을 components/admin_*_tab.py
-로 분리하고, 이 파일은 각 탭을 조합하는 얇은 오케스트레이터로 남겼다(순수
-분할 리팩터링 — 기능 변경 없음).
+2026-09-28: 7개 탭(사용자/권한 관리, 팀/리더 참조, 직군 예외자, 데이터
+업데이트, AI 검색 로그, AI 검색 테스트, 개발업데이트 이력)의 구현을
+components/admin_*_tab.py로 분리하고, 이 파일은 각 탭을 조합하는 얇은
+오케스트레이터로 남겼다(순수 분할 리팩터링 — 기능 변경 없음).
 
 이 파일 자체를 여기서 top-level import하는 것이 안전한 이유: pages/admin.py는
 Dash가 dash.Dash(use_pages=True) 생성자 안에서 pages/ 폴더를 훑으며(파일
@@ -22,6 +22,7 @@ import dash
 import dash_bootstrap_components as dbc
 from dash import Input, Output, State, callback, html, no_update
 
+from components.admin_ai_search_lab_tab import _ai_search_lab_tab
 from components.admin_ai_search_log_tab import _ai_search_log_tab
 from components.admin_data_update_tab import _data_update_tab
 from components.admin_dev_updates_tab import _dev_updates_tab
@@ -40,6 +41,7 @@ _TABS = [
      'admin-tab-content-exception-job-function', _exception_job_function_tab),
     ('tab-data-update', '데이터 업데이트', 'admin-tab-content-data-update', _data_update_tab),
     ('tab-ai-search-log', 'AI 검색 로그', 'admin-tab-content-ai-search-log', _ai_search_log_tab),
+    ('tab-ai-search-lab', 'AI 검색 테스트', 'admin-tab-content-ai-search-lab', _ai_search_lab_tab),
     ('tab-dev-updates', '개발업데이트 이력', 'admin-tab-content-dev-updates', _dev_updates_tab),
 ]
 
@@ -59,10 +61,10 @@ def layout():
     if not can('manage_users'):
         return _access_denied()
 
-    # 2026-10-10 수정: 예전엔 6개 탭의 콘텐츠를 여기서 전부 즉시 계산해(탭
+    # 2026-10-10 수정: 예전엔 탭 전체의 콘텐츠를 여기서 매번 즉시 계산해(탭
     # 전환은 dbc.Tabs가 클라이언트에서 보이기/숨기기만 할 뿐, 콘텐츠 자체는
     # 이미 서버에서 다 만들어져 있었음) 실제로 보려는 탭이 하나뿐이어도
-    # 나머지 5개 탭까지 매번 렌더링하는 비용을 치렀다 — "사용자/권한 관리"
+    # 나머지 탭까지 매번 렌더링하는 비용을 치렀다 — "사용자/권한 관리"
     # 탭은 다른 시스템과 공유하는 DB 테이블(app_users)을 읽으므로, 그쪽이
     # 느려지면(다른 시스템의 트랜잭션과 겹치는 등) admin 페이지 전체가
     # 덩달아 느려지는 문제가 있었다(사용자 보고). 각 탭을 빈 placeholder로만

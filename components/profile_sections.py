@@ -496,7 +496,7 @@ def _fmt_rate(val) -> str:
 
 def _has_min_duration(start_raw, end_raw, min_days: int = 30) -> bool:
     """과제 참여기간(종료일-시작일)이 min_days 이하이면 False (해당 과제는 제외).
-    종료일이 비어있으면(진행중) 오늘 날짜를 종료일로 간주해 계산한다.
+    종료일이 비어있으면(진행중)은 기간과 무관하게 항상 포함한다(2026-10-08 변경).
     start_date/end_date가 YYYYMMDD 정수로 들어올 수 있어, pandas가 나노초로
     오인하지 않도록 반드시 문자열로 변환한 뒤 파싱한다."""
     start = pd.to_datetime(str(start_raw).strip(), errors='coerce') if start_raw is not None else pd.NaT
@@ -504,7 +504,9 @@ def _has_min_duration(start_raw, end_raw, min_days: int = 30) -> bool:
         return False
     end_s = str(end_raw).strip() if end_raw is not None else ''
     is_empty_end = is_blank(end_s)
-    end = pd.Timestamp(datetime.now().date()) if is_empty_end else pd.to_datetime(end_s, errors='coerce')
+    if is_empty_end:
+        return True  # 진행중인 과제는 방금 시작했어도 항상 포함(2026-10-08)
+    end = pd.to_datetime(end_s, errors='coerce')
     if pd.isna(end):
         end = pd.Timestamp(datetime.now().date())
     return (end - start).days > min_days

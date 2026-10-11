@@ -147,6 +147,16 @@ def process(raw_dir: str = RAW_DIR) -> bool:
         'write_date':        df[COL_WRITE_DATE].apply(parse_yyyymmdd),
     })
 
+    # 과제명 개명 이력은 중복 제거 *전* 원본 행에서 만든다 — 과제명 기준 중복 제거는
+    # "내용이 가장 많이 채워진 행"을 남겨서(예: 재작성된 2025-06 행) 그 이름이 실제로
+    # 처음 쓰인 작성일(2022-12 등)이 사라질 수 있기 때문(2026-10-09). process_tasks가 이
+    # 파일(task_name_history.csv)로 참여기간을 개명 시점별로 쪼갠다.
+    hist = result[['task_code', 'task_name', 'write_date']]
+    hist = hist[(hist['task_code'].astype(str).str.strip() != '') & (hist['task_name'].astype(str).str.strip() != '')
+                & (hist['write_date'].astype(str).str.strip() != '')].drop_duplicates()
+    if len(hist):
+        write_merged(os.path.join(OUT_DIR, 'task_name_history.csv'), hist, TABLE_KEYS['task_name_history'])
+
     before = len(result)
     result = _dedupe_by_name(result)
     after = len(result)
