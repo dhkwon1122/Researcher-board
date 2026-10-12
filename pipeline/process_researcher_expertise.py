@@ -24,11 +24,11 @@ Source:
   data/processed/work_experience.csv                 (입사 전 근무 경력, 2026-10 추가)
   data/processed/nurturing.csv                       (양성 이력 — 위탁교육/학위과정, 2026-10 추가)
 
-과제/직무/논문/특허 항목에는 기준일 대비 시기 표시([최근 3년]/[3~6년 전]/
-[6년 이전])를, 과제에는 기간·평균 투입률·환산 M/M을 붙여 LLM이 최근에
+과제/직무/논문/특허 항목에는 기준일 대비 시기 표시([최근 3년]/[3~5년 전]/
+[5~6년 전]/[6년 이전])를, 과제에는 기간·평균 투입률·환산 M/M을 붙여 LLM이 최근에
 깊게 수행한 분야를 강점으로 우선하도록 한다(2026-10, 사용자 확정 — 가중치
-1.0/0.5/0.25). 출력에 current_focus_fields(현재 주력)/past_fields(과거 주력)
-가 추가됐다.
+1.0/0.5/0.25). 출력에 current_focus_fields(화면 "최근 5년")/past_fields(화면 "5년 이전")
+가 추가됐다(2026-10-12 사용자 확정: 구분 기준을 최근 3년 → 최근 5년으로 변경, 화면 명칭도 변경).
 
 저널 권위도 조회/캐시 로직은 pipeline/journal_authority.py로 분리되어 있다.
 평가 값이 실제로 채워진 저널은 건너뛰고, 값이 비어 있는(신규거나 이전 조회
@@ -122,15 +122,15 @@ HR 담당자와 R&D 부서장이 이 연구원이 "실제로 어떤 일을 해�
 6. key_responsibilities와 domain_knowledge_skill은 관점이 다릅니다 —
    전자는 "실제 수행 업무(무엇을 했는가)", 후자는 "보유 지식·역량(무엇을
    아는가/할 수 있는가)"입니다. 같은 내용을 두 필드에 중복해서 넣지 마세요.
-7. 최근성·깊이 가중: 과제/직무/논문/특허 항목에는 [최근 3년]/[3~6년 전]/
-   [6년 이전] 시기 표시와(과제는) 투입률·환산 M/M(맨먼스)이 붙어 있습니다.
+7. 최근성·깊이 가중: 과제/직무/논문/특허 항목에는 [최근 3년]/[3~5년 전]/
+   [5~6년 전]/[6년 이전] 시기 표시와(과제는) 투입률·환산 M/M(맨먼스)이 붙어 있습니다.
    strength_fields/strength_keywords를 정할 때 시기별 가중치를 최근 3년 1.0,
-   3~6년 전 0.5, 6년 이전 0.25로 보고, 같은 시기라면 환산 M/M이 큰(오래·
+   3~5년 전·5~6년 전 0.5, 6년 이전 0.25로 보고, 같은 시기라면 환산 M/M이 큰(오래·
    깊게 수행한) 분야를 우선하세요. 오래전에 짧게 참여한 분야만으로 강점을
    정하지 마세요.
-8. current_focus_fields(현재 주력 분야)는 최근 3년 근거로 뒷받침되는 분야만
-   1~3개, past_fields(과거 주력 분야)는 예전에는 깊게 수행했지만 최근 3년
-   근거가 약한 분야를 0~3개 쓰세요. 두 필드에 같은 분야를 넣지 마세요.
+8. current_focus_fields(최근 5년 주력 분야)는 최근 5년 이내 근거([최근 3년]·[3~5년 전]
+   항목)로 뒷받침되는 분야만 1~3개, past_fields(5년 이전 주력 분야)는 5년보다 이전
+   ([5~6년 전]·[6년 이전] 항목)에 깊게 수행했지만 최근 5년 근거가 약한 분야를 0~3개 쓰세요. 두 필드에 같은 분야를 넣지 마세요.
    시기 정보가 없어 판단할 수 없으면 빈 배열로 두세요.
 9. [입사 전 근무 경력]은 이 연구원의 실제 경력이므로 strength_fields와
    domain_knowledge_skill의 근거로 활용하되, 사내 과제 근거보다 낮은
@@ -145,8 +145,8 @@ HR 담당자와 R&D 부서장이 이 연구원이 "실제로 어떤 일을 해�
   "strength_keywords": ["키워드1", "키워드2", "키워드3"],
   "key_responsibilities": ["주요 역할/책임 1", "주요 역할/책임 2"],
   "domain_knowledge_skill": ["전문지식/역량 1", "전문지식/역량 2"],
-  "current_focus_fields": ["현재 주력 분야1"],
-  "past_fields": ["과거 주력 분야1"]
+  "current_focus_fields": ["최근 5년 주력 분야1"],
+  "past_fields": ["5년 이전 주력 분야1"]
 }
 """
 
@@ -155,7 +155,10 @@ _PROFILE_LIST_FIELDS = ('strength_fields', 'strength_keywords', 'key_responsibil
 
 # 최근성 구간(2026-10, 사용자 확정): 기준일로부터 3년 이내 / 3~6년 / 그 이전.
 # 가중치(1.0/0.5/0.25)는 프롬프트 지침 7번에 그대로 적혀 있다.
+# (2026-10-12) 최근 5년 / 5년 이전 주력 구분을 위해 3~6년 구간을 5년에서 한 번 더 나눴다
+# ([3~5년 전]/[5~6년 전], 가중치는 둘 다 0.5로 동일 — 강점 가중 자체는 바뀌지 않음).
 _RECENT_YEARS = 3
+_FOCUS_YEARS = 5
 _MID_YEARS = 6
 _NO_DATA = '(데이터 없음)'
 
@@ -184,8 +187,10 @@ def _recency_label(last: date | None, ref_date: date) -> str:
     years = (ref_date - last).days / 365.25
     if years <= _RECENT_YEARS:
         return '[최근 3년]'
+    if years <= _FOCUS_YEARS:
+        return '[3~5년 전]'
     if years <= _MID_YEARS:
-        return '[3~6년 전]'
+        return '[5~6년 전]'
     return '[6년 이전]'
 
 
@@ -544,7 +549,8 @@ def _list_block_html(title: str, items: list) -> str:
 
 
 def _focus_block_html(current: list, past: list) -> str:
-    """현재 주력 분야(위) + 과거 주력 분야(아래)를 한 카드로 합쳐 보여준다(2026-10-08).
+    """최근 5년 주력 분야(위) + 5년 이전 주력 분야(아래)를 한 카드로 합쳐 보여준다(2026-10-08,
+    명칭은 2026-10-12 현재/과거 → 최근 5년/5년 이전).
     둘 다 비어 있으면(재분석 전 결과 등) 블록 자체를 표시하지 않는다."""
     if not current and not past:
         return ''
@@ -556,7 +562,7 @@ def _focus_block_html(current: list, past: list) -> str:
         return f'<div class="kv-sub">{label}</div><ul class="kv-list">{lis}</ul>'
 
     return ('<div class="kv-block"><div class="kv-title">주력 분야</div>'
-            + _part('현재', current) + _part('과거', past) + '</div>')
+            + _part('최근 5년', current) + _part('5년 이전', past) + '</div>')
 
 
 def researcher_card_html(item: dict, name_map: dict, anchor: str = '', include_links: bool = True,
