@@ -199,6 +199,18 @@ def process(force: bool = False, skip_confluence: bool = False) -> bool:
     personnel_rows = []
     completed = 0
     total = len(projects)
+    # 이번 실행에서 원문 조회/요약에 실패한 과제(새 주소인데 Confluence 실패, --skip-confluence 등)가
+    # 결과 파일에서 통째로 빠지지 않도록 직전 결과를 이어 쓴다(2026-10-12). 예전에는 이번 실행 성공분만으로
+    # 파일을 덮어써서, 실패한 과제가 과제별 필요 역량·과제 내 담당 업무 근거에서 사라질 수 있었다.
+    previous = {}
+    prev_path = os.path.join(OUT_DIR, 'project_expertise_analysis.json')
+    if os.path.exists(prev_path):
+        try:
+            with open(prev_path, encoding='utf-8') as f:
+                previous = {it.get('project_name', ''): it for it in json.load(f) if isinstance(it, dict)}
+        except (OSError, ValueError):
+            previous = {}
+    carried = []
     for _, proj in projects.iterrows():
         dep_name = proj['dep_name']
         project_name = proj['project_name']
@@ -209,6 +221,17 @@ def process(force: bool = False, skip_confluence: bool = False) -> bool:
         completed += 1
         if summary is None:
             reason = '컨플루언스 조회 건너뜀(--skip-confluence)' if skip_confluence and confl_address else '건너뜀'
+            prev = previous.get(project_name)
+            if prev:
+                results.append(prev)
+                for p in prev.get('personnel') or []:
+                    personnel_rows.append({
+                        'researcher_id': p.get('researcher_id', ''), 'name': p.get('name', ''),
+                        'name_suffix': p.get('name_suffix', ''), 'project_name': project_name,
+                        'dep_name': prev.get('dep_name', dep_name), 'role_description': p.get('role_description', ''),
+                    })
+                carried.append(project_name)
+                reason += ' → 직전 분석 결과 유지'
             print(f'  [{project_name}] {reason}')
             if completed % 5 == 0 or completed == total:
                 print(f'    (진행: {completed}/{total})')
@@ -246,7 +269,11 @@ def process(force: bool = False, skip_confluence: bool = False) -> bool:
     json_text = json.dumps(results, ensure_ascii=False, indent=2)
     with open(out_path, 'w', encoding='utf-8') as f:
         f.write(json_text)
-    print(f'[OK]   project_expertise_analysis.json 저장 ({len(results)}건)')
+    print(f'[OK]   project_expertise_analysis.json 저장 ({len(results)}건'
+          + (f', 이번 조회 실패로 직전 결과 유지 {len(carried)}건' if carried else '') + ')')
+    missing = total - len(results)
+    if missing:
+        print(f'  [WARN] 과제 {missing}건은 이번에도 분석 결과가 없습니다(원문 조회/요약 실패, 직전 결과도 없음).')
     result_archive.archive_copy('01. 과제분석', '과제 전문성 분석', 'json', json_text)
 
     _write_personnel_csv(personnel_rows)

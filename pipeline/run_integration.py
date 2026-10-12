@@ -19,6 +19,9 @@ run_analysis.py 단계는 사내 LLM/BGE-M3 호출이 많아 전체 실행에 �
      미설정이면 안내만 하고 그냥 끝난다(앱이 파일을 직접 읽으므로 불필요).
      앱은 DB가 있으면 파일보다 DB를 먼저 읽으므로, 이 단계가 없으면 분석 결과가
      화면에 반영되지 않는다.
+  4) pipeline/verify_outputs.py 결과 자동 점검(2026-10-12) — 화면이 쓰는 산출물(파일·DB)에 최신
+     필드가 실제로 들어갔는지 확인해 [OK]/[WARN]으로 요약(옛 이미지로 실행, DB 반영 누락 등 진단).
+     읽기만 하며, 경고가 있어도 실행 결과에는 영향 없음.
 
 사용법:
   python pipeline/run_integration.py
@@ -71,7 +74,7 @@ def run(skip_ready: bool = False, force: bool = False, skip_bge: bool = False, s
     start = time.monotonic()
 
     if not skip_ready:
-        print('[run_integration] 0/3 환경 점검 (run_ready.py)')
+        print('[run_integration] 0/4 환경 점검 (run_ready.py)')
         from run_ready import run as run_ready
         ready = run_ready(skip_bge=skip_bge, skip_confluence=skip_confluence)
         if not ready and not force:
@@ -81,20 +84,20 @@ def run(skip_ready: bool = False, force: bool = False, skip_bge: bool = False, s
         if not ready and force:
             print('\n[run_integration] 환경 점검 실패했지만 --force로 강행합니다.')
     else:
-        print('[run_integration] 0/3 환경 점검 — 건너뜀(--skip-ready)')
+        print('[run_integration] 0/4 환경 점검 — 건너뜀(--skip-ready)')
 
-    print('\n[run_integration] 1/3 전처리 (run_expertise.py)')
+    print('\n[run_integration] 1/4 전처리 (run_expertise.py)')
     from run_expertise import run as run_expertise
     run_expertise()
 
-    print('\n[run_integration] 2/3 전문성 분석 LLM 체인 (run_analysis.py)')
+    print('\n[run_integration] 2/4 전문성 분석 LLM 체인 (run_analysis.py)')
     from run_analysis import run as run_analysis
     run_analysis(skip_confluence=skip_confluence, **analysis_kwargs)
 
     if skip_db_load:
-        print('\n[run_integration] 3/3 DB 반영 — 건너뜀(--skip-db-load)')
+        print('\n[run_integration] 3/4 DB 반영 — 건너뜀(--skip-db-load)')
     else:
-        print('\n[run_integration] 3/3 DB 반영 (load_to_db.py)')
+        print('\n[run_integration] 3/4 DB 반영 (load_to_db.py)')
         try:
             from load_to_db import load as load_to_db  # 임포트 시 프로젝트 루트를 sys.path에 추가한다
             from services.db import load_env_file
@@ -102,6 +105,13 @@ def run(skip_ready: bool = False, force: bool = False, skip_bge: bool = False, s
             load_to_db()  # DATABASE_URL 미설정이면 안내만 출력하고 바로 반환
         except Exception as e:  # DB 접속 실패 등 — 분석 결과(파일)는 이미 저장됐으므로 실행 자체는 성공 처리
             print(f'[run_integration] DB 반영 실패 — 파일 결과는 저장됨. 관리자 화면 "DB 반영"으로 다시 시도하세요: {type(e).__name__}: {e}')
+
+    print('\n[run_integration] 4/4 결과 자동 점검 (verify_outputs.py)')
+    try:
+        from verify_outputs import run as verify_outputs
+        verify_outputs()
+    except Exception as e:  # 점검 자체의 오류는 실행 결과에 영향 주지 않는다
+        print(f'[run_integration] 결과 점검 중 오류(무시하고 종료): {type(e).__name__}: {e}')
 
     elapsed = time.monotonic() - start
     print(f'\n[run_integration] 전체 완료 (총 소요 시간: {elapsed / 60:.1f}분)')
