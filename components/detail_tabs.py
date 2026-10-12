@@ -368,18 +368,18 @@ def llm_summary_block(profile: dict | None, similar: list | None = None, name_ma
             children.append(html.Div(
                 [dbc.Badge(k, color='secondary', className='me-1 mb-1') for k in keywords],
             ))
-    # 현재/과거 주력 분야(2026-10) — 재분석 전 결과에는 없으므로 있을 때만.
+    # 주력 분야(2026-10) — 재분석 전 결과에는 없으므로 있을 때만. 명칭: 최근 5년/5년 이전(2026-10-12).
     focus = profile.get('current_focus_fields') or []
     past = profile.get('past_fields') or []
     if (focus or past) and not deemphasize_strength:
         # 현재(위)·과거(아래)를 한 카드로 합쳐 보여준다(2026-10-08).
         rows = []
         if focus:
-            rows.append(html.Div([html.Span('현재 주력', className='small text-muted fw-semibold me-2')] + [
+            rows.append(html.Div([html.Span('최근 5년', className='small text-muted fw-semibold me-2', title='최근 5년 이내 과제·직무·논문·특허 근거로 뒷받침되는 주력 분야', style={'cursor': 'help'})] + [
                 dbc.Badge(f, color='primary', className='me-1 mb-1') for f in focus],
                 className='d-flex align-items-center flex-wrap'))
         if past:
-            rows.append(html.Div([html.Span('과거 주력', className='small text-muted fw-semibold me-2')] + [
+            rows.append(html.Div([html.Span('5년 이전', className='small text-muted fw-semibold me-2', title='5년보다 이전에 깊게 수행했지만 최근 5년 근거는 약한 분야', style={'cursor': 'help'})] + [
                 dbc.Badge(f, color='light', text_color='secondary', className='me-1 mb-1 border') for f in past],
                 className='d-flex align-items-center flex-wrap'))
         children.append(html.Div(rows, className='border rounded p-2 mt-2'))
