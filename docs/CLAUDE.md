@@ -13930,3 +13930,12 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - "API 연동" 열 숨김(`_SHOW_API_COLUMN = False` — 연결되면 True로, du-api 콜백은 그대로).
 - "누적 시점(연/월)" → "누적 시점(년/월)", 년·월 드롭다운을 항상 한 줄(flex-nowrap).
 - "최종실행이력" 열 삭제 → "실행결과"에 상태 아이콘(성공 초록 체크/실패 빨간 X/실행중 회전) + 상태 + 실행 시각, 아래에 메시지(2줄 말줄임, 마우스 오버 전체).
+
+## (27) JOB Market 과제 드롭다운에 과거 과제만 보이던 문제 (2026-10-13)
+- 원인: 화면(데이터 업데이트)에서 올린 과제별컨플.xlsx는 data/web_updates/project_confl_address/에 저장되는데,
+  run_integration → run_expertise의 process_project_confl.process()는 원천 사본(DB project_confl_address_stg
+  또는 data/raw_csv/project_confl_address.csv)만 읽었다. 이 사본은 화면 업로드로 갱신되지 않아, run_integration을
+  돌릴 때마다 옛 파일이 "이번 업로드"로 취급되고 is_current가 뒤집혔다(옛 과제=Y, 새 과제=N).
+- 수정: process()가 기본 경로로 호출될 때, 화면 업로드 파일이 raw_csv 사본보다 새것이면(또는 사본이 없으면) 그 파일을
+  읽는다(`_newer_web_upload`). 테스트: tests/test_project_confl_source.py.
+- 반영 후: 과제별컨플을 한 번 다시 처리(데이터 업데이트 실행 또는 run_integration)하고 DB 반영해야 is_current가 바로잡힌다.

@@ -28,7 +28,7 @@ import sys
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from paths import RAW_DIR, OUT_DIR  # noqa: E402
+from paths import BASE_DIR, RAW_DIR, OUT_DIR  # noqa: E402
 from source_files import resolve_excel  # noqa: E402
 from excel_reader import clean_str as _clean, read_xlsx
 from merge_utils import TABLE_KEYS, write_merged
@@ -63,7 +63,27 @@ def _mark_current(merged: pd.DataFrame, latest: pd.DataFrame) -> pd.DataFrame:
     return merged
 
 
+WEB_UPLOAD_DIR = os.path.join(BASE_DIR, 'data', 'web_updates', 'project_confl_address')
+RAW_CSV_PATH = os.path.join(BASE_DIR, 'data', 'raw_csv', 'project_confl_address.csv')
+
+
+def _newer_web_upload() -> str | None:
+    """관리자 화면(데이터 업데이트)에 올린 과제별컨플.xlsx가 1단계 원천 사본(data/raw_csv)보다 새것이면
+    그 경로(2026-10-13 버그 수정). run_integration/run_expertise는 원천 사본(DB _stg 또는 raw_csv)을 읽는데,
+    이 사본은 화면 업로드로 갱신되지 않는다 — 그대로 읽으면 옛 파일이 "이번 업로드"로 취급돼 is_current가
+    뒤집혀(옛 과제=Y, 새 과제=N) JOB Market 등 드롭다운에 과거 과제만 보였다."""
+    path = resolve_excel(WEB_UPLOAD_DIR, SOURCE_FILE)
+    if not os.path.exists(path):
+        return None
+    if os.path.exists(RAW_CSV_PATH) and os.path.getmtime(RAW_CSV_PATH) > os.path.getmtime(path):
+        return None
+    return path
+
+
 def process(raw_dir: str = RAW_DIR) -> bool:
+    if raw_dir == RAW_DIR and _newer_web_upload():
+        raw_dir = WEB_UPLOAD_DIR
+        print(f'  [READ] 관리자 화면에서 올린 최신 {SOURCE_FILE} 사용(원천 사본보다 새 파일)')
     if raw_dir == RAW_DIR:
         df = read_source('project_confl_address')
         if df is None:
