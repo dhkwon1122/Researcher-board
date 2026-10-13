@@ -22,23 +22,24 @@ from services import web_pipeline_runner as wpr
 
 
 def _valid_period_picker(key: str, year: int, month: int):
-    """"누적 시점(연/월)" 입력 — 일(day) 없이 연/월만, 연이 왼쪽/월이 오른쪽,
+    """"누적 시점(년/월)" 입력 — 일(day) 없이 년/월만, 년이 왼쪽/월이 오른쪽,
     월은 숫자(1월~12월) 표기(2026-09-01, 사용자 확정). dcc.DatePickerSingle은
     일 단위 선택만 지원하고 팝업 캘린더 헤더도 영문이라, 연/월 각각 별도
     dcc.Dropdown 두 개로 대체했다."""
     year_options = [{'label': f'{y}년', 'value': y}
                      for y in range(year - _VALID_YEAR_SPAN_BACK, year + _VALID_YEAR_SPAN_FWD + 1)]
     month_options = [{'label': f'{m}월', 'value': m} for m in range(1, 13)]
-    return dbc.Row([
-        dbc.Col(dcc.Dropdown(
+    # 년/월 드롭다운을 항상 한 줄에(2026-10-13 사용자 요청 — 예전 dbc.Row는 칸이 좁으면 두 줄로 꺾였다)
+    return html.Div([
+        dcc.Dropdown(
             id={'type': 'du-valid-year', 'key': key}, options=year_options, value=year,
-            clearable=False, searchable=False, style={'minWidth': '92px'},
-        ), width='auto'),
-        dbc.Col(dcc.Dropdown(
+            clearable=False, searchable=False, style={'width': '92px'},
+        ),
+        dcc.Dropdown(
             id={'type': 'du-valid-month', 'key': key}, options=month_options, value=month,
-            clearable=False, searchable=False, style={'minWidth': '76px'},
-        ), width='auto'),
-    ], className='g-1 justify-content-center')
+            clearable=False, searchable=False, style={'width': '72px'},
+        ),
+    ], className='du-period d-flex flex-nowrap justify-content-center gap-1')
 
 
 # 연도 드롭다운 범위 — 과거 백필(소급 반영)과 근시일 소급 입력을 모두 커버.
@@ -93,14 +94,7 @@ def _data_update_row(row: dict) -> html.Tr:
             ),
         ])
 
-    status = row['status']
-    status_badge = (
-        dbc.Badge([html.I(className='bi bi-arrow-repeat me-1'), '실행중'], color='info')
-        if status == '실행중'
-        else dbc.Badge(status or '-', color=_STATUS_COLORS.get(status, 'secondary'))
-    )
-
-    api_btn = _api_button(key, row['has_api'])
+    status_view = _status_view(row)
 
     # 업로드 파일 형식 안내는 구분 라벨 옆 호버 아이콘으로만 보여준다(2026-09-01,
     # 사용자 확정) — 표에 항상 보이는 텍스트 줄 대신 필요할 때만 마우스 오버로.
@@ -112,7 +106,7 @@ def _data_update_row(row: dict) -> html.Tr:
         dbc.Tooltip(row['hint'], target=hint_icon_id, placement='right'),
     ])
 
-    # "누적 시점(연/월)" — "현재상태" 성격 항목(evaluations/core_technology/
+    # "누적 시점(년/월)" — "현재상태" 성격 항목(evaluations/core_technology/
     # job_profile/work_objective_*)만 별도 컬럼으로 보여준다(2026-09-01,
     # 사용자 확정 — "구분" 셀에서 분리). 과거 시점으로 잘못 지정하면
     # process_*.py가 기존 최신 값을 보호하려고 그 사람 행을 건너뛴다(정상
@@ -121,16 +115,6 @@ def _data_update_row(row: dict) -> html.Tr:
     valid_period_cell = (
         _valid_period_picker(key, today.year, today.month)
         if row['needs_valid_date'] else html.Span('-', className='text-muted')
-    )
-
-    # 최종실행이력 — 실행 시각 + 이번 실행이 API였는지 업로드였는지(2026-09-01,
-    # 사용자 확정). 아직 한 번도 실행한 적 없으면(source 빈 문자열) 배지 자체를
-    # 안 보여준다.
-    source = row.get('source', '')
-    source_badge = (
-        dbc.Badge(source, color='info' if source == 'API' else 'secondary',
-                  className='mt-1', style={'fontSize': '0.62rem'})
-        if source else None
     )
 
     return html.Tr([
@@ -149,15 +133,37 @@ def _data_update_row(row: dict) -> html.Tr:
                        color='link', size='sm', disabled=not row['has_upload'], className='p-0'),
             html.Div(row['uploaded_at'] or '-', className='small text-muted'),
         ], className='align-middle text-center'),
-        html.Td(api_btn, className='align-middle text-center'),
-        html.Td([row['last_run_at'] or '-', html.Div(source_badge)], className='align-middle small text-center'),
-        html.Td([status_badge, html.Div(row['message'], className='small text-muted mt-1',
-                                         title=row['message'])],
-                className='align-middle', style={'minWidth': '200px'}),
+        *([html.Td(_api_button(key, row['has_api']), className='align-middle text-center')] if _SHOW_API_COLUMN else []),
+        html.Td([status_view, html.Div(row['message'], className='du-msg text-muted mt-1', title=row['message'])],
+                className='align-middle', style={'minWidth': '220px'}),
     ])
 
 
-_DATA_UPDATE_TABLE_COLSPAN = 8
+# "API 연동" 열 — 기능 연결 전까지 숨김(2026-10-13 사용자 요청). 연결되면 True로. du-api 콜백은 칸이 없으면
+# 발동하지 않으므로 그대로 둬도 된다.
+_SHOW_API_COLUMN = False
+
+_STATUS_ICONS = {'성공': ('bi-check-circle-fill', '#52c41a'), '실패': ('bi-x-circle-fill', '#ff4d4f')}
+
+
+def _status_view(row: dict):
+    """실행결과 = 상태 아이콘 + 상태 + 실행 시각(2026-10-13: 별도 "최종실행이력" 열을 없애고 여기로 합침)."""
+    status = row['status']
+    when = row.get('last_run_at') or ''
+    if status == '실행중':
+        return html.Span([html.I(className='bi bi-arrow-repeat me-1 du-spin'), '실행중'],
+                         className='du-status text-primary fw-semibold')
+    if not status:
+        return html.Span('실행 이력 없음', className='du-status text-muted')
+    icon, color = _STATUS_ICONS.get(status, ('bi-dash-circle', '#8c8c8c'))
+    return html.Span([
+        html.I(className=f'bi {icon} me-1', style={'color': color}),
+        html.Span(status, className='fw-semibold me-2', style={'color': color}),
+        html.Span(when, className='text-muted'),
+    ], className='du-status')
+
+
+_DATA_UPDATE_TABLE_COLSPAN = 6 + (1 if _SHOW_API_COLUMN else 0)
 
 # 표시 순서: 공용(공용파일) → 대시보드용 → LLM분석용(2026-09-01, 사용자 확정
 # — 순서 그대로). 각 값은 run_pipeline.py(대시보드)와 run_expertise.py(LLM
@@ -173,9 +179,7 @@ _DATA_UPDATE_SCOPES = [
 
 
 def _data_update_section_header(label: str) -> html.Tr:
-    return html.Tr(html.Td(label, colSpan=_DATA_UPDATE_TABLE_COLSPAN,
-                            className='fw-semibold small text-muted',
-                            style={'backgroundColor': 'var(--gs-header-bg)'}))
+    return html.Tr(html.Td(label, colSpan=_DATA_UPDATE_TABLE_COLSPAN, className='du-group-row'))
 
 
 def _data_update_table() -> dbc.Table:
@@ -192,8 +196,9 @@ def _data_update_table() -> dbc.Table:
 
     header = html.Thead(html.Tr([
         _th('체크', style={'width': '48px'}), _th('구분'), _th('업로드'),
-        _th('누적 시점(연/월)'), _th('이전 Data'), _th('API 연동'),
-        _th('최종실행이력'), _th('실행결과'),
+        _th('누적 시점(년/월)'), _th('이전 Data'),
+        *([_th('API 연동')] if _SHOW_API_COLUMN else []),
+        _th('실행결과'),
     ]))
     body_rows: list = []
     for scope_key, scope_label in _DATA_UPDATE_SCOPES:
@@ -202,8 +207,10 @@ def _data_update_table() -> dbc.Table:
         body_rows.append(_data_update_section_header(scope_label))
         body_rows.extend(_data_update_row(r) for r in rows if r['pipeline_scope'] == scope_key)
     body = html.Tbody(body_rows)
-    return dbc.Table([header, body], bordered=True, hover=True, responsive=True, size='sm',
-                      className='align-middle mb-0 admin-table')
+    # 팀/리더 참조(AG Grid, .gs-ag-grid)와 같은 톤의 표 스타일 — assets/custom.css의 .du-grid(2026-10-13)
+    return html.Div(dbc.Table([header, body], bordered=False, hover=True, responsive=False, size='sm',
+                              className='align-middle mb-0 admin-table du-grid'),
+                    className='du-grid-wrap')
 
 
 def _db_status_view() -> html.Span:
