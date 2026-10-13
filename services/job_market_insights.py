@@ -14,6 +14,10 @@ services/job_market.py의 기존 추천(A: 과제 분석 유사도, B: 과제원
   B3 종료 영향    — 종료 과제 인원이 보유자의 절반 이상인 기술/강점(사내 보유 공백 위험).
   B4 육성 경로    — 참여 가능 과제가 없을 때 가장 가까운 과제의 부족 역량 + 멘토(과제원 상위 보유자).
   (B1 인력 요청 / B5 수요·공급 탭은 2026-10-13 사용자 확정으로 제거.)
+  C1 요구사항 커버리지 — 과제 요소(핵심 기술·산출물·기술 난제 문장, 키워드, 필요 역량)를 하나씩 나눠
+                    이 사람의 보유 항목과 1:1 비교 → "요구 N개 중 M개 충족"(전체를 뭉친 임베딩 비교의 희석 보완).
+  C2 실적 근거    — 최근 5년 논문·특허 제목, 참여 과제명을 과제 내용과 직접 비교한 상위 근거.
+  (C3 LLM 확신도/부족한 점은 services/job_market.py의 판정 프롬프트에서.)
 
 평가(인사평가) 데이터는 추천 점수에 쓰지 않는다(전문성 적합도와 성과는 다른 축 — 섞으면 "비슷한
 사람"이 아니라 "평가 좋은 사람"이 위로 올라와 추천의 의미가 바뀐다). 화면에서 권한이 있는 사용자에게만
@@ -24,8 +28,10 @@ LLM을 새로 호출하지 않는다 — 임베딩만 사용(fit.cached_embed, �
 from __future__ import annotations
 
 import os
+import re
 import sys
 import threading
+from datetime import date
 
 import numpy as np
 
@@ -42,6 +48,12 @@ MISSING_THRESHOLD = 0.6     # B4: 이 값 미만이면 "부족 역량"
 GAP_WEIGHT = 0.5            # 추천 정렬 가산: adjusted = max(A,B) + GAP_WEIGHT*gap_score + 주력 보정
 FOCUS_BONUS = 0.02          # 최근 5년 주력과 일치하면 가산, 복귀형이면 감산
 MINORITY_RATIO = 0.3        # 과제 내 시니어(또는 주니어) 비율이 이보다 낮으면 그쪽 인력이 "보완"
+COVER_THRESHOLD = 0.7       # C1: 요구 항목과 보유 항목 유사도가 이 값 이상이면 "충족"
+COVER_WEIGHT = 0.2          # C1 정렬 가산: + COVER_WEIGHT × 충족 비율
+EVIDENCE_YEARS = 5          # C2: 최근 N년 실적만
+EVIDENCE_MIN = 0.5          # C2: 이 값 이상인 실적만 근거로 표시
+EVIDENCE_WEIGHT = 0.1       # C2 정렬 가산: + EVIDENCE_WEIGHT × 최고 실적 유사도
+MAX_REQUIREMENTS = 20
 
 
 def _norm(name: str) -> str:
@@ -75,6 +87,8 @@ class Context:
         self.tenure = _tenure_map(self.researchers)
         self.contrib = _contribution_map(data_store.read_processed('researcher_contribution_metrics'))
         self._items_cache: dict = {}
+        self._evidence_cache: dict = {}
+        self._evidence_frames = None
 
     # 임베딩: 검색 동안 메모리에 모아 두고, 처음 보는 텍스트만 한 번에 계산
     def embed(self, texts: list) -> np.ndarray:
@@ -97,6 +111,50 @@ class Context:
                     vals.append(v)
             self._items_cache[rid] = vals
         return self._items_cache[rid]
+
+    def coverage_items(self, rid: str) -> list:
+        """C1용 보유 항목 = person_items + 주요 역할·책임(실제 수행 업무도 요구 충족 근거가 된다)."""
+        p = self.profiles.get(rid) or {}
+        extra = [str(v).strip() for v in p.get('key_responsibilities') or [] if str(v).strip()]
+        return list(dict.fromkeys(self.person_items(rid) + extra))
+
+    def evidence_items(self, rid: str) -> list:
+        """C2용 최근 EVIDENCE_YEARS년 실적 [(종류, 제목, 연도)] — 논문 게재·특허 출원·과제 참여(진행 중 포함)."""
+        if rid in self._evidence_cache:
+            return self._evidence_cache[rid]
+        if self._evidence_frames is None:
+            self._evidence_frames = (data_store.read_processed('publications'), data_store.read_processed('patents'),
+                                     data_store.read_processed('tasks'))
+        pubs, pats, tasks = self._evidence_frames
+        since = date.today().year - EVIDENCE_YEARS + 1
+        out = []
+
+        def _year(*vals):
+            for v in vals:
+                m = re.match(r'(\d{4})', str(v or ''))
+                if m:
+                    return int(m.group(1))
+            return None
+
+        for df, kind, title_cols, date_cols in ((pubs, '논문', ('title',), ('pub_year', 'pub_date')),
+                                                 (pats, '특허', ('title_ko', 'title'), ('application_date',))):
+            if df is None or df.empty or 'researcher_id' not in df.columns:
+                continue
+            for r in df[df['researcher_id'] == rid].fillna('').to_dict('records'):
+                title = next((str(r.get(c)).strip() for c in title_cols if str(r.get(c) or '').strip()), '')
+                y = _year(*(r.get(c) for c in date_cols))
+                if title and y and y >= since:
+                    out.append((kind, title, y))
+        if tasks is not None and not tasks.empty and 'researcher_id' in tasks.columns:
+            for r in tasks[tasks['researcher_id'] == rid].fillna('').to_dict('records'):
+                title = str(r.get('the_task_name') or r.get('task_name') or '').strip()
+                end = str(r.get('end_date') or '').strip()
+                y = _year(end) or date.today().year   # 해제일 없음 = 진행 중
+                if title and y >= since:
+                    out.append(('과제', title, y))
+        out = sorted(dict.fromkeys(out), key=lambda x: -x[2])[:40]
+        self._evidence_cache[rid] = out
+        return out
 
     def gap_item(self, project_name: str) -> dict | None:
         return self.gap_by_norm.get(_norm(project_name))
@@ -217,15 +275,90 @@ def composition(ctx: Context, rid: str, member_ids: list) -> dict | None:
             'me': me_label, 'me_contrib': ctx.contrib.get(rid, ''), 'complement': complement}
 
 
+# ─── C1: 요구사항 커버리지 / C2: 실적 근거 ───────────────────────────────────
+
+_SPLIT_RE = re.compile(r'[\n;•·]+|(?<=[.!?])\s+')
+
+
+def project_requirements(entry: dict | None) -> list:
+    """과제 분석(project_expertise_analysis) 항목을 요구 요소 목록으로 — 핵심 기술·산출물·기술 난제는 문장 단위
+    (항목당 최대 4개), 키워드(한글 우선)는 그대로. "확인 불가"/너무 짧은 조각은 제외."""
+    if not entry:
+        return []
+    reqs = []
+    for key in ('core_tech', 'deliverable', 'challenge'):
+        v = str(entry.get(key) or '').strip()
+        if not v or v == '확인 불가':
+            continue
+        parts = [x.strip(' -*\t.。') for x in _SPLIT_RE.split(v)]
+        reqs += [x for x in parts if len(x) >= 6][:4]
+    kws = [str(k).strip() for k in (entry.get('keywords_kr') or entry.get('keywords_en') or []) if str(k).strip()]
+    reqs += kws
+    return list(dict.fromkeys(reqs))[:MAX_REQUIREMENTS]
+
+
+def requirement_coverage(ctx: Context, rid: str, project_name: str, base_requirements: list | None) -> dict | None:
+    """요구 요소 + 과제별 필요 역량 이름을 하나씩 이 사람의 보유 항목과 비교. None = 비교할 요구/보유 항목 없음."""
+    reqs = list(base_requirements or [])
+    item = ctx.gap_item(project_name)
+    reqs += [str(c.get('competency') or '').strip() for c in (item or {}).get('competencies') or []]
+    reqs = [r for r in dict.fromkeys(reqs) if r][:MAX_REQUIREMENTS]
+    have = ctx.coverage_items(rid)
+    if not reqs or not have:
+        return None
+    sims = _cos_matrix(ctx.embed(reqs), ctx.embed(have))
+    covered, uncovered = [], []
+    for req, row in zip(reqs, sims):
+        j = int(np.argmax(row))
+        if float(row[j]) >= COVER_THRESHOLD:
+            covered.append({'requirement': req, 'item': have[j], 'score': round(float(row[j]), 3)})
+        else:
+            uncovered.append(req)
+    covered.sort(key=lambda x: -x['score'])
+    return {'total': len(reqs), 'covered': covered, 'uncovered': uncovered,
+            'ratio': round(len(covered) / len(reqs), 3)}
+
+
+def evidence_match(ctx: Context, rid: str, project_embedding, top: int = 3) -> dict | None:
+    """최근 5년 논문·특허·과제 제목 중 과제 내용(분석 텍스트 임베딩)과 가장 가까운 것. None = 실적/과제 분석 없음."""
+    items = ctx.evidence_items(rid)
+    if project_embedding is None or not items:
+        return None
+    proj = np.asarray(project_embedding, dtype=np.float32).reshape(1, -1)
+    sims = _cos_matrix(proj, ctx.embed([t for _k, t, _y in items]))[0]
+    order = np.argsort(-sims)
+    best = float(sims[order[0]])
+    picks = [{'kind': items[i][0], 'title': items[i][1], 'year': items[i][2], 'score': round(float(sims[i]), 3)}
+             for i in order[:top] if float(sims[i]) >= EVIDENCE_MIN]
+    return {'top': round(best, 3), 'items': picks}
+
+
 def enrich_candidates(ctx: Context, rid: str, scored: list, member_ids_by_project: dict) -> list:
-    """job_market._score_candidates() 결과에 A1~A4를 붙이고 adjusted 점수로 재정렬."""
+    """job_market._score_candidates() 결과에 A1~A4·C1·C2를 붙이고 adjusted 점수로 재정렬."""
+    # 필요한 텍스트를 한 번에 임베딩해 둔다 — 후보마다 따로 부르면 그때마다 임베딩 캐시 파일 전체를 다시 읽는다.
+    texts = list(ctx.coverage_items(rid)) + [t for _k, t, _y in ctx.evidence_items(rid)]
+    p = ctx.profiles.get(rid) or {}
+    for key in ('current_focus_fields', 'past_fields'):
+        vals = [str(v) for v in p.get(key) or [] if str(v).strip()]
+        if vals:
+            texts.append(', '.join(vals))
+    for c in scored:
+        texts += list(c.get('requirements') or [])
+        texts += [str(x.get('competency') or '') for x in (ctx.gap_item(c['project_name']) or {}).get('competencies') or []]
+    texts = [t for t in dict.fromkeys(texts) if t]
+    if texts:
+        ctx.embed(texts)
     out = []
     for c in scored:
         members = member_ids_by_project.get(c['project_name'], [])
         gap = gap_fill(ctx, rid, c['project_name'])
         focus = focus_match(ctx, rid, c.get('a_embedding'))
-        adjusted = c['combined'] + (GAP_WEIGHT * gap['score'] if gap else 0.0) + (focus['bonus'] if focus else 0.0)
-        out.append({**c, 'gap': gap, 'focus': focus,
+        coverage = requirement_coverage(ctx, rid, c['project_name'], c.get('requirements'))
+        evidence = evidence_match(ctx, rid, c.get('a_embedding'))
+        adjusted = (c['combined'] + (GAP_WEIGHT * gap['score'] if gap else 0.0) + (focus['bonus'] if focus else 0.0)
+                    + (COVER_WEIGHT * coverage['ratio'] if coverage else 0.0)
+                    + (EVIDENCE_WEIGHT * evidence['top'] if evidence else 0.0))
+        out.append({**c, 'gap': gap, 'focus': focus, 'coverage': coverage, 'evidence': evidence,
                     'collaborators': collaborators(ctx, rid, members),
                     'composition': composition(ctx, rid, members),
                     'adjusted': round(adjusted, 4)})
@@ -236,6 +369,14 @@ def enrich_candidates(ctx: Context, rid: str, scored: list, member_ids_by_projec
 def signals_text(c: dict) -> str:
     """LLM 후보 블록에 덧붙일 한 줄 요약(사람 이름은 넣지 않는다 — PII 원칙)."""
     parts = []
+    cov = c.get('coverage')
+    if cov:
+        parts.append(f"요구사항 충족 {len(cov['covered'])}/{cov['total']}"
+                     + (f" (충족: {', '.join(x['requirement'][:30] for x in cov['covered'][:3])})" if cov['covered'] else '')
+                     + (f" (미충족: {', '.join(r[:30] for r in cov['uncovered'][:3])})" if cov['uncovered'] else ''))
+    ev = c.get('evidence')
+    if ev and ev['items']:
+        parts.append('관련 실적: ' + '; '.join(f"[{x['kind']}] {x['title'][:40]}({x['year']})" for x in ev['items'][:2]))
     gap = c.get('gap')
     if gap:
         if gap['filled']:
@@ -258,6 +399,9 @@ def public_fields(c: dict) -> dict:
         'gap': c.get('gap'), 'focus': ({k: v for k, v in c['focus'].items()} if c.get('focus') else None),
         'collaborators': [list(x) for x in c.get('collaborators') or []],
         'composition': c.get('composition'), 'adjusted': c.get('adjusted'),
+        'coverage': ({**c['coverage'], 'covered': c['coverage']['covered'][:8], 'uncovered': c['coverage']['uncovered'][:8]}
+                     if c.get('coverage') else None),
+        'evidence': c.get('evidence'),
     }
 
 

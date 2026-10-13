@@ -56,6 +56,23 @@ def _insight_line(rec: dict):
     """(2026-10-13) 갭 충족 / 주력 시기 / 기존 협업자 / 과제 구성 배지 — services/job_market_insights.py.
     마우스를 올리면 근거(채우는 역량별 이 사람의 가까운 보유 항목, 협업자 이름 등)."""
     badges = []
+    cov = rec.get('coverage')
+    if cov:
+        covered = cov.get('covered') or []
+        tip = ('충족:\n' + '\n'.join(f"· {x['requirement']} ← {x['item']} ({x['score']:.2f})" for x in covered)
+               if covered else '충족한 요구 요소 없음')
+        if cov.get('uncovered'):
+            tip += '\n미충족:\n' + '\n'.join(f'· {r}' for r in cov['uncovered'])
+        ratio = float(cov.get('ratio') or 0)
+        badges.append(dbc.Badge(f"요구사항 충족 {len(covered)}/{cov.get('total', 0)}",
+                                color='success' if ratio >= 0.5 else 'warning' if ratio >= 0.25 else 'light',
+                                text_color=None if ratio >= 0.5 else 'dark', className='me-1 border', title=tip,
+                                style={'cursor': 'help'}))
+    ev = (rec.get('evidence') or {}).get('items') or []
+    if ev:
+        badges.append(dbc.Badge(f'관련 실적 {len(ev)}건', color='dark', className='me-1',
+                                title='\n'.join(f"· [{x['kind']}] {x['title']} ({x['year']}, {x['score']:.2f})" for x in ev),
+                                style={'cursor': 'help'}))
     gap = rec.get('gap')
     if gap:
         filled = gap.get('filled') or []
@@ -86,16 +103,40 @@ def _insight_line(rec: dict):
     return html.Div(badges, className='mt-1') if badges else None
 
 
+_CONFIDENCE_COLOR = {'상': 'success', '중': 'warning', '하': 'danger'}
+
+
+def _confidence_badge(rec: dict):
+    """(C3) LLM 확신도 — 요구 충족·관련 실적·필요 역량 근거가 얼마나 뚜렷한지에 대한 LLM 판단."""
+    c = rec.get('confidence')
+    if not c:
+        return None
+    return dbc.Badge(f'확신도 {c}', color=_CONFIDENCE_COLOR.get(c, 'secondary'),
+                     text_color='dark' if c == '중' else None, className='me-1',
+                     title='상: 요구 대부분 충족·근거 뚜렷 / 중: 일부 충족·간접 근거 / 하: 근거 약함', style={'cursor': 'help'})
+
+
+def _risk_line(rec: dict):
+    risk = (rec.get('risk') or '').strip()
+    if not risk or risk == '특이사항 없음':
+        return None
+    return html.Div([html.I(className='bi bi-exclamation-circle me-1 text-danger'), f'부족한 점: {risk}'],
+                    className='small text-danger', style={'fontSize': '0.75rem'})
+
+
 def _recommendation_row(rec: dict):
     return html.Div([
         html.Div([
             html.Span(rec.get('project_name', ''), className='fw-semibold me-2'),
             html.Span(rec.get('dep_name', ''), className='text-muted small me-2'),
+            _confidence_badge(rec),
             _score_badge('A', rec.get('score_a')),
             _score_badge('B', rec.get('score_b')),
         ]),
         _insight_line(rec),
-        html.Div(rec.get('reason', '') or '(근거 없음)', className='text-muted small mb-2'),
+        html.Div(rec.get('reason', '') or '(근거 없음)', className='text-muted small'),
+        _risk_line(rec),
+        html.Div(className='mb-2'),
     ], className='mb-2 pb-2 border-bottom')
 
 
@@ -147,11 +188,14 @@ def _must_place_block(must_place: list):
         rows.append(html.Div([
             html.Span(r.get('project_name', ''), className='fw-semibold me-2'),
             html.Span(r.get('dep_name', ''), className='text-muted small me-2'),
+            _confidence_badge(r),
             _score_badge('A', r.get('score_a')),
             _score_badge('B', r.get('score_b')),
         ], className='mb-1'))
         rows.append(_insight_line(r))
-        rows.append(html.Div(r.get('reason', '') or '(사유 없음)', className='text-muted small fst-italic mb-2'))
+        rows.append(html.Div(r.get('reason', '') or '(사유 없음)', className='text-muted small fst-italic'))
+        rows.append(_risk_line(r))
+        rows.append(html.Div(className='mb-2'))
     return html.Div([
         html.Div([
             html.I(className='bi bi-exclamation-triangle-fill me-1 text-warning'),

@@ -215,11 +215,13 @@ def _build_candidate_pool(excluded_norm: set, expertise_profiles: dict) -> dict:
 
     # 근거 A 텍스트 준비 (없으면 빈 문자열 — 임베딩 대상에서 제외)
     a_texts_by_project = {}
+    requirements_by_project = {}
     for row in candidates:
         entry = jd.read_confluence_summary(row['project_name'])
         text = jd.confluence_context_text(entry)
         if text:
             a_texts_by_project[row['project_name']] = text
+        requirements_by_project[row['project_name']] = jmi.project_requirements(entry)  # C1 요구 요소
 
     # 근거 B: 후보별 현재 배정 인력의 전문성 프로필 텍스트 (있는 사람만)
     b_texts_by_project = {}
@@ -265,6 +267,7 @@ def _build_candidate_pool(excluded_norm: set, expertise_profiles: dict) -> dict:
             'a_embedding': a_embedding,
             'b_members': b_members,
             'member_ids': member_ids_by_project.get(project_name, []),
+            'requirements': requirements_by_project.get(project_name, []),
         }
     return pool
 
@@ -291,6 +294,7 @@ def _score_candidates(profile_embedding, candidate_pool: dict) -> list:
             'score_a': score_a, 'score_b': score_b,
             'a_text': cand['a_text'], 'b_text': b_text or '',
             'combined': combined, 'a_embedding': cand['a_embedding'],
+            'requirements': cand.get('requirements', []),
         })
     scored.sort(key=lambda x: -x['combined'])
     return scored
@@ -318,6 +322,8 @@ _RECOMMEND_SYSTEM_PROMPT = """# Role
    (이 연구원이 채울 수 있는 과제의 약한 필요 역량, 최근 5년/5년 이전 주력 일치,
    공동 연구자 재직, 시니어·주니어 보완)가 있으면, 단순히 비슷한 과제보다
    이 연구원이 실제로 필요한(약한 역량을 채우는) 과제를 우선하고 그 점을 사유에 쓰세요.
+   C)의 "요구사항 충족 M/N"(과제 요구 요소별 1:1 비교)과 "관련 실적"(최근 5년 논문·특허·과제 제목)이
+   있으면 사유에 구체적으로 인용하세요.
 4. recommendations가 빈 리스트라면(뚜렷이 맞는 과제가 하나도 없다면), 그래도
    후보 중 그나마 가장 가까운 과제 하나를 골라 closest_non_match에 담으세요.
    reason에는 "추천"이 아니라 왜 이 과제조차 충분히 맞지 않는지(이 연구원의
@@ -332,12 +338,17 @@ _RECOMMEND_SYSTEM_PROMPT = """# Role
    합니다) — recommendations와 같은 과제가 겹쳐도 상관없습니다. reason에는
    왜 이게 그나마 최선의 선택인지(부족한 점이 있다면 그것도 포함해서)
    1~2문장으로 쓰세요.
-6. 반드시 아래 JSON 형식으로만 출력하세요.
+6. recommendations와 must_place의 각 항목에 confidence(확신도)와 risk(부족한 점)를 함께 쓰세요.
+   - confidence: "상"(요구 대부분 충족 + 관련 실적/필요 역량 근거가 뚜렷), "중"(일부 충족 또는 근거가
+     간접적), "하"(유사도는 있으나 근거가 약하거나 부족한 요구가 많음) 중 하나.
+   - risk: 이 과제에 갔을 때 부족하거나 확인이 필요한 점 1문장(예: 미충족 요구 요소, 5년 이전 경험 위주,
+     시니어 필요 과제에 주니어 등). 특별히 없으면 "특이사항 없음".
+7. 반드시 아래 JSON 형식으로만 출력하세요.
 
 # Output Format (JSON)
-{"recommendations": [{"project_name": "후보 목록의 과제명 그대로", "reason": "1~2문장 사유"}],
+{"recommendations": [{"project_name": "후보 목록의 과제명 그대로", "reason": "1~2문장 사유", "confidence": "상|중|하", "risk": "부족한 점 1문장"}],
  "closest_non_match": {"project_name": "후보 목록의 과제명 그대로", "reason": "왜 이것도 충분히 맞지 않는지 1~2문장"} 또는 null,
- "must_place": [{"project_name": "후보 목록의 과제명 그대로", "reason": "왜 그나마 최선인지 1~2문장"}]}
+ "must_place": [{"project_name": "후보 목록의 과제명 그대로", "reason": "왜 그나마 최선인지 1~2문장", "confidence": "상|중|하", "risk": "부족한 점 1문장"}]}
 """
 
 
@@ -401,7 +412,7 @@ def _judge_recommendations(profile_text: str, shortlist: list) -> tuple:
         '그리고 이것과는 별개로, 무조건 후보 중 하나로 재배치해야 한다면 그나마 최선인 과제 1~3개를 '
         'must_place에 반드시 담아주세요(빈 리스트 금지).'
     )
-    raw = llm_client.call_llm(prompt, _RECOMMEND_SYSTEM_PROMPT, temperature=0.0, max_tokens=1200)
+    raw = llm_client.call_llm(prompt, _RECOMMEND_SYSTEM_PROMPT, temperature=0.0, max_tokens=1800)
     if not raw:
         return [], None, _fallback_must_place(shortlist)
     try:
@@ -432,9 +443,12 @@ def _judge_recommendations(profile_text: str, shortlist: list) -> tuple:
             # 그냥 빠지고, must_place는 버려진 뒤 _fallback_must_place()로
             # 대체되며, closest_non_match는 None(참여 가능한 과제 없음 처리)이 된다.
             return None
+        confidence = str(r.get('confidence') or '').strip()[:1]
         return {
             'project_name': name, 'dep_name': cand['dep_name'],
             'reason': reason,
+            'confidence': confidence if confidence in ('상', '중', '하') else '',
+            'risk': str(r.get('risk') or '').strip(),
             'score_a': cand['score_a'], 'score_b': cand['score_b'], **jmi.public_fields(cand),
         }
 
@@ -701,12 +715,23 @@ def _format_picks(picks: list) -> str:
     for i, r in enumerate(picks, start=1):
         line = (f"{i}. {r.get('project_name', '')} ({r.get('dep_name', '')}) "
                 f"- A: {_pct(r.get('score_a'))}, B: {_pct(r.get('score_b'))}")
+        if r.get('confidence'):
+            line += f" - 확신도 {r['confidence']}"
+        cov = r.get('coverage')
+        if cov:
+            line += f"\n   요구사항 충족: {len(cov.get('covered') or [])}/{cov.get('total', 0)}"
         filled = ((r.get('gap') or {}).get('filled')) or []
         if filled:
             line += '\n   갭 충족: ' + ', '.join(f['competency'] for f in filled)
+        ev = ((r.get('evidence') or {}).get('items')) or []
+        if ev:
+            line += '\n   관련 실적: ' + '; '.join(f"[{x['kind']}] {x['title']}({x['year']})" for x in ev)
         reason = (r.get('reason') or '').strip()
         if reason:
             line += f'\n   사유: {reason}'
+        risk = (r.get('risk') or '').strip()
+        if risk:
+            line += f'\n   부족한 점: {risk}'
         blocks.append(line)
     return '\n\n'.join(blocks)
 
