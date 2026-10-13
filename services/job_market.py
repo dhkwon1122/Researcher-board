@@ -133,25 +133,25 @@ def load_history(file_name: str) -> dict | None:
 
 # ─── 과제/부서 목록 (드롭다운, 결정적) ───────────────────────────────────────
 
-def list_departments() -> list:
-    """드롭다운용 부서(플랫폼/팀) 목록 — project_confl_address.csv의 dep_name."""
-    projects_df = data_store.read_processed('project_confl_address')
-    if projects_df.empty or 'dep_name' not in projects_df.columns:
-        return []
-    return sorted({str(v).strip() for v in projects_df['dep_name'] if str(v).strip()})
-
-
-def list_projects(department=None) -> list:
-    """드롭다운용 과제 목록 — project_confl_address.csv의 project_name.
-    department가 있으면 그 dep_name(문자열 1개 또는 복수 선택 시 리스트)인
-    과제만."""
+def list_projects_by_levels(l1=None, l2=None) -> list:
+    """드롭다운용 과제 목록(2026-10-13: 다른 화면과 같은 팀/리더 참조 기준으로 변경 — 예전엔 과제별컨플 "소속").
+    과제 자체는 과제별컨플의 과제명(검색 대상·후보 풀과 같은 목록)이고, 플랫폼(1단계)/그룹(2단계)을 고르면
+    그 조직에 속한 과제만 남긴다. 소속 판정: 과제의 매칭 키(비공식소속부서명이 있으면 그 값, 없으면 과제명)가
+    선택 조직의 비공식소속부서명과 같거나, 과제명이 선택 조직의 3단계부서명과 같음(대괄호 꼬리표·공백 무시).
+    아무것도 고르지 않으면 전체(팀/리더 참조에 없는 과제 포함)."""
+    from services import similarity_map as sm
     projects_df = data_store.read_processed('project_confl_address')
     if projects_df.empty or 'project_name' not in projects_df.columns:
         return []
-    if department:
-        depts = {department.strip()} if isinstance(department, str) else {str(d).strip() for d in department}
-        projects_df = projects_df[projects_df['dep_name'].astype(str).str.strip().isin(depts)]
-    return sorted({str(v).strip() for v in projects_df['project_name'] if str(v).strip()})
+    names = sorted({str(v).strip() for v in projects_df['project_name'] if str(v).strip()})
+    rows = sm.org_rows_for_levels(l1, l2, None)
+    if rows is None:
+        return names
+    org_keys = {fit.normalize_org_code(r.get('org_name_wd')) for r in rows} - {''}
+    third = {fit.normalize_org_code(r.get('dep_3rd_name')) for r in rows} - {''}
+    overrides = fit.project_org_overrides(projects_df)
+    return [n for n in names
+            if fit.project_member_key(n, overrides) in org_keys or fit.normalize_org_code(n) in (org_keys | third)]
 
 
 # ─── 과제원 명단(roster) — researcher_profile_export의 표시용 컬럼 재사용 ─────

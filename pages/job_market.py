@@ -450,7 +450,9 @@ def _history_table():
 
 
 def layout(**_kwargs):
-    department_options = [{'label': d, 'value': d} for d in jm.list_departments()]
+    from services import similarity_map as sm
+    l1_options = sm.level_filter_options(1)
+    l2_options = sm.level_filter_options(2)
     return html.Div([
         html.H5(
             [html.I(className='bi bi-signpost-split me-2 text-primary'), 'JOB Market'],
@@ -473,10 +475,12 @@ def layout(**_kwargs):
 
         html.Div(
             dbc.Row([
-                dbc.Col(dcc.Dropdown(id='jm-project-dept', options=department_options,
-                                      placeholder='부서(플랫폼/팀) 선택(복수 선택 가능)', multi=True), md=4),
+                dbc.Col(dcc.Dropdown(id='jm-project-l1', options=l1_options,
+                                      placeholder='플랫폼(전체)', multi=True), md=3),
+                dbc.Col(dcc.Dropdown(id='jm-project-l2', options=l2_options,
+                                      placeholder='그룹(전체)', multi=True), md=3),
                 dbc.Col(dcc.Dropdown(id='jm-project-select', options=[],
-                                      placeholder='종료 예정 과제 선택(복수 선택 가능)', multi=True), md=8),
+                                      placeholder='종료 예정 과제 선택(복수 선택 가능)', multi=True), md=6),
             ], className='g-2 mb-2'),
             id='jm-project-mode-row',
         ),
@@ -499,12 +503,14 @@ def layout(**_kwargs):
 
         html.Div('참여 가능한 과제에서 제외', className='fw-bold small mb-1 mt-2'),
         html.Div(
-            '"제외할 과제"만 결과에 반영(부서는 결과에 영향 없음)',
+            '"제외할 과제"만 결과에 반영(플랫폼/그룹은 과제 목록을 좁히는 용도, 결과에 영향 없음)',
             className='small text-muted mb-1',
         ),
         dbc.Row([
-            dbc.Col(dcc.Dropdown(id='jm-exclude-dept', options=department_options,
-                                  placeholder='부서', multi=True), md=6),
+            dbc.Col(dcc.Dropdown(id='jm-exclude-l1', options=l1_options,
+                                  placeholder='플랫폼(전체)', multi=True), md=3),
+            dbc.Col(dcc.Dropdown(id='jm-exclude-l2', options=l2_options,
+                                  placeholder='그룹(전체)', multi=True), md=3),
             dbc.Col(dcc.Dropdown(id='jm-exclude-project', options=[],
                                   placeholder='제외할 과제(복수 선택 가능)', multi=True), md=6),
         ], className='g-2 mb-3'),
@@ -536,24 +542,51 @@ def _toggle_mode(mode):
     return {'display': 'block'}, {'display': 'none'}
 
 
+def _project_options(l1, l2, selected) -> list:
+    """플랫폼/그룹(팀/리더 참조)으로 좁힌 과제 + 이미 고른 과제(필터를 바꿔도 선택이 사라지지 않게)."""
+    names = jm.list_projects_by_levels(l1, l2)
+    names += [p for p in (selected or []) if p not in names]
+    return [{'label': p, 'value': p} for p in names]
+
+
+@callback(
+    Output('jm-project-l2', 'options'),
+    Input('jm-project-l1', 'value'),
+)
+def _update_project_l2(l1):
+    from services import similarity_map as sm
+    return sm.level_filter_options(2, {1: l1} if l1 else None)
+
+
 @callback(
     Output('jm-project-select', 'options'),
-    Input('jm-project-dept', 'value'),
+    Input('jm-project-l1', 'value'),
+    Input('jm-project-l2', 'value'),
+    State('jm-project-select', 'value'),
 )
-def _update_project_options(department):
-    return [{'label': p, 'value': p} for p in jm.list_projects(department)]
+def _update_project_options(l1, l2, selected):
+    return _project_options(l1, l2, selected)
+
+
+@callback(
+    Output('jm-exclude-l2', 'options'),
+    Input('jm-exclude-l1', 'value'),
+)
+def _update_exclude_l2(l1):
+    from services import similarity_map as sm
+    return sm.level_filter_options(2, {1: l1} if l1 else None)
 
 
 @callback(
     Output('jm-exclude-project', 'options'),
-    Input('jm-exclude-dept', 'value'),
+    Input('jm-exclude-l1', 'value'),
+    Input('jm-exclude-l2', 'value'),
+    State('jm-exclude-project', 'value'),
 )
-def _update_exclude_project_options(excluded_dept):
-    # "종료 예정 과제" 선택과 동일하게, 부서를 고르면 "제외할 과제" 드롭다운에
-    # 그 부서의 과제만 보이도록 좁혀서 고르기 편하게 할 뿐이다 — 부서 값 자체는
-    # jm.run_project_search()/run_individual_search()에 전달되지 않으므로 검색
-    # 결과에는 어떤 영향도 주지 않는다(사용자 확정: 부서는 순수 캐스케이딩 필터).
-    return [{'label': p, 'value': p} for p in jm.list_projects(excluded_dept)]
+def _update_exclude_project_options(l1, l2, selected):
+    # 플랫폼/그룹은 "제외할 과제" 목록을 좁혀 보여주는 캐스케이딩 필터일 뿐 — 그 값 자체는
+    # jm.run_project_search()/run_individual_search()에 전달되지 않아 결과에 영향이 없다(사용자 확정).
+    return _project_options(l1, l2, selected)
 
 
 @callback(

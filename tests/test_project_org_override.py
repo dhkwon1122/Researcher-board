@@ -64,3 +64,19 @@ def test_gap_team_and_job_market_exclusion(monkeypatch):
     monkeypatch.setattr(jm.fit, 'cached_embed', lambda ts: np.ones((len(ts), 4)))
     pool = jm._build_candidate_pool({'발광소재파트'}, {})
     assert list(pool) == ['전지과제']
+
+
+def test_job_market_projects_by_levels(monkeypatch):
+    from services import job_market as jm
+    from services import similarity_map as sm
+    confl = pd.DataFrame([
+        {'dep_name': 'D', 'project_name': '[연구] 발광소재 개발', 'org_code': '발광파트'},   # 비공식소속부서명으로 매칭
+        {'dep_name': 'D', 'project_name': '전지과제', 'org_code': ''},                      # 3단계부서명으로 매칭
+        {'dep_name': 'D', 'project_name': '기타과제', 'org_code': ''},
+    ])
+    rows = [{'org_name_wd': '발광파트', 'dep_3rd_name': '발광소재파트'},
+            {'org_name_wd': 'ORG-9', 'dep_3rd_name': '전지 과제'}]
+    monkeypatch.setattr(jm.data_store, 'read_processed', lambda name, **k: confl)
+    monkeypatch.setattr(sm, 'org_rows_for_levels', lambda l1, l2, l3: rows if (l1 or l2) else None)
+    assert jm.list_projects_by_levels(None, None) == ['[연구] 발광소재 개발', '기타과제', '전지과제']
+    assert jm.list_projects_by_levels(['P'], None) == ['[연구] 발광소재 개발', '전지과제']
