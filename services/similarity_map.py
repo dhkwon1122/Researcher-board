@@ -551,6 +551,45 @@ def org_codes_for_levels(l1=None, l2=None, l3=None, period: tuple | None = None)
     return codes
 
 
+def org_rows_for_levels(l1=None, l2=None, l3=None, period: tuple | None = None) -> list | None:
+    """선택된 1/2/3단계 부서명에 해당하는 팀/리더 참조 행(org_name_wd 있는 행) 목록.
+    아무것도 선택하지 않았으면 None(필터 없음). org_codes_for_levels()와 같은 기준이되, 이름 칸까지
+    필요한 호출부(과제명 ↔ 3단계부서명 매칭 등)를 위해 행 자체를 돌려준다."""
+    sel = {1: _as_name_set(l1), 2: _as_name_set(l2), 3: _as_name_set(l3)}
+    if not any(sel.values()):
+        return None
+    return [r for r in _org_rows(period)
+            if all(_cell(r, lvl) in names for lvl, names in sel.items() if names)]
+
+
+def staff_org_codes(period: tuple | None = None) -> set:
+    """팀/리더 참조의 구분(work_type)이 "Staff"인 조직과 그 하위 조직 전체의 org_code(=org_name_wd)
+    집합(2026-10-13 사용자 확정: 상위 조직이 Staff면 하위도 모두 제외). 대소문자 무시.
+    upper_dep_id를 따라 조상 중 하나라도 Staff면 포함한다."""
+    rows = read_team_refer(DATA_DIR, period=period)
+    by_id = {str(r.get('dep_id') or '').strip(): r for r in rows if str(r.get('dep_id') or '').strip()}
+
+    def _is_staff(r):
+        return str(r.get('work_type') or '').strip().lower() == 'staff'
+
+    out = set()
+    for r in rows:
+        code = (r.get('org_name_wd') or '').strip()
+        if not code:
+            continue
+        cur, seen = r, set()
+        while cur is not None:
+            if _is_staff(cur):
+                out.add(code)
+                break
+            parent = str(cur.get('upper_dep_id') or '').strip()
+            if not parent or parent in seen:
+                break
+            seen.add(parent)
+            cur = by_id.get(parent)
+    return out
+
+
 def org_code_level_names(org_code: str) -> tuple[str, str, str]:
     """org_code가 속한 (1단계, 2단계, 3단계) 부서명 — team_refer 칸 값 그대로."""
     org_code = (org_code or '').strip()

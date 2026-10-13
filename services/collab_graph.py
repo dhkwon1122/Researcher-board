@@ -34,6 +34,25 @@ def aggregate(edges: pd.DataFrame, level: str) -> dict[tuple[str, str], int]:
     return out
 
 
+def _ordered(nodes: list[str], order: list | None) -> list[str]:
+    """order(팀/리더 참조 조직코드 순 이름 목록)가 있으면 그 순서로, 목록에 없는 이름은 뒤에(이름순)."""
+    if not order:
+        return nodes
+    pos = {n: i for i, n in enumerate(order)}
+    return sorted(nodes, key=lambda n: (pos.get(n, len(pos)), n))
+
+
+def _partners(pairs: dict) -> dict:
+    """단위 -> [(상대, 건수), ...] 건수 내림차순."""
+    out: dict = {}
+    for (a, b), n in pairs.items():
+        out.setdefault(a, []).append((b, n))
+        out.setdefault(b, []).append((a, n))
+    for k in out:
+        out[k].sort(key=lambda x: (-x[1], x[0]))
+    return out
+
+
 def top_nodes(pairs: dict, top_n: int) -> list[str]:
     """협업량 합이 큰 순으로 상위 top_n 단위."""
     total: dict = {}
@@ -43,10 +62,11 @@ def top_nodes(pairs: dict, top_n: int) -> list[str]:
     return [k for k, _ in sorted(total.items(), key=lambda kv: (-kv[1], kv[0]))[:top_n]]
 
 
-def network_figure(pairs: dict, top_n: int = 20, min_weight: int = 1):
+def network_figure(pairs: dict, top_n: int = 20, min_weight: int = 1, order: list | None = None):
+    """원형 배치 순서는 order(조직코드 순)를 따른다. 노드 마우스 오버: 타 단위 협업 합계 + 상위 5개 상대별 건수."""
     import plotly.graph_objects as go
 
-    nodes = top_nodes(pairs, top_n)
+    nodes = _ordered(top_nodes(pairs, top_n), order)
     links = [(a, b, n) for (a, b), n in pairs.items() if a in nodes and b in nodes and n >= min_weight]
     if not nodes or not links:
         return None
@@ -65,22 +85,31 @@ def network_figure(pairs: dict, top_n: int = 20, min_weight: int = 1):
             line=dict(width=1 + 7 * w / wmax, color=f'rgba(22,119,255,{0.2 + 0.6 * w / wmax:.2f})'),
             hovertemplate=f'{a} ↔ {b}<br>최근 5년 협업 {w}건<extra></extra>', showlegend=False))
     tmax = max(total.values())
+    partners = _partners(pairs)
+    all_total = {n: sum(c for _, c in partners.get(n, [])) for n in nodes}
+
+    def _top5(n):
+        return '<br>'.join(f'· {p}: {c}건' for p, c in partners.get(n, [])[:5])
+
     fig.add_trace(go.Scatter(
         x=[pos[n][0] for n in nodes], y=[pos[n][1] for n in nodes], mode='markers+text',
         text=[n if len(n) <= 14 else n[:13] + '…' for n in nodes], textposition='top center',
-        customdata=[[n, total[n]] for n in nodes],
+        customdata=[[n, all_total[n], _top5(n)] for n in nodes],
         marker=dict(size=[10 + 22 * total[n] / tmax for n in nodes], color='#1677ff',
                     line=dict(width=1, color='white')),
-        hovertemplate='%{customdata[0]}<br>타 단위 협업 합계 %{customdata[1]}건<extra></extra>', showlegend=False))
+        hovertemplate='<b>%{customdata[0]}</b><br>타 단위 협업 합계 %{customdata[1]}건<br>'
+                      '<span style="font-size:11px">상위 협업 상대</span><br>%{customdata[2]}<extra></extra>',
+        hoverlabel=dict(align='left'), showlegend=False))
     fig.update_layout(xaxis=dict(visible=False), yaxis=dict(visible=False, scaleanchor='x'),
                       margin=dict(l=10, r=10, t=10, b=10), height=520, plot_bgcolor='white')
     return fig
 
 
-def heatmap_figure(pairs: dict, top_n: int = 20):
+def heatmap_figure(pairs: dict, top_n: int = 20, order: list | None = None):
+    """협업량 상위 top_n 단위를 고른 뒤, X·Y축 모두 order(팀/리더 참조 조직코드 순)로 나열."""
     import plotly.graph_objects as go
 
-    nodes = top_nodes(pairs, top_n)
+    nodes = _ordered(top_nodes(pairs, top_n), order)
     if not nodes:
         return None
     z = [[0] * len(nodes) for _ in nodes]

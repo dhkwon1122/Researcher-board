@@ -6,27 +6,16 @@ pipeline/process_expertise_metrics.py 등이 만든 조직 단위 집계 산출�
 
   - 부서/과제간 협업(collaboration_edges.csv) — 최근 5년·현재 소속 기준 1단계/3단계부서명 간
     협업을 네트워크 그래프 + 히트맵으로(services/collab_graph.py). 모든 로그인 사용자.
-  - 과제별 역량(project_competency_gap.json) — 플랫폼/그룹/과제 캐스케이딩으로 과제를 고르면
-    필요 역량별 소속 과제원(유사도 구간)과 비소속 적합 임직원. 모든 로그인 사용자.
-    (2026-10-08부터 하위 탭 3개: 과제별 역량 / 부서 간 협업 / 기술별 보유자 수)
-  - 기술별 보유자 수(핵심인력 리스크, technology_holder_summary.csv) —
-    개인 명단이 들어 있어 관리자(manage_users)에게만 보인다.
+  - 과제별 필요 역량(project_competency_gap.json) — 플랫폼/그룹/과제 캐스케이딩으로 과제를 고르면
+    필요 역량별 소속 과제원과 비소속 적합 임직원. 분석 결과가 없는 과제 목록(사유)도 함께. 모든 로그인 사용자.
+  - (2026-10-13) "기술별 보유자 수" 하위 탭은 사용자 확정으로 삭제(표기만 다른 같은 기술 통합이
+    기대만큼 개선되지 않음). 집계 파일 technology_holder_summary.csv는 계속 생성된다.
 """
 
-import dash_ag_grid as dag
 import dash_bootstrap_components as dbc
 from dash import Input, Output, callback, dcc, html
 
 from services.data_store import read_processed, read_project_competency_gap
-
-_RISK_STYLE = {
-    'styleConditions': [
-        {'condition': "params.value === '위험'", 'style': {'color': '#cf1322', 'fontWeight': 600}},
-        {'condition': "params.value === '주의'", 'style': {'color': '#d46b08', 'fontWeight': 600}},
-    ],
-    'defaultStyle': {'textAlign': 'center'},
-}
-
 
 def _section(title: str, hint: str, body) -> html.Div:
     return html.Div([
@@ -51,74 +40,11 @@ def _names(ids: str, name_map: dict) -> str:
     return ', '.join(name_map.get(x.zfill(8), x) for x in str(ids or '').split(';') if x)
 
 
-def technology_holder_section() -> html.Div:
-    hint = ('현재 재직자 기준. 고수준 = 핵심기술 등급 A 이상 / 보유기술 Lv 3 이상(강점분야는 해당 없음). '
-            '위험 = 보유자 2명 이하, 주의 = 고수준 보유자 1명 이하. 표기만 다른 같은 기술은 하나로 통합("통합된 표기" 열).')
-    df = read_processed('technology_holder_summary')
-    if df.empty:
-        return _section('기술별 보유자 수 (핵심인력 리스크)', hint,
-                        _empty('데이터 없음 — pipeline/run_analysis.py(4/4 전문성 심화 지표) 실행 후 표시됩니다.'))
-    name_map = _name_map()
-    df = df.fillna('')
-    rows = [{
-        **{k: r.get(k, '') for k in ('source', 'technology', 'tech_field', 'risk_level', 'aliases')},
-        'holder_count': int(float(r.get('holder_count') or 0)),
-        'high_level_count': (int(float(r['high_level_count'])) if str(r.get('high_level_count', '')).strip() else None),
-        'department_count': int(float(r.get('department_count') or 0)),
-        'holders': _names(r.get('holder_ids'), name_map),
-        'high_level_holders': _names(r.get('high_level_ids'), name_map),
-    } for r in df.to_dict('records')]
-    counts = df['risk_level'].value_counts().to_dict()
-    summary = html.Div([
-        dbc.Badge(f"위험 {counts.get('위험', 0)}", color='danger', className='me-1'),
-        dbc.Badge(f"주의 {counts.get('주의', 0)}", color='warning', text_color='dark', className='me-1'),
-        dbc.Badge(f"정상 {counts.get('정상', 0)}", color='secondary'),
-    ], className='mb-2')
-    text_filter = {'filter': 'agTextColumnFilter', 'floatingFilter': True}
-    num_filter = {'filter': 'agNumberColumnFilter', 'floatingFilter': True}
-    column_defs = [
-        {'headerName': '리스크', 'field': 'risk_level', 'width': 90, 'cellStyle': _RISK_STYLE, **text_filter},
-        {'headerName': '출처', 'field': 'source', 'width': 100, **text_filter},
-        {'headerName': '기술', 'field': 'technology', 'minWidth': 160, 'flex': 1,
-         'cellStyle': {'textAlign': 'left'}, 'tooltipField': 'technology', **text_filter},
-        {'headerName': '통합된 표기', 'field': 'aliases', 'minWidth': 140, 'flex': 1,
-         'cellStyle': {'textAlign': 'left'}, 'tooltipField': 'aliases', **text_filter},
-        {'headerName': '분야', 'field': 'tech_field', 'width': 120, **text_filter},
-        {'headerName': '보유자', 'field': 'holder_count', 'width': 90, **num_filter},
-        {'headerName': '고수준', 'field': 'high_level_count', 'width': 90, **num_filter},
-        {'headerName': '부서 수', 'field': 'department_count', 'width': 90, **num_filter},
-        {'headerName': '보유자 명단', 'field': 'holders', 'minWidth': 200, 'flex': 1,
-         'cellStyle': {'textAlign': 'left'}, 'tooltipField': 'holders', **text_filter},
-        {'headerName': '고수준 보유자', 'field': 'high_level_holders', 'minWidth': 160, 'flex': 1,
-         'cellStyle': {'textAlign': 'left'}, 'tooltipField': 'high_level_holders', **text_filter},
-    ]
-    grid = dag.AgGrid(
-        id='org-tech-holder-grid',
-        className='gs-ag-grid',
-        columnDefs=column_defs,
-        rowData=rows,
-        defaultColDef={'resizable': True, 'sortable': True, 'wrapHeaderText': True, 'autoHeaderHeight': True,
-                       'cellStyle': {'textAlign': 'center'}},
-        dashGridOptions={'pagination': True, 'paginationPageSize': 20, 'domLayout': 'autoHeight',
-                         'tooltipShowDelay': 0},
-    )
-    return _section('기술별 보유자 수 (핵심인력 리스크)', hint, html.Div([summary, grid]))
-
-
-def _grid(grid_id: str, column_defs: list, rows: list, page_size: int = 15) -> dag.AgGrid:
-    return dag.AgGrid(
-        id=grid_id, className='gs-ag-grid', columnDefs=column_defs, rowData=rows,
-        defaultColDef={'resizable': True, 'sortable': True, 'wrapHeaderText': True, 'autoHeaderHeight': True,
-                       'cellStyle': {'textAlign': 'center'}},
-        dashGridOptions={'pagination': True, 'paginationPageSize': page_size, 'domLayout': 'autoHeight',
-                         'tooltipShowDelay': 0},
-    )
-
-
 def collaboration_section() -> html.Div:
     title = '부서/과제간 협업 (최근 5년 논문 공저·특허 공동발명)'
     hint = ('같은 논문 공저자 또는 같은 특허 공동발명자인 현재 재직 연구원 쌍을 협업 1건으로 보고, 현재 소속 기준으로 '
-            '부서(1단계부서명) 간 / 과제(3단계부서명) 간으로 합산합니다. 최근 5년(올해 포함) 건만, 같은 단위 안의 협업은 제외. '
+            '부서(1단계부서명) 간 / 과제(3단계부서명) 간으로 합산합니다. 최근 5년(올해 포함) 건만, 같은 단위 안의 협업과 '
+            '팀/리더 참조 구분이 "Staff"인 조직(하위 조직 포함)은 제외. 순서는 조직코드 순, 노드에 마우스를 올리면 협업 건수. '
             '네트워크 그래프는 선이 굵을수록 협업이 많고, 히트맵은 진할수록 많습니다(마우스 오버로 건수 확인).')
     edges = read_processed('collaboration_edges')
     if edges.empty:
@@ -146,8 +72,11 @@ def _collab_body(level, top_n):
     edges = read_processed('collaboration_edges')
     pairs = cg.aggregate(edges, level or 'level1')
     unit = '부서' if level != 'level3' else '과제'
-    net = cg.network_figure(pairs, int(top_n or 20))
-    heat = cg.heatmap_figure(pairs, int(top_n or 20))
+    from services import similarity_map as sm
+    # 네트워크 원형 배치·히트맵 X/Y축 순서 = 팀/리더 참조 조직코드(dep_code) 순(드롭다운과 같은 기준)
+    order = [o['value'] for o in sm.level_filter_options(3 if level == 'level3' else 1)]
+    net = cg.network_figure(pairs, int(top_n or 20), order=order)
+    heat = cg.heatmap_figure(pairs, int(top_n or 20), order=order)
     if net is None or heat is None:
         return _empty(f'표시할 {unit} 간 협업이 없습니다(최근 5년, 현재 소속 기준).')
     return dbc.Row([
@@ -246,20 +175,86 @@ def _competency_table(item: dict) -> html.Div:
                      style={'fontSize': '0.78rem', 'tableLayout': 'fixed'})
 
 
-def _project_options(l1, l2) -> list:
-    """플랫폼/그룹 선택에 속하는 과제 옵션. 연구원 프로필·연구원 명단과 같은 기준(팀/리더 참조의
-    1/2/3단계부서명 칸 값 → org_code)으로 고른 뒤, 과제명(꼬리표·공백 제거)이 그 org_code와
-    일치하는 분석 과제만 남긴다. 아무것도 선택하지 않으면 전체(팀/리더 참조에 없는 과제 포함)."""
-    from pipeline.researcher_fit import normalize_org_code
-    from services import similarity_map as sm
+def _norm_name(text: str) -> str:
+    """과제명/조직명 비교용: 대괄호 꼬리표([연구] 등)·공백 제거, 소문자."""
+    import re
+    return re.sub(r'\[[^\]]*\]|\s+', '', str(text or '')).lower()
 
+
+def _project_matches(l1, l2) -> tuple:
+    """(선택된 단계의 조직 코드 집합, 비교용 이름 집합) — 선택이 없으면 (None, None).
+    이름 집합에는 팀/리더 참조의 비공식소속부서명(org_name_wd)과 3단계부서명을 모두 넣는다
+    (2026-10-13: 과제명이 3단계부서명과는 같지만 비공식소속부서명과 표기가 달라 목록에서 빠지던 문제)."""
+    from services import similarity_map as sm
+    rows = sm.org_rows_for_levels(l1, l2, None)
+    if rows is None:
+        return None, None
+    codes = {(r.get('org_name_wd') or '').strip() for r in rows}
+    names = {_norm_name(r.get('org_name_wd')) for r in rows} | {_norm_name(r.get('dep_3rd_name')) for r in rows}
+    return codes, names - {''}
+
+
+def _item_in_levels(item: dict, codes: set, names: set, org_map: dict) -> bool:
+    """과제명이 선택 조직의 이름과 같거나, 분석된 과제원 과반이 선택 조직 소속이면 포함."""
+    if _norm_name(item.get('project_name')) in names:
+        return True
+    rids = {m.get('researcher_id') for c in item.get('competencies') or [] for m in c.get('members') or []}
+    rids.discard(None)
+    if not rids:
+        return False
+    inside = sum(1 for r in rids if org_map.get(r, '') in codes)
+    return inside * 2 >= len(rids)
+
+
+def _project_options(l1, l2) -> list:
+    """플랫폼/그룹 선택에 속하는 과제 옵션(연구원 프로필·명단과 같은 팀/리더 참조 1/2단계 기준).
+    아무것도 선택하지 않으면 전체(팀/리더 참조에 없는 과제 포함)."""
     items = _gap_items()
-    codes = sm.org_codes_for_levels(l1, l2, None)
+    codes, names = _project_matches(l1, l2)
     if codes is not None:
-        wanted = {normalize_org_code(c) for c in codes}
-        items = [i for i in items if normalize_org_code(i.get('project_name', '')) in wanted]
+        org_map = _org_map()
+        items = [i for i in items if _item_in_levels(i, codes, names, org_map)]
     return sorted(({'label': i.get('project_name', ''), 'value': i.get('project_name', '')} for i in items),
                   key=lambda o: o['label'])
+
+
+def _missing_projects(l1, l2) -> list:
+    """과제별컨플에 등록됐지만 과제별 필요 역량 결과가 없는 과제 [(과제명, 소속, 사유)].
+    플랫폼/그룹을 고르면 이름이 그 조직과 맞는 과제만."""
+    from services.data_store import read_project_expertise_analysis
+    confl = read_processed('project_confl_address')
+    if confl.empty or 'project_name' not in confl.columns:
+        return []
+    have = {i.get('project_name', '') for i in _gap_items()}
+    analyzed = {i.get('project_name', '') for i in (read_project_expertise_analysis() or [])}
+    _codes, names = _project_matches(l1, l2)
+    out, seen = [], set()
+    for r in confl.fillna('').to_dict('records'):
+        name = str(r.get('project_name', '')).strip()
+        if not name or name in have or name in seen:
+            continue
+        if names is not None and _norm_name(name) not in names:
+            continue
+        seen.add(name)
+        reason = ('필요 역량 추출 실패 또는 문서 내용 부족(과제 문서 분석은 됨)' if name in analyzed
+                  else '과제 문서 분석 실패(Confluence/PDF 원문 조회 또는 요약 실패)')
+        out.append((name, str(r.get('dep_name', '')).strip(), reason))
+    return sorted(out)
+
+
+def _missing_block(l1, l2):
+    rows = _missing_projects(l1, l2)
+    if not rows:
+        return html.Div()
+    return html.Details([
+        html.Summary(f'분석 결과가 없는 과제 {len(rows)}건', className='small fw-semibold text-muted',
+                     style={'cursor': 'pointer'}),
+        dbc.Table([html.Thead(html.Tr([html.Th('과제'), html.Th('소속'), html.Th('사유')])),
+                   html.Tbody([html.Tr([html.Td(n), html.Td(d), html.Td(why)]) for n, d, why in rows])],
+                  bordered=True, size='sm', className='mt-2 mb-0', style={'fontSize': '0.75rem'}),
+        html.Div('다음 run_integration.py 실행 때 다시 시도됩니다. 계속 실패하면 실행 로그에서 해당 과제명을 확인하세요.',
+                 className='text-muted mt-1', style={'fontSize': '0.7rem'}),
+    ], className='mb-3')
 
 
 @callback(Output('org-gap-l2', 'options'), Output('org-gap-l2', 'value'),
@@ -270,9 +265,10 @@ def _gap_l2_options(l1):
 
 
 @callback(Output('org-gap-project', 'options'), Output('org-gap-project', 'value'),
+          Output('org-gap-missing', 'children'),
           Input('org-gap-l1', 'value'), Input('org-gap-l2', 'value'))
 def _gap_project_options(l1, l2):
-    return _project_options(l1, l2), None
+    return _project_options(l1, l2), None, _missing_block(l1, l2)
 
 
 @callback(Output('org-gap-detail', 'children'), Input('org-gap-project', 'value'))
@@ -311,14 +307,11 @@ def competency_gap_section() -> html.Div:
         drop('org-gap-l2', '그룹', sm.level_filter_options(2)),
         drop('org-gap-project', '과제', _project_options(None, None)),
     ], className='g-2 mb-3')
-    return _section(title, hint, html.Div([controls, html.Div(id='org-gap-detail')]))
+    return _section(title, hint, html.Div([controls, html.Div(_missing_block(None, None), id='org-gap-missing'),
+                                           html.Div(id='org-gap-detail')]))
 
 
 def org_analysis_content() -> html.Div:
-    from services.auth import can
-
     tabs = [dbc.Tab(competency_gap_section(), label='과제별 필요 역량', tab_id='org-sub-gap'),
             dbc.Tab(collaboration_section(), label='부서/과제간 협업', tab_id='org-sub-collab')]
-    if can('manage_users'):
-        tabs.append(dbc.Tab(technology_holder_section(), label='기술별 보유자 수', tab_id='org-sub-tech'))
     return dbc.Tabs(tabs, id='org-sub-tabs', active_tab='org-sub-gap', className='mt-2')

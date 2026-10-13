@@ -13860,3 +13860,9 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 참고(미변경): 원문 캐시(`project_page_cache.json`)는 주소 기준으로 만료가 없어, 같은 주소의 Confluence 문서 내용이 바뀌어도 자동으로 다시 읽지 않는다(`--refresh`도 요약만 다시 함).
 
 - (2026-10-12) 상단 네비게이션의 아이콘·"People in SAIT" 브랜드명을 누르면 연구원 프로필('/')로 이동(`app.py` navbar — NavbarBrand href='/', 아이콘은 dcc.Link). Playwright로 연구원 명단 화면에서 둘 다 클릭 → '/' 이동 확인.
+
+## (18) 조직 분석 정리: 기술별 보유자 수 삭제, 과제 매칭·누락 목록, 협업 Staff 제외·조직코드 순 (2026-10-13)
+- **기술별 보유자 수 탭 삭제**(표기만 다른 같은 기술 통합이 기대만큼 개선되지 않음). 기술명 통합(tech_canonical, 임베딩+LLM)도 꺼서 실행 비용 제거. `technology_holder_summary.csv` 집계는 계속(비용 없음). verify_outputs에서도 점검 제외.
+- **과제별 필요 역량 — 플랫폼/그룹 선택 시 과제 누락**: 과제명을 팀/리더 참조의 비공식소속부서명(org_name_wd)하고만 비교해, 3단계부서명과는 같지만 org_name_wd 표기가 다른 과제가 빠짐 → 이름 비교 대상에 3단계부서명 추가(대괄호 꼬리표·공백 무시), 또는 분석된 과제원 과반이 선택 조직 소속이면 포함(`similarity_map.org_rows_for_levels`, `_item_in_levels`).
+- **분석 결과가 없는 과제 목록**: 과제별컨플 등록 과제 중 결과 없는 과제를 사유와 함께 접이식 표로(문서 분석 실패 / 필요 역량 추출 실패). 플랫폼/그룹 선택 시 그 조직 과제만.
+- **부서/과제간 협업**: 팀/리더 참조 구분(work_type)이 "Staff"인 조직과 그 하위 조직 전체(upper_dep_id로 조상 추적, 대소문자 무시) 소속은 집계 제외(`similarity_map.staff_org_codes`, `process_expertise_metrics.current_levels`). 네트워크 노드 마우스 오버에 타 단위 협업 합계 + 상위 5개 상대별 건수. 히트맵 X/Y축과 네트워크 원형 배치를 조직코드(dep_code) 순으로(상위 N개 선택 후 정렬). Staff 제외는 run_integration(4단계) 재실행 + DB 반영 후 반영.
