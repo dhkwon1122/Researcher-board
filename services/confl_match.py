@@ -33,6 +33,7 @@ TITLE_WEIGHT, DEPT_WEIGHT = 0.8, 0.2
 HEADER_DEP = '소속'
 HEADER_PROJECT = '과제명'
 HEADER_ADDR = '컨플 주소'
+HEADER_ORG = '비공식소속부서명'   # 선택 열(과제원 매칭용, 2026-10-13) — 다시 올릴 때 값이 유지되도록
 HEADER_RESULT = '추출 결과'
 HEADER_TITLE = '매칭된 제목'
 HEADER_SCORE = '유사도'
@@ -106,10 +107,12 @@ def _load_workbook_from_source():
 
     from services.data_store import read_processed
     df = read_processed('project_confl_address')
+    if df is not None and not df.empty and 'is_current' in df.columns:
+        df = df[df['is_current'].astype(str).str.upper() != 'N']   # 최신 과제별컨플 행만
     if df is not None and not df.empty:
         out = df.rename(columns={'dep_name': HEADER_DEP, 'project_name': HEADER_PROJECT,
-                                 'confl_address': HEADER_ADDR})
-        out = out[[c for c in (HEADER_DEP, HEADER_PROJECT, HEADER_ADDR) if c in out.columns]]
+                                 'confl_address': HEADER_ADDR, 'org_code': HEADER_ORG})
+        out = out[[c for c in (HEADER_DEP, HEADER_PROJECT, HEADER_ADDR, HEADER_ORG) if c in out.columns]]
         return _workbook_from_frame(out.astype(str).replace('nan', '')), '처리된 project_confl_address 데이터(원본 파일 없음)'
     raise ValueError('업로드된 과제별컨플이 없습니다 — 먼저 데이터 업데이트에서 과제별컨플을 올려주세요.')
 

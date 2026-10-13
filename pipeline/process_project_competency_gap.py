@@ -190,7 +190,7 @@ def _researcher_items(profiles: list, strength_std: list) -> dict:
 
 
 def analyze_gaps(projects: list, required: dict, members: dict, items: dict, current: set,
-                 levels: dict | None = None) -> list:
+                 levels: dict | None = None, org_overrides: dict | None = None) -> list:
     """required: project_name -> [역량], members: project_name -> set(rid).
     임베딩은 fit.cached_embed(실패 시 LLMError 전파)."""
     levels = levels or {}
@@ -216,7 +216,7 @@ def analyze_gaps(projects: list, required: dict, members: dict, items: dict, cur
         comps = required.get(name) or []
         if not comps:
             continue
-        team = members.get(fit.normalize_org_code(name), set())
+        team = members.get(fit.project_member_key(name, org_overrides), set())
         rows = []
         for comp in comps:
             c, desc = _comp_name(comp), _comp_desc(comp)
@@ -258,6 +258,7 @@ def analyze_gaps(projects: list, required: dict, members: dict, items: dict, cur
         l1, l2, l3 = levels.get(name, ('', '', ''))
         results.append({
             'project_name': name,
+            'org_code': fit.project_org_code(name, org_overrides),
             'dep_name': proj.get('dep_name', ''),
             'level1': l1, 'level2': l2, 'level3': l3,
             'member_count': len(team),
@@ -322,12 +323,13 @@ def attach_evidence(results: list, cache: dict) -> int:
     return done
 
 
-def _project_levels(projects: list) -> dict:
+def _project_levels(projects: list, org_overrides: dict | None = None) -> dict:
     """project_name -> (플랫폼, 그룹, 과제) — team_refer의 1/2/3단계부서명 칸 값(과제명을
     org_name_wd로 매칭). team_refer가 없거나 매칭이 없으면 ('', '', '')."""
     try:
         from services import similarity_map as sm
-        return {p.get('project_name', ''): sm.org_code_level_names(fit.normalize_org_code(p.get('project_name', '')))
+        return {p.get('project_name', ''): sm.org_code_level_names(fit.project_org_code(p.get('project_name', ''),
+                                                                                      org_overrides))
                 for p in projects}
     except Exception as exc:  # team_refer 없음 등 — 단계 구분 없이 진행
         print(f'  [WARN] 과제 소속 단계 조회 실패(단계 없이 저장): {exc}')
@@ -354,11 +356,12 @@ def process(refresh: bool = False) -> bool:
         for rid, org in zip(researchers['researcher_id'], researchers['org_code']):
             if rid in current and str(org).strip():
                 members.setdefault(fit.normalize_org_code(str(org)), set()).add(rid)
+    org_overrides = fit.project_org_overrides(_read_csv('project_confl_address'))
     personnel = _read_csv('project_personnel')
     if not personnel.empty and 'project_name' in personnel.columns:
         for rid, pname in zip(personnel['researcher_id'], personnel['project_name']):
             if rid and rid != '00000000' and str(pname).strip():
-                members.setdefault(fit.normalize_org_code(str(pname)), set()).add(rid)
+                members.setdefault(fit.project_member_key(str(pname), org_overrides), set()).add(rid)
 
     cache = _read_json(CACHE_FILE, {})
     required = {}
@@ -378,9 +381,9 @@ def process(refresh: bool = False) -> bool:
     _write_json(CACHE_FILE, cache)
 
     items = _researcher_items(profiles, _read_json(STRENGTH_STD_FILE, []))
-    levels = _project_levels(projects)
+    levels = _project_levels(projects, org_overrides)
     try:
-        results = analyze_gaps(projects, required, members, items, current, levels)
+        results = analyze_gaps(projects, required, members, items, current, levels, org_overrides)
     except LLMError as exc:
         print(f'  [WARN] 임베딩 실패 — 역량 갭 분석 중단: {exc}')
         return False

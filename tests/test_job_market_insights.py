@@ -1,8 +1,6 @@
 """JOB Market 심화 지표(services/job_market_insights.py, 2026-10-13) — 합성 데이터로 검증."""
 import os
 import sys
-from datetime import date
-
 import numpy as np
 import pandas as pd
 
@@ -24,9 +22,10 @@ def _embed(texts):
     return np.array(out)
 
 
-def _ctx(monkeypatch, profiles, gap, edges=None, researchers=None, contrib=None):
+def _ctx(monkeypatch, profiles, gap, edges=None, researchers=None, contrib=None, extra=None):
     from services import data_store as ds
     tables = {
+        **(extra or {}),
         'researchers': researchers if researchers is not None else pd.DataFrame(
             {'researcher_id': ['00000001', '00000002', '00000003', '00000004'],
              'name': ['갑', '을', '병', '정'], 'org_code': ['P', 'X', 'X', 'Y'], 'position': ['CL3'] * 4}),
@@ -110,27 +109,6 @@ def test_ending_impact():
     assert rows[0]['remaining'] == 0 and rows[0]['share'] == 1.0
 
 
-def test_release_map_and_request_and_supply(monkeypatch):
-    tasks = pd.DataFrame([
-        {'researcher_id': '00000001', 'end_date': '2026-11-30'},   # 해제 임박
-        {'researcher_id': '00000004', 'end_date': '2026-01-31'},   # 대기
-        {'researcher_id': '00000003', 'end_date': ''},             # 진행 중 → 제외
-        {'researcher_id': '00000002', 'end_date': '2027-12-31'},   # N개월 이후 → 제외
-    ])
-    rel = jmi.release_map(6, tasks, today=date(2026, 10, 13))
-    assert rel == {'00000001': {'status': 'soon', 'date': '2026-11-30'},
-                   '00000004': {'status': 'idle', 'date': '2026-01-31'}}
-    ctx = _ctx(monkeypatch, PROFILES, GAP)
-    req = jmi.staffing_request(ctx, 'X과제', release=rel)
-    assert [r['competency'] for r in req['rows']] == ['광학 설계']          # 약한 역량만
-    assert [c['name'] for c in req['rows'][0]['candidates']] == ['갑', '정']
-    assert req['rows'][0]['team_best_name'] == '을'
-    sd = jmi.supply_demand(ctx, release=rel, level_of=lambda code: {'P': '플랫폼A', 'X': '플랫폼B', 'Y': '플랫폼A'}.get(code, ''))
-    by = {r['platform']: r for r in sd}
-    assert by['플랫폼A']['soon'] == 1 and by['플랫폼A']['idle'] == 1
-    assert by['플랫폼B']['weak_competencies'] == 1 and by['플랫폼B']['weak_projects'] == 1
-
-
 def test_recommend_flow_and_render(monkeypatch):
     import json as _json
 
@@ -143,7 +121,8 @@ def test_recommend_flow_and_render(monkeypatch):
 
     def fake_llm(prompt, system, **k):
         prompts.append(prompt)
-        return _json.dumps({'recommendations': [{'project_name': '[연구]X과제', 'reason': '광학 설계 역량을 채울 수 있음'}],
+        return _json.dumps({'recommendations': [{'project_name': '[연구]X과제', 'reason': '광학 설계 역량을 채울 수 있음',
+                                                  'confidence': '상', 'risk': '배터리 소재 경험 부족'}],
                             'closest_non_match': None,
                             'must_place': [{'project_name': '[연구]X과제', 'reason': '약한 역량 보완에 가장 적합'}]})
     monkeypatch.setattr(jm.llm_client, 'call_llm', fake_llm)
@@ -153,6 +132,8 @@ def test_recommend_flow_and_render(monkeypatch):
     res = jm.recommend_for_researcher('00000001', PROFILES, pool, ctx)
     rec = res['recommendations'][0]
     assert rec['gap']['filled'][0]['competency'] == '광학 설계' and rec['collaborators'] == [['00000002', '을']]
+    assert rec['confidence'] == '상' and rec['risk'] == '배터리 소재 경험 부족'
+    assert rec['coverage'] and rec['coverage']['total'] >= 2
     assert res['shortlist'][0]['project_name'] == '[연구]X과제' and res['growth'] is None
     assert 'C) 참고 지표' in prompts[0] and '00000002' not in prompts[0]
     _json.dumps(res['shortlist']), _json.dumps(rec)   # 이력 저장 가능(직렬화)
@@ -174,10 +155,44 @@ def test_recommend_flow_and_render(monkeypatch):
               'results': {'00000001': res, '00000004': res2},
               'impact': [{'technology': 'T1', 'source': 's', 'holders': 2, 'ending_holders': 2, 'remaining': 0, 'share': 1.0}]}
     html_text = str(page._render_result(report))
-    for needle in ('갭 충족 1/1', '기존 협업자 1명', '일괄 배치 시뮬레이션', '종료 영향 분석', '육성 경로'):
+    for needle in ('갭 충족 1/1', '기존 협업자 1명', '일괄 배치 시뮬레이션', '종료 영향 분석', '육성 경로',
+                   '확신도 상', '부족한 점: 배터리 소재 경험 부족', '요구사항 충족'):
         assert needle in html_text, needle
     import io
 
     from openpyxl import load_workbook
     ws = load_workbook(io.BytesIO(jm.build_result_workbook(report))).active
-    assert '갭 충족: 광학 설계' in str(ws.cell(row=2, column=2).value)
+    cell = str(ws.cell(row=2, column=2).value)
+    assert '갭 충족: 광학 설계' in cell and '확신도 상' in cell and '부족한 점: 배터리 소재 경험 부족' in cell
+
+
+
+def test_project_requirements_split():
+    entry = {'core_tech': '광학 설계 기반 센서. 소재 합성 공정 개발', 'deliverable': '확인 불가', 'challenge': '',
+             'keywords_kr': ['배터리', '광학 설계 기반 센서'], 'keywords_en': ['battery']}
+    reqs = jmi.project_requirements(entry)
+    assert reqs == ['광학 설계 기반 센서', '소재 합성 공정 개발', '배터리']   # 문장 분리, 확인 불가 제외, 중복 제거, 한글 키워드 우선
+    assert jmi.project_requirements(None) == []
+
+
+def test_requirement_coverage_and_evidence(monkeypatch):
+    from datetime import date
+    y = date.today().year
+    pubs = pd.DataFrame([{'researcher_id': '00000001', 'title': '광학 설계 최적화 연구', 'pub_year': str(y - 1), 'pub_date': ''},
+                         {'researcher_id': '00000001', 'title': 'AI 모델', 'pub_year': str(y - 9), 'pub_date': ''}])
+    pats = pd.DataFrame([{'researcher_id': '00000001', 'title': '', 'title_ko': '배터리 소재 특허', 'application_date': f'{y}0101'}])
+    tasks = pd.DataFrame([{'researcher_id': '00000001', 'task_name': '광학 과제', 'the_task_name': '', 'end_date': ''}])
+    profiles = {'00000001': {'strength_fields': ['광학 설계'], 'key_responsibilities': ['소재 합성']}}
+    ctx = _ctx(monkeypatch, profiles, GAP, extra={'publications': pubs, 'patents': pats, 'tasks': tasks})
+    cov = jmi.requirement_coverage(ctx, '00000001', 'X과제', ['광학 설계 센서', '소재 공정', 'AI 반도체'])
+    # 요구 = 기본 3개 + 필요 역량 2개(광학 설계, 배터리 소재)
+    assert cov['total'] == 5
+    covered = {c['requirement']: c['item'] for c in cov['covered']}
+    assert {'광학 설계 센서', '소재 공정', '광학 설계'} <= set(covered)
+    assert covered['소재 공정'] == '소재 합성'                         # 역할·책임도 충족 근거
+    assert 'AI 반도체' in cov['uncovered'] and cov['ratio'] == round(len(covered) / 5, 3)
+    ev = jmi.evidence_match(ctx, '00000001', _embed(['광학 설계'])[0])
+    kinds = {(x['kind'], x['title']) for x in ev['items']}
+    assert ('논문', '광학 설계 최적화 연구') in kinds and ('과제', '광학 과제') in kinds
+    assert all(x['title'] != 'AI 모델' for x in ev['items'])           # 5년 이전 실적 제외
+    assert jmi.evidence_match(ctx, '00000001', None) is None

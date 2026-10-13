@@ -7,7 +7,13 @@
 출력 파일: data/processed/project_confl_address.csv
 
 읽는 컬럼:
-  소속, 과제명, 컨플 주소
+  소속, 과제명, 컨플 주소, (선택) 비공식소속부서명
+  is_current(2026-10-13): 누적 저장은 그대로 두되, 이번(가장 최근) 업로드 파일에 있는 (소속, 과제명) 행은 Y,
+  예전 업로드에만 있던 행은 N으로 매번 다시 표시한다(인력현황 researchers.csv의 is_current와 같은 방식).
+  드롭다운·과제 문서 분석·JOB Market 후보 등 "현재 과제"가 필요한 곳은 Y만 쓴다(researcher_fit.current_rows).
+  비공식소속부서명(2026-10-13): 과제명과 연구원 인력현황의 소속(org_code) 표기가 달라 "이 과제 사람"
+  매칭이 안 되는 과제만 채운다. 값이 있으면 과제원 매칭에 과제명 대신 이 값을 쓰고, 화면 표시·컨플/PDF
+  조회·자동 반영은 계속 과제명을 쓴다(researcher_fit.project_member_key 참고). 열이 없거나 비어 있으면 기존과 동일.
 
 처리:
   - xlsx를 CSV로 변환합니다(추가 가공 없음).
@@ -34,6 +40,7 @@ SOURCE_FILE = '과제별컨플.xlsx'
 COL_DEP = '소속'
 COL_PROJECT = '과제명'
 COL_CONFL = '컨플 주소'
+COL_ORG = '비공식소속부서명'   # 선택 열
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -44,6 +51,16 @@ def _clean_confl_address(val) -> str:
     if re.fullmatch(r'\d+\.0+', s):
         return s.split('.')[0]
     return s
+
+
+def _mark_current(merged: pd.DataFrame, latest: pd.DataFrame) -> pd.DataFrame:
+    """이번 업로드(latest)에 있는 (dep_name, project_name)은 Y, 나머지는 N."""
+    keys = TABLE_KEYS['project_confl_address']
+    current = set(zip(*(latest[k].astype(str) for k in keys)))
+    merged = merged.copy().fillna('')
+    merged['is_current'] = ['Y' if tuple(row) in current else 'N'
+                            for row in zip(*(merged[k].astype(str) for k in keys))]
+    return merged
 
 
 def process(raw_dir: str = RAW_DIR) -> bool:
@@ -75,11 +92,18 @@ def process(raw_dir: str = RAW_DIR) -> bool:
         'dep_name': df[COL_DEP].apply(_clean),
         'project_name': df[COL_PROJECT].apply(_clean),
         'confl_address': df[COL_CONFL].apply(_clean_confl_address),
+        'org_code': df[COL_ORG].apply(_clean) if COL_ORG in df.columns else '',
     })
     result = result[result['project_name'] != ''].reset_index(drop=True)
 
     out_path = os.path.join(OUT_DIR, 'project_confl_address.csv')
     merged = write_merged(out_path, result, TABLE_KEYS['project_confl_address'])
+    merged = _mark_current(merged, result)
+    import csv as _csv
+    merged.to_csv(out_path, index=False, encoding='utf-8-sig', quoting=_csv.QUOTE_NONNUMERIC)
+    n_old = int((merged['is_current'] == 'N').sum())
+    if n_old:
+        print(f'  최신 파일에 없는 과거 과제 {n_old}행은 is_current=N(드롭다운·분석 대상에서 제외, 기록은 보존)')
 
     print(f'[OK]   project_confl_address.csv 저장 (총 {len(merged)}행, 이번 파일 {len(result)}행 반영)')
     return True

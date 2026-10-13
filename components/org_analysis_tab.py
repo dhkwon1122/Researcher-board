@@ -198,6 +198,9 @@ def _item_in_levels(item: dict, codes: set, names: set, org_map: dict) -> bool:
     """과제명이 선택 조직의 이름과 같거나, 분석된 과제원 과반이 선택 조직 소속이면 포함."""
     if _norm_name(item.get('project_name')) in names:
         return True
+    # 과제별컨플의 비공식소속부서명(있으면 org_code로 저장됨)이 선택 조직이면 포함(2026-10-13)
+    if item.get('org_code') and (item['org_code'] in codes or _norm_name(item['org_code']) in names):
+        return True
     rids = {m.get('researcher_id') for c in item.get('competencies') or [] for m in c.get('members') or []}
     rids.discard(None)
     if not rids:
@@ -222,7 +225,8 @@ def _missing_projects(l1, l2) -> list:
     """과제별컨플에 등록됐지만 과제별 필요 역량 결과가 없는 과제 [(과제명, 소속, 사유)].
     플랫폼/그룹을 고르면 이름이 그 조직과 맞는 과제만."""
     from services.data_store import read_project_expertise_analysis
-    confl = read_processed('project_confl_address')
+    from pipeline.researcher_fit import current_rows
+    confl = current_rows(read_processed('project_confl_address'))
     if confl.empty or 'project_name' not in confl.columns:
         return []
     have = {i.get('project_name', '') for i in _gap_items()}

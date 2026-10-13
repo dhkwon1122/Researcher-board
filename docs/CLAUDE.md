@@ -13960,3 +13960,30 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 엑셀 결과에 "갭 충족: …" 줄 추가. 검색 이력(JSON)에 shortlist/growth/impact 포함(옛 이력은 그대로 열림).
 - 해제 임박/대기 판정은 과제참여이력 해제일만 근거(진행 중=해제일 없음 또는 N개월 이후).
 - 데이터 의존: 과제별 필요 역량(run_analysis 5단계)이 없는 과제는 A1/B1/B4가 비고 기존 A/B 점수만 사용.
+
+## (20) 과제별컨플 "비공식소속부서명" 선택 열 — 과제원 매칭 키 (2026-10-13)
+- 과제명과 인력현황 소속(org_code) 표기가 달라 "이 과제 사람" 매칭이 안 되는 과제만, 과제별컨플.xlsx에 `비공식소속부서명` 열을 추가해 채운다(선택 — 열이 없거나 비면 기존과 동일하게 과제명으로 매칭). 과제명 자체를 바꾸지 않는 이유: 중복 행(upsert 키 dep_name+project_name), PDF 폴백 파일명(`conflue_MPR/{과제명}.pdf`), 화면 표시명, 컨플 하위 페이지 자동 반영(과제명↔페이지 제목) 문제가 생김.
+- `process_project_confl.py`: 선택 열 → project_confl_address.csv `org_code`.
+- 단일 기준 `researcher_fit.project_org_overrides / project_member_key / project_org_code`를 모든 매칭 지점에 적용: `process_project_expertise._resolve_personnel`(과제 문서 인력 → 연구원), `jd_reconciliation.get_project_members`(30초 캐시; JOB Market 후보 과제 인원·과제 단위 검색), `process_project_competency_gap`(과제원·과제 내 담당 업무 인원·플랫폼/그룹/과제 단계, 결과에 `org_code` 저장), `job_market._build_candidate_pool`(본인 소속 과제 자동 제외가 표기 차이로 새지 않게 `member_key`도 비교), `org_analysis_tab._item_in_levels`(드롭다운 필터).
+- `confl_match`(하위 페이지 자동 반영 엑셀)가 처리된 CSV로 표를 만들 때도 이 열을 유지. 데이터 업데이트 화면 안내 문구 추가.
+- 반영: 과제별컨플 재업로드 → run_integration(과제 문서 분석의 인력 매칭, 과제별 필요 역량이 새 키로 다시 계산; 요약/역량 LLM은 캐시 재사용) → DB 반영.
+- (2026-10-13 추가) JOB Market "인력 요청(과제 기준)"·"수요·공급 현황" 탭 제거(사용자 확정, 화면을 탭 도입 이전 레이아웃으로 되돌림). `job_market_insights`의 release_map/staffing_request/supply_demand도 삭제. 재배치 추천의 A1~A5·일괄 배치·종료 영향·육성 경로는 유지.
+
+## (21) JOB Market 재배치 추천 심화: 요구사항 커버리지·실적 근거·LLM 확신도 (2026-10-13)
+- **C1 요구사항 커버리지**(`job_market_insights.project_requirements / requirement_coverage`): 과제 분석의 핵심 기술·산출물·기술 난제를 문장 단위(항목당 최대 4, 끝 마침표 제거), 키워드(한글 우선), 과제별 필요 역량 이름을 요구 요소(최대 20)로 나눠, 이 사람의 보유 항목(강점·키워드·전문지식 + 주요 역할·책임)과 1:1 비교 → 유사도 ≥ 0.7이면 충족. 정렬 가산 +0.2×충족 비율. 화면 "요구사항 충족 M/N" 배지(오버: 충족 요구 ← 근거 항목, 미충족 목록).
+- **C2 실적 근거**(`evidence_match`): 최근 5년 논문 제목·특허 제목(한글 우선)·참여 과제명(진행 중 포함)을 과제 분석 임베딩과 비교, 0.5 이상 상위 3개. 정렬 가산 +0.1×최고 유사도. "관련 실적 N건" 배지.
+- **C3 LLM 확신도·부족한 점**: 판정 프롬프트에 C1/C2를 참고 지표로 넣고, recommendations/must_place마다 confidence(상/중/하)와 risk(부족한 점 1문장)를 받음(max_tokens 1200→1800). 화면 "확신도" 배지 + 빨간 "부족한 점" 줄, 엑셀에도 포함.
+- 정렬 점수 = max(A,B) + 0.5×갭 + 0.2×요구 충족 비율 + 0.1×실적 + 주력 ±0.02 → 상위 8개 LLM 판정.
+- 성능: 사람별로 필요한 텍스트(요구 요소·필요 역량·보유 항목·실적 제목)를 한 번에 임베딩(후보 100개여도 임베딩 호출 1회 — fit.cached_embed가 호출마다 캐시 파일 전체를 읽기 때문). 첫 실행 시 새 텍스트 임베딩 비용이 있고 이후 캐시.
+
+## (22) JOB Market 드롭다운을 팀/리더 참조 기준으로 (2026-10-13)
+- 예전: 부서 = 과제별컨플 "소속"(dep_name), 과제 = 과제별컨플 과제명(소속으로 좁힘). 다른 화면(프로필·명단·조직 분석)과 부서 표기가 달랐음.
+- 변경: 종료 예정 과제 / 제외할 과제 모두 플랫폼(1단계부서명) → 그룹(2단계부서명, 플랫폼으로 캐스케이딩) → 과제. 과제 목록 자체는 계속 과제별컨플 과제명(검색·후보 풀과 같은 목록)이고, `job_market.list_projects_by_levels()`가 선택 조직 소속 과제만 남김 — 과제의 매칭 키(비공식소속부서명 있으면 그 값)가 선택 조직의 비공식소속부서명과 같거나, 과제명이 선택 조직의 3단계부서명과 같으면(꼬리표·공백 무시) 포함. 필터를 바꿔도 이미 고른 과제는 유지. 플랫폼/그룹은 목록을 좁힐 뿐 결과에는 영향 없음(기존 원칙 유지). `list_departments`/`list_projects` 제거.
+
+## (23) 과제별컨플 is_current(Y/N) + 현재 기준 과제·과제원 (2026-10-13)
+- `process_project_confl.py`: 누적 저장은 유지하되, 가장 최근 업로드 파일에 있는 (소속, 과제명) 행은 `is_current=Y`, 예전 업로드에만 있던 행은 `N`으로 매번 다시 표시(인력현황 researchers.csv와 같은 방식, 기록 보존).
+- 공용 필터 `researcher_fit.current_rows(df)`(is_current != N, 열 없으면 그대로) 적용처:
+  - 과제(최신 과제별컨플만): JOB Market 종료 예정/제외 과제 드롭다운(`list_projects_by_levels`)과 후보 과제 풀(`_build_candidate_pool`), 과제 문서 분석 대상(`process_project_expertise._read_projects`), 유사 기업/학계 탐색, 조직 분석 "분석 결과가 없는 과제", 컨플 자동 반영 엑셀(처리 CSV 폴백), verify_outputs 과제 수, `jd.list_project_names`.
+  - 과제원(최신 인력현황 is_current=Y만): `jd.get_project_members`(JOB Market 과제 단위 대상·B 점수·갭/구성/협업자), 과제 문서 인력 → 연구원 매핑(`_resolve_personnel`). 과제별 필요 역량은 원래 현재 재직자만.
+- 과제원 매칭 키는 (20)과 같이 과제별컨플의 비공식소속부서명(없으면 과제명) → 최신 인력현황의 그 비공식소속부서명 소속 연구원.
+- 반영: 과제별컨플 재업로드(Y/N 표시가 이때 생김) → run_integration → DB 반영. 재업로드 전에는 is_current 열이 없어 기존처럼 전체가 현재로 취급됨.
