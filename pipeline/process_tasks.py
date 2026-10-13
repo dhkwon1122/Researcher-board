@@ -305,15 +305,18 @@ def _drop_stale_task_rows(result: pd.DataFrame) -> None:
         return
     if not {'researcher_id', 'task_name'} <= set(existing.columns):
         return
-    fresh = set(zip(result['researcher_id'].astype(str), result['task_name'].astype(str)))
-    mask = [(r, t) in fresh for r, t in zip(existing['researcher_id'], existing['task_name'])]
+    def _ids(col):   # 사번 표기(앞자리 0 유무) 차이로 옛 행이 안 지워지지 않게 8자리로 맞춰 비교
+        return [str(v).strip().zfill(8) for v in col]
+
+    fresh = set(zip(_ids(result['researcher_id']), result['task_name'].astype(str)))
+    mask = [(r, t) in fresh for r, t in zip(_ids(existing['researcher_id']), existing['task_name'])]
     # 같은 사람·같은 과제코드인데 task_name만 다른 옛 행(개명 전 과제명으로 올렸던 업로드)도 지운다
     # (2026-10-13) — 과제명 이력 보정으로 the_task_name 구간이 똑같이 만들어져 타임라인 카드가 2개씩 보였다.
     if 'task_code' in existing.columns and 'task_code' in result.columns:
-        fresh_codes = {(r, c) for r, c in zip(result['researcher_id'].astype(str), result['task_code'].astype(str))
+        fresh_codes = {(r, c) for r, c in zip(_ids(result['researcher_id']), result['task_code'].astype(str))
                        if c.strip()}
         mask = [m or (r, c) in fresh_codes
-                for m, r, c in zip(mask, existing['researcher_id'], existing['task_code'].astype(str))]
+                for m, r, c in zip(mask, _ids(existing['researcher_id']), existing['task_code'].astype(str))]
     if not any(mask):
         return
     import csv as _csv
