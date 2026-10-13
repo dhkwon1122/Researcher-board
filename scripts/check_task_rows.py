@@ -11,7 +11,7 @@ import pandas as pd
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE)
 
-COLS = ['task_name', 'start_date', 'end_date', 'task_code', 'the_task_name']
+COLS = ['researcher_id', 'task_name', 'start_date', 'end_date', 'task_code', 'the_task_name']
 
 
 def _show(label, df, rid, code):
@@ -19,7 +19,7 @@ def _show(label, df, rid, code):
         print(f'\n[{label}] 없음')
         return
     df = df.fillna('').astype(str)
-    df = df[df['researcher_id'].str.zfill(8) == rid]
+    df = df[df['researcher_id'].str.strip().str.zfill(8) == rid]
     if code:
         df = df[df['task_code'] == code] if 'task_code' in df.columns else df.iloc[0:0]
     cols = [c for c in COLS if c in df.columns]
@@ -29,6 +29,13 @@ def _show(label, df, rid, code):
         dup = df.duplicated(subset=[c for c in ('the_task_name', 'start_date', 'end_date') if c in df.columns], keep=False)
         if dup.any():
             print(f'  -> 같은 과제명·기간이 중복된 행 {int(dup.sum())}개')
+            keys = [c for c in ('the_task_name', 'start_date', 'end_date') if c in df.columns]
+            causes = set()
+            for _, grp in df[dup].groupby(keys):
+                diff = [c for c in grp.columns if grp[c].nunique() > 1]
+                causes.add(', '.join(diff) if diff else '모든 열 동일')
+            for c in sorted(causes):
+                print(f'     중복 행끼리 값이 다른 열: {c}')
 
 
 def main():

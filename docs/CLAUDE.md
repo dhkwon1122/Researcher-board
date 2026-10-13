@@ -14027,3 +14027,6 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   (2) process_tasks._drop_stale_task_rows가 같은 사람·같은 task_code의 옛 행도 정리.
   (3) 점검 스크립트 scripts/check_task_rows.py <사번> [과제코드] — 파일/DB 행 비교.
 - 테스트: tests/test_task_duplicates.py.
+- 후속(같은 날): 서버 점검 결과 파일·DB 모두 10행 전부 중복(5구간×2) 확인, 화면은 (1)로 정상화됨.
+  _drop_stale_task_rows가 사번을 8자리로 맞춰 비교하도록 보강(앞자리 0 표기 차이로 옛 행이 남는 경우 대비).
+  check_task_rows.py가 중복 행끼리 값이 다른 열(task_name/researcher_id 등)을 출력해 원인을 바로 보여준다.
