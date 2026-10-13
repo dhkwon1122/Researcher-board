@@ -21,7 +21,6 @@ def test_verify_ok_and_old(tmp_path, monkeypatch):
     monkeypatch.setattr(vo, 'OUT_DIR', str(tmp_path))
     pd.DataFrame([{'researcher_a': '1', 'researcher_b': '2', 'recent_count': 1, 'level1_a': 'P1', 'level1_b': 'P2',
                    'level3_a': 'T1', 'level3_b': 'T2'}]).to_csv(tmp_path / 'collaboration_edges.csv', index=False)
-    pd.DataFrame([{'technology': 'X', 'aliases': 'X 기반'}]).to_csv(tmp_path / 'technology_holder_summary.csv', index=False)
     _write(tmp_path, 'project_competency_gap.json',
            [{'project_name': 'P', 'competencies': [{'competency': 'A', 'description': '쉬운 설명',
                                                     'members': [{'reason': 'r'}], 'outsiders': []}]}])

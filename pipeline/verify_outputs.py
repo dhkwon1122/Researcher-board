@@ -24,7 +24,6 @@ if BASE_DIR not in sys.path:
 CSV_REQUIRED = {
     'collaboration_edges': (['recent_count', 'level1_a', 'level1_b', 'level3_a', 'level3_b'],
                             '부서/과제간 협업', 'run_analysis 4단계(전문성 심화 지표)'),
-    'technology_holder_summary': (['aliases'], '기술별 보유자 수', 'run_analysis 4단계(전문성 심화 지표)'),
 }
 
 
@@ -62,18 +61,12 @@ def check_files() -> list[tuple[str, str]]:
             out.append(('WARN', f'[{label}] {name}.csv에 최신 열 {missing} 없음 — 옛 코드로 생성됨'
                                 f'(이미지 재빌드 후 다시 실행 필요)'))
             continue
-        if name == 'collaboration_edges':
-            n = len(df)
-            mapped = int(((df['level1_a'] != '') & (df['level1_b'] != '')).sum())
-            recent = int((pd.to_numeric(df['recent_count'], errors='coerce').fillna(0) > 0).sum())
-            msg = f'[{label}] 연구원 쌍 {n}건, 최근 5년 협업 {recent}건, 양쪽 1단계부서 매핑 {mapped}건'
-            out.append(('WARN' if n and not mapped else 'OK',
-                        msg + (' — 부서 매핑 0건: 팀참조(team_refer) 확인 필요' if n and not mapped else '')))
-        else:
-            merged = int((df['aliases'] != '').sum())
-            out.append(('OK', f'[{label}] 기술 {len(df)}개, 표기 통합된 기술 {merged}개'
-                              + (' (0개면 통합 대상이 없거나 임베딩/LLM 실패 — 실행 로그의 "기술명 통합" 줄 확인)'
-                                 if not merged else '')))
+        n = len(df)
+        mapped = int(((df['level1_a'] != '') & (df['level1_b'] != '')).sum())
+        recent = int((pd.to_numeric(df['recent_count'], errors='coerce').fillna(0) > 0).sum())
+        msg = f'[{label}] 연구원 쌍 {n}건, 최근 5년 협업 {recent}건, 양쪽 1단계부서 매핑 {mapped}건(Staff 조직 제외)'
+        out.append(('WARN' if n and not mapped else 'OK',
+                    msg + (' — 부서 매핑 0건: 팀참조(team_refer) 확인 필요' if n and not mapped else '')))
 
     gap = _json('project_competency_gap.json')
     label = '과제별 필요 역량'

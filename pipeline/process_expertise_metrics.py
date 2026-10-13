@@ -362,7 +362,8 @@ COLLAB_RECENT_YEARS = 5   # 부서/과제간 협업 그래프는 최근 5년(올
 
 def current_levels(researchers: pd.DataFrame) -> dict:
     """현재 재직자 researcher_id -> (1단계부서명, 3단계부서명) — 팀/리더 참조 칸 값 기준(연구원 프로필·
-    명단·과제별 필요 역량과 동일). 매칭 안 되면 빈 문자열. team_refer가 없으면 {}."""
+    명단·과제별 필요 역량과 동일). 매칭 안 되면 빈 문자열. team_refer가 없으면 {}.
+    구분이 "Staff"인 조직(상위가 Staff인 하위 조직 포함) 소속은 아예 넣지 않는다 → 그래프 집계에서 제외."""
     if researchers.empty or 'org_code' not in researchers.columns:
         return {}
     try:
@@ -373,13 +374,24 @@ def current_levels(researchers: pd.DataFrame) -> dict:
     cur = researchers
     if 'is_current' in cur.columns:
         cur = cur[cur['is_current'].astype(str).str.upper() != 'N']
+    try:
+        staff = sm.staff_org_codes()
+    except Exception as exc:
+        print(f'  [WARN] Staff 조직 조회 실패(제외 없이 진행): {exc}')
+        staff = set()
     cache: dict = {}
     out = {}
+    excluded = 0
     for rid, org in zip(cur['researcher_id'], cur['org_code'].astype(str).str.strip()):
+        if org in staff:   # 구분 "Staff" 조직(하위 포함) 소속은 협업 그래프에서 제외(2026-10-13)
+            excluded += 1
+            continue
         if org not in cache:
             l1, _l2, l3 = sm.org_code_level_names(org)
             cache[org] = (l1, l3)
         out[rid] = cache[org]
+    if excluded:
+        print(f'  부서/과제간 협업: 구분 "Staff" 조직(하위 포함) 소속 {excluded}명 제외')
     return out
 
 
@@ -568,13 +580,9 @@ def run_technology_holders(strength_std: list) -> bool:
     if core.empty and own.empty and not strength_std:
         print('  [WARN] core_technology/tech_ownership/강점 표준화 결과 없음 — 기술별 보유자 수 생략')
         return False
-    try:
-        from tech_canonical import build_canonical_map
-        canonicalize = build_canonical_map
-    except Exception as exc:
-        print(f'  [WARN] 기술명 통합 모듈 로드 실패 — 통합 없이 집계: {exc}')
-        canonicalize = None
-    df = compute_technology_holders(researchers, core, own, strength_std, canonicalize)
+    # 기술명 통합(tech_canonical, 임베딩+LLM)은 2026-10-13 사용자 확정으로 끔 — 화면의 "기술별 보유자 수"
+    # 탭을 삭제해 쓸 곳이 없고 매 실행 LLM 비용만 든다. 집계 파일 자체는 비용이 거의 없어 계속 만든다.
+    df = compute_technology_holders(researchers, core, own, strength_std)
     os.makedirs(OUT_DIR, exist_ok=True)
     df.to_csv(os.path.join(OUT_DIR, TECH_HOLDER_FILE), index=False, encoding='utf-8-sig')
     risk = int((df['risk_level'] == '위험').sum()) if not df.empty else 0
