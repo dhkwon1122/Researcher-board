@@ -13916,3 +13916,10 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   1. 같은 탭의 "과제별컨플 — 컨플 주소 없는 과제 PDF 첨부" 칸이 `accept='.pdf'`라 엑셀을 거기 끌어놓으면 브라우저가 조용히 거부 → accept 제거, 콜백에서 PDF가 아니면 "과제별컨플 엑셀은 데이터 업데이트 표의 과제별컨플 행에 올려 주세요" 안내.
   2. `save_upload`/`save_confl_pdf`의 저장 실패(OSError — 예: 데이터 폴더 권한)가 콜백 예외로 끝나 화면에 아무것도 안 뜸 → 잡아서 "서버에 저장하지 못했습니다(…) — sudo scripts/fix_data_ownership.sh" 표시.
 - (2026-10-13 추가) 데이터 업데이트 업로드 수신/결과를 앱 로그에 출력(`[data_update_on_upload] 수신: …`) — 요청이 서버까지 왔는지 docker compose logs로 확인용.
+
+## (25) 관리자 업로드 전체 먹통 — 탭 간 Output 의존 제거 (2026-10-13)
+- 증상: 데이터 업데이트의 모든 업로드가 반응 없음, 서버 로그에 수신 기록 없음. 브라우저 콘솔: `ReferenceError: A nonexistent object was used in an Output … id team-refer-upload-status`.
+- 원인: `data_update_on_upload` 하나가 데이터 업데이트 표 + 팀/리더 참조 탭 상태칸(`team-refer-upload-status`) + 직군 예외자 탭 상태칸을 모두 Output으로 묶고 있어, 그중 하나라도 화면 레이아웃에 없으면 Dash가 콜백 자체를 실행하지 않음(요청이 서버로 안 감). 이전 코드로 팀/리더 참조 업로드 영역이 없는 상황을 재현해 사용자와 동일한 오류 문자열 확인.
+- 수정: 탭별 콜백으로 분리 — 데이터 업데이트 표(`du-upload` → data_update_on_upload), 팀/리더 참조(`du-upload-tab`/team_refer → team_refer_on_upload), 직군 예외자(`du-upload-tab`/exception_job_function → exception_job_function_on_upload). 각 콜백은 자기 탭 안의 업로드 칸과 상태칸만 사용. 저장 처리는 `_handle_upload` 공용(수신/결과 로그, 저장 실패 메시지 포함). `_upload_box(..., id_type=)` 추가.
+- 검증(Playwright): 정상 / 팀/리더 참조 업로드 영역이 없는 상태 / 팀/리더 참조 탭 업로드 — 셋 다 "업로드 완료", 콘솔 오류 없음.
+- 미해결: 사용자 서버에서 팀/리더 참조 업로드 영역이 왜 레이아웃에 없었는지는 확인 못 함(코드상 항상 렌더링됨) — 팀/리더 참조 탭 하단 "엑셀 파일로 한 번에 반영" 카드가 보이는지 확인 요청.

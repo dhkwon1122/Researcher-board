@@ -118,7 +118,7 @@ def _exception_job_function_upload_section():
         dbc.Row([
             dbc.Col([
                 html.Div('업로드(직무_직군_맵핑_예외자.xlsx)', className='small text-muted mb-1'),
-                _upload_box('exception_job_function', 'single'),
+                _upload_box('exception_job_function', 'single', id_type='du-upload-tab'),
                 filenames_view,
             ], md=7),
             dbc.Col([

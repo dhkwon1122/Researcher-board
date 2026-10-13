@@ -16,13 +16,17 @@ def _alert(msg: str, color: str):
     return dbc.Alert(msg, color=color, dismissable=True, className='py-2 small mb-0')
 
 
-def _upload_box(key: str, slot: str, small_label: str = '', multiple: bool = False) -> html.Div:
+def _upload_box(key: str, slot: str, small_label: str = '', multiple: bool = False,
+                id_type: str = 'du-upload') -> html.Div:
     """단일 업로드 드롭존. slot: 'single'(대부분) | 'legacy'/'new'(직무이력 전용).
     multiple=True(대량 백필 대상 항목만, needs_valid_date 참고)면 파일을
     여러 개 한 번에 선택할 수 있다 — 파일명이 "_YYYYMM"으로 끝나는 것만
     백필로 인식되고(pipeline/backfill_utils.py), 그 외는 무시된다."""
     return dcc.Upload(
-        id={'type': 'du-upload', 'key': key, 'slot': slot},
+        # id_type: "데이터 업데이트" 표는 'du-upload', 팀/리더 참조·직군 예외자 탭은 각자 'du-upload-tab'
+        # (2026-10-13 — 한 콜백이 다른 탭의 상태칸까지 Output으로 묶여 있으면, 그 칸이 화면에 없을 때
+        # Dash가 콜백 자체를 거부해 모든 업로드가 멈췄다. 탭별 콜백으로 분리.)
+        id={'type': id_type, 'key': key, 'slot': slot},
         children=html.Div([
             html.I(className='bi bi-cloud-arrow-up me-1'),
             small_label or '클릭 또는 드래그해 업로드',

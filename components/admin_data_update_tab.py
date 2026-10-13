@@ -430,48 +430,26 @@ def _data_update_tab() -> html.Div:
 
 
 # ── 콜백: 데이터 업데이트 — 파일 업로드 ────────────────────────────────────────
-@callback(
-    Output('data-update-table-container', 'children', allow_duplicate=True),
-    Output('data-update-status-msg', 'children', allow_duplicate=True),
-    Output('team-refer-upload-status', 'children', allow_duplicate=True),
-    Output('exception-job-function-upload-status', 'children', allow_duplicate=True),
-    Input({'type': 'du-upload', 'key': ALL, 'slot': ALL}, 'contents'),
-    State({'type': 'du-upload', 'key': ALL, 'slot': ALL}, 'filename'),
-    State({'type': 'du-upload', 'key': ALL, 'slot': ALL}, 'id'),
-    prevent_initial_call=True,
-)
-def data_update_on_upload(all_contents, all_filenames, all_ids):
-    from services.auth import can
-    if not can('manage_users'):
-        return no_update, _alert('관리자만 업로드할 수 있습니다.', 'danger'), no_update, no_update
-
-    trig = dash.callback_context.triggered_id
-    if trig is None:
-        return no_update, no_update, no_update, no_update
-    idx = next((i for i, cid in enumerate(all_ids) if cid == trig), None)
-    if idx is None or not all_contents[idx]:
-        return no_update, no_update, no_update, no_update
-
-    # needs_valid_date 항목의 대량 백필 업로드는 dcc.Upload(multiple=True)라
-    # contents/filename이 리스트로 온다 — 그 외(기존 단일 업로드)는 문자열
-    # 그대로 온다. 둘 다 아래에서 같은 방식으로 처리하도록 리스트로 통일한다.
-    raw_contents = all_contents[idx]
-    raw_filenames = all_filenames[idx]
+# (2026-10-13) 예전엔 콜백 하나가 "데이터 업데이트" 표 + 팀/리더 참조 탭 + 직군 예외자 탭의 상태칸을 모두
+# Output으로 잡고 있어, 그중 하나라도 화면 레이아웃에 없으면 Dash가 "A nonexistent object was used in an
+# Output" 오류로 콜백 자체를 실행하지 않아 모든 업로드가 멈췄다(요청이 서버에 오지도 않음). 탭별로 분리:
+# 각 콜백은 자기 탭 안의 업로드 칸(Input)과 상태칸(Output)만 쓴다. 저장 처리는 _handle_upload 공용.
+def _handle_upload(key, raw_contents, raw_filenames, slot_id) -> tuple:
+    """업로드 저장 공용 처리 → (메시지, 색). 단일 업로드는 문자열, 다중 업로드는 리스트로 온다."""
     if isinstance(raw_contents, list):
         contents_list, filenames_list = raw_contents, raw_filenames
     else:
         contents_list, filenames_list = [raw_contents], [raw_filenames]
-
-    slot = None if trig['slot'] == 'single' else trig['slot']
+    slot = None if slot_id == 'single' else slot_id
     # 업로드 요청이 서버까지 왔는지 로그로 확인할 수 있게(2026-10-13 — "업로드가 안 됨" 진단용)
-    print(f"[data_update_on_upload] 수신: {trig['key']} / {filenames_list} "
+    print(f"[data_update_on_upload] 수신: {key} / {filenames_list} "
           f"/ {[len(c or '') for c in contents_list]}자(base64)", flush=True)
     ok_count, errors = 0, []
     for filename, contents in zip(filenames_list, contents_list):
         try:
             _header, b64data = contents.split(',', 1)
             file_bytes = base64.b64decode(b64data, validate=True)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, AttributeError):
             errors.append(f'{filename}: 파일을 읽지 못했습니다.')
             continue
         if len(file_bytes) > wpr.MAX_UPLOAD_BYTES:
@@ -479,31 +457,86 @@ def data_update_on_upload(all_contents, all_filenames, all_ids):
             errors.append(f'{filename}: 파일이 너무 큽니다(최대 {limit_mb}MB).')
             continue
         try:
-            wpr.save_upload(trig['key'], filename, file_bytes, slot=slot)
-        except OSError as exc:   # 예: 데이터 폴더 권한 — 예전엔 콜백이 그대로 실패해 화면에 아무 반응이 없었다(2026-10-13)
-            print(f'[data_update_on_upload] 저장 실패 {trig["key"]} {filename}: {exc}')
+            wpr.save_upload(key, filename, file_bytes, slot=slot)
+        except OSError as exc:   # 예: 데이터 폴더 권한
+            print(f'[data_update_on_upload] 저장 실패 {key} {filename}: {exc}')
             errors.append(f'{filename}: 서버에 저장하지 못했습니다({exc}). 데이터 폴더 권한을 확인하세요 '
                           '(서버에서 sudo scripts/fix_data_ownership.sh).')
             continue
         ok_count += 1
-
-    print(f"[data_update_on_upload] 결과: {trig['key']} 성공 {ok_count}건, 실패 {errors}", flush=True)
+    print(f"[data_update_on_upload] 결과: {key} 성공 {ok_count}건, 실패 {errors}", flush=True)
     if ok_count and not errors:
-        msg, color = f'{ok_count}개 파일 업로드 완료.' if ok_count > 1 else f'{filenames_list[0]} 업로드 완료.', 'success'
-    elif ok_count and errors:
-        msg, color = f'{ok_count}개 업로드 완료, {len(errors)}개 실패({"; ".join(errors[:3])})', 'warning'
-    else:
-        msg, color = '; '.join(errors[:3]) or '업로드에 실패했습니다.', 'danger'
+        return (f'{ok_count}개 파일 업로드 완료.' if ok_count > 1 else f'{filenames_list[0]} 업로드 완료.'), 'success'
+    if ok_count and errors:
+        return f'{ok_count}개 업로드 완료, {len(errors)}개 실패({"; ".join(errors[:3])})', 'warning'
+    return '; '.join(errors[:3]) or '업로드에 실패했습니다.', 'danger'
 
-    # team_refer/exception_job_function은 "데이터 업데이트" 탭 표에서
-    # 숨겨져 있어(hidden_from_table), 그 탭의 상태 메시지 자리
-    # (data-update-status-msg)는 다른 탭이라 안 보인다 — 대신 각자의 탭 안
-    # 전용 상태 자리로 알림을 보낸다.
-    if trig['key'] == 'team_refer':
-        return _data_update_table(), no_update, _alert(msg, color), no_update
-    if trig['key'] == 'exception_job_function':
-        return _data_update_table(), no_update, no_update, _alert(msg, color)
-    return _data_update_table(), _alert(msg, color), no_update, no_update
+
+def _triggered_upload(all_contents, all_ids):
+    """패턴매칭 업로드 중 실제로 바뀐 칸 → (id, contents) 또는 (None, None)."""
+    trig = dash.callback_context.triggered_id
+    if trig is None:
+        return None, None
+    idx = next((i for i, cid in enumerate(all_ids) if cid == trig), None)
+    if idx is None or not all_contents[idx]:
+        return None, None
+    return trig, idx
+
+
+@callback(
+    Output('data-update-table-container', 'children', allow_duplicate=True),
+    Output('data-update-status-msg', 'children', allow_duplicate=True),
+    Input({'type': 'du-upload', 'key': ALL, 'slot': ALL}, 'contents'),
+    State({'type': 'du-upload', 'key': ALL, 'slot': ALL}, 'filename'),
+    State({'type': 'du-upload', 'key': ALL, 'slot': ALL}, 'id'),
+    prevent_initial_call=True,
+)
+def data_update_on_upload(all_contents, all_filenames, all_ids):
+    """"데이터 업데이트" 표의 업로드 칸 전용."""
+    from services.auth import can
+    if not can('manage_users'):
+        return no_update, _alert('관리자만 업로드할 수 있습니다.', 'danger')
+    trig, idx = _triggered_upload(all_contents, all_ids)
+    if trig is None:
+        return no_update, no_update
+    msg, color = _handle_upload(trig['key'], all_contents[idx], all_filenames[idx], trig['slot'])
+    return _data_update_table(), _alert(msg, color)
+
+
+@callback(
+    Output('team-refer-upload-status', 'children', allow_duplicate=True),
+    Input({'type': 'du-upload-tab', 'key': 'team_refer', 'slot': ALL}, 'contents'),
+    State({'type': 'du-upload-tab', 'key': 'team_refer', 'slot': ALL}, 'filename'),
+    State({'type': 'du-upload-tab', 'key': 'team_refer', 'slot': ALL}, 'id'),
+    prevent_initial_call=True,
+)
+def team_refer_on_upload(all_contents, all_filenames, all_ids):
+    """팀/리더 참조 탭의 엑셀 업로드 칸 전용(상태칸도 같은 탭 안)."""
+    from services.auth import can
+    if not can('manage_users'):
+        return _alert('관리자만 업로드할 수 있습니다.', 'danger')
+    trig, idx = _triggered_upload(all_contents, all_ids)
+    if trig is None:
+        return no_update
+    return _alert(*_handle_upload('team_refer', all_contents[idx], all_filenames[idx], trig['slot']))
+
+
+@callback(
+    Output('exception-job-function-upload-status', 'children', allow_duplicate=True),
+    Input({'type': 'du-upload-tab', 'key': 'exception_job_function', 'slot': ALL}, 'contents'),
+    State({'type': 'du-upload-tab', 'key': 'exception_job_function', 'slot': ALL}, 'filename'),
+    State({'type': 'du-upload-tab', 'key': 'exception_job_function', 'slot': ALL}, 'id'),
+    prevent_initial_call=True,
+)
+def exception_job_function_on_upload(all_contents, all_filenames, all_ids):
+    """직군 예외자 탭의 엑셀 업로드 칸 전용(상태칸도 같은 탭 안)."""
+    from services.auth import can
+    if not can('manage_users'):
+        return _alert('관리자만 업로드할 수 있습니다.', 'danger')
+    trig, idx = _triggered_upload(all_contents, all_ids)
+    if trig is None:
+        return no_update
+    return _alert(*_handle_upload('exception_job_function', all_contents[idx], all_filenames[idx], trig['slot']))
 
 
 # ── 콜백: 과제별컨플 — 컨플 주소 없는 과제 PDF 업로드/삭제 ──────────────────────
