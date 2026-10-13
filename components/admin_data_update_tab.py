@@ -300,7 +300,9 @@ def _confl_pdf_upload_section():
                         html.I(className='bi bi-cloud-arrow-up me-1'),
                         '클릭 또는 드래그해 PDF 업로드(여러 개 가능, 파일명 = 과제명)',
                     ], className='small text-muted'),
-                    accept='.pdf', multiple=True,
+                    # accept='.pdf'를 두면 엑셀을 여기에 잘못 끌어놓았을 때 브라우저가 조용히 거부해 아무 반응이
+                    # 없었다(2026-10-13 사용자 리포트) — 모든 파일을 받고 콜백에서 PDF가 아니면 안내한다.
+                    multiple=True,
                     style={'padding': '8px', 'border': '1px dashed #adb5bd', 'borderRadius': '4px',
                            'textAlign': 'center', 'cursor': 'pointer'},
                 ),
@@ -473,7 +475,13 @@ def data_update_on_upload(all_contents, all_filenames, all_ids):
             limit_mb = wpr.MAX_UPLOAD_BYTES // (1024 * 1024)
             errors.append(f'{filename}: 파일이 너무 큽니다(최대 {limit_mb}MB).')
             continue
-        wpr.save_upload(trig['key'], filename, file_bytes, slot=slot)
+        try:
+            wpr.save_upload(trig['key'], filename, file_bytes, slot=slot)
+        except OSError as exc:   # 예: 데이터 폴더 권한 — 예전엔 콜백이 그대로 실패해 화면에 아무 반응이 없었다(2026-10-13)
+            print(f'[data_update_on_upload] 저장 실패 {trig["key"]} {filename}: {exc}')
+            errors.append(f'{filename}: 서버에 저장하지 못했습니다({exc}). 데이터 폴더 권한을 확인하세요 '
+                          '(서버에서 sudo scripts/fix_data_ownership.sh).')
+            continue
         ok_count += 1
 
     if ok_count and not errors:
@@ -525,11 +533,18 @@ def confl_pdf_on_upload(all_contents, all_filenames):
             limit_mb = wpr.MAX_UPLOAD_BYTES // (1024 * 1024)
             errors.append(f'{filename}: 파일이 너무 큽니다(최대 {limit_mb}MB).')
             continue
+        if not str(filename or '').lower().endswith('.pdf'):
+            errors.append(f'{filename}: 이 칸은 컨플 주소 없는 과제의 PDF 전용입니다. 과제별컨플 엑셀은 위 '
+                          '"데이터 업데이트" 표의 과제별컨플 행 업로드 칸에 올려 주세요.')
+            continue
         try:
             wpr.save_confl_pdf(filename, file_bytes)
             ok_count += 1
         except ValueError as exc:
             errors.append(f'{filename}: {exc}')
+        except OSError as exc:
+            errors.append(f'{filename}: 서버에 저장하지 못했습니다({exc}). 데이터 폴더 권한을 확인하세요 '
+                          '(서버에서 sudo scripts/fix_data_ownership.sh).')
 
     if ok_count and not errors:
         msg, color = f'{ok_count}개 PDF 업로드 완료.' if ok_count > 1 else f'{all_filenames[0]} 업로드 완료.', 'success'
