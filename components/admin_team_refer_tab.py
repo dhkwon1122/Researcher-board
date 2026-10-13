@@ -80,7 +80,8 @@ def _team_refer_upload_section():
     업데이트" 탭에서 이동). 백엔드는 services/web_pipeline_runner.py의
     'team_refer' 항목(hidden_from_table=True)을 그대로 재사용 — 업로드
     저장/백필/실행 로그가 전부 "데이터 업데이트" 탭의 다른 항목과 동일한
-    경로를 탄다. 업로드 컴포넌트({'type':'du-upload','key':'team_refer',...})와
+    경로를 탄다. 업로드 컴포넌트({'type':'du-upload-tab','key':'team_refer',...} — 이 탭 전용 콜백
+    team_refer_on_upload, 2026-10-13 분리)와
     다운로드 버튼({'type':'du-download','key':'team_refer'})은 패턴매칭
     콜백(data_update_on_upload/data_update_download)이 위치와 무관하게
     그대로 처리하므로 이 탭 안에 있어도 새 콜백이 필요 없다 — "실행" 버튼만
@@ -112,7 +113,7 @@ def _team_refer_upload_section():
         dbc.Row([
             dbc.Col([
                 html.Div('업로드(xlsx 또는 csv)', className='small text-muted mb-1'),
-                _upload_box('team_refer', 'single', multiple=True),
+                _upload_box('team_refer', 'single', multiple=True, id_type='du-upload-tab'),
                 filenames_view, backfill_view,
             ], md=5),
             dbc.Col([
