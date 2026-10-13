@@ -52,6 +52,7 @@ def task_points(task_df):
         return []
     today = pd.Timestamp(datetime.now().date())
     points = []
+    seen = set()
     from services.task_history import close_stale_open_rows
     rows = close_stale_open_rows(task_df.to_dict('records'), close_with='start')
     for row in rows:
@@ -73,6 +74,12 @@ def task_points(task_df):
         # (구버전 CSV/매핑 실패 폴백) 원본 task_name.
         the_name = clean(row.get('the_task_name', ''))
         name = the_name or str(row.get('task_name', '')).strip()
+        # 같은 표시 과제명·같은 기간이 여러 행으로 들어와도(예: 개명 전 과제명으로 올린 옛 업로드 행이
+        # task_name만 달라 지워지지 않고 남은 경우, 옛 DB 사본) 카드는 하나만 그린다(2026-10-13).
+        key = (name, start, end_label)
+        if key in seen:
+            continue
+        seen.add(key)
         points.append({
             'task_name': name,
             'start': start,

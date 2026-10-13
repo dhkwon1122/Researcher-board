@@ -14016,3 +14016,14 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 수정: process()가 기본 경로로 호출될 때, 화면 업로드 파일이 raw_csv 사본보다 새것이면(또는 사본이 없으면) 그 파일을
   읽는다(`_newer_web_upload`). 테스트: tests/test_project_confl_source.py.
 - 반영 후: 과제별컨플을 한 번 다시 처리(데이터 업데이트 실행 또는 run_integration)하고 DB 반영해야 is_current가 바로잡힌다.
+
+## (28) 타임라인 과제 카드가 2개씩 보이던 문제 (2026-10-13)
+- 증상: 과제명 개명 이력이 있는 과제(task_code 같음)의 구간 카드가 모두 2개씩 표시(30일 이하 구간은 둘 다 제외).
+- 화면 코드는 행 1개당 카드 1개라 깨끗한 데이터로는 재현되지 않음 → 앱이 읽는 데이터(파일 또는 DB)에 같은 구간이 두 행.
+  유력 원인: 개명 전 과제명(task_name)으로 올렸던 옛 업로드 행. 자연키가 (researcher_id, task_name, start_date)라
+  _drop_stale_task_rows가 task_name이 다른 옛 행을 지우지 못했고, 과제명 이력 보정이 같은 the_task_name 구간을 만들었다.
+  (DB 반영을 안 해 DB가 옛 사본인 경우도 같은 증상.)
+- 수정: (1) components/timeline_data.task_points가 (표시 과제명, 시작, 종료)가 같은 행은 카드 1개로.
+  (2) process_tasks._drop_stale_task_rows가 같은 사람·같은 task_code의 옛 행도 정리.
+  (3) 점검 스크립트 scripts/check_task_rows.py <사번> [과제코드] — 파일/DB 행 비교.
+- 테스트: tests/test_task_duplicates.py.
