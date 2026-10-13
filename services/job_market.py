@@ -174,13 +174,17 @@ def _dedup_candidate_rows(projects_df) -> list:
     (대괄호 태그/띄어쓰기) 같은 과제를 서로 다른 후보로 중복 추천하지 않기
     위함(get_project_members()가 쓰는 것과 동일한 fit.normalize_org_code() 기준)."""
     seen = {}
+    overrides = fit.project_org_overrides(projects_df)
     for _, row in projects_df.iterrows():
         name = str(row.get('project_name') or '').strip()
         if not name:
             continue
         key = fit.normalize_org_code(name)
         if key not in seen:
-            seen[key] = {'project_name': name, 'dep_name': str(row.get('dep_name') or '').strip(), 'norm': key}
+            # member_key: 연구원 org_code와 비교하는 키(비공식소속부서명이 있으면 그 값, 2026-10-13) —
+            # "본인이 지금 속한 과제" 자동 제외가 과제명 표기 차이로 새지 않게.
+            seen[key] = {'project_name': name, 'dep_name': str(row.get('dep_name') or '').strip(), 'norm': key,
+                         'member_key': fit.project_member_key(name, overrides)}
     return list(seen.values())
 
 
@@ -204,7 +208,8 @@ def _build_candidate_pool(excluded_norm: set, expertise_profiles: dict) -> dict:
     if projects_df.empty:
         return {}
     all_rows = _dedup_candidate_rows(projects_df)
-    candidates = [row for row in all_rows if row['norm'] not in excluded_norm]
+    candidates = [row for row in all_rows
+                  if row['norm'] not in excluded_norm and row.get('member_key', row['norm']) not in excluded_norm]
     if not candidates:
         return {}
 

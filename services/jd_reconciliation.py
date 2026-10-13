@@ -76,6 +76,19 @@ def list_project_names() -> list:
     return sorted({str(v).strip() for v in projects_df['project_name'] if str(v).strip()})
 
 
+_ORG_OVERRIDE_CACHE: dict = {'ts': 0.0, 'map': {}}
+
+
+def _org_overrides() -> dict:
+    """과제명 -> 비공식소속부서명(과제별컨플 선택 열). JOB Market이 후보 과제마다 호출하므로 30초 캐시."""
+    import time
+    now = time.monotonic()
+    if now - _ORG_OVERRIDE_CACHE['ts'] > 30:
+        _ORG_OVERRIDE_CACHE['map'] = fit.project_org_overrides(data_store.read_processed('project_confl_address'))
+        _ORG_OVERRIDE_CACHE['ts'] = now
+    return _ORG_OVERRIDE_CACHE['map']
+
+
 def get_project_members(project_name: str) -> list:
     """선택한 과제에 현재 배정된 인원 목록 — researchers.csv의
     org_code(현재 소속 과제)가 이 과제명과 같은 사람. process_project_expertise.py가
@@ -91,7 +104,8 @@ def get_project_members(project_name: str) -> list:
     researchers_df = data_store.read_processed('researchers')
     if researchers_df.empty:
         return []
-    target = fit.normalize_org_code(project_name)
+    # 과제별컨플에 비공식소속부서명이 있으면 과제명 대신 그 값으로 매칭(2026-10-13)
+    target = fit.project_member_key(project_name, _org_overrides())
     rows = researchers_df[researchers_df['org_code'].astype(str).apply(fit.normalize_org_code) == target]
     if rows.empty:
         return []

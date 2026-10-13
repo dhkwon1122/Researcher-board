@@ -13883,3 +13883,10 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 엑셀 결과에 "갭 충족: …" 줄 추가. 검색 이력(JSON)에 shortlist/growth/impact 포함(옛 이력은 그대로 열림).
 - 해제 임박/대기 판정은 과제참여이력 해제일만 근거(진행 중=해제일 없음 또는 N개월 이후).
 - 데이터 의존: 과제별 필요 역량(run_analysis 5단계)이 없는 과제는 A1/B1/B4가 비고 기존 A/B 점수만 사용.
+
+## (20) 과제별컨플 "비공식소속부서명" 선택 열 — 과제원 매칭 키 (2026-10-13)
+- 과제명과 인력현황 소속(org_code) 표기가 달라 "이 과제 사람" 매칭이 안 되는 과제만, 과제별컨플.xlsx에 `비공식소속부서명` 열을 추가해 채운다(선택 — 열이 없거나 비면 기존과 동일하게 과제명으로 매칭). 과제명 자체를 바꾸지 않는 이유: 중복 행(upsert 키 dep_name+project_name), PDF 폴백 파일명(`conflue_MPR/{과제명}.pdf`), 화면 표시명, 컨플 하위 페이지 자동 반영(과제명↔페이지 제목) 문제가 생김.
+- `process_project_confl.py`: 선택 열 → project_confl_address.csv `org_code`.
+- 단일 기준 `researcher_fit.project_org_overrides / project_member_key / project_org_code`를 모든 매칭 지점에 적용: `process_project_expertise._resolve_personnel`(과제 문서 인력 → 연구원), `jd_reconciliation.get_project_members`(30초 캐시; JOB Market 후보 과제 인원·과제 단위 검색), `process_project_competency_gap`(과제원·과제 내 담당 업무 인원·플랫폼/그룹/과제 단계, 결과에 `org_code` 저장), `job_market._build_candidate_pool`(본인 소속 과제 자동 제외가 표기 차이로 새지 않게 `member_key`도 비교), `org_analysis_tab._item_in_levels`(드롭다운 필터).
+- `confl_match`(하위 페이지 자동 반영 엑셀)가 처리된 CSV로 표를 만들 때도 이 열을 유지. 데이터 업데이트 화면 안내 문구 추가.
+- 반영: 과제별컨플 재업로드 → run_integration(과제 문서 분석의 인력 매칭, 과제별 필요 역량이 새 키로 다시 계산; 요약/역량 LLM은 캐시 재사용) → DB 반영.

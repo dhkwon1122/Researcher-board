@@ -7,7 +7,10 @@
 출력 파일: data/processed/project_confl_address.csv
 
 읽는 컬럼:
-  소속, 과제명, 컨플 주소
+  소속, 과제명, 컨플 주소, (선택) 비공식소속부서명
+  비공식소속부서명(2026-10-13): 과제명과 연구원 인력현황의 소속(org_code) 표기가 달라 "이 과제 사람"
+  매칭이 안 되는 과제만 채운다. 값이 있으면 과제원 매칭에 과제명 대신 이 값을 쓰고, 화면 표시·컨플/PDF
+  조회·자동 반영은 계속 과제명을 쓴다(researcher_fit.project_member_key 참고). 열이 없거나 비어 있으면 기존과 동일.
 
 처리:
   - xlsx를 CSV로 변환합니다(추가 가공 없음).
@@ -34,6 +37,7 @@ SOURCE_FILE = '과제별컨플.xlsx'
 COL_DEP = '소속'
 COL_PROJECT = '과제명'
 COL_CONFL = '컨플 주소'
+COL_ORG = '비공식소속부서명'   # 선택 열
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -75,6 +79,7 @@ def process(raw_dir: str = RAW_DIR) -> bool:
         'dep_name': df[COL_DEP].apply(_clean),
         'project_name': df[COL_PROJECT].apply(_clean),
         'confl_address': df[COL_CONFL].apply(_clean_confl_address),
+        'org_code': df[COL_ORG].apply(_clean) if COL_ORG in df.columns else '',
     })
     result = result[result['project_name'] != ''].reset_index(drop=True)
 

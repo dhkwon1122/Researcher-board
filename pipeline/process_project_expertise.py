@@ -80,7 +80,8 @@ def _read_projects() -> pd.DataFrame:
     return pd.read_csv(path, encoding='utf-8-sig', dtype=str).fillna('')
 
 
-def _resolve_personnel(project_name: str, personnel: list, researchers_df: pd.DataFrame) -> list:
+def _resolve_personnel(project_name: str, personnel: list, researchers_df: pd.DataFrame,
+                       org_overrides: dict | None = None) -> list:
     """문서에서 뽑은 인력(이름 + name_suffix)을, org_code == project_name인
     연구원 중 이름이 같은 사람과 대조해 researcher_id를 매핑한다. 후보가
     없거나(0명) 동명이인을 판별할 수 없으면(name_suffix 없음/일치 후보 0·2명
@@ -93,7 +94,8 @@ def _resolve_personnel(project_name: str, personnel: list, researchers_df: pd.Da
     if researchers_df.empty:
         candidates_df = pd.DataFrame()
     else:
-        target = fit.normalize_org_code(project_name)
+        # 과제별컨플에 비공식소속부서명이 있으면 그 값으로 매칭(2026-10-13, researcher_fit.project_member_key)
+        target = fit.project_member_key(project_name, org_overrides)
         candidates_df = researchers_df[
             researchers_df['org_code'].astype(str).apply(fit.normalize_org_code) == target
         ]
@@ -189,6 +191,7 @@ def process(force: bool = False, skip_confluence: bool = False) -> bool:
         return False
 
     researchers_df = fit.read_researchers(OUT_DIR)
+    org_overrides = fit.project_org_overrides(projects)
 
     page_cache = project_summary.load_page_cache()
     summary_cache = project_summary.load_cache()
@@ -237,7 +240,8 @@ def process(force: bool = False, skip_confluence: bool = False) -> bool:
                 print(f'    (진행: {completed}/{total})')
             continue
 
-        matched_personnel = _resolve_personnel(project_name, summary.get('personnel') or [], researchers_df)
+        matched_personnel = _resolve_personnel(project_name, summary.get('personnel') or [], researchers_df,
+                                               org_overrides)
         for p in matched_personnel:
             personnel_rows.append({
                 'researcher_id': p['researcher_id'], 'name': p['name'], 'name_suffix': p['name_suffix'],

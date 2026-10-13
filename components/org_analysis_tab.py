@@ -198,6 +198,9 @@ def _item_in_levels(item: dict, codes: set, names: set, org_map: dict) -> bool:
     """과제명이 선택 조직의 이름과 같거나, 분석된 과제원 과반이 선택 조직 소속이면 포함."""
     if _norm_name(item.get('project_name')) in names:
         return True
+    # 과제별컨플의 비공식소속부서명(있으면 org_code로 저장됨)이 선택 조직이면 포함(2026-10-13)
+    if item.get('org_code') and (item['org_code'] in codes or _norm_name(item['org_code']) in names):
+        return True
     rids = {m.get('researcher_id') for c in item.get('competencies') or [] for m in c.get('members') or []}
     rids.discard(None)
     if not rids:
