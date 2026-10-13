@@ -57,6 +57,7 @@ import llm_client  # noqa: E402
 import researcher_fit as fit  # noqa: E402
 from services import data_store  # noqa: E402
 from services import jd_reconciliation as jd  # noqa: E402
+from services import job_market_insights as jmi  # noqa: E402
 from services import researcher_profile_export as export  # noqa: E402
 from services.llm import LLMError  # noqa: E402
 
@@ -217,8 +218,10 @@ def _build_candidate_pool(excluded_norm: set, expertise_profiles: dict) -> dict:
 
     # 근거 B: 후보별 현재 배정 인력의 전문성 프로필 텍스트 (있는 사람만)
     b_texts_by_project = {}
+    member_ids_by_project = {}
     for row in candidates:
         members = jd.get_project_members(row['project_name'])
+        member_ids_by_project[row['project_name']] = [m['researcher_id'] for m in members]
         texts = []
         for m in members:
             profile = expertise_profiles.get(m['researcher_id'])
@@ -256,6 +259,7 @@ def _build_candidate_pool(excluded_norm: set, expertise_profiles: dict) -> dict:
             'a_text': a_texts_by_project.get(project_name, ''),
             'a_embedding': a_embedding,
             'b_members': b_members,
+            'member_ids': member_ids_by_project.get(project_name, []),
         }
     return pool
 
@@ -281,7 +285,7 @@ def _score_candidates(profile_embedding, candidate_pool: dict) -> list:
             'project_name': project_name, 'dep_name': cand['dep_name'],
             'score_a': score_a, 'score_b': score_b,
             'a_text': cand['a_text'], 'b_text': b_text or '',
-            'combined': combined,
+            'combined': combined, 'a_embedding': cand['a_embedding'],
         })
     scored.sort(key=lambda x: -x['combined'])
     return scored
@@ -305,7 +309,10 @@ _RECOMMEND_SYSTEM_PROMPT = """# Role
 2. 근거가 뚜렷한 순서대로 최대 3개까지만 고르세요. 뚜렷한 연관성이 없으면
    억지로 채우지 말고 빈 리스트를 반환하세요.
 3. reason은 왜 이 과제가 맞는지 1~2문장으로 구체적으로 쓰세요. A/B 중 어떤
-   근거를 주로 참고했는지 자연스럽게 드러나도록 쓰세요.
+   근거를 주로 참고했는지 자연스럽게 드러나도록 쓰세요. 후보에 C) 참고 지표
+   (이 연구원이 채울 수 있는 과제의 약한 필요 역량, 최근 5년/5년 이전 주력 일치,
+   공동 연구자 재직, 시니어·주니어 보완)가 있으면, 단순히 비슷한 과제보다
+   이 연구원이 실제로 필요한(약한 역량을 채우는) 과제를 우선하고 그 점을 사유에 쓰세요.
 4. recommendations가 빈 리스트라면(뚜렷이 맞는 과제가 하나도 없다면), 그래도
    후보 중 그나마 가장 가까운 과제 하나를 골라 closest_non_match에 담으세요.
    reason에는 "추천"이 아니라 왜 이 과제조차 충분히 맞지 않는지(이 연구원의
@@ -332,7 +339,9 @@ _RECOMMEND_SYSTEM_PROMPT = """# Role
 def _candidate_block(item: dict) -> str:
     a = item['a_text'] or '(과제 분석 데이터 없음)'
     b = item['b_text'] or '(비교 가능한 배정 인력 없음)'
-    return f"[{item['project_name']}] 소속: {item['dep_name']}\nA) 과제 분석 기반: {a}\nB) 유사 인력 기반: {b}"
+    block = f"[{item['project_name']}] 소속: {item['dep_name']}\nA) 과제 분석 기반: {a}\nB) 유사 인력 기반: {b}"
+    signals = jmi.signals_text(item)
+    return block + (f"\nC) 참고 지표: {signals}" if signals else '')
 
 
 # 공백/문장부호(줄임표 "…"/"..." 포함)만 있거나, 그걸 다 떼고 남는 실질 글자
@@ -363,7 +372,7 @@ def _fallback_must_place(shortlist: list) -> list:
     return [{
         'project_name': top['project_name'], 'dep_name': top['dep_name'],
         'reason': '(LLM 응답에 강제 배치 후보가 없어 임베딩 유사도 1순위로 대체)',
-        'score_a': top['score_a'], 'score_b': top['score_b'],
+        'score_a': top['score_a'], 'score_b': top['score_b'], **jmi.public_fields(top),
     }]
 
 
@@ -421,7 +430,7 @@ def _judge_recommendations(profile_text: str, shortlist: list) -> tuple:
         return {
             'project_name': name, 'dep_name': cand['dep_name'],
             'reason': reason,
-            'score_a': cand['score_a'], 'score_b': cand['score_b'],
+            'score_a': cand['score_a'], 'score_b': cand['score_b'], **jmi.public_fields(cand),
         }
 
     results = []
@@ -447,7 +456,8 @@ def _judge_recommendations(profile_text: str, shortlist: list) -> tuple:
 
 # ─── 전체 실행 ───────────────────────────────────────────────────────────────
 
-def recommend_for_researcher(researcher_id: str, expertise_profiles: dict, candidate_pool: dict) -> dict:
+def recommend_for_researcher(researcher_id: str, expertise_profiles: dict, candidate_pool: dict,
+                             ctx: 'jmi.Context | None' = None) -> dict:
     """한 사람에 대한 추천 결과. candidate_pool은 여러 사람에 걸쳐 재사용
     가능(과제 단위 검색이 배정 인원 전체를 순회할 때 매번 새로 만들지 않도록
     호출부가 미리 만들어 넘긴다).
@@ -473,10 +483,38 @@ def recommend_for_researcher(researcher_id: str, expertise_profiles: dict, candi
                 'note': f'임베딩 계산 실패: {exc}', 'profile': profile}
 
     scored = _score_candidates(profile_embedding, candidate_pool)
+    # (2026-10-13) 갭 충족·주력 시기·협업자·구성 지표를 붙이고, 갭 충족을 가산한 점수로 재정렬한 뒤
+    # 상위 후보를 LLM에 넘긴다(services/job_market_insights.py). 지표 계산 실패 시 기존 순서 그대로.
+    try:
+        ctx = ctx or jmi.Context(expertise_profiles)
+        member_ids = {name: cand.get('member_ids', []) for name, cand in candidate_pool.items()}
+        scored = jmi.enrich_candidates(ctx, researcher_id, scored, member_ids)
+    except Exception as exc:  # noqa: BLE001 — 부가 지표 실패가 추천 자체를 막지 않게
+        print(f'[job_market] 심화 지표 계산 실패(기존 점수로 진행) {researcher_id}: {exc}')
+        ctx = None
     shortlist = scored[:TOP_K_CANDIDATES]
     recommendations, closest_non_match, must_place = _judge_recommendations(profile_text, shortlist)
+    growth = None
+    if not recommendations and ctx is not None and shortlist:
+        target = (closest_non_match or {}).get('project_name') or shortlist[0]['project_name']
+        try:
+            growth = jmi.growth_path(ctx, researcher_id, target)
+        except Exception as exc:  # noqa: BLE001
+            print(f'[job_market] 육성 경로 계산 실패 {researcher_id}: {exc}')
+    compact = [{'project_name': c['project_name'], 'dep_name': c['dep_name'],
+                'adjusted': c.get('adjusted', c['combined']), 'gap': c.get('gap')} for c in shortlist]
     return {'recommendations': recommendations, 'closest_non_match': closest_non_match,
-            'must_place': must_place, 'note': '', 'profile': profile}
+            'must_place': must_place, 'note': '', 'profile': profile,
+            'shortlist': compact, 'growth': growth}
+
+
+def _safe_context(expertise_profiles: dict):
+    """심화 지표용 컨텍스트(검색 1회에 한 번). 만들 수 없으면 None — 사람별로 다시 시도한다."""
+    try:
+        return jmi.Context(expertise_profiles)
+    except Exception as exc:  # noqa: BLE001
+        print(f'[job_market] 심화 지표 컨텍스트 생성 실패: {exc}')
+        return None
 
 
 def _own_org_code(researcher_id: str, researchers_df) -> str:
@@ -518,8 +556,9 @@ def run_project_search(project_names: list, excluded_org_codes: list) -> dict:
     except LLMError as exc:
         return {'error': f'후보 과제 임베딩 계산 실패: {exc}'}
 
+    ctx = _safe_context(expertise_profiles)
     workers = llm_client.batch_concurrency()
-    tasks = [(lambda rid=rid: recommend_for_researcher(rid, expertise_profiles, candidate_pool))
+    tasks = [(lambda rid=rid: recommend_for_researcher(rid, expertise_profiles, candidate_pool, ctx))
               for rid in researcher_ids]
     task_results = llm_client.run_concurrent(tasks, max_workers=workers) if tasks else []
 
@@ -527,11 +566,17 @@ def run_project_search(project_names: list, excluded_org_codes: list) -> dict:
     for rid, (result, error) in zip(researcher_ids, task_results):
         results[rid] = result if error is None and result else {'recommendations': [], 'note': f'처리 중 오류: {error}'}
 
+    try:
+        impact = jmi.ending_impact(researcher_ids)
+    except Exception as exc:  # noqa: BLE001
+        print(f'[job_market] 종료 영향 분석 실패: {exc}')
+        impact = []
     report = {
         'mode': 'project', 'project_names': project_names,
         'run_at': datetime.now().isoformat(timespec='seconds'),
         'roster': roster, 'results': results,
         'candidates_considered': len(candidate_pool),
+        'impact': impact,
     }
     save_history(report)
     return report
@@ -613,9 +658,10 @@ def run_individual_search(researcher_ids: list, excluded_org_codes: list) -> dic
     except LLMError as exc:
         return {'error': f'후보 과제 임베딩 계산 실패: {exc}'}
 
+    ctx = _safe_context(expertise_profiles)
     workers = llm_client.batch_concurrency()
     tasks = [
-        (lambda rid=rid: recommend_for_researcher(rid, expertise_profiles, pool_by_own_org[own_norm_by_rid[rid]]))
+        (lambda rid=rid: recommend_for_researcher(rid, expertise_profiles, pool_by_own_org[own_norm_by_rid[rid]], ctx))
         for rid in researcher_ids
     ]
     task_results = llm_client.run_concurrent(tasks, max_workers=workers) if tasks else []
@@ -650,6 +696,9 @@ def _format_picks(picks: list) -> str:
     for i, r in enumerate(picks, start=1):
         line = (f"{i}. {r.get('project_name', '')} ({r.get('dep_name', '')}) "
                 f"- A: {_pct(r.get('score_a'))}, B: {_pct(r.get('score_b'))}")
+        filled = ((r.get('gap') or {}).get('filled')) or []
+        if filled:
+            line += '\n   갭 충족: ' + ', '.join(f['competency'] for f in filled)
         reason = (r.get('reason') or '').strip()
         if reason:
             line += f'\n   사유: {reason}'
