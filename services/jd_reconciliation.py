@@ -70,7 +70,7 @@ def list_project_names() -> list:
     과제 목록, process_project_expertise.py가 분석하는 것과 동일한 과제명
     체계)의 project_name. 파일이 없으면(process_project_confl.py 미실행)
     빈 리스트."""
-    projects_df = data_store.read_processed('project_confl_address')
+    projects_df = fit.current_rows(data_store.read_processed('project_confl_address'))
     if projects_df.empty or 'project_name' not in projects_df.columns:
         return []
     return sorted({str(v).strip() for v in projects_df['project_name'] if str(v).strip()})
@@ -101,7 +101,8 @@ def get_project_members(project_name: str) -> list:
     태그/공백 없음)는 표기 형식이 달라 fit.normalize_org_code()로 정규화한
     뒤 비교한다(process_project_expertise.py의 _resolve_personnel()과 동일한
     정규화 기준 공유)."""
-    researchers_df = data_store.read_processed('researchers')
+    # 현재(최신 인력현황, is_current=Y) 소속자만 — 예전에 이 과제였던 퇴직·전배자 제외(2026-10-13)
+    researchers_df = fit.current_rows(data_store.read_processed('researchers'))
     if researchers_df.empty:
         return []
     # 과제별컨플에 비공식소속부서명이 있으면 과제명 대신 그 값으로 매칭(2026-10-13)

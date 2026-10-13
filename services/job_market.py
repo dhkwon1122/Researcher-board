@@ -140,7 +140,7 @@ def list_projects_by_levels(l1=None, l2=None) -> list:
     선택 조직의 비공식소속부서명과 같거나, 과제명이 선택 조직의 3단계부서명과 같음(대괄호 꼬리표·공백 무시).
     아무것도 고르지 않으면 전체(팀/리더 참조에 없는 과제 포함)."""
     from services import similarity_map as sm
-    projects_df = data_store.read_processed('project_confl_address')
+    projects_df = fit.current_rows(data_store.read_processed('project_confl_address'))
     if projects_df.empty or 'project_name' not in projects_df.columns:
         return []
     names = sorted({str(v).strip() for v in projects_df['project_name'] if str(v).strip()})
@@ -204,7 +204,7 @@ def _build_candidate_pool(excluded_norm: set, expertise_profiles: dict) -> dict:
     반환: {project_name(대표 표기): {'dep_name', 'a_text', 'a_embedding'(or None),
                                       'b_members': [(embedding, profile_text), ...]}}
     A/B 둘 다 없는 과제는 이 dict에 아예 포함하지 않는다(비교 근거 없음)."""
-    projects_df = data_store.read_processed('project_confl_address')
+    projects_df = fit.current_rows(data_store.read_processed('project_confl_address'))  # 최신 과제별컨플의 과제만 후보
     if projects_df.empty:
         return {}
     all_rows = _dedup_candidate_rows(projects_df)

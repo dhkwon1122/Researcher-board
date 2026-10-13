@@ -13902,3 +13902,11 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 ## (22) JOB Market 드롭다운을 팀/리더 참조 기준으로 (2026-10-13)
 - 예전: 부서 = 과제별컨플 "소속"(dep_name), 과제 = 과제별컨플 과제명(소속으로 좁힘). 다른 화면(프로필·명단·조직 분석)과 부서 표기가 달랐음.
 - 변경: 종료 예정 과제 / 제외할 과제 모두 플랫폼(1단계부서명) → 그룹(2단계부서명, 플랫폼으로 캐스케이딩) → 과제. 과제 목록 자체는 계속 과제별컨플 과제명(검색·후보 풀과 같은 목록)이고, `job_market.list_projects_by_levels()`가 선택 조직 소속 과제만 남김 — 과제의 매칭 키(비공식소속부서명 있으면 그 값)가 선택 조직의 비공식소속부서명과 같거나, 과제명이 선택 조직의 3단계부서명과 같으면(꼬리표·공백 무시) 포함. 필터를 바꿔도 이미 고른 과제는 유지. 플랫폼/그룹은 목록을 좁힐 뿐 결과에는 영향 없음(기존 원칙 유지). `list_departments`/`list_projects` 제거.
+
+## (23) 과제별컨플 is_current(Y/N) + 현재 기준 과제·과제원 (2026-10-13)
+- `process_project_confl.py`: 누적 저장은 유지하되, 가장 최근 업로드 파일에 있는 (소속, 과제명) 행은 `is_current=Y`, 예전 업로드에만 있던 행은 `N`으로 매번 다시 표시(인력현황 researchers.csv와 같은 방식, 기록 보존).
+- 공용 필터 `researcher_fit.current_rows(df)`(is_current != N, 열 없으면 그대로) 적용처:
+  - 과제(최신 과제별컨플만): JOB Market 종료 예정/제외 과제 드롭다운(`list_projects_by_levels`)과 후보 과제 풀(`_build_candidate_pool`), 과제 문서 분석 대상(`process_project_expertise._read_projects`), 유사 기업/학계 탐색, 조직 분석 "분석 결과가 없는 과제", 컨플 자동 반영 엑셀(처리 CSV 폴백), verify_outputs 과제 수, `jd.list_project_names`.
+  - 과제원(최신 인력현황 is_current=Y만): `jd.get_project_members`(JOB Market 과제 단위 대상·B 점수·갭/구성/협업자), 과제 문서 인력 → 연구원 매핑(`_resolve_personnel`). 과제별 필요 역량은 원래 현재 재직자만.
+- 과제원 매칭 키는 (20)과 같이 과제별컨플의 비공식소속부서명(없으면 과제명) → 최신 인력현황의 그 비공식소속부서명 소속 연구원.
+- 반영: 과제별컨플 재업로드(Y/N 표시가 이때 생김) → run_integration → DB 반영. 재업로드 전에는 is_current 열이 없어 기존처럼 전체가 현재로 취급됨.

@@ -77,7 +77,8 @@ def _read_projects() -> pd.DataFrame:
     path = os.path.join(OUT_DIR, 'project_confl_address.csv')
     if not os.path.exists(path):
         return pd.DataFrame()
-    return pd.read_csv(path, encoding='utf-8-sig', dtype=str).fillna('')
+    # 최신 과제별컨플에 있는 과제(is_current != N)만 분석 대상(2026-10-13)
+    return fit.current_rows(pd.read_csv(path, encoding='utf-8-sig', dtype=str).fillna(''))
 
 
 def _resolve_personnel(project_name: str, personnel: list, researchers_df: pd.DataFrame,
@@ -190,7 +191,8 @@ def process(force: bool = False, skip_confluence: bool = False) -> bool:
               '(process_project_confl.py 먼저 실행)')
         return False
 
-    researchers_df = fit.read_researchers(OUT_DIR)
+    # 과제 문서의 인력은 항상 현재(최신 인력현황) 소속자와만 매칭(2026-10-13)
+    researchers_df = fit.current_rows(fit.read_researchers(OUT_DIR))
     org_overrides = fit.project_org_overrides(projects)
 
     page_cache = project_summary.load_page_cache()

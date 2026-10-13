@@ -57,6 +57,15 @@ def normalize_org_code(text: str) -> str:
     return re.sub(r'\s+', '', s)
 
 
+def current_rows(df):
+    """is_current == 'N'인 행을 뺀다(열이 없으면 그대로) — 인력현황(researchers.csv)과 과제별컨플
+    (project_confl_address.csv) 모두 누적 저장 + 최신 업로드 여부 Y/N 표시 방식이라(2026-10-13)
+    "현재 기준"이 필요한 곳은 이 함수로 거른다."""
+    if df is None or getattr(df, 'empty', True) or 'is_current' not in df.columns:
+        return df
+    return df[df['is_current'].astype(str).str.upper() != 'N']
+
+
 def project_org_overrides(confl_df) -> dict:
     """과제별컨플의 "비공식소속부서명"(선택 열, project_confl_address.csv의 org_code) 매핑:
     normalize_org_code(과제명) -> 비공식소속부서명 원문. 값이 있는 행만 담는다(2026-10-13).

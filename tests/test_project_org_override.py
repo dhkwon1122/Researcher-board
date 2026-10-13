@@ -80,3 +80,40 @@ def test_job_market_projects_by_levels(monkeypatch):
     monkeypatch.setattr(sm, 'org_rows_for_levels', lambda l1, l2, l3: rows if (l1 or l2) else None)
     assert jm.list_projects_by_levels(None, None) == ['[연구] 발광소재 개발', '기타과제', '전지과제']
     assert jm.list_projects_by_levels(['P'], None) == ['[연구] 발광소재 개발', '전지과제']
+
+
+def test_confl_is_current_marking(tmp_path, monkeypatch):
+    """두 번 올리면: 두 번째 파일에 있는 행 Y, 첫 파일에만 있던 행 N(기록은 보존)."""
+    from pipeline import process_project_confl as pc
+    monkeypatch.setattr(pc, 'OUT_DIR', str(tmp_path / 'out'))
+    os.makedirs(tmp_path / 'out')
+
+    def upload(rows):
+        d = tmp_path / f'raw{len(rows)}'
+        os.makedirs(d, exist_ok=True)
+        monkeypatch.setattr(pc, 'resolve_excel', lambda raw_dir, name: str(d / name))
+        monkeypatch.setattr(pc, 'read_xlsx', lambda path: pd.DataFrame(rows))
+        (d / '과제별컨플.xlsx').write_bytes(b'x')
+        assert pc.process(raw_dir=str(d))
+        return pd.read_csv(tmp_path / 'out' / 'project_confl_address.csv', dtype=str).fillna('')
+
+    upload([{'소속': 'D', '과제명': '옛과제', '컨플 주소': '1'}, {'소속': 'D', '과제명': '유지과제', '컨플 주소': '2'}])
+    out = upload([{'소속': 'D', '과제명': '유지과제', '컨플 주소': '2'}, {'소속': 'D', '과제명': '새과제', '컨플 주소': '3'}])
+    flags = dict(zip(out['project_name'], out['is_current']))
+    assert flags == {'옛과제': 'N', '유지과제': 'Y', '새과제': 'Y'}
+    assert sorted(fit.current_rows(out)['project_name']) == ['새과제', '유지과제']
+
+
+def test_current_only_members_and_projects(monkeypatch):
+    from services import data_store as ds
+    from services import jd_reconciliation as jd
+    from services import job_market as jm
+    researchers = RESEARCHERS.assign(is_current=['Y', 'N', 'Y'])          # 을(전지과제)은 퇴직·전배
+    confl = CONFL.assign(is_current=['Y', 'N'])                           # 전지과제는 과제별컨플에서 빠짐
+    tables = {'researchers': researchers, 'project_confl_address': confl}
+    monkeypatch.setattr(ds, 'read_processed', lambda name, **k: tables.get(name, pd.DataFrame()))
+    jd._ORG_OVERRIDE_CACHE['ts'] = 0.0
+    assert jd.get_project_members('전지과제') == []                         # 현재 소속자만
+    assert [m['researcher_id'] for m in jd.get_project_members('[연구] 발광소재 개발')] == ['00000001']
+    assert jm.list_projects_by_levels(None, None) == ['[연구] 발광소재 개발']   # 최신 과제별컨플만
+    assert jd.list_project_names() == ['[연구] 발광소재 개발']

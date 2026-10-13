@@ -87,6 +87,8 @@ def check_files() -> list[tuple[str, str]]:
 
     analysis = _json('project_expertise_analysis.json')
     confl = _csv('project_confl_address')
+    if confl is not None and 'is_current' in confl.columns:   # 최신 과제별컨플 과제만(2026-10-13)
+        confl = confl[confl['is_current'].str.upper() != 'N']
     if analysis is not None and confl is not None:
         out.append(('OK' if len(analysis) >= len(confl) else 'WARN',
                     f'[과제 문서 분석] 과제 {len(confl)}건 중 분석 결과 {len(analysis)}건'

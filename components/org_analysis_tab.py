@@ -225,7 +225,8 @@ def _missing_projects(l1, l2) -> list:
     """과제별컨플에 등록됐지만 과제별 필요 역량 결과가 없는 과제 [(과제명, 소속, 사유)].
     플랫폼/그룹을 고르면 이름이 그 조직과 맞는 과제만."""
     from services.data_store import read_project_expertise_analysis
-    confl = read_processed('project_confl_address')
+    from pipeline.researcher_fit import current_rows
+    confl = current_rows(read_processed('project_confl_address'))
     if confl.empty or 'project_name' not in confl.columns:
         return []
     have = {i.get('project_name', '') for i in _gap_items()}

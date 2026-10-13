@@ -107,6 +107,8 @@ def _load_workbook_from_source():
 
     from services.data_store import read_processed
     df = read_processed('project_confl_address')
+    if df is not None and not df.empty and 'is_current' in df.columns:
+        df = df[df['is_current'].astype(str).str.upper() != 'N']   # 최신 과제별컨플 행만
     if df is not None and not df.empty:
         out = df.rename(columns={'dep_name': HEADER_DEP, 'project_name': HEADER_PROJECT,
                                  'confl_address': HEADER_ADDR, 'org_code': HEADER_ORG})

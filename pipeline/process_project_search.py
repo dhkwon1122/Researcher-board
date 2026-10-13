@@ -124,7 +124,10 @@ def _read_projects() -> pd.DataFrame:
     path = os.path.join(OUT_DIR, 'project_confl_address.csv')
     if not os.path.exists(path):
         return pd.DataFrame()
-    return pd.read_csv(path, encoding='utf-8-sig', dtype=str).fillna('')
+    df = pd.read_csv(path, encoding='utf-8-sig', dtype=str).fillna('')
+    if 'is_current' in df.columns:   # 최신 과제별컨플의 과제만(2026-10-13)
+        df = df[df['is_current'].str.upper() != 'N']
+    return df
 
 
 def _discovery_user_prompt(project_name: str, summary: dict) -> str:
