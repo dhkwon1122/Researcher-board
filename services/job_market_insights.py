@@ -10,11 +10,10 @@ services/job_market.py의 기존 추천(A: 과제 분석 유사도, B: 과제원
   A3 기존 협업자  — 후보 과제 현재 인원 중 최근 5년 공저·공동발명자 수(collaboration_edges.csv).
   A4 과제 구성    — 후보 과제의 시니어/주니어·주도형 구성과 이 사람이 보완인지.
   A5 근거         — 갭 충족 역량마다 이 사람의 가장 가까운 보유 항목.
-  B1 인력 요청    — 과제 기준 약한 역량별 비소속 적합자 + 과제 해제 임박/대기 표시.
   B2 일괄 배치    — 과제 종료 시 과제원 전원을 과제별 인원 상한 안에서 그리디 배정.
   B3 종료 영향    — 종료 과제 인원이 보유자의 절반 이상인 기술/강점(사내 보유 공백 위험).
   B4 육성 경로    — 참여 가능 과제가 없을 때 가장 가까운 과제의 부족 역량 + 멘토(과제원 상위 보유자).
-  B5 수요·공급    — 플랫폼(1단계부서명)별 곧 풀리는/대기 인원 vs 약한 역량.
+  (B1 인력 요청 / B5 수요·공급 탭은 2026-10-13 사용자 확정으로 제거.)
 
 평가(인사평가) 데이터는 추천 점수에 쓰지 않는다(전문성 적합도와 성과는 다른 축 — 섞으면 "비슷한
 사람"이 아니라 "평가 좋은 사람"이 위로 올라와 추천의 의미가 바뀐다). 화면에서 권한이 있는 사용자에게만
@@ -25,10 +24,8 @@ LLM을 새로 호출하지 않는다 — 임베딩만 사용(fit.cached_embed, �
 from __future__ import annotations
 
 import os
-import re
 import sys
 import threading
-from datetime import date, timedelta
 
 import numpy as np
 
@@ -345,109 +342,3 @@ def ending_impact(member_ids: list, holders_df=None, min_share: float = 0.5, lim
                         'remaining': len(holders) - len(inside), 'share': round(share, 2)})
     out.sort(key=lambda x: (-x['share'], x['remaining'], x['technology']))
     return out[:limit]
-
-
-# ─── B1 / B5: 해제 임박·대기 인원, 인력 요청, 수요·공급 ───────────────────────
-
-def _parse_date(v):
-    digits = re.sub(r'\D', '', str(v or ''))
-    if len(digits) >= 8:
-        try:
-            return date(int(digits[:4]), int(digits[4:6]), int(digits[6:8]))
-        except ValueError:
-            return None
-    return None
-
-
-def release_map(months: int = 6, tasks=None, today: date | None = None) -> dict:
-    """researcher_id -> {'status': 'soon'|'idle', 'date': 'YYYY-MM-DD'|''}.
-    soon = 진행 중 과제가 없고 가장 늦은 해제일이 오늘~N개월 이내(과제참여이력 해제일 기준),
-    idle = 진행 중 과제가 없고 마지막 해제일이 이미 지남(현재 과제 미참여). 진행 중(해제일 없음/미래 해제일이
-    N개월 넘음) 과제가 하나라도 있으면 포함하지 않는다."""
-    today = today or date.today()
-    limit = today + timedelta(days=int(months * 30.5))
-    if tasks is None:
-        tasks = data_store.read_processed('tasks')
-    if tasks is None or tasks.empty or 'researcher_id' not in tasks.columns:
-        return {}
-    out = {}
-    for rid, g in tasks.fillna('').groupby('researcher_id'):
-        ends = [_parse_date(v) for v in g['end_date']]
-        if any(e is None for e in ends) or any(e > limit for e in ends if e):
-            continue   # 진행 중(해제일 없음) 또는 N개월 이후까지 참여
-        last = max(ends)
-        out[str(rid).zfill(8)] = {'status': 'soon' if last >= today else 'idle', 'date': last.isoformat()}
-    return out
-
-
-def staffing_request(ctx: Context, project_name: str, months: int = 6, weak_only: bool = True,
-                     release: dict | None = None) -> dict | None:
-    """B1: 과제 기준 인력 요청 — 필요 역량별 과제원 최고 유사도와, 비소속 적합자(과제별 필요 역량의
-    outsiders 상위 10명)에 해제 임박/대기·시니어 여부·현재 소속을 붙인다. 해제 임박/대기를 먼저 정렬."""
-    item = ctx.gap_item(project_name)
-    if not item:
-        return None
-    release = release if release is not None else release_map(months)
-    rows = []
-    for c in item.get('competencies') or []:
-        members = sorted(c.get('members') or [], key=lambda m: -float(m.get('score', 0)))
-        best = members[0] if members else None
-        team_best = float(best.get('score', 0)) if best else 0.0
-        if weak_only and team_best >= WEAK_THRESHOLD:
-            continue
-        cands = []
-        for x in c.get('outsiders') or []:
-            rid = x.get('researcher_id', '')
-            rel = release.get(rid)
-            cands.append({'researcher_id': rid, 'name': ctx.name_map.get(rid, rid), 'score': x.get('score', 0),
-                          'org_code': ctx.org_map.get(rid, ''), 'tenure': ctx.tenure.get(rid, ''),
-                          'release': rel, 'reason': x.get('reason', ''), 'item': x.get('item', '')})
-        cands.sort(key=lambda d: (0 if d['release'] else 1, -float(d['score'] or 0)))
-        rows.append({'competency': c.get('competency', ''), 'description': c.get('description', ''),
-                     'team_best': round(team_best, 3),
-                     'team_best_name': ctx.name_map.get(best.get('researcher_id', ''), '') if best else '',
-                     'candidates': cands})
-    return {'project_name': item.get('project_name', project_name), 'rows': rows}
-
-
-def supply_demand(ctx: Context, months: int = 6, release: dict | None = None, level_of=None) -> list:
-    """B5: 플랫폼(1단계부서명)별 공급(해제 임박/대기 인원, Staff 제외) vs 수요(약한 필요 역량 수와 그런 과제 수).
-    과제의 플랫폼 = 분석된 과제원 과반의 플랫폼. level_of(org_code)->1단계명은 테스트용 주입."""
-    if level_of is None:
-        from services import similarity_map as sm
-        staff = sm.staff_org_codes()
-
-        def level_of(code):
-            return '' if code in staff else sm.org_code_level_names(code)[0]
-    cache: dict = {}
-
-    def _lv(code):
-        if code not in cache:
-            cache[code] = level_of(code) or ''
-        return cache[code]
-
-    release = release if release is not None else release_map(months)
-    table: dict = {}
-
-    def _row(p):
-        return table.setdefault(p, {'platform': p, 'soon': 0, 'idle': 0, 'weak_competencies': 0, 'weak_projects': 0})
-
-    for rid, rel in release.items():
-        p = _lv(ctx.org_map.get(rid, ''))
-        if p:
-            _row(p)[rel['status']] += 1
-    for item in ctx.gap_by_norm.values():
-        comps = item.get('competencies') or []
-        rids = [m.get('researcher_id') for c in comps for m in c.get('members') or []]
-        plats = [_lv(ctx.org_map.get(r, '')) for r in dict.fromkeys(rids) if r]
-        plats = [p for p in plats if p]
-        if not plats:
-            continue
-        p = max(set(plats), key=plats.count)
-        weak = sum(1 for c in comps
-                   if max((float(m.get('score', 0)) for m in c.get('members') or []), default=0.0) < WEAK_THRESHOLD)
-        if weak:
-            r = _row(p)
-            r['weak_competencies'] += weak
-            r['weak_projects'] += 1
-    return sorted(table.values(), key=lambda r: -(r['weak_competencies'] + r['soon'] + r['idle']))

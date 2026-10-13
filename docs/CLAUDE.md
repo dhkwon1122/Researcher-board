@@ -13890,3 +13890,4 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 단일 기준 `researcher_fit.project_org_overrides / project_member_key / project_org_code`를 모든 매칭 지점에 적용: `process_project_expertise._resolve_personnel`(과제 문서 인력 → 연구원), `jd_reconciliation.get_project_members`(30초 캐시; JOB Market 후보 과제 인원·과제 단위 검색), `process_project_competency_gap`(과제원·과제 내 담당 업무 인원·플랫폼/그룹/과제 단계, 결과에 `org_code` 저장), `job_market._build_candidate_pool`(본인 소속 과제 자동 제외가 표기 차이로 새지 않게 `member_key`도 비교), `org_analysis_tab._item_in_levels`(드롭다운 필터).
 - `confl_match`(하위 페이지 자동 반영 엑셀)가 처리된 CSV로 표를 만들 때도 이 열을 유지. 데이터 업데이트 화면 안내 문구 추가.
 - 반영: 과제별컨플 재업로드 → run_integration(과제 문서 분석의 인력 매칭, 과제별 필요 역량이 새 키로 다시 계산; 요약/역량 LLM은 캐시 재사용) → DB 반영.
+- (2026-10-13 추가) JOB Market "인력 요청(과제 기준)"·"수요·공급 현황" 탭 제거(사용자 확정, 화면을 탭 도입 이전 레이아웃으로 되돌림). `job_market_insights`의 release_map/staffing_request/supply_demand도 삭제. 재배치 추천의 A1~A5·일괄 배치·종료 영향·육성 경로는 유지.

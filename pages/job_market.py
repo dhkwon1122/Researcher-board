@@ -405,39 +405,6 @@ def _history_table():
     ], bordered=False, hover=True, size='sm', className='mb-0')
 
 
-_MONTH_OPTIONS = [{'label': f'{m}개월 이내', 'value': m} for m in (3, 6, 12)]
-
-
-def _request_tab():
-    """(B1) 인력 요청 — 과제를 고르면 약한 필요 역량별로 비소속 적합자를, 과제 해제 임박/대기 인원을 먼저 보여준다."""
-    names = sorted({i.get('project_name', '') for i in (jm.data_store.read_project_competency_gap() or [])} - {''})
-    return html.Div([
-        html.Div('과제의 필요 역량(과제별 필요 역량 분석) 중 과제원 최고 유사도가 0.75 미만인 약한 역량에 대해, '
-                 '과제 밖에서 그 역량을 가진 임직원을 보여줍니다. 참여 중인 과제가 곧 끝나거나(해제 임박) 현재 참여 '
-                 '과제가 없는(대기) 사람을 먼저 정렬합니다(과제참여이력 해제일 기준).', className='small text-muted mb-2'),
-        dbc.Row([
-            dbc.Col(dcc.Dropdown(id='jm-req-project', options=[{'label': n, 'value': n} for n in names],
-                                 placeholder='인력이 필요한 과제 선택'), md=6),
-            dbc.Col(dcc.Dropdown(id='jm-req-months', options=_MONTH_OPTIONS, value=6, clearable=False), md=3),
-            dbc.Col(dbc.Checkbox(id='jm-req-weak-only', value=True, label='약한 역량만'), md=3,
-                    className='d-flex align-items-center'),
-        ], className='g-2 mb-3'),
-        dcc.Loading(html.Div(id='jm-req-body')),
-    ], className='pt-3')
-
-
-def _supply_demand_tab():
-    """(B5) 플랫폼별 수요·공급 — 곧 풀리는/대기 인원 vs 약한 필요 역량."""
-    return html.Div([
-        html.Div('플랫폼(1단계부서명)별로 과제 참여가 곧 끝나는 인원(해제 임박)과 현재 참여 과제가 없는 인원(대기)을 '
-                 '공급으로, 과제별 필요 역량 중 과제원이 약한 역량 수를 수요로 비교합니다. 팀/리더 참조 구분이 '
-                 '"Staff"인 조직(하위 포함)은 제외합니다.', className='small text-muted mb-2'),
-        dbc.Row([dbc.Col(dcc.Dropdown(id='jm-sd-months', options=_MONTH_OPTIONS, value=6, clearable=False), md=3)],
-                className='g-2 mb-3'),
-        dcc.Loading(html.Div(id='jm-sd-body')),
-    ], className='pt-3')
-
-
 def layout(**_kwargs):
     department_options = [{'label': d, 'value': d} for d in jm.list_departments()]
     return html.Div([
@@ -451,72 +418,66 @@ def layout(**_kwargs):
             className='text-muted small mb-3',
         ),
 
-        dbc.Tabs([
-            dbc.Tab(html.Div([
-            dbc.RadioItems(
-                id='jm-mode', inline=True, value=_MODE_PROJECT,
-                options=[
-                    {'label': '종료 예정 과제 단위', 'value': _MODE_PROJECT},
-                    {'label': '개인별 검색', 'value': _MODE_INDIVIDUAL},
-                ],
-                className='mb-2',
-            ),
+        dbc.RadioItems(
+            id='jm-mode', inline=True, value=_MODE_PROJECT,
+            options=[
+                {'label': '종료 예정 과제 단위', 'value': _MODE_PROJECT},
+                {'label': '개인별 검색', 'value': _MODE_INDIVIDUAL},
+            ],
+            className='mb-2',
+        ),
 
-            html.Div(
-                dbc.Row([
-                    dbc.Col(dcc.Dropdown(id='jm-project-dept', options=department_options,
-                                          placeholder='부서(플랫폼/팀) 선택(복수 선택 가능)', multi=True), md=4),
-                    dbc.Col(dcc.Dropdown(id='jm-project-select', options=[],
-                                          placeholder='종료 예정 과제 선택(복수 선택 가능)', multi=True), md=8),
-                ], className='g-2 mb-2'),
-                id='jm-project-mode-row',
-            ),
-            html.Div([
-                dbc.Row([
-                    dbc.Col(dcc.Input(id='jm-individual-search-input', type='text', placeholder='이름 또는 사번 검색',
-                                       className='form-control'), md=9),
-                    dbc.Col(dbc.Button('찾기', id='jm-individual-search-btn', color='secondary',
-                                        n_clicks=0, className='w-100'), md=3),
-                ], className='g-2 mb-2'),
-                html.Div(id='jm-individual-candidates', className='mb-2'),
-                html.Div('선택된 대상자', className='fw-bold small mb-1'),
-                html.Div(id='jm-individual-selected-list',
-                          children=html.Div('선택된 대상자가 없습니다. 위에서 검색해 추가해주세요.',
-                                             className='text-muted small'),
-                          className='mb-2'),
-                dcc.Store(id='jm-individual-candidates-store', data=[]),
-                dcc.Store(id='jm-individual-selected-store', data=[]),
-            ], id='jm-individual-mode-row', style={'display': 'none'}),
-
-            html.Div('참여 가능한 과제에서 제외', className='fw-bold small mb-1 mt-2'),
-            html.Div(
-                '"제외할 과제"만 결과에 반영(부서는 결과에 영향 없음)',
-                className='small text-muted mb-1',
-            ),
+        html.Div(
             dbc.Row([
-                dbc.Col(dcc.Dropdown(id='jm-exclude-dept', options=department_options,
-                                      placeholder='부서', multi=True), md=6),
-                dbc.Col(dcc.Dropdown(id='jm-exclude-project', options=[],
-                                      placeholder='제외할 과제(복수 선택 가능)', multi=True), md=6),
-            ], className='g-2 mb-3'),
+                dbc.Col(dcc.Dropdown(id='jm-project-dept', options=department_options,
+                                      placeholder='부서(플랫폼/팀) 선택(복수 선택 가능)', multi=True), md=4),
+                dbc.Col(dcc.Dropdown(id='jm-project-select', options=[],
+                                      placeholder='종료 예정 과제 선택(복수 선택 가능)', multi=True), md=8),
+            ], className='g-2 mb-2'),
+            id='jm-project-mode-row',
+        ),
+        html.Div([
+            dbc.Row([
+                dbc.Col(dcc.Input(id='jm-individual-search-input', type='text', placeholder='이름 또는 사번 검색',
+                                   className='form-control'), md=9),
+                dbc.Col(dbc.Button('찾기', id='jm-individual-search-btn', color='secondary',
+                                    n_clicks=0, className='w-100'), md=3),
+            ], className='g-2 mb-2'),
+            html.Div(id='jm-individual-candidates', className='mb-2'),
+            html.Div('선택된 대상자', className='fw-bold small mb-1'),
+            html.Div(id='jm-individual-selected-list',
+                      children=html.Div('선택된 대상자가 없습니다. 위에서 검색해 추가해주세요.',
+                                         className='text-muted small'),
+                      className='mb-2'),
+            dcc.Store(id='jm-individual-candidates-store', data=[]),
+            dcc.Store(id='jm-individual-selected-store', data=[]),
+        ], id='jm-individual-mode-row', style={'display': 'none'}),
 
-            dbc.Button([html.I(className='bi bi-search me-1'), '검색'],
-                       id='jm-run-btn', color='primary', n_clicks=0, className='mb-3'),
+        html.Div('참여 가능한 과제에서 제외', className='fw-bold small mb-1 mt-2'),
+        html.Div(
+            '"제외할 과제"만 결과에 반영(부서는 결과에 영향 없음)',
+            className='small text-muted mb-1',
+        ),
+        dbc.Row([
+            dbc.Col(dcc.Dropdown(id='jm-exclude-dept', options=department_options,
+                                  placeholder='부서', multi=True), md=6),
+            dbc.Col(dcc.Dropdown(id='jm-exclude-project', options=[],
+                                  placeholder='제외할 과제(복수 선택 가능)', multi=True), md=6),
+        ], className='g-2 mb-3'),
 
-            dcc.Loading(html.Div(id='jm-result')),
-            dbc.Button([html.I(className='bi bi-file-earmark-excel me-1'), '재배치 가능 인원 엑셀 다운로드'],
-                       id='jm-excel-btn', color='success', outline=True, size='sm',
-                       className='mb-3', style={'display': 'none'}, n_clicks=0, disabled=True),
-            dcc.Download(id='jm-excel-download'),
-            dcc.Store(id='jm-result-store', data=None),
-            dcc.Store(id='jm-history-refresh', data=0),
-            html.Hr(),
-            html.H6('검색 이력', className='fw-bold mb-2'),
-            html.Div(id='jm-history-table', children=_history_table()),
-            ], className='pt-3'), label='재배치 추천', tab_id='jm-tab-redeploy'),
-            dbc.Tab(_request_tab(), label='인력 요청(과제 기준)', tab_id='jm-tab-request'),
-            dbc.Tab(_supply_demand_tab(), label='수요·공급 현황', tab_id='jm-tab-supply'),
-        ], id='jm-tabs', active_tab='jm-tab-redeploy'),
+        dbc.Button([html.I(className='bi bi-search me-1'), '검색'],
+                   id='jm-run-btn', color='primary', n_clicks=0, className='mb-3'),
+
+        dcc.Loading(html.Div(id='jm-result')),
+        dbc.Button([html.I(className='bi bi-file-earmark-excel me-1'), '재배치 가능 인원 엑셀 다운로드'],
+                   id='jm-excel-btn', color='success', outline=True, size='sm',
+                   className='mb-3', style={'display': 'none'}, n_clicks=0, disabled=True),
+        dcc.Download(id='jm-excel-download'),
+        dcc.Store(id='jm-result-store', data=None),
+        dcc.Store(id='jm-history-refresh', data=0),
+        html.Hr(),
+        html.H6('검색 이력', className='fw-bold mb-2'),
+        html.Div(id='jm-history-table', children=_history_table()),
     ], className='mb-3')
 
 
@@ -729,82 +690,3 @@ def _update_assignment(capacity, result):
     if not result:
         return dash.no_update
     return _assignment_view(result, int(capacity or 2))
-
-
-def _release_badge(rel):
-    if not rel:
-        return None
-    if rel['status'] == 'idle':
-        return dbc.Badge(f"대기(해제 {rel['date']})", color='success', className='ms-1')
-    return dbc.Badge(f"해제 임박 {rel['date']}", color='warning', text_color='dark', className='ms-1')
-
-
-@callback(
-    Output('jm-req-body', 'children'),
-    Input('jm-req-project', 'value'),
-    Input('jm-req-months', 'value'),
-    Input('jm-req-weak-only', 'value'),
-)
-def _request_body(project, months, weak_only):
-    if not project:
-        return html.Div('과제를 선택하세요.', className='text-muted small')
-    try:
-        ctx = jmi.Context(jm.data_store.read_expertise_profiles())
-        req = jmi.staffing_request(ctx, project, int(months or 6), bool(weak_only))
-    except Exception as exc:  # noqa: BLE001
-        return dbc.Alert(f'조회 중 오류: {exc}', color='danger')
-    if not req:
-        return html.Div('이 과제의 필요 역량 분석이 없습니다.', className='text-muted small')
-    if not req['rows']:
-        return html.Div('약한 필요 역량이 없습니다(과제원이 모든 필요 역량을 0.75 이상으로 보유).', className='text-muted small')
-    tenure = {'Senior': '시니어', 'Junior': '주니어'}
-    rows = []
-    for r in req['rows']:
-        cands = [html.Div([
-            html.Span(f"{c['name']} {float(c['score'] or 0):.2f}", className='fw-semibold',
-                      title=(c.get('reason') or c.get('item') or '')),
-            html.Span(f" · {c['org_code']}" + (f" · {tenure[c['tenure']]}" if c.get('tenure') in tenure else ''),
-                      className='text-muted'),
-            _release_badge(c.get('release')),
-        ], className='mb-1') for c in r['candidates']] or [html.Span('-', className='text-muted')]
-        rows.append(html.Tr([
-            html.Td([html.Div(r['competency'], className='fw-semibold'),
-                     html.Div(r.get('description') or '', className='text-muted', style={'fontSize': '0.7rem'})]),
-            html.Td(f"{r['team_best']:.2f}" + (f" ({r['team_best_name']})" if r['team_best_name'] else '')),
-            html.Td(cands),
-        ]))
-    return dbc.Table([html.Thead(html.Tr([html.Th('필요 역량', style={'width': '30%'}),
-                                          html.Th('과제 내 최고', style={'width': '15%'}),
-                                          html.Th('비소속 적합자(해제 임박·대기 우선)')])),
-                      html.Tbody(rows)], bordered=True, size='sm', style={'fontSize': '0.78rem'})
-
-
-@callback(
-    Output('jm-sd-body', 'children'),
-    Input('jm-sd-months', 'value'),
-)
-def _supply_demand_body(months):
-    import plotly.graph_objects as go
-    try:
-        ctx = jmi.Context(jm.data_store.read_expertise_profiles())
-        table = jmi.supply_demand(ctx, int(months or 6))
-    except Exception as exc:  # noqa: BLE001
-        return dbc.Alert(f'조회 중 오류: {exc}', color='danger')
-    if not table:
-        return html.Div('표시할 데이터가 없습니다(과제참여이력/과제별 필요 역량/팀 참조 확인).', className='text-muted small')
-    plats = [r['platform'] for r in table]
-    fig = go.Figure([
-        go.Bar(name='해제 임박', x=plats, y=[r['soon'] for r in table], marker_color='#faad14'),
-        go.Bar(name='대기', x=plats, y=[r['idle'] for r in table], marker_color='#52c41a'),
-        go.Bar(name='약한 필요 역량', x=plats, y=[r['weak_competencies'] for r in table], marker_color='#1677ff'),
-    ])
-    fig.update_layout(barmode='group', height=360, margin=dict(l=10, r=10, t=10, b=10),
-                      legend=dict(orientation='h', y=1.08), plot_bgcolor='white')
-    return html.Div([
-        dcc.Graph(figure=fig, config={'displaylogo': False}),
-        dbc.Table([html.Thead(html.Tr([html.Th('플랫폼'), html.Th('해제 임박'), html.Th('대기'),
-                                       html.Th('약한 필요 역량'), html.Th('약한 역량 있는 과제')])),
-                   html.Tbody([html.Tr([html.Td(r['platform']), html.Td(r['soon']), html.Td(r['idle']),
-                                        html.Td(r['weak_competencies']), html.Td(r['weak_projects'])]) for r in table])],
-                  bordered=True, size='sm', style={'fontSize': '0.8rem'}),
-    ])

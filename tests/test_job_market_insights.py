@@ -1,8 +1,6 @@
 """JOB Market 심화 지표(services/job_market_insights.py, 2026-10-13) — 합성 데이터로 검증."""
 import os
 import sys
-from datetime import date
-
 import numpy as np
 import pandas as pd
 
@@ -108,27 +106,6 @@ def test_ending_impact():
     rows = jmi.ending_impact(['00000001', '00000002'], holders)
     assert [r['technology'] for r in rows] == ['T1', 'T3']
     assert rows[0]['remaining'] == 0 and rows[0]['share'] == 1.0
-
-
-def test_release_map_and_request_and_supply(monkeypatch):
-    tasks = pd.DataFrame([
-        {'researcher_id': '00000001', 'end_date': '2026-11-30'},   # 해제 임박
-        {'researcher_id': '00000004', 'end_date': '2026-01-31'},   # 대기
-        {'researcher_id': '00000003', 'end_date': ''},             # 진행 중 → 제외
-        {'researcher_id': '00000002', 'end_date': '2027-12-31'},   # N개월 이후 → 제외
-    ])
-    rel = jmi.release_map(6, tasks, today=date(2026, 10, 13))
-    assert rel == {'00000001': {'status': 'soon', 'date': '2026-11-30'},
-                   '00000004': {'status': 'idle', 'date': '2026-01-31'}}
-    ctx = _ctx(monkeypatch, PROFILES, GAP)
-    req = jmi.staffing_request(ctx, 'X과제', release=rel)
-    assert [r['competency'] for r in req['rows']] == ['광학 설계']          # 약한 역량만
-    assert [c['name'] for c in req['rows'][0]['candidates']] == ['갑', '정']
-    assert req['rows'][0]['team_best_name'] == '을'
-    sd = jmi.supply_demand(ctx, release=rel, level_of=lambda code: {'P': '플랫폼A', 'X': '플랫폼B', 'Y': '플랫폼A'}.get(code, ''))
-    by = {r['platform']: r for r in sd}
-    assert by['플랫폼A']['soon'] == 1 and by['플랫폼A']['idle'] == 1
-    assert by['플랫폼B']['weak_competencies'] == 1 and by['플랫폼B']['weak_projects'] == 1
 
 
 def test_recommend_flow_and_render(monkeypatch):
