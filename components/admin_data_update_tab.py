@@ -463,6 +463,9 @@ def data_update_on_upload(all_contents, all_filenames, all_ids):
         contents_list, filenames_list = [raw_contents], [raw_filenames]
 
     slot = None if trig['slot'] == 'single' else trig['slot']
+    # 업로드 요청이 서버까지 왔는지 로그로 확인할 수 있게(2026-10-13 — "업로드가 안 됨" 진단용)
+    print(f"[data_update_on_upload] 수신: {trig['key']} / {filenames_list} "
+          f"/ {[len(c or '') for c in contents_list]}자(base64)", flush=True)
     ok_count, errors = 0, []
     for filename, contents in zip(filenames_list, contents_list):
         try:
@@ -484,6 +487,7 @@ def data_update_on_upload(all_contents, all_filenames, all_ids):
             continue
         ok_count += 1
 
+    print(f"[data_update_on_upload] 결과: {trig['key']} 성공 {ok_count}건, 실패 {errors}", flush=True)
     if ok_count and not errors:
         msg, color = f'{ok_count}개 파일 업로드 완료.' if ok_count > 1 else f'{filenames_list[0]} 업로드 완료.', 'success'
     elif ok_count and errors:
