@@ -541,13 +541,16 @@ navbar = dbc.Navbar(
         [
             dbc.Row(
                 [
+                    # 아이콘·브랜드명을 누르면 첫 화면(연구원 프로필, '/')으로 이동(2026-10-12 사용자 요청).
                     dbc.Col(
-                        html.I(className='bi bi-bar-chart-fill me-2',
-                               style={'fontSize': '1.4rem', 'color': '#1677ff'}),
+                        dcc.Link(html.I(className='bi bi-bar-chart-fill me-2',
+                                        style={'fontSize': '1.4rem', 'color': '#1677ff'}),
+                                 href='/', title='연구원 프로필로 이동'),
                         width='auto',
                     ),
                     dbc.Col(
-                        dbc.NavbarBrand(_brand_label(), className='fw-bold fs-5 mb-0'),
+                        dbc.NavbarBrand(_brand_label(), href='/', className='fw-bold fs-5 mb-0',
+                                        style={'cursor': 'pointer'}),
                         width='auto',
                     ),
                     dbc.Col(feedback_modal.render(), width='auto'),

@@ -13935,3 +13935,5 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - `pipeline/verify_outputs.py` 신설, `run_integration.py` 4/4 단계로 실행(단독 실행도 가능). 화면이 쓰는 산출물에 최신 필드가 실제로 있는지 파일·DB 양쪽을 확인해 [OK]/[WARN] 요약 — 협업(`recent_count`/`level1_*`/`level3_*` + 부서 매핑 건수), 기술별 보유자(`aliases` + 통합 건수), 과제별 필요 역량(`description`/근거 `reason` 비율), 과제 문서 분석 건수 vs 과제 수, 연구원 전문성 주력 분야 필드. DB가 있으면 테이블 열/`project_competency_gap` 설명 유무로 "파일은 새것인데 DB가 옛것"도 잡아낸다. 읽기만 함.
 - `process_project_expertise.py`: 결과 JSON을 이번 실행 성공분만으로 덮어써서, 원문 조회/요약에 실패한 과제(새 주소인데 Confluence 실패, `--skip-confluence` 등)가 통째로 빠지고 `project_personnel.csv`의 담당 업무 근거도 사라지던 문제 → 실패 시 직전 결과(과 그 인력 행)를 이어 씀. 요약 캐시(`project_summary_cache.json`, 키=컨플 주소)에 있는 과제는 원래대로 재조회 없이 재사용.
 - 참고(미변경): 원문 캐시(`project_page_cache.json`)는 주소 기준으로 만료가 없어, 같은 주소의 Confluence 문서 내용이 바뀌어도 자동으로 다시 읽지 않는다(`--refresh`도 요약만 다시 함).
+
+- (2026-10-12) 상단 네비게이션의 아이콘·"People in SAIT" 브랜드명을 누르면 연구원 프로필('/')로 이동(`app.py` navbar — NavbarBrand href='/', 아이콘은 dcc.Link). Playwright로 연구원 명단 화면에서 둘 다 클릭 → '/' 이동 확인.
