@@ -385,6 +385,7 @@ def _data_update_tab() -> html.Div:
     return html.Div([
         dcc.Download(id='data-update-download'),
         dcc.Interval(id='data-update-interval', interval=3000, disabled=not wpr.any_running()),
+        dcc.Store(id='data-update-sig', data=None),   # 상태 변경 감지값(가벼운 폴링 → 바뀔 때만 표 갱신)
 
         dbc.Alert(
             [
@@ -834,20 +835,35 @@ def data_update_db_load(n_clicks):
 
 
 # ── 콜백: 데이터 업데이트 — 진행 상황 폴링(브라우저를 새로 열어도 최신 상태) ────
+# 2026-10-14: 두 단계로 분리. ① 3초마다 가벼운 상태값(락 + 결과 파일 수정 시각)만 확인하고 ② 그 값이 바뀌었을
+# 때만 표·그리드를 다시 그린다. 예전엔 3초마다 무거운 갱신을 통째로 돌려, 서버에서(실행 중인 작업과 같은 프로세스라
+# 느려짐) 응답이 3초를 넘으면 Dash가 다음 틱 때 이전 응답을 버려 화면이 계속 안 바뀌고 새로고침해야만 반영됐다.
+@callback(
+    Output('data-update-sig', 'data'),
+    Output('data-update-interval', 'disabled', allow_duplicate=True),
+    Input('data-update-interval', 'n_intervals'),
+    State('data-update-sig', 'data'),
+    prevent_initial_call=True,
+)
+def data_update_status_tick(_n, prev_sig):
+    sig = wpr.status_signature()
+    running = bool(sig[0])
+    return (sig if sig != prev_sig else no_update), not running
+
+
 @callback(
     Output('data-update-table-container', 'children', allow_duplicate=True),
     Output('data-update-db-status', 'children', allow_duplicate=True),
-    Output('data-update-interval', 'disabled', allow_duplicate=True),
     Output('team-refer-upload-status', 'children', allow_duplicate=True),
     Output('exception-job-function-upload-status', 'children', allow_duplicate=True),
     Output('team-refer-table', 'rowData', allow_duplicate=True),
     Output('team-refer-hidden-rows', 'data', allow_duplicate=True),
     Output('team-refer-table', 'selectedRows', allow_duplicate=True),
-    Input('data-update-interval', 'n_intervals'),
+    Input('data-update-sig', 'data'),
     State('team-refer-highlight-date', 'data'),
     prevent_initial_call=True,
 )
-def data_update_poll(_n, highlight_date):
+def data_update_poll(_sig, highlight_date):
     team_refer_row = next((r for r in wpr.snapshot() if r['key'] == 'team_refer'), None)
     team_refer_status = _run_status_view(team_refer_row) if team_refer_row else no_update
     ejf_row = next((r for r in wpr.snapshot() if r['key'] == 'exception_job_function'), None)
@@ -868,7 +884,7 @@ def data_update_poll(_n, highlight_date):
     # 있음)에만, 이번 업로드 날짜와 다른 행("과거 데이터")을 색으로
     # 강조한다(_mark_stale_rows() 참고).
     grid_data = _mark_stale_rows(grid_data, highlight_date)
-    return (_data_update_table(), _db_status_view(), not wpr.any_running(),
+    return (_data_update_table(), _db_status_view(),
             team_refer_status, ejf_status, grid_data, hidden_rows, [])
 
 
