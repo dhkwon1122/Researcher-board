@@ -14049,3 +14049,28 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   수정: services/excel_text.excel_safe(openpyxl ILLEGAL_CHARACTERS_RE로 \x00~\x1f 중 탭/줄바꿈 외 제거)를
   연구원 명단 엑셀(researcher_profile_export), 유사도 맵 엑셀(similarity_map), JOB Market 엑셀(job_market)의 셀 쓰기에 적용.
   테스트: tests/test_excel_text.py (+ 특허 제목에 \x0b를 넣은 데이터로 build_profile_workbook 정상 생성 확인).
+
+## (32) 연구원 명단 엑셀 정렬·어학 만료일 (2026-10-14)
+- 본문 셀 정렬: 학력/과제수행이력/특허 실적/논문 실적만 왼쪽, 나머지 열은 가운데(가로·세로). `_LEFT_ALIGNED_HEADERS`.
+- 어학(services/language_qualification.format_lines): 1등급/1+등급/1++등급/S등급은 만료일 미표기
+  (엑셀·프로필 화면·인쇄 카드 공용 헬퍼라 모두 동일 적용).
+- 후속: CL/년차의 년차가 0(1년 미만)이면 1로 표기(position_years에서 max(1, …)). 유사도 시니어/주니어 판정(5 이상)에는 영향 없음.
+
+## (33) 엑셀 "직책"이 과거 직책을 보여주던 문제 (2026-10-14)
+- 직책 = 팀/리더 참조(team_refer)의 assignment_name(조직장급만 researcher_id가 채워짐).
+- 원인: 엑셀(researcher_profile_export)만 누적 team_refer 전체(과거 스냅샷 포함)를 읽고 그 사람의 첫 행을 써서,
+  예전에 조직장이었다가 지금은 아닌 사람도 직책이 표시됐다. 명단 화면(similarity_map.title_by_researcher_id)은 이미 현재 기준.
+- 수정: `_current_team_refer()` — read_team_refer()로 dep_id별 최신 스냅샷(삭제 조직 제외)만 사용. 테스트 tests/test_export_position_title.py.
+
+## (34) 연구원 명단 "추가 선택 항목" 라벨에서 "포함" 제거 (2026-10-14)
+- 예: "보유기술 포함" → "보유기술". 값(value)은 그대로라 엑셀 동작 변화 없음.
+
+## (35) 문구 정리·AI 검색 피드백 삭제·엑셀 반영 카드 정렬 (2026-10-14)
+- 연구원 명단 인쇄 안내: "프로필 인쇄 : 표에서 원하는 행 체크 시 해당 인원만, 체크가 없을 경우 전체를 인쇄".
+- AI 검색 피드백 기능 삭제: nl_query_bar의 👍/👎/개선 의견 UI·콜백 제거, 관리자 "AI 검색 로그" 탭의 피드백 표 제거,
+  nl_query_feedback.FEEDBACK_ENABLED=False(프롬프트 힌트 미주입), 기존 nl_query_feedback.csv는 purge_all_once()로
+  최초 1회 삭제(표시 파일 nl_query_feedback_purged.flag).
+- JOB Market: 설명 문구 "특정 과제 종료 가정시, 해당 과제원(복수, 개인)의 보유 전문성 기준으로 참여 가능한 타 과제 추천",
+  제외 섹션의 "제외할 과제만 결과에 반영…" 안내 삭제.
+- 팀/리더 참조·직군 예외자 카드: 제목 "엑셀 파일로 반영", 실행/다운로드 칸에 빈 제목 자리(nbsp)로 높이 맞춤,
+  "최종실행이력" → "실행결과"(데이터 업데이트 표와 같은 아이콘+상태+시각, 아래 메시지 2줄). admin_shared.run_status_line 공용.

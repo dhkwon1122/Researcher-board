@@ -20,7 +20,9 @@
   hire_date     : 근속 기준일_그룹입사일 (원본 YYYYMMDD → YYYY-MM-DD로 변환)
   tenure        : (오늘 - hire_date).days / 365, 소수 첫째자리 (표시 전용)
   promotion_date: 승격산정기준일자 (YYYY-MM-DD)
-  position_year : ceil((2027-03-01 - promotion_date).days / 365) (표시 전용)
+  position_year : floor((기준일 - promotion_date).days / 365), 최소 1 (표시 전용, CSV에는 저장 안 함)
+                  기준일 = 2027-03-01부터 오늘 이후 처음 오는 3월 1일. 계산은
+                  services/researcher_profile_export.position_years() 참고.
   valid_year    : 인원실적년도 (YYYY, 4자리)
   valid_month   : 인원실적월   (MM, 2자리 제로패딩)
   employment_status: 재직상태명 원본 그대로(휴직/재직/퇴직 등) — is_current(최신

@@ -14,7 +14,7 @@ import dash_bootstrap_components as dbc
 from dash import ALL, Input, Output, State, callback, dcc, html, no_update
 
 from components.admin_shared import (
-    _alert, _ensure_rid, _mark_stale_rows, _renumbered, _run_status_view, _split_hidden_rows,
+    _alert, _ensure_rid, _mark_stale_rows, _renumbered, _run_status_view, _split_hidden_rows, run_status_line,
     _STATUS_COLORS, _upload_box,
 )
 from services import confl_match, confl_tree, team_refer_store
@@ -143,24 +143,9 @@ def _data_update_row(row: dict) -> html.Tr:
 # 발동하지 않으므로 그대로 둬도 된다.
 _SHOW_API_COLUMN = False
 
-_STATUS_ICONS = {'성공': ('bi-check-circle-fill', '#52c41a'), '실패': ('bi-x-circle-fill', '#ff4d4f')}
-
-
 def _status_view(row: dict):
     """실행결과 = 상태 아이콘 + 상태 + 실행 시각(2026-10-13: 별도 "최종실행이력" 열을 없애고 여기로 합침)."""
-    status = row['status']
-    when = row.get('last_run_at') or ''
-    if status == '실행중':
-        return html.Span([html.I(className='bi bi-arrow-repeat me-1 du-spin'), '실행중'],
-                         className='du-status text-primary fw-semibold')
-    if not status:
-        return html.Span('실행 이력 없음', className='du-status text-muted')
-    icon, color = _STATUS_ICONS.get(status, ('bi-dash-circle', '#8c8c8c'))
-    return html.Span([
-        html.I(className=f'bi {icon} me-1', style={'color': color}),
-        html.Span(status, className='fw-semibold me-2', style={'color': color}),
-        html.Span(when, className='text-muted'),
-    ], className='du-status')
+    return run_status_line(row)
 
 
 _DATA_UPDATE_TABLE_COLSPAN = 6 + (1 if _SHOW_API_COLUMN else 0)

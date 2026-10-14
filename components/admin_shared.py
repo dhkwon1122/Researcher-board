@@ -128,26 +128,33 @@ def _split_hidden_rows(rows: list) -> tuple[list, list]:
     return visible, hidden
 
 
-def _run_status_view(row: dict):
-    """엑셀 업로드 섹션의 "최종실행이력/실행결과" 미니 표시 — 팀/리더 참조·
-    직군 예외자 탭의 초기 렌더와 데이터 업데이트 탭의 폴링 갱신
-    (data_update_poll)이 모두 공유한다(원래 이름 _team_refer_run_status_view
-    — 이름과 달리 처음부터 범용이었다, 2026-09-28 분할 리팩터링에서
-    admin_shared로 옮기며 이름도 실제 쓰임에 맞게 변경)."""
+_RUN_STATUS_ICONS = {'성공': ('bi-check-circle-fill', '#52c41a'), '실패': ('bi-x-circle-fill', '#ff4d4f')}
+
+
+def run_status_line(row: dict):
+    """실행결과 = 상태 아이콘 + 상태 + 실행 시각(2026-10-13, 데이터 업데이트 표). 팀/리더 참조·직군 예외자
+    카드도 같은 표시를 쓴다(2026-10-14)."""
     status = row['status']
-    status_badge = (
-        dbc.Badge([html.I(className='bi bi-arrow-repeat me-1'), '실행중'], color='info')
-        if status == '실행중'
-        else dbc.Badge(status or '-', color=_STATUS_COLORS.get(status, 'secondary'))
-    )
-    source = row.get('source', '')
-    source_badge = (
-        dbc.Badge(source, color='info' if source == 'API' else 'secondary',
-                  className='ms-1', style={'fontSize': '0.62rem'})
-        if source else None
-    )
+    when = row.get('last_run_at') or ''
+    if status == '실행중':
+        return html.Span([html.I(className='bi bi-arrow-repeat me-1 du-spin'), '실행중'],
+                         className='du-status text-primary fw-semibold')
+    if not status:
+        return html.Span('실행 이력 없음', className='du-status text-muted')
+    icon, color = _RUN_STATUS_ICONS.get(status, ('bi-dash-circle', '#8c8c8c'))
+    return html.Span([
+        html.I(className=f'bi {icon} me-1', style={'color': color}),
+        html.Span(status, className='fw-semibold me-2', style={'color': color}),
+        html.Span(when, className='text-muted'),
+    ], className='du-status')
+
+
+def _run_status_view(row: dict):
+    """엑셀 업로드 카드(팀/리더 참조·직군 예외자)의 "실행결과" 표시 — 초기 렌더와 데이터 업데이트 탭의
+    폴링 갱신(data_update_poll)이 공유한다. 2026-10-14: 데이터 업데이트 표와 같은 방식(아이콘+상태+시각,
+    그 아래 결과 메시지 최대 2줄)으로 통일 — 별도 "최종실행이력" 칸 없음."""
+    msg = row.get('message') or ''
     return html.Div([
-        html.Div([html.Span(row['last_run_at'] or '-', className='small'), source_badge]),
-        html.Div([status_badge, html.Span(row['message'], className='small text-muted ms-2',
-                                           title=row['message'])], className='mt-1'),
-    ])
+        run_status_line(row),
+        html.Div(msg, className='du-msg small text-muted mt-1', title=msg) if msg else None,
+    ], className='du-grid')

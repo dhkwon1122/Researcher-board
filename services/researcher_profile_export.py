@@ -102,7 +102,8 @@ def position_years(promotion_date: str) -> int | None:
         return None
     promo_dt = date.fromisoformat(promo[:10])
     ref = _next_promotion_ref_date(date.today())
-    return int(_floor1((ref - promo_dt).days / 365))
+    # 1년 미만(0년차)은 1년차로 표기한다(2026-10-14, 사용자 확정).
+    return max(1, int(_floor1((ref - promo_dt).days / 365)))
 
 
 def _load_tables() -> dict:
@@ -113,7 +114,7 @@ def _load_tables() -> dict:
         'tasks': data_store.read_processed('tasks'),
         'nurturing': data_store.read_processed('nurturing'),
         'incentive_selection': data_store.read_processed('incentive_selection'),
-        'team_refer': data_store.read_processed('team_refer'),
+        'team_refer': _current_team_refer(),
         'tech_ownership': data_store.read_processed('tech_ownership'),
         'patents': data_store.read_processed('patents'),
         'publications': data_store.read_processed('publications'),
@@ -123,6 +124,17 @@ def _load_tables() -> dict:
         'evaluation_exception': data_store.read_processed('evaluation_exception'),
         'expertise_profiles': data_store.read_expertise_profiles(),
     }
+
+
+def _current_team_refer() -> pd.DataFrame:
+    """팀/리더 참조의 "현재" 행만(dep_id별 최신 스냅샷, 삭제된 조직 제외) — 직책 열용(2026-10-14).
+    예전엔 누적된 team_refer 전체(과거 스냅샷 포함)를 읽어, 예전에 조직장이었다가 지금은 아닌 사람도
+    과거 행의 직책이 그대로 나왔다. 연구원 명단 화면의 직책(similarity_map.title_by_researcher_id)과 같은 기준."""
+    from pipeline.rd_specialist_markdown import read_team_refer
+    df = pd.DataFrame(read_team_refer(data_store.DATA_DIR))
+    if not df.empty and 'researcher_id' in df.columns:
+        df['researcher_id'] = [str(v).strip().zfill(8) if str(v).strip() else '' for v in df['researcher_id']]
+    return df
 
 
 def _rows_for(df, researcher_id: str):
@@ -495,6 +507,8 @@ def _col_work_experience(_rid, rows):
 
 
 _PATENT_COLUMNS = [('특허 실적', _col_patents)]
+# 본문 셀을 왼쪽 정렬로 두는 열(여러 줄 긴 목록) — 나머지는 가운데 정렬(2026-10-14, 사용자 확정).
+_LEFT_ALIGNED_HEADERS = {'학력', '과제수행이력', '특허 실적', '논문 실적'}
 _PUBLICATION_COLUMNS = [('논문 실적', _col_publications)]
 _JOB_FUNCTION_COLUMNS = [('직무', _col_job_function)]
 _JOB_PROFILE_COLUMNS = [('직무이력', _col_job_profile)]
@@ -849,7 +863,7 @@ def build_profile_workbook(
             cell = ws.cell(row=row_idx, column=col_idx, value=excel_safe(value))
             cell.font = body_font
             cell.border = _BORDER
-            cell.alignment = wrap_left
+            cell.alignment = wrap_left if _header in _LEFT_ALIGNED_HEADERS else wrap_center
 
     for col_idx, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(col_idx)].width = width

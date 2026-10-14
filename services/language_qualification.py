@@ -48,6 +48,9 @@ def _clean_date(val) -> str:
     return m.group(1) if m else s
 
 
+_NO_EXPIRY_GRADES = {'1등급', '1+등급', '1++등급', 'S등급'}
+
+
 def format_lines(rows: list[dict]) -> list[str]:
     """행 목록을 "{언어} {등급}(만료일 {날짜})" 문자열 리스트로 변환한다.
     만료일이 없으면 그 부분을 생략한다(예: "영어 2등급")."""
@@ -59,7 +62,8 @@ def format_lines(rows: list[dict]) -> list[str]:
             continue
         expiration = _clean_date(r.get('expiration_date'))
         line = f'{language} {grade}'
-        if expiration:
+        # 1등급/1+등급/1++등급/S등급은 만료일을 표기하지 않는다(2026-10-14, 사용자 확정 — 9999-12-31 등 무기한 값).
+        if expiration and grade.replace(' ', '') not in _NO_EXPIRY_GRADES:
             line += f'(만료일 {expiration})'
         lines.append(line)
     return lines
