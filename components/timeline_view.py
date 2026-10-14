@@ -41,6 +41,7 @@ from dash import ALL, MATCH, Input, Output, State, dcc, html
 from components.detail_tabs import patents_tab, publications_tab
 from components.profile_sections import tasks_block
 from components.timeline_data import (
+    PUBLICATION_GRADE_COLORS,
     dedupe_patents,
     hr_points,
     job_points,
@@ -352,18 +353,25 @@ def _task_expand_body(matched_pubs, matched_pats):
     if not matched_pubs and not matched_pats:
         return html.P('연결된 논문/특허 없음', className='empty',
                        style={'fontSize': '0.68rem', 'color': _LEGEND_NEUTRAL, 'margin': 0})
-    items = [
-        html.Div(f"{_ICONS['논문']} {_pub_pill_text(p)} · {p['title']}",
-                  style={'fontSize': '0.66rem', 'color': '#333', 'marginTop': '2px',
-                         'whiteSpace': 'normal', 'overflowWrap': 'break-word'})
-        for p in matched_pubs
-    ] + [
+    items = [_pub_expand_line(p) for p in matched_pubs] + [
         html.Div(f"{_ICONS['특허']} {_patent_pill_text(p)} · {p['title']}",
                   style={'fontSize': '0.66rem', 'color': '#333', 'marginTop': '2px',
                          'whiteSpace': 'normal', 'overflowWrap': 'break-word'})
         for p in matched_pats
     ]
     return html.Div(items)
+
+
+def _pub_expand_line(p):
+    """펼친 과제 안의 논문 한 줄. 등급구분이 최우수/우수면 등급 색 글씨(굵게)와 [등급] 표시(2026-10-14)."""
+    grade = p.get('grade') or ''
+    style = {'fontSize': '0.66rem', 'color': '#333', 'marginTop': '2px',
+             'whiteSpace': 'normal', 'overflowWrap': 'break-word'}
+    prefix = ''
+    if grade in ('최우수', '우수'):
+        style.update(color=PUBLICATION_GRADE_COLORS[grade], fontWeight=600)
+        prefix = f'[{grade}] '
+    return html.Div(f"{_ICONS['논문']} {prefix}{_pub_pill_text(p)} · {p['title']}", style=style)
 
 
 def _build_main_spine(tasks, jobs, hrs, pubs, pats, code_map, today, rid):

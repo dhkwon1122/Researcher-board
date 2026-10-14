@@ -5,37 +5,30 @@ import pandas as pd
 from dash import html
 
 from components.timeline_data import (
+    PUBLICATION_GRADE_COLORS,
     cell,
     dedupe_patents,
     is_registered,
     is_strategic_patent,
     patent_summary,
     patent_title,
+    publication_grade,
+    publication_if_label,
+    publication_priority_key,
+    publication_summary,
 )
 
 _LEGEND_NEUTRAL = '#8c8c8c'
 
 
-def publications_tab(pub_df, rid):
-    """연구원의 논문 실적 목록 (data/processed/publications.csv)."""
-    if pub_df.empty:
-        return html.Div('논문 데이터 없음', className='text-muted p-3')
+def _grade_badge(row):
+    g = publication_grade(row)
+    if not g:
+        return None
+    return dbc.Badge(g, className='me-1', style={'backgroundColor': PUBLICATION_GRADE_COLORS[g]})
 
-    sort_col = 'pub_date' if 'pub_date' in pub_df.columns else 'pub_year'
-    pub = pub_df[pub_df['researcher_id'] == rid].copy()
-    if pub.empty:
-        return html.Div('논문 실적 없음', className='text-muted p-3')
-    pub = pub.sort_values(sort_col, ascending=False)
 
-    total = len(pub)
-    corr_mask = pub['is_corresponding'].astype(str).str.lower().isin(['true', '1', 'y', 'yes'])
-    corr = int(corr_mask.sum())
-
-    summary = dbc.Row([
-        dbc.Col(_single_card(total, '총 논문 수', 'text-primary'), md=2),
-        dbc.Col(_single_card(corr, '교신저자', 'text-warning'), md=2),
-    ], className='mb-3 g-2')
-
+def _publication_rows(pub):
     rows = []
     for _, row in pub.iterrows():
         is_corr = str(row.get('is_corresponding', '')).lower() in ('true', '1', 'y', 'yes')
@@ -56,31 +49,66 @@ def publications_tab(pub_df, rid):
         if is_corr:
             badges.append(dbc.Badge('교신', color='warning', text_color='dark'))
 
+        grade_badge = _grade_badge(row)
         rows.append(html.Tr([
             html.Td(str(row.get('pub_year', '') or row.get('pub_date', ''))[:7],
                     className='small text-muted', style={'wordBreak': 'break-word'}),
+            html.Td(grade_badge or html.Span('-', className='text-muted small'), className='text-center'),
             html.Td(row.get('title', ''),
                     style={'wordBreak': 'break-word', 'fontSize': '0.82rem'}),
             html.Td(row.get('journal', ''), className='small text-muted',
                     style={'wordBreak': 'break-word'}),
+            html.Td(publication_if_label(row) or '-', className='small text-center'),
             html.Td(rank_total, className='small text-center', style={'wordBreak': 'break-word'}),
             html.Td(f'{contrib}%' if contrib and contrib not in ('nan', '') else '',
                     className='small text-center'),
             html.Td(html.Div(badges) if badges else '', style={'wordBreak': 'break-word'}),
         ]))
-
-    return html.Div([summary, dbc.Table([
+    return dbc.Table([
         html.Thead(html.Tr([
             html.Th('발표일', style={'width': '9%'}),
-            html.Th('제목', style={'width': '31%'}),
-            html.Th('게재처', style={'width': '20%'}),
-            html.Th('순위/총수', className='text-center', style={'width': '10%'}),
-            html.Th('기여도', className='text-center', style={'width': '10%'}),
-            html.Th('구분', style={'width': '20%'}),
+            html.Th('등급', className='text-center', style={'width': '8%'}),
+            html.Th('제목', style={'width': '29%'}),
+            html.Th('게재처', style={'width': '17%'}),
+            html.Th('IF', className='text-center', style={'width': '6%'}),
+            html.Th('순위/총수', className='text-center', style={'width': '9%'}),
+            html.Th('기여도', className='text-center', style={'width': '7%'}),
+            html.Th('구분', style={'width': '15%'}),
         ]), className='table-light'),
         html.Tbody(rows),
-    ], bordered=False, hover=True, size='sm',
-       style={'tableLayout': 'fixed', 'width': '100%'})])
+    ], bordered=False, hover=True, size='sm', style={'tableLayout': 'fixed', 'width': '100%'})
+
+
+def publications_tab(pub_df, rid):
+    """연구원의 논문 실적 목록 (data/processed/publications.csv).
+    2026-10-14: 등급구분 배지·IF 열, 요약 카드에 최우수/우수 건수·최고 IF, "대표순/최신순" 보기 전환
+    (대표순 = timeline_data.publication_priority_key: 등급 > 1저자·교신 > IF > 최신)."""
+    if pub_df.empty:
+        return html.Div('논문 데이터 없음', className='text-muted p-3')
+
+    sort_col = 'pub_date' if 'pub_date' in pub_df.columns else 'pub_year'
+    pub = pub_df[pub_df['researcher_id'] == rid].copy()
+    if pub.empty:
+        return html.Div('논문 실적 없음', className='text-muted p-3')
+    recent = pub.sort_values(sort_col, ascending=False, kind='stable')
+    rep = recent.assign(_k=recent.apply(publication_priority_key, axis=1)).sort_values('_k', kind='stable')
+
+    st = publication_summary(pub)
+    cards = [
+        dbc.Col(_single_card(st['total'], '총 논문 수', 'text-primary'), md=2),
+        dbc.Col(_single_card(st['corr'], '교신저자', 'text-warning'), md=2),
+    ]
+    if st['grade_counts']:
+        cards.append(dbc.Col(_single_card(st['grade_counts'].get('최우수', 0), '최우수', 'text-danger'), md=2))
+        cards.append(dbc.Col(_single_card(st['grade_counts'].get('우수', 0), '우수', 'text-warning'), md=2))
+    if st['max_if'] > 0:
+        cards.append(dbc.Col(_single_card(f"{st['max_if']:.1f}", '최고 IF', 'text-success'), md=2))
+    summary = dbc.Row(cards, className='mb-3 g-2')
+
+    return html.Div([summary, dbc.Tabs([
+        dbc.Tab(_publication_rows(rep), label='대표순', tab_id='rep'),
+        dbc.Tab(_publication_rows(recent), label='최신순', tab_id='recent'),
+    ], active_tab='rep', className='mb-2')])
 
 
 def strategic_badge(small: bool = True):

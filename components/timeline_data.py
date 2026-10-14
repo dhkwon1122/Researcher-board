@@ -138,6 +138,33 @@ def hr_points(hr_df):
 PUBLICATION_GRADE_ORDER = ['최우수', '우수', '일반', '외부']
 
 
+# 등급별 표시 색(2026-10-14): 배지·타임라인 필 공용. 일반/외부/-는 기본(회색 계열).
+PUBLICATION_GRADE_COLORS = {'최우수': '#cf1322', '우수': '#d46b08', '일반': '#595959', '외부': '#8c8c8c'}
+
+
+def publication_grade(row) -> str:
+    """표시용 등급(최우수/우수/일반/외부) — 그 외/빈 값은 ''."""
+    g = str(row.get('grade_publication', '') or '').strip() if row is not None else ''
+    return g if g in PUBLICATION_GRADE_ORDER else ''
+
+
+def publication_if_label(row) -> str:
+    f = _as_float(row.get('impact_factor')) if row is not None else 0.0
+    return f'{f:.1f}' if f > 0 else ''
+
+
+def publication_summary(pub_df) -> dict:
+    """{'total','corr','grade_counts':{등급:건수},'max_if':float} — 화면 요약 카드·인쇄 1페이지 요약 공용."""
+    if pub_df is None or pub_df.empty:
+        return {'total': 0, 'corr': 0, 'grade_counts': {}, 'max_if': 0.0}
+    corr = int(pub_df.get('is_corresponding', pd.Series(dtype=str)).astype(str).str.lower()
+               .isin(['true', '1', 'y', 'yes']).sum())
+    grades = pub_df.get('grade_publication', pd.Series(dtype=str)).astype(str).str.strip()
+    counts = {g: int((grades == g).sum()) for g in PUBLICATION_GRADE_ORDER if (grades == g).any()}
+    ifs = [_as_float(v) for v in pub_df.get('impact_factor', pd.Series(dtype=str))]
+    return {'total': len(pub_df), 'corr': corr, 'grade_counts': counts, 'max_if': max(ifs) if ifs else 0.0}
+
+
 def publication_grade_rank(grade) -> int:
     g = str(grade or '').strip()
     return PUBLICATION_GRADE_ORDER.index(g) if g in PUBLICATION_GRADE_ORDER else len(PUBLICATION_GRADE_ORDER)
@@ -182,6 +209,7 @@ def pub_points(pub_df):
             'contribution': clean(row.get('contribution', '')),
             'project_name': clean(row.get('project_name', '')),
             'project_code': clean(row.get('project_code', '')),
+            'grade': publication_grade(row),
         })
     points.sort(key=lambda p: p['date'])
     return points

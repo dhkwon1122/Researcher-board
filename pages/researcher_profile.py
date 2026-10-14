@@ -889,10 +889,16 @@ def _print_publication_summary(pub_df, rid):
     pub = pub_df[pub_df['researcher_id'] == rid] if not pub_df.empty else pub_df
     if pub is None or pub.empty:
         return html.Div('없음', className='small', style={'marginLeft': '10px'})
-    total = len(pub)
-    corr = int(pub.get('is_corresponding', pd.Series(dtype=str)).astype(str).str.lower()
-               .isin(['true', '1', 'y', 'yes']).sum())
-    return html.Div(f'{total}건 (교신저자 {corr}건)', className='small', style={'marginLeft': '10px'})
+    # 2026-10-14: 등급(최우수·우수)·최고 IF도 함께 — 예: "12건 (교신저자 3건, 최우수 2·우수 4, 최고 IF 15.2)"
+    from components.timeline_data import publication_summary
+    st = publication_summary(pub)
+    parts = [f"교신저자 {st['corr']}건"]
+    grades = '·'.join(f'{g} {st["grade_counts"][g]}' for g in ('최우수', '우수') if st['grade_counts'].get(g))
+    if grades:
+        parts.append(grades)
+    if st['max_if'] > 0:
+        parts.append(f"최고 IF {st['max_if']:.1f}")
+    return html.Div(f"{st['total']}건 ({', '.join(parts)})", className='small', style={'marginLeft': '10px'})
 
 
 def _print_patent_summary(pat_df, rid):
