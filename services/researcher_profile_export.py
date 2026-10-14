@@ -25,6 +25,7 @@ from services import language_qualification as language_qual
 from services import work_experience as work_exp
 from services.task_history import merge_task_rows, task_year
 from services.task_history import sort_key as _task_sort_key
+from services.excel_text import excel_safe
 
 _FONT_NAME = '바탕체'
 _FONT_SIZE = 11
@@ -845,7 +846,7 @@ def build_profile_workbook(
                                        org_code_dep_code_map, evaluation_exception_ids)
         for col_idx, (_header, fn) in enumerate(columns, start=1):
             value = fn(rid, ctx)
-            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell = ws.cell(row=row_idx, column=col_idx, value=excel_safe(value))
             cell.font = body_font
             cell.border = _BORDER
             cell.alignment = wrap_left

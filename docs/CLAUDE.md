@@ -14045,3 +14045,7 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 로컬(샘플 50명, 추가 항목 12개 전부, 팝오버 열린 채 엑셀 버튼 클릭 포함)에서는 정상 다운로드 — 서버 데이터에서만 나는 예외로 추정.
 - download_excel이 요청/완료 로그(`[researcher_list] 엑셀 요청/완료`)를 남기고, 예외는 traceback을 로그에 찍은 뒤
   버튼 아래(list-excel-msg)에 "엑셀 생성 실패: 오류명"을 표시. 대상 0명도 안내(예전엔 무반응).
+- 원인 확인(서버 로그): openpyxl IllegalCharacterError — 특허 제목("2026-01 : P-G 특허 …")에 엑셀 금지 제어문자.
+  수정: services/excel_text.excel_safe(openpyxl ILLEGAL_CHARACTERS_RE로 \x00~\x1f 중 탭/줄바꿈 외 제거)를
+  연구원 명단 엑셀(researcher_profile_export), 유사도 맵 엑셀(similarity_map), JOB Market 엑셀(job_market)의 셀 쓰기에 적용.
+  테스트: tests/test_excel_text.py (+ 특허 제목에 \x0b를 넣은 데이터로 build_profile_workbook 정상 생성 확인).
