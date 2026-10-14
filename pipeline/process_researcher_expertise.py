@@ -137,7 +137,10 @@ HR 담당자와 R&D 부서장이 이 연구원이 "실제로 어떤 일을 해�
    비중(6년 이전 수준)으로 보세요. 출력에 회사명을 그대로 쓰지 마세요.
    [양성 이력](박사과정·위탁교육 등)은 해당 전공·분야의 학술적 지식 근거로
    domain_knowledge_skill에 반영할 수 있습니다.
-10. 반드시 아래 JSON 형식으로만 출력하고, 그 외 텍스트는 출력하지 마세요.
+10. [논문] 항목의 "등급"(최우수 > 우수 > 일반 > 외부)과 IF(Impact Factor)는 논문의 질을 나타냅니다.
+   같은 시기라면 최우수·우수 등급이거나 IF가 높은 논문의 분야를 strength_fields/strength_keywords에
+   더 강한 근거로 보고, 일반·외부 등급 논문 한두 건만으로 강점을 정하지 마세요.
+11. 반드시 아래 JSON 형식으로만 출력하고, 그 외 텍스트는 출력하지 마세요.
 
 # Output Format (JSON)
 {
@@ -433,6 +436,12 @@ def _publications_text(pub_rows: pd.DataFrame, journal_authority: dict, ref_date
         is_corr = str(r.get('is_corresponding', '')).strip().lower() in ('true', 'o', 'y', '1')
         label = _recency_label(_parse_date(year) or _parse_date(r.get('pub_date')), ref_date)
         line = f'- {label + " " if label else ""}{title} ({year}, {journal or "-"}), 저자유형: {author_type or "-"}, 교신저자: {"O" if is_corr else "X"}'
+        grade = _clean(r.get('grade_publication'))   # 등급구분·IF(2026-10-14, 있을 때만)
+        if grade and grade != '-':
+            line += f', 등급: {grade}'
+        impact = _clean(r.get('impact_factor'))
+        if impact:
+            line += f', IF: {impact}'
         authority = journal_authority.get(journal, '')
         if authority:
             line += f'\n  저널 권위도: {authority}'

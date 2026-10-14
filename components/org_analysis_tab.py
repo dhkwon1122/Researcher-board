@@ -328,7 +328,44 @@ def competency_gap_section() -> html.Div:
                                            html.Div(id='org-gap-detail')]))
 
 
+# ── 부서별 논문 등급(2026-10-14) ──────────────────────────────────────────────
+
+def publication_grade_section() -> html.Div:
+    title = '부서/과제별 논문 등급 (최근 5년)'
+    hint = ('현재 재직 연구원의 최근 5년 논문을 등급구분(최우수 > 우수 > 일반 > 외부)별로 세어 부서(1단계부서명) 또는 '
+            '과제(3단계부서명) 단위로 비교합니다. 같은 단위의 공저자가 같은 논문을 각자 올린 경우는 1건으로 셉니다. '
+            '최우수·우수가 많은 순으로 정렬되며, 표에는 전체 단위가 조직코드 순으로 나옵니다.')
+    controls = dbc.Row([
+        dbc.Col([dbc.Label('기준', className='small fw-semibold text-muted mb-1'),
+                 dbc.RadioItems(id='org-pubgrade-level', value='level1', inline=True,
+                                options=[{'label': '부서(1단계부서명)', 'value': 'level1'},
+                                         {'label': '과제(3단계부서명)', 'value': 'level3'}])], md=6),
+    ], className='g-2 mb-3')
+    return _section(title, hint, html.Div([controls, html.Div(id='org-pubgrade-body')]))
+
+
+@callback(Output('org-pubgrade-body', 'children'), Input('org-pubgrade-level', 'value'))
+def _pubgrade_body(level):
+    from services import publication_quality as pq
+    df = pq.grade_counts(level or 'level1')
+    fig = pq.grade_figure(df)
+    if fig is None:
+        return _empty('표시할 논문 등급 데이터가 없습니다(논문 원천에 "등급구분" 열 반영 후 데이터 업데이트 필요).')
+    th = {'textAlign': 'center', 'verticalAlign': 'middle', 'fontWeight': 700, 'color': '#000'}
+    table = dbc.Table([
+        html.Thead(html.Tr([html.Th(c if c != 'unit' else ('부서' if level != 'level3' else '과제'), style=th)
+                            for c in df.columns])),
+        html.Tbody([html.Tr([html.Td(v, style={'textAlign': 'left' if i == 0 else 'center'})
+                             for i, v in enumerate(r)]) for r in df.itertuples(index=False)]),
+    ], bordered=True, size='sm', className='mb-0', style={'fontSize': '0.78rem'})
+    return dbc.Row([
+        dbc.Col(dcc.Graph(figure=fig, config={'displaylogo': False}), lg=7),
+        dbc.Col(html.Div(table, style={'maxHeight': '520px', 'overflowY': 'auto'}), lg=5),
+    ], className='g-3')
+
+
 def org_analysis_content() -> html.Div:
     tabs = [dbc.Tab(competency_gap_section(), label='과제별 필요 역량', tab_id='org-sub-gap'),
-            dbc.Tab(collaboration_section(), label='부서/과제간 협업', tab_id='org-sub-collab')]
+            dbc.Tab(collaboration_section(), label='부서/과제간 협업', tab_id='org-sub-collab'),
+            dbc.Tab(publication_grade_section(), label='부서별 논문 등급', tab_id='org-sub-pubgrade')]
     return dbc.Tabs(tabs, id='org-sub-tabs', active_tab='org-sub-gap', className='mt-2')
