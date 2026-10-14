@@ -376,13 +376,13 @@ def can(permission: str) -> bool:
 
 
 def can_view_succession_plan() -> bool:
-    """리포팅 > 석세션 플랜(pages/org_comparison.py) 접근 가능 여부 — 사용자
+    """업무 시나리오 > 석세션 플랜(pages/org_comparison.py) 접근 가능 여부 — 사용자
     요청: "임원조직 담당자만 조회 가능한 석세션 플랜". can()의 4개 세부
     권한과 달리 config/auth_config.py의 SUCCESSION_PLAN_ROLES(고정 role
     집합)로만 판단한다 — is_admin도, 계정별 permissions 오버라이드도
     적용하지 않는다(이 화면 전용으로 명시적으로 고정해 달라는 요청이라,
     다른 권한처럼 "사용자/권한 관리" 탭에서 개별 계정에 풀어줄 수 있는
-    대상이 아님). app.py의 네비게이션 바(리포팅 메뉴 노출 여부)와
+    대상이 아님). app.py의 네비게이션 바(업무 시나리오 > 석세션 플랜 메뉴 노출 여부)와
     pages/org_comparison.py의 layout() 둘 다 반드시 이 함수로 판정해야
     한다 — 메뉴만 숨기고 layout()에서 재확인하지 않으면 URL을 직접 입력해
     우회할 수 있다."""

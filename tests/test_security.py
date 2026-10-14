@@ -32,7 +32,7 @@ def test_ai_tables_require_authentication():
 
 
 def test_succession_plan_restricted_to_executive_org_role():
-    """리포팅 > 석세션 플랜은 ROLE_PERMISSIONS의 4개 세부 권한과 달리
+    """업무 시나리오 > 석세션 플랜은 ROLE_PERMISSIONS의 4개 세부 권한과 달리
     executive_org 역할에만 고정 허용된다(사용자 요청 — "임원조직
     담당자만 조회 가능한 석세션 플랜"). is_admin이나 계정별 permissions
     오버라이드로는 풀리지 않는다는 것까지 함께 확인한다."""
