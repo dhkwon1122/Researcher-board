@@ -13953,3 +13953,7 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 후속(같은 날): 서버 점검 결과 파일·DB 모두 10행 전부 중복(5구간×2) 확인, 화면은 (1)로 정상화됨.
   _drop_stale_task_rows가 사번을 8자리로 맞춰 비교하도록 보강(앞자리 0 표기 차이로 옛 행이 남는 경우 대비).
   check_task_rows.py가 중복 행끼리 값이 다른 열(task_name/researcher_id 등)을 출력해 원인을 바로 보여준다.
+
+## (29) 엑셀 학력 칸: 고교는 전공 미표기 (2026-10-14)
+- services/researcher_profile_export._degree_line: 고교 줄은 `고)학교명`만(예전 `고)학교명 -`).
+  엑셀 "학력" 칸(_col_education)과 최종학력 1건 표기(_highest_degree_str — 과제원 명단 등) 공용.

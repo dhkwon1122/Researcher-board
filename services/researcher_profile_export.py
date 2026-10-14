@@ -208,10 +208,7 @@ def _col_education(_rid, rows):
         e = by_degree.get(deg)
         if not e:
             continue
-        code = _DEGREE_CODE_FULL[deg]
-        school = _or_dash(e.get('school'))
-        major = _or_dash(e.get('major'))
-        lines.append(f'{code}){school} {major}')
+        lines.append(_degree_line(deg, e))
     return '\n'.join(lines) if lines else '-'
 
 
@@ -639,10 +636,17 @@ def _highest_degree_str(education_rows: list) -> str:
     e = highest_degree_row(education_rows)
     if not e:
         return '-'
-    code = _DEGREE_CODE_FULL[_s(e.get('degree'))]
+    return _degree_line(_s(e.get('degree')), e)
+
+
+def _degree_line(deg: str, e: dict) -> str:
+    """'학)○○대학교 전자공학' 형식 한 줄. 고교는 전공을 표기하지 않는다(2026-10-14, 사용자 확정 —
+    전공이 없어 '고)○○고등학교 -'처럼 '-'만 붙던 문제)."""
+    code = _DEGREE_CODE_FULL[deg]
     school = _or_dash(e.get('school'))
-    major = _or_dash(e.get('major'))
-    return f'{code}){school} {major}'
+    if deg == '고교':
+        return f'{code}){school}'
+    return f'{code}){school} {_or_dash(e.get("major"))}'
 
 
 def person_base_table(researcher_ids: list) -> dict:
