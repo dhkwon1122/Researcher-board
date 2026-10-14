@@ -14007,3 +14007,15 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 논문: 원천 선택 열 등급구분→grade_publication, Impact Factor→impact_factor. 대표 논문 정렬
   timeline_data.publication_priority_key = 등급(최우수>우수>일반>외부>-) > 1저자·교신 > IF 내림차순 > 최신.
   프로필 인쇄 2페이지 논문 상세표에 "등급" 열 추가(IF 열은 기존). 테스트 tests/test_publication_grade.py.
+
+## (37) 논문 등급/IF 활용 확대 + 협업 그래프 부서 색 (2026-10-14)
+- 논문 탭(detail_tabs.publications_tab): 등급 배지·IF 열, 요약 카드(최우수·우수 건수, 최고 IF), "대표순/최신순" 탭.
+- 인쇄 1페이지 요약: "N건 (교신저자 M건, 최우수 a·우수 b, 최고 IF x)". 엑셀 "논문 실적": 대표순 + [등급]·IF 표기.
+- 타임라인: 펼친 과제 안 논문 줄 — 최우수(빨강)·우수(주황) 색 글씨 + [등급]. 공용 색/요약 함수는 timeline_data
+  (PUBLICATION_GRADE_COLORS, publication_summary 등).
+- 분석: 전문성 LLM 입력에 논문 등급·IF + 지침 10(우수 논문 분야를 더 강한 근거로). JOB Market 관련 실적(C2)은
+  최우수 +0.05·우수 +0.03 가산(정렬은 가산값, 표시는 1.0 상한), 종류 표시 "논문(최우수)".
+  조직 분석 하위 탭 "부서별 논문 등급"(services/publication_quality.py): 최근 5년, 부서/과제 기준, 같은 단위 공저 중복 제외.
+- 협업 그래프: 부서별 12색(DEPT_PALETTE). 과제 기준은 sm.level1_of_level3()로 과제→1단계부서 묶음 — 같은 부서끼리
+  붙여 배치, 부서 색 계열의 밝기 차이로 과제 구분, 네트워크 바깥 호 + 부서명, 히트맵 위 부서 색 띠·부서명·경계선,
+  축 이름도 부서 색. 제외 1단계 부서명에 "Ideation Factory T/F(SAIT)" 추가(대소문자·공백 무시, 하위 포함).

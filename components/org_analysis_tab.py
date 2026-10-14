@@ -44,7 +44,9 @@ def collaboration_section() -> html.Div:
     title = '부서/과제간 협업 (최근 5년 논문 공저·특허 공동발명)'
     hint = ('같은 논문 공저자 또는 같은 특허 공동발명자인 현재 재직 연구원 쌍을 협업 1건으로 보고, 현재 소속 기준으로 '
             '부서(1단계부서명) 간 / 과제(3단계부서명) 간으로 합산합니다. 최근 5년(올해 포함) 건만, 같은 단위 안의 협업과 '
-            '팀/리더 참조 구분이 "Staff"인 조직(하위 조직 포함)과 1단계 부서명이 "SAIT"인 조직은 제외. 순서는 조직코드 순, 노드에 마우스를 올리면 협업 건수. '
+            '팀/리더 참조 구분이 "Staff"인 조직(하위 조직 포함)과 1단계 부서명이 "SAIT"·"Ideation Factory T/F(SAIT)"인 '
+            '조직(하위 포함)은 제외. 부서마다 색이 다르고, 과제 기준에서는 과제가 소속 부서 색 계열로 칠해지며 '
+            '네트워크 바깥 띠·히트맵 위쪽 띠에 부서명이 표시됩니다. 순서는 조직코드 순, 노드에 마우스를 올리면 협업 건수. '
             '네트워크 그래프는 선이 굵을수록 협업이 많고, 히트맵은 진할수록 많습니다(마우스 오버로 건수 확인).')
     edges = read_processed('collaboration_edges')
     if edges.empty:
@@ -75,8 +77,10 @@ def _collab_body(level, top_n):
     from services import similarity_map as sm
     # 네트워크 원형 배치·히트맵 X/Y축 순서 = 팀/리더 참조 조직코드(dep_code) 순(드롭다운과 같은 기준)
     order = [o['value'] for o in sm.level_filter_options(3 if level == 'level3' else 1)]
-    net = cg.network_figure(pairs, int(top_n or 20), order=order)
-    heat = cg.heatmap_figure(pairs, int(top_n or 20), order=order)
+    # 과제 기준이면 과제→1단계부서명으로 묶어 부서 색 계열 + 바깥 부서 띠(2026-10-14)
+    group_of = sm.level1_of_level3() if level == 'level3' else None
+    net = cg.network_figure(pairs, int(top_n or 20), order=order, group_of=group_of)
+    heat = cg.heatmap_figure(pairs, int(top_n or 20), order=order, group_of=group_of)
     if net is None or heat is None:
         return _empty(f'표시할 {unit} 간 협업이 없습니다(최근 5년, 현재 소속 기준).')
     return dbc.Row([

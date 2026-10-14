@@ -552,6 +552,17 @@ def org_codes_for_levels(l1=None, l2=None, l3=None, period: tuple | None = None)
     return codes
 
 
+def level1_of_level3(period: tuple | None = None) -> dict:
+    """3단계부서명(과제) → 1단계부서명(부서) — 협업 그래프에서 과제를 소속 부서 색으로 묶을 때(2026-10-14).
+    같은 3단계 이름이 여러 1단계에 있으면 조직코드가 앞선 쪽."""
+    out: dict = {}
+    for r in sorted(_org_rows(period), key=lambda r: str(r.get('dep_code') or '')):
+        l3, l1 = _cell(r, 3), _cell(r, 1)
+        if l3 and l1:
+            out.setdefault(l3, l1)
+    return out
+
+
 def org_rows_for_levels(l1=None, l2=None, l3=None, period: tuple | None = None) -> list | None:
     """선택된 1/2/3단계 부서명에 해당하는 팀/리더 참조 행(org_name_wd 있는 행) 목록.
     아무것도 선택하지 않았으면 None(필터 없음). org_codes_for_levels()와 같은 기준이되, 이름 칸까지

@@ -25,7 +25,9 @@ def test_staff_org_codes_includes_descendants(monkeypatch):
 def test_graph_order_and_hover():
     pairs = {('B', 'C'): 3, ('A', 'B'): 1, ('A', 'C'): 5}
     heat = cg.heatmap_figure(pairs, order=['C', 'A', 'B'])
-    assert list(heat.data[0].x) == ['C', 'A', 'B'] and list(heat.data[0].y) == ['C', 'A', 'B']
+    import re as _re
+    labels = [_re.sub(r'<[^>]+>', '', t) for t in heat.layout.xaxis.ticktext]   # 축 라벨은 부서 색 글씨(2026-10-14)
+    assert labels == ['C', 'A', 'B'] and list(heat.layout.yaxis.ticktext) == list(heat.layout.xaxis.ticktext)
     net = cg.network_figure(pairs, order=['C', 'A', 'B'])
     node = net.data[-1]
     assert [c[0] for c in node.customdata] == ['C', 'A', 'B']
@@ -82,3 +84,20 @@ def test_aggregate_excludes_sait_level1():
     ])
     assert aggregate(edges, 'level1') == {('A플랫폼', 'B플랫폼'): 3}
     assert aggregate(edges, 'level3') == {('a', 'b'): 3}
+
+
+def test_project_graph_groups_by_department_with_outer_ring():
+    """과제 기준: 같은 부서 과제끼리 붙여 배치, 같은 부서 계열 색, 바깥 부서 띠·히트맵 위 부서명(2026-10-14)."""
+    import re as _re
+    pairs = {('p1', 'q1'): 3, ('p2', 'q1'): 2, ('p1', 'p2'): 1}
+    group_of = {'p1': '부서P', 'p2': '부서P', 'q1': '부서Q'}
+    net = cg.network_figure(pairs, order=['p1', 'q1', 'p2'], group_of=group_of)
+    node = net.data[-1]
+    assert [c[0] for c in node.customdata] == ['p1', 'p2', 'q1']
+    colors = list(node.marker.color)
+    assert colors[0] != colors[1] and colors[0][:3] != colors[2][:3] or colors[0] != colors[2]
+    assert {a.text for a in net.layout.annotations} == {'<b>부서P</b>', '<b>부서Q</b>'}
+    heat = cg.heatmap_figure(pairs, order=['p1', 'q1', 'p2'], group_of=group_of)
+    assert [_re.sub(r'<[^>]+>', '', t) for t in heat.layout.xaxis.ticktext] == ['p1', 'p2', 'q1']
+    assert {a.text for a in heat.layout.annotations} == {'<b>부서P</b>', '<b>부서Q</b>'}
+    assert cg.is_excluded_level1(' ideation factory T/F (SAIT) ') and cg.is_excluded_level1('sait')
