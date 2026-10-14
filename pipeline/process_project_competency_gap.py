@@ -75,13 +75,15 @@ _SYSTEM_PROMPT = """# Role
 2. 각 역량의 name은 "무엇을 할 수 있어야 하는가"가 드러나는 짧은 명사구로 쓰세요
    (예: "SLAM 알고리즘 설계", "배터리 양극재 합성", "FPGA 하드웨어 가속").
    "소통 능력" 같은 일반 역량은 넣지 마세요.
-3. 각 역량의 description은 비전공자도 이해할 수 있게 1~2문장으로 쉽게 설명하세요
-   (전문 용어는 풀어 쓰고, 이 과제에서 왜 필요한지를 포함).
+3. 각 역량의 description은 비전공자도 이해할 수 있는 쉬운 말의 개조식 2~3개 항목(배열)으로 쓰세요.
+   항목 하나는 25자 안팎의 짧은 구(예: "빛을 내는 신소재를 직접 합성", "과제 목표 소재 개발에 필수")로,
+   "~함/~임" 같은 서술형 문장 대신 명사형으로 끝내세요. 전문 용어는 풀어 쓰고,
+   무엇을 하는 역량인지 + 이 과제에서 왜 필요한지를 포함하세요.
 4. 문서 근거가 부족하면 개수를 줄이세요(지어내지 마세요).
 5. 반드시 아래 JSON 형식으로만 출력하세요.
 
 # Output Format (JSON)
-{"required_competencies": [{"name": "역량1", "description": "쉬운 설명"}]}
+{"required_competencies": [{"name": "역량1", "description": ["쉬운 설명 항목1", "항목2"]}]}
 """
 
 _EVIDENCE_SYSTEM_PROMPT = """# Role
@@ -90,12 +92,13 @@ _EVIDENCE_SYSTEM_PROMPT = """# Role
 
 # Guidelines
 1. 후보자마다 왜 이 필요 역량을 갖췄다고 볼 수 있는지(또는 어느 부분이 가까운지)를
-   보유 항목에 근거해 1문장(60자 안팎)으로 쓰세요. 항목에 없는 내용을 지어내지 마세요.
-2. 유사도가 낮으면(0.5 미만) "관련성이 낮음"을 솔직히 밝히세요.
+   보유 항목에 근거해 쉬운 말의 개조식 1~3개 항목(배열, 항목당 30자 안팎의 명사형 짧은 구)으로 쓰세요.
+   항목에 없는 내용을 지어내지 마세요.
+2. 유사도가 낮으면(0.5 미만) "관련성 낮음"을 항목으로 솔직히 밝히세요.
 3. 후보자는 idx(번호)로만 식별합니다. 반드시 아래 JSON 형식으로만 출력하세요.
 
 # Output Format (JSON)
-{"evidence": [{"idx": 0, "reason": "근거 한 문장"}]}
+{"evidence": [{"idx": 0, "reason": ["근거 항목1", "근거 항목2"]}]}
 """
 
 
@@ -137,9 +140,21 @@ def _project_text(item: dict) -> str:
     return '\n\n'.join(parts)
 
 
+def _bullets(value) -> str:
+    """LLM이 준 개조식 항목(배열, 또는 문자열)을 줄바꿈으로 이은 문자열로. 앞의 '-', '•' 등 기호는 떼고
+    화면이 항목 기호를 붙인다(2026-10-14)."""
+    if isinstance(value, (list, tuple)):
+        items = [str(x) for x in value]
+    else:
+        items = str(value or '').split('\n')
+    items = [i.strip().lstrip('-•·*▪ ').strip() for i in items]
+    return '\n'.join(i for i in items if i)
+
+
 def _required_competencies(text: str, cache: dict, refresh: bool) -> list | None:
-    """[{'name','description'}, ...]. 캐시 키는 v2 접두(설명 포함 형식)."""
-    key = 'v2:' + hashlib.sha256(text.encode('utf-8')).hexdigest()
+    """[{'name','description'}, ...]. 캐시 키는 v3 접두(2026-10-14: 설명을 개조식 항목으로 — description은
+    항목을 줄바꿈으로 이은 문자열)."""
+    key = 'v3:' + hashlib.sha256(text.encode('utf-8')).hexdigest()
     if not refresh and key in cache:
         return cache[key]
     raw = call_llm(f'아래는 한 R&D 과제 문서의 분석 요약입니다.\n\n{text}', _SYSTEM_PROMPT,
@@ -153,7 +168,7 @@ def _required_competencies(text: str, cache: dict, refresh: bool) -> list | None
     values, seen = [], set()
     for v in data.get('required_competencies') or []:
         if isinstance(v, dict):
-            name, desc = str(v.get('name') or '').strip(), str(v.get('description') or '').strip()
+            name, desc = str(v.get('name') or '').strip(), _bullets(v.get('description'))
         else:
             name, desc = str(v).strip(), ''
         if name and name not in seen:
@@ -279,7 +294,7 @@ def _evidence_task(comp: str, desc: str, persons: list, cache: dict):
         its = '; '.join(f"{t['item']}({t['score']:.2f})" for t in p.get('top_items') or [])
         lines.append(f'[{i}] {its or "(보유 항목 없음)"}')
     prompt = (f'필요 역량: {comp}\n설명: {desc}\n\n후보자별 가까운 보유 항목(유사도):\n' + '\n'.join(lines))
-    key = hashlib.sha256(prompt.encode('utf-8')).hexdigest()
+    key = 'v2:' + hashlib.sha256(prompt.encode('utf-8')).hexdigest()   # v2: 근거를 개조식 항목으로(2026-10-14)
     if key in cache:
         return cache[key]
     raw = call_llm(prompt, _EVIDENCE_SYSTEM_PROMPT, temperature=0.1, max_tokens=3000)
@@ -292,7 +307,7 @@ def _evidence_task(comp: str, desc: str, persons: list, cache: dict):
     out = {}
     for e in data.get('evidence') or []:
         try:
-            out[int(e.get('idx'))] = str(e.get('reason') or '').strip()
+            out[int(e.get('idx'))] = _bullets(e.get('reason'))
         except (TypeError, ValueError):
             continue
     cache[key] = {str(k): v for k, v in out.items()}

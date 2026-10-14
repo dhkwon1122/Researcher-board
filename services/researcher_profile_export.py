@@ -18,7 +18,10 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, Side
 from openpyxl.utils import get_column_letter
 
-from components.timeline_data import dedupe_patents, is_strategic_patent, job_points, patent_title
+from components.timeline_data import (
+    dedupe_patents, is_strategic_patent, job_points, patent_title, publication_grade, publication_if_label,
+    publication_priority_key,
+)
 from pipeline.excel_reader import clean_str as _s
 from services import auth, data_store, evaluations
 from services import language_qualification as language_qual
@@ -436,17 +439,23 @@ def _col_patents(_rid, rows):
 
 def _col_publications(_rid, rows):
     """논문 실적 — components/detail_tabs.py의 publications_tab()과 동일하게
-    pub_date(없으면 pub_year) 내림차순으로 "발표일 : 제목 (게재처, 순위/총수,
-    기여도%, 교신)"를 한 셀에 줄바꿈 나열."""
+    대표 논문 순(등급 > 1저자·교신 > IF > 최신)으로 "발표일 : [등급] 제목 (게재처 IF, 순위/총수,
+    기여도%, 교신)"를 한 셀에 줄바꿈 나열(2026-10-14 — 예전엔 최신순)."""
     items = rows.get('publications') or []
     if not items:
         return '-'
+    # 2026-10-14: 대표 논문 순(등급 > 1저자·교신 > IF > 최신)으로 정렬하고, 줄 앞에 [등급], 괄호 안에 IF 표기
     items = sorted(items, key=lambda p: _s(p.get('pub_date')) or _s(p.get('pub_year')), reverse=True)
+    items = sorted(items, key=publication_priority_key)
     lines = []
     for p in items:
         date = (_s(p.get('pub_date')) or _s(p.get('pub_year')))[:7] or '-'
         title = _s(p.get('title')) or '-'
-        journal = _s(p.get('journal'))
+        grade = publication_grade(p)
+        if grade:
+            title = f'[{grade}] {title}'
+        if_label = publication_if_label(p)
+        journal = _s(p.get('journal')) + (f' IF {if_label}' if if_label else '')
         rank, total = _s(p.get('author_rank')), _s(p.get('total_authors'))
         rank_total = f'{rank}/{total}' if rank and total else ''
         contrib = _s(p.get('contribution'))

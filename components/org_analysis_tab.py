@@ -44,7 +44,9 @@ def collaboration_section() -> html.Div:
     title = '부서/과제간 협업 (최근 5년 논문 공저·특허 공동발명)'
     hint = ('같은 논문 공저자 또는 같은 특허 공동발명자인 현재 재직 연구원 쌍을 협업 1건으로 보고, 현재 소속 기준으로 '
             '부서(1단계부서명) 간 / 과제(3단계부서명) 간으로 합산합니다. 최근 5년(올해 포함) 건만, 같은 단위 안의 협업과 '
-            '팀/리더 참조 구분이 "Staff"인 조직(하위 조직 포함)은 제외. 순서는 조직코드 순, 노드에 마우스를 올리면 협업 건수. '
+            '팀/리더 참조 구분이 "Staff"인 조직(하위 조직 포함)과 1단계 부서명이 "SAIT"·"Ideation Factory T/F(SAIT)"인 '
+            '조직(하위 포함)은 제외. 부서마다 색이 다르고, 과제 기준에서는 과제가 소속 부서 색 계열로 칠해지며 '
+            '네트워크 바깥 띠·히트맵 위쪽 띠에 부서명이 표시됩니다. 순서는 조직코드 순, 노드에 마우스를 올리면 협업 건수. '
             '네트워크 그래프는 선이 굵을수록 협업이 많고, 히트맵은 진할수록 많습니다(마우스 오버로 건수 확인).')
     edges = read_processed('collaboration_edges')
     if edges.empty:
@@ -75,16 +77,80 @@ def _collab_body(level, top_n):
     from services import similarity_map as sm
     # 네트워크 원형 배치·히트맵 X/Y축 순서 = 팀/리더 참조 조직코드(dep_code) 순(드롭다운과 같은 기준)
     order = [o['value'] for o in sm.level_filter_options(3 if level == 'level3' else 1)]
-    net = cg.network_figure(pairs, int(top_n or 20), order=order)
-    heat = cg.heatmap_figure(pairs, int(top_n or 20), order=order)
+    # 과제 기준이면 과제→1단계부서명으로 묶어 부서 색 계열 + 바깥 부서 띠(2026-10-14)
+    group_of = sm.level1_of_level3() if level == 'level3' else None
+    net = cg.network_figure(pairs, int(top_n or 20), order=order, group_of=group_of)
+    heat = cg.heatmap_figure(pairs, int(top_n or 20), order=order, group_of=group_of)
     if net is None or heat is None:
         return _empty(f'표시할 {unit} 간 협업이 없습니다(최근 5년, 현재 소속 기준).')
-    return dbc.Row([
+    graphs = dbc.Row([
         dbc.Col([html.Div(f'{unit} 간 협업 네트워크', className='small text-muted mb-1'),
                  dcc.Graph(figure=net, config={'displaylogo': False})], lg=6),
         dbc.Col([html.Div(f'{unit} 간 협업 히트맵', className='small text-muted mb-1'),
                  dcc.Graph(figure=heat, config={'displaylogo': False})], lg=6),
     ], className='g-3')
+    return html.Div([graphs, _collab_summary_card(level or 'level1')])
+
+
+def _pair_line(r: dict, extra: str = '') -> str:
+    kinds = ' · '.join(x for x in (f"논문 {r['papers']}" if r.get('papers') else '',
+                                   f"특허 {r['patents']}" if r.get('patents') else '') if x)
+    return f"{r['a']} ↔ {r['b']} ({kinds or str(r.get('total', 0)) + '건'}{extra})"
+
+
+def _collab_summary_card(level: str):
+    """AI 협업 요약(pipeline/process_collab_summary.py 산출물, 2026-10-14). 없으면 안내만."""
+    from services.data_store import read_collab_summary
+    s = read_collab_summary().get(level)
+    unit = '부서' if level != 'level3' else '과제'
+    if not s:
+        return html.Div(_empty('AI 협업 요약이 아직 없습니다 — 분석 실행(run_integration) 후 표시됩니다.'), className='mt-3')
+    li = lambda items: html.Ul([html.Li(x) for x in items], className='mb-2 ps-3')  # noqa: E731
+    top = []
+    for r in s.get('top_pairs') or []:
+        grade = f", 최우수·우수 {r['top_grade']}" if r.get('top_grade') else ''
+        names = '·'.join(r.get('people') or [])
+        if r.get('people_more'):
+            names += f" 외 {r['people_more']}명"
+        top.append(html.Li([
+            html.Span(_pair_line(r, grade), className='fw-semibold'),
+            html.Span(f" — 주제: {', '.join(r['topics'])}" if r.get('topics') else ''),
+            html.Span(f' / 참여: {names}' if names else '', className='text-muted'),
+        ]))
+    facts = []
+    if s.get('hubs'):
+        facts.append('허브 ' + unit + ': ' + ', '.join(f"{h['unit']}(상대 {h['partners']}곳·{h['docs']}건)" for h in s['hubs']))
+    if s.get('low'):
+        facts.append(f'협업이 적은 {unit}: ' + ', '.join(s['low']))
+    if s.get('new_pairs'):
+        facts.append('최근 2년 새로 생긴 협업: ' + ', '.join(f"{r['a']} ↔ {r['b']}" for r in s['new_pairs']))
+    if s.get('rising'):
+        facts.append('최근 늘어난 협업: ' + ', '.join(f"{r['a']} ↔ {r['b']}(최근2년 {r['recent']}·이전3년 {r['prior']})"
+                                               for r in s['rising']))
+    if s.get('falling'):
+        facts.append('최근 줄어든 협업: ' + ', '.join(f"{r['a']} ↔ {r['b']}(최근2년 {r['recent']}·이전3년 {r['prior']})"
+                                               for r in s['falling']))
+    facts.append(f"협업 유형: 논문 {s.get('papers', 0)}건 · 특허 {s.get('patents', 0)}건 "
+                 f"({'논문' if s.get('papers', 0) >= s.get('patents', 0) else '특허'} 중심)")
+    if s.get('top_grade_pairs'):
+        facts.append('최우수·우수 논문 공동 성과: ' + ', '.join(f"{r['a']} ↔ {r['b']}({r['top_grade']}편)"
+                                                    for r in s['top_grade_pairs']))
+    head = html.Div([
+        html.I(className='bi bi-stars me-1 text-primary'),
+        html.Span(f'AI 협업 요약 — {unit} 기준', className='fw-semibold'),
+        html.Span(f" (최근 5년 {s.get('period', '')}, 생성 {s.get('generated_at', '')}"
+                  + ('' if s.get('llm') else ', AI 응답 없어 통계 기반') + ')', className='text-muted small ms-1'),
+    ], className='mb-2')
+    return dbc.Card(dbc.CardBody([
+        head,
+        html.Div('총평', className='small fw-semibold text-muted'), li(s.get('overview') or []),
+        html.Div(f'협업 상위 {unit} 쌍', className='small fw-semibold text-muted'),
+        html.Ul(top, className='mb-2 ps-3') if top else _empty('협업 쌍 없음'),
+        html.Div('세부 현황', className='small fw-semibold text-muted'), li(facts),
+        html.Div('건수는 서로 다른 논문·특허 수 기준(위 그래프는 연구원 쌍 기준이라 숫자가 다를 수 있음). '
+                 'AI에는 이름 없이 부서/과제명·제목·건수만 전달되며, 참여자 이름은 데이터에서 직접 표시합니다.',
+                 className='text-muted', style={'fontSize': '0.7rem'}),
+    ], style={'fontSize': '0.8rem'}), className='mt-3 shadow-sm')
 
 
 # ── 과제별 역량(2026-10-08 개편) ────────────────────────────────────────────────
@@ -121,8 +187,8 @@ def _evidence_text(x: dict) -> str:
     items = '; '.join(f"{t.get('item', '')}({float(t.get('score', 0)):.2f})" for t in x.get('top_items') or []) \
         or str(x.get('item') or '')
     lines = []
-    if reason:
-        lines.append(f'근거: {reason}')
+    if reason:   # 개조식 항목(줄바꿈 구분, 2026-10-14)
+        lines.append('근거:\n' + '\n'.join(f'· {r}' for r in reason.split('\n') if r.strip()))
     lines.append(f'가까운 보유 항목: {items}' if items else '')
     return '\n'.join(l for l in lines if l)
 
@@ -143,6 +209,14 @@ def _score_color(score: float) -> str:
     return 'success' if score >= 0.75 else 'primary' if score >= 0.5 else 'warning' if score >= 0.25 else 'secondary'
 
 
+def _bullet_list(text):
+    """개조식 설명(줄바꿈 구분)을 글머리 목록으로. 예전 서술형(한 줄)은 그 한 줄을 그대로 한 항목으로."""
+    lines = [ln.strip() for ln in str(text or '').split('\n') if ln.strip()]
+    if not lines:
+        return None
+    return html.Ul([html.Li(ln) for ln in lines], className='mb-0 ps-3')
+
+
 def _competency_table(item: dict) -> html.Div:
     name_map, org_map = _name_map(), _org_map()
     rows = []
@@ -160,16 +234,21 @@ def _competency_table(item: dict) -> html.Div:
                            style={'verticalAlign': 'top'})
         rows.append(html.Tr([
             html.Td(html.Div(c.get('competency', ''), className='fw-semibold'), style={'verticalAlign': 'top'}),
-            html.Td(c.get('description') or html.Span('(설명 없음 — 분석 재실행 필요)', className='text-muted'),
+            html.Td(_bullet_list(c.get('description'))
+                    or html.Span('(설명 없음 — 분석 재실행 필요)', className='text-muted'),
                     style={'verticalAlign': 'top'}),
             mem_cell, out_cell,
         ]))
+    # 헤더: 셀(0.78rem)보다 크게, 검정 볼드, 가로·세로 가운데(2026-10-14)
+    th = {'fontSize': '0.86rem', 'fontWeight': 700, 'color': '#000', 'textAlign': 'center',
+          'verticalAlign': 'middle'}
     head = html.Thead(html.Tr([
-        html.Th('필요 역량', style={'width': '15%'}),
-        html.Th('설명', style={'width': '25%'}),
-        html.Th([html.Div('과제원 맵핑', style={'fontSize': '0.65rem'}), '이름 + 임베딩 유사도'], style={'width': '30%'}),
-        html.Th([html.Div('비과제원 맵핑(상위 10명)', style={'fontSize': '0.65rem'}), '이름 + 임베딩 유사도'],
-                style={'width': '30%'}),
+        html.Th('필요 역량', style={**th, 'width': '15%'}),
+        html.Th('설명', style={**th, 'width': '25%'}),
+        html.Th([html.Div('과제원 맵핑'), html.Div('(이름 + 임베딩 유사도)', style={'fontSize': '0.78rem'})],
+                style={**th, 'width': '30%'}),
+        html.Th([html.Div('비과제원 맵핑(상위 10명)'), html.Div('(이름 + 임베딩 유사도)', style={'fontSize': '0.78rem'})],
+                style={**th, 'width': '30%'}),
     ]))
     return dbc.Table([head, html.Tbody(rows)], bordered=True, size='sm', className='mb-0 align-middle',
                      style={'fontSize': '0.78rem', 'tableLayout': 'fixed'})
@@ -315,7 +394,44 @@ def competency_gap_section() -> html.Div:
                                            html.Div(id='org-gap-detail')]))
 
 
+# ── 부서별 논문 등급(2026-10-14) ──────────────────────────────────────────────
+
+def publication_grade_section() -> html.Div:
+    title = '부서/과제별 논문 등급 (최근 5년)'
+    hint = ('현재 재직 연구원의 최근 5년 논문을 등급구분(최우수 > 우수 > 일반 > 외부)별로 세어 부서(1단계부서명) 또는 '
+            '과제(3단계부서명) 단위로 비교합니다. 같은 단위의 공저자가 같은 논문을 각자 올린 경우는 1건으로 셉니다. '
+            '최우수·우수가 많은 순으로 정렬되며, 표에는 전체 단위가 조직코드 순으로 나옵니다.')
+    controls = dbc.Row([
+        dbc.Col([dbc.Label('기준', className='small fw-semibold text-muted mb-1'),
+                 dbc.RadioItems(id='org-pubgrade-level', value='level1', inline=True,
+                                options=[{'label': '부서(1단계부서명)', 'value': 'level1'},
+                                         {'label': '과제(3단계부서명)', 'value': 'level3'}])], md=6),
+    ], className='g-2 mb-3')
+    return _section(title, hint, html.Div([controls, html.Div(id='org-pubgrade-body')]))
+
+
+@callback(Output('org-pubgrade-body', 'children'), Input('org-pubgrade-level', 'value'))
+def _pubgrade_body(level):
+    from services import publication_quality as pq
+    df = pq.grade_counts(level or 'level1')
+    fig = pq.grade_figure(df)
+    if fig is None:
+        return _empty('표시할 논문 등급 데이터가 없습니다(논문 원천에 "등급구분" 열 반영 후 데이터 업데이트 필요).')
+    th = {'textAlign': 'center', 'verticalAlign': 'middle', 'fontWeight': 700, 'color': '#000'}
+    table = dbc.Table([
+        html.Thead(html.Tr([html.Th(c if c != 'unit' else ('부서' if level != 'level3' else '과제'), style=th)
+                            for c in df.columns])),
+        html.Tbody([html.Tr([html.Td(v, style={'textAlign': 'left' if i == 0 else 'center'})
+                             for i, v in enumerate(r)]) for r in df.itertuples(index=False)]),
+    ], bordered=True, size='sm', className='mb-0', style={'fontSize': '0.78rem'})
+    return dbc.Row([
+        dbc.Col(dcc.Graph(figure=fig, config={'displaylogo': False}), lg=7),
+        dbc.Col(html.Div(table, style={'maxHeight': '520px', 'overflowY': 'auto'}), lg=5),
+    ], className='g-3')
+
+
 def org_analysis_content() -> html.Div:
     tabs = [dbc.Tab(competency_gap_section(), label='과제별 필요 역량', tab_id='org-sub-gap'),
-            dbc.Tab(collaboration_section(), label='부서/과제간 협업', tab_id='org-sub-collab')]
+            dbc.Tab(collaboration_section(), label='부서/과제간 협업', tab_id='org-sub-collab'),
+            dbc.Tab(publication_grade_section(), label='부서별 논문 등급', tab_id='org-sub-pubgrade')]
     return dbc.Tabs(tabs, id='org-sub-tabs', active_tab='org-sub-gap', className='mt-2')

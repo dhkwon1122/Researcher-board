@@ -14074,3 +14074,35 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   제외 섹션의 "제외할 과제만 결과에 반영…" 안내 삭제.
 - 팀/리더 참조·직군 예외자 카드: 제목 "엑셀 파일로 반영", 실행/다운로드 칸에 빈 제목 자리(nbsp)로 높이 맞춤,
   "최종실행이력" → "실행결과"(데이터 업데이트 표와 같은 아이콘+상태+시각, 아래 메시지 2줄). admin_shared.run_status_line 공용.
+
+## (36) 필요 역량 표·개조식·협업 SAIT 제외·논문 등급/IF (2026-10-14)
+- 조직 분석 > 과제별 필요 역량 표: 헤더 0.86rem 검정 볼드, 가로·세로 가운데(셀 0.78rem보다 큼). 설명은 글머리 목록.
+- process_project_competency_gap: 설명(description)·근거(reason)를 쉬운 말 개조식 항목 배열로 요청 → 줄바꿈 문자열(_bullets).
+  캐시 키 v3(설명)/v2(근거)로 올려 다음 run_analysis 5단계에서 다시 생성. 화면은 예전 서술형도 그대로 한 항목으로 표시.
+- 부서/과제간 협업: 1단계 부서명 "SAIT"도 제외(collab_graph.EXCLUDED_LEVEL1). 화면 집계(aggregate)에서 바로 거르고,
+  파이프라인 current_levels()에서도 제외.
+- 논문: 원천 선택 열 등급구분→grade_publication, Impact Factor→impact_factor. 대표 논문 정렬
+  timeline_data.publication_priority_key = 등급(최우수>우수>일반>외부>-) > 1저자·교신 > IF 내림차순 > 최신.
+  프로필 인쇄 2페이지 논문 상세표에 "등급" 열 추가(IF 열은 기존). 테스트 tests/test_publication_grade.py.
+
+## (37) 논문 등급/IF 활용 확대 + 협업 그래프 부서 색 (2026-10-14)
+- 논문 탭(detail_tabs.publications_tab): 등급 배지·IF 열, 요약 카드(최우수·우수 건수, 최고 IF), "대표순/최신순" 탭.
+- 인쇄 1페이지 요약: "N건 (교신저자 M건, 최우수 a·우수 b, 최고 IF x)". 엑셀 "논문 실적": 대표순 + [등급]·IF 표기.
+- 타임라인: 펼친 과제 안 논문 줄 — 최우수(빨강)·우수(주황) 색 글씨 + [등급]. 공용 색/요약 함수는 timeline_data
+  (PUBLICATION_GRADE_COLORS, publication_summary 등).
+- 분석: 전문성 LLM 입력에 논문 등급·IF + 지침 10(우수 논문 분야를 더 강한 근거로). JOB Market 관련 실적(C2)은
+  최우수 +0.05·우수 +0.03 가산(정렬은 가산값, 표시는 1.0 상한), 종류 표시 "논문(최우수)".
+  조직 분석 하위 탭 "부서별 논문 등급"(services/publication_quality.py): 최근 5년, 부서/과제 기준, 같은 단위 공저 중복 제외.
+- 협업 그래프: 부서별 12색(DEPT_PALETTE). 과제 기준은 sm.level1_of_level3()로 과제→1단계부서 묶음 — 같은 부서끼리
+  붙여 배치, 부서 색 계열의 밝기 차이로 과제 구분, 네트워크 바깥 호 + 부서명, 히트맵 위 부서 색 띠·부서명·경계선,
+  축 이름도 부서 색. 제외 1단계 부서명에 "Ideation Factory T/F(SAIT)" 추가(대소문자·공백 무시, 하위 포함).
+
+## (38) 협업 그래프 높이 통일·히트맵 숫자·AI 협업 요약 (2026-10-14)
+- collab_graph.graph_height(top_n): 네트워크·히트맵 공통 높이(10·20개 650 / 30개 800 / 50개 950) — 부서/과제 기준 무관.
+- 히트맵 칸에 건수(굵게, 0·대각선 비움). 글자색은 plotly 자동 대비(진한 칸 흰색·연한 칸 검정).
+- pipeline/process_collab_summary.py(run_analysis 4/5 직후 자동): 최근 5년 공저 논문·공동발명 특허를 문서 단위로
+  부서/과제 쌍별 집계 → 상위 5쌍(논문/특허·최우수·우수 수, LLM 주제 2~3개, 참여자 3명+외 N명), 허브, 협업 적은 단위,
+  최근 2년 vs 이전 3년(연평균) 증가·감소·신규, 논문/특허 유형, 우수 논문 공동 성과 + LLM 개조식 총평.
+  LLM에는 이름·사번 미전송(부서/과제명·제목·건수만), 실패 시 통계 기반 문장으로 저장. 캐시 collab_summary_cache.json.
+  산출물 collab_summary.json(load_to_db JSON_TABLES 'collab_summary', 키 level) → data_store.read_collab_summary.
+- 화면: 협업 그래프 아래 "AI 협업 요약" 카드(총평/상위 쌍/세부 현황). 테스트 tests/test_collab_summary.py.

@@ -53,6 +53,8 @@ COVER_WEIGHT = 0.2          # C1 정렬 가산: + COVER_WEIGHT × 충족 비율
 EVIDENCE_YEARS = 5          # C2: 최근 N년 실적만
 EVIDENCE_MIN = 0.5          # C2: 이 값 이상인 실적만 근거로 표시
 EVIDENCE_WEIGHT = 0.1       # C2 정렬 가산: + EVIDENCE_WEIGHT × 최고 실적 유사도
+# C2: 논문 등급구분 가산(2026-10-14) — 같은 내용이면 최우수·우수 논문이 관련 실적으로 먼저 잡히고 점수도 조금 높게.
+EVIDENCE_GRADE_BONUS = {'최우수': 0.05, '우수': 0.03}
 MAX_REQUIREMENTS = 20
 
 
@@ -144,7 +146,9 @@ class Context:
                 title = next((str(r.get(c)).strip() for c in title_cols if str(r.get(c) or '').strip()), '')
                 y = _year(*(r.get(c) for c in date_cols))
                 if title and y and y >= since:
-                    out.append((kind, title, y))
+                    grade = str(r.get('grade_publication') or '').strip() if kind == '논문' else ''
+                    # 최우수·우수 논문은 종류에 등급을 붙여 표시하고, evidence_match에서 가산(2026-10-14)
+                    out.append((f'{kind}({grade})' if grade in EVIDENCE_GRADE_BONUS else kind, title, y))
         if tasks is not None and not tasks.empty and 'researcher_id' in tasks.columns:
             for r in tasks[tasks['researcher_id'] == rid].fillna('').to_dict('records'):
                 title = str(r.get('the_task_name') or r.get('task_name') or '').strip()
@@ -326,9 +330,12 @@ def evidence_match(ctx: Context, rid: str, project_embedding, top: int = 3) -> d
         return None
     proj = np.asarray(project_embedding, dtype=np.float32).reshape(1, -1)
     sims = _cos_matrix(proj, ctx.embed([t for _k, t, _y in items]))[0]
+    bonus = np.array([next((b for g, b in EVIDENCE_GRADE_BONUS.items() if k.endswith(f'({g})')), 0.0)
+                      for k, _t, _y in items], dtype=np.float32)
+    sims = sims + bonus   # 정렬은 가산 후 값으로(1.0 상한으로 자르면 동점이 돼 가산 효과가 사라짐), 표시 점수만 1.0 상한
     order = np.argsort(-sims)
-    best = float(sims[order[0]])
-    picks = [{'kind': items[i][0], 'title': items[i][1], 'year': items[i][2], 'score': round(float(sims[i]), 3)}
+    best = min(float(sims[order[0]]), 1.0)
+    picks = [{'kind': items[i][0], 'title': items[i][1], 'year': items[i][2], 'score': round(min(float(sims[i]), 1.0), 3)}
              for i in order[:top] if float(sims[i]) >= EVIDENCE_MIN]
     return {'top': round(best, 3), 'items': picks}
 

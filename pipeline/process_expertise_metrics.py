@@ -363,11 +363,13 @@ COLLAB_RECENT_YEARS = 5   # 부서/과제간 협업 그래프는 최근 5년(올
 def current_levels(researchers: pd.DataFrame) -> dict:
     """현재 재직자 researcher_id -> (1단계부서명, 3단계부서명) — 팀/리더 참조 칸 값 기준(연구원 프로필·
     명단·과제별 필요 역량과 동일). 매칭 안 되면 빈 문자열. team_refer가 없으면 {}.
-    구분이 "Staff"인 조직(상위가 Staff인 하위 조직 포함) 소속은 아예 넣지 않는다 → 그래프 집계에서 제외."""
+    구분이 "Staff"인 조직(상위가 Staff인 하위 조직 포함)과 1단계 부서명이 SAIT인 조직 소속은 아예 넣지 않는다
+    → 그래프 집계에서 제외."""
     if researchers.empty or 'org_code' not in researchers.columns:
         return {}
     try:
         from services import similarity_map as sm
+        from services.collab_graph import is_excluded_level1
     except Exception as exc:
         print(f'  [WARN] 부서 단계 조회 불가(부서/과제간 협업 그래프용 열 생략): {exc}')
         return {}
@@ -389,9 +391,12 @@ def current_levels(researchers: pd.DataFrame) -> dict:
         if org not in cache:
             l1, _l2, l3 = sm.org_code_level_names(org)
             cache[org] = (l1, l3)
+        if is_excluded_level1(cache[org][0]):   # 1단계 부서명 "SAIT"도 제외(2026-10-14)
+            excluded += 1
+            continue
         out[rid] = cache[org]
     if excluded:
-        print(f'  부서/과제간 협업: 구분 "Staff" 조직(하위 포함) 소속 {excluded}명 제외')
+        print(f'  부서/과제간 협업: 구분 "Staff" 조직(하위 포함)·1단계 부서명 SAIT 소속 {excluded}명 제외')
     return out
 
 

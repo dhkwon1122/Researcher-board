@@ -889,10 +889,16 @@ def _print_publication_summary(pub_df, rid):
     pub = pub_df[pub_df['researcher_id'] == rid] if not pub_df.empty else pub_df
     if pub is None or pub.empty:
         return html.Div('없음', className='small', style={'marginLeft': '10px'})
-    total = len(pub)
-    corr = int(pub.get('is_corresponding', pd.Series(dtype=str)).astype(str).str.lower()
-               .isin(['true', '1', 'y', 'yes']).sum())
-    return html.Div(f'{total}건 (교신저자 {corr}건)', className='small', style={'marginLeft': '10px'})
+    # 2026-10-14: 등급(최우수·우수)·최고 IF도 함께 — 예: "12건 (교신저자 3건, 최우수 2·우수 4, 최고 IF 15.2)"
+    from components.timeline_data import publication_summary
+    st = publication_summary(pub)
+    parts = [f"교신저자 {st['corr']}건"]
+    grades = '·'.join(f'{g} {st["grade_counts"][g]}' for g in ('최우수', '우수') if st['grade_counts'].get(g))
+    if grades:
+        parts.append(grades)
+    if st['max_if'] > 0:
+        parts.append(f"최고 IF {st['max_if']:.1f}")
+    return html.Div(f"{st['total']}건 ({', '.join(parts)})", className='small', style={'marginLeft': '10px'})
 
 
 def _print_patent_summary(pat_df, rid):
@@ -933,17 +939,9 @@ def _year_label(row, year_col='pub_year', date_col='pub_date'):
 
 
 def _publication_priority_key(row):
-    """1저자(순위 1) 또는 교신저자를 우선(0), 그다음 impact factor 내림차순 —
-    실적이 많을 때 "최근순"이 아니라 대표 실적 위주로 추리기 위한 정렬 키."""
-    r = str(row.get('author_rank', '')).strip()
-    is_first_author = r not in ('', 'nan') and r == '1'
-    is_corr = str(row.get('is_corresponding', '')).lower() in ('true', '1', 'y', 'yes')
-    tier = 0 if (is_first_author or is_corr) else 1
-    try:
-        impact_factor = float(row.get('impact_factor', 0) or 0)
-    except (TypeError, ValueError):
-        impact_factor = 0.0
-    return (tier, -impact_factor)
+    """대표 논문 정렬 키 — components/timeline_data.publication_priority_key(등급구분 > 1저자·교신 > IF > 최신)."""
+    from components.timeline_data import publication_priority_key
+    return publication_priority_key(row)
 
 
 def _print_publication_detail_table(pub_df, rid):
@@ -959,7 +957,7 @@ def _print_publication_detail_table(pub_df, rid):
     if pub.empty:
         return html.Div('논문 실적 없음', className='small text-muted')
     pub['_priority'] = pub.apply(_publication_priority_key, axis=1)
-    pub = pub.sort_values('_priority')
+    pub = pub.sort_values('_priority', kind='stable')
 
     rows = []
     for _, row in pub.iterrows():
@@ -974,8 +972,11 @@ def _print_publication_detail_table(pub_df, rid):
             if_label = f'{impact_factor:.1f}'
         except (TypeError, ValueError):
             if_label = '-'
+        grade = str(row.get('grade_publication', '') or '').strip()
         rows.append(html.Tr([
             html.Td(_year_label(row), style={**_PRINT_TABLE_TD_STYLE, 'whiteSpace': 'nowrap'}),
+            html.Td(grade if grade and grade != 'nan' else '-',
+                    style={**_PRINT_TABLE_TD_STYLE, 'textAlign': 'center', 'whiteSpace': 'nowrap'}),
             html.Td(cell(row, 'title'), style=_PRINT_TABLE_TD_STYLE),
             html.Td(cell(row, 'journal'), style=_PRINT_TABLE_TD_STYLE),
             html.Td(if_label, style={**_PRINT_TABLE_TD_STYLE, 'textAlign': 'center', 'whiteSpace': 'nowrap'}),
@@ -988,6 +989,7 @@ def _print_publication_detail_table(pub_df, rid):
     table = html.Table([
         html.Thead(html.Tr([
             html.Th('연도', style=_PRINT_TABLE_TH_STYLE),
+            html.Th('등급', style={**_PRINT_TABLE_TH_STYLE, 'textAlign': 'center'}),
             html.Th('제목', style=_PRINT_TABLE_TH_STYLE),
             html.Th('게재처', style=_PRINT_TABLE_TH_STYLE),
             html.Th('IF', style={**_PRINT_TABLE_TH_STYLE, 'textAlign': 'center'}),
@@ -1083,7 +1085,7 @@ def _print_pub_patent_detail_page(name, rid, tables):
     return html.Div([
         html.Div(f'{name}({rid}) — 논문 · 특허 실적 상세', className='print-page2-title',
                  style={'fontSize': '16px', 'fontWeight': 700, 'marginBottom': '10px'}),
-        _print_box('논문 실적 (주요 실적 우선 — 1저자·교신저자, IF 우선)',
+        _print_box('논문 실적 (주요 실적 우선 — 등급, 1저자·교신저자, IF, 최신 순)',
                    _print_publication_detail_table(tables['publications'], rid)),
         _print_box('특허 실적 (전략출원 > 등록 > 출원, 대표발명·지분율 우선)',
                    _print_patent_detail_table(tables['patents'], rid)),
