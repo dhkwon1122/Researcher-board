@@ -13959,3 +13959,7 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   엑셀 "학력" 칸(_col_education)과 최종학력 1건 표기(_highest_degree_str — 과제원 명단 등) 공용.
 - 후속: 화면도 동일 — 개별 프로필/인쇄 카드 학력(components/profile_sections.education_block)은 고교 줄에 전공 생략,
   연구원 명단 "전공" 칸은 최종학력이 고교면 빈칸(필터 옵션에도 안 나옴).
+
+## (30) 연구원 명단 "추가 선택 항목" 팝오버: 바깥 클릭으로 닫힘 (2026-10-14)
+- dbc.Popover trigger 'click' → 'legacy'. 버튼으로 열고/닫기 + 바깥 아무 곳 클릭 시 닫힘, 팝오버 안(스위치) 클릭은 유지,
+  선택값도 유지(Playwright 최소 앱으로 확인).

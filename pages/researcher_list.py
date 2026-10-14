@@ -564,7 +564,7 @@ def layout():
                         ], className='w-100'),
                         # 엑셀 다운로드에 포함할 추가 항목 — 항상 노출하지 않고
                         # 위 아이콘(list-excel-options-btn) 클릭 시 뜨는 가벼운
-                        # 팝오버로 옮겼다(사용자 요청). trigger='click'이라 별도
+                        # 팝오버로 옮겼다(사용자 요청). trigger='legacy'(클릭으로 열고, 바깥 어디를 눌러도 닫힘 — 2026-10-14)라 별도
                         # 열기/닫기 콜백 없이 dbc가 알아서 토글한다.
                         dbc.Popover(
                             dbc.Checklist(
@@ -602,7 +602,7 @@ def layout():
                                 value=[], switch=True,
                                 className='small',
                             ),
-                            target='list-excel-options-btn', trigger='click',
+                            target='list-excel-options-btn', trigger='legacy',
                             placement='bottom', body=True,
                         ),
                         html.Div(
