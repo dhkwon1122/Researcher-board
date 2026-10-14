@@ -33,6 +33,7 @@ from pipeline.researcher_fit import _load_embed_cache, _text_hash, researcher_pr
 from services import job_category as job_category_service
 from services import researcher_profile_export as export
 from services.data_store import DATA_DIR, filter_current, read_expertise_profiles, read_processed, read_similar_researchers
+from services.excel_text import excel_safe
 
 
 def _cluster_label(rows: list) -> str:
@@ -928,7 +929,7 @@ def build_expertise_similarity_workbook(researcher_ids: list) -> bytes:
             _similar_list_lines(rid, similarity_map, name_map, dept_map),
         ]
         for col_idx, value in enumerate(values, start=1):
-            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell = ws.cell(row=row_idx, column=col_idx, value=excel_safe(value))
             cell.font = body_font
             cell.border = _RESULT_BORDER
             cell.alignment = wrap_center if col_idx <= 3 else wrap_left

@@ -60,6 +60,7 @@ from services import jd_reconciliation as jd  # noqa: E402
 from services import job_market_insights as jmi  # noqa: E402
 from services import researcher_profile_export as export  # noqa: E402
 from services.llm import LLMError  # noqa: E402
+from services.excel_text import excel_safe  # noqa: E402
 
 TOP_K_CANDIDATES = 8  # 임베딩으로 추려 LLM에 넘길 상위 후보 수(최종 0~3개는 LLM이 고름)
 MAX_RECOMMENDATIONS = 3
@@ -785,7 +786,7 @@ def build_result_workbook(result: dict) -> bytes:
         id_cell.alignment = wrap_center
 
         for col_idx, text in ((2, result_text), (3, must_place_text)):
-            cell = ws.cell(row=row_idx, column=col_idx, value=text)
+            cell = ws.cell(row=row_idx, column=col_idx, value=excel_safe(text))
             cell.font = body_font
             cell.border = border
             cell.alignment = wrap_left
