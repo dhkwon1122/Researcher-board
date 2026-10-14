@@ -967,11 +967,9 @@ def _print_publication_detail_table(pub_df, rid):
         r = str(row.get('author_rank', '')).strip()
         t = str(row.get('total_authors', '')).strip()
         rank_total = f'{r}/{t}' if r and t and r not in ('nan', '') and t not in ('nan', '') else '-'
-        try:
-            impact_factor = float(row.get('impact_factor', '') or '')
-            if_label = f'{impact_factor:.1f}'
-        except (TypeError, ValueError):
-            if_label = '-'
+        # 빈 IF는 CSV에서 NaN으로 읽혀 'nan'으로 찍히던 문제(2026-10-14) — 공용 표기 함수 사용
+        from components.timeline_data import publication_if_label
+        if_label = publication_if_label(row) or '-'
         grade = str(row.get('grade_publication', '') or '').strip()
         rows.append(html.Tr([
             html.Td(_year_label(row), style={**_PRINT_TABLE_TD_STYLE, 'whiteSpace': 'nowrap'}),
