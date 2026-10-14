@@ -580,26 +580,26 @@ def layout():
                                 # UX일 뿐, 실제 방어는 서버 쪽에 있다.
                                 options=(
                                     [
-                                        {'label': '평가(종합 - 최근 3년) 포함', 'value': 'eval_summary'},
-                                        {'label': '연봉등급(최근 3년) 포함', 'value': 'salary_grade'},
-                                        {'label': '업적평가(최근 3년) 포함', 'value': 'eval_half'},
+                                        {'label': '평가(종합 - 최근 3년)', 'value': 'eval_summary'},
+                                        {'label': '연봉등급(최근 3년)', 'value': 'salary_grade'},
+                                        {'label': '업적평가(최근 3년)', 'value': 'eval_half'},
                                     ] if show_eval else []
                                 ) + [
                                     # 과제수행이력/양성이력/핵심이력/보유기술은 원래 항상
                                     # 자동 포함이었으나 추가 선택(옵트인) 항목으로 전환
                                     # (사용자 확정 2026-09-02).
-                                    {'label': '과제수행이력 포함', 'value': 'tasks'},
-                                    {'label': '양성이력 포함', 'value': 'nurturing'},
-                                    {'label': '핵심이력 포함', 'value': 'incentive'},
-                                    {'label': '보유기술 포함', 'value': 'tech_ownership'},
-                                    {'label': '보유 전문성 포함', 'value': 'expertise'},
-                                    {'label': '특허 포함', 'value': 'patents'},
-                                    {'label': '논문 포함', 'value': 'publications'},
-                                    {'label': '직무 포함', 'value': 'job_function'},
-                                    {'label': '직무이력 포함', 'value': 'job_profile'},
-                                    {'label': '재직상태 포함', 'value': 'employment_status'},
-                                    {'label': '어학 포함', 'value': 'language'},
-                                    {'label': '근무 경력 포함', 'value': 'work_experience'},
+                                    {'label': '과제수행이력', 'value': 'tasks'},
+                                    {'label': '양성이력', 'value': 'nurturing'},
+                                    {'label': '핵심이력', 'value': 'incentive'},
+                                    {'label': '보유기술', 'value': 'tech_ownership'},
+                                    {'label': '보유 전문성', 'value': 'expertise'},
+                                    {'label': '특허', 'value': 'patents'},
+                                    {'label': '논문', 'value': 'publications'},
+                                    {'label': '직무', 'value': 'job_function'},
+                                    {'label': '직무이력', 'value': 'job_profile'},
+                                    {'label': '재직상태', 'value': 'employment_status'},
+                                    {'label': '어학', 'value': 'language'},
+                                    {'label': '근무 경력', 'value': 'work_experience'},
                                 ],
                                 value=[], switch=True,
                                 className='small',

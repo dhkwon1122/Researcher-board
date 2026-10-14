@@ -13984,3 +13984,6 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 원인: 엑셀(researcher_profile_export)만 누적 team_refer 전체(과거 스냅샷 포함)를 읽고 그 사람의 첫 행을 써서,
   예전에 조직장이었다가 지금은 아닌 사람도 직책이 표시됐다. 명단 화면(similarity_map.title_by_researcher_id)은 이미 현재 기준.
 - 수정: `_current_team_refer()` — read_team_refer()로 dep_id별 최신 스냅샷(삭제 조직 제외)만 사용. 테스트 tests/test_export_position_title.py.
+
+## (34) 연구원 명단 "추가 선택 항목" 라벨에서 "포함" 제거 (2026-10-14)
+- 예: "보유기술 포함" → "보유기술". 값(value)은 그대로라 엑셀 동작 변화 없음.
