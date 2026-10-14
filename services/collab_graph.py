@@ -98,6 +98,13 @@ def node_colors(nodes: list, group_of: dict | None) -> tuple[dict, dict]:
     return out, dcol
 
 
+def graph_height(top_n: int) -> int:
+    """네트워크·히트맵 공통 높이(px) — 부서/과제 기준과 무관하게 "표시 단위 수"로만 정해 두 박스 높이를 맞춘다
+    (2026-10-14, 사용자 확정: 10·20개 650, 30개 800, 50개 950)."""
+    n = int(top_n or 20)
+    return 650 if n <= 20 else 800 if n <= 30 else 950
+
+
 def _partners(pairs: dict) -> dict:
     """단위 -> [(상대, 건수), ...] 건수 내림차순."""
     out: dict = {}
@@ -119,7 +126,7 @@ def top_nodes(pairs: dict, top_n: int) -> list[str]:
 
 
 def network_figure(pairs: dict, top_n: int = 20, min_weight: int = 1, order: list | None = None,
-                   group_of: dict | None = None):
+                   group_of: dict | None = None, height: int | None = None):
     """원형 배치 순서는 order(조직코드 순)를 따른다. 노드 마우스 오버: 타 단위 협업 합계 + 상위 5개 상대별 건수.
     2026-10-14: 노드 색 = 부서별 색(과제 기준이면 소속 부서 색 계열). group_of(과제→1단계부서명)가 있으면
     같은 부서 과제끼리 붙여 배치하고, 원 바깥쪽에 부서별 색 띠 + 부서명을 둘러 "이 과제들은 이 부서" 를 보여준다."""
@@ -191,11 +198,12 @@ def network_figure(pairs: dict, top_n: int = 20, min_weight: int = 1, order: lis
         hoverlabel=dict(align='left'), showlegend=False))
     lim = 1.95 if group_of is not None else 1.3
     fig.update_layout(xaxis=dict(visible=False, range=[-lim, lim]), yaxis=dict(visible=False, scaleanchor='x', range=[-lim, lim]),
-                      margin=dict(l=10, r=10, t=10, b=10), height=560, plot_bgcolor='white')
+                      margin=dict(l=10, r=10, t=10, b=10), height=height or graph_height(top_n), plot_bgcolor='white')
     return fig
 
 
-def heatmap_figure(pairs: dict, top_n: int = 20, order: list | None = None, group_of: dict | None = None):
+def heatmap_figure(pairs: dict, top_n: int = 20, order: list | None = None, group_of: dict | None = None,
+                   height: int | None = None):
     """협업량 상위 top_n 단위를 고른 뒤, X·Y축 모두 order(팀/리더 참조 조직코드 순)로 나열.
     2026-10-14: 축 이름을 부서 색으로 칠하고, 과제 기준(group_of)이면 같은 부서끼리 붙여 위쪽에 부서 색 띠 + 부서명,
     부서 경계에 구분선을 넣는다."""
@@ -220,8 +228,12 @@ def heatmap_figure(pairs: dict, top_n: int = 20, order: list | None = None, grou
         z[i][i] = None   # 같은 단위는 비움
     tick_col = {n: dcol[(group_of or {}).get(n, n)] if group_of is not None else colors[n] for n in nodes}
     ticktext = [f'<span style="color:{tick_col[n]}"><b>{n}</b></span>' for n in nodes]
+    # 칸 안 건수 숫자(0건·대각선은 비움). 글자색은 plotly가 칸 색에 맞춰 자동 대비(진한 칸 흰색, 연한 칸 검정)
+    cell_text = [[str(v) if v else '' for v in row] for row in z]
+    font_size = 11 if len(nodes) <= 20 else 9 if len(nodes) <= 30 else 7
     fig = go.Figure(go.Heatmap(
         z=z, x=list(range(len(nodes))), y=list(range(len(nodes))), colorscale='Blues', hoverongaps=False,
+        text=cell_text, texttemplate='<b>%{text}</b>', textfont=dict(size=font_size),
         customdata=[[[nodes[r], nodes[c]] for c in range(len(nodes))] for r in range(len(nodes))],
         hovertemplate='%{customdata[0]} ↔ %{customdata[1]}<br>최근 5년 협업 %{z}건<extra></extra>',
         colorbar=dict(title='건')))
@@ -245,6 +257,6 @@ def heatmap_figure(pairs: dict, top_n: int = 20, order: list | None = None, grou
                            dict(y0=i0 - 0.5, y1=i0 - 0.5, x0=-0.5, x1=len(nodes) - 0.5)):
                     fig.add_shape(type='line', xref='x', yref='y', line=dict(color='#333', width=1), **kw)
         top = 70
-    fig.update_layout(margin=dict(l=10, r=10, t=top, b=10), height=max(440, 22 * len(nodes) + 200),
+    fig.update_layout(margin=dict(l=10, r=10, t=top, b=10), height=height or graph_height(top_n),
                       xaxis=dict(tickangle=-45, **axis), yaxis=dict(autorange='reversed', **axis))
     return fig
