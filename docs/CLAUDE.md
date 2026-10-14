@@ -13978,3 +13978,9 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 어학(services/language_qualification.format_lines): 1등급/1+등급/1++등급/S등급은 만료일 미표기
   (엑셀·프로필 화면·인쇄 카드 공용 헬퍼라 모두 동일 적용).
 - 후속: CL/년차의 년차가 0(1년 미만)이면 1로 표기(position_years에서 max(1, …)). 유사도 시니어/주니어 판정(5 이상)에는 영향 없음.
+
+## (33) 엑셀 "직책"이 과거 직책을 보여주던 문제 (2026-10-14)
+- 직책 = 팀/리더 참조(team_refer)의 assignment_name(조직장급만 researcher_id가 채워짐).
+- 원인: 엑셀(researcher_profile_export)만 누적 team_refer 전체(과거 스냅샷 포함)를 읽고 그 사람의 첫 행을 써서,
+  예전에 조직장이었다가 지금은 아닌 사람도 직책이 표시됐다. 명단 화면(similarity_map.title_by_researcher_id)은 이미 현재 기준.
+- 수정: `_current_team_refer()` — read_team_refer()로 dep_id별 최신 스냅샷(삭제 조직 제외)만 사용. 테스트 tests/test_export_position_title.py.

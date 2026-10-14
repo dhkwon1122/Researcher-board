@@ -114,7 +114,7 @@ def _load_tables() -> dict:
         'tasks': data_store.read_processed('tasks'),
         'nurturing': data_store.read_processed('nurturing'),
         'incentive_selection': data_store.read_processed('incentive_selection'),
-        'team_refer': data_store.read_processed('team_refer'),
+        'team_refer': _current_team_refer(),
         'tech_ownership': data_store.read_processed('tech_ownership'),
         'patents': data_store.read_processed('patents'),
         'publications': data_store.read_processed('publications'),
@@ -124,6 +124,17 @@ def _load_tables() -> dict:
         'evaluation_exception': data_store.read_processed('evaluation_exception'),
         'expertise_profiles': data_store.read_expertise_profiles(),
     }
+
+
+def _current_team_refer() -> pd.DataFrame:
+    """팀/리더 참조의 "현재" 행만(dep_id별 최신 스냅샷, 삭제된 조직 제외) — 직책 열용(2026-10-14).
+    예전엔 누적된 team_refer 전체(과거 스냅샷 포함)를 읽어, 예전에 조직장이었다가 지금은 아닌 사람도
+    과거 행의 직책이 그대로 나왔다. 연구원 명단 화면의 직책(similarity_map.title_by_researcher_id)과 같은 기준."""
+    from pipeline.rd_specialist_markdown import read_team_refer
+    df = pd.DataFrame(read_team_refer(data_store.DATA_DIR))
+    if not df.empty and 'researcher_id' in df.columns:
+        df['researcher_id'] = [str(v).strip().zfill(8) if str(v).strip() else '' for v in df['researcher_id']]
+    return df
 
 
 def _rows_for(df, researcher_id: str):
