@@ -459,8 +459,7 @@ def layout(**_kwargs):
             className='fw-bold mb-1 mt-1',
         ),
         html.Div(
-            '특정 과제가 종료된다고 가정할 때, 그 과제원(또는 개인 1명)이 보유 전문성 기준으로 '
-            '참여 가능한 다른 과제를 추천합니다.',
+            '특정 과제 종료 가정시, 해당 과제원(복수, 개인)의 보유 전문성 기준으로 참여 가능한 타 과제 추천',
             className='text-muted small mb-3',
         ),
 
@@ -502,10 +501,6 @@ def layout(**_kwargs):
         ], id='jm-individual-mode-row', style={'display': 'none'}),
 
         html.Div('참여 가능한 과제에서 제외', className='fw-bold small mb-1 mt-2'),
-        html.Div(
-            '"제외할 과제"만 결과에 반영(플랫폼/그룹은 과제 목록을 좁히는 용도, 결과에 영향 없음)',
-            className='small text-muted mb-1',
-        ),
         dbc.Row([
             dbc.Col(dcc.Dropdown(id='jm-exclude-l1', options=l1_options,
                                   placeholder='플랫폼(전체)', multi=True), md=3),

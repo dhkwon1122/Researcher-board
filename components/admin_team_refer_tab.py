@@ -108,7 +108,7 @@ def _team_refer_upload_section():
     return dbc.Card(dbc.CardBody([
         html.Div([
             html.I(className='bi bi-file-earmark-excel me-2 text-success'),
-            html.Span('엑셀 파일로 한 번에 반영', className='fw-semibold small'),
+            html.Span('엑셀 파일로 반영', className='fw-semibold small'),
         ], className='mb-2'),
         dbc.Row([
             dbc.Col([
@@ -121,7 +121,7 @@ def _team_refer_upload_section():
                 _valid_date_picker('team_refer', today),
             ], md=3),
             dbc.Col([
-                html.Div(' ', className='small mb-1'),
+                html.Div('\u00a0', className='small text-muted mb-1'),  # 제목 자리(빈칸) — 버튼 높이를 다른 칸과 맞춤
                 dbc.ButtonGroup([
                     dbc.Button([html.I(className='bi bi-play-fill me-1'), '실행'],
                                id='team-refer-run-upload-btn', color='primary', size='sm'),
@@ -132,7 +132,7 @@ def _team_refer_upload_section():
                 ]),
             ], md=2),
             dbc.Col([
-                html.Div('최종실행이력', className='small text-muted mb-1'),
+                html.Div('실행결과', className='small text-muted mb-1'),
                 html.Div(id='team-refer-upload-status', children=_run_status_view(row)),
             ], md=2),
         ], className='g-2 align-items-start'),

@@ -122,9 +122,32 @@ def find_similar_feedback(question: str, top_n: int = _TOP_N,
     ]
 
 
+# 2026-10-14 사용자 확정: AI 검색 피드백 기능 삭제(화면 버튼/관리자 표 제거). 과거 피드백이 프롬프트에
+# 들어가지 않도록 힌트를 끄고, 기존 기록 파일은 한 번만 삭제한다(purge_all_once).
+FEEDBACK_ENABLED = False
+_PURGED_FLAG = os.path.join(LOG_DIR, 'nl_query_feedback_purged.flag')
+
+
+def purge_all_once() -> None:
+    """기존 피드백 기록(nl_query_feedback.csv)을 한 번만 삭제한다(표시 파일로 재실행 방지)."""
+    if os.path.exists(_PURGED_FLAG):
+        return
+    try:
+        if os.path.isfile(LOG_PATH):
+            os.remove(LOG_PATH)
+            print('[nl_query_feedback] 기존 AI 검색 피드백 기록 삭제(기능 제거)')
+        with open(_PURGED_FLAG, 'w', encoding='utf-8') as f:
+            f.write(datetime.now().isoformat())
+    except OSError as exc:
+        print(f'[nl_query_feedback] 피드백 기록 삭제 실패(다음 시작 때 재시도): {exc}')
+
+
 def feedback_hint_for(question: str) -> str:
     """SQL 생성/intent 분류 시스템 프롬프트 뒤에 그대로 덧붙일 수 있는 텍스트
-    조각. 비슷한 과거 피드백이 없으면 빈 문자열(프롬프트에 아무 영향 없음)."""
+    조각. 비슷한 과거 피드백이 없으면 빈 문자열(프롬프트에 아무 영향 없음).
+    기능 삭제(2026-10-14)로 FEEDBACK_ENABLED=False면 항상 빈 문자열."""
+    if not FEEDBACK_ENABLED:
+        return ''
     matches = find_similar_feedback(question)
     if not matches:
         return ''
@@ -136,3 +159,6 @@ def feedback_hint_for(question: str) -> str:
         '\n\n# 사용자 피드백 (비슷한 과거 질문에 남겨진 개선 의견 — 참고하되, '
         '지금 질문과 실제로 관련 없으면 무시할 것)\n' + lines
     )
+
+
+purge_all_once()
