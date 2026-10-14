@@ -495,6 +495,8 @@ def _col_work_experience(_rid, rows):
 
 
 _PATENT_COLUMNS = [('특허 실적', _col_patents)]
+# 본문 셀을 왼쪽 정렬로 두는 열(여러 줄 긴 목록) — 나머지는 가운데 정렬(2026-10-14, 사용자 확정).
+_LEFT_ALIGNED_HEADERS = {'학력', '과제수행이력', '특허 실적', '논문 실적'}
 _PUBLICATION_COLUMNS = [('논문 실적', _col_publications)]
 _JOB_FUNCTION_COLUMNS = [('직무', _col_job_function)]
 _JOB_PROFILE_COLUMNS = [('직무이력', _col_job_profile)]
@@ -849,7 +851,7 @@ def build_profile_workbook(
             cell = ws.cell(row=row_idx, column=col_idx, value=excel_safe(value))
             cell.font = body_font
             cell.border = _BORDER
-            cell.alignment = wrap_left
+            cell.alignment = wrap_left if _header in _LEFT_ALIGNED_HEADERS else wrap_center
 
     for col_idx, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(col_idx)].width = width

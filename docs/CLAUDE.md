@@ -13972,3 +13972,8 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   수정: services/excel_text.excel_safe(openpyxl ILLEGAL_CHARACTERS_RE로 \x00~\x1f 중 탭/줄바꿈 외 제거)를
   연구원 명단 엑셀(researcher_profile_export), 유사도 맵 엑셀(similarity_map), JOB Market 엑셀(job_market)의 셀 쓰기에 적용.
   테스트: tests/test_excel_text.py (+ 특허 제목에 \x0b를 넣은 데이터로 build_profile_workbook 정상 생성 확인).
+
+## (32) 연구원 명단 엑셀 정렬·어학 만료일 (2026-10-14)
+- 본문 셀 정렬: 학력/과제수행이력/특허 실적/논문 실적만 왼쪽, 나머지 열은 가운데(가로·세로). `_LEFT_ALIGNED_HEADERS`.
+- 어학(services/language_qualification.format_lines): 1등급/1+등급/1++등급/S등급은 만료일 미표기
+  (엑셀·프로필 화면·인쇄 카드 공용 헬퍼라 모두 동일 적용).
