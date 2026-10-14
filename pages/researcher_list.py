@@ -171,7 +171,8 @@ def _build_summary_df(current_only: bool = True, period: tuple[date, date] | Non
             top_edu = edu_r.assign(_rank=edu_r['degree'].map(_DEGREE_RANK).fillna(0)) \
                            .sort_values('_rank').iloc[-1]
             highest = top_edu['degree']
-            major = str(top_edu.get('major', '') or '').strip() or '-'
+            # 최종학력이 고교면 전공 칸은 비워 둔다(2026-10-14, 고교는 전공 미표기 — 엑셀/프로필과 동일).
+            major = '' if highest == '고교' else (str(top_edu.get('major', '') or '').strip() or '-')
         else:
             highest = '-'
             major = '-'

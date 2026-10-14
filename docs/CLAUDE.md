@@ -13957,3 +13957,5 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 ## (29) 엑셀 학력 칸: 고교는 전공 미표기 (2026-10-14)
 - services/researcher_profile_export._degree_line: 고교 줄은 `고)학교명`만(예전 `고)학교명 -`).
   엑셀 "학력" 칸(_col_education)과 최종학력 1건 표기(_highest_degree_str — 과제원 명단 등) 공용.
+- 후속: 화면도 동일 — 개별 프로필/인쇄 카드 학력(components/profile_sections.education_block)은 고교 줄에 전공 생략,
+  연구원 명단 "전공" 칸은 최종학력이 고교면 빈칸(필터 옵션에도 안 나옴).
