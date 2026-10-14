@@ -102,7 +102,8 @@ def position_years(promotion_date: str) -> int | None:
         return None
     promo_dt = date.fromisoformat(promo[:10])
     ref = _next_promotion_ref_date(date.today())
-    return int(_floor1((ref - promo_dt).days / 365))
+    # 1년 미만(0년차)은 1년차로 표기한다(2026-10-14, 사용자 확정).
+    return max(1, int(_floor1((ref - promo_dt).days / 365)))
 
 
 def _load_tables() -> dict:
