@@ -1,5 +1,5 @@
 """
-리포팅 > 석세션 플랜 — 전체 조직 조직장 석세션 후보 카드(조직별 우수
+업무 시나리오 > 석세션 플랜 — 전체 조직 조직장 석세션 후보 카드(조직별 우수
 연구원 비교) + 데이터 입력 패널. 조회·편집 둘 다 임원조직 담당자만
 가능하다(services.auth.can_view_succession_plan() 참고, 사용자 요청).
 
@@ -25,8 +25,8 @@ from components.profile_sections import load_photo_src
 dash.register_page(__name__, path='/succession-plan', name='석세션 플랜', title='석세션 플랜')
 
 # 한동안 사용하지 않는 화면이라 숨겨뒀었는데(_FEATURE_HIDDEN=True), 사용자
-# 요청으로 "리포팅 > 석세션 플랜" 메뉴로 되살렸다 — app.py의 네비게이션 바
-# "리포팅" 드롭다운이 can_view_succession_plan()일 때만 이 경로로 가는
+# 요청으로 "리포팅 > 석세션 플랜" 메뉴로 되살렸다(2026-10-14부터 "업무 시나리오 > 석세션 플랜") — app.py의 네비게이션 바
+# "업무 시나리오" 드롭다운이 can_view_succession_plan()일 때만 이 경로로 가는
 # 링크를 보여준다. 혹시 다시 숨겨야 하면 이 플래그를 True로 되돌리면 된다
 # (docs/CLAUDE.md 참고).
 _FEATURE_HIDDEN = False
@@ -778,7 +778,7 @@ def layout():
     if _FEATURE_HIDDEN:
         return dbc.Alert('이 기능은 현재 준비 중입니다.', color='secondary', className='mt-3')
     from services.auth import can_view_succession_plan
-    # 메뉴(app.py의 "리포팅" 드롭다운)는 can_view_succession_plan()일 때만
+    # 메뉴(app.py의 "업무 시나리오" 드롭다운)는 can_view_succession_plan()일 때만
     # 노출되지만, URL(/succession-plan)을 직접 입력하면 메뉴를 거치지 않고도
     # 들어올 수 있어 여기서도 반드시 다시 확인해야 한다(사용자 요청 —
     # "임원조직 담당자만 조회 가능한").

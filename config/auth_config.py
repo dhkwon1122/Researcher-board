@@ -106,7 +106,7 @@ ROLE_PERMISSIONS: dict[str, dict[str, bool]] = {
     },
 }
 
-# 리포팅 > 석세션 플랜(pages/org_comparison.py) 전용 접근 제어 — 사용자 요청:
+# 업무 시나리오 > 석세션 플랜(pages/org_comparison.py) 전용 접근 제어 — 사용자 요청:
 # "임원조직 담당자만 조회 가능한 석세션 플랜". 위 ROLE_PERMISSIONS의 4개
 # 세부 권한(view_evaluation 등)은 여러 역할에 걸쳐 있고 계정별로도 재정의
 # 가능한 반면, 이 화면은 "이 역할이면 무조건, 아니면 무조건 불가"로 고정해

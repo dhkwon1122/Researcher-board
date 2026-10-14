@@ -14106,3 +14106,11 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   LLM에는 이름·사번 미전송(부서/과제명·제목·건수만), 실패 시 통계 기반 문장으로 저장. 캐시 collab_summary_cache.json.
   산출물 collab_summary.json(load_to_db JSON_TABLES 'collab_summary', 키 level) → data_store.read_collab_summary.
 - 화면: 협업 그래프 아래 "AI 협업 요약" 카드(총평/상위 쌍/세부 현황). 테스트 tests/test_collab_summary.py.
+
+## (39) 네비게이션 바 4개 상위 기능으로 재구성 (2026-10-14)
+- 사용자 요청: 기능을 "연구원 프로필 카드 / 연구원 명단 / 보유 전문성 조회 / 업무 시나리오" 4개로 구분,
+  JOB Market과 석세션 플랜을 "업무 시나리오"의 하위 메뉴로.
+- app.py: 고정 NavLink 3개 라벨 변경(경로는 그대로 /, /researcher-list, /researcher-similarity-map).
+  JOB Market 고정 NavLink와 기존 "리포팅" 드롭다운을 없애고, refresh_navbar_user 콜백이 "업무 시나리오"
+  DropdownMenu를 만든다 — JOB Market은 항상, 석세션 플랜은 can_view_succession_plan()일 때만 항목 추가
+  (실제 접근 차단은 여전히 pages/org_comparison.py layout()). 페이지 경로·register_page 이름은 변경 없음.
