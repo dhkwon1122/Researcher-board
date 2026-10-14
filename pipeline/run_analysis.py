@@ -94,6 +94,10 @@ def run(refresh_journals: bool = False, refresh_judgments: bool = False, top_k: 
     print('[run_analysis] 4/5 전문성 심화 지표')
     from process_expertise_metrics import process as process_expertise_metrics
     steps.append(('전문성 심화 지표', process_expertise_metrics()))
+    # 부서/과제간 협업 AI 요약(2026-10-14) — 4단계의 협업 기준(현재 재직·제외 조직)과 같음. LLM 2회(부서·과제), 캐시.
+    print('[run_analysis] 4/5+ 부서/과제간 협업 AI 요약')
+    from process_collab_summary import process as process_collab_summary
+    steps.append(('협업 AI 요약', process_collab_summary()))
 
     if skip_competency_gap:
         print('[run_analysis] 5/5 과제별 역량 갭 — 건너뜀(--skip-competency-gap)')

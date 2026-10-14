@@ -83,12 +83,74 @@ def _collab_body(level, top_n):
     heat = cg.heatmap_figure(pairs, int(top_n or 20), order=order, group_of=group_of)
     if net is None or heat is None:
         return _empty(f'표시할 {unit} 간 협업이 없습니다(최근 5년, 현재 소속 기준).')
-    return dbc.Row([
+    graphs = dbc.Row([
         dbc.Col([html.Div(f'{unit} 간 협업 네트워크', className='small text-muted mb-1'),
                  dcc.Graph(figure=net, config={'displaylogo': False})], lg=6),
         dbc.Col([html.Div(f'{unit} 간 협업 히트맵', className='small text-muted mb-1'),
                  dcc.Graph(figure=heat, config={'displaylogo': False})], lg=6),
     ], className='g-3')
+    return html.Div([graphs, _collab_summary_card(level or 'level1')])
+
+
+def _pair_line(r: dict, extra: str = '') -> str:
+    kinds = ' · '.join(x for x in (f"논문 {r['papers']}" if r.get('papers') else '',
+                                   f"특허 {r['patents']}" if r.get('patents') else '') if x)
+    return f"{r['a']} ↔ {r['b']} ({kinds or str(r.get('total', 0)) + '건'}{extra})"
+
+
+def _collab_summary_card(level: str):
+    """AI 협업 요약(pipeline/process_collab_summary.py 산출물, 2026-10-14). 없으면 안내만."""
+    from services.data_store import read_collab_summary
+    s = read_collab_summary().get(level)
+    unit = '부서' if level != 'level3' else '과제'
+    if not s:
+        return html.Div(_empty('AI 협업 요약이 아직 없습니다 — 분석 실행(run_integration) 후 표시됩니다.'), className='mt-3')
+    li = lambda items: html.Ul([html.Li(x) for x in items], className='mb-2 ps-3')  # noqa: E731
+    top = []
+    for r in s.get('top_pairs') or []:
+        grade = f", 최우수·우수 {r['top_grade']}" if r.get('top_grade') else ''
+        names = '·'.join(r.get('people') or [])
+        if r.get('people_more'):
+            names += f" 외 {r['people_more']}명"
+        top.append(html.Li([
+            html.Span(_pair_line(r, grade), className='fw-semibold'),
+            html.Span(f" — 주제: {', '.join(r['topics'])}" if r.get('topics') else ''),
+            html.Span(f' / 참여: {names}' if names else '', className='text-muted'),
+        ]))
+    facts = []
+    if s.get('hubs'):
+        facts.append('허브 ' + unit + ': ' + ', '.join(f"{h['unit']}(상대 {h['partners']}곳·{h['docs']}건)" for h in s['hubs']))
+    if s.get('low'):
+        facts.append(f'협업이 적은 {unit}: ' + ', '.join(s['low']))
+    if s.get('new_pairs'):
+        facts.append('최근 2년 새로 생긴 협업: ' + ', '.join(f"{r['a']} ↔ {r['b']}" for r in s['new_pairs']))
+    if s.get('rising'):
+        facts.append('최근 늘어난 협업: ' + ', '.join(f"{r['a']} ↔ {r['b']}(최근2년 {r['recent']}·이전3년 {r['prior']})"
+                                               for r in s['rising']))
+    if s.get('falling'):
+        facts.append('최근 줄어든 협업: ' + ', '.join(f"{r['a']} ↔ {r['b']}(최근2년 {r['recent']}·이전3년 {r['prior']})"
+                                               for r in s['falling']))
+    facts.append(f"협업 유형: 논문 {s.get('papers', 0)}건 · 특허 {s.get('patents', 0)}건 "
+                 f"({'논문' if s.get('papers', 0) >= s.get('patents', 0) else '특허'} 중심)")
+    if s.get('top_grade_pairs'):
+        facts.append('최우수·우수 논문 공동 성과: ' + ', '.join(f"{r['a']} ↔ {r['b']}({r['top_grade']}편)"
+                                                    for r in s['top_grade_pairs']))
+    head = html.Div([
+        html.I(className='bi bi-stars me-1 text-primary'),
+        html.Span(f'AI 협업 요약 — {unit} 기준', className='fw-semibold'),
+        html.Span(f" (최근 5년 {s.get('period', '')}, 생성 {s.get('generated_at', '')}"
+                  + ('' if s.get('llm') else ', AI 응답 없어 통계 기반') + ')', className='text-muted small ms-1'),
+    ], className='mb-2')
+    return dbc.Card(dbc.CardBody([
+        head,
+        html.Div('총평', className='small fw-semibold text-muted'), li(s.get('overview') or []),
+        html.Div(f'협업 상위 {unit} 쌍', className='small fw-semibold text-muted'),
+        html.Ul(top, className='mb-2 ps-3') if top else _empty('협업 쌍 없음'),
+        html.Div('세부 현황', className='small fw-semibold text-muted'), li(facts),
+        html.Div('건수는 서로 다른 논문·특허 수 기준(위 그래프는 연구원 쌍 기준이라 숫자가 다를 수 있음). '
+                 'AI에는 이름 없이 부서/과제명·제목·건수만 전달되며, 참여자 이름은 데이터에서 직접 표시합니다.',
+                 className='text-muted', style={'fontSize': '0.7rem'}),
+    ], style={'fontSize': '0.8rem'}), className='mt-3 shadow-sm')
 
 
 # ── 과제별 역량(2026-10-08 개편) ────────────────────────────────────────────────

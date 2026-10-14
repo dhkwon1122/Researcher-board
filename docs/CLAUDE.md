@@ -14019,3 +14019,13 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 협업 그래프: 부서별 12색(DEPT_PALETTE). 과제 기준은 sm.level1_of_level3()로 과제→1단계부서 묶음 — 같은 부서끼리
   붙여 배치, 부서 색 계열의 밝기 차이로 과제 구분, 네트워크 바깥 호 + 부서명, 히트맵 위 부서 색 띠·부서명·경계선,
   축 이름도 부서 색. 제외 1단계 부서명에 "Ideation Factory T/F(SAIT)" 추가(대소문자·공백 무시, 하위 포함).
+
+## (38) 협업 그래프 높이 통일·히트맵 숫자·AI 협업 요약 (2026-10-14)
+- collab_graph.graph_height(top_n): 네트워크·히트맵 공통 높이(10·20개 650 / 30개 800 / 50개 950) — 부서/과제 기준 무관.
+- 히트맵 칸에 건수(굵게, 0·대각선 비움). 글자색은 plotly 자동 대비(진한 칸 흰색·연한 칸 검정).
+- pipeline/process_collab_summary.py(run_analysis 4/5 직후 자동): 최근 5년 공저 논문·공동발명 특허를 문서 단위로
+  부서/과제 쌍별 집계 → 상위 5쌍(논문/특허·최우수·우수 수, LLM 주제 2~3개, 참여자 3명+외 N명), 허브, 협업 적은 단위,
+  최근 2년 vs 이전 3년(연평균) 증가·감소·신규, 논문/특허 유형, 우수 논문 공동 성과 + LLM 개조식 총평.
+  LLM에는 이름·사번 미전송(부서/과제명·제목·건수만), 실패 시 통계 기반 문장으로 저장. 캐시 collab_summary_cache.json.
+  산출물 collab_summary.json(load_to_db JSON_TABLES 'collab_summary', 키 level) → data_store.read_collab_summary.
+- 화면: 협업 그래프 아래 "AI 협업 요약" 카드(총평/상위 쌍/세부 현황). 테스트 tests/test_collab_summary.py.
