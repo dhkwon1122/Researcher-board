@@ -171,7 +171,8 @@ def _build_summary_df(current_only: bool = True, period: tuple[date, date] | Non
             top_edu = edu_r.assign(_rank=edu_r['degree'].map(_DEGREE_RANK).fillna(0)) \
                            .sort_values('_rank').iloc[-1]
             highest = top_edu['degree']
-            major = str(top_edu.get('major', '') or '').strip() or '-'
+            # 최종학력이 고교면 전공 칸은 비워 둔다(2026-10-14, 고교는 전공 미표기 — 엑셀/프로필과 동일).
+            major = '' if highest == '고교' else (str(top_edu.get('major', '') or '').strip() or '-')
         else:
             highest = '-'
             major = '-'
@@ -459,6 +460,8 @@ def layout():
     return html.Div([
         dcc.Location(id='list-url', refresh=True),
         dcc.Download(id='researcher-list-excel-download'),
+        # 엑셀 다운로드 실패/대상 없음 안내(2026-10-14 — 예전엔 아무 반응 없이 끝나 원인을 알 수 없었다)
+        html.Div(id='list-excel-msg', className='small'),
 
         dbc.Row([
             dbc.Col(
@@ -563,7 +566,7 @@ def layout():
                         ], className='w-100'),
                         # 엑셀 다운로드에 포함할 추가 항목 — 항상 노출하지 않고
                         # 위 아이콘(list-excel-options-btn) 클릭 시 뜨는 가벼운
-                        # 팝오버로 옮겼다(사용자 요청). trigger='click'이라 별도
+                        # 팝오버로 옮겼다(사용자 요청). trigger='legacy'(클릭으로 열고, 바깥 어디를 눌러도 닫힘 — 2026-10-14)라 별도
                         # 열기/닫기 콜백 없이 dbc가 알아서 토글한다.
                         dbc.Popover(
                             dbc.Checklist(
@@ -601,7 +604,7 @@ def layout():
                                 value=[], switch=True,
                                 className='small',
                             ),
-                            target='list-excel-options-btn', trigger='click',
+                            target='list-excel-options-btn', trigger='legacy',
                             placement='bottom', body=True,
                         ),
                         html.Div(
@@ -1021,19 +1024,35 @@ def toggle_filter_modal(_open_clicks, _apply_clicks):
 # 열별 필터/정렬까지 반영된) 대상자들의 프로필을 다운로드 ───────────────────
 @callback(
     Output('researcher-list-excel-download', 'data'),
+    Output('list-excel-msg', 'children'),
     Input('list-excel-btn', 'n_clicks'),
     State('researcher-table', 'virtualRowData'),
     State('list-excel-options-check', 'value'),
     prevent_initial_call=True,
 )
 def download_excel(n_clicks, virtual_data, excel_options):
-    if not n_clicks or not virtual_data:
-        return no_update
-    researcher_ids = [row['researcher_id'] for row in virtual_data if row.get('researcher_id')]
+    if not n_clicks:
+        return no_update, no_update
+    researcher_ids = [row['researcher_id'] for row in (virtual_data or []) if row.get('researcher_id')]
     if not researcher_ids:
-        return no_update
+        return no_update, html.Span('다운로드할 대상이 없습니다(표에 보이는 연구원이 없음).', className='text-danger')
     excel_options = excel_options or []
-    data = researcher_profile_export.build_profile_workbook(
+    import time
+    import traceback
+    t0 = time.time()
+    print(f'[researcher_list] 엑셀 요청: {len(researcher_ids)}명, 추가 항목 {excel_options}', flush=True)
+    try:
+        data = _build_list_workbook(researcher_ids, excel_options)
+    except Exception as exc:
+        traceback.print_exc()
+        return no_update, html.Span(f'엑셀 생성 실패: {type(exc).__name__}: {exc} (서버 로그에 상세 내용)',
+                                    className='text-danger')
+    print(f'[researcher_list] 엑셀 완료: {len(data) // 1024}KB, {time.time() - t0:.1f}초', flush=True)
+    return dcc.send_bytes(data, researcher_profile_export.default_filename()), ''
+
+
+def _build_list_workbook(researcher_ids, excel_options):
+    return researcher_profile_export.build_profile_workbook(
         researcher_ids,
         # 과제수행이력/양성이력/핵심이력/보유기술 — 추가 선택(옵트인) 항목으로
         # 전환(사용자 확정 2026-09-02, 원래는 항상 자동 포함이었다).
@@ -1057,7 +1076,6 @@ def download_excel(n_clicks, virtual_data, excel_options):
         include_salary_grade='salary_grade' in excel_options,
         include_eval_half='eval_half' in excel_options,
     )
-    return dcc.send_bytes(data, researcher_profile_export.default_filename())
 
 
 # ── 콜백 5: 행 클릭 → 프로필 화면 이동 ──────────────────────────────────────

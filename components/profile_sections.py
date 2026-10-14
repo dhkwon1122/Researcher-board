@@ -241,7 +241,9 @@ def education_block(edu_df: pd.DataFrame, rid: str, *, plain_degree: bool = Fals
             row_style = None
         items.append(html.Div([
             degree_el,
-            html.Span(f"{edu.get('school', '')}  {edu.get('major', '')} ({grad_year})",
+            # 고교는 전공을 표기하지 않는다(2026-10-14, 엑셀 학력 칸과 동일).
+            html.Span(f"{edu.get('school', '')}  ({grad_year})" if degree == '고교'
+                      else f"{edu.get('school', '')}  {edu.get('major', '')} ({grad_year})",
                       className='small'),
         ], className=None if plain_degree else 'd-flex align-items-center mb-1', style=row_style))
     return html.Div(items) if items else html.Div('학력 정보 없음', className='text-muted small')
