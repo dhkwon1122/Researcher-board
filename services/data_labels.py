@@ -85,6 +85,8 @@ COLUMN_LABELS = {
     'contribution': '기여도',
     'project_name': '과제명',
     'project_code': '과제코드',
+    'grade_publication': '등급구분',
+    'impact_factor': 'Impact Factor',
 
     # 특허 (patents.csv)
     'application_id': '출원ID',

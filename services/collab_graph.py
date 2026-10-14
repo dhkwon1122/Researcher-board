@@ -14,11 +14,23 @@ import math
 import pandas as pd
 
 
+# 협업 분석에서 제외할 1단계 부서명(2026-10-14, 사용자 확정 — Staff 조직과 함께 제외). 대소문자 무시.
+EXCLUDED_LEVEL1 = {'SAIT'}
+
+
+def is_excluded_level1(name) -> bool:
+    return str(name or '').strip().upper() in EXCLUDED_LEVEL1
+
+
 def aggregate(edges: pd.DataFrame, level: str) -> dict[tuple[str, str], int]:
-    """{(단위A, 단위B)(사전순): 최근 5년 협업량}. 필요한 열이 없으면 {}."""
+    """{(단위A, 단위B)(사전순): 최근 5년 협업량}. 필요한 열이 없으면 {}.
+    한쪽이라도 1단계 부서명이 EXCLUDED_LEVEL1(SAIT)인 쌍은 제외 — 분석 재실행 전 산출물에도 바로 적용되도록 화면에서도 거른다."""
     a_col, b_col = f'{level}_a', f'{level}_b'
     if edges is None or edges.empty or not {a_col, b_col, 'recent_count'} <= set(edges.columns):
         return {}
+    if {'level1_a', 'level1_b'} <= set(edges.columns):
+        drop = edges['level1_a'].map(is_excluded_level1) | edges['level1_b'].map(is_excluded_level1)
+        edges = edges[~drop]
     df = edges[[a_col, b_col, 'recent_count']].fillna('')
     out: dict = {}
     for a, b, n in zip(df[a_col].astype(str), df[b_col].astype(str), df['recent_count']):

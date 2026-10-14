@@ -69,3 +69,16 @@ def test_current_levels_excludes_staff(monkeypatch):
     monkeypatch.setattr(sm, 'org_code_level_names', lambda code: ('P1', 'G', 'T-' + code))
     r = pd.DataFrame({'researcher_id': ['1', '2'], 'org_code': ['STAFF-ORG', 'RND'], 'is_current': ['Y', 'Y']})
     assert pm.current_levels(r) == {'2': ('P1', 'T-RND')}
+
+
+def test_aggregate_excludes_sait_level1():
+    """1단계 부서명 SAIT가 한쪽이라도 끼면 협업 쌍에서 제외(2026-10-14)."""
+    import pandas as pd
+    from services.collab_graph import aggregate
+    edges = pd.DataFrame([
+        dict(level1_a='A플랫폼', level1_b='B플랫폼', level3_a='a', level3_b='b', recent_count='3'),
+        dict(level1_a='SAIT', level1_b='B플랫폼', level3_a='s', level3_b='b', recent_count='5'),
+        dict(level1_a='A플랫폼', level1_b='sait', level3_a='a', level3_b='s2', recent_count='2'),
+    ])
+    assert aggregate(edges, 'level1') == {('A플랫폼', 'B플랫폼'): 3}
+    assert aggregate(edges, 'level3') == {('a', 'b'): 3}

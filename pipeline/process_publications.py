@@ -26,6 +26,9 @@ Output : data/processed/publications.csv
   총저자수       → total_authors (정수)
   전체 저자정보 → author_info + 기여도 파생
     └ 마지막 '(기여도 : XX%)' 추출 → contribution 컬럼 (정수 %, 없으면 빈 문자열)
+  등급구분      → grade_publication (선택, 최우수/우수/일반/외부/-, 원본에 없으면 빈 문자열 — 2026-10-14)
+  Impact Factor → impact_factor (선택, 숫자 문자열, 없거나 '-'면 빈 문자열 — 2026-10-14)
+    └ 프로필 인쇄의 대표 논문 우선순위(components/timeline_data.publication_priority_key)에 쓰인다.
   과제명   → project_name (선택, 원본에 없으면 빈 문자열)
   과제코드 → project_code (선택, 원본에 없으면 빈 문자열)
     └ 타임라인(components/timeline_data.py)에서 이 논문이 어떤 과제
@@ -81,8 +84,26 @@ _VALID_STATUS_NORM = {_normalize_status(v) for v in _VALID_STATUS_VALUES}
 # 있으면 추가로 가져오는 선택 컬럼(없어도 처리 계속, 빈 문자열로 채움)
 COL_PROJECT_NAME = '과제명'
 COL_PROJECT_CODE = '과제코드'
+COL_GRADE = '등급구분'
+COL_IMPACT_FACTOR = 'Impact Factor'
 
 _CONTRIBUTION_RE = re.compile(r'\(기여도\s*:\s*(\d+)\s*%\)\s*$')
+
+
+def _clean_grade(val) -> str:
+    """등급구분 원문(최우수/우수/일반/외부/-) 공백 정리. 비어 있으면 빈 문자열."""
+    from excel_reader import is_blank
+    s = str(val).strip()
+    return '' if is_blank(s) else s
+
+
+def _parse_float(val) -> str:
+    """Impact Factor 숫자 문자열(예: '12.345'). 숫자가 아니면('-' 등) 빈 문자열."""
+    try:
+        f = float(str(val).strip().replace(',', ''))
+    except (TypeError, ValueError):
+        return ''
+    return '' if f != f else f'{f:g}'
 
 
 def _parse_int(val) -> str:
@@ -176,6 +197,8 @@ def process(raw_dir: str = RAW_DIR) -> bool:
 
     result['project_name'] = df[COL_PROJECT_NAME].astype(str).str.strip() if COL_PROJECT_NAME in df.columns else ''
     result['project_code'] = df[COL_PROJECT_CODE].astype(str).str.strip() if COL_PROJECT_CODE in df.columns else ''
+    result['grade_publication'] = df[COL_GRADE].apply(_clean_grade) if COL_GRADE in df.columns else ''
+    result['impact_factor'] = df[COL_IMPACT_FACTOR].apply(_parse_float) if COL_IMPACT_FACTOR in df.columns else ''
 
     # pub_year: pub_date 앞 4자리
     result['pub_year'] = result['pub_date'].str[:4].where(

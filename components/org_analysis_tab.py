@@ -44,7 +44,7 @@ def collaboration_section() -> html.Div:
     title = '부서/과제간 협업 (최근 5년 논문 공저·특허 공동발명)'
     hint = ('같은 논문 공저자 또는 같은 특허 공동발명자인 현재 재직 연구원 쌍을 협업 1건으로 보고, 현재 소속 기준으로 '
             '부서(1단계부서명) 간 / 과제(3단계부서명) 간으로 합산합니다. 최근 5년(올해 포함) 건만, 같은 단위 안의 협업과 '
-            '팀/리더 참조 구분이 "Staff"인 조직(하위 조직 포함)은 제외. 순서는 조직코드 순, 노드에 마우스를 올리면 협업 건수. '
+            '팀/리더 참조 구분이 "Staff"인 조직(하위 조직 포함)과 1단계 부서명이 "SAIT"인 조직은 제외. 순서는 조직코드 순, 노드에 마우스를 올리면 협업 건수. '
             '네트워크 그래프는 선이 굵을수록 협업이 많고, 히트맵은 진할수록 많습니다(마우스 오버로 건수 확인).')
     edges = read_processed('collaboration_edges')
     if edges.empty:
@@ -121,8 +121,8 @@ def _evidence_text(x: dict) -> str:
     items = '; '.join(f"{t.get('item', '')}({float(t.get('score', 0)):.2f})" for t in x.get('top_items') or []) \
         or str(x.get('item') or '')
     lines = []
-    if reason:
-        lines.append(f'근거: {reason}')
+    if reason:   # 개조식 항목(줄바꿈 구분, 2026-10-14)
+        lines.append('근거:\n' + '\n'.join(f'· {r}' for r in reason.split('\n') if r.strip()))
     lines.append(f'가까운 보유 항목: {items}' if items else '')
     return '\n'.join(l for l in lines if l)
 
@@ -143,6 +143,14 @@ def _score_color(score: float) -> str:
     return 'success' if score >= 0.75 else 'primary' if score >= 0.5 else 'warning' if score >= 0.25 else 'secondary'
 
 
+def _bullet_list(text):
+    """개조식 설명(줄바꿈 구분)을 글머리 목록으로. 예전 서술형(한 줄)은 그 한 줄을 그대로 한 항목으로."""
+    lines = [ln.strip() for ln in str(text or '').split('\n') if ln.strip()]
+    if not lines:
+        return None
+    return html.Ul([html.Li(ln) for ln in lines], className='mb-0 ps-3')
+
+
 def _competency_table(item: dict) -> html.Div:
     name_map, org_map = _name_map(), _org_map()
     rows = []
@@ -160,16 +168,21 @@ def _competency_table(item: dict) -> html.Div:
                            style={'verticalAlign': 'top'})
         rows.append(html.Tr([
             html.Td(html.Div(c.get('competency', ''), className='fw-semibold'), style={'verticalAlign': 'top'}),
-            html.Td(c.get('description') or html.Span('(설명 없음 — 분석 재실행 필요)', className='text-muted'),
+            html.Td(_bullet_list(c.get('description'))
+                    or html.Span('(설명 없음 — 분석 재실행 필요)', className='text-muted'),
                     style={'verticalAlign': 'top'}),
             mem_cell, out_cell,
         ]))
+    # 헤더: 셀(0.78rem)보다 크게, 검정 볼드, 가로·세로 가운데(2026-10-14)
+    th = {'fontSize': '0.86rem', 'fontWeight': 700, 'color': '#000', 'textAlign': 'center',
+          'verticalAlign': 'middle'}
     head = html.Thead(html.Tr([
-        html.Th('필요 역량', style={'width': '15%'}),
-        html.Th('설명', style={'width': '25%'}),
-        html.Th([html.Div('과제원 맵핑', style={'fontSize': '0.65rem'}), '이름 + 임베딩 유사도'], style={'width': '30%'}),
-        html.Th([html.Div('비과제원 맵핑(상위 10명)', style={'fontSize': '0.65rem'}), '이름 + 임베딩 유사도'],
-                style={'width': '30%'}),
+        html.Th('필요 역량', style={**th, 'width': '15%'}),
+        html.Th('설명', style={**th, 'width': '25%'}),
+        html.Th([html.Div('과제원 맵핑'), html.Div('(이름 + 임베딩 유사도)', style={'fontSize': '0.78rem'})],
+                style={**th, 'width': '30%'}),
+        html.Th([html.Div('비과제원 맵핑(상위 10명)'), html.Div('(이름 + 임베딩 유사도)', style={'fontSize': '0.78rem'})],
+                style={**th, 'width': '30%'}),
     ]))
     return dbc.Table([head, html.Tbody(rows)], bordered=True, size='sm', className='mb-0 align-middle',
                      style={'fontSize': '0.78rem', 'tableLayout': 'fixed'})

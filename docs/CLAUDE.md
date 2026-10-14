@@ -13997,3 +13997,13 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   제외 섹션의 "제외할 과제만 결과에 반영…" 안내 삭제.
 - 팀/리더 참조·직군 예외자 카드: 제목 "엑셀 파일로 반영", 실행/다운로드 칸에 빈 제목 자리(nbsp)로 높이 맞춤,
   "최종실행이력" → "실행결과"(데이터 업데이트 표와 같은 아이콘+상태+시각, 아래 메시지 2줄). admin_shared.run_status_line 공용.
+
+## (36) 필요 역량 표·개조식·협업 SAIT 제외·논문 등급/IF (2026-10-14)
+- 조직 분석 > 과제별 필요 역량 표: 헤더 0.86rem 검정 볼드, 가로·세로 가운데(셀 0.78rem보다 큼). 설명은 글머리 목록.
+- process_project_competency_gap: 설명(description)·근거(reason)를 쉬운 말 개조식 항목 배열로 요청 → 줄바꿈 문자열(_bullets).
+  캐시 키 v3(설명)/v2(근거)로 올려 다음 run_analysis 5단계에서 다시 생성. 화면은 예전 서술형도 그대로 한 항목으로 표시.
+- 부서/과제간 협업: 1단계 부서명 "SAIT"도 제외(collab_graph.EXCLUDED_LEVEL1). 화면 집계(aggregate)에서 바로 거르고,
+  파이프라인 current_levels()에서도 제외.
+- 논문: 원천 선택 열 등급구분→grade_publication, Impact Factor→impact_factor. 대표 논문 정렬
+  timeline_data.publication_priority_key = 등급(최우수>우수>일반>외부>-) > 1저자·교신 > IF 내림차순 > 최신.
+  프로필 인쇄 2페이지 논문 상세표에 "등급" 열 추가(IF 열은 기존). 테스트 tests/test_publication_grade.py.

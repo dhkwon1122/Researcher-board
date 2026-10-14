@@ -134,6 +134,34 @@ def hr_points(hr_df):
     return points
 
 
+# 논문 등급구분 우선순위(2026-10-14, 사용자 확정): 최우수 > 우수 > 일반 > 외부 > -(또는 빈 값)
+PUBLICATION_GRADE_ORDER = ['최우수', '우수', '일반', '외부']
+
+
+def publication_grade_rank(grade) -> int:
+    g = str(grade or '').strip()
+    return PUBLICATION_GRADE_ORDER.index(g) if g in PUBLICATION_GRADE_ORDER else len(PUBLICATION_GRADE_ORDER)
+
+
+def _as_float(v) -> float:
+    try:
+        f = float(str(v).strip())
+    except (TypeError, ValueError):
+        return 0.0
+    return 0.0 if f != f else f
+
+
+def publication_priority_key(row) -> tuple:
+    """대표 논문 정렬 키(작을수록 앞): ① 등급구분(최우수>우수>일반>외부>-) ② 1저자 또는 교신저자 우선
+    ③ Impact Factor 내림차순 ④ 최신 실적일 우선. 프로필 인쇄 상세표가 이 순서로 앞에서부터 한 페이지만큼 보여준다."""
+    r = str(row.get('author_rank', '')).strip()
+    lead = r == '1' or str(row.get('is_corresponding', '')).lower() in ('true', '1', 'y', 'yes')
+    date = str(row.get('pub_date', '') or row.get('pub_year', '') or '')
+    date_key = -int(date[:10].replace('-', '').ljust(8, '0')) if date[:4].isdigit() and date[:10].replace('-', '').isdigit() else 0
+    return (publication_grade_rank(row.get('grade_publication')), 0 if lead else 1,
+            -_as_float(row.get('impact_factor')), date_key)
+
+
 def pub_points(pub_df):
     if pub_df.empty:
         return []
