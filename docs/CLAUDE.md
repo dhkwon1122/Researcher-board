@@ -14029,3 +14029,7 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   LLM에는 이름·사번 미전송(부서/과제명·제목·건수만), 실패 시 통계 기반 문장으로 저장. 캐시 collab_summary_cache.json.
   산출물 collab_summary.json(load_to_db JSON_TABLES 'collab_summary', 키 level) → data_store.read_collab_summary.
 - 화면: 협업 그래프 아래 "AI 협업 요약" 카드(총평/상위 쌍/세부 현황). 테스트 tests/test_collab_summary.py.
+
+## (39) 알림 닫기(X) 버튼 세로 가운데 정렬 (2026-10-14)
+- assets/custom.css `.alert-dismissible .btn-close` top:50% + translateY(-50%), padding 0.5rem 1rem — 데이터 업데이트
+  "N개 항목 실행을 시작했습니다…" 등 얇은 알림(py-2)에서 X가 아래로 처지던 문제. 모든 닫기 가능 알림 공통.
