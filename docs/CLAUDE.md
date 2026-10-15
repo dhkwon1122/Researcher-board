@@ -14042,3 +14042,14 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   결과 표시 / 새 코드: 실행중→성공 자동 표시).
 - 수정: 두 단계 분리 — data_update_status_tick(3초, wpr.status_signature(): 락 + 결과 기록 파일 수정 시각만 확인,
   인터벌 on/off)이 값이 바뀔 때만 Store(data-update-sig)를 갱신하고, data_update_poll은 그 Store 변경 때만 표·그리드 갱신.
+
+## (41) 조직 탭 개편 — 명칭·개조식 설명·1인 과제 제외·논문/특허 자산화 현황 (2026-10-15)
+- 명칭: 보유 전문성 > [연구원 | 조직(플랫폼/과제)] > [필요 역량(과제) | 협업(플랫폼/과제) | 논문,특허(플랫폼/과제)].
+  최하위 탭 설명은 개조식(_section의 hint를 리스트로 주면 글머리 목록).
+- 공용 소속 판정 services/org_units.py(unit_members/unit_sizes): 현재 재직, Staff 조직(하위 포함)·1단계 SAIT/
+  Ideation Factory T/F(SAIT) 제외 — 파이프라인 current_levels()와 같은 규칙.
+- 협업(과제 기준): 구성원 1명 과제가 낀 쌍 제외(화면 _collab_body + process_collab_summary level3). 부서 기준은 그대로.
+- 논문,특허(services/publication_quality.asset_counts/asset_figure): 논문 최우수>우수>일반>외부(공저 1건),
+  특허 전략(A급구분 전략출원)>A1>A2>기타(현재등급, 출원ID 1건), 최근 5년, 제외 조직 반영.
+  그래프: 논문·특허 나란히(같은 단위 순서), 파스텔 색, 범례 위쪽 가운데(서브플롯 제목·막대와 안 겹침).
+  표: 논문/특허 그룹 헤더 + 등급별·계. 테스트 tests/test_publication_grade.py, test_collab_summary.py.

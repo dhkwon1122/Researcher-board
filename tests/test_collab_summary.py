@@ -48,5 +48,8 @@ def test_level_stats_and_names_not_sent(monkeypatch):
 def test_fallback_without_llm(monkeypatch):
     monkeypatch.setattr(pcs, 'call_llm', lambda *a, **k: '')
     out = pcs.build(RES, PUBS, PATS, LEVELS, cache={}, today=date(2026, 10, 14))
+    l1 = next(r for r in out if r['level'] == 'level1')
+    assert not l1['llm'] and l1['overview'] and l1['overview'][0].startswith('가장 협업이 많은 부서')
+    # 과제 기준: 이 데이터의 과제는 b과제 외 모두 구성원 1명 → 1인 과제 제외(2026-10-15)로 협업 쌍 없음
     l3 = next(r for r in out if r['level'] == 'level3')
-    assert not l3['llm'] and l3['overview'] and l3['overview'][0].startswith('가장 협업이 많은 과제')
+    assert l3['top_pairs'] == []

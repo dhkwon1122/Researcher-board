@@ -50,22 +50,46 @@ def test_priority_grade_then_lead_then_if_then_recent():
         ['최우수-1저자-최근', '최우수-1저자-옛', '최우수-공저', '일반-1저자-IF30', '등급없음']
 
 
-def test_grade_counts_by_dept_dedupes_coauthors(monkeypatch):
+def test_asset_counts_papers_and_patents(monkeypatch):
+    """논문 등급(공저 1건)·특허 등급(전략>A1>A2>기타, 출원ID 1건)을 단위별로(2026-10-15)."""
     from services import publication_quality as pq
+    from services import org_units
     from services import similarity_map as sm
-    res = pd.DataFrame({'researcher_id': ['1', '2', '3'], 'org_code': ['O1', 'O1', 'O2'], 'is_current': ['Y'] * 3})
     pubs = pd.DataFrame({'researcher_id': ['1', '2', '3', '3'], 'title': ['P', 'p', 'Q', 'R'],
                          'grade_publication': ['최우수', '최우수', '우수', '외부'],
                          'pub_year': ['2025', '2025', '2024', '2001']})
-    monkeypatch.setattr(pq, 'read_processed', lambda n: {'publications': pubs, 'researchers': res}[n])
-    monkeypatch.setattr(sm, 'org_code_level_names', lambda o: ({'O1': 'A부서', 'O2': 'B부서'}[o], '', o))
+    pats = pd.DataFrame({'researcher_id': ['1', '2', '3', '3', '3'], 'application_id': ['X', 'X', 'Y', 'Z', 'W'],
+                         'patent_grade': ['A1', 'A1', 'A2', 'B', 'A1'], 'patent_grade_a_sub': ['전략출원', '전략출원', '', '', ''],
+                         'application_date': ['2025-01-01', '2025-01-01', '2024-03-01', '2023-05-01', '2010-01-01']})
+    monkeypatch.setattr(pq, 'read_processed', lambda n: {'publications': pubs, 'patents': pats}[n])
+    monkeypatch.setattr(org_units, 'unit_members', lambda level='level1': {'1': 'A부서', '2': 'A부서', '3': 'B부서'})
     monkeypatch.setattr(sm, 'level_filter_options', lambda lvl, *a, **k: [{'value': 'B부서'}, {'value': 'A부서'}])
-    df = pq.grade_counts('level1')
-    assert df.to_dict('records') == [
-        {'unit': 'B부서', '최우수': 0, '우수': 1, '일반': 0, '외부': 0, '합계': 1},
-        {'unit': 'A부서', '최우수': 1, '우수': 0, '일반': 0, '외부': 0, '합계': 1},
-    ]
-    assert pq.grade_figure(df) is not None
+    rows = {r['unit']: r for r in pq.asset_counts('level1').to_dict('records')}
+    assert list(rows) == ['B부서', 'A부서']
+    assert rows['A부서']['논문_최우수'] == 1 and rows['A부서']['특허_전략'] == 1 and rows['A부서']['특허_계'] == 1
+    assert rows['B부서']['논문_우수'] == 1 and rows['B부서']['논문_계'] == 1
+    assert (rows['B부서']['특허_A2'], rows['B부서']['특허_기타'], rows['B부서']['특허_A1']) == (1, 1, 0)
+    fig = pq.asset_figure(pq.asset_counts('level1'))
+    assert fig is not None and fig.layout.legend.xanchor == 'center'
+
+
+def test_collab_level3_drops_single_member_projects(monkeypatch):
+    """협업 과제 기준: 구성원 1명인 과제가 낀 쌍은 제외(2026-10-15)."""
+    import dash
+    dash.Dash(__name__)
+    from components import org_analysis_tab as o
+    from services import org_units
+    edges = pd.DataFrame([dict(level1_a='P', level1_b='Q', level3_a='a', level3_b='b', recent_count='3'),
+                          dict(level1_a='P', level1_b='Q', level3_a='a', level3_b='solo', recent_count='5')])
+    monkeypatch.setattr(o, 'read_processed', lambda n: edges)
+    from collections import Counter
+    monkeypatch.setattr(org_units, 'unit_sizes', lambda level='level1': Counter({'a': 3, 'b': 2, 'solo': 1}))
+    captured = {}
+    from services import collab_graph as cg
+    monkeypatch.setattr(cg, 'network_figure', lambda pairs, *a, **k: captured.setdefault('pairs', pairs) and None)
+    monkeypatch.setattr(cg, 'heatmap_figure', lambda *a, **k: None)
+    o._collab_body('level3', 20)
+    assert captured['pairs'] == {('a', 'b'): 3}
 
 
 def test_evidence_grade_bonus_ranks_top_paper_first():

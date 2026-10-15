@@ -17,12 +17,12 @@ from dash import Input, Output, callback, dcc, html
 
 from services.data_store import read_processed, read_project_competency_gap
 
-def _section(title: str, hint: str, body) -> html.Div:
-    return html.Div([
-        html.Div(title, className='fw-semibold mb-1'),
-        html.Div(hint, className='text-muted mb-2', style={'fontSize': '0.75rem'}),
-        body,
-    ], className='mb-4')
+def _section(title: str, hint, body) -> html.Div:
+    """hint가 리스트면 개조식(글머리 목록)으로 보여준다(2026-10-15, 탭 설명 개조식화)."""
+    hint_el = (html.Ul([html.Li(h) for h in hint], className='text-muted mb-2 ps-3', style={'fontSize': '0.75rem'})
+               if isinstance(hint, (list, tuple)) else
+               html.Div(hint, className='text-muted mb-2', style={'fontSize': '0.75rem'}))
+    return html.Div([html.Div(title, className='fw-semibold mb-1'), hint_el, body], className='mb-4')
 
 
 def _empty(msg: str) -> html.Div:
@@ -41,13 +41,13 @@ def _names(ids: str, name_map: dict) -> str:
 
 
 def collaboration_section() -> html.Div:
-    title = '부서/과제간 협업 (최근 5년 논문 공저·특허 공동발명)'
-    hint = ('같은 논문 공저자 또는 같은 특허 공동발명자인 현재 재직 연구원 쌍을 협업 1건으로 보고, 현재 소속 기준으로 '
-            '부서(1단계부서명) 간 / 과제(3단계부서명) 간으로 합산합니다. 최근 5년(올해 포함) 건만, 같은 단위 안의 협업과 '
-            '팀/리더 참조 구분이 "Staff"인 조직(하위 조직 포함)과 1단계 부서명이 "SAIT"·"Ideation Factory T/F(SAIT)"인 '
-            '조직(하위 포함)은 제외. 부서마다 색이 다르고, 과제 기준에서는 과제가 소속 부서 색 계열로 칠해지며 '
-            '네트워크 바깥 띠·히트맵 위쪽 띠에 부서명이 표시됩니다. 순서는 조직코드 순, 노드에 마우스를 올리면 협업 건수. '
-            '네트워크 그래프는 선이 굵을수록 협업이 많고, 히트맵은 진할수록 많습니다(마우스 오버로 건수 확인).')
+    title = '협업(플랫폼/과제) — 최근 5년 논문 공저·특허 공동발명'
+    hint = ['협업 1건 = 같은 논문 공저자 또는 같은 특허 공동발명자인 현재 재직 연구원 쌍',
+            '현재 소속 기준으로 부서(1단계부서명) 간 / 과제(3단계부서명) 간 합산, 최근 5년(올해 포함)',
+            '제외: 같은 단위 안의 협업, 구분 "Staff" 조직, 1단계 "SAIT"·"Ideation Factory T/F(SAIT)"(모두 하위 포함), '
+            '과제 기준에서 구성원 1명인 과제',
+            '부서마다 다른 색, 과제는 소속 부서 색 계열 — 네트워크 바깥 띠·히트맵 위 띠에 부서명',
+            '네트워크: 선이 굵을수록 협업 많음 · 히트맵: 진할수록 많음, 칸 숫자 = 건수 · 순서는 조직코드 순']
     edges = read_processed('collaboration_edges')
     if edges.empty:
         return _section(title, hint, _empty('데이터 없음 — pipeline/run_analysis.py(4/4 전문성 심화 지표) 실행 후 표시됩니다.'))
@@ -73,6 +73,10 @@ def _collab_body(level, top_n):
 
     edges = read_processed('collaboration_edges')
     pairs = cg.aggregate(edges, level or 'level1')
+    if level == 'level3':   # 구성원 1명인 과제는 제외(2026-10-15 — 조직 특성상 1인 과제가 있음)
+        from services.org_units import unit_sizes
+        sizes = unit_sizes('level3')
+        pairs = {k: v for k, v in pairs.items() if sizes.get(k[0], 0) > 1 and sizes.get(k[1], 0) > 1}
     unit = '부서' if level != 'level3' else '과제'
     from services import similarity_map as sm
     # 네트워크 원형 배치·히트맵 X/Y축 순서 = 팀/리더 참조 조직코드(dep_code) 순(드롭다운과 같은 기준)
@@ -374,9 +378,11 @@ def _gap_detail(project):
 
 
 def competency_gap_section() -> html.Div:
-    title = '과제별 필요 역량'
-    hint = ('과제 문서에서 LLM이 뽑은 필요 역량과 쉬운 설명, 소속 과제원의 임베딩 유사도, 소속은 아니지만 해당 역량을 가진 '
-            '임직원 상위 10명을 보여줍니다. 배지 숫자는 유사도(0~1), 마우스를 올리면 LLM 근거(비과제원은 1·3단계 부서명 포함).')
+    title = '필요 역량(과제)'
+    hint = ['과제 문서에서 AI가 뽑은 필요 역량과 쉬운 설명(개조식)',
+            '과제원 맵핑: 소속 과제원별 보유 역량 유사도(0~1)',
+            '비과제원 맵핑: 소속은 아니지만 해당 역량을 가진 임직원 상위 10명',
+            '배지에 마우스를 올리면 AI 근거(비과제원은 1·3단계 부서명 포함)']
     items = _gap_items()
     if not items:
         return _section(title, hint, _empty('데이터 없음 — pipeline/run_analysis.py(5/5 과제별 역량 갭) 실행 후 표시됩니다.'))
@@ -397,10 +403,12 @@ def competency_gap_section() -> html.Div:
 # ── 부서별 논문 등급(2026-10-14) ──────────────────────────────────────────────
 
 def publication_grade_section() -> html.Div:
-    title = '부서/과제별 논문 등급 (최근 5년)'
-    hint = ('현재 재직 연구원의 최근 5년 논문을 등급구분(최우수 > 우수 > 일반 > 외부)별로 세어 부서(1단계부서명) 또는 '
-            '과제(3단계부서명) 단위로 비교합니다. 같은 단위의 공저자가 같은 논문을 각자 올린 경우는 1건으로 셉니다. '
-            '최우수·우수가 많은 순으로 정렬되며, 표에는 전체 단위가 조직코드 순으로 나옵니다.')
+    title = '논문,특허(플랫폼/과제) — 최근 5년 자산화 현황'
+    hint = ['논문 등급: 최우수 > 우수 > 일반 > 외부(등급구분) · 같은 단위 공저는 1건',
+            '특허 등급: 전략(A급구분 전략출원) > A1 > A2 > 기타(현재등급) · 같은 특허(여러 나라 출원)·공동발명은 1건',
+            '기간: 논문 실적일·특허 출원일 기준 최근 5년, 현재 재직 연구원',
+            '제외: 구분 "Staff" 조직, 1단계 "SAIT"·"Ideation Factory T/F(SAIT)"(모두 하위 포함)',
+            '그래프: 상위 등급이 많은 순 / 표: 전체 단위, 조직코드 순']
     controls = dbc.Row([
         dbc.Col([dbc.Label('기준', className='small fw-semibold text-muted mb-1'),
                  dbc.RadioItems(id='org-pubgrade-level', value='level1', inline=True,
@@ -413,25 +421,31 @@ def publication_grade_section() -> html.Div:
 @callback(Output('org-pubgrade-body', 'children'), Input('org-pubgrade-level', 'value'))
 def _pubgrade_body(level):
     from services import publication_quality as pq
-    df = pq.grade_counts(level or 'level1')
-    fig = pq.grade_figure(df)
+    df = pq.asset_counts(level or 'level1')
+    fig = pq.asset_figure(df)
     if fig is None:
-        return _empty('표시할 논문 등급 데이터가 없습니다(논문 원천에 "등급구분" 열 반영 후 데이터 업데이트 필요).')
+        return _empty('표시할 논문·특허 데이터가 없습니다(최근 5년, 제외 조직 반영 후).')
     th = {'textAlign': 'center', 'verticalAlign': 'middle', 'fontWeight': 700, 'color': '#000'}
+    unit = '부서' if level != 'level3' else '과제'
+    groups = html.Tr([html.Th(unit, rowSpan=2, style=th),
+                      html.Th('논문', colSpan=len(pq.PAPER_GRADES) + 1, style={**th, 'background': '#FBEDE3'}),
+                      html.Th('특허', colSpan=len(pq.PATENT_GRADES) + 1, style={**th, 'background': '#EFE8FA'})])
+    sub = html.Tr([html.Th(c.split('_', 1)[1], style=th) for c in df.columns[1:]])
     table = dbc.Table([
-        html.Thead(html.Tr([html.Th(c if c != 'unit' else ('부서' if level != 'level3' else '과제'), style=th)
-                            for c in df.columns])),
-        html.Tbody([html.Tr([html.Td(v, style={'textAlign': 'left' if i == 0 else 'center'})
+        html.Thead([groups, sub]),
+        html.Tbody([html.Tr([html.Td(v, style={'textAlign': 'left' if i == 0 else 'center',
+                                               'fontWeight': 600 if df.columns[i].endswith('_계') else None})
                              for i, v in enumerate(r)]) for r in df.itertuples(index=False)]),
-    ], bordered=True, size='sm', className='mb-0', style={'fontSize': '0.78rem'})
-    return dbc.Row([
-        dbc.Col(dcc.Graph(figure=fig, config={'displaylogo': False}), lg=7),
-        dbc.Col(html.Div(table, style={'maxHeight': '520px', 'overflowY': 'auto'}), lg=5),
-    ], className='g-3')
+    ], bordered=True, size='sm', className='mb-0', style={'fontSize': '0.76rem'})
+    return html.Div([
+        dcc.Graph(figure=fig, config={'displaylogo': False}),
+        html.Div(table, style={'maxHeight': '420px', 'overflowY': 'auto'}, className='mt-2'),
+    ])
 
 
 def org_analysis_content() -> html.Div:
-    tabs = [dbc.Tab(competency_gap_section(), label='과제별 필요 역량', tab_id='org-sub-gap'),
-            dbc.Tab(collaboration_section(), label='부서/과제간 협업', tab_id='org-sub-collab'),
-            dbc.Tab(publication_grade_section(), label='부서별 논문 등급', tab_id='org-sub-pubgrade')]
+    # 탭 이름(2026-10-15 사용자 확정): 필요 역량(과제) / 협업(플랫폼/과제) / 논문,특허(플랫폼/과제)
+    tabs = [dbc.Tab(competency_gap_section(), label='필요 역량(과제)', tab_id='org-sub-gap'),
+            dbc.Tab(collaboration_section(), label='협업(플랫폼/과제)', tab_id='org-sub-collab'),
+            dbc.Tab(publication_grade_section(), label='논문,특허(플랫폼/과제)', tab_id='org-sub-pubgrade')]
     return dbc.Tabs(tabs, id='org-sub-tabs', active_tab='org-sub-gap', className='mt-2')
