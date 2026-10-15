@@ -14162,3 +14162,14 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 화면(detail_tabs.collaborator_row): "이름 (논문 3 · 특허 1)" — 0건 쪽은 생략. 재실행 전 산출물은 "이름 (4건)".
   data_store.read_top_collaborators는 (id, 논문, 특허) 튜플 반환(분리 열 없으면 특허 -1).
 - 반영: run_integration.py(또는 process_expertise_metrics.py + DB 반영) 재실행 후. 테스트 tests/test_org_analysis.py.
+
+## (45) 과제 투입기간 해제일 오타로 '진행중'이 되던 문제 (2026-10-15)
+- 사례: 원본 해제일 `2020250614`(10자리 오타) → parse_yyyymmdd가 날짜가 아닌 값을 그대로 통과 → 그 구간이 뒤 구간
+  (20250614~20250715~20260922)과 이어지지 못하고 따로 남아, 과제명 이력 분할 후 마지막 구간([연구]소재개발 22.12~)이
+  종료일 없음 → 타임라인 '진행중'.
+- 수정(pipeline/process_tasks.py):
+  - `_clean_dates`: 시작일/해제일이 실제 날짜(YYYY-MM-DD)가 아니면 경고 출력. 해제일은 빈 값으로, 시작일 오류 행은 제외.
+  - `_merge_consecutive_periods`: 해제일이 빈 구간 뒤에 같은 과제의 더 늦은 구간이 있으면 이어 붙임(뒤 구간 종료일 채택).
+    뒤 구간이 없으면 기존대로 진행중.
+- 반영: 과제 투입기간 파일 재처리(데이터 업데이트 실행 또는 process_tasks.py) — 같은 과제의 옛 행은 _drop_stale_task_rows가 정리.
+  원본 오타는 실행 로그의 "[WARN] 날짜 형식 오류"로 확인 가능. 테스트 tests/test_task_processing_dates.py.

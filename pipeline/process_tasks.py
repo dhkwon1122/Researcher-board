@@ -27,6 +27,7 @@ tasks_information.csv가 없으면 원본 task_name 그대로 the_task_name에 �
 
 import glob
 import os
+import re
 import sys
 from datetime import datetime, timedelta
 
@@ -83,6 +84,34 @@ def _collapse_same_start(grp: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).reset_index(drop=True)
 
 
+_DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+
+
+def _valid_date(s: str) -> bool:
+    if not _DATE_RE.match(str(s or '')):
+        return False
+    try:
+        datetime.strptime(s, '%Y-%m-%d')
+        return True
+    except ValueError:
+        return False
+
+
+def _clean_dates(df: pd.DataFrame) -> pd.DataFrame:
+    """날짜가 아닌 시작일/해제일(원본 오타 — 예: 해제일 2020250614)을 빈 값으로 바꾸고 경고를 출력한다
+    (2026-10-15). 시작일이 날짜가 아닌 행은 기간을 알 수 없어 뺀다. 해제일이 비게 된 행은
+    _merge_consecutive_periods가 같은 과제의 뒤 구간과 이어 붙인다(뒤 구간이 없으면 진행중)."""
+    df = df.copy()
+    bad_start = ~df['start_date'].map(_valid_date)
+    bad_end = ~df['end_date'].map(lambda v: v == '' or _valid_date(v))
+    for _, r in df[bad_start | bad_end].iterrows():
+        col, val = ('시작일', r['start_date']) if not _valid_date(r['start_date']) else ('해제일', r['end_date'])
+        print(f"  [WARN] 날짜 형식 오류 — KNOXID {r['researcher_id']} / {r['task_name']} / {col} '{val}' "
+              f"({'행 제외' if col == '시작일' else '해제일 없음으로 처리, 같은 과제 뒤 구간이 있으면 이어 붙임'})")
+    df.loc[bad_end, 'end_date'] = ''
+    return df[~bad_start].reset_index(drop=True)
+
+
 def _merge_consecutive_periods(df: pd.DataFrame) -> pd.DataFrame:
     """같은 (researcher_id, task_name) 내에서 이어지는 구간을 하나로 병합.
     "이어짐"의 기준: 종료일 == 다음 시작일(정확히 일치)이거나, 종료월과 다음
@@ -107,8 +136,11 @@ def _merge_consecutive_periods(df: pd.DataFrame) -> pd.DataFrame:
             if is_blank(ne):
                 ne = ''
 
-            # 연속 조건: 이전 종료일 == 다음 시작일, 또는 같은 달 안에서 재참여
-            if cur_e != '' and (ns == cur_e or _same_month(cur_e, ns)):
+            # 연속 조건: 이전 종료일 == 다음 시작일, 또는 같은 달 안에서 재참여.
+            # (2026-10-15) 이전 구간 해제일이 비었거나 날짜가 아니었는데(_clean_dates가 비움) 같은 과제의
+            # 더 늦은 구간이 있으면, 그 구간이 이어받은 것으로 보고 병합한다 — 해제일 오타(예: 2020250614)
+            # 구간이 '진행중'으로 남아 뒤 구간의 종료일(20260922)이 무시되던 문제.
+            if (cur_e == '' and ns > cur_s) or (cur_e != '' and (ns == cur_e or _same_month(cur_e, ns))):
                 cur_e = ne   # '' (ongoing) 또는 더 늦은 날짜
                 cur_r = nr
             else:
@@ -358,6 +390,7 @@ def process(raw_dir: str = RAW_DIR) -> bool:
     })
 
     result = result[result['researcher_id'] != ''].reset_index(drop=True)
+    result = _clean_dates(result)
 
     # 연속 수행기간 병합
     result = _merge_consecutive_periods(result)
