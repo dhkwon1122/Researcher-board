@@ -18,7 +18,10 @@ from dash import Input, Output, callback, dcc, html
 from services.data_store import read_processed, read_project_competency_gap
 
 def _section(title: str, hint, body) -> html.Div:
-    """hint가 리스트면 개조식(글머리 목록)으로 보여준다(2026-10-15, 탭 설명 개조식화)."""
+    """hint가 리스트면 개조식(글머리 목록)으로 보여준다(2026-10-15, 탭 설명 개조식화).
+    hint가 None이면 설명 없이 제목만(2026-10-15 사용자 확정 — 하위 탭 설명 전부 제외)."""
+    if not hint:
+        return html.Div([html.Div(title, className='fw-semibold mb-2'), body], className='mb-4')
     hint_el = (html.Ul([html.Li(h) for h in hint], className='text-muted mb-2 ps-3', style={'fontSize': '0.75rem'})
                if isinstance(hint, (list, tuple)) else
                html.Div(hint, className='text-muted mb-2', style={'fontSize': '0.75rem'}))
@@ -42,12 +45,7 @@ def _names(ids: str, name_map: dict) -> str:
 
 def collaboration_section() -> html.Div:
     title = '협업(플랫폼/과제) — 최근 5년 논문 공저·특허 공동발명'
-    hint = ['협업 1건 = 같은 논문 공저자 또는 같은 특허 공동발명자인 현재 재직 연구원 쌍',
-            '현재 소속 기준으로 부서(1단계부서명) 간 / 과제(3단계부서명) 간 합산, 최근 5년(올해 포함)',
-            '제외: 같은 단위 안의 협업, 구분 "Staff" 조직, 1단계 "SAIT"·"Ideation Factory T/F(SAIT)"(모두 하위 포함), '
-            '과제 기준에서 구성원 1명인 과제',
-            '부서마다 다른 색, 과제는 소속 부서 색 계열 — 네트워크 바깥 띠·히트맵 위 띠에 부서명',
-            '네트워크: 선이 굵을수록 협업 많음 · 히트맵: 진할수록 많음, 칸 숫자 = 건수 · 순서는 조직코드 순']
+    hint = None   # 하위 탭 설명 제외(2026-10-15 사용자 확정)
     edges = read_processed('collaboration_edges')
     if edges.empty:
         return _section(title, hint, _empty('데이터 없음 — pipeline/run_analysis.py(4/4 전문성 심화 지표) 실행 후 표시됩니다.'))
@@ -417,12 +415,7 @@ def _gap_detail(project):
 
 def competency_gap_section() -> html.Div:
     title = '필요 역량(과제)'
-    hint = ['과제 개요: 과제 문서를 AI가 정리한 과제 목표·마일스톤·주요 업무',
-            '인력현황: 최신 인력현황(researchers.csv) 기준 과제 소속 인원(휴직자 제외) — CL·직무·학위별',
-            '과제 문서에서 AI가 뽑은 필요 역량과 쉬운 설명(개조식)',
-            '과제원 맵핑: 인력현황의 소속 과제원별 보유 역량 유사도(0~1)',
-            '비과제원 맵핑: 소속은 아니지만 해당 역량을 가진 임직원 상위 10명',
-            '배지에 마우스를 올리면 AI 근거(비과제원은 1·3단계 부서명 포함)']
+    hint = None   # 하위 탭 설명 제외(2026-10-15 사용자 확정)
     items = _gap_items()
     if not items:
         return _section(title, hint, _empty('데이터 없음 — pipeline/run_analysis.py(5/5 과제별 역량 갭) 실행 후 표시됩니다.'))
@@ -444,39 +437,49 @@ def competency_gap_section() -> html.Div:
 
 def publication_grade_section() -> html.Div:
     title = '논문,특허(플랫폼/과제) — 최근 5년 자산화 현황'
-    hint = ['논문 등급: 최우수 > 우수 > 일반 > 외부(등급구분) · 같은 단위 공저는 1건',
-            '특허 등급: 전략(A급구분 전략출원) > A1 > A2 > 기타(현재등급) · 같은 특허(여러 나라 출원)·공동발명은 1건',
-            '기간: 논문 실적일·특허 출원일 기준 최근 5년, 현재 재직 연구원',
-            '제외: 구분 "Staff" 조직, 1단계 "SAIT"·"Ideation Factory T/F(SAIT)"(모두 하위 포함)',
-            '그래프: 상위 등급이 많은 순 / 표: 전체 단위, 조직코드 순']
+    hint = None   # 하위 탭 설명 제외(2026-10-15 사용자 확정)
+    from services import publication_quality as pq
     controls = dbc.Row([
         dbc.Col([dbc.Label('기준', className='small fw-semibold text-muted mb-1'),
                  dbc.RadioItems(id='org-pubgrade-level', value='level1', inline=True,
                                 options=[{'label': '부서(1단계부서명)', 'value': 'level1'},
-                                         {'label': '과제(3단계부서명)', 'value': 'level3'}])], md=6),
+                                         {'label': '과제(3단계부서명)', 'value': 'level3'}])], md=5),
+        dbc.Col([dbc.Label('플랫폼', className='small fw-semibold text-muted mb-1'),
+                 dcc.Dropdown(id='org-pubgrade-l1', multi=True, placeholder='전체',
+                              options=[{'label': d, 'value': d} for d in pq.dept_order()])], md=7),
     ], className='g-2 mb-3')
     return _section(title, hint, html.Div([controls, html.Div(id='org-pubgrade-body')]))
 
 
-@callback(Output('org-pubgrade-body', 'children'), Input('org-pubgrade-level', 'value'))
-def _pubgrade_body(level):
+@callback(Output('org-pubgrade-body', 'children'),
+          Input('org-pubgrade-level', 'value'), Input('org-pubgrade-l1', 'value'))
+def _pubgrade_body(level, platforms):
     from services import publication_quality as pq
-    df = pq.asset_counts(level or 'level1')
+    level = level or 'level1'
+    df = pq.asset_counts(level, platforms=platforms or None)
     fig = pq.asset_figure(df)
     if fig is None:
         return _empty('표시할 논문·특허 데이터가 없습니다(최근 5년, 제외 조직 반영 후).')
     th = {'textAlign': 'center', 'verticalAlign': 'middle', 'fontWeight': 700, 'color': '#000'}
     unit = '부서' if level != 'level3' else '과제'
-    groups = html.Tr([html.Th(unit, rowSpan=2, style=th),
-                      html.Th('논문', colSpan=len(pq.PAPER_GRADES) + 1, style={**th, 'background': '#FBEDE3'}),
-                      html.Th('특허', colSpan=len(pq.PATENT_GRADES) + 1, style={**th, 'background': '#EFE8FA'})])
-    sub = html.Tr([html.Th(c.split('_', 1)[1], style=th) for c in df.columns[1:]])
-    table = dbc.Table([
-        html.Thead([groups, sub]),
-        html.Tbody([html.Tr([html.Td(v, style={'textAlign': 'left' if i == 0 else 'center',
-                                               'fontWeight': 600 if df.columns[i].endswith('_계') else None})
-                             for i, v in enumerate(r)]) for r in df.itertuples(index=False)]),
-    ], bordered=True, size='sm', className='mb-0', style={'fontSize': '0.76rem'})
+    cols = [c for c in df.columns if c != 'dept']
+    lead = [html.Th('부서', rowSpan=2, style=th)] if level == 'level3' else []
+    groups = html.Tr(lead + [html.Th(unit, rowSpan=2, style=th),
+                             html.Th('논문', colSpan=len(pq.PAPER_GRADES) + 1, style={**th, 'background': '#FBEDE3'}),
+                             html.Th('특허', colSpan=len(pq.PATENT_GRADES) + 1, style={**th, 'background': '#EFE8FA'})])
+    sub = html.Tr([html.Th(c.split('_', 1)[1], style=th) for c in cols[1:]])
+    colors = pq.dept_color_map()
+    rows = []
+    for r in df.to_dict('records'):
+        dept = r.get('dept') or r['unit']
+        dot = html.Span('■ ', style={'color': colors.get(dept, '#999')})
+        cells = [html.Td([dot, dept], style={'textAlign': 'left', 'whiteSpace': 'nowrap'})] if level == 'level3' else []
+        cells.append(html.Td(([dot] if level != 'level3' else []) + [r['unit']], style={'textAlign': 'left'}))
+        cells += [html.Td(r[c], style={'textAlign': 'center', 'fontWeight': 600 if c.endswith('_계') else None})
+                  for c in cols[1:]]
+        rows.append(html.Tr(cells))
+    table = dbc.Table([html.Thead([groups, sub]), html.Tbody(rows)],
+                      bordered=True, size='sm', className='mb-0', style={'fontSize': '0.76rem'})
     return html.Div([
         dcc.Graph(figure=fig, config={'displaylogo': False}),
         html.Div(table, style={'maxHeight': '420px', 'overflowY': 'auto'}, className='mt-2'),
