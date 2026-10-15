@@ -560,27 +560,30 @@ navbar = dbc.Navbar(
             ),
             dbc.Nav(
                 [
+                    # 상위 기능 4개: 연구원 프로필 카드 / 연구원 명단 / 보유 전문성 조회 /
+                    # 업무 시나리오(2026-10-14 사용자 요청). 앞의 3개는 고정 NavLink,
+                    # "업무 시나리오"(JOB Market, 석세션 플랜)는 하위 메뉴 중 석세션
+                    # 플랜이 역할 제한(can_view_succession_plan())이 있어 로그인한
+                    # 사용자별로 동적으로 만들어야 하므로 아래 _navbar-user 콜백이
+                    # 채운다(이 navbar 변수 자체는 app.py 로드 시 한 번만 만들어지는
+                    # 정적 객체라, 요청/세션마다 달라지는 항목은 반드시 그 콜백이
+                    # 채우는 _navbar-user 안에 둬야 한다).
                     dbc.NavItem(dbc.NavLink(
-                        [html.I(className='bi bi-person-badge-fill me-1'), '연구원 프로필'],
+                        [html.I(className='bi bi-person-badge-fill me-1'), '연구원 프로필 카드'],
                         href='/', active='exact', className='text-white',
                     )),
                     dbc.NavItem(dbc.NavLink(
-                        [html.I(className='bi bi-table me-1'), '연구원 명단(AI검색)'],
+                        [html.I(className='bi bi-table me-1'), '연구원 명단'],
                         href='/researcher-list', active='exact', className='text-white',
                     )),
                     dbc.NavItem(dbc.NavLink(
-                        [html.I(className='bi bi-share-fill me-1'), '보유 전문성'],
+                        [html.I(className='bi bi-share-fill me-1'), '보유 전문성 조회'],
                         href='/researcher-similarity-map', active='exact', className='text-white',
                     )),
-                    dbc.NavItem(dbc.NavLink(
-                        [html.I(className='bi bi-signpost-split me-1'), 'JOB Market'],
-                        href='/job-market', active='exact', className='text-white',
-                    )),
-                    # '조직별 비교'/'과제 직무/대상자 검증' NavLink는 각각
-                    # pages/org_comparison.py, pages/jd_reconciliation.py의
-                    # _FEATURE_HIDDEN(기능 준비 중) 동안 제거됨(data/processed/
-                    # CLAUDE.md에 재오픈 방법 기록).
-                    # 관리자 메뉴 + 사용자 정보 (콜백으로 갱신)
+                    # '과제 직무/대상자 검증' NavLink는 pages/jd_reconciliation.py의
+                    # _FEATURE_HIDDEN(기능 준비 중) 동안 제거됨(docs/CLAUDE.md에
+                    # 재오픈 방법 기록).
+                    # 업무 시나리오 메뉴 + 관리자 메뉴 + 사용자 정보 (콜백으로 갱신)
                     html.Div(id='_navbar-user', className='d-flex align-items-center ms-3'),
                     # '로그아웃'은 /logout이 Dash 페이지가 아니라 순수 Flask
                     # 라우트라, 일반 <a href> 클릭을 Dash 페이지 라우터가 가로채면
@@ -622,11 +625,35 @@ app.layout = html.Div(
     Input('_pages_location', 'pathname'),
 )
 def refresh_navbar_user(_):
-    from services.auth import can, get_current_user, role_label
+    from services.auth import can, can_view_succession_plan, get_current_user, role_label
     user = get_current_user()
     if not user:
         return []
     items = []
+    # "업무 시나리오" 상위 메뉴 — 하위 메뉴: JOB Market(모든 사용자),
+    # 석세션 플랜(can_view_succession_plan()일 때만). 석세션 플랜 항목을
+    # 숨기는 건 UX일 뿐이고, 실제 접근 차단은 pages/org_comparison.py의
+    # layout()이 같은 함수로 다시 확인한다(URL 직접 입력 우회 방지, 사용자
+    # 요청: "임원조직 담당자만 조회 가능한 석세션 플랜"). 시나리오가 더
+    # 추가되면 scenario_items에 더하면 된다.
+    scenario_items = [
+        dbc.DropdownMenuItem(
+            [html.I(className='bi bi-signpost-split me-1'), 'JOB Market'],
+            href='/job-market',
+        ),
+    ]
+    if can_view_succession_plan():
+        scenario_items.append(dbc.DropdownMenuItem(
+            [html.I(className='bi bi-person-lines-fill me-1'), '석세션 플랜'],
+            href='/succession-plan',
+        ))
+    items.append(dbc.NavItem(dbc.DropdownMenu(
+        label=[html.I(className='bi bi-diagram-3 me-1'), '업무 시나리오'],
+        children=scenario_items,
+        nav=True, in_navbar=True,
+        toggle_style={'color': '#fff'},
+        toggleClassName='text-white',
+    )))
     if can('manage_users'):
         items.append(dbc.NavItem(dbc.NavLink(
             [html.I(className='bi bi-gear me-1'), '관리자'],

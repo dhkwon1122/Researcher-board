@@ -13359,6 +13359,83 @@ pandas NaN 문제와 근본 원인이 다름 — 이번 리팩토링은 "pandas�
 파이프라인 임포트 체인) 정상 로드, 기존 `tests/`(17건) 전체 통과,
 수정한 13개 파일 `py_compile` 통과.
 
+## 2026-10-02: 리포팅 > 석세션 플랜 메뉴 신설 (조직별 비교 화면을 임원조직 담당자 전용으로 되살림)
+
+사용자 요청: "이제 리포팅 기능을 추가하고 싶어. 예전에 없앴던 기능 중에
+석세션 플랜 기능이 있는데 그 화면을 다시 살리고 싶어. 다만 메뉴는
+리포팅 기능으로 하고 그 하위 메뉴로 임원조직 담당자만 조회 가능한
+석세션 플랜 이라는 메뉴로 만들고 싶어."
+
+`pages/org_comparison.py`("조직별 우수 연구원 비교" — 조직장 석세션 후보
+카드, `succession.csv` 기반)가 바로 그 기능이었다 — 삭제된 게 아니라
+`_FEATURE_HIDDEN = True`로 숨겨둔 상태였고("당분간 사용하지 않는
+화면"), 상단에 이미 "나중에 다시 쓰게 되면 이 플래그를 False로"라는
+재오픈 안내 주석이 남아 있었다.
+
+**권한 설계**: 이 화면은 `services.auth.can()`이 쓰는 4개 세부 권한
+(view_evaluation/view_incentive/view_comments/view_grade, 역할마다
+여러 개 True일 수 있고 계정별 재정의도 가능)으로는 표현할 수 없다 —
+사용자가 원한 건 "이 역할이면 무조건, 아니면 무조건 불가"라는 고정
+규칙. 그래서 별도 경로를 새로 만들었다:
+- `config/auth_config.py`: `SUCCESSION_PLAN_ROLES = frozenset({'executive_org'})`
+  (주석으로 can()의 4개 권한과 다른 설계임을 명시).
+- `services/auth.py`: `can_view_succession_plan()` — `SUCCESSION_PLAN_ROLES`
+  로만 판정, `is_admin`도 계정별 `permissions` 오버라이드도 적용하지
+  않는다(다른 4개 권한과 달리 "사용자/권한 관리" 탭에서 개별 계정에
+  풀어줄 수 있는 대상이 아님 — 명시적으로 고정해 달라는 요청).
+
+**화면/메뉴 변경**:
+- `pages/org_comparison.py`: `register_page` 경로를 `/org-comparison`
+  → `/succession-plan`, name/title을 '조직별 비교' → '석세션 플랜'으로
+  바꾸고 `_FEATURE_HIDDEN = False`. `layout()` 맨 앞에
+  `can_view_succession_plan()` 가드를 추가해 권한 없는 사용자는
+  "이 페이지는 임원조직 담당자만 조회할 수 있습니다" 경고만 보게 했다
+  — 메뉴를 숨기는 것만으론 부족하다(URL을 직접 입력하면 메뉴를 거치지
+  않고 들어올 수 있음), 반드시 `layout()`에서도 같은 함수로 재확인해야
+  한다는 걸 주석에도 남겼다. 화면 안 제목 텍스트("조직별 우수 연구원
+  비교 (조직장 석세션)")도 "석세션 플랜 (조직별 조직장 승계 후보)"로
+  2곳(데이터 없을 때/있을 때 각각의 H5) 변경.
+- `app.py`: `navbar`(모듈 로드 시 한 번만 만들어지는 정적 객체)에는
+  손대지 않고, 이미 콜백(`refresh_navbar_user`, `_pages_location`의
+  pathname이 바뀔 때마다 재실행)으로 역할별 항목을 채우던
+  `_navbar-user` Div 안에 "리포팅" `dbc.DropdownMenu`를 추가했다 —
+  `can_view_succession_plan()`일 때만 노출되고, 하위 항목은 지금은
+  "석세션 플랜"(`/succession-plan`) 하나뿐이지만 나중에 리포트가 더
+  생기면 같은 드롭다운에 추가하면 된다. "관리자" NavLink보다 앞쪽에
+  뒀다. 기존에 '조직별 비교'/'과제 직무/대상자 검증'이 같이 묶여
+  있던 주석도 갱신(후자는 여전히 `pages/jd_reconciliation.py`의
+  `_FEATURE_HIDDEN`으로 숨겨진 채 그대로).
+
+**검증**: `requirements.txt`(dash-cytoscape는 사내망 전용 구버전이라
+이 샌드박스에서 `pip install`이 setuptools 버전 문제로 실패 —
+`setuptools==59.6.0`으로 임시로 내렸다가 설치 후 다시 올려 해결)·
+`requirements-dev.txt` 설치 후:
+- `tests/test_security.py`에 `test_succession_plan_restricted_to_executive_org_role`
+  신규 추가 — executive_org는 True, (is_admin=True + 다른 역할)은 False,
+  (계정별 `permissions={'view_grade': True}` 오버라이드 + 다른 역할)도
+  여전히 False, 비로그인도 False임을 확인(즉 이 권한은 `can()`의 다른
+  4개와 달리 is_admin/계정별 오버라이드로 우회되지 않음을 명시적으로
+  테스트). `python3 -m pytest tests/` 전체(18건) 통과.
+- 실제 서버 기동(`generate_sample_data.py`로 succession.csv 25행 포함
+  샘플 생성) + 두 역할(executive_org 1명, talent_dev 1명) 계정 생성 +
+  Playwright로 양쪽 다 확인:
+  - executive_org: 로그인 후 네비게이션 바에 "리포팅" 메뉴가 보이고,
+    드롭다운 안에 "석세션 플랜" 항목이 있으며, 클릭하면
+    `/succession-plan`으로 이동해 실제 카드(부서별 "Ready Now"/"Ready
+    Later" 승계 후보)가 렌더링됨을 확인. `/succession-plan`에 URL을
+    직접 입력해도(메뉴를 거치지 않고) 정상 접근됨을 확인.
+  - talent_dev: 네비게이션 바에 "리포팅" 메뉴 자체가 안 보임을 확인.
+    `/succession-plan`에 URL을 직접 입력하면 "이 페이지는 임원조직
+    담당자만 조회할 수 있습니다" 경고만 뜨고, 실제 후보 카드 데이터
+    ("Ready Now" 등)는 전혀 노출되지 않음을 확인(서버 쪽 가드가 메뉴
+    숨김과 별개로 실제로 작동함을 재확인).
+  - 콘솔 에러 없음(단, `cdn.jsdelivr.net`을 이 샌드박스가 막아놔
+    Bootstrap CSS/아이콘이 전혀 안 그려져 스크린샷은 꾸밈 없이 날것
+    그대로 나옴 — 이전 라운드들과 동일한 샌드박스 제약, 기능 자체와는
+    무관).
+- `python3 -m py_compile`로 수정한 5개 파일 전부 컴파일 확인.
+- 테스트 데이터(`data/`, `config/users.json`)·서버 모두 정리.
+
 ## 2026-10-06: 전문성 심화 지표 — 0단계(강점 표기 표준화) + ②(주도형/참여형)
 
 사용자 요청("연구원 전문성 심화 분석 … ①~⑤ 적용, 다 추천대로")의 첫 두
@@ -14030,11 +14107,19 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   산출물 collab_summary.json(load_to_db JSON_TABLES 'collab_summary', 키 level) → data_store.read_collab_summary.
 - 화면: 협업 그래프 아래 "AI 협업 요약" 카드(총평/상위 쌍/세부 현황). 테스트 tests/test_collab_summary.py.
 
-## (39) 알림 닫기(X) 버튼 세로 가운데 정렬 (2026-10-14)
+## (39) 네비게이션 바 4개 상위 기능으로 재구성 (2026-10-14)
+- 사용자 요청: 기능을 "연구원 프로필 카드 / 연구원 명단 / 보유 전문성 조회 / 업무 시나리오" 4개로 구분,
+  JOB Market과 석세션 플랜을 "업무 시나리오"의 하위 메뉴로.
+- app.py: 고정 NavLink 3개 라벨 변경(경로는 그대로 /, /researcher-list, /researcher-similarity-map).
+  JOB Market 고정 NavLink와 기존 "리포팅" 드롭다운을 없애고, refresh_navbar_user 콜백이 "업무 시나리오"
+  DropdownMenu를 만든다 — JOB Market은 항상, 석세션 플랜은 can_view_succession_plan()일 때만 항목 추가
+  (실제 접근 차단은 여전히 pages/org_comparison.py layout()). 페이지 경로·register_page 이름은 변경 없음.
+
+## (40) 알림 닫기(X) 버튼 세로 가운데 정렬 (2026-10-14)
 - assets/custom.css `.alert-dismissible .btn-close` top:50% + translateY(-50%), padding 0.5rem 1rem — 데이터 업데이트
   "N개 항목 실행을 시작했습니다…" 등 얇은 알림(py-2)에서 X가 아래로 처지던 문제. 모든 닫기 가능 알림 공통.
 
-## (40) 데이터 업데이트 자동 갱신이 안 되던 문제 (2026-10-14)
+## (41) 데이터 업데이트 자동 갱신이 안 되던 문제 (2026-10-14)
 - 증상: 선택/전체 업데이트·DB 반영 후 화면이 안 바뀌고, 다른 화면에 갔다 오거나 새로고침해야 반영.
 - 원인: 3초 간격 폴링 콜백(data_update_poll)이 매번 표 전체 + 팀/리더 참조 그리드까지 다시 만들었다. 서버에서는 실행 중
   작업과 같은 프로세스라 이 응답이 3초를 넘기기 쉬운데, Dash는 같은 콜백이 다시 트리거되면 이전 응답을 버린다 → 응답이
@@ -14043,7 +14128,7 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 수정: 두 단계 분리 — data_update_status_tick(3초, wpr.status_signature(): 락 + 결과 기록 파일 수정 시각만 확인,
   인터벌 on/off)이 값이 바뀔 때만 Store(data-update-sig)를 갱신하고, data_update_poll은 그 Store 변경 때만 표·그리드 갱신.
 
-## (41) 조직 탭 개편 — 명칭·개조식 설명·1인 과제 제외·논문/특허 자산화 현황 (2026-10-15)
+## (42) 조직 탭 개편 — 명칭·개조식 설명·1인 과제 제외·논문/특허 자산화 현황 (2026-10-15)
 - 명칭: 보유 전문성 > [연구원 | 조직(플랫폼/과제)] > [필요 역량(과제) | 협업(플랫폼/과제) | 논문,특허(플랫폼/과제)].
   최하위 탭 설명은 개조식(_section의 hint를 리스트로 주면 글머리 목록).
 - 공용 소속 판정 services/org_units.py(unit_members/unit_sizes): 현재 재직, Staff 조직(하위 포함)·1단계 SAIT/
@@ -14054,7 +14139,7 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   그래프: 논문·특허 나란히(같은 단위 순서), 파스텔 색, 범례 위쪽 가운데(서브플롯 제목·막대와 안 겹침).
   표: 논문/특허 그룹 헤더 + 등급별·계. 테스트 tests/test_publication_grade.py, test_collab_summary.py.
 
-## (42) 필요 역량(과제) — 과제 개요(목표·마일스톤·주요 업무·인력현황) 추가 (2026-10-15)
+## (43) 필요 역량(과제) — 과제 개요(목표·마일스톤·주요 업무·인력현황) 추가 (2026-10-15)
 - 과제를 고르면 필요 역량 표 위에 "과제 개요" 카드(펼침): 과제 목표 / 주요 업무 / 과제 마일스톤 / 인력현황, 모두 개조식.
 - 목표·마일스톤·주요 업무: `pipeline/process_project_competency_gap.py`가 과제 문서 요약(project_expertise_analysis.json)을
   LLM으로 압축해 항목별 `overview`({goals, milestones, tasks})로 저장. 캐시 `project_overview_cache.json`(입력 해시, `ov1:`).
