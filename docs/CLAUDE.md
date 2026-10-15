@@ -14173,3 +14173,15 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
     뒤 구간이 없으면 기존대로 진행중.
 - 반영: 과제 투입기간 파일 재처리(데이터 업데이트 실행 또는 process_tasks.py) — 같은 과제의 옛 행은 _drop_stale_task_rows가 정리.
   원본 오타는 실행 로그의 "[WARN] 날짜 형식 오류"로 확인 가능. 테스트 tests/test_task_processing_dates.py.
+
+## (46) 과제 '진행중' 재발 — 실제 원인: 분석 실행이 옛 원천 사본으로 tasks.csv를 덮어씀 (2026-10-15)
+- (45)의 해제일 `2020250614`는 사용자 전달 시 오타(원본은 20250614)로 확인 — 원본 3행은 정상적으로 2019-02-18~2026-09-22로 병합된다.
+  (45)의 날짜 검사·빈 해제일 뒤 구간 병합은 방어 로직으로 유지.
+- 실제 원인: 데이터 업데이트 화면 업로드는 data/web_updates/tasks/의 새 파일로 tasks.csv를 맞게 만들지만,
+  이후 run_integration → run_expertise가 process_tasks.process()를 기본 경로로 다시 호출하면서 원천 사본
+  (DB tasks_stg 또는 data/raw_csv/tasks.csv — 화면 업로드로 갱신되지 않음)을 읽었다. 옛 사본엔 그 시점 진행중이던
+  구간(20190218~빈 값)이 있어, _drop_stale_task_rows가 새 행을 지우고 같은 키(사번·과제명·시작일)로 해제일 빈 값이 저장됨
+  → 과제명 이력 분할 후 마지막 구간 '진행중'. process_project_confl(2026-10-13)과 같은 유형.
+- 수정: process_tasks._newer_web_upload — 화면 업로드 파일이 원천 사본(raw_csv/tasks.csv)보다 새것이면 기본 경로 호출도
+  화면 업로드 폴더를 읽는다. 테스트 tests/test_task_processing_dates.py.
+- 반영: 배포 후 데이터 업데이트에서 과제참여이력 재실행(또는 run_integration) — 둘 다 최신 업로드 파일을 읽는다.

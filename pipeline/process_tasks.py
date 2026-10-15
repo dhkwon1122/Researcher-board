@@ -34,7 +34,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from paths import RAW_DIR, OUT_DIR  # noqa: E402
+from paths import BASE_DIR, RAW_DIR, OUT_DIR  # noqa: E402
 from merge_utils import TABLE_KEYS, write_merged  # noqa: E402
 from excel_reader import is_blank  # noqa: E402
 
@@ -356,10 +356,33 @@ def _drop_stale_task_rows(result: pd.DataFrame) -> None:
     print(f'[process_tasks] 이번 파일에 다시 나온 과제의 기존 {sum(mask)}행을 먼저 정리(구간 경계 변경으로 인한 중복 방지)')
 
 
+WEB_UPLOAD_DIR = os.path.join(BASE_DIR, 'data', 'web_updates', 'tasks')
+RAW_CSV_PATH = os.path.join(BASE_DIR, 'data', 'raw_csv', 'tasks.csv')
+
+
+def _newer_web_upload() -> str | None:
+    """관리자 화면(데이터 업데이트)에 올린 과제참여이력 파일이 1단계 원천 사본(data/raw_csv/tasks.csv,
+    DB tasks_stg의 원본)보다 새것이면 그 폴더(2026-10-15 버그 수정 — process_project_confl과 같은 문제).
+    run_integration/run_expertise는 기본 경로로 process()를 부르는데, 원천 사본은 화면 업로드로 갱신되지
+    않는다. 그대로 읽으면 화면 업로드로 맞게 만든 tasks.csv를 옛 파일 내용이 같은 키(사번·과제명·시작일)로
+    덮어써, 이미 종료된 과제가 옛 파일 기준 '진행중'(해제일 빈 값)으로 되돌아갔다."""
+    if not os.path.isdir(WEB_UPLOAD_DIR):
+        return None
+    source = _find_source_file(WEB_UPLOAD_DIR)
+    if not source:
+        return None
+    if os.path.exists(RAW_CSV_PATH) and os.path.getmtime(RAW_CSV_PATH) > os.path.getmtime(source):
+        return None
+    return WEB_UPLOAD_DIR
+
+
 def process(raw_dir: str = RAW_DIR) -> bool:
     from excel_reader import norm_id, parse_yyyymmdd, read_xlsx
     from source_reader import read_source
 
+    if raw_dir == RAW_DIR and _newer_web_upload():
+        raw_dir = WEB_UPLOAD_DIR
+        print('  [READ] 관리자 화면에서 올린 최신 개인별과제투입기간데이터 사용(원천 사본보다 새 파일)')
     if raw_dir == RAW_DIR:
         df = read_source('tasks')
         if df is None:
