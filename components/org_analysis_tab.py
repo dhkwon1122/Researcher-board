@@ -20,8 +20,8 @@ from services.data_store import read_processed, read_project_competency_gap
 def _section(title: str, hint, body) -> html.Div:
     """hint가 리스트면 개조식(글머리 목록)으로 보여준다(2026-10-15, 탭 설명 개조식화).
     hint가 None이면 설명 없이 제목만(2026-10-15 사용자 확정 — 하위 탭 설명 전부 제외)."""
-    if not hint:
-        return html.Div([html.Div(title, className='fw-semibold mb-2'), body], className='mb-4')
+    if not hint:   # title이 비면 제목 줄도 생략(2026-10-15 — 탭 이름과 같은 제목이 한 번 더 나오지 않게)
+        return html.Div(([html.Div(title, className='fw-semibold mb-2')] if title else []) + [body], className='mb-4')
     hint_el = (html.Ul([html.Li(h) for h in hint], className='text-muted mb-2 ps-3', style={'fontSize': '0.75rem'})
                if isinstance(hint, (list, tuple)) else
                html.Div(hint, className='text-muted mb-2', style={'fontSize': '0.75rem'}))
@@ -44,7 +44,7 @@ def _names(ids: str, name_map: dict) -> str:
 
 
 def collaboration_section() -> html.Div:
-    title = '협업(플랫폼/과제) — 최근 5년 논문 공저·특허 공동발명'
+    title = '* 최근 5년 논문 공저, 특허 공동발명'
     hint = None   # 하위 탭 설명 제외(2026-10-15 사용자 확정)
     edges = read_processed('collaboration_edges')
     if edges.empty:
@@ -55,8 +55,8 @@ def collaboration_section() -> html.Div:
     controls = dbc.Row([
         dbc.Col([dbc.Label('기준', className='small fw-semibold text-muted mb-1'),
                  dbc.RadioItems(id='org-collab-level', value='level1', inline=True,
-                                options=[{'label': '부서(1단계부서명)', 'value': 'level1'},
-                                         {'label': '과제(3단계부서명)', 'value': 'level3'}])], md=6),
+                                options=[{'label': '플랫폼', 'value': 'level1'},
+                                         {'label': '과제', 'value': 'level3'}])], md=6),
         dbc.Col([dbc.Label('표시 단위 수(협업량 상위)', className='small fw-semibold text-muted mb-1'),
                  dcc.Dropdown(id='org-collab-topn', value=20, clearable=False,
                               options=[{'label': f'상위 {n}개', 'value': n} for n in (10, 20, 30, 50)])], md=3),
@@ -422,7 +422,7 @@ def _gap_detail(project):
 
 
 def competency_gap_section() -> html.Div:
-    title = '필요 역량(과제)'
+    title = ''   # 탭 이름과 중복이라 제목 없음(2026-10-15)
     hint = None   # 하위 탭 설명 제외(2026-10-15 사용자 확정)
     items = _gap_items()
     if not items:
@@ -444,14 +444,14 @@ def competency_gap_section() -> html.Div:
 # ── 부서별 논문 등급(2026-10-14) ──────────────────────────────────────────────
 
 def publication_grade_section() -> html.Div:
-    title = '논문,특허(플랫폼/과제) — 최근 5년 자산화 현황'
+    title = '* 최근 5년 자산화 현황'
     hint = None   # 하위 탭 설명 제외(2026-10-15 사용자 확정)
     from services import publication_quality as pq
     controls = dbc.Row([
         dbc.Col([dbc.Label('기준', className='small fw-semibold text-muted mb-1'),
                  dbc.RadioItems(id='org-pubgrade-level', value='level1', inline=True,
-                                options=[{'label': '부서(1단계부서명)', 'value': 'level1'},
-                                         {'label': '과제(3단계부서명)', 'value': 'level3'}])], md=5),
+                                options=[{'label': '플랫폼', 'value': 'level1'},
+                                         {'label': '과제', 'value': 'level3'}])], md=5),
         dbc.Col([dbc.Label('플랫폼', className='small fw-semibold text-muted mb-1'),
                  dcc.Dropdown(id='org-pubgrade-l1', multi=True, placeholder='전체',
                               options=[{'label': d, 'value': d} for d in pq.dept_order()])], md=7),

@@ -94,6 +94,18 @@ def read_expertise_profiles() -> dict[str, dict]:
     return {p.get('researcher_id', ''): p for p in profiles}
 
 
+def read_expertise_profiles_std() -> dict[str, dict]:
+    """read_expertise_profiles() + 강점 분야 표준화본(researcher_strength_std, 있으면 strength_fields_std로 덧붙임).
+    원본 dict는 건드리지 않고 복사본을 돌려준다(2026-10-15 — JOB Market이 과제별 필요 역량과 같은 표준화 기준을 쓰도록)."""
+    std = {str(r.get('researcher_id', '')).zfill(8): r.get('strength_fields_std') or []
+           for r in _read_json_records('researcher_strength_std', 'researcher_strength_std.json')}
+    out = {}
+    for rid, p in read_expertise_profiles().items():
+        fields = std.get(str(rid).zfill(8))
+        out[rid] = {**p, 'strength_fields_std': fields} if fields else p
+    return out
+
+
 def read_similar_researchers() -> dict[str, dict]:
     """researcher_id -> researcher_similarity 항목(dict, 'similar' 리스트
     포함) 매핑. DB(테이블 researcher_similarity)가 있으면 그걸, 없으면

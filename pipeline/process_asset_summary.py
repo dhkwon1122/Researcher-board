@@ -39,7 +39,7 @@ TREND_RECENT_YEARS = 2
 TOP_N = 5
 TITLES_PER_UNIT = 12
 PAPER_GRADES = ['최우수', '우수', '일반', '외부']
-PATENT_GRADES = ['전략', 'A1', 'A2', '기타']
+PATENT_GRADES = ['전략', 'A1', 'A2']   # 기타(그 외 등급) 제외 — 화면과 같은 기준(2026-10-15)
 TOP_PAPER = ('최우수', '우수')
 TOP_PATENT = ('전략', 'A1')
 
@@ -47,7 +47,7 @@ _SYSTEM_PROMPT = """# Role
 당신은 R&D 조직의 논문·특허 자산화 현황을 분석해 인사·기획 담당자에게 쉽게 설명하는 전문가입니다.
 
 # Input
-- 단위(부서 또는 과제)별 최근 5년 논문(등급: 최우수>우수>일반>외부)·특허(등급: 전략>A1>A2>기타) 건수,
+- 단위(부서 또는 과제)별 최근 5년 논문(등급: 최우수>우수>일반>외부)·특허(등급: 전략>A1>A2) 건수,
   구성원 수, 추세 통계, 그리고 상위 단위의 최우수·우수 논문 제목이 주어집니다.
 - 개인 정보(이름 등)는 주어지지 않으며, 출력에도 넣지 마세요.
 
@@ -93,10 +93,11 @@ def unit_records(unit_of: dict, pubs: pd.DataFrame, pats: pd.DataFrame, since: i
             unit = unit_of.get(r.get('researcher_id'))
             app = str(r.get('application_id') or '').strip()
             y = pem._year_of(r.get('application_date'))
-            if not unit or not app or not y or y < since or (unit, app) in seen:
+            grade = _patent_grade(r)
+            if not unit or not app or not y or y < since or (unit, app) in seen or grade not in PATENT_GRADES:
                 continue
             seen.add((unit, app))
-            out.setdefault(unit, {'papers': [], 'patents': []})['patents'].append((y, _patent_grade(r)))
+            out.setdefault(unit, {'papers': [], 'patents': []})['patents'].append((y, grade))
     return out
 
 

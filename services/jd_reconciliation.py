@@ -89,7 +89,7 @@ def _org_overrides() -> dict:
     return _ORG_OVERRIDE_CACHE['map']
 
 
-def get_project_members(project_name: str) -> list:
+def get_project_members(project_name: str, include_on_leave: bool = False) -> list:
     """선택한 과제에 현재 배정된 인원 목록 — researchers.csv의
     org_code(현재 소속 과제)가 이 과제명과 같은 사람. process_project_expertise.py가
     문서 내 인력 이름을 researcher_id로 매핑할 때 쓰는 것과 동일한 기준이라,
@@ -101,22 +101,25 @@ def get_project_members(project_name: str) -> list:
     태그/공백 없음)는 표기 형식이 달라 fit.normalize_org_code()로 정규화한
     뒤 비교한다(process_project_expertise.py의 _resolve_personnel()과 동일한
     정규화 기준 공유)."""
-    # 현재(최신 인력현황, is_current=Y) 소속자만 — 예전에 이 과제였던 퇴직·전배자 제외(2026-10-13)
-    researchers_df = fit.current_rows(data_store.read_processed('researchers'))
+    # (2026-10-15) 과제별 필요 역량·과제 개요 인력현황과 같은 규칙(services/project_staffing.staff_members):
+    # 최신 인력현황 현재 재직자, 휴직 제외(include_on_leave=True면 포함 + on_leave 표시), 소속이 과제 매칭 키
+    # (비공식소속부서명 반영)와 같거나 팀/리더 참조 3단계부서명이 과제명과 같은 사람.
+    from services.project_staffing import _level3_lookup, is_on_leave, staff_members
+    researchers_df = data_store.read_processed('researchers')
     if researchers_df.empty:
         return []
-    # 과제별컨플에 비공식소속부서명이 있으면 과제명 대신 그 값으로 매칭(2026-10-13)
-    target = fit.project_member_key(project_name, _org_overrides())
-    rows = researchers_df[researchers_df['org_code'].astype(str).apply(fit.normalize_org_code) == target]
-    if rows.empty:
+    rids = staff_members(researchers_df, project_name, _org_overrides(), _level3_lookup(), include_on_leave)
+    if not rids:
         return []
+    by_id = {r['researcher_id']: r for r in researchers_df.fillna('').to_dict('records')}
     return [
         {
-            'researcher_id': row['researcher_id'],
-            'name': row.get('name', row['researcher_id']),
-            'department': row.get('department', ''),
+            'researcher_id': rid,
+            'name': by_id.get(rid, {}).get('name', rid),
+            'department': by_id.get(rid, {}).get('department', ''),
+            'on_leave': is_on_leave(by_id.get(rid, {}).get('employment_status')),
         }
-        for _, row in rows.iterrows()
+        for rid in rids
     ]
 
 

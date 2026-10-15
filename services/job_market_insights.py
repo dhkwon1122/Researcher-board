@@ -454,7 +454,8 @@ def plan_assignment(results: dict, capacity: int = 2) -> dict:
     반환: {'assigned': [{researcher_id, project_name, dep_name, score, gap_filled}], 'unassigned': [rid],
            'load': {project_name: 인원}}."""
     pairs = []
-    for rid, res in (results or {}).items():
+    results = {rid: res for rid, res in (results or {}).items() if not res.get('on_leave')}   # 휴직자 제외(2026-10-15)
+    for rid, res in results.items():
         for c in res.get('shortlist') or []:
             pairs.append((float(c.get('adjusted') or 0), rid, c))
     pairs.sort(key=lambda x: -x[0])

@@ -301,7 +301,9 @@ def _roster_table(roster: list):
         ])),
         html.Tbody([
             html.Tr([
-                html.Td(p['researcher_id']), html.Td(p['name']), html.Td(p['department']),
+                html.Td(p['researcher_id']),
+                html.Td([p['name'], dbc.Badge('휴직', color='secondary', className='ms-1')] if p.get('on_leave') else p['name']),
+                html.Td(p['department']),
                 html.Td(p['org_code']), html.Td(p['position_year']), html.Td(p['degree_major']),
                 html.Td(p['age']),
                 *([html.Td(evals.get(p['researcher_id']))] if evals is not None else []),

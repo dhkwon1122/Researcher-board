@@ -51,7 +51,7 @@ def test_priority_grade_then_lead_then_if_then_recent():
 
 
 def test_asset_counts_papers_and_patents(monkeypatch):
-    """논문 등급(공저 1건)·특허 등급(전략>A1>A2>기타, 출원ID 1건)을 단위별로(2026-10-15)."""
+    """논문 등급(공저 1건)·특허 등급(전략>A1>A2, 기타 제외, 출원ID 1건)을 단위별로(2026-10-15)."""
     from services import publication_quality as pq
     from services import org_units
     from services import similarity_map as sm
@@ -68,7 +68,8 @@ def test_asset_counts_papers_and_patents(monkeypatch):
     assert list(rows) == ['B부서', 'A부서']
     assert rows['A부서']['논문_최우수'] == 1 and rows['A부서']['특허_전략'] == 1 and rows['A부서']['특허_계'] == 1
     assert rows['B부서']['논문_우수'] == 1 and rows['B부서']['논문_계'] == 1
-    assert (rows['B부서']['특허_A2'], rows['B부서']['특허_기타'], rows['B부서']['특허_A1']) == (1, 1, 0)
+    assert (rows['B부서']['특허_A2'], rows['B부서']['특허_A1'], rows['B부서']['특허_계']) == (1, 0, 1)   # B등급(기타) 제외
+    assert '특허_기타' not in rows['B부서']
     fig = pq.asset_figure(pq.asset_counts('level1'))
     assert fig is not None and fig.layout.legend.xanchor == 'center'
 

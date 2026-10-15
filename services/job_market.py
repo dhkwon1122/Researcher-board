@@ -558,19 +558,25 @@ def run_project_search(project_names: list, excluded_org_codes: list) -> dict:
 
     researcher_ids = []
     seen_rid = set()
+    on_leave = set()   # 휴직자: 명단에는 "휴직"으로 남기고 재배치 추천·일괄 배치·종료 영향에서는 제외(2026-10-15)
     for project_name in project_names:
-        for m in jd.get_project_members(project_name):
+        for m in jd.get_project_members(project_name, include_on_leave=True):
             if m['researcher_id'] not in seen_rid:
                 seen_rid.add(m['researcher_id'])
                 researcher_ids.append(m['researcher_id'])
+                if m.get('on_leave'):
+                    on_leave.add(m['researcher_id'])
     if not researcher_ids:
         return {'error': f'선택한 과제({", ".join(project_names)})에 배정된 인원이 없습니다.'}
     roster = build_roster(researcher_ids)
+    for p in roster:
+        p['on_leave'] = p['researcher_id'] in on_leave
+    active_ids = [r for r in researcher_ids if r not in on_leave]
 
     excluded_norm = _normalize_excluded_projects(set(excluded_org_codes))
     excluded_norm |= {fit.normalize_org_code(p) for p in project_names}  # 종료 예정 과제 전체는 항상 제외
 
-    expertise_profiles = data_store.read_expertise_profiles()
+    expertise_profiles = data_store.read_expertise_profiles_std()   # 강점 분야 표준화본 우선(2026-10-15)
     try:
         candidate_pool = _build_candidate_pool(excluded_norm, expertise_profiles)
     except LLMError as exc:
@@ -579,15 +585,18 @@ def run_project_search(project_names: list, excluded_org_codes: list) -> dict:
     ctx = _safe_context(expertise_profiles)
     workers = llm_client.batch_concurrency()
     tasks = [(lambda rid=rid: recommend_for_researcher(rid, expertise_profiles, candidate_pool, ctx))
-              for rid in researcher_ids]
+              for rid in active_ids]
     task_results = llm_client.run_concurrent(tasks, max_workers=workers) if tasks else []
 
     results = {}
-    for rid, (result, error) in zip(researcher_ids, task_results):
+    for rid, (result, error) in zip(active_ids, task_results):
         results[rid] = result if error is None and result else {'recommendations': [], 'note': f'처리 중 오류: {error}'}
+    for rid in on_leave:
+        results[rid] = {'recommendations': [], 'on_leave': True,
+                        'note': '휴직 중 — 재배치 추천·일괄 배치 대상에서 제외했습니다.'}
 
     try:
-        impact = jmi.ending_impact(researcher_ids)
+        impact = jmi.ending_impact(active_ids)
     except Exception as exc:  # noqa: BLE001
         print(f'[job_market] 종료 영향 분석 실패: {exc}')
         impact = []
@@ -663,7 +672,7 @@ def run_individual_search(researcher_ids: list, excluded_org_codes: list) -> dic
     roster = build_roster(researcher_ids)
 
     base_excluded_norm = _normalize_excluded_projects(set(excluded_org_codes))
-    expertise_profiles = data_store.read_expertise_profiles()
+    expertise_profiles = data_store.read_expertise_profiles_std()   # 강점 분야 표준화본 우선(2026-10-15)
 
     own_norm_by_rid = {}
     for rid in researcher_ids:
