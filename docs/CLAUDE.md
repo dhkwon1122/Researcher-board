@@ -14114,3 +14114,41 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   JOB Market 고정 NavLink와 기존 "리포팅" 드롭다운을 없애고, refresh_navbar_user 콜백이 "업무 시나리오"
   DropdownMenu를 만든다 — JOB Market은 항상, 석세션 플랜은 can_view_succession_plan()일 때만 항목 추가
   (실제 접근 차단은 여전히 pages/org_comparison.py layout()). 페이지 경로·register_page 이름은 변경 없음.
+
+## (40) 알림 닫기(X) 버튼 세로 가운데 정렬 (2026-10-14)
+- assets/custom.css `.alert-dismissible .btn-close` top:50% + translateY(-50%), padding 0.5rem 1rem — 데이터 업데이트
+  "N개 항목 실행을 시작했습니다…" 등 얇은 알림(py-2)에서 X가 아래로 처지던 문제. 모든 닫기 가능 알림 공통.
+
+## (41) 데이터 업데이트 자동 갱신이 안 되던 문제 (2026-10-14)
+- 증상: 선택/전체 업데이트·DB 반영 후 화면이 안 바뀌고, 다른 화면에 갔다 오거나 새로고침해야 반영.
+- 원인: 3초 간격 폴링 콜백(data_update_poll)이 매번 표 전체 + 팀/리더 참조 그리드까지 다시 만들었다. 서버에서는 실행 중
+  작업과 같은 프로세스라 이 응답이 3초를 넘기기 쉬운데, Dash는 같은 콜백이 다시 트리거되면 이전 응답을 버린다 → 응답이
+  계속 버려져 화면이 영영 안 바뀜. 로컬에서 표 갱신을 4초로 늦추고 10초짜리 가짜 DB 반영으로 재현(옛 코드: 끝까지 이전
+  결과 표시 / 새 코드: 실행중→성공 자동 표시).
+- 수정: 두 단계 분리 — data_update_status_tick(3초, wpr.status_signature(): 락 + 결과 기록 파일 수정 시각만 확인,
+  인터벌 on/off)이 값이 바뀔 때만 Store(data-update-sig)를 갱신하고, data_update_poll은 그 Store 변경 때만 표·그리드 갱신.
+
+## (42) 조직 탭 개편 — 명칭·개조식 설명·1인 과제 제외·논문/특허 자산화 현황 (2026-10-15)
+- 명칭: 보유 전문성 > [연구원 | 조직(플랫폼/과제)] > [필요 역량(과제) | 협업(플랫폼/과제) | 논문,특허(플랫폼/과제)].
+  최하위 탭 설명은 개조식(_section의 hint를 리스트로 주면 글머리 목록).
+- 공용 소속 판정 services/org_units.py(unit_members/unit_sizes): 현재 재직, Staff 조직(하위 포함)·1단계 SAIT/
+  Ideation Factory T/F(SAIT) 제외 — 파이프라인 current_levels()와 같은 규칙.
+- 협업(과제 기준): 구성원 1명 과제가 낀 쌍 제외(화면 _collab_body + process_collab_summary level3). 부서 기준은 그대로.
+- 논문,특허(services/publication_quality.asset_counts/asset_figure): 논문 최우수>우수>일반>외부(공저 1건),
+  특허 전략(A급구분 전략출원)>A1>A2>기타(현재등급, 출원ID 1건), 최근 5년, 제외 조직 반영.
+  그래프: 논문·특허 나란히(같은 단위 순서), 파스텔 색, 범례 위쪽 가운데(서브플롯 제목·막대와 안 겹침).
+  표: 논문/특허 그룹 헤더 + 등급별·계. 테스트 tests/test_publication_grade.py, test_collab_summary.py.
+
+## (43) 필요 역량(과제) — 과제 개요(목표·마일스톤·주요 업무·인력현황) 추가 (2026-10-15)
+- 과제를 고르면 필요 역량 표 위에 "과제 개요" 카드(펼침): 과제 목표 / 주요 업무 / 과제 마일스톤 / 인력현황, 모두 개조식.
+- 목표·마일스톤·주요 업무: `pipeline/process_project_competency_gap.py`가 과제 문서 요약(project_expertise_analysis.json)을
+  LLM으로 압축해 항목별 `overview`({goals, milestones, tasks})로 저장. 캐시 `project_overview_cache.json`(입력 해시, `ov1:`).
+  LLM 실패 시 요약 원문을 문장 단위로 잘라 사용. 프롬프트에는 과제 문서 요약만 — 연구원 ID/이름 없음.
+- 인력현황: `services/project_staffing.py` — 과제별컨플 담당자 목록은 쓰지 않고 researchers.csv 최신 시점(is_current≠N)만,
+  재직상태 휴직 제외. 소속 = org_code가 과제 매칭 키(project_member_key, 비공식소속부서명 매핑 반영)와 같거나,
+  그 소속의 팀/리더 참조 3단계부서명이 과제명과 같은 사람. 총원 / CL별(임원→CL 큰 순) / 직무별 / 학위(박사·석사, education.csv).
+- 필요 역량 표의 "과제원"도 같은 규칙으로 통일(staff_members) — project_personnel.csv(과제 문서 담당자) 합집합 제거.
+  컨플에만 있던 사람(타 부서 겸직 등)은 비과제원 쪽에 나타날 수 있음.
+- 반영: 화면 인력현황은 배포만으로, 과제 개요·과제원 기준 변경은 `run_integration.py`(또는 process_project_competency_gap.py + DB 반영) 재실행 후.
+- 분석 결과가 없는 과제는 기존처럼 "분석 결과가 없는 과제" 목록으로만 표시.
+- 테스트: tests/test_project_overview.py.

@@ -208,6 +208,10 @@ def build(researchers: pd.DataFrame, pubs: pd.DataFrame, pats: pd.DataFrame, lev
     out = []
     for level, idx, unit in (('level1', 0, '부서'), ('level3', 1, '과제')):
         unit_of = {rid: lv[idx] for rid, lv in levels.items() if lv[idx]}
+        if level == 'level3':   # 구성원 1명인 과제는 제외(2026-10-15, 화면 그래프와 같은 기준)
+            from collections import Counter
+            size = Counter(unit_of.values())
+            unit_of = {rid: u for rid, u in unit_of.items() if size[u] > 1}
         all_units = sorted(set(unit_of.values()))
         s = summarize_level(docs, unit_of, name_of, all_units, today.year)
         res = _llm(s, unit, cache) if use_llm and s['top_pairs'] else None

@@ -784,6 +784,20 @@ def is_running() -> bool:
     return bool(lock and lock.get('keys') != ['__db_load__'])
 
 
+def status_signature() -> list:
+    """실행/DB 반영 상태가 바뀌었는지 가볍게 비교하기 위한 값(2026-10-14) — 락 유무 + 결과 기록 파일들의
+    수정 시각. 화면 폴링이 3초마다 이것만 확인하고, 값이 바뀌었을 때만 무거운 표 갱신을 한다."""
+    def _m(path):
+        try:
+            return os.path.getmtime(path)
+        except OSError:
+            return 0
+    lock = lock_status()
+    return [bool(lock), (lock or {}).get('started_at_ts', 0),
+            _m(RUN_LOG_PATH), _m(DB_LOG_PATH), _m(TEAM_REFER_DB_LOG_PATH),
+            _m(os.path.join(OUT_DIR, 'team_refer.csv'))]
+
+
 def any_running() -> bool:
     """파이프라인 실행이든 DB 반영이든 뭐든 하나라도 진행 중이면 True —
     버튼 비활성화 판단용(같은 락을 공유하므로 동시 진행 자체가 안 됨)."""
