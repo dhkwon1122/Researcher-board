@@ -512,7 +512,10 @@ CONSOLE_STYLE = """
     --danger: #b23b3b; --danger-weak: rgba(178,59,59,0.1);
   }
   * { box-sizing: border-box; }
-  html, body { height: 100%; }
+  /* (2026-10-15) body에 height:100%를 주면 body(=iframe 높이)가 고정돼 main이 그 높이로 늘어나 멈추고,
+     카드가 길 때 main 하단 여백(100px)이 사라져 카드 하단 외곽선이 iframe 끝에 걸려 잘려 보였다.
+     body는 min-height만 두고 내용만큼 늘어나게(사이드바 sticky도 body 안에서 정상 동작). */
+  html { height: 100%; }
   body {
     background: var(--bg); color: var(--ink);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;

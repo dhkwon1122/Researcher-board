@@ -14214,3 +14214,48 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   먼저 빼고 평가 조건 적용 — 화면·엑셀(can_view_evaluation)과 같은 기준. 안내 문구에 제외 인원 수 표시.
 - open_data_query(자유 질의 SQL)의 evaluations 테이블은 행 단위 필터가 없어 기존대로 People제외 계정에 비공개.
 - 테스트 tests/test_nl_grade_people_exclusion.py.
+
+## (50) 보유 전문성 > 연구원 — 개인 카드 하단 외곽선 잘림 (2026-10-15)
+- 원인: 콘솔 리포트 CSS(pipeline/rd_specialist_markdown.py) `html, body { height: 100% }` + body flex → main 높이가 iframe
+  높이로 고정돼, 카드가 길면 main 하단 여백(100px)이 사라지고 카드 하단 테두리가 iframe 끝에 걸려 잘림.
+- 수정: height:100%는 html에만. body는 min-height 100vh로 내용만큼 늘어남 → 카드 아래 여백 확보, 조직도 사이드바 sticky 유지.
+  (align-items:flex-start만 주면 사이드바 배경이 아래에서 끊겨 이 방식으로 확정.) 화면에서 매번 렌더링하므로 배포만으로 반영.
+
+## (51) 조직(플랫폼/과제) 하위 탭 설명 제거 + 논문,특허 탭 정렬·부서색·플랫폼 필터 (2026-10-15)
+- 하위 탭 3개(필요 역량/협업/논문,특허)의 개조식 설명 제거(_section(hint=None) → 제목만).
+- 논문,특허(services/publication_quality):
+  - asset_counts(level, platforms=None): 과제 기준 구성원 1명 과제 제외(협업 탭과 같은 기준), dept(1단계) 열 추가,
+    조직코드 순(과제는 부서 조직코드 순으로 묶고 그 안에서 과제 조직코드 순). platforms로 플랫폼 필터.
+  - asset_figure: 상위 30 제한·등급순 정렬 제거 → 조직코드 순 전체(위→아래). 막대=등급색 유지, y축 이름표=부서색
+    (dept_color_map — collab_graph 팔레트, 전체 부서 목록 기준이라 필터와 무관하게 고정), 과제 기준은 같은 부서 묶음에
+    연한 부서색 배경 띠 + 오른쪽 부서명.
+  - 화면: 플랫폼(1단계) 다중 선택 필터(org-pubgrade-l1), 표에 부서색 마커, 과제 기준은 "부서" 열 추가.
+- 건수 기준은 그대로: 같은 단위 안 공저/공동발명은 1건, 다른 단위끼리는 각 단위에 1건씩(사용자 확정 유지).
+
+## (52) 논문,특허(플랫폼/과제) — AI 자산화 요약 (2026-10-15)
+- pipeline/process_asset_summary.py(run_analysis 4/5+, 협업 AI 요약 다음 자동): 화면 그래프와 같은 기준(최근 5년, 현재 재직,
+  Staff·SAIT·Ideation Factory 제외, 과제 기준 1인 과제 제외, 같은 단위 공저·공동발명 1건)으로 부서/과제 기준 각각:
+  ① LLM 개조식 총평 ② 상위 등급 실적 Top 5(최우수·우수 논문 + 전략·A1 특허) ③ 추세(최근 2년 vs 이전 3년 연평균,
+  늘어남 ≥1.5배·최근 2건 이상 / 줄어듦 ≤0.5배·이전 3건 이상) ⑤ 실적 1건 이하 단위 ⑥ 인당 생산성 상위·하위 5(겹치지 않게)
+  ⑦ Top 5 단위의 최우수·우수 논문 제목(최대 12개)에서 LLM 주제 2~3개.
+- LLM에는 부서/과제명·논문 제목·건수·인원 수만(이름·사번 없음). 실패 시 통계 기반 문장. 캐시 asset_summary_cache.json.
+- 산출물 asset_summary.json → load_to_db JSON_TABLES('asset_summary', 키 level) → data_store.read_asset_summary.
+- 화면: 논문,특허 표 아래 "AI 자산화 요약" 카드(총평 / 상위 등급 Top 5 + 주제 / 세부 현황). 플랫폼 필터와 무관하게 전체 기준.
+- 테스트 tests/test_asset_summary.py.
+
+## (53) 협업 — 논문·특허 작성 당시 같은 단위였던 협업 제외 + 이력 확인 스크립트 (2026-10-15)
+- pipeline/historical_units.py(UnitHistory): 문서 기준일(논문 pub_date→announce_date, 특허 application_date — 없으면
+  기존처럼 협업 집계 제외)에 researchers_history.csv 월별 스냅샷으로 당시 org_code(기준일 이전 가장 가까운 달, 없으면
+  이후 3개월 이내, 그래도 없으면 판정 불가 → 협업으로 셈), 팀/리더 참조 시점별 조직도로 당시 1/3단계부서명(없으면 현재 이름).
+  비교는 당시 이름끼리.
+- process_expertise_metrics.compute_collaboration(history=): 연구원 쌍마다 판정, edges에 recent_count_level1/level3
+  (당시 같은 단위 건 제외)·excluded_level1/level3 추가(recent_count 원값 유지). collab_graph.aggregate는 레벨별 열 우선,
+  excluded_same_unit()로 "현재 다른 단위인데 당시 같은 단위라 뺀 건수" → 협업 그래프 아래 안내 문구.
+- process_collab_summary: 단위 쌍의 연구원끼리 모두 당시 같은 단위였던 문서는 그 단위 쌍에서 제외(same_unit_excluded),
+  AI 협업 요약 세부 현황에 표시.
+- 기존 버그 수정(services/similarity_map._team_refer_org_code_timeline): _latest_rows_in_period에 튜플 대신 date 전달,
+  빈 칸 NaN → ''. (누적기준 조직 필터 researcher_ids_ever_matching_org_field도 이 함수를 씀 — 예외로 늘 빈 결과였을 수 있음.)
+- scripts/check_history_months.py [개월수=60]: 이력 보유 개월·월별 인원, 최근 N개월 중 빈 달, 최근 5년 협업 쌍 중 당시 소속
+  판정 가능 비율과 실제로 빠지는 건수.
+- 반영: run_integration(또는 process_expertise_metrics.py + process_collab_summary.py + DB 반영) 재실행.
+- 테스트 tests/test_historical_units.py.

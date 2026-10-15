@@ -18,7 +18,10 @@ from dash import Input, Output, callback, dcc, html
 from services.data_store import read_processed, read_project_competency_gap
 
 def _section(title: str, hint, body) -> html.Div:
-    """hint가 리스트면 개조식(글머리 목록)으로 보여준다(2026-10-15, 탭 설명 개조식화)."""
+    """hint가 리스트면 개조식(글머리 목록)으로 보여준다(2026-10-15, 탭 설명 개조식화).
+    hint가 None이면 설명 없이 제목만(2026-10-15 사용자 확정 — 하위 탭 설명 전부 제외)."""
+    if not hint:
+        return html.Div([html.Div(title, className='fw-semibold mb-2'), body], className='mb-4')
     hint_el = (html.Ul([html.Li(h) for h in hint], className='text-muted mb-2 ps-3', style={'fontSize': '0.75rem'})
                if isinstance(hint, (list, tuple)) else
                html.Div(hint, className='text-muted mb-2', style={'fontSize': '0.75rem'}))
@@ -42,12 +45,7 @@ def _names(ids: str, name_map: dict) -> str:
 
 def collaboration_section() -> html.Div:
     title = '협업(플랫폼/과제) — 최근 5년 논문 공저·특허 공동발명'
-    hint = ['협업 1건 = 같은 논문 공저자 또는 같은 특허 공동발명자인 현재 재직 연구원 쌍',
-            '현재 소속 기준으로 부서(1단계부서명) 간 / 과제(3단계부서명) 간 합산, 최근 5년(올해 포함)',
-            '제외: 같은 단위 안의 협업, 구분 "Staff" 조직, 1단계 "SAIT"·"Ideation Factory T/F(SAIT)"(모두 하위 포함), '
-            '과제 기준에서 구성원 1명인 과제',
-            '부서마다 다른 색, 과제는 소속 부서 색 계열 — 네트워크 바깥 띠·히트맵 위 띠에 부서명',
-            '네트워크: 선이 굵을수록 협업 많음 · 히트맵: 진할수록 많음, 칸 숫자 = 건수 · 순서는 조직코드 순']
+    hint = None   # 하위 탭 설명 제외(2026-10-15 사용자 확정)
     edges = read_processed('collaboration_edges')
     if edges.empty:
         return _section(title, hint, _empty('데이터 없음 — pipeline/run_analysis.py(4/4 전문성 심화 지표) 실행 후 표시됩니다.'))
@@ -73,10 +71,13 @@ def _collab_body(level, top_n):
 
     edges = read_processed('collaboration_edges')
     pairs = cg.aggregate(edges, level or 'level1')
+    keep = None
     if level == 'level3':   # 구성원 1명인 과제는 제외(2026-10-15 — 조직 특성상 1인 과제가 있음)
         from services.org_units import unit_sizes
         sizes = unit_sizes('level3')
         pairs = {k: v for k, v in pairs.items() if sizes.get(k[0], 0) > 1 and sizes.get(k[1], 0) > 1}
+        keep = {u for u, n in sizes.items() if n > 1}
+    excluded = cg.excluded_same_unit(edges, level or 'level1', keep)
     unit = '부서' if level != 'level3' else '과제'
     from services import similarity_map as sm
     # 네트워크 원형 배치·히트맵 X/Y축 순서 = 팀/리더 참조 조직코드(dep_code) 순(드롭다운과 같은 기준)
@@ -93,7 +94,10 @@ def _collab_body(level, top_n):
         dbc.Col([html.Div(f'{unit} 간 협업 히트맵', className='small text-muted mb-1'),
                  dcc.Graph(figure=heat, config={'displaylogo': False})], lg=6),
     ], className='g-3')
-    return html.Div([graphs, _collab_summary_card(level or 'level1')])
+    note = html.Div(f'논문·특허 작성 당시 같은 {unit}였던 협업 {excluded}건(연구원 쌍 기준)은 제외했습니다 '
+                    '(당시 소속 = 인력현황 월별 이력, 판정할 수 없는 건은 포함).',
+                    className='text-muted mt-1', style={'fontSize': '0.72rem'}) if excluded else None
+    return html.Div([graphs, note, _collab_summary_card(level or 'level1')])
 
 
 def _pair_line(r: dict, extra: str = '') -> str:
@@ -134,6 +138,8 @@ def _collab_summary_card(level: str):
     if s.get('falling'):
         facts.append('최근 줄어든 협업: ' + ', '.join(f"{r['a']} ↔ {r['b']}(최근2년 {r['recent']}·이전3년 {r['prior']})"
                                                for r in s['falling']))
+    if s.get('same_unit_excluded'):
+        facts.append(f"작성 당시 같은 {unit}였던 협업 {s['same_unit_excluded']}건 제외(인력현황 월별 이력 기준)")
     facts.append(f"협업 유형: 논문 {s.get('papers', 0)}건 · 특허 {s.get('patents', 0)}건 "
                  f"({'논문' if s.get('papers', 0) >= s.get('patents', 0) else '특허'} 중심)")
     if s.get('top_grade_pairs'):
@@ -417,12 +423,7 @@ def _gap_detail(project):
 
 def competency_gap_section() -> html.Div:
     title = '필요 역량(과제)'
-    hint = ['과제 개요: 과제 문서를 AI가 정리한 과제 목표·마일스톤·주요 업무',
-            '인력현황: 최신 인력현황(researchers.csv) 기준 과제 소속 인원(휴직자 제외) — CL·직무·학위별',
-            '과제 문서에서 AI가 뽑은 필요 역량과 쉬운 설명(개조식)',
-            '과제원 맵핑: 인력현황의 소속 과제원별 보유 역량 유사도(0~1)',
-            '비과제원 맵핑: 소속은 아니지만 해당 역량을 가진 임직원 상위 10명',
-            '배지에 마우스를 올리면 AI 근거(비과제원은 1·3단계 부서명 포함)']
+    hint = None   # 하위 탭 설명 제외(2026-10-15 사용자 확정)
     items = _gap_items()
     if not items:
         return _section(title, hint, _empty('데이터 없음 — pipeline/run_analysis.py(5/5 과제별 역량 갭) 실행 후 표시됩니다.'))
@@ -444,43 +445,101 @@ def competency_gap_section() -> html.Div:
 
 def publication_grade_section() -> html.Div:
     title = '논문,특허(플랫폼/과제) — 최근 5년 자산화 현황'
-    hint = ['논문 등급: 최우수 > 우수 > 일반 > 외부(등급구분) · 같은 단위 공저는 1건',
-            '특허 등급: 전략(A급구분 전략출원) > A1 > A2 > 기타(현재등급) · 같은 특허(여러 나라 출원)·공동발명은 1건',
-            '기간: 논문 실적일·특허 출원일 기준 최근 5년, 현재 재직 연구원',
-            '제외: 구분 "Staff" 조직, 1단계 "SAIT"·"Ideation Factory T/F(SAIT)"(모두 하위 포함)',
-            '그래프: 상위 등급이 많은 순 / 표: 전체 단위, 조직코드 순']
+    hint = None   # 하위 탭 설명 제외(2026-10-15 사용자 확정)
+    from services import publication_quality as pq
     controls = dbc.Row([
         dbc.Col([dbc.Label('기준', className='small fw-semibold text-muted mb-1'),
                  dbc.RadioItems(id='org-pubgrade-level', value='level1', inline=True,
                                 options=[{'label': '부서(1단계부서명)', 'value': 'level1'},
-                                         {'label': '과제(3단계부서명)', 'value': 'level3'}])], md=6),
+                                         {'label': '과제(3단계부서명)', 'value': 'level3'}])], md=5),
+        dbc.Col([dbc.Label('플랫폼', className='small fw-semibold text-muted mb-1'),
+                 dcc.Dropdown(id='org-pubgrade-l1', multi=True, placeholder='전체',
+                              options=[{'label': d, 'value': d} for d in pq.dept_order()])], md=7),
     ], className='g-2 mb-3')
     return _section(title, hint, html.Div([controls, html.Div(id='org-pubgrade-body')]))
 
 
-@callback(Output('org-pubgrade-body', 'children'), Input('org-pubgrade-level', 'value'))
-def _pubgrade_body(level):
+@callback(Output('org-pubgrade-body', 'children'),
+          Input('org-pubgrade-level', 'value'), Input('org-pubgrade-l1', 'value'))
+def _pubgrade_body(level, platforms):
     from services import publication_quality as pq
-    df = pq.asset_counts(level or 'level1')
+    level = level or 'level1'
+    df = pq.asset_counts(level, platforms=platforms or None)
     fig = pq.asset_figure(df)
     if fig is None:
         return _empty('표시할 논문·특허 데이터가 없습니다(최근 5년, 제외 조직 반영 후).')
     th = {'textAlign': 'center', 'verticalAlign': 'middle', 'fontWeight': 700, 'color': '#000'}
     unit = '부서' if level != 'level3' else '과제'
-    groups = html.Tr([html.Th(unit, rowSpan=2, style=th),
-                      html.Th('논문', colSpan=len(pq.PAPER_GRADES) + 1, style={**th, 'background': '#FBEDE3'}),
-                      html.Th('특허', colSpan=len(pq.PATENT_GRADES) + 1, style={**th, 'background': '#EFE8FA'})])
-    sub = html.Tr([html.Th(c.split('_', 1)[1], style=th) for c in df.columns[1:]])
-    table = dbc.Table([
-        html.Thead([groups, sub]),
-        html.Tbody([html.Tr([html.Td(v, style={'textAlign': 'left' if i == 0 else 'center',
-                                               'fontWeight': 600 if df.columns[i].endswith('_계') else None})
-                             for i, v in enumerate(r)]) for r in df.itertuples(index=False)]),
-    ], bordered=True, size='sm', className='mb-0', style={'fontSize': '0.76rem'})
+    cols = [c for c in df.columns if c != 'dept']
+    lead = [html.Th('부서', rowSpan=2, style=th)] if level == 'level3' else []
+    groups = html.Tr(lead + [html.Th(unit, rowSpan=2, style=th),
+                             html.Th('논문', colSpan=len(pq.PAPER_GRADES) + 1, style={**th, 'background': '#FBEDE3'}),
+                             html.Th('특허', colSpan=len(pq.PATENT_GRADES) + 1, style={**th, 'background': '#EFE8FA'})])
+    sub = html.Tr([html.Th(c.split('_', 1)[1], style=th) for c in cols[1:]])
+    colors = pq.dept_color_map()
+    rows = []
+    for r in df.to_dict('records'):
+        dept = r.get('dept') or r['unit']
+        dot = html.Span('■ ', style={'color': colors.get(dept, '#999')})
+        cells = [html.Td([dot, dept], style={'textAlign': 'left', 'whiteSpace': 'nowrap'})] if level == 'level3' else []
+        cells.append(html.Td(([dot] if level != 'level3' else []) + [r['unit']], style={'textAlign': 'left'}))
+        cells += [html.Td(r[c], style={'textAlign': 'center', 'fontWeight': 600 if c.endswith('_계') else None})
+                  for c in cols[1:]]
+        rows.append(html.Tr(cells))
+    table = dbc.Table([html.Thead([groups, sub]), html.Tbody(rows)],
+                      bordered=True, size='sm', className='mb-0', style={'fontSize': '0.76rem'})
     return html.Div([
         dcc.Graph(figure=fig, config={'displaylogo': False}),
         html.Div(table, style={'maxHeight': '420px', 'overflowY': 'auto'}, className='mt-2'),
+        _asset_summary_card(level),
     ])
+
+
+def _asset_summary_card(level: str):
+    """AI 자산화 요약(pipeline/process_asset_summary.py 산출물, 2026-10-15). 플랫폼 필터와 무관하게 전체 기준."""
+    from services.data_store import read_asset_summary
+    s = read_asset_summary().get(level)
+    unit = '부서' if level != 'level3' else '과제'
+    if not s:
+        return html.Div(_empty('AI 자산화 요약이 아직 없습니다 — 분석 실행(run_integration) 후 표시됩니다.'), className='mt-3')
+    li = lambda items: html.Ul([html.Li(x) for x in items], className='mb-2 ps-3')  # noqa: E731
+
+    def _counts(r):
+        pg, tg = r.get('paper_grades') or {}, r.get('patent_grades') or {}
+        return (f"논문 {r.get('papers', 0)}(최우수 {pg.get('최우수', 0)}·우수 {pg.get('우수', 0)}) · "
+                f"특허 {r.get('patents', 0)}(전략 {tg.get('전략', 0)}·A1 {tg.get('A1', 0)})")
+    top = [html.Li([html.Span(f"{r['unit']} — 상위 등급 {r.get('top', 0)}건", className='fw-semibold'),
+                    html.Span(f" ({_counts(r)}, 구성원 {r.get('members', 0)}명)", className='text-muted'),
+                    html.Span(f" — 주제: {', '.join(r['topics'])}" if r.get('topics') else '')])
+           for r in s.get('top_units') or []]
+    trend = lambda r: f"{r['unit']}(최근2년 {r['recent']}·이전3년 {r['prior']})"  # noqa: E731
+    capita = lambda r: f"{r['unit']}(인당 {r['per_capita']}건, {r['members']}명)"  # noqa: E731
+    facts = []
+    if s.get('rising'):
+        facts.append(f'최근 늘어난 {unit}: ' + ', '.join(map(trend, s['rising'])))
+    if s.get('falling'):
+        facts.append(f'최근 줄어든 {unit}: ' + ', '.join(map(trend, s['falling'])))
+    if s.get('per_capita_top'):
+        facts.append('인당 생산성 상위: ' + ', '.join(map(capita, s['per_capita_top'])))
+    if s.get('per_capita_bottom'):
+        facts.append('인당 생산성 하위: ' + ', '.join(map(capita, s['per_capita_bottom'])))
+    if s.get('low'):
+        facts.append(f'실적이 적은 {unit}(최근 5년 1건 이하): ' + ', '.join(s['low']))
+    head = html.Div([
+        html.I(className='bi bi-stars me-1 text-primary'),
+        html.Span(f'AI 자산화 요약 — {unit} 기준(전체)', className='fw-semibold'),
+        html.Span(f" (최근 5년 {s.get('period', '')}, 생성 {s.get('generated_at', '')}"
+                  + ('' if s.get('llm') else ', AI 응답 없어 통계 기반') + ')', className='text-muted small ms-1'),
+    ], className='mb-2')
+    return dbc.Card(dbc.CardBody([
+        head,
+        html.Div('총평', className='small fw-semibold text-muted'), li(s.get('overview') or []),
+        html.Div(f'상위 등급 실적 {unit} Top {len(top)} (최우수·우수 논문 + 전략·A1 특허)', className='small fw-semibold text-muted'),
+        html.Ul(top, className='mb-2 ps-3') if top else _empty('상위 등급 실적 없음'),
+        html.Div('세부 현황', className='small fw-semibold text-muted'), li(facts),
+        html.Div('플랫폼 필터와 관계없이 전체 기준으로 분석 실행 때 생성됩니다. AI에는 이름 없이 부서/과제명·논문 제목·'
+                 '건수·인원 수만 전달됩니다.', className='text-muted', style={'fontSize': '0.7rem'}),
+    ], style={'fontSize': '0.8rem'}), className='mt-3 shadow-sm')
 
 
 def org_analysis_content() -> html.Div:

@@ -31,28 +31,56 @@ def is_excluded_level1(name) -> bool:
     return _norm_l1(name) in _EXCLUDED_NORM
 
 
-def aggregate(edges: pd.DataFrame, level: str) -> dict[tuple[str, str], int]:
-    """{(단위A, 단위B)(사전순): 최근 5년 협업량}. 필요한 열이 없으면 {}.
-    한쪽이라도 1단계 부서명이 EXCLUDED_LEVEL1(SAIT)인 쌍은 제외 — 분석 재실행 전 산출물에도 바로 적용되도록 화면에서도 거른다."""
+def _unit_edges(edges: pd.DataFrame, level: str):
     a_col, b_col = f'{level}_a', f'{level}_b'
     if edges is None or edges.empty or not {a_col, b_col, 'recent_count'} <= set(edges.columns):
-        return {}
+        return None
     if {'level1_a', 'level1_b'} <= set(edges.columns):
         drop = edges['level1_a'].map(is_excluded_level1) | edges['level1_b'].map(is_excluded_level1)
         edges = edges[~drop]
-    df = edges[[a_col, b_col, 'recent_count']].fillna('')
+    return edges
+
+
+def _int(v) -> int:
+    try:
+        return int(float(v or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def aggregate(edges: pd.DataFrame, level: str) -> dict[tuple[str, str], int]:
+    """{(단위A, 단위B)(사전순): 최근 5년 협업량}. 필요한 열이 없으면 {}.
+    한쪽이라도 1단계 부서명이 EXCLUDED_LEVEL1(SAIT)인 쌍은 제외 — 분석 재실행 전 산출물에도 바로 적용되도록 화면에서도 거른다.
+    (2026-10-15) recent_count_<level>(당시 같은 단위였던 협업을 뺀 값)이 있으면 그 값을 쓴다."""
+    edges = _unit_edges(edges, level)
+    if edges is None:
+        return {}
+    a_col, b_col = f'{level}_a', f'{level}_b'
+    n_col = f'recent_count_{level}' if f'recent_count_{level}' in edges.columns else 'recent_count'
+    df = edges[[a_col, b_col, n_col]].fillna('')
     out: dict = {}
-    for a, b, n in zip(df[a_col].astype(str), df[b_col].astype(str), df['recent_count']):
-        a, b = a.strip(), b.strip()
-        try:
-            n = int(float(n or 0))
-        except ValueError:
-            n = 0
+    for a, b, n in zip(df[a_col].astype(str), df[b_col].astype(str), df[n_col]):
+        a, b, n = a.strip(), b.strip(), _int(n)
         if not a or not b or a == b or n <= 0:
             continue
         key = (a, b) if a <= b else (b, a)
         out[key] = out.get(key, 0) + n
     return out
+
+
+def excluded_same_unit(edges: pd.DataFrame, level: str, keep_units=None) -> int:
+    """현재는 서로 다른 단위지만 논문·특허 당시 같은 단위였어서 뺀 협업 수(연구원 쌍 기준, 2026-10-15).
+    keep_units(집합)를 주면 양쪽 단위가 그 안에 있을 때만(1인 과제 제외 등 화면 필터와 맞춤)."""
+    edges = _unit_edges(edges, level)
+    if edges is None or f'excluded_{level}' not in edges.columns:
+        return 0
+    total = 0
+    for a, b, n in zip(edges[f'{level}_a'].fillna('').astype(str), edges[f'{level}_b'].fillna('').astype(str),
+                       edges[f'excluded_{level}']):
+        a, b = a.strip(), b.strip()
+        if a and b and a != b and (keep_units is None or (a in keep_units and b in keep_units)):
+            total += _int(n)
+    return total
 
 
 def _ordered(nodes: list[str], order: list | None) -> list[str]:

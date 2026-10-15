@@ -339,7 +339,9 @@ def run_contribution_metrics() -> bool:
 # ── 3) 협업 네트워크 ─────────────────────────────────────────────────────────
 
 def _collab_groups(pubs: pd.DataFrame, pats: pd.DataFrame) -> list:
-    """[(kind, members(sorted list), year), ...] — 사내 연구원 2명 이상인 건만."""
+    """[(kind, members(sorted list), year, date), ...] — 사내 연구원 2명 이상인 건만.
+    date(2026-10-15): 당시 소속 판정 기준일 — 논문 pub_date(없으면 announce_date), 특허 application_date."""
+    from historical_units import doc_date
     groups = []
     if not pubs.empty and 'title' in pubs.columns:
         p = pubs.assign(_key=pubs['title'].map(_norm) + '|' + _col(pubs, 'pub_date').astype(str).str[:10])
@@ -348,14 +350,16 @@ def _collab_groups(pubs: pd.DataFrame, pats: pd.DataFrame) -> list:
             members = sorted(set(g['researcher_id']))
             year = max((y for y in (_year_of(v) for v in list(_col(g, 'pub_year')) + list(_col(g, 'pub_date'))) if y),
                        default=None)
-            groups.append(('paper', members, year))
+            d = next((x for x in (doc_date(r, 'paper') for r in g.to_dict('records')) if x), '')
+            groups.append(('paper', members, year, d))
     if not pats.empty and 'application_id' in pats.columns:
         t = pats[pats['application_id'].astype(str).str.strip() != '']
         for _, g in t.groupby('application_id'):
             members = sorted(set(g['researcher_id']))
             year = max((y for y in map(_year_of, _col(g, 'application_date')) if y), default=None)
-            groups.append(('patent', members, year))
-    return [(k, m, y) for k, m, y in groups if 2 <= len(m) <= COLLAB_MAX_GROUP]
+            d = next((x for x in (doc_date(r, 'patent') for r in g.to_dict('records')) if x), '')
+            groups.append(('patent', members, year, d))
+    return [(k, m, y, d) for k, m, y, d in groups if 2 <= len(m) <= COLLAB_MAX_GROUP]
 
 
 COLLAB_RECENT_YEARS = 5   # 부서/과제간 협업 그래프는 최근 5년(올해 포함) 협업 건만 집계(2026-10-09)
@@ -403,7 +407,10 @@ def current_levels(researchers: pd.DataFrame) -> dict:
 
 def compute_collaboration(researchers: pd.DataFrame, pubs: pd.DataFrame,
                           pats: pd.DataFrame, levels: dict | None = None,
-                          today_year: int | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
+                          today_year: int | None = None, history=None) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """history(historical_units.UnitHistory, 2026-10-15): 주면 최근 5년 협업 중 "당시 같은 1단계/3단계 단위"였던
+    연구원 쌍의 건을 단위별로 빼서 recent_count_level1/level3에 담는다(excluded_level1/level3 = 뺀 건수).
+    판정 불가(당시 인력현황 없음)는 그대로 센다. recent_count(원래 값)는 유지."""
     levels = levels or {}
     min_year = (today_year or date.today().year) - COLLAB_RECENT_YEARS + 1
     dept = {}
@@ -411,14 +418,19 @@ def compute_collaboration(researchers: pd.DataFrame, pubs: pd.DataFrame,
         dept = dict(zip(researchers['researcher_id'], researchers['department'].astype(str).str.strip()))
 
     edges: dict = {}
-    for kind, members, year in _collab_groups(pubs, pats):
+    use_hist = history is not None and getattr(history, 'available', False)
+    for kind, members, year, doc_d in _collab_groups(pubs, pats):
         for i, a in enumerate(members):
             for b in members[i + 1:]:
                 e = edges.setdefault((a, b), {'paper_count': 0, 'patent_count': 0, 'last_year': None,
-                                              'paper_recent': 0, 'patent_recent': 0})
+                                              'paper_recent': 0, 'patent_recent': 0, 'excl_l1': 0, 'excl_l3': 0})
                 e[f'{kind}_count'] += 1
                 if year and year >= min_year:
                     e[f'{kind}_recent'] += 1
+                    if use_hist and doc_d:
+                        same1, same3 = history.same_at(a, b, doc_d)
+                        e['excl_l1'] += same1
+                        e['excl_l3'] += same3
                 if year and (e['last_year'] is None or year > e['last_year']):
                     e['last_year'] = year
 
@@ -435,11 +447,15 @@ def compute_collaboration(researchers: pd.DataFrame, pubs: pd.DataFrame,
             'recent_count': e['paper_recent'] + e['patent_recent'],
             'level1_a': levels.get(a, ('', ''))[0], 'level1_b': levels.get(b, ('', ''))[0],
             'level3_a': levels.get(a, ('', ''))[1], 'level3_b': levels.get(b, ('', ''))[1],
+            'recent_count_level1': e['paper_recent'] + e['patent_recent'] - e['excl_l1'],
+            'recent_count_level3': e['paper_recent'] + e['patent_recent'] - e['excl_l3'],
+            'excluded_level1': e['excl_l1'], 'excluded_level3': e['excl_l3'],
         })
     edges_df = pd.DataFrame(edge_rows, columns=[
         'researcher_a', 'researcher_b', 'paper_count', 'patent_count', 'total_count',
         'last_year', 'department_a', 'department_b', 'same_department',
-        'recent_count', 'level1_a', 'level1_b', 'level3_a', 'level3_b'])
+        'recent_count', 'level1_a', 'level1_b', 'level3_a', 'level3_b',
+        'recent_count_level1', 'recent_count_level3', 'excluded_level1', 'excluded_level3'])
     if not edges_df.empty:
         edges_df = edges_df.sort_values('total_count', ascending=False).reset_index(drop=True)
 
@@ -486,7 +502,15 @@ def run_collaboration() -> bool:
     if pubs.empty and pats.empty:
         print('  [WARN] publications/patents.csv 없음 — 협업 네트워크 생략')
         return False
-    edges_df, metrics_df = compute_collaboration(researchers, pubs, pats, current_levels(researchers))
+    import historical_units
+    history = historical_units.load()
+    if not history.available:
+        print('  [INFO] researchers_history.csv 없음 — 당시 같은 단위 협업 제외 없이 현재 소속 기준으로만 집계')
+    edges_df, metrics_df = compute_collaboration(researchers, pubs, pats, current_levels(researchers), history=history)
+    if not edges_df.empty:
+        from services.collab_graph import excluded_same_unit
+        print(f"  현재는 다른 단위지만 작성 당시 같은 단위라 제외한 협업(연구원 쌍 기준): "
+              f"부서 {excluded_same_unit(edges_df, 'level1')}건, 과제 {excluded_same_unit(edges_df, 'level3')}건")
     os.makedirs(OUT_DIR, exist_ok=True)
     edges_df.to_csv(os.path.join(OUT_DIR, COLLAB_EDGES_FILE), index=False, encoding='utf-8-sig')
     metrics_df.to_csv(os.path.join(OUT_DIR, COLLAB_METRICS_FILE), index=False, encoding='utf-8-sig')

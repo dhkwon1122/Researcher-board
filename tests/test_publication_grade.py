@@ -105,3 +105,23 @@ def test_evidence_grade_bonus_ranks_top_paper_first():
 
     out = jmi.evidence_match(Ctx(), '1', [1.0, 0.0])
     assert out['items'][0]['title'] == '최우수 논문'
+
+
+def test_asset_counts_level3_excludes_solo_groups_by_dept_and_filters(monkeypatch):
+    """과제 기준: 1인 과제 제외, 부서(조직코드 순)로 묶은 뒤 과제 조직코드 순, 플랫폼 필터, 부서색 띠(2026-10-15)."""
+    from services import publication_quality as pq
+    from services import org_units
+    from services import similarity_map as sm
+    pubs = pd.DataFrame({'researcher_id': ['1', '3', '5', '6'], 'title': ['P', 'Q', 'R', 'S'],
+                         'grade_publication': ['우수'] * 4, 'pub_year': ['2025'] * 4})
+    monkeypatch.setattr(pq, 'read_processed', lambda n: {'publications': pubs, 'patents': pd.DataFrame()}[n])
+    members = {'1': 't1', '2': 't1', '3': 't2', '4': 't2', '5': 'solo', '6': 't3', '7': 't3'}
+    monkeypatch.setattr(org_units, 'unit_members', lambda level='level1': members)
+    monkeypatch.setattr(sm, 'level1_of_level3', lambda period=None: {'t1': 'A', 't2': 'B', 't3': 'A', 'solo': 'A'})
+    opts = {1: ['B', 'A'], 3: ['t3', 't2', 't1', 'solo']}
+    monkeypatch.setattr(sm, 'level_filter_options', lambda lvl, *a, **k: [{'value': v} for v in opts[lvl]])
+    df = pq.asset_counts('level3')
+    assert list(df['unit']) == ['t2', 't3', 't1'] and list(df['dept']) == ['B', 'A', 'A']   # solo 제외
+    assert list(pq.asset_counts('level3', platforms=['A'])['unit']) == ['t3', 't1']
+    fig = pq.asset_figure(df)
+    assert len(fig.layout.shapes) == 2 and list(fig.layout.yaxis.categoryarray) == ['t2', 't3', 't1']
