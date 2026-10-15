@@ -720,6 +720,58 @@ _EVAL_SUMMARY_COLUMN_WIDTH = 22
 _EVAL_DETAIL_COLUMN_WIDTH = 12  # 연봉등급/상반기업적/하반기업적 — 등급 코드 하나만 담는 좁은 컬럼
 
 
+def prepare_rows(researcher_ids: list):
+    """엑셀 행 준비(2026-10-15 build_profile_workbook에서 분리 — 조서 작성(services/report_builder)과 공유).
+    반환: (정렬된 researcher_ids, ctx_for(rid) -> 행 컨텍스트, permissions).
+    정렬: 조직코드(dep_code) 오름차순 → 같은 조직 안에서 직책자 먼저 → 이름순(2026-09-02 사용자 확정)."""
+    tables = _load_tables()
+    # 로그인 사용자당 한 번만 계산 — _col_evaluation/_col_incentive가 매 행마다
+    # auth.can()을 다시 호출하지 않도록 _researcher_row_context()에 실어 보낸다.
+    permissions = {'view_evaluation': auth.can('view_evaluation'), 'view_incentive': auth.can('view_incentive')}
+    # org_code → dep_1st_name/dep_3rd_name 매핑도 배치당 한 번만 만든다(연구원
+    # 수만큼 team_refer를 반복 스캔하지 않도록) — similarity_map이 이 모듈을
+    # 임포트하므로(순환 임포트 방지) 여기서는 지연 임포트로 가져온다.
+    from services import similarity_map
+    dep_pjt_maps = similarity_map.org_code_label_maps()
+    # 부서 단위 평가 제외(2026-08-31) — view_evaluation은 있어도 특정 부서
+    # 소속 연구원의 평가만 가리는 사용자를 위해 화면(researcher_list.py/
+    # researcher_profile.py)과 동일한 기준을 엑셀에도 적용한다.
+    eval_excluded_dep_ids = auth.eval_excluded_dep_ids()
+    org_code_dep_id_map = similarity_map.org_code_dep_id_map() if eval_excluded_dep_ids else {}
+    # 조직코드(A열) 표시 + 정렬(아래 참고) 모두에 필요 — 항상 계산.
+    org_code_dep_code_map = similarity_map.org_code_dep_code_map()
+    # 평가표기 예외자(2026-09-09) — _col_evaluation() 참고. 요청 단위로 한 번만
+    # 집합으로 만들어 전달한다(다른 요청 단위 값들과 같은 이유).
+    exc_df = tables['evaluation_exception']
+    evaluation_exception_ids = (
+        set(exc_df['researcher_id']) if not exc_df.empty and 'researcher_id' in exc_df.columns else set()
+    )
+
+    # 조직코드(dep_code) 오름차순 → 같은 조직 안에서는 직책자(부서/과제·파트
+    # 리더)가 먼저 → 그다음 가나다순(이름) 순서로 정렬한다(사용자 확정
+    # 2026-09-02). 리더 판정은 team_refer에서 그 org_code에 researcher_id가
+    # 채워진 행(=조직장급) 기준(org_code_leader_map()).
+    researchers_df = tables['researchers']
+    if not researchers_df.empty and 'researcher_id' in researchers_df.columns:
+        org_code_by_rid = dict(zip(researchers_df['researcher_id'], researchers_df.get('org_code', '')))
+        name_by_rid = dict(zip(researchers_df['researcher_id'], researchers_df.get('name', '')))
+    else:
+        org_code_by_rid, name_by_rid = {}, {}
+    org_code_leader_map = similarity_map.org_code_leader_map()
+
+    def _export_sort_key(rid: str):
+        org_code = str(org_code_by_rid.get(rid) or '').strip()
+        dep_code = org_code_dep_code_map.get(org_code, '')
+        is_not_leader = org_code_leader_map.get(org_code) != rid
+        return (dep_code, is_not_leader, str(name_by_rid.get(rid) or ''))
+
+    def ctx_for(rid):
+        return _researcher_row_context(rid, tables, permissions, dep_pjt_maps,
+                                       eval_excluded_dep_ids, org_code_dep_id_map,
+                                       org_code_dep_code_map, evaluation_exception_ids)
+    return sorted(researcher_ids, key=_export_sort_key), ctx_for, permissions
+
+
 def build_profile_workbook(
     researcher_ids: list,
     include_expertise: bool = False,
@@ -754,29 +806,7 @@ def build_profile_workbook(
     이 체크박스 자체를 숨기지만, 요청이 조작돼 True로 넘어와도 여기서
     다시 확인하므로 권한 없이는 컬럼 자체가 생기지 않는다(각 컬럼 함수도
     rows['permissions']로 한 번 더 확인 — 이중 방어)."""
-    tables = _load_tables()
-    # 로그인 사용자당 한 번만 계산 — _col_evaluation/_col_incentive가 매 행마다
-    # auth.can()을 다시 호출하지 않도록 _researcher_row_context()에 실어 보낸다.
-    permissions = {'view_evaluation': auth.can('view_evaluation'), 'view_incentive': auth.can('view_incentive')}
-    # org_code → dep_1st_name/dep_3rd_name 매핑도 배치당 한 번만 만든다(연구원
-    # 수만큼 team_refer를 반복 스캔하지 않도록) — similarity_map이 이 모듈을
-    # 임포트하므로(순환 임포트 방지) 여기서는 지연 임포트로 가져온다.
-    from services import similarity_map
-    dep_pjt_maps = similarity_map.org_code_label_maps()
-    # 부서 단위 평가 제외(2026-08-31) — view_evaluation은 있어도 특정 부서
-    # 소속 연구원의 평가만 가리는 사용자를 위해 화면(researcher_list.py/
-    # researcher_profile.py)과 동일한 기준을 엑셀에도 적용한다.
-    eval_excluded_dep_ids = auth.eval_excluded_dep_ids()
-    org_code_dep_id_map = similarity_map.org_code_dep_id_map() if eval_excluded_dep_ids else {}
-    # 조직코드(A열) 표시 + 정렬(아래 참고) 모두에 필요 — 항상 계산.
-    org_code_dep_code_map = similarity_map.org_code_dep_code_map()
-    # 평가표기 예외자(2026-09-09) — _col_evaluation() 참고. 요청 단위로 한 번만
-    # 집합으로 만들어 전달한다(다른 요청 단위 값들과 같은 이유).
-    exc_df = tables['evaluation_exception']
-    evaluation_exception_ids = (
-        set(exc_df['researcher_id']) if not exc_df.empty and 'researcher_id' in exc_df.columns else set()
-    )
-
+    researcher_ids, ctx_for, permissions = prepare_rows(researcher_ids)
     columns = list(_COLUMNS)
     widths = list(_COLUMN_WIDTHS)
     if include_tasks:
@@ -843,30 +873,8 @@ def build_profile_workbook(
         cell.border = _BORDER
         cell.alignment = wrap_center
 
-    # 조직코드(dep_code) 오름차순 → 같은 조직 안에서는 직책자(부서/과제·파트
-    # 리더)가 먼저 → 그다음 가나다순(이름) 순서로 정렬한다(사용자 확정
-    # 2026-09-02). 리더 판정은 team_refer에서 그 org_code에 researcher_id가
-    # 채워진 행(=조직장급) 기준(org_code_leader_map()).
-    researchers_df = tables['researchers']
-    if not researchers_df.empty and 'researcher_id' in researchers_df.columns:
-        org_code_by_rid = dict(zip(researchers_df['researcher_id'], researchers_df.get('org_code', '')))
-        name_by_rid = dict(zip(researchers_df['researcher_id'], researchers_df.get('name', '')))
-    else:
-        org_code_by_rid, name_by_rid = {}, {}
-    org_code_leader_map = similarity_map.org_code_leader_map()
-
-    def _export_sort_key(rid: str):
-        org_code = str(org_code_by_rid.get(rid) or '').strip()
-        dep_code = org_code_dep_code_map.get(org_code, '')
-        is_not_leader = org_code_leader_map.get(org_code) != rid
-        return (dep_code, is_not_leader, str(name_by_rid.get(rid) or ''))
-
-    researcher_ids = sorted(researcher_ids, key=_export_sort_key)
-
     for row_idx, rid in enumerate(researcher_ids, start=2):
-        ctx = _researcher_row_context(rid, tables, permissions, dep_pjt_maps,
-                                       eval_excluded_dep_ids, org_code_dep_id_map,
-                                       org_code_dep_code_map, evaluation_exception_ids)
+        ctx = ctx_for(rid)
         for col_idx, (_header, fn) in enumerate(columns, start=1):
             value = fn(rid, ctx)
             cell = ws.cell(row=row_idx, column=col_idx, value=excel_safe(value))
