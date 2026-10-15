@@ -14303,3 +14303,11 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   서로 다른 부서가 같은 1단계로 겹치면 "1단계부서명 (부서명)".
 - pages/org_comparison: 석세션 데이터 입력의 부서 드롭다운 라벨(값은 현소속부서명, 조직코드 순 정렬)과 조회 화면 섹션 제목에 적용.
 - 테스트 tests/test_succession_display.py. 업무 시나리오 추가 기능(신규 과제 팀 구성 등)은 사용자 요청으로 보류.
+
+## (59) 임베딩 HTTP 413 "embedding input too large" 수정 (2026-10-15)
+- 증상: scripts/backtest_job_market.py(그리고 같은 후보 풀을 만드는 JOB Market 실행)에서 임베딩 서버가 413.
+- 원인: services/llm.embed가 개수(64개)로만 나눠 보냄. 과제정보까지 붙어 길어진 근거 A 텍스트가 모이면 서버 한도
+  (services/bge_server: 요청당 총 65536자, 항목당 8000자)를 넘음.
+- 수정: services/llm._embed_chunks — 서버와 같은 환경변수(EMBED_MAX_ITEMS / EMBED_MAX_CHARS_PER_ITEM / EMBED_MAX_TOTAL_CHARS)로
+  항목당 글자 초과분은 잘라내고(앞부분 유지), 개수·총 글자 한도 안에서 요청을 나눔. 모든 임베딩 호출 공통.
+- 테스트 tests/test_embed_chunks.py.
