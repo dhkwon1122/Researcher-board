@@ -14214,3 +14214,9 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   먼저 빼고 평가 조건 적용 — 화면·엑셀(can_view_evaluation)과 같은 기준. 안내 문구에 제외 인원 수 표시.
 - open_data_query(자유 질의 SQL)의 evaluations 테이블은 행 단위 필터가 없어 기존대로 People제외 계정에 비공개.
 - 테스트 tests/test_nl_grade_people_exclusion.py.
+
+## (50) 보유 전문성 > 연구원 — 개인 카드 하단 외곽선 잘림 (2026-10-15)
+- 원인: 콘솔 리포트 CSS(pipeline/rd_specialist_markdown.py) `html, body { height: 100% }` + body flex → main 높이가 iframe
+  높이로 고정돼, 카드가 길면 main 하단 여백(100px)이 사라지고 카드 하단 테두리가 iframe 끝에 걸려 잘림.
+- 수정: height:100%는 html에만. body는 min-height 100vh로 내용만큼 늘어남 → 카드 아래 여백 확보, 조직도 사이드바 sticky 유지.
+  (align-items:flex-start만 주면 사이드바 배경이 아래에서 끊겨 이 방식으로 확정.) 화면에서 매번 렌더링하므로 배포만으로 반영.
