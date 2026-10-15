@@ -15,7 +15,7 @@ import io
 import json
 import os
 from collections import Counter
-from datetime import datetime
+from datetime import date as _date, datetime
 
 import numpy as np
 import pandas as pd
@@ -625,7 +625,7 @@ def _team_refer_org_code_timeline() -> dict:
     df = read_processed('team_refer')
     if df.empty or not {'valid_year', 'valid_month', 'valid_day'} <= set(df.columns):
         return {}
-    all_rows = df.to_dict('records')
+    all_rows = df.fillna('').astype(str).to_dict('records')   # 빈 칸 NaN(float) → '' (_latest_rows_in_period가 .strip())
 
     dates: set = set()
     for r in all_rows:
@@ -637,7 +637,13 @@ def _team_refer_org_code_timeline() -> dict:
     timeline: dict = {}
 
     for key in sorted(dates):
-        for r in _latest_rows_in_period(all_rows, key, key):
+        # _latest_rows_in_period는 date 객체(.year/.month/.day)를 받는다 — 예전엔 (연,월,일) 튜플을 넘겨 늘
+        # AttributeError가 났다(2026-10-15 발견·수정, 협업 당시 소속 판정에서 확인).
+        try:
+            as_of = _date(*key)
+        except ValueError:
+            continue
+        for r in _latest_rows_in_period(all_rows, as_of, as_of):
             org_code = (r.get('org_name_wd') or '').strip()
             if org_code:
                 timeline.setdefault(org_code, []).append((key, _cell(r, 1), _cell(r, 2), _cell(r, 3)))

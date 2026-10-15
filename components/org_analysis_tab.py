@@ -71,10 +71,13 @@ def _collab_body(level, top_n):
 
     edges = read_processed('collaboration_edges')
     pairs = cg.aggregate(edges, level or 'level1')
+    keep = None
     if level == 'level3':   # 구성원 1명인 과제는 제외(2026-10-15 — 조직 특성상 1인 과제가 있음)
         from services.org_units import unit_sizes
         sizes = unit_sizes('level3')
         pairs = {k: v for k, v in pairs.items() if sizes.get(k[0], 0) > 1 and sizes.get(k[1], 0) > 1}
+        keep = {u for u, n in sizes.items() if n > 1}
+    excluded = cg.excluded_same_unit(edges, level or 'level1', keep)
     unit = '부서' if level != 'level3' else '과제'
     from services import similarity_map as sm
     # 네트워크 원형 배치·히트맵 X/Y축 순서 = 팀/리더 참조 조직코드(dep_code) 순(드롭다운과 같은 기준)
@@ -91,7 +94,10 @@ def _collab_body(level, top_n):
         dbc.Col([html.Div(f'{unit} 간 협업 히트맵', className='small text-muted mb-1'),
                  dcc.Graph(figure=heat, config={'displaylogo': False})], lg=6),
     ], className='g-3')
-    return html.Div([graphs, _collab_summary_card(level or 'level1')])
+    note = html.Div(f'논문·특허 작성 당시 같은 {unit}였던 협업 {excluded}건(연구원 쌍 기준)은 제외했습니다 '
+                    '(당시 소속 = 인력현황 월별 이력, 판정할 수 없는 건은 포함).',
+                    className='text-muted mt-1', style={'fontSize': '0.72rem'}) if excluded else None
+    return html.Div([graphs, note, _collab_summary_card(level or 'level1')])
 
 
 def _pair_line(r: dict, extra: str = '') -> str:
@@ -132,6 +138,8 @@ def _collab_summary_card(level: str):
     if s.get('falling'):
         facts.append('최근 줄어든 협업: ' + ', '.join(f"{r['a']} ↔ {r['b']}(최근2년 {r['recent']}·이전3년 {r['prior']})"
                                                for r in s['falling']))
+    if s.get('same_unit_excluded'):
+        facts.append(f"작성 당시 같은 {unit}였던 협업 {s['same_unit_excluded']}건 제외(인력현황 월별 이력 기준)")
     facts.append(f"협업 유형: 논문 {s.get('papers', 0)}건 · 특허 {s.get('patents', 0)}건 "
                  f"({'논문' if s.get('papers', 0) >= s.get('patents', 0) else '특허'} 중심)")
     if s.get('top_grade_pairs'):

@@ -11,6 +11,9 @@
   5) 협업 유형(논문 중심/특허 중심) 6) 최우수·우수 논문을 함께 쓴 쌍
   + LLM 개조식 총평(위 통계 + 상위 쌍 주제 기반)
 
+(2026-10-15) 문서 작성 당시(논문 pub_date→announce_date, 특허 application_date) 인력현황 월별 이력상 같은 단위였던
+협업은 그 단위 쌍에서 뺀다(pipeline/historical_units.py, 협업 그래프와 같은 기준). 뺀 건수 same_unit_excluded.
+
 ⚠️ LLM에는 연구원 이름·사번을 절대 넣지 않는다(부서/과제명, 논문·특허 제목, 건수만). 이름은 결과 JSON에
 코드가 직접 붙인다. LLM 실패 시 주제·총평 없이 통계만으로 저장(화면은 통계 기반 문장으로 대체).
 
@@ -30,6 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import OUT_DIR  # noqa: E402
 from llm_client import call_llm, extract_json  # noqa: E402
 import process_expertise_metrics as pem  # noqa: E402
+from historical_units import doc_date  # noqa: E402
 
 OUTPUT_FILE = 'collab_summary.json'
 CACHE_FILE = 'collab_summary_cache.json'
@@ -72,20 +76,26 @@ def _documents(pubs: pd.DataFrame, pats: pd.DataFrame, since: int) -> list:
             grades = [str(v).strip() for v in pem._col(g, 'grade_publication')]
             grade = next((gr for gr in TOP_GRADES + ('일반', '외부') if gr in grades), '')
             docs.append({'kind': '논문', 'title': str(g['title'].iloc[0]).strip(), 'year': year, 'grade': grade,
-                         'members': sorted(set(g['researcher_id']))})
+                         'members': sorted(set(g['researcher_id'])),
+                         'date': next((x for x in (doc_date(r, 'paper') for r in g.to_dict('records')) if x), '')})
     if not pats.empty and 'application_id' in pats.columns:
         t = pats[pats['application_id'].astype(str).str.strip() != '']
         for _, g in t.groupby('application_id'):
             year = max((y for y in map(pem._year_of, pem._col(g, 'application_date')) if y), default=None)
             title = next((str(v).strip() for c in ('title_ko', 'title') for v in pem._col(g, c) if str(v).strip()), '')
             docs.append({'kind': '특허', 'title': title, 'year': year, 'grade': '',
-                         'members': sorted(set(g['researcher_id']))})
+                         'members': sorted(set(g['researcher_id'])),
+                         'date': next((x for x in (doc_date(r, 'patent') for r in g.to_dict('records')) if x), '')})
     return [d for d in docs if d['year'] and d['year'] >= since and 2 <= len(d['members']) <= pem.COLLAB_MAX_GROUP]
 
 
-def summarize_level(docs: list, unit_of: dict, name_of: dict, all_units: list, this_year: int) -> dict:
-    """한 기준(부서 또는 과제)의 통계. unit_of: rid -> 단위명(제외 대상은 없음). all_units: 현재 재직자가 있는 단위."""
+def summarize_level(docs: list, unit_of: dict, name_of: dict, all_units: list, this_year: int,
+                    same_then=None) -> dict:
+    """한 기준(부서 또는 과제)의 통계. unit_of: rid -> 단위명(제외 대상은 없음). all_units: 현재 재직자가 있는 단위.
+    same_then(rid_a, rid_b, date) -> bool(2026-10-15): 주면 단위 쌍의 연구원끼리 모두 "문서 작성 당시 같은 단위"였던
+    건은 그 단위 쌍 협업에서 뺀다(한 쌍이라도 당시 다른 단위였거나 판정 불가면 포함). 뺀 건수는 same_unit_excluded."""
     pairs: dict = {}
+    excluded = 0
     for d in docs:
         by_unit: dict = {}
         for rid in d['members']:
@@ -95,6 +105,10 @@ def summarize_level(docs: list, unit_of: dict, name_of: dict, all_units: list, t
         units = sorted(by_unit)
         for i, a in enumerate(units):
             for b in units[i + 1:]:
+                if same_then is not None and d.get('date') and all(
+                        same_then(x, y, d['date']) for x in by_unit[a] for y in by_unit[b]):
+                    excluded += 1
+                    continue
                 p = pairs.setdefault((a, b), {'docs': [], 'people': {}})
                 p['docs'].append(d)
                 for rid in by_unit[a] | by_unit[b]:
@@ -137,6 +151,7 @@ def summarize_level(docs: list, unit_of: dict, name_of: dict, all_units: list, t
     return {
         'pair_count': len(rows),
         'doc_count': len(involved),
+        'same_unit_excluded': excluded,
         'papers': sum(1 for d in involved.values() if d['kind'] == '논문'),
         'patents': sum(1 for d in involved.values() if d['kind'] == '특허'),
         'top_pairs': rows[:TOP_PAIRS],
@@ -198,7 +213,7 @@ def _llm(s: dict, unit: str, cache: dict) -> dict | None:
 
 
 def build(researchers: pd.DataFrame, pubs: pd.DataFrame, pats: pd.DataFrame, levels: dict,
-          use_llm: bool = True, cache: dict | None = None, today: date | None = None) -> list:
+          use_llm: bool = True, cache: dict | None = None, today: date | None = None, history=None) -> list:
     today = today or date.today()
     since = today.year - RECENT_YEARS + 1
     docs = _documents(pubs, pats, since)
@@ -213,7 +228,10 @@ def build(researchers: pd.DataFrame, pubs: pd.DataFrame, pats: pd.DataFrame, lev
             size = Counter(unit_of.values())
             unit_of = {rid: u for rid, u in unit_of.items() if size[u] > 1}
         all_units = sorted(set(unit_of.values()))
-        s = summarize_level(docs, unit_of, name_of, all_units, today.year)
+        same_then = None
+        if history is not None and getattr(history, 'available', False):   # 당시 같은 단위였던 협업 제외(2026-10-15)
+            same_then = (lambda x, y, dt, k=idx: history.same_at(x, y, dt)[0 if k == 0 else 1])
+        s = summarize_level(docs, unit_of, name_of, all_units, today.year, same_then)
         res = _llm(s, unit, cache) if use_llm and s['top_pairs'] else None
         topics = {}
         for p in (res or {}).get('pairs') or []:
@@ -242,7 +260,8 @@ def process() -> bool:
         print('  [WARN] 팀/리더 참조 매칭 없음 — 협업 AI 요약 생략')
         return False
     cache = pem._read_json(CACHE_FILE, {})
-    result = build(researchers, pubs, pats, levels, cache=cache)
+    import historical_units
+    result = build(researchers, pubs, pats, levels, cache=cache, history=historical_units.load())
     pem._write_json(CACHE_FILE, cache)
     pem._write_json(OUTPUT_FILE, result)
     for r in result:

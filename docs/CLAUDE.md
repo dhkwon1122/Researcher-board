@@ -14242,3 +14242,20 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 산출물 asset_summary.json → load_to_db JSON_TABLES('asset_summary', 키 level) → data_store.read_asset_summary.
 - 화면: 논문,특허 표 아래 "AI 자산화 요약" 카드(총평 / 상위 등급 Top 5 + 주제 / 세부 현황). 플랫폼 필터와 무관하게 전체 기준.
 - 테스트 tests/test_asset_summary.py.
+
+## (53) 협업 — 논문·특허 작성 당시 같은 단위였던 협업 제외 + 이력 확인 스크립트 (2026-10-15)
+- pipeline/historical_units.py(UnitHistory): 문서 기준일(논문 pub_date→announce_date, 특허 application_date — 없으면
+  기존처럼 협업 집계 제외)에 researchers_history.csv 월별 스냅샷으로 당시 org_code(기준일 이전 가장 가까운 달, 없으면
+  이후 3개월 이내, 그래도 없으면 판정 불가 → 협업으로 셈), 팀/리더 참조 시점별 조직도로 당시 1/3단계부서명(없으면 현재 이름).
+  비교는 당시 이름끼리.
+- process_expertise_metrics.compute_collaboration(history=): 연구원 쌍마다 판정, edges에 recent_count_level1/level3
+  (당시 같은 단위 건 제외)·excluded_level1/level3 추가(recent_count 원값 유지). collab_graph.aggregate는 레벨별 열 우선,
+  excluded_same_unit()로 "현재 다른 단위인데 당시 같은 단위라 뺀 건수" → 협업 그래프 아래 안내 문구.
+- process_collab_summary: 단위 쌍의 연구원끼리 모두 당시 같은 단위였던 문서는 그 단위 쌍에서 제외(same_unit_excluded),
+  AI 협업 요약 세부 현황에 표시.
+- 기존 버그 수정(services/similarity_map._team_refer_org_code_timeline): _latest_rows_in_period에 튜플 대신 date 전달,
+  빈 칸 NaN → ''. (누적기준 조직 필터 researcher_ids_ever_matching_org_field도 이 함수를 씀 — 예외로 늘 빈 결과였을 수 있음.)
+- scripts/check_history_months.py [개월수=60]: 이력 보유 개월·월별 인원, 최근 N개월 중 빈 달, 최근 5년 협업 쌍 중 당시 소속
+  판정 가능 비율과 실제로 빠지는 건수.
+- 반영: run_integration(또는 process_expertise_metrics.py + process_collab_summary.py + DB 반영) 재실행.
+- 테스트 tests/test_historical_units.py.
