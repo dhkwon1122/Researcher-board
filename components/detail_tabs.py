@@ -314,17 +314,29 @@ def contribution_badge_row(contribution: dict | None):
     ], title=str(contribution.get('contribution_basis') or ''), className='d-flex align-items-center flex-wrap mb-2')
 
 
+def _collab_label(paper: int, patent: int) -> str:
+    if patent < 0:   # 재실행 전 산출물 — 논문·특허 합계만 있음
+        return f'{paper}건'
+    parts = [f'논문 {paper}' if paper else '', f'특허 {patent}' if patent else '']
+    return ' · '.join(p for p in parts if p) or '0'
+
+
 def collaborator_row(collaborators: list | None, name_map: dict | None = None):
-    """주요 협업자(collaboration_metrics.csv 상위 5명 — 같은 논문 공저/특허
-    공동발명 횟수 기준). 없으면 None."""
+    """주요 협업자(collaboration_metrics.csv 상위 5명 — 최근 5년·현재 재직자, 논문 공저/특허 공동발명
+    건수를 나눠 표시, 2026-10-15). 없으면 None."""
     if not collaborators:
         return None
     name_map = name_map or {}
+    badges = []
+    for c in collaborators:
+        rid, paper, patent = (c[0], c[1], -1) if len(c) == 2 else c
+        badges.append(dbc.Badge(f'{name_map.get(rid, rid)} ({_collab_label(paper, patent)})', color='light',
+                                text_color='dark', className='me-1 mb-1 border'))
     return html.Div([
         html.Span('주요 협업자', className='small text-muted fw-semibold me-2'),
-        *[dbc.Badge(f'{name_map.get(rid, rid)} · {n}', color='light', text_color='dark',
-                    className='me-1 mb-1 border') for rid, n in collaborators],
-    ], title='같은 논문 공저·특허 공동발명 횟수 기준 상위 5명', className='d-flex align-items-center flex-wrap mb-2')
+        *badges,
+    ], title='최근 5년 같은 논문 공저·특허 공동발명 건수 기준 상위 5명(현재 재직자)',
+       className='d-flex align-items-center flex-wrap mb-2')
 
 
 def llm_summary_block(profile: dict | None, similar: list | None = None, name_map: dict | None = None,

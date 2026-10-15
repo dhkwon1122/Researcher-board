@@ -157,6 +157,9 @@ def process(raw_dir: str = RAW_DIR, valid_date: date | None = None):
     # 갖고 있었을 것) 추출이 통째로 실패한다 — 실제로 재현 확인(아래 검증
     # 참고). valid_date를 기준으로 하면 그 파일이 실제로 대표하는 시점의
     # 회계연도로 올바른 컬럼명을 찾는다.
+    if valid_date is None and raw_dir == RAW_DIR:   # 분석 실행이 화면 업로드를 읽었으면 그때 지정한 기준월(2026-10-15)
+        from source_reader import web_valid_date
+        valid_date = web_valid_date('evaluations')
     valid_date = valid_date or date.today()
     salary_years, half_years = evaluation_years(today=valid_date)
 

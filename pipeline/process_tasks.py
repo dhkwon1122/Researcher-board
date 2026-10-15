@@ -27,13 +27,14 @@ tasks_information.csv가 없으면 원본 task_name 그대로 the_task_name에 �
 
 import glob
 import os
+import re
 import sys
 from datetime import datetime, timedelta
 
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from paths import RAW_DIR, OUT_DIR  # noqa: E402
+from paths import BASE_DIR, RAW_DIR, OUT_DIR  # noqa: E402
 from merge_utils import TABLE_KEYS, write_merged  # noqa: E402
 from excel_reader import is_blank  # noqa: E402
 
@@ -83,6 +84,34 @@ def _collapse_same_start(grp: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).reset_index(drop=True)
 
 
+_DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+
+
+def _valid_date(s: str) -> bool:
+    if not _DATE_RE.match(str(s or '')):
+        return False
+    try:
+        datetime.strptime(s, '%Y-%m-%d')
+        return True
+    except ValueError:
+        return False
+
+
+def _clean_dates(df: pd.DataFrame) -> pd.DataFrame:
+    """날짜가 아닌 시작일/해제일(원본 오타 — 예: 해제일 2020250614)을 빈 값으로 바꾸고 경고를 출력한다
+    (2026-10-15). 시작일이 날짜가 아닌 행은 기간을 알 수 없어 뺀다. 해제일이 비게 된 행은
+    _merge_consecutive_periods가 같은 과제의 뒤 구간과 이어 붙인다(뒤 구간이 없으면 진행중)."""
+    df = df.copy()
+    bad_start = ~df['start_date'].map(_valid_date)
+    bad_end = ~df['end_date'].map(lambda v: v == '' or _valid_date(v))
+    for _, r in df[bad_start | bad_end].iterrows():
+        col, val = ('시작일', r['start_date']) if not _valid_date(r['start_date']) else ('해제일', r['end_date'])
+        print(f"  [WARN] 날짜 형식 오류 — KNOXID {r['researcher_id']} / {r['task_name']} / {col} '{val}' "
+              f"({'행 제외' if col == '시작일' else '해제일 없음으로 처리, 같은 과제 뒤 구간이 있으면 이어 붙임'})")
+    df.loc[bad_end, 'end_date'] = ''
+    return df[~bad_start].reset_index(drop=True)
+
+
 def _merge_consecutive_periods(df: pd.DataFrame) -> pd.DataFrame:
     """같은 (researcher_id, task_name) 내에서 이어지는 구간을 하나로 병합.
     "이어짐"의 기준: 종료일 == 다음 시작일(정확히 일치)이거나, 종료월과 다음
@@ -107,8 +136,11 @@ def _merge_consecutive_periods(df: pd.DataFrame) -> pd.DataFrame:
             if is_blank(ne):
                 ne = ''
 
-            # 연속 조건: 이전 종료일 == 다음 시작일, 또는 같은 달 안에서 재참여
-            if cur_e != '' and (ns == cur_e or _same_month(cur_e, ns)):
+            # 연속 조건: 이전 종료일 == 다음 시작일, 또는 같은 달 안에서 재참여.
+            # (2026-10-15) 이전 구간 해제일이 비었거나 날짜가 아니었는데(_clean_dates가 비움) 같은 과제의
+            # 더 늦은 구간이 있으면, 그 구간이 이어받은 것으로 보고 병합한다 — 해제일 오타(예: 2020250614)
+            # 구간이 '진행중'으로 남아 뒤 구간의 종료일(20260922)이 무시되던 문제.
+            if (cur_e == '' and ns > cur_s) or (cur_e != '' and (ns == cur_e or _same_month(cur_e, ns))):
                 cur_e = ne   # '' (ongoing) 또는 더 늦은 날짜
                 cur_r = nr
             else:
@@ -324,10 +356,33 @@ def _drop_stale_task_rows(result: pd.DataFrame) -> None:
     print(f'[process_tasks] 이번 파일에 다시 나온 과제의 기존 {sum(mask)}행을 먼저 정리(구간 경계 변경으로 인한 중복 방지)')
 
 
+WEB_UPLOAD_DIR = os.path.join(BASE_DIR, 'data', 'web_updates', 'tasks')
+RAW_CSV_PATH = os.path.join(BASE_DIR, 'data', 'raw_csv', 'tasks.csv')
+
+
+def _newer_web_upload() -> str | None:
+    """관리자 화면(데이터 업데이트)에 올린 과제참여이력 파일이 1단계 원천 사본(data/raw_csv/tasks.csv,
+    DB tasks_stg의 원본)보다 새것이면 그 폴더(2026-10-15 버그 수정 — process_project_confl과 같은 문제).
+    run_integration/run_expertise는 기본 경로로 process()를 부르는데, 원천 사본은 화면 업로드로 갱신되지
+    않는다. 그대로 읽으면 화면 업로드로 맞게 만든 tasks.csv를 옛 파일 내용이 같은 키(사번·과제명·시작일)로
+    덮어써, 이미 종료된 과제가 옛 파일 기준 '진행중'(해제일 빈 값)으로 되돌아갔다."""
+    if not os.path.isdir(WEB_UPLOAD_DIR):
+        return None
+    source = _find_source_file(WEB_UPLOAD_DIR)
+    if not source:
+        return None
+    if os.path.exists(RAW_CSV_PATH) and os.path.getmtime(RAW_CSV_PATH) > os.path.getmtime(source):
+        return None
+    return WEB_UPLOAD_DIR
+
+
 def process(raw_dir: str = RAW_DIR) -> bool:
     from excel_reader import norm_id, parse_yyyymmdd, read_xlsx
     from source_reader import read_source
 
+    if raw_dir == RAW_DIR and _newer_web_upload():
+        raw_dir = WEB_UPLOAD_DIR
+        print('  [READ] 관리자 화면에서 올린 최신 개인별과제투입기간데이터 사용(원천 사본보다 새 파일)')
     if raw_dir == RAW_DIR:
         df = read_source('tasks')
         if df is None:
@@ -358,6 +413,7 @@ def process(raw_dir: str = RAW_DIR) -> bool:
     })
 
     result = result[result['researcher_id'] != ''].reset_index(drop=True)
+    result = _clean_dates(result)
 
     # 연속 수행기간 병합
     result = _merge_consecutive_periods(result)

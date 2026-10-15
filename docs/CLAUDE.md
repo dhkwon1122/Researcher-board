@@ -14152,3 +14152,65 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 반영: 화면 인력현황은 배포만으로, 과제 개요·과제원 기준 변경은 `run_integration.py`(또는 process_project_competency_gap.py + DB 반영) 재실행 후.
 - 분석 결과가 없는 과제는 기존처럼 "분석 결과가 없는 과제" 목록으로만 표시.
 - 테스트: tests/test_project_overview.py.
+
+## (44) 프로필 전문성 요약 "주요 협업자" — 최근 5년·현재 재직자·논문/특허 분리 (2026-10-15)
+- 이전: 이름 옆 숫자 = 전체 기간 논문 공저 + 특허 공동발명 합계, 퇴사자 포함.
+- 변경(pipeline/process_expertise_metrics.compute_collaboration): 주요 협업자 상위 5명은 최근 5년(올해 포함) 협업 건만,
+  상대가 현재 재직자(is_current≠N)인 경우만. 정렬 합계 → 논문 순. collaboration_metrics.csv에
+  top_collaborator_paper_counts / top_collaborator_patent_counts 열 추가(top_collaborator_counts는 합계 유지).
+  collaborator_count·cross_dept_*는 기존대로 전체 기간.
+- 화면(detail_tabs.collaborator_row): "이름 (논문 3 · 특허 1)" — 0건 쪽은 생략. 재실행 전 산출물은 "이름 (4건)".
+  data_store.read_top_collaborators는 (id, 논문, 특허) 튜플 반환(분리 열 없으면 특허 -1).
+- 반영: run_integration.py(또는 process_expertise_metrics.py + DB 반영) 재실행 후. 테스트 tests/test_org_analysis.py.
+
+## (45) 과제 투입기간 해제일 오타로 '진행중'이 되던 문제 (2026-10-15)
+- 사례: 원본 해제일 `2020250614`(10자리 오타) → parse_yyyymmdd가 날짜가 아닌 값을 그대로 통과 → 그 구간이 뒤 구간
+  (20250614~20250715~20260922)과 이어지지 못하고 따로 남아, 과제명 이력 분할 후 마지막 구간([연구]소재개발 22.12~)이
+  종료일 없음 → 타임라인 '진행중'.
+- 수정(pipeline/process_tasks.py):
+  - `_clean_dates`: 시작일/해제일이 실제 날짜(YYYY-MM-DD)가 아니면 경고 출력. 해제일은 빈 값으로, 시작일 오류 행은 제외.
+  - `_merge_consecutive_periods`: 해제일이 빈 구간 뒤에 같은 과제의 더 늦은 구간이 있으면 이어 붙임(뒤 구간 종료일 채택).
+    뒤 구간이 없으면 기존대로 진행중.
+- 반영: 과제 투입기간 파일 재처리(데이터 업데이트 실행 또는 process_tasks.py) — 같은 과제의 옛 행은 _drop_stale_task_rows가 정리.
+  원본 오타는 실행 로그의 "[WARN] 날짜 형식 오류"로 확인 가능. 테스트 tests/test_task_processing_dates.py.
+
+## (46) 과제 '진행중' 재발 — 실제 원인: 분석 실행이 옛 원천 사본으로 tasks.csv를 덮어씀 (2026-10-15)
+- (45)의 해제일 `2020250614`는 사용자 전달 시 오타(원본은 20250614)로 확인 — 원본 3행은 정상적으로 2019-02-18~2026-09-22로 병합된다.
+  (45)의 날짜 검사·빈 해제일 뒤 구간 병합은 방어 로직으로 유지.
+- 실제 원인: 데이터 업데이트 화면 업로드는 data/web_updates/tasks/의 새 파일로 tasks.csv를 맞게 만들지만,
+  이후 run_integration → run_expertise가 process_tasks.process()를 기본 경로로 다시 호출하면서 원천 사본
+  (DB tasks_stg 또는 data/raw_csv/tasks.csv — 화면 업로드로 갱신되지 않음)을 읽었다. 옛 사본엔 그 시점 진행중이던
+  구간(20190218~빈 값)이 있어, _drop_stale_task_rows가 새 행을 지우고 같은 키(사번·과제명·시작일)로 해제일 빈 값이 저장됨
+  → 과제명 이력 분할 후 마지막 구간 '진행중'. process_project_confl(2026-10-13)과 같은 유형.
+- 수정: process_tasks._newer_web_upload — 화면 업로드 파일이 원천 사본(raw_csv/tasks.csv)보다 새것이면 기본 경로 호출도
+  화면 업로드 폴더를 읽는다. 테스트 tests/test_task_processing_dates.py.
+- 반영: 배포 후 데이터 업데이트에서 과제참여이력 재실행(또는 run_integration) — 둘 다 최신 업로드 파일을 읽는다.
+
+## (47) 모든 원천 공통 — 분석 실행이 화면 업로드보다 오래된 원천 사본을 읽지 않게 (2026-10-15)
+- pipeline/source_reader.read_source(name): 화면 업로드(data/web_updates/<name>/)가 원천 사본(data/raw_csv/<name>.csv,
+  DB `{name}_stg`의 원본)보다 새것이면 그 파일을 읽는다. 파일 선택·헤더 행은 sources.py 매니페스트(1단계와 같은 규칙),
+  패턴에 맞는 게 없고 폴더에 엑셀이 1개면 그 파일. 업무목표는 화면 슬롯 폴더(work_objective_1~3)에서 연도 파일명으로 찾음.
+  직무이력은 화면 실행 때 만든 "*_병합.xlsx". 읽으면 로그 "[READ] <name>: 관리자 화면에서 올린 최신 파일 사용".
+- 시점보호 항목(평가·핵심기술·직무이력·업무목표): 화면 실행 성공 시 web_pipeline_runner._write_valid_date가
+  `.valid_date.json`({files, valid_date})을 남기고, 분석 실행이 그 업로드를 읽으면 source_reader.web_valid_date()로
+  같은 기준 연/월을 쓴다(기록 없으면 기존대로 오늘).
+- 과제별컨플·과제참여이력의 개별 처리(_newer_web_upload)는 그대로 두고, 나머지 원천은 이 공통 경로로 처리.
+  팀/리더 참조·직군 예외자는 read_source를 쓰지 않는 자체 경로(기존).
+- 테스트 tests/test_source_reader_web_upload.py.
+
+## (48) AI 검색 "평가등급 조건으로 검색할 권한이 없습니다" 안내 구분 (2026-10-15)
+- 막히는 경우 2가지(services/nl_query.py, auth.can_table('evaluations')):
+  ① 계정의 "평가등급 열람"(view_evaluation) 권한 없음 — is_admin(관리자)은 사용자 관리 권한일 뿐 평가 열람과 별개.
+     역할 기본값(config/auth_config.ROLE_PERMISSIONS) 또는 계정별 재정의로 결정.
+  ② "People제외"(eval_excluded_dep_ids) 설정 — 화면·엑셀은 People팀만 가리지만 AI 검색은 행 단위 필터가 없어
+     평가 조건 전체 차단(2026-08-31 사용자 확정).
+- 권한·예외 설정은 로그인 시 세션에 저장되므로 변경 후 재로그인 필요.
+- 메시지를 ①/② 사유별로 바꿔 어떤 설정을 확인할지 안내.
+
+## (49) AI 검색 평가등급 조건 — People제외 계정도 사용 가능(해당 부서만 제외) (2026-10-15)
+- 사용자 확정으로 2026-08-31 방침("People제외 계정은 AI 검색 평가 조건 전체 차단") 변경.
+- services/nl_query.find_researchers_by_criteria: 평가등급 열람 권한(view_evaluation)이 없으면 기존대로 차단.
+  권한이 있고 eval_excluded_dep_ids가 있으면 후보 중 그 부서(dep_id, similarity_map.org_code_dep_id_map) 소속을
+  먼저 빼고 평가 조건 적용 — 화면·엑셀(can_view_evaluation)과 같은 기준. 안내 문구에 제외 인원 수 표시.
+- open_data_query(자유 질의 SQL)의 evaluations 테이블은 행 단위 필터가 없어 기존대로 People제외 계정에 비공개.
+- 테스트 tests/test_nl_grade_people_exclusion.py.

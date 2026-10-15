@@ -485,13 +485,25 @@ def find_researchers_by_criteria(age_min: int | None = None, age_max: int | None
         # 화면 UI(pages/*.py)가 view_evaluation 권한 없는 역할에는 평가등급을
         # 아예 안 보여주는 것과 동일한 기준 — 여기서도 evaluations.csv를 조건으로
         # 걸기 전에 확인해, 권한 없는 역할이 자연어 질문으로 평가등급 조건 검색을
-        # 우회하지 못하게 한다. 권한 이름을 직접 하드코딩하지 않고
-        # auth.can_table()로 TABLE_PERMISSIONS(config/auth_config.py)을 거쳐
-        # 조회 — open_data_query.py의 filter_permitted_tables()와 같은 매핑을 쓴다.
-        if not auth.can_table('evaluations'):
+        # 우회하지 못하게 한다.
+        # People제외(eval_excluded_dep_ids) 계정은 화면·엑셀과 같은 기준으로 그 부서 소속 연구원만 빼고
+        # 평가 조건을 적용한다(2026-10-15 사용자 확정 — 예전엔 행 단위 필터가 없어 평가 조건 검색 전체를 막았음).
+        # 평가등급 열람 권한 자체가 없으면 기존대로 차단.
+        if not auth.can('view_evaluation') or auth.get_current_user() is None:
             return _empty_table_result(
                 'find_researchers_by_criteria',
-                '평가등급 조건으로 검색할 권한이 없습니다.')
+                '평가등급 조건으로 검색할 권한이 없습니다. 관리자(is_admin) 여부와 별개로 계정의 "평가등급 열람" '
+                '권한이 필요합니다 — 관리자 > 사용자/권한 관리에서 확인 후 다시 로그인하세요.')
+        excluded_deps = auth.eval_excluded_dep_ids()
+        if excluded_deps and not candidates.empty:
+            from services.similarity_map import org_code_dep_id_map
+            dep_map = org_code_dep_id_map()
+            hidden = candidates['org_code'].astype(str).str.strip().map(
+                lambda o: dep_map.get(o, '') in excluded_deps) if 'org_code' in candidates.columns else None
+            if hidden is not None and hidden.any():
+                grade_note = (f'평가등급 열람 제외 부서(People팀 등) 소속 {int(hidden.sum())}명은 '
+                              '평가 조건 판단에서 제외했습니다.')
+                candidates = candidates[~hidden]
         n = len(grade_threshold)
         years = evaluation_years()[0][:n]
         if len(years) < n:
@@ -522,7 +534,8 @@ def find_researchers_by_criteria(age_min: int | None = None, age_max: int | None
                 grade_evidence[rid] = ' / '.join(f"'{str(y)[-2:]}:{g}" for y, g in zip(years, grades))
         candidates = candidates[candidates['researcher_id'].isin(keep_ids)]
         if excluded_missing:
-            grade_note = f'최근 {n}개년 평가등급이 모두 확인되지 않는 {excluded_missing}명은 판단할 수 없어 제외했습니다.'
+            grade_note = ' '.join(x for x in (grade_note, f'최근 {n}개년 평가등급이 모두 확인되지 않는 '
+                                               f'{excluded_missing}명은 판단할 수 없어 제외했습니다.') if x)
 
     items = []
     for _, r in candidates.iterrows():
