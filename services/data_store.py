@@ -113,9 +113,10 @@ def read_contribution_metrics() -> dict[str, dict]:
     return {r['researcher_id']: r for r in df.to_dict('records')}
 
 
-def read_top_collaborators(rid: str) -> list[tuple[str, int]]:
+def read_top_collaborators(rid: str) -> list[tuple[str, int, int]]:
     """collaboration_metrics.csv(pipeline/process_expertise_metrics.py)의 그
-    연구원 상위 협업자 [(researcher_id, 공동 논문+특허 수), ...]. 없으면 []."""
+    연구원 주요 협업자 [(researcher_id, 논문 공저 수, 특허 공동발명 수), ...] — 최근 5년·현재 재직자 기준
+    (2026-10-15). 재실행 전 산출물(논문/특허 분리 열 없음)은 합계를 논문 칸에, 특허는 -1(미상)로. 없으면 []."""
     df = read_processed('collaboration_metrics')
     if df.empty or 'researcher_id' not in df.columns:
         return []
@@ -123,15 +124,24 @@ def read_top_collaborators(rid: str) -> list[tuple[str, int]]:
     if rows.empty:
         return []
     r = rows.iloc[0]
+
+    def _ints(col):
+        out = []
+        for v in str(r.get(col) or '').split(';'):
+            try:
+                out.append(int(float(v)))
+            except ValueError:
+                out.append(0)
+        return out
     ids = [x for x in str(r.get('top_collaborators') or '').split(';') if x and x != 'nan']
-    counts = str(r.get('top_collaborator_counts') or '').split(';')
+    split = 'top_collaborator_paper_counts' in r.index and str(r.get('top_collaborator_paper_counts') or '') not in ('', 'nan')
+    papers = _ints('top_collaborator_paper_counts' if split else 'top_collaborator_counts')
+    patents = _ints('top_collaborator_patent_counts') if split else []
     out = []
     for i, x in enumerate(ids):
-        try:
-            n = int(float(counts[i]))
-        except (IndexError, ValueError):
-            n = 0
-        out.append((x.zfill(8), n))
+        pa = papers[i] if i < len(papers) else 0
+        pt = (patents[i] if i < len(patents) else 0) if split else -1
+        out.append((x.zfill(8), pa, pt))
     return out
 
 

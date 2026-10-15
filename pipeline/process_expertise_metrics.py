@@ -34,7 +34,8 @@ process_researcher_expertise.py(LLM 전문성 분석)가 끝난 뒤 run_analysis
      같은 논문(제목 공백·대소문자 무시 + 게재일)에 함께 이름을 올린 사내
      연구원, 같은 특허(application_id)의 공동발명자를 협업 관계로 본다.
      edges: 연구원 쌍별 공동 논문/특허 수·최근 연도·같은 부서 여부.
-     metrics: 연구원별 협업자 수, 타부서 협업자 수/비율, 상위 5명.
+     metrics: 연구원별 협업자 수, 타부서 협업자 수/비율(전체 기간), 주요 협업자 상위 5명
+     (2026-10-15: 최근 5년·상대가 현재 재직자인 협업만, 논문/특허 건수 분리 열 추가).
      사내 저자가 COLLAB_MAX_GROUP명을 넘는 대형 공저 1건은 관계 폭증을
      막기 위해 제외한다.
 
@@ -446,22 +447,37 @@ def compute_collaboration(researchers: pd.DataFrame, pubs: pd.DataFrame,
     for r in edge_rows:
         for me, other in ((r['researcher_a'], r['researcher_b']), (r['researcher_b'], r['researcher_a'])):
             partners.setdefault(me, []).append((other, r['total_count'], r['same_department'] == 'N'))
+    # 주요 협업자(프로필 전문성 요약, 2026-10-15): 최근 5년(올해 포함) 협업 건만, 상대가 현재 재직자인 경우만,
+    # 논문·특허 건수를 따로 기록(정렬은 합계 → 논문 순). collaborator_count/cross_dept_*는 기존대로 전체 기간.
+    current = set(researchers['researcher_id']) if not researchers.empty and 'researcher_id' in researchers.columns else set()
+    if current and 'is_current' in researchers.columns:
+        current = set(researchers.loc[researchers['is_current'].astype(str).str.upper() != 'N', 'researcher_id'])
+    recent: dict = {}
+    for (a, b), e in edges.items():
+        if e['paper_recent'] + e['patent_recent'] == 0:
+            continue
+        for me, other in ((a, b), (b, a)):
+            if other in current:
+                recent.setdefault(me, []).append((other, e['paper_recent'], e['patent_recent']))
     metric_rows = []
     for rid, lst in sorted(partners.items()):
         lst.sort(key=lambda x: -x[1])
         cross = sum(1 for _, _, c in lst if c)
-        top = lst[:COLLAB_TOP_N]
+        top = sorted(recent.get(rid, []), key=lambda x: (-(x[1] + x[2]), -x[1], x[0]))[:COLLAB_TOP_N]
         metric_rows.append({
             'researcher_id': rid,
             'collaborator_count': len(lst),
             'cross_dept_collaborator_count': cross,
             'cross_dept_ratio': round(cross * 100.0 / len(lst), 1),
             'top_collaborators': ';'.join(o for o, _, _ in top),
-            'top_collaborator_counts': ';'.join(str(n) for _, n, _ in top),
+            'top_collaborator_counts': ';'.join(str(pa + pt) for _, pa, pt in top),
+            'top_collaborator_paper_counts': ';'.join(str(pa) for _, pa, _ in top),
+            'top_collaborator_patent_counts': ';'.join(str(pt) for _, _, pt in top),
         })
     return edges_df, pd.DataFrame(metric_rows, columns=[
         'researcher_id', 'collaborator_count', 'cross_dept_collaborator_count', 'cross_dept_ratio',
-        'top_collaborators', 'top_collaborator_counts'])
+        'top_collaborators', 'top_collaborator_counts', 'top_collaborator_paper_counts',
+        'top_collaborator_patent_counts'])
 
 
 def run_collaboration() -> bool:

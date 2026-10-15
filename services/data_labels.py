@@ -228,6 +228,8 @@ COLUMN_LABELS = {
     'cross_dept_ratio': '타부서 협업 비율(%)',
     'top_collaborators': '주요 협업자 사번',
     'top_collaborator_counts': '주요 협업자별 협업수',
+    'top_collaborator_paper_counts': '주요 협업자별 논문 공저수',
+    'top_collaborator_patent_counts': '주요 협업자별 특허 공동발명수',
     'recent_count': '최근 5년 협업 건수',
     'level1_a': '1단계부서명(A)', 'level1_b': '1단계부서명(B)',
     'level3_a': '3단계부서명(A)', 'level3_b': '3단계부서명(B)',

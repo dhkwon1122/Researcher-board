@@ -14152,3 +14152,13 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 반영: 화면 인력현황은 배포만으로, 과제 개요·과제원 기준 변경은 `run_integration.py`(또는 process_project_competency_gap.py + DB 반영) 재실행 후.
 - 분석 결과가 없는 과제는 기존처럼 "분석 결과가 없는 과제" 목록으로만 표시.
 - 테스트: tests/test_project_overview.py.
+
+## (44) 프로필 전문성 요약 "주요 협업자" — 최근 5년·현재 재직자·논문/특허 분리 (2026-10-15)
+- 이전: 이름 옆 숫자 = 전체 기간 논문 공저 + 특허 공동발명 합계, 퇴사자 포함.
+- 변경(pipeline/process_expertise_metrics.compute_collaboration): 주요 협업자 상위 5명은 최근 5년(올해 포함) 협업 건만,
+  상대가 현재 재직자(is_current≠N)인 경우만. 정렬 합계 → 논문 순. collaboration_metrics.csv에
+  top_collaborator_paper_counts / top_collaborator_patent_counts 열 추가(top_collaborator_counts는 합계 유지).
+  collaborator_count·cross_dept_*는 기존대로 전체 기간.
+- 화면(detail_tabs.collaborator_row): "이름 (논문 3 · 특허 1)" — 0건 쪽은 생략. 재실행 전 산출물은 "이름 (4건)".
+  data_store.read_top_collaborators는 (id, 논문, 특허) 튜플 반환(분리 열 없으면 특허 -1).
+- 반영: run_integration.py(또는 process_expertise_metrics.py + DB 반영) 재실행 후. 테스트 tests/test_org_analysis.py.

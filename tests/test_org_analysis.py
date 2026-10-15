@@ -58,3 +58,23 @@ def test_collab_recent_and_levels():
     assert cg.aggregate(e, 'level1') == {('P1', 'P2'): 1}
     assert cg.aggregate(e, 'level3') == {('T1', 'T2'): 1}
     assert cg.network_figure(cg.aggregate(e, 'level1')) is not None
+
+
+def test_top_collaborators_recent_current_split(monkeypatch):
+    """주요 협업자: 최근 5년·현재 재직자만, 논문/특허 분리(2026-10-15)."""
+    r = pd.DataFrame({'researcher_id': ['1', '2', '3', '4'], 'department': ['a'] * 4,
+                      'is_current': ['Y', 'Y', 'Y', 'N']})
+    pubs = pd.DataFrame({'researcher_id': ['1', '2', '1', '3', '1', '4'], 'title': ['t', 't', 'old', 'old', 'x', 'x'],
+                         'pub_date': ['2025-01-01'] * 2 + ['2015-01-01'] * 2 + ['2024-01-01'] * 2})
+    pats = pd.DataFrame({'researcher_id': ['1', '2'], 'application_id': ['A1', 'A1'], 'application_date': ['2023-05-01'] * 2})
+    _, m = pm.compute_collaboration(r, pubs, pats, {}, today_year=2026)
+    row = m[m['researcher_id'] == '1'].iloc[0]
+    assert row['top_collaborators'] == '2'            # 3: 2015년(5년 밖), 4: 퇴직자 → 제외
+    assert row['top_collaborator_paper_counts'] == '1' and row['top_collaborator_patent_counts'] == '1'
+    assert row['collaborator_count'] == 3              # 협업자 수는 기존대로 전체 기간
+
+    from services import data_store as ds
+    monkeypatch.setattr(ds, 'read_processed', lambda name, **k: m.assign(researcher_id=m['researcher_id'].str.zfill(8)))
+    assert ds.read_top_collaborators('1') == [('00000002', 1, 1)]
+    from components.detail_tabs import _collab_label
+    assert _collab_label(1, 1) == '논문 1 · 특허 1' and _collab_label(3, 0) == '논문 3' and _collab_label(4, -1) == '4건'
