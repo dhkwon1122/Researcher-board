@@ -29,7 +29,7 @@ def _score_badge(label: str, score):
     return dbc.Badge(f'{label}: {round(score * 100)}%', color='info', className='me-1')
 
 
-_SCORE_A_DESC = '과제에서 필요한 기술과 해당 연구원의 보유 전문성 유사도 기반'
+_SCORE_A_DESC = '과제에서 필요한 기술(컨플 과제 분석 + 과제정보의 목표·확보전략 등)과 해당 연구원의 보유 전문성 유사도 기반'
 _SCORE_B_DESC = '과제 참여중인 인력의 보유 전문성과 해당 연구원의 보유 전문성 유사도 기반'
 
 
@@ -93,6 +93,24 @@ def _insight_line(rec: dict):
         badges.append(dbc.Badge(f'기존 협업자 {len(collab)}명', color='info', className='me-1',
                                 title='최근 5년 공저·공동발명: ' + ', '.join(n for _rid, n in collab),
                                 style={'cursor': 'help'}))
+    hist = rec.get('history')
+    if hist and hist.get('score'):
+        tip = []
+        if hist.get('experience'):
+            e = hist['experience']
+            tip.append(f"이 과제(계열) 참여 경험 약 {e['months']}개월 (마지막 {e['last_year']}년)")
+        if hist.get('peers'):
+            tip.append(f"과거 같은 과제에서 함께 일한 현재 과제원 {len(hist['peers'])}명: "
+                       + ', '.join(hist.get('peer_names') or hist['peers']))
+        f = hist.get('flow') or {}
+        if f.get('count'):
+            tip.append(f"현재 과제에서 이 과제로 옮긴 선례 {f['count']}건 (현재 과제 출신 이동 {f['total']}건 중)")
+        label = '과제 이력: ' + ' · '.join(x for x in (
+            '참여 경험' if hist.get('experience') else '',
+            f"옛 동료 {len(hist['peers'])}명" if hist.get('peers') else '',
+            f"이동 선례 {f['count']}건" if f.get('count') else '') if x)
+        badges.append(dbc.Badge(label, color='warning', text_color='dark', className='me-1',
+                                title='\n'.join(tip) + '\n(과제참여이력 기반 — 추천 정렬에 가산)', style={'cursor': 'help'}))
     comp = rec.get('composition')
     if comp:
         text = (f"과제 {comp['total']}명 · 시니어 {comp['seniors']} · 주니어 {comp['juniors']} · 주도형 {comp['leads']}"
