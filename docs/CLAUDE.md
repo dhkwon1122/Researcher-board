@@ -14206,3 +14206,11 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
      평가 조건 전체 차단(2026-08-31 사용자 확정).
 - 권한·예외 설정은 로그인 시 세션에 저장되므로 변경 후 재로그인 필요.
 - 메시지를 ①/② 사유별로 바꿔 어떤 설정을 확인할지 안내.
+
+## (49) AI 검색 평가등급 조건 — People제외 계정도 사용 가능(해당 부서만 제외) (2026-10-15)
+- 사용자 확정으로 2026-08-31 방침("People제외 계정은 AI 검색 평가 조건 전체 차단") 변경.
+- services/nl_query.find_researchers_by_criteria: 평가등급 열람 권한(view_evaluation)이 없으면 기존대로 차단.
+  권한이 있고 eval_excluded_dep_ids가 있으면 후보 중 그 부서(dep_id, similarity_map.org_code_dep_id_map) 소속을
+  먼저 빼고 평가 조건 적용 — 화면·엑셀(can_view_evaluation)과 같은 기준. 안내 문구에 제외 인원 수 표시.
+- open_data_query(자유 질의 SQL)의 evaluations 테이블은 행 단위 필터가 없어 기존대로 People제외 계정에 비공개.
+- 테스트 tests/test_nl_grade_people_exclusion.py.
