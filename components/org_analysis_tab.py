@@ -483,7 +483,55 @@ def _pubgrade_body(level, platforms):
     return html.Div([
         dcc.Graph(figure=fig, config={'displaylogo': False}),
         html.Div(table, style={'maxHeight': '420px', 'overflowY': 'auto'}, className='mt-2'),
+        _asset_summary_card(level),
     ])
+
+
+def _asset_summary_card(level: str):
+    """AI 자산화 요약(pipeline/process_asset_summary.py 산출물, 2026-10-15). 플랫폼 필터와 무관하게 전체 기준."""
+    from services.data_store import read_asset_summary
+    s = read_asset_summary().get(level)
+    unit = '부서' if level != 'level3' else '과제'
+    if not s:
+        return html.Div(_empty('AI 자산화 요약이 아직 없습니다 — 분석 실행(run_integration) 후 표시됩니다.'), className='mt-3')
+    li = lambda items: html.Ul([html.Li(x) for x in items], className='mb-2 ps-3')  # noqa: E731
+
+    def _counts(r):
+        pg, tg = r.get('paper_grades') or {}, r.get('patent_grades') or {}
+        return (f"논문 {r.get('papers', 0)}(최우수 {pg.get('최우수', 0)}·우수 {pg.get('우수', 0)}) · "
+                f"특허 {r.get('patents', 0)}(전략 {tg.get('전략', 0)}·A1 {tg.get('A1', 0)})")
+    top = [html.Li([html.Span(f"{r['unit']} — 상위 등급 {r.get('top', 0)}건", className='fw-semibold'),
+                    html.Span(f" ({_counts(r)}, 구성원 {r.get('members', 0)}명)", className='text-muted'),
+                    html.Span(f" — 주제: {', '.join(r['topics'])}" if r.get('topics') else '')])
+           for r in s.get('top_units') or []]
+    trend = lambda r: f"{r['unit']}(최근2년 {r['recent']}·이전3년 {r['prior']})"  # noqa: E731
+    capita = lambda r: f"{r['unit']}(인당 {r['per_capita']}건, {r['members']}명)"  # noqa: E731
+    facts = []
+    if s.get('rising'):
+        facts.append(f'최근 늘어난 {unit}: ' + ', '.join(map(trend, s['rising'])))
+    if s.get('falling'):
+        facts.append(f'최근 줄어든 {unit}: ' + ', '.join(map(trend, s['falling'])))
+    if s.get('per_capita_top'):
+        facts.append('인당 생산성 상위: ' + ', '.join(map(capita, s['per_capita_top'])))
+    if s.get('per_capita_bottom'):
+        facts.append('인당 생산성 하위: ' + ', '.join(map(capita, s['per_capita_bottom'])))
+    if s.get('low'):
+        facts.append(f'실적이 적은 {unit}(최근 5년 1건 이하): ' + ', '.join(s['low']))
+    head = html.Div([
+        html.I(className='bi bi-stars me-1 text-primary'),
+        html.Span(f'AI 자산화 요약 — {unit} 기준(전체)', className='fw-semibold'),
+        html.Span(f" (최근 5년 {s.get('period', '')}, 생성 {s.get('generated_at', '')}"
+                  + ('' if s.get('llm') else ', AI 응답 없어 통계 기반') + ')', className='text-muted small ms-1'),
+    ], className='mb-2')
+    return dbc.Card(dbc.CardBody([
+        head,
+        html.Div('총평', className='small fw-semibold text-muted'), li(s.get('overview') or []),
+        html.Div(f'상위 등급 실적 {unit} Top {len(top)} (최우수·우수 논문 + 전략·A1 특허)', className='small fw-semibold text-muted'),
+        html.Ul(top, className='mb-2 ps-3') if top else _empty('상위 등급 실적 없음'),
+        html.Div('세부 현황', className='small fw-semibold text-muted'), li(facts),
+        html.Div('플랫폼 필터와 관계없이 전체 기준으로 분석 실행 때 생성됩니다. AI에는 이름 없이 부서/과제명·논문 제목·'
+                 '건수·인원 수만 전달됩니다.', className='text-muted', style={'fontSize': '0.7rem'}),
+    ], style={'fontSize': '0.8rem'}), className='mt-3 shadow-sm')
 
 
 def org_analysis_content() -> html.Div:

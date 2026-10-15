@@ -151,6 +151,12 @@ def read_project_competency_gap() -> list[dict]:
     return _read_json_records('project_competency_gap', 'project_competency_gap.json')
 
 
+def read_asset_summary() -> dict:
+    """논문·특허 자산화 AI 요약(pipeline/process_asset_summary.py) — {'level1': {...}, 'level3': {...}}.
+    DB(테이블 asset_summary) 우선, 없으면 JSON 파일. 둘 다 없으면 {}."""
+    return {r.get('level'): r for r in _read_json_records('asset_summary', 'asset_summary.json') if r.get('level')}
+
+
 def read_collab_summary() -> dict:
     """부서/과제간 협업 AI 요약(pipeline/process_collab_summary.py) — {'level1': {...}, 'level3': {...}}.
     DB(테이블 collab_summary) 우선, 없으면 JSON 파일. 둘 다 없으면 {}."""

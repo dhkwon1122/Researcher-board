@@ -122,6 +122,7 @@ JSON_TABLES = [
     ('researcher_strength_std', 'researcher_strength_std.json', 'researcher_id'),
     ('project_competency_gap', 'project_competency_gap.json', 'project_name'),
     ('collab_summary', 'collab_summary.json', 'level'),
+    ('asset_summary', 'asset_summary.json', 'level'),
 ]
 
 
