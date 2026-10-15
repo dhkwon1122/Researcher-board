@@ -14053,3 +14053,17 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   특허 전략(A급구분 전략출원)>A1>A2>기타(현재등급, 출원ID 1건), 최근 5년, 제외 조직 반영.
   그래프: 논문·특허 나란히(같은 단위 순서), 파스텔 색, 범례 위쪽 가운데(서브플롯 제목·막대와 안 겹침).
   표: 논문/특허 그룹 헤더 + 등급별·계. 테스트 tests/test_publication_grade.py, test_collab_summary.py.
+
+## (42) 필요 역량(과제) — 과제 개요(목표·마일스톤·주요 업무·인력현황) 추가 (2026-10-15)
+- 과제를 고르면 필요 역량 표 위에 "과제 개요" 카드(펼침): 과제 목표 / 주요 업무 / 과제 마일스톤 / 인력현황, 모두 개조식.
+- 목표·마일스톤·주요 업무: `pipeline/process_project_competency_gap.py`가 과제 문서 요약(project_expertise_analysis.json)을
+  LLM으로 압축해 항목별 `overview`({goals, milestones, tasks})로 저장. 캐시 `project_overview_cache.json`(입력 해시, `ov1:`).
+  LLM 실패 시 요약 원문을 문장 단위로 잘라 사용. 프롬프트에는 과제 문서 요약만 — 연구원 ID/이름 없음.
+- 인력현황: `services/project_staffing.py` — 과제별컨플 담당자 목록은 쓰지 않고 researchers.csv 최신 시점(is_current≠N)만,
+  재직상태 휴직 제외. 소속 = org_code가 과제 매칭 키(project_member_key, 비공식소속부서명 매핑 반영)와 같거나,
+  그 소속의 팀/리더 참조 3단계부서명이 과제명과 같은 사람. 총원 / CL별(임원→CL 큰 순) / 직무별 / 학위(박사·석사, education.csv).
+- 필요 역량 표의 "과제원"도 같은 규칙으로 통일(staff_members) — project_personnel.csv(과제 문서 담당자) 합집합 제거.
+  컨플에만 있던 사람(타 부서 겸직 등)은 비과제원 쪽에 나타날 수 있음.
+- 반영: 화면 인력현황은 배포만으로, 과제 개요·과제원 기준 변경은 `run_integration.py`(또는 process_project_competency_gap.py + DB 반영) 재실행 후.
+- 분석 결과가 없는 과제는 기존처럼 "분석 결과가 없는 과제" 목록으로만 표시.
+- 테스트: tests/test_project_overview.py.

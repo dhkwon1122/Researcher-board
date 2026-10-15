@@ -7,8 +7,7 @@ analysis.json)에서 과제별 "필요 역량"을 사내 LLM으로 4~8개 뽑고
 보유 역량(연구원 보유 전문성 분석.json의 강점 분야(표준화본 우선)/키워드/
 전문지식 및 역량)과 BGE-M3 임베딩으로 대조한다.
 
-  - 과제 인력 = researchers.csv에서 org_code == project_name인 현재 재직자
-    + project_personnel.csv(과제 문서에 담당 업무가 적힌 사람)의 합집합
+  - 과제 인력 = researchers.csv에서 org_code == project_name인 현재 재직자(휴직 제외, 2026-10-15 아래 참고)
   - 필요 역량마다 인력 보유 항목 중 코사인 유사도 최고값이 GAP_THRESHOLD
     (0.75) 이상이면 "충족"(충족자 목록), 미만이면 "갭"
   - 갭 역량은 과제 밖 현재 재직자 중 유사도 GAP_THRESHOLD 이상인 상위 3명을
@@ -21,10 +20,14 @@ analysis.json)에서 과제별 "필요 역량"을 사내 LLM으로 4~8개 뽑고
   - (2026-10-09) "과제별 필요 역량"으로 목적 변경: 충족/갭 판정 대신 필요 역량 이름 + 쉬운 설명(LLM),
     과제원별 임베딩 유사도 + LLM 근거 한 줄, 비소속 상위 OUTSIDER_TOP_N(10)명(+근거)을 기록한다.
     LLM 프롬프트에는 연구원 ID/이름을 넣지 않는다(순번만 사용).
+  - (2026-10-15) 과제 개요 추가: 과제 문서 요약을 LLM으로 과제 목표·마일스톤·주요 업무 개조식 항목으로
+    압축해 `overview`에 기록(project_overview_cache.json, 입력 해시 캐시. 실패 시 요약 원문을 문장 단위로).
+    과제원 판별을 실제 인력현황(researchers.csv 최신, 휴직 제외)만으로 변경 — 과제별컨플 담당자
+    (project_personnel.csv)는 더 이상 합치지 않는다(services/project_staffing.staff_members와 같은 규칙).
 
 Source:
   data/processed/project_expertise_analysis.json
-  data/processed/researchers.csv, project_personnel.csv
+  data/processed/researchers.csv, project_confl_address.csv(비공식소속부서명 매핑)
   data/processed/연구원 보유 전문성 분석.json, researcher_strength_std.json(있으면)
 
 Output:
@@ -42,6 +45,7 @@ Confluence 접근이 막혀 있어도(예: 401) 이 단계는 이미 저장된 �
 import hashlib
 import json
 import os
+import re
 import sys
 from datetime import datetime
 
@@ -65,6 +69,7 @@ OUTSIDER_TOP_N = 10      # 비소속 적합자 표시 인원(유사도 상위, 2
 EVIDENCE_MEMBER_MAX = 30  # LLM 근거를 붙이는 과제원 상한(유사도 상위)
 EVIDENCE_TOP_ITEMS = 3   # 후보자당 LLM에 넘기는 가까운 보유 항목 수
 EVIDENCE_CACHE_FILE = 'project_competency_evidence_cache.json'
+OVERVIEW_CACHE_FILE = 'project_overview_cache.json'   # 과제 개요(목표·마일스톤·주요 업무) LLM 캐시
 
 _SYSTEM_PROMPT = """# Role
 당신은 R&D 과제 인력 구성 전문가입니다. 과제 문서 요약을 읽고 이 과제를
@@ -100,6 +105,83 @@ _EVIDENCE_SYSTEM_PROMPT = """# Role
 # Output Format (JSON)
 {"evidence": [{"idx": 0, "reason": ["근거 항목1", "근거 항목2"]}]}
 """
+
+
+_OVERVIEW_SYSTEM_PROMPT = """# Role
+당신은 R&D 과제 기획 담당자입니다. 과제 문서 분석 요약을 읽고, 과제를 처음 보는 사람이
+한눈에 파악할 수 있도록 과제 개요를 개조식으로 정리합니다.
+
+# Guidelines
+1. goals(과제 목표): 이 과제가 최종적으로 달성하려는 것 2~4개 항목.
+2. milestones(과제 마일스톤): 주요 추진 일정·단계 2~5개 항목. 문서에 시점(연도/분기 등)이 있으면 앞에 붙이세요.
+3. tasks(주요 업무): 과제 수행을 위해 실제로 하는 핵심 업무 3~5개 항목.
+4. 항목 하나는 40자 안팎의 명사형 짧은 구로 쓰고("~함/~임" 서술형 금지), 쉬운 말로 쓰세요.
+5. 문서에 근거가 없는 내용은 지어내지 말고, 근거가 없으면 빈 배열로 두세요.
+6. 반드시 아래 JSON 형식으로만 출력하세요.
+
+# Output Format (JSON)
+{"goals": ["항목1"], "milestones": ["항목1"], "tasks": ["항목1"]}
+"""
+
+OVERVIEW_KEYS = ('goals', 'milestones', 'tasks')
+
+
+def _overview_text(item: dict) -> str:
+    text = _project_text(item)
+    ms = [str(m).strip() for m in item.get('milestones') or [] if str(m).strip()]
+    if ms:
+        text += '\n\n[마일스톤]\n' + '\n'.join(f'- {m}' for m in ms)
+    return text
+
+
+def _overview_fallback(item: dict) -> dict:
+    """LLM 실패 시: 저장된 요약 필드를 문장 단위로 잘라 그대로 쓴다."""
+    def _split(v, n):
+        parts = re.split(r'(?<=[.。])\s+|\n+', str(v or ''))
+        return [x.strip(' -•·') for x in parts if x.strip(' -•·')][:n]
+    return {'goals': _split(item.get('deliverable'), 3),
+            'milestones': [str(m).strip() for m in item.get('milestones') or [] if str(m).strip()][:5],
+            'tasks': _split(item.get('core_tech'), 4)}
+
+
+def _overview_task(item: dict, cache: dict):
+    """과제 개요 {goals, milestones, tasks}(각 항목 리스트). 캐시 키 = 입력 텍스트 해시(문서가 안 바뀌면 재호출 없음).
+    입력은 과제 문서 요약 필드뿐이라 연구원 ID/이름은 들어가지 않는다."""
+    text = _overview_text(item)
+    if not text.strip():
+        return None
+    key = 'ov1:' + hashlib.sha256(text.encode('utf-8')).hexdigest()
+    if key in cache:
+        return cache[key]
+    raw = call_llm(f'아래는 한 R&D 과제 문서의 분석 요약입니다.\n\n{text}', _OVERVIEW_SYSTEM_PROMPT,
+                   temperature=0.1, max_tokens=2000)
+    if not raw:
+        return None
+    try:
+        data = json.loads(extract_json(raw))
+    except json.JSONDecodeError:
+        return None
+    out = {k: [b for b in _bullets(data.get(k)).split('\n') if b] for k in OVERVIEW_KEYS}
+    if not any(out.values()):
+        return None
+    cache[key] = out
+    return out
+
+
+def attach_overview(results: list, projects: list, cache: dict) -> int:
+    """results 각 과제에 overview(과제 목표·마일스톤·주요 업무)를 붙인다. LLM 실패 과제는 요약 필드 그대로(fallback)."""
+    by_name = {p.get('project_name', ''): p for p in projects}
+    pairs = [(r, by_name.get(r.get('project_name', ''), {})) for r in results]
+    tasks = [(lambda p=p: _overview_task(p, cache)) for _r, p in pairs]
+    done = 0
+    for (r, p), (res, err) in zip(pairs, run_concurrent(tasks, max_workers=max_concurrency())):
+        if res and not err:
+            r['overview'] = res
+            done += 1
+        else:
+            r['overview'] = _overview_fallback(p)
+    print(f'  과제 개요 생성 {done}/{len(pairs)}건(나머지는 요약 원문 사용)')
+    return done
 
 
 def _read_json(name: str, default):
@@ -366,17 +448,16 @@ def process(refresh: bool = False) -> bool:
     current = set(researchers['researcher_id']) if not researchers.empty else set()
     if not researchers.empty and 'is_current' in researchers.columns:
         current = set(researchers.loc[researchers['is_current'].str.upper() != 'N', 'researcher_id'])
-    members: dict = {}
-    if not researchers.empty and 'org_code' in researchers.columns:
-        for rid, org in zip(researchers['researcher_id'], researchers['org_code']):
-            if rid in current and str(org).strip():
-                members.setdefault(fit.normalize_org_code(str(org)), set()).add(rid)
-    org_overrides = fit.project_org_overrides(_read_csv('project_confl_address'))
-    personnel = _read_csv('project_personnel')
-    if not personnel.empty and 'project_name' in personnel.columns:
-        for rid, pname in zip(personnel['researcher_id'], personnel['project_name']):
-            if rid and rid != '00000000' and str(pname).strip():
-                members.setdefault(fit.project_member_key(str(pname), org_overrides), set()).add(rid)
+    org_overrides = fit.project_org_overrides(fit.current_rows(_read_csv('project_confl_address')))
+    # (2026-10-15) 과제원 = 실제 인력현황(researchers.csv 최신, 휴직 제외)만 — 과제별컨플 담당자(project_personnel)는
+    # 더 이상 합치지 않는다. 화면의 "과제 개요 > 인력현황"과 같은 규칙(services/project_staffing.staff_members).
+    from services.project_staffing import _level3_lookup, staff_members
+    level3_of = _level3_lookup()
+    members: dict = {
+        fit.project_member_key(p.get('project_name', ''), org_overrides):
+            set(staff_members(researchers, p.get('project_name', ''), org_overrides, level3_of))
+        for p in projects if p.get('project_name')
+    }
 
     cache = _read_json(CACHE_FILE, {})
     required = {}
@@ -405,6 +486,9 @@ def process(refresh: bool = False) -> bool:
     ev_cache = _read_json(EVIDENCE_CACHE_FILE, {})
     attach_evidence(results, ev_cache)
     _write_json(EVIDENCE_CACHE_FILE, ev_cache)
+    ov_cache = _read_json(OVERVIEW_CACHE_FILE, {})
+    attach_overview(results, projects, ov_cache)
+    _write_json(OVERVIEW_CACHE_FILE, ov_cache)
     computed_at = datetime.now().strftime('%Y-%m-%d %H:%M')
     for r in results:
         r['computed_at'] = computed_at

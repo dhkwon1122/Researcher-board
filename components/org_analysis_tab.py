@@ -358,6 +358,43 @@ def _gap_project_options(l1, l2):
     return _project_options(l1, l2), None, _missing_block(l1, l2)
 
 
+def _overview_card(item: dict) -> html.Div:
+    """과제 개요(2026-10-15): 과제 목표·마일스톤·주요 업무(과제 문서 요약을 LLM으로 개조식 압축) +
+    인력현황(researchers.csv 최신 시점, 휴직 제외 — 과제별컨플 담당자는 쓰지 않음)."""
+    from services.project_staffing import project_staffing
+    ov = item.get('overview') or {}
+
+    def _block(label, lines):
+        lines = [str(x).strip() for x in lines or [] if str(x).strip()]
+        body = (html.Ul([html.Li(x) for x in lines], className='mb-0 ps-3') if lines
+                else html.Div('(문서 근거 없음 — 분석 재실행 시 생성)', className='text-muted'))
+        return html.Div([html.Div(label, className='fw-semibold mb-1', style={'color': '#14213D'}), body],
+                        className='mb-2')
+
+    st = project_staffing(item.get('project_name', ''))
+    if st['total']:
+        def _chips(pairs):
+            return [dbc.Badge(f'{k} · {v}명', color='light', text_color='dark', className='me-1 mb-1 border')
+                    for k, v in pairs]
+        staff = html.Ul([
+            html.Li([html.B(f"총 {st['total']}명"), html.Span(' (최신 인력현황 기준, 휴직자 제외)', className='text-muted')]),
+            html.Li(['CL별 ', *_chips(st['by_cl'])]),
+            html.Li(['직무별 ', *_chips(st['by_job'])]),
+            html.Li(f"학위: 박사 {st['doctor']}명 · 석사 {st['master']}명"),
+        ], className='mb-0 ps-3')
+    else:
+        staff = html.Div('최신 인력현황(researchers.csv)에서 이 과제 소속 인원을 찾지 못했습니다.', className='text-muted')
+    staff_block = html.Div([html.Div('인력현황', className='fw-semibold mb-1', style={'color': '#14213D'}), staff],
+                           className='mb-2')
+    return html.Div([
+        html.Div('과제 개요', className='fw-bold mb-2', style={'fontSize': '0.9rem'}),
+        dbc.Row([
+            dbc.Col([_block('과제 목표', ov.get('goals')), _block('주요 업무', ov.get('tasks'))], md=6),
+            dbc.Col([_block('과제 마일스톤', ov.get('milestones')), staff_block], md=6),
+        ]),
+    ], className='border rounded p-3 mb-3', style={'fontSize': '0.8rem', 'background': '#F8FAFD'})
+
+
 @callback(Output('org-gap-detail', 'children'), Input('org-gap-project', 'value'))
 def _gap_detail(project):
     if not project:
@@ -366,6 +403,7 @@ def _gap_detail(project):
     if not item:
         return _empty('선택한 과제의 분석 결과가 없습니다.')
     comps = item.get('competencies') or []
+    overview = _overview_card(item)
     summary = html.Div([
         dbc.Badge(f"필요 역량 {len(comps)}개", color='primary', className='me-1'),
         dbc.Badge(f"과제원 {item.get('member_count', 0)}명(분석 {item.get('analyzed_member_count', 0)}명)",
@@ -373,14 +411,16 @@ def _gap_detail(project):
         html.Span(item.get('project_name', ''), className='small text-muted ms-1'),
     ], className='mb-2')
     if not comps:
-        return html.Div([summary, _empty('이 과제의 필요 역량이 없습니다.')])
-    return html.Div([summary, _competency_table(item)])
+        return html.Div([overview, summary, _empty('이 과제의 필요 역량이 없습니다.')])
+    return html.Div([overview, summary, _competency_table(item)])
 
 
 def competency_gap_section() -> html.Div:
     title = '필요 역량(과제)'
-    hint = ['과제 문서에서 AI가 뽑은 필요 역량과 쉬운 설명(개조식)',
-            '과제원 맵핑: 소속 과제원별 보유 역량 유사도(0~1)',
+    hint = ['과제 개요: 과제 문서를 AI가 정리한 과제 목표·마일스톤·주요 업무',
+            '인력현황: 최신 인력현황(researchers.csv) 기준 과제 소속 인원(휴직자 제외) — CL·직무·학위별',
+            '과제 문서에서 AI가 뽑은 필요 역량과 쉬운 설명(개조식)',
+            '과제원 맵핑: 인력현황의 소속 과제원별 보유 역량 유사도(0~1)',
             '비과제원 맵핑: 소속은 아니지만 해당 역량을 가진 임직원 상위 10명',
             '배지에 마우스를 올리면 AI 근거(비과제원은 1·3단계 부서명 포함)']
     items = _gap_items()
