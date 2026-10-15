@@ -647,6 +647,12 @@ def refresh_navbar_user(_):
             [html.I(className='bi bi-person-lines-fill me-1'), '석세션 플랜'],
             href='/succession-plan',
         ))
+    # 조서 작성(2026-10-15) — 열을 직접 구성하는 엑셀 다운로드(pages/report_builder.py). 모든 로그인 사용자,
+    # 평가·핵심이력 항목은 권한자에게만 보임.
+    scenario_items.append(dbc.DropdownMenuItem(
+        [html.I(className='bi bi-file-earmark-spreadsheet me-1'), '조서 작성'],
+        href='/report-builder',
+    ))
     items.append(dbc.NavItem(dbc.DropdownMenu(
         label=[html.I(className='bi bi-diagram-3 me-1'), '업무 시나리오'],
         children=scenario_items,
