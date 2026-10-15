@@ -197,6 +197,47 @@ def _normalize_excluded_projects(excluded_org_codes: set) -> set:
     return {fit.normalize_org_code(p) for p in excluded_org_codes}
 
 
+_TASK_INFO_FIELDS = (('task_goal', '목표'), ('task_value', '가치'), ('task_howtoget', '확보전략'),
+                     ('task_expectissue', '예상문제'), ('task_Activityplan', '활용 계획'),
+                     ('task_futureusage', '향후 계획'), ('task_collabo', '관계사'))
+_TASK_INFO_FIELD_MAX = 300   # 항목당 최대 글자(임베딩·LLM 입력이 과제정보 쪽으로 쏠리지 않게)
+
+
+def _task_info_lookup():
+    """과제정보(tasks_information.csv — 목표/가치/확보전략/예상문제/활용 계획/향후 계획/관계사) 조회 함수.
+    (2026-10-15) 근거 A 보강 — 컨플 분석과 합치고, 컨플 분석이 없는 과제도 이 내용만으로 후보가 되게.
+    과제명(정규화) 또는 과제코드(과제명 이력 포함)로 찾는다. 반환: f(project_name, member_key) -> 텍스트('' 가능)."""
+    df = data_store.read_processed('tasks_information')
+    if df.empty or 'task_name' not in df.columns:
+        return lambda name, key='', member_ids=(): ''
+    df = df.fillna('')
+    if 'write_date' in df.columns:
+        df = df.sort_values('write_date')
+    by_name, by_code = {}, {}
+    for r in df.to_dict('records'):   # 작성일 순 — 같은 과제면 최신 행이 남음
+        text = ' / '.join(f"{label}: {str(r.get(col) or '').strip()[:_TASK_INFO_FIELD_MAX]}"
+                          for col, label in _TASK_INFO_FIELDS if str(r.get(col) or '').strip())
+        if not text:
+            continue
+        by_name[fit.normalize_org_code(r.get('task_name'))] = text
+        if str(r.get('task_code') or '').strip():
+            by_code[str(r['task_code']).strip()] = text
+    history = None
+    try:
+        from services import job_market_history as jmh
+        history = jmh.load()
+    except Exception:  # noqa: BLE001
+        pass
+
+    def _lookup(name: str, member_key: str = '', member_ids=()) -> str:
+        for n in (fit.normalize_org_code(name), fit.normalize_org_code(member_key)):
+            if n and n in by_name:
+                return by_name[n]
+        code = history.key_for_project(name, member_key, member_ids) if history else None
+        return by_code.get(code, '') if code else ''
+    return _lookup
+
+
 def _build_candidate_pool(excluded_norm: set, expertise_profiles: dict) -> dict:
     """후보 과제별로 근거 A(과제 분석 텍스트)/B(현재 배정 인력 프로필 목록)를
     준비한다. 임베딩은 fit.cached_embed()로 한꺼번에 계산해(텍스트 해시 캐시
@@ -215,28 +256,36 @@ def _build_candidate_pool(excluded_norm: set, expertise_profiles: dict) -> dict:
         return {}
 
     # 근거 A 텍스트 준비 (없으면 빈 문자열 — 임베딩 대상에서 제외)
+    # (2026-10-15) 컨플 분석 + 과제정보(목표·가치·확보전략 등). 둘 중 하나만 있어도 근거 A가 생긴다.
+    task_info = _task_info_lookup()
+    members_by_project = {row['project_name']: jd.get_project_members(row['project_name']) for row in candidates}
     a_texts_by_project = {}
     requirements_by_project = {}
     for row in candidates:
         entry = jd.read_confluence_summary(row['project_name'])
-        text = jd.confluence_context_text(entry)
+        info = task_info(row['project_name'], row.get('member_key', ''),
+                         [m['researcher_id'] for m in members_by_project[row['project_name']]])
+        text = '\n'.join(t for t in (jd.confluence_context_text(entry), f'[과제정보] {info}' if info else '') if t)
         if text:
             a_texts_by_project[row['project_name']] = text
         requirements_by_project[row['project_name']] = jmi.project_requirements(entry)  # C1 요구 요소
 
     # 근거 B: 후보별 현재 배정 인력의 전문성 프로필 텍스트 (있는 사람만)
     b_texts_by_project = {}
+    b_ids_by_project = {}
     member_ids_by_project = {}
     for row in candidates:
-        members = jd.get_project_members(row['project_name'])
+        members = members_by_project[row['project_name']]
         member_ids_by_project[row['project_name']] = [m['researcher_id'] for m in members]
-        texts = []
+        texts, ids = [], []
         for m in members:
             profile = expertise_profiles.get(m['researcher_id'])
             if profile:
                 texts.append(fit.researcher_profile_text(profile))
+                ids.append(m['researcher_id'])
         if texts:
             b_texts_by_project[row['project_name']] = texts
+            b_ids_by_project[row['project_name']] = ids
 
     # 임베딩은 한 번에 계산(캐시 재사용) — 실패하면 그대로 위로 전파(호출부가 처리)
     all_a_texts = list(a_texts_by_project.values())
@@ -264,9 +313,11 @@ def _build_candidate_pool(excluded_norm: set, expertise_profiles: dict) -> dict:
             continue
         pool[project_name] = {
             'dep_name': row['dep_name'],
+            'member_key': row.get('member_key', ''),
             'a_text': a_texts_by_project.get(project_name, ''),
             'a_embedding': a_embedding,
             'b_members': b_members,
+            'b_member_ids': b_ids_by_project.get(project_name, []),
             'member_ids': member_ids_by_project.get(project_name, []),
             'requirements': requirements_by_project.get(project_name, []),
         }
@@ -291,7 +342,7 @@ def _score_candidates(profile_embedding, candidate_pool: dict) -> list:
             score_b, b_text = max(sims, key=lambda x: x[0])
         combined = max(v for v in (score_a, score_b) if v is not None)
         scored.append({
-            'project_name': project_name, 'dep_name': cand['dep_name'],
+            'project_name': project_name, 'dep_name': cand['dep_name'], 'member_key': cand.get('member_key', ''),
             'score_a': score_a, 'score_b': score_b,
             'a_text': cand['a_text'], 'b_text': b_text or '',
             'combined': combined, 'a_embedding': cand['a_embedding'],
@@ -736,6 +787,10 @@ def _format_picks(picks: list) -> str:
         ev = ((r.get('evidence') or {}).get('items')) or []
         if ev:
             line += '\n   관련 실적: ' + '; '.join(f"[{x['kind']}] {x['title']}({x['year']})" for x in ev)
+        from services.job_market_history import signal_text
+        hist = signal_text(r.get('history'))
+        if hist:
+            line += f'\n   과제 참여 이력: {hist}'
         reason = (r.get('reason') or '').strip()
         if reason:
             line += f'\n   사유: {reason}'

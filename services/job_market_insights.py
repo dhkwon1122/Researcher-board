@@ -18,6 +18,8 @@ services/job_market.py의 기존 추천(A: 과제 분석 유사도, B: 과제원
                     이 사람의 보유 항목과 1:1 비교 → "요구 N개 중 M개 충족"(전체를 뭉친 임베딩 비교의 희석 보완).
   C2 실적 근거    — 최근 5년 논문·특허 제목, 참여 과제명을 과제 내용과 직접 비교한 상위 근거.
   (C3 LLM 확신도/부족한 점은 services/job_market.py의 판정 프롬프트에서.)
+  D  과제 참여 이력(2026-10-15) — 이 과제 계열 참여 경험·과거 같은 과제를 한 현재 과제원·현재 과제에서 이 과제로
+                    옮긴 선례(services/job_market_history.py). 정렬 가산 HISTORY_WEIGHT × H(0~1).
 
 평가(인사평가) 데이터는 추천 점수에 쓰지 않는다(전문성 적합도와 성과는 다른 축 — 섞으면 "비슷한
 사람"이 아니라 "평가 좋은 사람"이 위로 올라와 추천의 의미가 바뀐다). 화면에서 권한이 있는 사용자에게만
@@ -56,6 +58,12 @@ EVIDENCE_WEIGHT = 0.1       # C2 정렬 가산: + EVIDENCE_WEIGHT × 최고 실�
 # C2: 논문 등급구분 가산(2026-10-14) — 같은 내용이면 최우수·우수 논문이 관련 실적으로 먼저 잡히고 점수도 조금 높게.
 EVIDENCE_GRADE_BONUS = {'최우수': 0.05, '우수': 0.03}
 MAX_REQUIREMENTS = 20
+# D 과제 참여 이력 가산(2026-10-15). scripts/backtest_job_market.py로 실제 과거 이동 적중률을 보고 조정 —
+# 서버 환경변수 JM_HISTORY_WEIGHT로 코드 수정 없이 바꿀 수 있다(0이면 표시만 하고 정렬엔 미반영).
+try:
+    HISTORY_WEIGHT = float(os.environ.get('JM_HISTORY_WEIGHT', '0.1'))
+except ValueError:
+    HISTORY_WEIGHT = 0.1
 
 
 def _norm(name: str) -> str:
@@ -91,6 +99,20 @@ class Context:
         self._items_cache: dict = {}
         self._evidence_cache: dict = {}
         self._evidence_frames = None
+        self._history = None
+        self.as_of = None   # 백테스트에서 과거 시점 지정(D 과제 참여 이력만 시점 반영)
+
+    @property
+    def history(self):
+        """D 과제 참여 이력(처음 쓸 때 한 번 로드). 실패하면 False — 그 지표만 생략."""
+        if self._history is None:
+            try:
+                from services import job_market_history as jmh
+                self._history = jmh.load()
+            except Exception as exc:  # noqa: BLE001
+                print(f'[job_market] 과제 참여 이력 로드 실패(지표 생략): {exc}')
+                self._history = False
+        return self._history
 
     # 임베딩: 검색 동안 메모리에 모아 두고, 처음 보는 텍스트만 한 번에 계산
     def embed(self, texts: list) -> np.ndarray:
@@ -362,10 +384,16 @@ def enrich_candidates(ctx: Context, rid: str, scored: list, member_ids_by_projec
         focus = focus_match(ctx, rid, c.get('a_embedding'))
         coverage = requirement_coverage(ctx, rid, c['project_name'], c.get('requirements'))
         evidence = evidence_match(ctx, rid, c.get('a_embedding'))
-        adjusted = (c['combined'] + (GAP_WEIGHT * gap['score'] if gap else 0.0) + (focus['bonus'] if focus else 0.0)
-                    + (COVER_WEIGHT * coverage['ratio'] if coverage else 0.0)
-                    + (EVIDENCE_WEIGHT * evidence['top'] if evidence else 0.0))
-        out.append({**c, 'gap': gap, 'focus': focus, 'coverage': coverage, 'evidence': evidence,
+        history = (ctx.history.signal(rid, c['project_name'], c.get('member_key', ''), members, as_of=ctx.as_of)
+                   if ctx.history else None)
+        if history and history.get('peers'):   # 화면 툴팁용 이름(LLM 텍스트에는 인원 수만 — signals_text)
+            history = {**history, 'peer_names': [ctx.name_map.get(m, m) for m in history['peers']]}
+        base_adjusted = (c['combined'] + (GAP_WEIGHT * gap['score'] if gap else 0.0) + (focus['bonus'] if focus else 0.0)
+                         + (COVER_WEIGHT * coverage['ratio'] if coverage else 0.0)
+                         + (EVIDENCE_WEIGHT * evidence['top'] if evidence else 0.0))
+        adjusted = base_adjusted + (HISTORY_WEIGHT * history['score'] if history else 0.0)
+        out.append({**c, 'gap': gap, 'focus': focus, 'coverage': coverage, 'evidence': evidence, 'history': history,
+                    'base_adjusted': round(base_adjusted, 4),
                     'collaborators': collaborators(ctx, rid, members),
                     'composition': composition(ctx, rid, members),
                     'adjusted': round(adjusted, 4)})
@@ -397,6 +425,10 @@ def signals_text(c: dict) -> str:
     comp = c.get('composition')
     if comp and comp.get('complement'):
         parts.append(comp['complement'])
+    from services.job_market_history import signal_text
+    hist = signal_text(c.get('history'))
+    if hist:
+        parts.append('과제 참여 이력: ' + hist)
     return ' / '.join(parts)
 
 
@@ -409,7 +441,15 @@ def public_fields(c: dict) -> dict:
         'coverage': ({**c['coverage'], 'covered': c['coverage']['covered'][:8], 'uncovered': c['coverage']['uncovered'][:8]}
                      if c.get('coverage') else None),
         'evidence': c.get('evidence'),
+        'history': _public_history(c.get('history')),
     }
+
+
+def _public_history(h: dict | None) -> dict | None:
+    """D 과제 참여 이력 — 화면 툴팁용으로 옛 동료 이름을 붙인다(LLM 프롬프트에는 signals_text의 인원 수만)."""
+    if not h or not h.get('score'):
+        return None
+    return {**h, 'peers': list(h.get('peers') or [])[:20]}
 
 
 # ─── B4: 육성 경로 ───────────────────────────────────────────────────────────
