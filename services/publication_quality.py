@@ -4,7 +4,8 @@
   - 대상: 현재 재직 연구원, Staff 조직(하위 포함)·1단계 SAIT/Ideation Factory T/F(SAIT) 제외(services/org_units)
   - 기간: 최근 5년(논문 실적일·특허 출원일 기준)
   - 논문 등급: 최우수 > 우수 > 일반 > 외부(등급구분). 같은 단위 공저는 제목 기준 1건.
-  - 특허 등급: 전략("현재등급 - A급구분"이 전략출원) > A1 > A2 > 기타(그 외·빈 값, 현재등급 기준).
+  - 특허 등급: 전략("현재등급 - A급구분"이 전략출원) > A1 > A2(현재등급 기준). 그 외 등급·빈 값(기타)은 집계 제외
+    (2026-10-15 사용자 확정 — 실데이터에 기타 0건).
     같은 특허(여러 나라 출원 포함)는 출원ID 기준 1건, 같은 단위 공동발명도 1건.
   - (2026-10-15) 과제 기준은 구성원 1명 과제 제외(협업 탭과 같은 기준), 조직코드 순 정렬(그래프·표 공통),
     플랫폼(1단계부서명) 필터, 부서별 색(이름표·표 마커, 과제 기준은 같은 부서 과제끼리 묶고 부서색 배경 띠).
@@ -19,10 +20,10 @@ from services.data_store import read_processed
 
 RECENT_YEARS = 5
 PAPER_GRADES = ['최우수', '우수', '일반', '외부']
-PATENT_GRADES = ['전략', 'A1', 'A2', '기타']
+PATENT_GRADES = ['전략', 'A1', 'A2']   # 기타 제외(2026-10-15)
 # 파스텔 톤(2026-10-15) — 높은 등급일수록 진하게
 PAPER_COLORS = {'최우수': '#F4A7A7', '우수': '#F9CFA0', '일반': '#BCD6EE', '외부': '#DADDE6'}
-PATENT_COLORS = {'전략': '#C8B1EA', 'A1': '#A9DCCB', 'A2': '#D3EBB4', '기타': '#E4E4E4'}
+PATENT_COLORS = {'전략': '#C8B1EA', 'A1': '#A9DCCB', 'A2': '#D3EBB4'}
 
 
 def _year(*vals):
@@ -99,9 +100,10 @@ def asset_counts(level: str = 'level1', years: int = RECENT_YEARS, platforms: li
             y = _year(r.get('application_date'))
             if not unit or not app or y is None or y < since:
                 continue
-            if (unit, app) not in seen:
+            grade = patent_grade(r)
+            if grade in PATENT_GRADES and (unit, app) not in seen:   # 기타(전략·A1·A2 외)는 제외
                 seen.add((unit, app))
-                _bump(unit, f'특허_{patent_grade(r)}')
+                _bump(unit, f'특허_{grade}')
     if not counts:
         return pd.DataFrame(columns=cols + ['dept'])
     for c in counts.values():

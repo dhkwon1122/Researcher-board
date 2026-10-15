@@ -14259,3 +14259,8 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   판정 가능 비율과 실제로 빠지는 건수.
 - 반영: run_integration(또는 process_expertise_metrics.py + process_collab_summary.py + DB 반영) 재실행.
 - 테스트 tests/test_historical_units.py.
+
+## (54) 논문,특허 탭 — 특허 등급 "기타" 제외 (2026-10-15)
+- 사용자 확인: 실데이터에 기타(전략·A1·A2 외) 0건 → 등급 목록에서 제거.
+- services/publication_quality.PATENT_GRADES = 전략/A1/A2(색·그래프 범례·표 열 함께 제거), 그 외 등급 특허는 집계 제외.
+- pipeline/process_asset_summary도 같은 기준(AI 자산화 요약 — 분석 재실행 시 반영).
