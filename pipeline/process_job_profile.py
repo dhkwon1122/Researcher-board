@@ -156,6 +156,9 @@ def process(raw_dir: str = RAW_DIR, valid_date: date | None = None) -> bool:
 
     result = pd.DataFrame(rows, columns=out_cols)
 
+    if valid_date is None and raw_dir == RAW_DIR:   # 분석 실행이 화면 업로드를 읽었으면 그때 지정한 기준월(2026-10-15)
+        from source_reader import web_valid_date
+        valid_date = web_valid_date('job_profile')
     valid_date = valid_date or date.today()
     result['valid_year'] = f'{valid_date.year:04d}'
     result['valid_month'] = f'{valid_date.month:02d}'

@@ -305,6 +305,19 @@ def _hint_with_xlsb(hint: str) -> str:
     return hint
 
 
+def _write_valid_date(raw_dir: str, valid_date: date) -> None:
+    """이 업로드 파일들을 반영할 때 쓴 기준 연/월 기록(2026-10-15) — 분석 실행(run_integration)이 원천 사본 대신
+    이 업로드를 읽을 때(pipeline/source_reader.read_source) 기준월을 '오늘'이 아니라 이 값으로 쓰게 한다."""
+    import json
+    from source_reader import VALID_DATE_FILE
+    files = [f for f in os.listdir(raw_dir) if not f.startswith('.') and os.path.isfile(os.path.join(raw_dir, f))]
+    try:
+        with open(os.path.join(raw_dir, VALID_DATE_FILE), 'w', encoding='utf-8') as fh:
+            json.dump({'files': files, 'valid_date': valid_date.isoformat()}, fh, ensure_ascii=False)
+    except OSError:
+        pass
+
+
 def _key_dir(key: str) -> str:
     d = os.path.join(WEB_UPDATES_DIR, key)
     os.makedirs(d, exist_ok=True)
@@ -657,6 +670,8 @@ def run_one(key: str, via_api: bool = False, valid_date: date | None = None) -> 
                     ok = module.process(raw_dir=raw_dir, valid_date=valid_date)
                 else:
                     ok = module.process(raw_dir=raw_dir)
+            if ok and item.get('needs_valid_date'):
+                _write_valid_date(raw_dir, valid_date or date.today())
             output = buf.getvalue()
             summary = _last_meaningful_line(output) or ('성공' if ok else '처리 실패(사유 불명 — 로그 확인 필요)')
 

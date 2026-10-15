@@ -14185,3 +14185,15 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 수정: process_tasks._newer_web_upload — 화면 업로드 파일이 원천 사본(raw_csv/tasks.csv)보다 새것이면 기본 경로 호출도
   화면 업로드 폴더를 읽는다. 테스트 tests/test_task_processing_dates.py.
 - 반영: 배포 후 데이터 업데이트에서 과제참여이력 재실행(또는 run_integration) — 둘 다 최신 업로드 파일을 읽는다.
+
+## (47) 모든 원천 공통 — 분석 실행이 화면 업로드보다 오래된 원천 사본을 읽지 않게 (2026-10-15)
+- pipeline/source_reader.read_source(name): 화면 업로드(data/web_updates/<name>/)가 원천 사본(data/raw_csv/<name>.csv,
+  DB `{name}_stg`의 원본)보다 새것이면 그 파일을 읽는다. 파일 선택·헤더 행은 sources.py 매니페스트(1단계와 같은 규칙),
+  패턴에 맞는 게 없고 폴더에 엑셀이 1개면 그 파일. 업무목표는 화면 슬롯 폴더(work_objective_1~3)에서 연도 파일명으로 찾음.
+  직무이력은 화면 실행 때 만든 "*_병합.xlsx". 읽으면 로그 "[READ] <name>: 관리자 화면에서 올린 최신 파일 사용".
+- 시점보호 항목(평가·핵심기술·직무이력·업무목표): 화면 실행 성공 시 web_pipeline_runner._write_valid_date가
+  `.valid_date.json`({files, valid_date})을 남기고, 분석 실행이 그 업로드를 읽으면 source_reader.web_valid_date()로
+  같은 기준 연/월을 쓴다(기록 없으면 기존대로 오늘).
+- 과제별컨플·과제참여이력의 개별 처리(_newer_web_upload)는 그대로 두고, 나머지 원천은 이 공통 경로로 처리.
+  팀/리더 참조·직군 예외자는 read_source를 쓰지 않는 자체 경로(기존).
+- 테스트 tests/test_source_reader_web_upload.py.

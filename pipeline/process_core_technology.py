@@ -99,6 +99,9 @@ def process(raw_dir: str = RAW_DIR, valid_date: date | None = None) -> bool:
     result.loc[result['tech_grade'] == '', 'tech_grade'] = '-'
     result = result.sort_values(['researcher_id']).reset_index(drop=True)
 
+    if valid_date is None and raw_dir == RAW_DIR:   # 분석 실행이 화면 업로드를 읽었으면 그때 지정한 기준월(2026-10-15)
+        from source_reader import web_valid_date
+        valid_date = web_valid_date('core_technology')
     valid_date = valid_date or date.today()
     result['valid_year'] = f'{valid_date.year:04d}'
     result['valid_month'] = f'{valid_date.month:02d}'
