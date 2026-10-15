@@ -85,6 +85,36 @@ def list_departments() -> list[str]:
     return names
 
 
+def department_display_map() -> dict:
+    """현소속부서명(department, 저장·그룹 기준 그대로) → 화면 표시명(팀/리더 참조 1단계부서명), 2026-10-15 사용자 확정.
+    실제 조직에서 2단계와 1단계가 거의 같아 1단계부서명으로 보여준다. 그 부서 현재 소속자들의 org_code를 팀/리더 참조로
+    1단계부서명에 매핑해 가장 많은 값을 쓰고, 못 찾으면 원래 부서명. 서로 다른 부서가 같은 1단계로 겹치면
+    "1단계부서명 (부서명)"으로 구분한다."""
+    from collections import Counter
+    res = _researchers_df()
+    if res.empty or not {'department', 'org_code'} <= set(res.columns):
+        return {}
+    try:
+        from services import similarity_map as sm
+    except Exception:  # noqa: BLE001
+        return {}
+    cache: dict = {}
+    votes: dict = {}
+    for dept, org in zip(res['department'].astype(str).str.strip(), res['org_code'].astype(str).str.strip()):
+        if not dept or dept.lower() == 'nan' or not org:
+            continue
+        if org not in cache:
+            try:
+                cache[org] = sm.org_code_level_names(org)[0]
+            except Exception:  # noqa: BLE001
+                cache[org] = ''
+        if cache[org]:
+            votes.setdefault(dept, Counter())[cache[org]] += 1
+    mapped = {d: c.most_common(1)[0][0] for d, c in votes.items()}
+    dup = Counter(mapped.values())
+    return {d: (l1 if dup[l1] == 1 or l1 == d else f'{l1} ({d})') for d, l1 in mapped.items()}
+
+
 def department_researcher_options(department: str) -> list[dict]:
     """그 부서 소속 현재 연구원 선택 옵션 — "성명 (사번)" 라벨, 이름
     가나다순."""

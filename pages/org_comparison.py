@@ -490,10 +490,12 @@ def _render_dashboard():
         key=lambda n: (order_map.get(n, '9999'), n),
     )
 
+    from services import succession_store
+    display = succession_store.department_display_map()   # 섹션 제목은 1단계부서명으로(2026-10-15)
     sections = []
     for dept_name in dept_names:
         suc_dept = suc[suc['department'] == dept_name]
-        sec = _dept_section(dept_name, suc_dept, res, eva, edu, awd, nur, inc,
+        sec = _dept_section(display.get(dept_name, dept_name), suc_dept, res, eva, edu, awd, nur, inc,
                             show_eval=show_eval, show_incentive=show_incentive)
         if sec:
             sections.append(sec)
@@ -566,7 +568,11 @@ def _succession_slot_row(slot_key, label):
 
 def _succession_edit_panel():
     from services import succession_store
-    dept_options = [{'label': d, 'value': d} for d in succession_store.list_departments()]
+    # 표시는 팀/리더 참조 1단계부서명, 값(저장·조회 기준)은 현소속부서명 그대로(2026-10-15)
+    display = succession_store.department_display_map()
+    order_map = _department_order_map()
+    dept_options = [{'label': display.get(d, d), 'value': d}
+                    for d in sorted(succession_store.list_departments(), key=lambda n: (order_map.get(n, '9999'), n))]
 
     return html.Div([
         dbc.Button(

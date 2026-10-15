@@ -41,11 +41,40 @@ def _embed_cfg():
     return base, model, api_key, timeout
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _embed_chunks(texts: list[str], batch_size: int) -> list[list[str]]:
+    """임베딩 서버(services/bge_server.py) 요청 한도에 맞춰 나눈다(2026-10-15 — 개수만 보고 64개씩 보내다
+    긴 텍스트(과제 분석+과제정보 등)가 모이면 "HTTP 413 embedding input too large"로 실패).
+      - 항목 하나가 EMBED_MAX_CHARS_PER_ITEM(기본 8000자)을 넘으면 그 길이로 자른다(앞부분 유지)
+      - 한 요청의 개수 EMBED_MAX_ITEMS(64)·총 글자 EMBED_MAX_TOTAL_CHARS(65536) 안에서 묶는다
+    서버와 같은 환경변수를 읽으므로 서버 한도를 바꾸면 여기도 같이 따라간다."""
+    per_item = _env_int('EMBED_MAX_CHARS_PER_ITEM', 8000)
+    max_items = min(batch_size, _env_int('EMBED_MAX_ITEMS', 64))
+    max_total = _env_int('EMBED_MAX_TOTAL_CHARS', 65536)
+    chunks, cur, cur_len = [], [], 0
+    for t in texts:
+        t = t if len(t) <= per_item else t[:per_item]
+        if cur and (len(cur) >= max_items or cur_len + len(t) > max_total):
+            chunks.append(cur)
+            cur, cur_len = [], 0
+        cur.append(t)
+        cur_len += len(t)
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
 def embed(texts: list[str], batch_size: int = 64) -> list[list[float]]:
     """
     texts: 임베딩할 문자열 리스트
     반환: texts와 같은 순서의 임베딩 벡터(list[float]) 리스트. 실패 시 LLMError.
-    많은 개수를 한 번에 넘겨도 내부적으로 batch_size 단위로 나눠 호출한다.
+    많은 개수를 한 번에 넘겨도 내부적으로 서버 한도(개수·글자 수) 안에서 나눠 호출한다(_embed_chunks).
     """
     try:
         import requests
@@ -73,8 +102,7 @@ def embed(texts: list[str], batch_size: int = 64) -> list[list[float]]:
         headers['Authorization'] = f'Bearer {api_key}'
 
     vectors: list[list[float]] = []
-    for i in range(0, len(texts), batch_size):
-        chunk = texts[i:i + batch_size]
+    for chunk in _embed_chunks(texts, batch_size):
         payload = {'model': model, 'input': chunk}
         try:
             resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
