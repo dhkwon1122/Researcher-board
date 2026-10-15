@@ -14197,3 +14197,12 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 과제별컨플·과제참여이력의 개별 처리(_newer_web_upload)는 그대로 두고, 나머지 원천은 이 공통 경로로 처리.
   팀/리더 참조·직군 예외자는 read_source를 쓰지 않는 자체 경로(기존).
 - 테스트 tests/test_source_reader_web_upload.py.
+
+## (48) AI 검색 "평가등급 조건으로 검색할 권한이 없습니다" 안내 구분 (2026-10-15)
+- 막히는 경우 2가지(services/nl_query.py, auth.can_table('evaluations')):
+  ① 계정의 "평가등급 열람"(view_evaluation) 권한 없음 — is_admin(관리자)은 사용자 관리 권한일 뿐 평가 열람과 별개.
+     역할 기본값(config/auth_config.ROLE_PERMISSIONS) 또는 계정별 재정의로 결정.
+  ② "People제외"(eval_excluded_dep_ids) 설정 — 화면·엑셀은 People팀만 가리지만 AI 검색은 행 단위 필터가 없어
+     평가 조건 전체 차단(2026-08-31 사용자 확정).
+- 권한·예외 설정은 로그인 시 세션에 저장되므로 변경 후 재로그인 필요.
+- 메시지를 ①/② 사유별로 바꿔 어떤 설정을 확인할지 안내.

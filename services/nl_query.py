@@ -489,9 +489,16 @@ def find_researchers_by_criteria(age_min: int | None = None, age_max: int | None
         # auth.can_table()로 TABLE_PERMISSIONS(config/auth_config.py)을 거쳐
         # 조회 — open_data_query.py의 filter_permitted_tables()와 같은 매핑을 쓴다.
         if not auth.can_table('evaluations'):
-            return _empty_table_result(
-                'find_researchers_by_criteria',
-                '평가등급 조건으로 검색할 권한이 없습니다.')
+            # 사유를 구분해 안내(2026-10-15): 평가 조회 권한 자체가 없는지, 평가 예외 부서 설정 때문에
+            # AI 검색에서만 막힌 것인지(화면에서는 예외 부서만 가려서 보임) — 관리자도 헷갈렸음.
+            if auth.can('view_evaluation') and auth.eval_excluded_dep_ids():
+                msg = ('계정에 "People제외"(People팀 평가등급 제외)가 설정돼 있어 AI 검색에서는 평가등급 조건을 '
+                       '쓸 수 없습니다(화면·엑셀은 People팀만 가려서 표시). 관리자 > 사용자/권한 관리에서 '
+                       '"People제외"를 해제하고 다시 로그인하면 사용할 수 있습니다.')
+            else:
+                msg = ('평가등급 조건으로 검색할 권한이 없습니다. 관리자(is_admin) 여부와 별개로 계정의 '
+                       '"평가 조회" 권한이 필요합니다 — 관리자 > 사용자/권한 관리에서 확인 후 다시 로그인하세요.')
+            return _empty_table_result('find_researchers_by_criteria', msg)
         n = len(grade_threshold)
         years = evaluation_years()[0][:n]
         if len(years) < n:
