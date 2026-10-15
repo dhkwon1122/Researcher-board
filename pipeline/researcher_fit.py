@@ -118,8 +118,10 @@ def researcher_profile_text(profile: dict) -> str:
     parts = []
     if profile.get('current_focus_fields'):
         parts.append('주력 분야(최근 5년): ' + ', '.join(profile['current_focus_fields']))
-    if profile.get('strength_fields'):
-        parts.append('강점 분야: ' + ', '.join(profile['strength_fields']))
+    # 표준화된 강점 분야(researcher_strength_std, 붙어 있으면)를 우선(2026-10-15 — 과제별 필요 역량과 같은 기준)
+    fields = profile.get('strength_fields_std') or profile.get('strength_fields')
+    if fields:
+        parts.append('강점 분야: ' + ', '.join(fields))
     if profile.get('strength_keywords'):
         parts.append('강점 키워드: ' + ', '.join(profile['strength_keywords']))
     if profile.get('key_responsibilities'):

@@ -31,8 +31,9 @@ def cl_sort_key(label: str):
 
 
 def staff_members(researchers, project_name: str, overrides: dict | None = None,
-                  level3_of=None) -> list:
-    """이 과제의 현재 인력(휴직 제외) researcher_id 목록. level3_of: org_code -> 3단계부서명(선택)."""
+                  level3_of=None, include_on_leave: bool = False) -> list:
+    """이 과제의 현재 인력(휴직 제외) researcher_id 목록. level3_of: org_code -> 3단계부서명(선택).
+    include_on_leave=True면 휴직자도 포함(JOB Market 대상자 명단에 "휴직" 표시용, 2026-10-15)."""
     from pipeline.researcher_fit import normalize_org_code, project_member_key
     df = filter_current(researchers)
     if df.empty or 'org_code' not in df.columns:
@@ -41,7 +42,7 @@ def staff_members(researchers, project_name: str, overrides: dict | None = None,
     name_key = normalize_org_code(project_name)
     out = []
     for r in df.fillna('').to_dict('records'):
-        if is_on_leave(r.get('employment_status')):
+        if not include_on_leave and is_on_leave(r.get('employment_status')):
             continue
         org = str(r.get('org_code') or '').strip()
         if not org:

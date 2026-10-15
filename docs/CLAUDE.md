@@ -14269,3 +14269,14 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 필요 역량(과제): 탭 이름과 같은 제목 줄 삭제(_section은 title이 비면 제목 줄 생략).
 - 협업 제목 "* 최근 5년 논문 공저, 특허 공동발명", 논문,특허 제목 "* 최근 5년 자산화 현황".
 - 두 탭의 기준 선택 라벨: 부서(1단계부서명) → 플랫폼, 과제(3단계부서명) → 과제.
+
+## (56) JOB Market — 최근 개선 기준과 통일(과제원 판정·휴직자, 강점 분야 표준화) (2026-10-15)
+- jd_reconciliation.get_project_members(project_name, include_on_leave=False): services/project_staffing.staff_members와 같은
+  규칙(최신 인력현황 현재 재직자, 휴직 제외, 과제 매칭 키 또는 팀/리더 참조 3단계부서명 일치) — 과제별 필요 역량·과제 개요
+  인력현황과 같은 인원. include_on_leave=True면 휴직자 포함 + on_leave 표시.
+- JOB Market 과제 단위 검색: 종료 과제 명단에 휴직자는 "휴직" 배지로 남기고 재배치 추천(LLM)·일괄 배치(plan_assignment)·
+  종료 영향에서 제외. 후보 과제의 과제원(근거 B·과제 구성·본인 과제 제외)도 휴직 제외 기준.
+- 강점 분야 표준화: data_store.read_expertise_profiles_std()(researcher_strength_std를 strength_fields_std로 덧붙임)를
+  JOB Market이 사용, researcher_fit.researcher_profile_text는 strength_fields_std 우선 → 임베딩·LLM 프로필, 갭 충족(A1) 모두
+  과제별 필요 역량과 같은 표준화 기준. 프로필 텍스트가 바뀌어 임베딩 캐시는 첫 실행 때 다시 계산됨.
+- 테스트 tests/test_job_market_alignment.py.
