@@ -543,7 +543,7 @@ def layout(**_kwargs):
                    id='jm-excel-btn', color='success', outline=True, size='sm',
                    className='mb-3', style={'display': 'none'}, n_clicks=0, disabled=True),
         _download_request_ui('job_market'),
-        html.Span(id='jm-excel-msg', className='small text-danger ms-2'),
+        html.Span(id='jm-excel-msg', className='small text-muted ms-2'),
         dcc.Download(id='jm-excel-download'),
         dcc.Store(id='jm-result-store', data=None),
         dcc.Store(id='jm-history-refresh', data=0),
@@ -776,12 +776,33 @@ def _download_excel(n_clicks, result):
     if not n_clicks or not _has_redeployable(result):
         return dash.no_update, dash.no_update
     from services import download_access   # 엑셀 다운로드 권한 / 1회성 승인(2026-10-15)
-    allowed, gate_msg, grant_id = download_access.check('job_market')
+    allowed, gate_msg, grant = download_access.check('job_market')
     if not allowed:
         return dash.no_update, gate_msg
-    data = jm.build_result_workbook(result)
-    download_access.consume(grant_id)
-    return dcc.send_bytes(data, jm.result_default_filename()), ''
+    ids = jm.result_researcher_ids(result)
+    headers = list(jm.RESULT_HEADERS)
+    if grant:   # 1회성 승인 — 승인된 대상자·헤더만
+        approved = set(grant['spec']['ids'])
+        ids = [rid for rid in ids if rid in approved]
+        headers = grant['spec']['headers']
+        if not ids:
+            return dash.no_update, '승인된 대상자가 지금 결과에 없습니다 — 요청할 때와 같은 조건으로 검색한 뒤 다시 시도하세요.'
+    data = jm.build_result_workbook(result, ids if grant else None, headers if grant else None)
+    filename = jm.result_default_filename()
+    download_access.complete('job_market', grant, len(ids), headers, filename)
+    return dcc.send_bytes(data, filename), gate_msg
+
+
+@callback(
+    Output({'type': 'dlreq-ctx', 'f': 'job_market'}, 'data'),
+    Input('jm-result-store', 'data'),
+)
+def _request_context(result):
+    """1회성 다운로드 요청에 붙일 대상자(엑셀에 들어갈 사람) — 권한 보유자는 계산하지 않음."""
+    from services import download_access
+    if download_access.has_permission():
+        return dash.no_update
+    return {'ids': jm.result_researcher_ids(result) if result else []}
 
 
 

@@ -902,11 +902,17 @@ def _similar_list_lines(rid: str, similarity_map: dict, name_map: dict, dept_map
     return '\n'.join(lines)
 
 
-def build_expertise_similarity_workbook(researcher_ids: list) -> bytes:
+SIMILARITY_HEADERS = _SIMILARITY_COLUMNS_HEADER
+
+
+def build_expertise_similarity_workbook(researcher_ids: list, headers: list | None = None) -> bytes:
     """선택된 연구원들의 보유 전문성(LLM 4개 필드)과 저장된 유사 연구원 명단
     전체를 엑셀로 내보낸다. 개인별 검색 또는 조직도 부서 단위(하위부서 포함
-    옵션)로 고른 researcher_ids를 그대로 받는다(중복은 순서 유지하며 제거)."""
+    옵션)로 고른 researcher_ids를 그대로 받는다(중복은 순서 유지하며 제거).
+    headers: 1회성 승인 다운로드(services/download_access)일 때 승인된 열만 남긴다."""
     researcher_ids = list(dict.fromkeys(researcher_ids))
+    keep = [i for i, h in enumerate(_SIMILARITY_COLUMNS_HEADER) if headers is None or h in headers]
+    widths = [12, 14, 18, 24, 24, 26, 26, 40]
 
     researchers_df = read_processed('researchers')
     name_map, dept_map = {}, {}
@@ -927,11 +933,12 @@ def build_expertise_similarity_workbook(researcher_ids: list) -> bytes:
     wrap_center = Alignment(wrap_text=True, vertical='center', horizontal='center')
     wrap_left = Alignment(wrap_text=True, vertical='top', horizontal='left')
 
-    for col_idx, header in enumerate(_SIMILARITY_COLUMNS_HEADER, start=1):
-        cell = ws.cell(row=1, column=col_idx, value=header)
+    for out_col, src in enumerate(keep, start=1):
+        cell = ws.cell(row=1, column=out_col, value=_SIMILARITY_COLUMNS_HEADER[src])
         cell.font = header_font
         cell.border = _RESULT_BORDER
         cell.alignment = wrap_center
+        ws.column_dimensions[get_column_letter(out_col)].width = widths[src]
 
     for row_idx, rid in enumerate(researcher_ids, start=2):
         profile = profiles.get(rid)
@@ -945,14 +952,11 @@ def build_expertise_similarity_workbook(researcher_ids: list) -> bytes:
             export.expertise_field_lines(profile, 'domain_knowledge_skill'),
             _similar_list_lines(rid, similarity_map, name_map, dept_map),
         ]
-        for col_idx, value in enumerate(values, start=1):
-            cell = ws.cell(row=row_idx, column=col_idx, value=excel_safe(value))
+        for out_col, src in enumerate(keep, start=1):
+            cell = ws.cell(row=row_idx, column=out_col, value=excel_safe(values[src]))
             cell.font = body_font
             cell.border = _RESULT_BORDER
-            cell.alignment = wrap_center if col_idx <= 3 else wrap_left
-
-    for col_idx, width in enumerate([12, 14, 18, 24, 24, 26, 26, 40], start=1):
-        ws.column_dimensions[get_column_letter(col_idx)].width = width
+            cell.alignment = wrap_center if src < 3 else wrap_left
 
     buf = io.BytesIO()
     wb.save(buf)

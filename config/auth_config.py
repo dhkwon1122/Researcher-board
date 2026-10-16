@@ -37,84 +37,84 @@ ROLE_PERMISSIONS: dict[str, dict[str, bool]] = {
         'view_incentive':  True,
         'view_comments':   True,
         'view_grade':      True,
-        'download_excel': True,   # 엑셀 다운로드(2026-10-15) — 기본 허용, 계정별로 끌 수 있음
+        'download_excel': False,  # 엑셀 다운로드(2026-10-16 기본 불허로 변경) — 계정별로 켜거나 1회성 요청·승인
     },
     'talent_exp': {
         'view_evaluation': False,
         'view_incentive':  False,
         'view_comments':   False,
         'view_grade':      False,
-        'download_excel': True,   # 엑셀 다운로드(2026-10-15) — 기본 허용, 계정별로 끌 수 있음
+        'download_excel': False,  # 엑셀 다운로드(2026-10-16 기본 불허로 변경) — 계정별로 켜거나 1회성 요청·승인
     },
     'talent_mng': {
         'view_evaluation': True,
         'view_incentive':  True,
         'view_comments':   True,
         'view_grade':      True,
-        'download_excel': True,   # 엑셀 다운로드(2026-10-15) — 기본 허용, 계정별로 끌 수 있음
+        'download_excel': False,  # 엑셀 다운로드(2026-10-16 기본 불허로 변경) — 계정별로 켜거나 1회성 요청·승인
     },
     'talent_dev': {
         'view_evaluation': False,
         'view_incentive':  False,
         'view_comments':   False,
         'view_grade':      False,
-        'download_excel': True,   # 엑셀 다운로드(2026-10-15) — 기본 허용, 계정별로 끌 수 있음
+        'download_excel': False,  # 엑셀 다운로드(2026-10-16 기본 불허로 변경) — 계정별로 켜거나 1회성 요청·승인
     },
     'workforce_mng': {
         'view_evaluation': True,
         'view_incentive':  False,
         'view_comments':   False,
         'view_grade':      True,
-        'download_excel': True,   # 엑셀 다운로드(2026-10-15) — 기본 허용, 계정별로 끌 수 있음
+        'download_excel': False,  # 엑셀 다운로드(2026-10-16 기본 불허로 변경) — 계정별로 켜거나 1회성 요청·승인
     },
     'employee_relation': {
         'view_evaluation': False,
         'view_incentive':  False,
         'view_comments':   True,
         'view_grade':      False,
-        'download_excel': True,   # 엑셀 다운로드(2026-10-15) — 기본 허용, 계정별로 끌 수 있음
+        'download_excel': False,  # 엑셀 다운로드(2026-10-16 기본 불허로 변경) — 계정별로 켜거나 1회성 요청·승인
     },
     'executive_org': {
         'view_evaluation': True,
         'view_incentive':  True,
         'view_comments':   True,
         'view_grade':      True,
-        'download_excel': True,   # 엑셀 다운로드(2026-10-15) — 기본 허용, 계정별로 끌 수 있음
+        'download_excel': False,  # 엑셀 다운로드(2026-10-16 기본 불허로 변경) — 계정별로 켜거나 1회성 요청·승인
     },
     'workplace_sol': {
         'view_evaluation': False,
         'view_incentive':  False,
         'view_comments':   False,
         'view_grade':      False,
-        'download_excel': True,   # 엑셀 다운로드(2026-10-15) — 기본 허용, 계정별로 끌 수 있음
+        'download_excel': False,  # 엑셀 다운로드(2026-10-16 기본 불허로 변경) — 계정별로 켜거나 1회성 요청·승인
     },
     'hr_planning': {
         'view_evaluation': False,
         'view_incentive':  True,
         'view_comments':   False,
         'view_grade':      True,
-        'download_excel': True,   # 엑셀 다운로드(2026-10-15) — 기본 허용, 계정별로 끌 수 있음
+        'download_excel': False,  # 엑셀 다운로드(2026-10-16 기본 불허로 변경) — 계정별로 켜거나 1회성 요청·승인
     },
     'hr_policy': {
         'view_evaluation': True,
         'view_incentive':  True,
         'view_comments':   True,
         'view_grade':      True,
-        'download_excel': True,   # 엑셀 다운로드(2026-10-15) — 기본 허용, 계정별로 끌 수 있음
+        'download_excel': False,  # 엑셀 다운로드(2026-10-16 기본 불허로 변경) — 계정별로 켜거나 1회성 요청·승인
     },
     'recruit': {
         'view_evaluation': False,
         'view_incentive':  False,
         'view_comments':   False,
         'view_grade':      False,
-        'download_excel': True,   # 엑셀 다운로드(2026-10-15) — 기본 허용, 계정별로 끌 수 있음
+        'download_excel': False,  # 엑셀 다운로드(2026-10-16 기본 불허로 변경) — 계정별로 켜거나 1회성 요청·승인
     },
     'org_culture': {
         'view_evaluation': False,
         'view_incentive':  False,
         'view_comments':   False,
         'view_grade':      False,
-        'download_excel': True,   # 엑셀 다운로드(2026-10-15) — 기본 허용, 계정별로 끌 수 있음
+        'download_excel': False,  # 엑셀 다운로드(2026-10-16 기본 불허로 변경) — 계정별로 켜거나 1회성 요청·승인
     },
 }
 

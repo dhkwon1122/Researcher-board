@@ -14340,3 +14340,21 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   계정에 이메일이 있고 메일 설정(pipeline/mailer)이 돼 있으면 같은 내용 메일도 발송(실패해도 화면 알림은 동작).
 - 승인 1건 = 해당 화면에서 1회 다운로드, 유효기간 GRANT_DAYS(7)일.
 - 테스트 tests/test_download_access.py.
+
+## (62) 엑셀 다운로드 — 역할 기본값 불허, 요청에 헤더·대상자 구성 첨부, 다운로드 로그 (2026-10-16)
+- config/auth_config.py: download_excel 역할 기본값 False(12개 역할 전부). 관리자 계정(is_admin)은 항상 허용
+  (download_access.has_permission). 그 외는 사용자/권한 관리 "엑셀" 체크로 계정별 허용.
+- 1회성 요청에 구성(spec) 첨부 — 관리자는 무엇을 받으려는지 보고 승인, 다운로드는 승인된 spec 그대로만:
+  · 조서 작성: 화면에서 구성한 열(헤더·항목·묶는 방식)·여러 건 최대·대상자. 승인 다운로드는 편집기 상태와 무관하게 spec 사용.
+  · JOB Market 결과 / 보유 전문성·유사 연구원: 요청 모달에서 그 엑셀 헤더 중 선택 + 화면에서 고른 대상자.
+    build_result_workbook / build_expertise_similarity_workbook에 대상자·헤더 필터 인자 추가
+    (job_market.RESULT_HEADERS·result_researcher_ids, similarity_map.SIMILARITY_HEADERS).
+  · 연구원 명단: 열이 고정이라 별도 요청 없이 "조서 작성에서 요청" — 표에 보이는 대상자를 조서 작성 "개별 연구원"으로
+    넘김(download_prefill.json, 사용자별 1회 pop). 조서 작성 기본 양식 = 연구원 명단 엑셀.
+  · 화면 상태는 각 페이지가 {'type':'dlreq-ctx','f':feature} Store에 채움(권한 보유자는 계산 생략).
+  · components/download_request.spec_view — 헤더·대상자 표시(요청 모달·관리자 탭·승인 알림 공용).
+- 로그 data/processed/download_log.jsonl(append): request/approve/reject/acknowledge/download(권한 보유자 다운로드 포함,
+  행 수·헤더·파일명). 관리자 > 다운로드 요청 탭 하단 "다운로드 로그"(최근 300건).
+- download_access.check()는 승인 건(dict)을 돌려주고, 다운로드 후 complete(feature, grant, rows, headers, filename)로
+  사용 처리 + 로그(consume 대체).
+- 테스트 tests/test_download_access.py(기본 불허·관리자 허용, spec 요청→승인→확인→1회 사용, 로그 순서, 헤더 필터, prefill).

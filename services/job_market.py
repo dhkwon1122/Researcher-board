@@ -801,7 +801,20 @@ def _format_picks(picks: list) -> str:
     return '\n\n'.join(blocks)
 
 
-def build_result_workbook(result: dict) -> bytes:
+RESULT_HEADERS = ['사번', '결과', '반드시 배치해야 한다면']
+
+
+def result_researcher_ids(result: dict) -> list:
+    """엑셀에 들어가는 사람(추천 또는 must_place가 있는 사람)의 사번, 엑셀과 같은 순서."""
+    roster = (result or {}).get('roster') or []
+    results = (result or {}).get('results') or {}
+    ordered = [p['researcher_id'] for p in roster if p.get('researcher_id') in results]
+    ordered += [rid for rid in results if rid not in ordered]
+    return [rid for rid in ordered
+            if (results.get(rid) or {}).get('recommendations') or (results.get(rid) or {}).get('must_place')]
+
+
+def build_result_workbook(result: dict, researcher_ids: list | None = None, headers: list | None = None) -> bytes:
     """JOB Market 검색 결과(run_project_search/run_individual_search/
     load_history()가 반환하는 report 형태)를 엑셀로 내보낸다. 사번을 첫
     번째 컬럼, 추천 결과(recommendations)를 두 번째, "반드시 배치해야
@@ -809,20 +822,18 @@ def build_result_workbook(result: dict) -> bytes:
     (recommendations 있음) 여부와 무관하게, must_place가 하나라도 있는
     사람은 전부 포함한다(사용자 확정 — must_place는 원래 재배치가
     어려운 사람을 위해 만든 값이라, 그 사람들이 엑셀에서 빠지면 의미가
-    없음). recommendations가 없는 사람은 '결과' 셀만 '-'로 비워둔다."""
-    roster = result.get('roster') or []
+    없음). recommendations가 없는 사람은 '결과' 셀만 '-'로 비워둔다.
+    researcher_ids/headers: 1회성 승인 다운로드(services/download_access)일 때 승인된 대상·열만 남긴다."""
     results = result.get('results') or {}
-    ordered_rids = [p['researcher_id'] for p in roster if p.get('researcher_id') in results]
-    ordered_rids += [rid for rid in results if rid not in ordered_rids]
-
+    allowed = set(researcher_ids) if researcher_ids is not None else None
     rows = []
-    for rid in ordered_rids:
-        person_result = results.get(rid) or {}
-        recs = person_result.get('recommendations') or []
-        must_place = person_result.get('must_place') or []
-        if not recs and not must_place:
+    for rid in result_researcher_ids(result):
+        if allowed is not None and rid not in allowed:
             continue
-        rows.append((rid, _format_picks(recs), _format_picks(must_place)))
+        person_result = results.get(rid) or {}
+        rows.append((rid, _format_picks(person_result.get('recommendations') or []),
+                     _format_picks(person_result.get('must_place') or [])))
+    keep = [i for i, h in enumerate(RESULT_HEADERS) if headers is None or h in headers]
 
     wb = Workbook()
     ws = wb.active
@@ -836,27 +847,20 @@ def build_result_workbook(result: dict) -> bytes:
     wrap_center = Alignment(wrap_text=True, vertical='center', horizontal='center')
     wrap_left = Alignment(wrap_text=True, vertical='top', horizontal='left')
 
-    headers = ['사번', '결과', '반드시 배치해야 한다면']
-    for col_idx, header in enumerate(headers, start=1):
-        cell = ws.cell(row=1, column=col_idx, value=header)
+    widths = (14, 90, 90)
+    for out_col, src in enumerate(keep, start=1):
+        cell = ws.cell(row=1, column=out_col, value=RESULT_HEADERS[src])
         cell.font = header_font
         cell.border = border
         cell.alignment = wrap_center
+        ws.column_dimensions[get_column_letter(out_col)].width = widths[src]
 
-    for row_idx, (rid, result_text, must_place_text) in enumerate(rows, start=2):
-        id_cell = ws.cell(row=row_idx, column=1, value=rid)
-        id_cell.font = body_font
-        id_cell.border = border
-        id_cell.alignment = wrap_center
-
-        for col_idx, text in ((2, result_text), (3, must_place_text)):
-            cell = ws.cell(row=row_idx, column=col_idx, value=excel_safe(text))
+    for row_idx, values in enumerate(rows, start=2):
+        for out_col, src in enumerate(keep, start=1):
+            cell = ws.cell(row=row_idx, column=out_col, value=values[src] if src == 0 else excel_safe(values[src]))
             cell.font = body_font
             cell.border = border
-            cell.alignment = wrap_left
-
-    for col_idx, width in ((1, 14), (2, 90), (3, 90)):
-        ws.column_dimensions[get_column_letter(col_idx)].width = width
+            cell.alignment = wrap_center if src == 0 else wrap_left
 
     buf = io.BytesIO()
     wb.save(buf)
