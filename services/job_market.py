@@ -595,7 +595,28 @@ def _own_org_code(researcher_id: str, researchers_df) -> str:
     return str(rows.iloc[0].get('org_code') or '').strip()
 
 
-def run_project_search(project_names: list, excluded_org_codes: list) -> dict:
+def _progress(progress, stage: str, done: int, total: int) -> None:
+    """백그라운드 실행(services/job_market_jobs)이 화면에 단계·진행 건수를 보여주도록 알림. 실패해도 검색은 계속."""
+    if progress is not None:
+        try:
+            progress(stage, done, total)
+        except Exception as exc:  # noqa: BLE001
+            print(f'[job_market] 진행 상황 기록 실패: {exc}')
+
+
+def _counter(progress, total: int):
+    """run_concurrent on_complete — 1명 끝날 때마다 진행 건수 갱신."""
+    if progress is None:
+        return None
+    state = {'n': 0}
+
+    def _done(_i, _result, _error):
+        state['n'] += 1
+        _progress(progress, '추천 계산(LLM)', state['n'], total)
+    return _done
+
+
+def run_project_search(project_names: list, excluded_org_codes: list, progress=None) -> dict:
     """'종료 예정 과제' 단위 검색 — 복수 선택 가능. 선택한 과제 전체의 배정
     인원(중복 인원은 한 번만)에 대해 추천을 반복하고, 선택한 과제들은 전부
     (본인이 속한 과제뿐 아니라 함께 종료되는 다른 선택 과제들도) 후보에서
@@ -626,6 +647,7 @@ def run_project_search(project_names: list, excluded_org_codes: list) -> dict:
 
     excluded_norm = _normalize_excluded_projects(set(excluded_org_codes))
     excluded_norm |= {fit.normalize_org_code(p) for p in project_names}  # 종료 예정 과제 전체는 항상 제외
+    _progress(progress, '후보 과제 준비(임베딩)', 0, len(active_ids))
 
     expertise_profiles = data_store.read_expertise_profiles_std()   # 강점 분야 표준화본 우선(2026-10-15)
     try:
@@ -637,7 +659,8 @@ def run_project_search(project_names: list, excluded_org_codes: list) -> dict:
     workers = llm_client.batch_concurrency()
     tasks = [(lambda rid=rid: recommend_for_researcher(rid, expertise_profiles, candidate_pool, ctx))
               for rid in active_ids]
-    task_results = llm_client.run_concurrent(tasks, max_workers=workers) if tasks else []
+    task_results = llm_client.run_concurrent(tasks, max_workers=workers, on_complete=_counter(progress, len(tasks))) \
+        if tasks else []
 
     results = {}
     for rid, (result, error) in zip(active_ids, task_results):
@@ -646,6 +669,7 @@ def run_project_search(project_names: list, excluded_org_codes: list) -> dict:
         results[rid] = {'recommendations': [], 'on_leave': True,
                         'note': '휴직 중 — 재배치 추천·일괄 배치 대상에서 제외했습니다.'}
 
+    _progress(progress, '종료 영향 분석', len(active_ids), len(active_ids))
     try:
         impact = jmi.ending_impact(active_ids)
     except Exception as exc:  # noqa: BLE001
@@ -658,7 +682,7 @@ def run_project_search(project_names: list, excluded_org_codes: list) -> dict:
         'candidates_considered': len(candidate_pool),
         'impact': impact,
     }
-    save_history(report)
+    report['history_file'] = save_history(report)
     return report
 
 
@@ -704,7 +728,7 @@ def search_researchers(query: str) -> list:
     ][:MAX_SEARCH_RESULTS]
 
 
-def run_individual_search(researcher_ids: list, excluded_org_codes: list) -> dict:
+def run_individual_search(researcher_ids: list, excluded_org_codes: list, progress=None) -> dict:
     """개인별 검색 — 화면에서 미리 골라 확정한 researcher_id 목록(1명 또는
     여러 명)에 대해 각자의 후보 과제를 추천한다. 각자 현재 속한 과제는
     항상 자동으로 제외한다(사람마다 다를 수 있어 개별 계산). 제외는 과제
@@ -730,6 +754,7 @@ def run_individual_search(researcher_ids: list, excluded_org_codes: list) -> dic
         own_org_code = _own_org_code(rid, researchers_df)
         own_norm_by_rid[rid] = fit.normalize_org_code(own_org_code) if own_org_code else ''
 
+    _progress(progress, '후보 과제 준비(임베딩)', 0, len(researcher_ids))
     pool_by_own_org = {}
     try:
         for own_norm in set(own_norm_by_rid.values()):
@@ -744,7 +769,8 @@ def run_individual_search(researcher_ids: list, excluded_org_codes: list) -> dic
         (lambda rid=rid: recommend_for_researcher(rid, expertise_profiles, pool_by_own_org[own_norm_by_rid[rid]], ctx))
         for rid in researcher_ids
     ]
-    task_results = llm_client.run_concurrent(tasks, max_workers=workers) if tasks else []
+    task_results = llm_client.run_concurrent(tasks, max_workers=workers, on_complete=_counter(progress, len(tasks))) \
+        if tasks else []
 
     results = {}
     for rid, (result, error) in zip(researcher_ids, task_results):
@@ -756,7 +782,7 @@ def run_individual_search(researcher_ids: list, excluded_org_codes: list) -> dic
         'roster': roster, 'results': results,
         'candidates_considered': max((len(p) for p in pool_by_own_org.values()), default=0),
     }
-    save_history(report)
+    report['history_file'] = save_history(report)
     return report
 
 

@@ -54,7 +54,7 @@ def _rows_path() -> str:
 
 
 def _write_json_atomic(path: str, data) -> None:
-    tmp = f'{path}.{os.getpid()}.tmp'
+    tmp = f'{path}.{os.getpid()}.{threading.get_ident()}.tmp'
     with open(tmp, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False)
     try:

@@ -14377,3 +14377,18 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   검색 뒤 조건을 바꾸면 "다시 검색" 안내(rb-search-cond와 비교).
 - 연구원 명단 "조서 작성에서 요청"으로 넘어오면 개인 단위로 검색된 상태로 열림.
 - 테스트 tests/test_report_builder.py::test_resolve_targets_cascading.
+
+## (65) JOB Market 검색 백그라운드 실행 + 종료 상태 표시 (2026-10-16)
+- 증상: 검색 후 결과도 없고 화면도 그대로인 채 끝남. 원인: 검색이 브라우저 요청 하나 안에서 끝까지 돌아, 인원이 많아
+  LLM 추천이 GUNICORN_TIMEOUT(300초)을 넘기면 gunicorn이 워커를 강제 종료 → 화면은 응답을 못 받음.
+- services/job_market_jobs.py: 검색을 데몬 스레드로 실행(요청은 즉시 반환, 시간 제한 없음). 상태 파일
+  data/processed/jm_jobs/<id>.json(워커 2개 공유) — 단계·진행 인원·heartbeat(10초). 종료 상태:
+  done(추천 있음/전원 추천 없음) · error(조건·데이터 문제) · failed(예외, 메시지) · lost(heartbeat 90초 끊김 = 워커 재시작 등).
+  사용자당 동시 1건, 7일 지난 상태 파일 정리.
+- job_market.run_project_search / run_individual_search에 progress 콜백(단계, 완료/전체 인원 — run_concurrent on_complete)
+  과 report['history_file'] 추가.
+- pages/job_market.py: _run은 작업 시작만(jm-job 세션 Store), _poll(dcc.Interval 2초)이 진행 바·경과 시간 → 끝나면
+  완료/결과 없음/오류/중단 알림 + 결과 표시 + 이력 갱신, 폴링 중지. 실행 중 검색 버튼 비활성. 다른 화면 갔다 와도 이어서 표시.
+- 같이 고침: 한 프로세스 안 두 스레드가 동시에 임베딩 캐시를 저장하면 임시 파일명(pid만)이 겹쳐 FileNotFoundError —
+  researcher_fit._save_embed_cache, confl_tree, nl_query_curation 임시 파일명에 스레드 id 추가.
+- 테스트 tests/test_job_market_jobs.py.

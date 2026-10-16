@@ -535,8 +535,15 @@ def layout(**_kwargs):
                                   placeholder='제외할 과제(복수 선택 가능)', multi=True), md=6),
         ], className='g-2 mb-3'),
 
-        dbc.Button([html.I(className='bi bi-search me-1'), '검색'],
-                   id='jm-run-btn', color='primary', n_clicks=0, className='mb-3'),
+        html.Div([
+            dbc.Button([html.I(className='bi bi-search me-1'), '검색'],
+                       id='jm-run-btn', color='primary', n_clicks=0),
+            html.Span(id='jm-run-msg', className='ms-2'),
+        ], className='d-flex align-items-center mb-3'),
+        # 백그라운드 실행 상태(services/job_market_jobs, 2026-10-16) — 실행 중 진행 상황, 끝나면 완료/결과 없음/오류/중단
+        dcc.Store(id='jm-job', storage_type='session'),
+        dcc.Interval(id='jm-job-poll', interval=2000, disabled=True),
+        html.Div(id='jm-job-status'),
 
         dcc.Loading(html.Div(id='jm-result')),
         dbc.Button([html.I(className='bi bi-file-earmark-excel me-1'), '재배치 가능 인원 엑셀 다운로드'],
@@ -682,42 +689,105 @@ def _render_selected(selected):
 
 
 @callback(
-    Output('jm-result', 'children'),
-    Output('jm-history-refresh', 'data'),
-    Output('jm-result-store', 'data'),
+    Output('jm-run-msg', 'children'),
+    Output('jm-job', 'data'),
     Input('jm-run-btn', 'n_clicks'),
     State('jm-mode', 'value'),
     State('jm-project-select', 'value'),
     State('jm-individual-selected-store', 'data'),
     State('jm-exclude-project', 'value'),
-    State('jm-history-refresh', 'data'),
     prevent_initial_call=True,
 )
-def _run(n_clicks, mode, project_names, selected_individuals, excluded_projects, refresh_token):
+def _run(n_clicks, mode, project_names, selected_individuals, excluded_projects):
+    """검색은 백그라운드로 시작만 하고 바로 반환(2026-10-16) — 예전처럼 요청 안에서 끝까지 돌리면 오래 걸릴 때
+    gunicorn 타임아웃으로 워커가 죽어 화면이 아무 반응 없이 끝났다. 진행·종료 표시는 _poll."""
     if not n_clicks:
-        return dash.no_update, dash.no_update, dash.no_update
+        return dash.no_update, dash.no_update
+    from services import job_market_jobs as jobs
+    from services.auth import get_current_user
     excluded_projects = excluded_projects or []
-    project_names = project_names or []
-    selected_individuals = selected_individuals or []
-
+    if mode == _MODE_INDIVIDUAL:
+        if not selected_individuals:
+            return dbc.Alert('대상자를 검색해서 추가해주세요.', color='warning', className='py-1 px-2 mb-0 small'), dash.no_update
+        job_mode, args = 'individual', {'researcher_ids': [c['researcher_id'] for c in selected_individuals],
+                                        'excluded': excluded_projects}
+    else:
+        if not project_names:
+            return dbc.Alert('종료 예정 과제를 선택해주세요.', color='warning', className='py-1 px-2 mb-0 small'), dash.no_update
+        job_mode, args = 'project', {'project_names': project_names, 'excluded': excluded_projects}
     try:
-        if mode == _MODE_INDIVIDUAL:
-            if not selected_individuals:
-                return dbc.Alert('대상자를 검색해서 추가해주세요.', color='warning'), dash.no_update, None
-            researcher_ids = [c['researcher_id'] for c in selected_individuals]
-            result = jm.run_individual_search(researcher_ids, excluded_projects)
-        else:
-            if not project_names:
-                return dbc.Alert('종료 예정 과제를 선택해주세요.', color='warning'), dash.no_update, None
-            result = jm.run_project_search(project_names, excluded_projects)
-    except Exception as exc:  # noqa: BLE001 — 어떤 원인이든 화면에 아무 반응도
-        # 없는 것보다는, 오류를 눈에 보이게 알려주는 게 낫다(외부 입력/실데이터
-        # 경계). services/job_market.py 내부의 개별 안전망(run_concurrent 등)이
-        # 못 잡는 예외(예: 명단 구성, 후보 조회 단계)까지 여기서 최종적으로 잡는다.
-        return dbc.Alert(f'검색 중 오류가 발생했습니다: {exc}', color='danger'), dash.no_update, None
+        job = jobs.start((get_current_user() or {}).get('user_id', ''), job_mode, args)
+    except Exception as exc:  # noqa: BLE001
+        return dbc.Alert(f'검색을 시작하지 못했습니다: {exc}', color='danger', className='py-1 px-2 mb-0 small'), dash.no_update
+    msg = html.Span('이미 실행 중인 검색이 있어 그 진행 상황을 표시합니다.', className='small text-muted') \
+        if job.get('already_running') else None
+    return msg, {'id': job['id']}
 
-    refresh = (refresh_token or 0) + 1 if not result.get('error') else dash.no_update
-    return _render_result(result), refresh, (None if result.get('error') else result)
+
+def _job_status_view(job: dict):
+    from services import job_market_jobs as jobs
+    elapsed = jobs.elapsed_text(job)
+    status = job['status']
+    if status == 'running':
+        total, done = job.get('total') or 0, job.get('done') or 0
+        pct = int(done * 100 / total) if total else 0
+        return dbc.Alert([
+            html.Div([dbc.Spinner(size='sm', spinner_class_name='me-2'),
+                      html.B('검색 실행 중'), html.Span(f" · {job.get('stage', '')}"
+                                                       + (f' {done}/{total}명' if total else '')
+                                                       + f' · 경과 {elapsed}', className='small ms-1')]),
+            dbc.Progress(value=pct, className='mt-2', style={'height': '6px'}, animated=True, striped=True),
+            html.Div('다른 화면으로 이동하거나 창을 닫아도 서버에서 계속 실행됩니다. 이 화면으로 돌아오면 이어서 표시합니다.',
+                     className='small text-muted mt-1'),
+        ], color='info', className='py-2')
+    if status == 'done':
+        n, m = job.get('people', 0), job.get('recommended', 0)
+        text = (f'검색이 완료되었습니다 — 대상 {n}명 중 {m}명에게 재배치 추천이 나왔습니다.' if m else
+                f'검색이 완료되었습니다 — 대상 {n}명 모두 재배치 추천 결과가 없습니다(아래 사유 확인).')
+        return dbc.Alert([html.I(className='bi bi-check-circle-fill me-2'), text,
+                          html.Span(f' (소요 {elapsed}, {job.get("finished_at", "")[11:16]} 종료)', className='small')],
+                         color='success' if m else 'warning', dismissable=True, className='py-2')
+    labels = {'error': ('검색이 종료되었습니다(결과 없음)', 'warning'),
+              'failed': ('검색이 오류로 종료되었습니다', 'danger'),
+              'lost': ('검색 프로세스가 중단되었습니다', 'danger')}
+    title, color = labels.get(status, (status, 'secondary'))
+    return dbc.Alert([html.I(className='bi bi-exclamation-triangle-fill me-2'), html.B(title),
+                      html.Div(f"{job.get('message', '')} (경과 {elapsed})", className='small mt-1')],
+                     color=color, dismissable=True, className='py-2')
+
+
+@callback(
+    Output('jm-job-status', 'children'),
+    Output('jm-job-poll', 'disabled'),
+    Output('jm-run-btn', 'disabled'),
+    Output('jm-result', 'children'),
+    Output('jm-result-store', 'data'),
+    Output('jm-history-refresh', 'data'),
+    Input('jm-job-poll', 'n_intervals'),
+    Input('jm-job', 'data'),
+    State('jm-history-refresh', 'data'),
+)
+def _poll(_n, job_ref, refresh_token):
+    """백그라운드 검색 상태 표시 — 실행 중이면 2초마다 진행 상황, 끝나면 결과(또는 결과 없음/오류/중단)를 표시하고
+    폴링을 멈춘다. 페이지에 다시 들어오면(세션 Store) 마지막 검색을 이어서 보여준다."""
+    no = dash.no_update
+    if not job_ref or not job_ref.get('id'):
+        return None, True, False, no, no, no
+    from services import job_market_jobs as jobs
+    job = jobs.get(job_ref['id'])
+    if job is None:
+        return None, True, False, no, no, no
+    status_view = _job_status_view(job)
+    if job['status'] == 'running':
+        cleared = dash.ctx.triggered_id == 'jm-job'   # 새 검색을 시작한 순간에만 이전 결과를 지움
+        return status_view, False, True, (None if cleared else no), (None if cleared else no), no
+    if job['status'] == 'done':
+        result = jm.load_history(job.get('history_file', '')) if job.get('history_file') else None
+        if not result:
+            return (dbc.Alert('검색은 완료됐지만 결과 파일을 불러오지 못했습니다 — 아래 검색 이력에서 확인하세요.',
+                              color='warning'), True, False, None, None, (refresh_token or 0) + 1)
+        return status_view, True, False, _render_result(result), result, (refresh_token or 0) + 1
+    return status_view, True, False, None, None, no
 
 
 @callback(
