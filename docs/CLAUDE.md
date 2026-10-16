@@ -14325,3 +14325,18 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - researcher_profile_export.prepare_rows(): build_profile_workbook의 행 준비(권한·조직 매핑·정렬)를 분리해 공유 —
   기존 연구원 명단 엑셀 결과는 리팩터링 전후 동일함을 확인.
 - 테스트 tests/test_report_builder.py. 사용자 테스트 후 추가 수정 예정.
+
+## (61) 엑셀 다운로드 권한 분리 + 1회성 다운로드 요청/승인 (2026-10-16)
+- 권한 키 download_excel(config/auth_config.py 모든 역할 기본 허용, user_store perm_download_excel 열 자동 추가).
+  관리자 > 사용자/권한 관리 표의 "엑셀" 체크로 계정별 켜고 끔. 바꾼 뒤 해당 사용자는 재로그인해야 반영.
+- 관문 대상 화면(services/download_access.FEATURES): 연구원 명단 엑셀, 업무 시나리오 > 조서 작성, JOB Market 결과,
+  보유 전문성·유사 연구원 명단. 각 다운로드 콜백에서 check(feature) → 막히면 안내 문구, 성공 시 consume(승인 id).
+  관리자 화면 안의 다운로드는 관리자 전용이라 대상 아님.
+- 요청: 권한 없는 사용자에게만 다운로드 버튼 옆 "다운로드 요청" 버튼(components/download_request.request_ui) —
+  대상·사용목적 입력 후 전송. 저장 data/processed/download_requests.json(파일 잠금).
+- 관리자 > 다운로드 요청 탭(components/admin_download_requests_tab.py): 대기 건 우선, 의견 입력 후 승인/반려, 처리 이력 표시.
+- 알림: 승인/반려 시 요청자 화면 이동 때 전역 모달(app.layout의 notice_modal) — 승인 건은
+  "다운로드한 정보의 관리 책임은 전적으로 본인에게 있습니다…" 안내를 체크해 확인해야 사용 가능.
+  계정에 이메일이 있고 메일 설정(pipeline/mailer)이 돼 있으면 같은 내용 메일도 발송(실패해도 화면 알림은 동작).
+- 승인 1건 = 해당 화면에서 1회 다운로드, 유효기간 GRANT_DAYS(7)일.
+- 테스트 tests/test_download_access.py.

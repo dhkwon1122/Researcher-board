@@ -41,7 +41,7 @@ def _bound_statement_timeout(conn) -> None:
 # 명시적 값을 쓴다(그 화면에서 한 번이라도 저장하면 그 뒤로는 역할 기본값을
 # 자동으로 따라가지 않는다는 뜻) — 한 번도 손대지 않은 계정만 NULL로 남아
 # 역할 기본값을 계속 따른다.
-PERMISSION_COLUMNS = ('view_evaluation', 'view_incentive', 'view_comments', 'view_grade')
+PERMISSION_COLUMNS = ('view_evaluation', 'view_incentive', 'view_comments', 'view_grade', 'download_excel')
 
 # 다른 데이터 테이블(researchers 등)과 이름이 겹치지 않도록 app_users로 둔다.
 users = Table(
@@ -68,6 +68,7 @@ users = Table(
     Column('perm_view_incentive', Boolean),
     Column('perm_view_comments', Boolean),
     Column('perm_view_grade', Boolean),
+    Column('perm_download_excel', Boolean),   # 엑셀 다운로드(2026-10-15)
     # view_evaluation이 있어도 특정 부서(team_refer의 dep_id) 소속 연구원의
     # 평가만은 못 보게 하는 예외 목록 — JSON 배열 문자열(예: '["D-003"]').
     # dep_name(표시 라벨)이 아니라 dep_id를 쓰는 이유는 services/similarity_map.py

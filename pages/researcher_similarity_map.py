@@ -781,6 +781,11 @@ def _mail_researcher_modal(mail_rid: str | None = None, mail_rid_name: str = '')
     ], id='mail-researcher-modal', is_open=bool(mail_rid))
 
 
+def _download_request_ui(feature):
+    from components.download_request import request_ui
+    return request_ui(feature)
+
+
 def _download_panel():
     """"연구원" 탭 아래(전문성 MAP 탭에서는 숨김)에 붙는 보유 전문성·유사
     연구원 명단 엑셀 다운로드 패널. 개인별 검색 또는
@@ -829,6 +834,7 @@ def _download_panel():
         dbc.Button([html.I(className='bi bi-file-earmark-excel me-1'), '엑셀 다운로드'],
                    id='expertise-download-btn', color='success', outline=True, size='sm',
                    className='mt-2', n_clicks=0),
+        _download_request_ui('expertise'),
         html.Div(id='expertise-download-msg', className='small text-danger mt-1'),
         dcc.Download(id='expertise-download-download'),
     ], id='expertise-download-panel')
@@ -1021,7 +1027,12 @@ def _download_expertise_similarity(n_clicks, mode, individual_ids, dept_ids, inc
         if not researcher_ids:
             return dash.no_update, '대상자를 검색해서 선택해주세요.'
 
+    from services import download_access   # 엑셀 다운로드 권한 / 1회성 승인(2026-10-15)
+    allowed, gate_msg, grant_id = download_access.check('expertise')
+    if not allowed:
+        return dash.no_update, gate_msg
     data = build_expertise_similarity_workbook(researcher_ids)
+    download_access.consume(grant_id)
     return dcc.send_bytes(data, similarity_workbook_filename()), ''
 
 

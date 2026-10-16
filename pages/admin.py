@@ -26,6 +26,7 @@ from components.admin_ai_search_lab_tab import _ai_search_lab_tab
 from components.admin_ai_search_log_tab import _ai_search_log_tab
 from components.admin_data_update_tab import _data_update_tab
 from components.admin_dev_updates_tab import _dev_updates_tab
+from components.admin_download_requests_tab import _download_requests_tab
 from components.admin_exception_job_function_tab import _exception_job_function_tab
 from components.admin_team_refer_tab import _team_refer_tab
 from components.admin_users_tab import _user_management_tab
@@ -40,6 +41,7 @@ _TABS = [
     ('tab-exception-job-function', '직군 예외자',
      'admin-tab-content-exception-job-function', _exception_job_function_tab),
     ('tab-data-update', '데이터 업데이트', 'admin-tab-content-data-update', _data_update_tab),
+    ('tab-download-requests', '다운로드 요청', 'admin-tab-content-download-requests', _download_requests_tab),
     ('tab-ai-search-log', 'AI 검색 로그', 'admin-tab-content-ai-search-log', _ai_search_log_tab),
     ('tab-ai-search-lab', 'AI 검색 테스트', 'admin-tab-content-ai-search-lab', _ai_search_lab_tab),
     ('tab-dev-updates', '개발업데이트 이력', 'admin-tab-content-dev-updates', _dev_updates_tab),

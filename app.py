@@ -605,6 +605,8 @@ navbar = dbc.Navbar(
     className='app-navbar',
 )
 
+from components.download_request import notice_modal as _download_notice_modal  # noqa: E402
+
 app.layout = html.Div(
     [
         navbar,
@@ -615,6 +617,8 @@ app.layout = html.Div(
             fluid=True,
             className='px-4 py-3',
         ),
+        # 엑셀 다운로드 요청 승인/반려 알림(2026-10-15, components/download_request.py)
+        _download_notice_modal(),
     ],
     style={'minHeight': '100vh', 'backgroundColor': '#f5f5f5'},
 )

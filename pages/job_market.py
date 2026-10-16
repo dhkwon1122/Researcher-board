@@ -469,6 +469,11 @@ def _history_table():
     ], bordered=False, hover=True, size='sm', className='mb-0')
 
 
+def _download_request_ui(feature):
+    from components.download_request import request_ui
+    return request_ui(feature)
+
+
 def layout(**_kwargs):
     from services import similarity_map as sm
     l1_options = sm.level_filter_options(1)
@@ -537,6 +542,8 @@ def layout(**_kwargs):
         dbc.Button([html.I(className='bi bi-file-earmark-excel me-1'), '재배치 가능 인원 엑셀 다운로드'],
                    id='jm-excel-btn', color='success', outline=True, size='sm',
                    className='mb-3', style={'display': 'none'}, n_clicks=0, disabled=True),
+        _download_request_ui('job_market'),
+        html.Span(id='jm-excel-msg', className='small text-danger ms-2'),
         dcc.Download(id='jm-excel-download'),
         dcc.Store(id='jm-result-store', data=None),
         dcc.Store(id='jm-history-refresh', data=0),
@@ -760,15 +767,21 @@ def _update_excel_button(result):
 
 @callback(
     Output('jm-excel-download', 'data'),
+    Output('jm-excel-msg', 'children'),
     Input('jm-excel-btn', 'n_clicks'),
     State('jm-result-store', 'data'),
     prevent_initial_call=True,
 )
 def _download_excel(n_clicks, result):
     if not n_clicks or not _has_redeployable(result):
-        return dash.no_update
+        return dash.no_update, dash.no_update
+    from services import download_access   # 엑셀 다운로드 권한 / 1회성 승인(2026-10-15)
+    allowed, gate_msg, grant_id = download_access.check('job_market')
+    if not allowed:
+        return dash.no_update, gate_msg
     data = jm.build_result_workbook(result)
-    return dcc.send_bytes(data, jm.result_default_filename())
+    download_access.consume(grant_id)
+    return dcc.send_bytes(data, jm.result_default_filename()), ''
 
 
 

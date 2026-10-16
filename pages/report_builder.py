@@ -53,6 +53,11 @@ def _column_row(i: int, n: int, col: dict, field_options: list, join_options: li
     ], className='g-2 mb-2 align-items-start')
 
 
+def _download_request_ui(feature):
+    from components.download_request import request_ui
+    return request_ui(feature)
+
+
 def layout(**_kwargs):
     from services import report_builder as rb
     from services import similarity_map as sm
@@ -119,8 +124,12 @@ def layout(**_kwargs):
             html.Div([html.Span('3. 미리보기', className='fw-semibold me-2'),
                       html.Small(f'(대상자 중 처음 {_MAX_PREVIEW}명)', className='text-muted')], className='mb-2'),
             html.Div(id='rb-preview', style={'overflowX': 'auto'}),
-            dbc.Button([html.I(className='bi bi-file-earmark-arrow-down me-1'), '엑셀 다운로드'], id='rb-download-btn',
-                       color='success', className='mt-2'),
+            html.Div([
+                dbc.Button([html.I(className='bi bi-file-earmark-arrow-down me-1'), '엑셀 다운로드'], id='rb-download-btn',
+                           color='success'),
+                _download_request_ui('report_builder'),
+                html.Span(id='rb-download-msg', className='small ms-2'),
+            ], className='d-flex align-items-center flex-wrap mt-2'),
             dcc.Download(id='rb-download'),
         ]), className='mb-4'),
     ])
@@ -218,7 +227,7 @@ def _preview(headers, fields, joins, max_items, l1, l3, people):
     ], bordered=True, size='sm', className='mb-0')
 
 
-@callback(Output('rb-download', 'data'), Output('rb-alert', 'children', allow_duplicate=True),
+@callback(Output('rb-download', 'data'), Output('rb-download-msg', 'children'),
           Input('rb-download-btn', 'n_clicks'),
           State({'type': 'rb-h', 'index': ALL}, 'value'),
           State({'type': 'rb-f', 'index': ALL}, 'value'),
@@ -230,9 +239,14 @@ def _download(_n, headers, fields, joins, max_items, l1, l3, people, name):
     ids = rb.resolve_targets(l1, l3, people)
     cols = rb.clean_columns(_current(headers, fields, joins))
     if not ids or not cols:
-        return no_update, dbc.Alert('대상자와 항목이 있는 열을 먼저 정하세요.', color='warning', dismissable=True)
+        return no_update, html.Span('대상자와 항목이 있는 열을 먼저 정하세요.', className='text-danger')
+    from services import download_access   # 엑셀 다운로드 권한 / 1회성 승인(2026-10-15)
+    allowed, gate_msg, grant_id = download_access.check('report_builder')
+    if not allowed:
+        return no_update, html.Span(gate_msg, className='text-danger')
     data = rb.build_workbook(ids, cols, max_items)
-    return dcc.send_bytes(data, rb.default_filename(name or '조서')), None
+    download_access.consume(grant_id)
+    return dcc.send_bytes(data, rb.default_filename(name or '조서')), html.Span(gate_msg, className='text-muted')
 
 
 @callback(Output('rb-alert', 'children'), Output('rb-template', 'options'), Output('rb-template', 'value'),
