@@ -156,7 +156,7 @@ def main():
     best = max((m for m in methods if m.startswith('+이력')), key=lambda m: summary[m])
     base = '현재방식' if not args.fast else 'A·B'
     print(f'\n→ 과제 참여 이력 가중치 추천: {best.split()[-1]} (적중@3 {summary[best][0] * 100:.1f}%, '
-          f'{base} {summary[base][0] * 100:.1f}%). 서버 환경변수 JM_HISTORY_WEIGHT로 설정(기본 0.1).')
+          f'{base} {summary[base][0] * 100:.1f}%). 서버 환경변수 JM_HISTORY_WEIGHT로 설정(기본 0.05).')
     print('  ※ A·B·현재방식은 현재 프로필(이동 이후 경험 포함)을 써서 낙관적으로, 이력은 이동 이전 데이터만 써서 '
           '보수적으로 나옵니다.')
     if args.csv and details:
