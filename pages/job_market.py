@@ -469,6 +469,11 @@ def _history_table():
     ], bordered=False, hover=True, size='sm', className='mb-0')
 
 
+def _download_request_ui(feature):
+    from components.download_request import request_ui
+    return request_ui(feature)
+
+
 def layout(**_kwargs):
     from services import similarity_map as sm
     l1_options = sm.level_filter_options(1)
@@ -537,6 +542,8 @@ def layout(**_kwargs):
         dbc.Button([html.I(className='bi bi-file-earmark-excel me-1'), '재배치 가능 인원 엑셀 다운로드'],
                    id='jm-excel-btn', color='success', outline=True, size='sm',
                    className='mb-3', style={'display': 'none'}, n_clicks=0, disabled=True),
+        _download_request_ui('job_market'),
+        html.Span(id='jm-excel-msg', className='small text-muted ms-2'),
         dcc.Download(id='jm-excel-download'),
         dcc.Store(id='jm-result-store', data=None),
         dcc.Store(id='jm-history-refresh', data=0),
@@ -760,15 +767,42 @@ def _update_excel_button(result):
 
 @callback(
     Output('jm-excel-download', 'data'),
+    Output('jm-excel-msg', 'children'),
     Input('jm-excel-btn', 'n_clicks'),
     State('jm-result-store', 'data'),
     prevent_initial_call=True,
 )
 def _download_excel(n_clicks, result):
     if not n_clicks or not _has_redeployable(result):
+        return dash.no_update, dash.no_update
+    from services import download_access   # 엑셀 다운로드 권한 / 1회성 승인(2026-10-15)
+    allowed, gate_msg, grant = download_access.check('job_market')
+    if not allowed:
+        return dash.no_update, gate_msg
+    ids = jm.result_researcher_ids(result)
+    headers = list(jm.RESULT_HEADERS)
+    if grant:   # 1회성 승인 — 승인된 대상자·헤더만
+        approved = set(grant['spec']['ids'])
+        ids = [rid for rid in ids if rid in approved]
+        headers = grant['spec']['headers']
+        if not ids:
+            return dash.no_update, '승인된 대상자가 지금 결과에 없습니다 — 요청할 때와 같은 조건으로 검색한 뒤 다시 시도하세요.'
+    data = jm.build_result_workbook(result, ids if grant else None, headers if grant else None)
+    filename = jm.result_default_filename()
+    download_access.complete('job_market', grant, len(ids), headers, filename)
+    return dcc.send_bytes(data, filename), gate_msg
+
+
+@callback(
+    Output({'type': 'dlreq-ctx', 'f': 'job_market'}, 'data'),
+    Input('jm-result-store', 'data'),
+)
+def _request_context(result):
+    """1회성 다운로드 요청에 붙일 대상자(엑셀에 들어갈 사람) — 권한 보유자는 계산하지 않음."""
+    from services import download_access
+    if download_access.has_permission():
         return dash.no_update
-    data = jm.build_result_workbook(result)
-    return dcc.send_bytes(data, jm.result_default_filename())
+    return {'ids': jm.result_researcher_ids(result) if result else []}
 
 
 

@@ -53,6 +53,11 @@ def _column_row(i: int, n: int, col: dict, field_options: list, join_options: li
     ], className='g-2 mb-2 align-items-start')
 
 
+def _download_request_ui(feature):
+    from components.download_request import request_ui
+    return request_ui(feature)
+
+
 def layout(**_kwargs):
     from services import report_builder as rb
     from services import similarity_map as sm
@@ -62,6 +67,9 @@ def layout(**_kwargs):
     people = [{'label': f"{r.get('name', '')} ({r['researcher_id']}) · {r.get('department', '')}", 'value': r['researcher_id']}
               for r in res.fillna('').to_dict('records')] if not res.empty else []
     default = rb.default_template()
+    from services import download_access
+    valid = {p['value'] for p in people}
+    prefill = [rid for rid in download_access.pop_prefill(user_id) if rid in valid]   # 연구원 명단 "조서 작성에서 요청"
     return html.Div([
         html.H5([html.I(className='bi bi-file-earmark-spreadsheet me-2 text-primary'), '조서 작성'],
                 className='fw-bold mb-1 mt-1'),
@@ -71,6 +79,9 @@ def layout(**_kwargs):
         dcc.Store(id='rb-template-id', data=default['id']),
         dcc.Store(id='rb-field-options', data=rb.field_options(perms)),
         html.Div(id='rb-alert'),
+        dbc.Alert(f'연구원 명단에서 넘어온 대상자 {len(prefill)}명을 "개별 연구원"에 넣었습니다. 아래 양식(기본 양식 = 연구원 명단 엑셀)을 '
+                  '필요한 헤더로 구성한 뒤 "다운로드 요청"을 누르세요.', color='info', className='py-2 small')
+        if prefill else None,
 
         dbc.Card(dbc.CardBody([
             html.Div('1. 대상자', className='fw-semibold mb-2'),
@@ -80,7 +91,8 @@ def layout(**_kwargs):
                 dbc.Col([dbc.Label('과제', className='small text-muted mb-1'),
                          dcc.Dropdown(id='rb-l3', options=sm.level_filter_options(3), multi=True, placeholder='선택')], md=4),
                 dbc.Col([dbc.Label('개별 연구원', className='small text-muted mb-1'),
-                         dcc.Dropdown(id='rb-people', options=people, multi=True, placeholder='이름 또는 사번')], md=4),
+                         dcc.Dropdown(id='rb-people', options=people, value=prefill or None, multi=True,
+                                      placeholder='이름 또는 사번')], md=4),
             ], className='g-2'),
             html.Div(id='rb-target-count', className='small text-muted mt-2'),
         ]), className='mb-3'),
@@ -119,8 +131,12 @@ def layout(**_kwargs):
             html.Div([html.Span('3. 미리보기', className='fw-semibold me-2'),
                       html.Small(f'(대상자 중 처음 {_MAX_PREVIEW}명)', className='text-muted')], className='mb-2'),
             html.Div(id='rb-preview', style={'overflowX': 'auto'}),
-            dbc.Button([html.I(className='bi bi-file-earmark-arrow-down me-1'), '엑셀 다운로드'], id='rb-download-btn',
-                       color='success', className='mt-2'),
+            html.Div([
+                dbc.Button([html.I(className='bi bi-file-earmark-arrow-down me-1'), '엑셀 다운로드'], id='rb-download-btn',
+                           color='success'),
+                _download_request_ui('report_builder'),
+                html.Span(id='rb-download-msg', className='small ms-2'),
+            ], className='d-flex align-items-center flex-wrap mt-2'),
             dcc.Download(id='rb-download'),
         ]), className='mb-4'),
     ])
@@ -218,7 +234,7 @@ def _preview(headers, fields, joins, max_items, l1, l3, people):
     ], bordered=True, size='sm', className='mb-0')
 
 
-@callback(Output('rb-download', 'data'), Output('rb-alert', 'children', allow_duplicate=True),
+@callback(Output('rb-download', 'data'), Output('rb-download-msg', 'children'),
           Input('rb-download-btn', 'n_clicks'),
           State({'type': 'rb-h', 'index': ALL}, 'value'),
           State({'type': 'rb-f', 'index': ALL}, 'value'),
@@ -227,12 +243,37 @@ def _preview(headers, fields, joins, max_items, l1, l3, people):
           State('rb-name', 'value'), prevent_initial_call=True)
 def _download(_n, headers, fields, joins, max_items, l1, l3, people, name):
     from services import report_builder as rb
-    ids = rb.resolve_targets(l1, l3, people)
-    cols = rb.clean_columns(_current(headers, fields, joins))
-    if not ids or not cols:
-        return no_update, dbc.Alert('대상자와 항목이 있는 열을 먼저 정하세요.', color='warning', dismissable=True)
+    from services import download_access   # 엑셀 다운로드 권한 / 1회성 승인(2026-10-15)
+    allowed, gate_msg, grant = download_access.check('report_builder')
+    if not allowed:
+        return no_update, html.Span(gate_msg, className='text-danger')
+    if grant:   # 1회성 승인 — 화면 구성이 아니라 승인된 열·대상자 그대로
+        ids, cols, max_items = grant['spec']['ids'], grant['spec']['columns'], grant['spec'].get('max_items')
+    else:
+        ids = rb.resolve_targets(l1, l3, people)
+        cols = rb.clean_columns(_current(headers, fields, joins))
+        if not ids or not cols:
+            return no_update, html.Span('대상자와 항목이 있는 열을 먼저 정하세요.', className='text-danger')
     data = rb.build_workbook(ids, cols, max_items)
-    return dcc.send_bytes(data, rb.default_filename(name or '조서')), None
+    filename = rb.default_filename(name or '조서')
+    download_access.complete('report_builder', grant, len(ids), [c['header'] for c in cols], filename)
+    return dcc.send_bytes(data, filename), html.Span(gate_msg, className='text-muted')
+
+
+@callback(Output({'type': 'dlreq-ctx', 'f': 'report_builder'}, 'data'),
+          Input('rb-l1', 'value'), Input('rb-l3', 'value'), Input('rb-people', 'value'),
+          Input({'type': 'rb-h', 'index': ALL}, 'value'),
+          Input({'type': 'rb-f', 'index': ALL}, 'value'),
+          Input({'type': 'rb-j', 'index': ALL}, 'value'),
+          Input('rb-max', 'value'))
+def _request_context(l1, l3, people, headers, fields, joins, max_items):
+    """1회성 다운로드 요청(components/download_request)에 붙일 화면 구성 — 권한 보유자는 계산하지 않음."""
+    from services import download_access
+    if download_access.has_permission():
+        return no_update
+    from services import report_builder as rb
+    return {'ids': rb.resolve_targets(l1, l3, people), 'columns': rb.clean_columns(_current(headers, fields, joins)),
+            'max_items': max_items}
 
 
 @callback(Output('rb-alert', 'children'), Output('rb-template', 'options'), Output('rb-template', 'value'),

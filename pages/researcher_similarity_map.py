@@ -781,6 +781,11 @@ def _mail_researcher_modal(mail_rid: str | None = None, mail_rid_name: str = '')
     ], id='mail-researcher-modal', is_open=bool(mail_rid))
 
 
+def _download_request_ui(feature):
+    from components.download_request import request_ui
+    return request_ui(feature)
+
+
 def _download_panel():
     """"연구원" 탭 아래(전문성 MAP 탭에서는 숨김)에 붙는 보유 전문성·유사
     연구원 명단 엑셀 다운로드 패널. 개인별 검색 또는
@@ -829,6 +834,7 @@ def _download_panel():
         dbc.Button([html.I(className='bi bi-file-earmark-excel me-1'), '엑셀 다운로드'],
                    id='expertise-download-btn', color='success', outline=True, size='sm',
                    className='mt-2', n_clicks=0),
+        _download_request_ui('expertise'),
         html.Div(id='expertise-download-msg', className='small text-danger mt-1'),
         dcc.Download(id='expertise-download-download'),
     ], id='expertise-download-panel')
@@ -1009,7 +1015,15 @@ def _restrict_download_mode(search_mode, current_download_mode):
 def _download_expertise_similarity(n_clicks, mode, individual_ids, dept_ids, include_children):
     if not n_clicks:
         return dash.no_update, dash.no_update
-    if mode == 'department':
+    from services import download_access   # 엑셀 다운로드 권한 / 1회성 승인(2026-10-15)
+    from services.similarity_map import SIMILARITY_HEADERS
+    allowed, gate_msg, grant = download_access.check('expertise')
+    if not allowed:
+        return dash.no_update, gate_msg
+    headers = None
+    if grant:   # 1회성 승인 — 화면 선택이 아니라 승인된 대상자·헤더 그대로
+        researcher_ids, headers = grant['spec']['ids'], grant['spec']['headers']
+    elif mode == 'department':
         dept_ids = dept_ids or []
         if not dept_ids:
             return dash.no_update, '부서를 선택해주세요.'
@@ -1020,9 +1034,30 @@ def _download_expertise_similarity(n_clicks, mode, individual_ids, dept_ids, inc
         researcher_ids = individual_ids or []
         if not researcher_ids:
             return dash.no_update, '대상자를 검색해서 선택해주세요.'
+    data = build_expertise_similarity_workbook(researcher_ids, headers)
+    filename = similarity_workbook_filename()
+    download_access.complete('expertise', grant, len(researcher_ids), headers or SIMILARITY_HEADERS, filename)
+    return dcc.send_bytes(data, filename), html.Span(gate_msg, className='text-muted')
 
-    data = build_expertise_similarity_workbook(researcher_ids)
-    return dcc.send_bytes(data, similarity_workbook_filename()), ''
+
+@callback(
+    Output({'type': 'dlreq-ctx', 'f': 'expertise'}, 'data'),
+    Input('expertise-download-mode', 'value'),
+    Input('expertise-download-individual', 'value'),
+    Input('expertise-download-dept', 'value'),
+    Input('expertise-download-include-children', 'value'),
+)
+def _expertise_request_context(mode, individual_ids, dept_ids, include_children):
+    """1회성 다운로드 요청에 붙일 대상자 — 다운로드 버튼과 같은 규칙. 권한 보유자는 계산하지 않음."""
+    from services import download_access
+    if download_access.has_permission():
+        return dash.no_update
+    if mode == 'department':
+        ids = researchers_under_departments(dept_ids or [], include_children='include' in (include_children or [])) \
+            if dept_ids else []
+    else:
+        ids = individual_ids or []
+    return {'ids': list(ids)}
 
 
 @callback(

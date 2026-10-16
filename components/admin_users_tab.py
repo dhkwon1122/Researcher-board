@@ -20,6 +20,7 @@ _PERMISSION_LABELS = {
     'view_incentive':  '인센티브(핵심이력) 열람',
     'view_comments':   '인물 코멘트 열람',
     'view_grade':      '리더십/승계 열람(AI 검색)',
+    'download_excel':  '엑셀 다운로드(연구원 명단·조서 작성·JOB Market·보유 전문성)',
 }
 _PERMISSION_KEYS = list(_PERMISSION_LABELS.keys())
 
@@ -34,6 +35,7 @@ _INLINE_PERM_COLUMNS = [
     ('view_incentive', '인센티브', _PERMISSION_LABELS['view_incentive']),
     ('view_comments', '코멘트', _PERMISSION_LABELS['view_comments']),
     ('view_grade', '리더십', _PERMISSION_LABELS['view_grade']),
+    ('download_excel', '엑셀', _PERMISSION_LABELS['download_excel']),
 ]
 # 정렬 가능한 전체 컬럼(신분 정보 5개 + 권한 6개) — '관리' 액션 컬럼은 제외.
 _SORTABLE_COLUMNS = [
@@ -680,9 +682,11 @@ def save_row_admin(is_admin):
     Input({'type': 'row-perm-check', 'field': 'view_comments', 'user_id': MATCH}, 'value'),
     Input({'type': 'row-perm-check', 'field': 'view_grade', 'user_id': MATCH}, 'value'),
     Input({'type': 'row-perm-exclude', 'user_id': MATCH}, 'value'),
+    Input({'type': 'row-perm-check', 'field': 'download_excel', 'user_id': MATCH}, 'value'),
     prevent_initial_call=True,
 )
-def save_row_permissions(view_evaluation, view_incentive, view_comments, view_grade, exclude_people_team):
+def save_row_permissions(view_evaluation, view_incentive, view_comments, view_grade, exclude_people_team,
+                         download_excel=True):
     """개별 권한 4개 + People팀 평가제외 체크박스 — 하나라도 바뀌면 그 행의
     5개 값을 한꺼번에 읽어(MATCH로 같은 user_id 그룹만) update_permissions()
     로 즉시 저장한다. 이 API는 4개 권한을 부분 업데이트가 아니라 항상 전부
@@ -699,6 +703,7 @@ def save_row_permissions(view_evaluation, view_incentive, view_comments, view_gr
         'view_incentive': bool(view_incentive),
         'view_comments': bool(view_comments),
         'view_grade': bool(view_grade),
+        'download_excel': bool(download_excel),
     }
     excluded_dep_ids = list(people_team_dep_ids()) if exclude_people_team else []
     update_permissions(user_id, permissions, excluded_dep_ids)

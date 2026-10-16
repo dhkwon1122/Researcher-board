@@ -431,6 +431,11 @@ def _merge_ai_result(base_df: pd.DataFrame, ai_result: dict):
     return merged_df, [c for c, _ in extra_pairs], [lbl for _, lbl in extra_pairs]
 
 
+def _download_request_ui(feature):
+    from components.download_request import request_ui
+    return request_ui(feature)
+
+
 def layout():
     from services.auth import can, eval_excluded_dep_ids
     show_eval = can('view_evaluation')
@@ -461,7 +466,8 @@ def layout():
         dcc.Location(id='list-url', refresh=True),
         dcc.Download(id='researcher-list-excel-download'),
         # 엑셀 다운로드 실패/대상 없음 안내(2026-10-14 — 예전엔 아무 반응 없이 끝나 원인을 알 수 없었다)
-        html.Div(id='list-excel-msg', className='small'),
+        html.Div([html.Span(id='list-excel-msg', className='small'), _download_request_ui('researcher_list')],
+                 className='d-flex align-items-center flex-wrap'),
 
         dbc.Row([
             dbc.Col(
@@ -1034,6 +1040,10 @@ def download_excel(n_clicks, virtual_data, excel_options):
     researcher_ids = [row['researcher_id'] for row in (virtual_data or []) if row.get('researcher_id')]
     if not researcher_ids:
         return no_update, html.Span('다운로드할 대상이 없습니다(표에 보이는 연구원이 없음).', className='text-danger')
+    from services import download_access   # 엑셀 다운로드 권한(2026-10-15) — 권한 없으면 조서 작성에서 1회성 요청
+    allowed, gate_msg, _grant = download_access.check('researcher_list')
+    if not allowed:
+        return no_update, html.Span(gate_msg, className='text-danger')
     excel_options = excel_options or []
     import time
     import traceback
@@ -1046,7 +1056,27 @@ def download_excel(n_clicks, virtual_data, excel_options):
         return no_update, html.Span(f'엑셀 생성 실패: {type(exc).__name__}: {exc} (서버 로그에 상세 내용)',
                                     className='text-danger')
     print(f'[researcher_list] 엑셀 완료: {len(data) // 1024}KB, {time.time() - t0:.1f}초', flush=True)
-    return dcc.send_bytes(data, researcher_profile_export.default_filename()), ''
+    filename = researcher_profile_export.default_filename()
+    download_access.complete('researcher_list', None, len(researcher_ids),
+                             ['기본 항목'] + [o for o in excel_options], filename)
+    return dcc.send_bytes(data, filename), html.Span(gate_msg, className='text-muted')
+
+
+@callback(
+    Output('dlreq-redirect', 'href'),
+    Input('dlreq-to-rb', 'n_clicks'),
+    State('researcher-table', 'virtualRowData'),
+    prevent_initial_call=True,
+)
+def _request_via_report_builder(n_clicks, virtual_data):
+    """엑셀 권한이 없는 사용자 — 표에 보이는 대상자를 조서 작성으로 넘겨 헤더를 구성해 1회성 요청하게 한다."""
+    if not n_clicks:
+        return no_update
+    from services import download_access
+    from services.auth import get_current_user
+    ids = [row['researcher_id'] for row in (virtual_data or []) if row.get('researcher_id')]
+    download_access.set_prefill((get_current_user() or {}).get('user_id', ''), ids)
+    return '/report-builder'
 
 
 def _build_list_workbook(researcher_ids, excel_options):
