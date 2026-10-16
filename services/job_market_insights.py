@@ -60,10 +60,11 @@ EVIDENCE_GRADE_BONUS = {'최우수': 0.05, '우수': 0.03}
 MAX_REQUIREMENTS = 20
 # D 과제 참여 이력 가산(2026-10-15). scripts/backtest_job_market.py로 실제 과거 이동 적중률을 보고 조정 —
 # 서버 환경변수 JM_HISTORY_WEIGHT로 코드 수정 없이 바꿀 수 있다(0이면 표시만 하고 정렬엔 미반영).
+# 기본 0.05(2026-10-16 운영 백테스트 3년: 0.05가 현재방식과 적중@1·@3·MRR 동등, 적중@8 소폭 개선 — 0.1부터 적중@1 하락).
 try:
-    HISTORY_WEIGHT = float(os.environ.get('JM_HISTORY_WEIGHT', '0.1'))
+    HISTORY_WEIGHT = float(os.environ.get('JM_HISTORY_WEIGHT', '0.05'))
 except ValueError:
-    HISTORY_WEIGHT = 0.1
+    HISTORY_WEIGHT = 0.05
 
 
 def _norm(name: str) -> str:

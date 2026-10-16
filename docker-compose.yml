@@ -94,6 +94,8 @@ services:
       LLM2_API_URL: ${LLM2_API_URL:-http://75.12.15.121:8000/v1/chat/completions}
       LLM2_MODEL: ${LLM2_MODEL:-thinkingcap}
       LLM2_TIMEOUT: ${LLM2_TIMEOUT:-300}
+      # JOB Market 과제 참여 이력(D) 가산 가중치 — scripts/backtest_job_market.py 결과로 조정(.env로 덮어쓰기 가능)
+      JM_HISTORY_WEIGHT: ${JM_HISTORY_WEIGHT:-0.05}
       LLM2_MAX_TOKENS_MULTIPLIER: ${LLM2_MAX_TOKENS_MULTIPLIER:-3}
       LLM2_MAX_CONCURRENT: ${LLM2_MAX_CONCURRENT:-8}
       LLM2_QUERY_MAX_WAIT_SECONDS: ${LLM2_QUERY_MAX_WAIT_SECONDS:-15}

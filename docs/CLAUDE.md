@@ -14358,3 +14358,10 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - download_access.check()는 승인 건(dict)을 돌려주고, 다운로드 후 complete(feature, grant, rows, headers, filename)로
   사용 처리 + 로그(consume 대체).
 - 테스트 tests/test_download_access.py(기본 불허·관리자 허용, spec 요청→승인→확인→1회 사용, 로그 순서, 헤더 필터, prefill).
+
+## (63) JOB Market 과제 참여 이력(D) 가중치 기본 0.05 (2026-10-16)
+- 운영 백테스트(scripts/backtest_job_market.py --years 3) 결과: 현재방식 적중@1/3/8 64.9/87.2/97.9%, MRR 0.773 →
+  +이력 0.05: 65.3/86.8/98.3%, MRR 0.773(동등, @8 소폭↑) / 0.1: @1 59.7%, MRR 0.743 / 0.2 이상은 계속 하락.
+- 현재방식은 이동 이후 경험이 섞인 지금 프로필을 써서 낙관적 → 이력 효과는 과소평가 쪽이라 0이 아닌 작은 값(0.05) 유지.
+- 반영: services/job_market_insights.HISTORY_WEIGHT 기본 0.05, docker-compose.yml app에 JM_HISTORY_WEIGHT=${JM_HISTORY_WEIGHT:-0.05}
+  (.env로 덮어쓰기), 백테스트 안내 문구 기본값 수정.
