@@ -296,7 +296,9 @@ def delete_template(template_id: str, user_id: str, is_admin: bool = False) -> N
 # ─── 대상자 ──────────────────────────────────────────────────────────────────
 
 def resolve_targets(platforms=None, projects=None, researcher_ids=None) -> list:
-    """현재 재직자 중 선택한 플랫폼(1단계)·과제(3단계) 소속 + 개별 지정 인원(합집합)."""
+    """현재 재직자 중 부서 조건 해당자 + 개별 지정 인원(합집합).
+    부서 조건(2026-10-16 캐스케이딩): 과제를 고르면 그 과제(플랫폼도 골랐으면 그 플랫폼 안의 과제)만,
+    과제 없이 플랫폼만 고르면 플랫폼 전체."""
     from services import similarity_map as sm
     res = data_store.filter_current(data_store.read_processed('researchers'))
     out = set(str(r).zfill(8) for r in researcher_ids or [])
@@ -307,9 +309,18 @@ def resolve_targets(platforms=None, projects=None, researcher_ids=None) -> list:
             if org not in cache:
                 cache[org] = sm.org_code_level_names(org)
             l1, _l2, l3 = cache[org]
-            if (l1 and l1 in platforms) or (l3 and l3 in projects):
+            if projects:
+                hit = l3 in projects and (not platforms or l1 in platforms)
+            else:
+                hit = l1 in platforms
+            if hit:
                 out.add(rid)
     return sorted(out)
+
+
+SEARCH_COLUMNS = [{'header': h, 'fields': [f], 'join': 'slash'} for h, f in
+                  (('성명', 'name'), ('사번', 'researcher_id'), ('부서', 'dept'), ('과제', 'project'),
+                   ('직책', 'position_title'), ('CL/년차', 'cl_and_years'))]
 
 
 # ─── 값 계산 / 엑셀 ──────────────────────────────────────────────────────────

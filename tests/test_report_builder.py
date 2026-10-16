@@ -42,3 +42,20 @@ def test_template_store(tmp_path, monkeypatch):
     rb.delete_template(t['id'], 'u1')
     with pytest.raises(ValueError):
         rb.save_template('u1', '', cols, None)
+
+
+def test_resolve_targets_cascading(monkeypatch):
+    """부서 단위: 과제를 고르면 그 과제만(플랫폼 안), 과제 없으면 플랫폼 전체. 개인 단위는 지정 인원(2026-10-16)."""
+    import pandas as pd
+    from services import data_store
+    from services import report_builder as rb
+    from services import similarity_map as sm
+    df = pd.DataFrame({'researcher_id': ['00000001', '00000002', '00000003'], 'org_code': ['A', 'B', 'C']})
+    monkeypatch.setattr(data_store, 'read_processed', lambda name: df)
+    monkeypatch.setattr(data_store, 'filter_current', lambda d: d)
+    levels = {'A': ('P1', '', 'T1'), 'B': ('P1', '', 'T2'), 'C': ('P2', '', 'T1')}
+    monkeypatch.setattr(sm, 'org_code_level_names', lambda org: levels[org])
+    assert rb.resolve_targets(['P1'], None) == ['00000001', '00000002']
+    assert rb.resolve_targets(['P1'], ['T1']) == ['00000001']            # 플랫폼 안의 과제만
+    assert rb.resolve_targets(None, ['T1']) == ['00000001', '00000003']
+    assert rb.resolve_targets(None, None, ['3']) == ['00000003']

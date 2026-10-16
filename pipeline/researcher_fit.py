@@ -23,6 +23,7 @@ import json
 import os
 import re
 import sys
+import threading
 
 import numpy as np
 import pandas as pd
@@ -178,7 +179,9 @@ def _save_embed_cache(cache: dict):
     "완성된 새 파일" 중 하나만 보게 되어 _load_embed_cache()가 겪던
     파일 손상(위 docstring 참고)이 재발하지 않는다."""
     os.makedirs(OUT_DIR, exist_ok=True)
-    tmp_path = f'{_EMBED_CACHE_PATH}.{os.getpid()}.tmp'
+    # 스레드 id까지 — JOB Market 백그라운드 검색(2026-10-16)처럼 한 프로세스 안 두 스레드가 동시에 저장하면
+    # pid만으로는 임시 파일이 겹쳐 한쪽의 os.replace가 FileNotFoundError로 실패했다.
+    tmp_path = f'{_EMBED_CACHE_PATH}.{os.getpid()}.{threading.get_ident()}.tmp'
     with open(tmp_path, 'w', encoding='utf-8') as f:
         json.dump(cache, f)
     os.replace(tmp_path, _EMBED_CACHE_PATH)

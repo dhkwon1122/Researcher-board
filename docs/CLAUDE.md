@@ -14365,3 +14365,33 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 현재방식은 이동 이후 경험이 섞인 지금 프로필을 써서 낙관적 → 이력 효과는 과소평가 쪽이라 0이 아닌 작은 값(0.05) 유지.
 - 반영: services/job_market_insights.HISTORY_WEIGHT 기본 0.05, docker-compose.yml app에 JM_HISTORY_WEIGHT=${JM_HISTORY_WEIGHT:-0.05}
   (.env로 덮어쓰기), 백테스트 안내 문구 기본값 수정.
+
+## (64) 조서 작성 — 대상자 부서 단위/개인 단위 구분 + 검색 후 양식 (2026-10-16)
+- 1. 대상자: 라디오로 "부서 단위"(플랫폼→과제 캐스케이딩 드롭다운, 둘 다 여러 개 선택) / "개인 단위(여러 명 지정)".
+  - 캐스케이딩: 과제 옵션 = 고른 플랫폼 아래 과제(similarity_map.level_filter_options(3, parents={1: l1})), 범위 밖 선택은 해제.
+  - 대상 규칙(report_builder.resolve_targets 변경): 과제를 고르면 그 과제만(플랫폼도 골랐으면 그 안), 과제 없으면 플랫폼 전체.
+    예전 "플랫폼 ∪ 과제 ∪ 개인" 합집합에서 변경.
+- "검색" 버튼 → 최종 대상자 명단(성명·사번·부서·과제·직책·CL/년차, 엑셀과 같은 순서, report_builder.SEARCH_COLUMNS)을 보여주고
+  rb-targets Store에 저장. 2. 양식·3. 미리보기는 검색 결과가 1명 이상일 때 나타남.
+  미리보기·다운로드·1회성 요청(dlreq-ctx)은 모두 rb-targets(마지막 검색 결과) 기준.
+  검색 뒤 조건을 바꾸면 "다시 검색" 안내(rb-search-cond와 비교).
+- 연구원 명단 "조서 작성에서 요청"으로 넘어오면 개인 단위로 검색된 상태로 열림.
+- 테스트 tests/test_report_builder.py::test_resolve_targets_cascading.
+
+## (65) JOB Market 검색 백그라운드 실행 + 종료 상태 표시 (2026-10-16)
+- 증상: 검색 후 결과도 없고 화면도 그대로인 채 끝남. 원인: 검색이 브라우저 요청 하나 안에서 끝까지 돌아, 인원이 많아
+  LLM 추천이 GUNICORN_TIMEOUT(300초)을 넘기면 gunicorn이 워커를 강제 종료 → 화면은 응답을 못 받음.
+- services/job_market_jobs.py: 검색을 데몬 스레드로 실행(요청은 즉시 반환, 시간 제한 없음). 상태 파일
+  data/processed/jm_jobs/<id>.json(워커 2개 공유) — 단계·진행 인원·heartbeat(10초). 종료 상태:
+  done(추천 있음/전원 추천 없음) · error(조건·데이터 문제) · failed(예외, 메시지) · lost(heartbeat 90초 끊김 = 워커 재시작 등).
+  사용자당 동시 1건, 7일 지난 상태 파일 정리.
+- job_market.run_project_search / run_individual_search에 progress 콜백(단계, 완료/전체 인원 — run_concurrent on_complete)
+  과 report['history_file'] 추가.
+- pages/job_market.py: _run은 작업 시작만(jm-job 세션 Store), _poll(dcc.Interval 2초)이 진행 바·경과 시간 → 끝나면
+  완료/결과 없음/오류/중단 알림 + 결과 표시 + 이력 갱신, 폴링 중지. 실행 중 검색 버튼 비활성. 다른 화면 갔다 와도 이어서 표시.
+- 같이 고침: 한 프로세스 안 두 스레드가 동시에 임베딩 캐시를 저장하면 임시 파일명(pid만)이 겹쳐 FileNotFoundError —
+  researcher_fit._save_embed_cache, confl_tree, nl_query_curation 임시 파일명에 스레드 id 추가.
+- 테스트 tests/test_job_market_jobs.py.
+
+## (66) 업무 시나리오 메뉴 순서 변경 (2026-10-16)
+- app.py 네비게이션 "업무 시나리오" 하위 메뉴 순서: 1. 조서 작성 → 2. 석세션 플랜(권한자만 보임) → 3. JOB Market.

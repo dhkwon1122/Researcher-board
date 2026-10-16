@@ -634,16 +634,15 @@ def refresh_navbar_user(_):
     if not user:
         return []
     items = []
-    # "업무 시나리오" 상위 메뉴 — 하위 메뉴: JOB Market(모든 사용자),
-    # 석세션 플랜(can_view_succession_plan()일 때만). 석세션 플랜 항목을
-    # 숨기는 건 UX일 뿐이고, 실제 접근 차단은 pages/org_comparison.py의
-    # layout()이 같은 함수로 다시 확인한다(URL 직접 입력 우회 방지, 사용자
-    # 요청: "임원조직 담당자만 조회 가능한 석세션 플랜"). 시나리오가 더
-    # 추가되면 scenario_items에 더하면 된다.
+    # "업무 시나리오" 상위 메뉴 — 순서(2026-10-16 사용자 요청): 1. 조서 작성, 2. 석세션 플랜, 3. JOB Market.
+    # 조서 작성(pages/report_builder.py)·JOB Market은 모든 로그인 사용자, 석세션 플랜은
+    # can_view_succession_plan()일 때만. 석세션 플랜 항목을 숨기는 건 UX일 뿐이고, 실제 접근 차단은
+    # pages/org_comparison.py의 layout()이 같은 함수로 다시 확인한다(URL 직접 입력 우회 방지, 사용자
+    # 요청: "임원조직 담당자만 조회 가능한 석세션 플랜"). 시나리오가 더 추가되면 scenario_items에 더하면 된다.
     scenario_items = [
         dbc.DropdownMenuItem(
-            [html.I(className='bi bi-signpost-split me-1'), 'JOB Market'],
-            href='/job-market',
+            [html.I(className='bi bi-file-earmark-spreadsheet me-1'), '조서 작성'],
+            href='/report-builder',
         ),
     ]
     if can_view_succession_plan():
@@ -651,11 +650,9 @@ def refresh_navbar_user(_):
             [html.I(className='bi bi-person-lines-fill me-1'), '석세션 플랜'],
             href='/succession-plan',
         ))
-    # 조서 작성(2026-10-15) — 열을 직접 구성하는 엑셀 다운로드(pages/report_builder.py). 모든 로그인 사용자,
-    # 평가·핵심이력 항목은 권한자에게만 보임.
     scenario_items.append(dbc.DropdownMenuItem(
-        [html.I(className='bi bi-file-earmark-spreadsheet me-1'), '조서 작성'],
-        href='/report-builder',
+        [html.I(className='bi bi-signpost-split me-1'), 'JOB Market'],
+        href='/job-market',
     ))
     items.append(dbc.NavItem(dbc.DropdownMenu(
         label=[html.I(className='bi bi-diagram-3 me-1'), '업무 시나리오'],

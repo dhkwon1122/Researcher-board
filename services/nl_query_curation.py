@@ -55,7 +55,7 @@ def _read(name: str) -> list:
 
 
 def _write(name: str, data: list) -> None:
-    tmp = _path(name) + f'.{os.getpid()}.tmp'
+    tmp = _path(name) + f'.{os.getpid()}.{threading.get_ident()}.tmp'
     with open(tmp, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=1)
     os.replace(tmp, _path(name))
