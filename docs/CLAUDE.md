@@ -14365,3 +14365,15 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 현재방식은 이동 이후 경험이 섞인 지금 프로필을 써서 낙관적 → 이력 효과는 과소평가 쪽이라 0이 아닌 작은 값(0.05) 유지.
 - 반영: services/job_market_insights.HISTORY_WEIGHT 기본 0.05, docker-compose.yml app에 JM_HISTORY_WEIGHT=${JM_HISTORY_WEIGHT:-0.05}
   (.env로 덮어쓰기), 백테스트 안내 문구 기본값 수정.
+
+## (64) 조서 작성 — 대상자 부서 단위/개인 단위 구분 + 검색 후 양식 (2026-10-16)
+- 1. 대상자: 라디오로 "부서 단위"(플랫폼→과제 캐스케이딩 드롭다운, 둘 다 여러 개 선택) / "개인 단위(여러 명 지정)".
+  - 캐스케이딩: 과제 옵션 = 고른 플랫폼 아래 과제(similarity_map.level_filter_options(3, parents={1: l1})), 범위 밖 선택은 해제.
+  - 대상 규칙(report_builder.resolve_targets 변경): 과제를 고르면 그 과제만(플랫폼도 골랐으면 그 안), 과제 없으면 플랫폼 전체.
+    예전 "플랫폼 ∪ 과제 ∪ 개인" 합집합에서 변경.
+- "검색" 버튼 → 최종 대상자 명단(성명·사번·부서·과제·직책·CL/년차, 엑셀과 같은 순서, report_builder.SEARCH_COLUMNS)을 보여주고
+  rb-targets Store에 저장. 2. 양식·3. 미리보기는 검색 결과가 1명 이상일 때 나타남.
+  미리보기·다운로드·1회성 요청(dlreq-ctx)은 모두 rb-targets(마지막 검색 결과) 기준.
+  검색 뒤 조건을 바꾸면 "다시 검색" 안내(rb-search-cond와 비교).
+- 연구원 명단 "조서 작성에서 요청"으로 넘어오면 개인 단위로 검색된 상태로 열림.
+- 테스트 tests/test_report_builder.py::test_resolve_targets_cascading.
