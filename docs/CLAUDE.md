@@ -14392,3 +14392,6 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 같이 고침: 한 프로세스 안 두 스레드가 동시에 임베딩 캐시를 저장하면 임시 파일명(pid만)이 겹쳐 FileNotFoundError —
   researcher_fit._save_embed_cache, confl_tree, nl_query_curation 임시 파일명에 스레드 id 추가.
 - 테스트 tests/test_job_market_jobs.py.
+
+## (66) 업무 시나리오 메뉴 순서 변경 (2026-10-16)
+- app.py 네비게이션 "업무 시나리오" 하위 메뉴 순서: 1. 조서 작성 → 2. 석세션 플랜(권한자만 보임) → 3. JOB Market.
