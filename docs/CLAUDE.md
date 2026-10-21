@@ -14414,3 +14414,20 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   표준화 후보, 부서 간 유사도(히트맵), 구성요소 비율, 레벨 점검, 데이터 점검, 직무 간 공유 스킬, 정규화 데이터. 콘솔에도 핵심 요약 출력.
 - 2차 예정(사용자 보류): 실제 인원(1단계 부서명 기준)·직무정보_부서 대조, 연구원 보유 전문성과 스킬 매칭.
 - 테스트 tests/test_job_skill_analysis.py.
+
+## (68) 직무 스킬 분석 — 서버 호스트(도커 밖) 실행 + LLM 검토(--llm) (2026-10-21)
+- 실행 위치: Windows 로컬뿐 아니라 리눅스 서버 호스트에서도 `python3 scripts/analyze_job_skills.py ...`로 실행.
+  필수 패키지는 pandas·numpy·openpyxl·requests뿐(python-dotenv·scikit-learn은 있으면 사용, 없으면 대체 경로).
+- 입력: `--input 파일(xlsx/csv)` 추가 → 없으면 data/raw/스킬셋.xlsx → data/raw_csv/job_skill_set.csv. DRM 엑셀은 서버에서 못 읽으므로
+  DRM 해제본이나 로컬 변환 raw_csv를 쓰라는 안내를 낸다. raw_csv 사본 갱신은 권한이 없으면 건너뜀.
+- 출력: 모두 `--out`(기본 data/analysis) 아래 — 리포트, 정규화 CSV(job_skill_set.csv, (67)의 data/processed에서 이동),
+  `.cache/embedding_cache.json`·`.cache/llm_cache.json`. 앱이 쓰는 data/processed/embedding_cache.json은 쓰지 않는다(호스트 계정이
+  쓰면 소유자가 바뀌어 컨테이너 uid 10001이 못 쓰게 되는 문제 — scripts/fix_data_ownership.sh 참고).
+- 접속: services.db.load_env_file로 .env 로드(.env 읽기 실패는 경고). EMBED_BASE_URL/LLM2_API_URL의 호스트가 도커 서비스명
+  (bge-embed 등)인데 호스트에서 안 풀리면 localhost로 교체(bge-embed는 127.0.0.1:7138 공개). 접속 대상은 NO_PROXY/no_proxy에 추가.
+- LLM 검토 pipeline/job_skill_llm.py(`--llm`, `--llm-parts same,std,level,comp,dept`, `--llm-workers` 기본 4 — 운영 앱과 같은
+  vllm을 같이 쓰므로 낮게): same 같은 스킬 부서별 차이 유형(표현/범위/수준/내용)·요약·통합 정의, std 표준화 후보 같은 스킬 여부·표준명·
+  통합 정의, level 단계 명확/모호/역전 + 수정 제안(새 시트 "레벨 AI 점검"), comp 미분류 구성요소 제안, dept 직무별 부서 구성 특징 요약.
+  점수·판정은 계산값 그대로, AI 열은 'AI '로 시작하고 보라색 헤더. 프롬프트에 직무·부서·스킬 문장만(개인정보 없음).
+  응답은 프롬프트 해시로 캐시 — 다시 돌리면 바뀐 부분만 호출.
+- 테스트: tests/test_job_skill_analysis.py에 --input, 도커 주소 교체, LLM 검토·캐시 추가.

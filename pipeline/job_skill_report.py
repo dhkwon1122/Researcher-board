@@ -19,6 +19,7 @@ F_TITLE = Font(name=FONT, size=16, bold=True, color=NAVY)
 F_SUB = Font(name=FONT, size=12, bold=True, color=NAVY)
 F_NOTE = Font(name=FONT, size=9, color='5B6577')
 FILL_HEAD = PatternFill('solid', fgColor=NAVY)
+FILL_HEAD_AI = PatternFill('solid', fgColor='5B3FD9')   # 'AI '로 시작하는 열(LLM 검토, --llm) — 계산값과 구분
 FILL_BLOCK = PatternFill('solid', fgColor='E8F0FE')
 FILL_ALT = PatternFill('solid', fgColor='F6F8FB')
 THIN = Side(style='thin', color='D5DBE5')
@@ -36,6 +37,8 @@ SIM_WORDS = ('유사도', '일치도', '일치율')
 def _width(col: str, values) -> float:
     if col in {'스킬 정의', 'Level 1', 'Level 2', 'Level 3', '정의 A', '정의 B'}:
         return 42
+    if str(col).startswith('AI ') and col not in ('AI 판정', 'AI 차이 유형', 'AI 같은 스킬?'):
+        return 44
     longest = max([len(str(col))] + [len(str(v)) for v in list(values)[:300]])
     return max(8, min(36, longest * 1.6 + 2))
 
@@ -55,7 +58,8 @@ def write_table(ws, df: pd.DataFrame, row: int, col: int = 1, *, filt: bool = Fa
     cols = list(df.columns)
     for j, name in enumerate(cols):
         c = ws.cell(row=row, column=col + j, value=name)
-        c.font, c.fill, c.alignment, c.border = F_HEAD, FILL_HEAD, CENTER, BORDER
+        c.font, c.alignment, c.border = F_HEAD, CENTER, BORDER
+        c.fill = FILL_HEAD_AI if str(name).startswith('AI ') else FILL_HEAD
     for i, rec in enumerate(df.itertuples(index=False), start=1):
         for j, v in enumerate(rec):
             if isinstance(v, float) and pd.isna(v):
@@ -63,7 +67,8 @@ def write_table(ws, df: pd.DataFrame, row: int, col: int = 1, *, filt: bool = Fa
             c = ws.cell(row=row + i, column=col + j, value=v)
             c.font, c.border = F_BASE, BORDER
             name = cols[j]
-            c.alignment = WRAP if name in LONG_TEXT or (isinstance(v, str) and len(v) > 30) else Alignment(vertical='top')
+            long = name in LONG_TEXT or str(name).startswith('AI ') or (isinstance(v, str) and len(v) > 30)
+            c.alignment = WRAP if long else Alignment(vertical='top')
             if name in pct:
                 c.number_format = '0%'
             elif isinstance(v, float):
@@ -142,6 +147,13 @@ def build_workbook(df: pd.DataFrame, res: dict, info: dict, path: str) -> str:
         ws.cell(row=r, column=1, value=f"■ {b['job']}  (평균 스킬명 일치율 {b['avg_jaccard'] or 0:.0%} · "
                                        f"내용 일치율 {b['avg_soft'] or 0:.0%})").font = F_SUB
         n = len(b['depts'])
+        if b.get('ai_summary'):
+            note = f"AI 요약: {b['ai_summary']}" + (f"  빠진 스킬: {b['ai_gaps']}" if b.get('ai_gaps') else '')
+            c = ws.cell(row=r + 1, column=1, value=note)
+            c.font, c.alignment = Font(name=FONT, size=10, color='5B3FD9'), Alignment(wrap_text=True, vertical='top')
+            ws.merge_cells(start_row=r + 1, start_column=1, end_row=r + 1, end_column=max(2 * n + 3, 8))
+            ws.row_dimensions[r + 1].height = 48
+            r += 1
         ws.cell(row=r + 1, column=1, value='스킬명 일치율').font = F_BOLD
         ws.cell(row=r + 1, column=n + 3, value='내용 기준 일치율').font = F_BOLD
         for k, (mat, c0) in enumerate(((b['jaccard'], 1), (b['soft'], n + 3))):
@@ -167,6 +179,13 @@ def build_workbook(df: pd.DataFrame, res: dict, info: dict, path: str) -> str:
                               '(기초: 이해·보조 / 적용: 수행·활용 / 주도: 설계·리드·지도 — 단어 기반 참고용).')
     write_table(ws, res['level'], 4, filt=True)
     ws.freeze_panes = 'D5'
+
+    if res.get('level_ai') is not None and 'level' in res.get('llm_parts', ()):
+        ws = _sheet(wb, '레벨 AI 점검', 'AI(사내 LLM)가 Level 1→2→3 문장을 읽고 단계가 명확히 올라가는지 판단한 결과 — 역전·모호 먼저. '
+                                    '참고 의견이므로 원문과 함께 확인하세요.')
+        write_table(ws, res['level_ai'], 4, filt=True,
+                    fills={'AI 판정': {'역전': 'FDE2E1', '모호': 'FFF4D6', '정보 부족': 'F1F3F7', '명확': 'DFF3E8'}})
+        ws.freeze_panes = 'D5'
 
     ws = _sheet(wb, '데이터 점검', '원본 정리가 필요한 행 — 필수값 누락, 같은 직무·부서 중복, 스킬명 표기 차이, 구성요소 4종 외 값.')
     write_table(ws, res['data'], 4, filt=True)
@@ -199,6 +218,10 @@ def _summary_sheet(ws, df, res, info):
                             f"{df['skill_key'].nunique()}개(스킬명 기준)"),
         ('유사도 방식', mode + (f" — 임베딩 오류: {res['sem_error'][:120]}" if res.get('sem_error') else '')),
     ]
+    st = res.get('llm_stats')
+    facts.append(('AI 검토(LLM)', '사용 안 함(--llm으로 켜기)' if not st else
+                  f"사용 — {', '.join(res.get('llm_parts', ()))} · 호출 {st['calls']}건, 캐시 {st['cached']}건, 실패 {st['failed']}건 "
+                  f"(보라색 'AI' 열은 참고 의견)"))
     r = 3
     for k, v in facts:
         ws.cell(row=r, column=1, value=k).font = F_BOLD
@@ -216,6 +239,10 @@ def _summary_sheet(ws, df, res, info):
         ('데이터 점검 대상', len(res['data']), '데이터 점검'),
         ('직무 간 공유 스킬', len(res['cross_job']), '직무 간 공유 스킬'),
     ]
+    if res.get('level_ai') is not None and not res['level_ai'].empty:
+        counts.insert(3, ('AI가 본 레벨 역전·모호', int(res['level_ai']['AI 판정'].isin(['역전', '모호']).sum()), '레벨 AI 점검'))
+    if 'AI 같은 스킬?' in res['standardize'].columns:
+        counts.insert(2, ('AI가 같은 스킬로 본 표준화 후보', int((res['standardize']['AI 같은 스킬?'] == '같음').sum()), '표준화 후보'))
     ws.cell(row=r, column=1, value='살펴볼 항목').font = F_SUB
     r = write_table(ws, pd.DataFrame(counts, columns=['항목', '건수', '시트']), r + 1, widths=False)
 

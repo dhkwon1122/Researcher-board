@@ -100,23 +100,90 @@ def test_embedding_failure_falls_back_to_text():
     assert any('임베딩 서버 사용 불가' in m for m in msgs)
 
 
+def _isolate_env(monkeypatch):
+    for var in ('NO_PROXY', 'no_proxy', 'EMBED_BASE_URL', 'LLM2_API_URL'):
+        monkeypatch.setenv(var, '')
+
+
 def test_report_and_script(tmp_path, monkeypatch):
-    raw_dir, raw_csv_dir, out_dir = tmp_path / 'raw', tmp_path / 'raw_csv', tmp_path / 'processed'
-    for d in (raw_dir, raw_csv_dir, out_dir):
+    _isolate_env(monkeypatch)
+    raw_dir, raw_csv_dir = tmp_path / 'raw', tmp_path / 'raw_csv'
+    for d in (raw_dir, raw_csv_dir):
         d.mkdir()
     monkeypatch.setattr(prep, 'RAW_DIR', str(raw_dir))
     monkeypatch.setattr(prep, 'RAW_CSV_PATH', str(raw_csv_dir / 'job_skill_set.csv'))
-    monkeypatch.setattr(prep, 'OUT_DIR', str(out_dir))
-    monkeypatch.setattr(prep, 'OUT_PATH', str(out_dir / 'job_skill_set.csv'))
     _raw().to_csv(raw_csv_dir / 'job_skill_set.csv', index=False, encoding='utf-8-sig')
     sys.path.insert(0, os.path.join(ROOT, 'scripts'))
     import analyze_job_skills
-    assert analyze_job_skills.main(['--no-embed', '--out', str(tmp_path / 'report')]) == 0
-    files = os.listdir(tmp_path / 'report')
+    out = tmp_path / 'report'
+    assert analyze_job_skills.main(['--no-embed', '--out', str(out)]) == 0
+    files = [f for f in os.listdir(out) if f.endswith('.xlsx')]
     assert len(files) == 1 and files[0].startswith('job_skill_analysis_')
+    assert (out / 'job_skill_set.csv').exists()                       # 정규화 CSV도 출력 폴더에(앱 data/processed 아님)
     from openpyxl import load_workbook
-    wb = load_workbook(tmp_path / 'report' / files[0])
+    wb = load_workbook(out / files[0])
     assert wb.sheetnames == ['요약', '스킬 매트릭스', '같은 스킬 비교', '같은 스킬 상세', '표준화 후보', '부서 간 유사도',
                              '구성요소 비율', '레벨 점검', '데이터 점검', '직무 간 공유 스킬', '정규화 데이터']
-    assert (out_dir / 'job_skill_set.csv').exists()
     assert analyze_job_skills.main(['--no-embed', '--job', '없는직무', '--out', str(tmp_path / 'r2')]) == 1
+    # --input으로 다른 위치의 파일 지정
+    other = tmp_path / '스킬셋_사본.csv'
+    _raw().to_csv(other, index=False, encoding='utf-8-sig')
+    assert analyze_job_skills.main(['--no-embed', '--input', str(other), '--out', str(tmp_path / 'r3')]) == 0
+    assert analyze_job_skills.main(['--no-embed', '--input', str(tmp_path / '없음.xlsx'), '--out', str(tmp_path / 'r4')]) == 1
+
+
+def test_prepare_env_rewrites_docker_hosts(monkeypatch):
+    _isolate_env(monkeypatch)
+    monkeypatch.setenv('EMBED_BASE_URL', 'http://bge-embed:7138')
+    monkeypatch.setenv('LLM2_API_URL', 'http://75.12.15.121:8000/v1/chat/completions')
+    sys.path.insert(0, os.path.join(ROOT, 'scripts'))
+    import analyze_job_skills
+    analyze_job_skills.prepare_env(log=lambda *a: None)
+    assert os.environ['EMBED_BASE_URL'] == 'http://localhost:7138'
+    assert os.environ['LLM2_API_URL'].startswith('http://75.12.15.121:8000')
+    assert '75.12.15.121' in os.environ['NO_PROXY'] and 'localhost' in os.environ['no_proxy']
+
+
+def test_llm_review_fills_ai_columns_and_caches(tmp_path, monkeypatch):
+    import job_skill_llm as jl
+    df, _ = prep.normalize(_raw())
+    res = jsa.analyze(df, embed_fn=_fake_embed, log=lambda *a: None)
+    calls = []
+
+    def fake_call(prompt, max_tokens=1200):
+        calls.append(prompt)
+        assert '사번' not in prompt                                     # PII 없음(스킬셋엔 원래 없음)
+        if '같은 스킬을 부서마다' in prompt:
+            return {'difference_type': '범위 차이', 'summary': 'A부서는 SPICE, B부서는 성능 예측',
+                    'merged_definition': '회로 동작·성능을 검증하는 능력'}
+        if '같은 스킬인지' in prompt:
+            return {'items': [{'id': 0, 'same': True, 'standard_name': 'Python 프로그래밍',
+                               'merged_definition': '파이썬 코드 작성 능력', 'reason': '정의 동일'}]}
+        if 'Level 1→2→3' in prompt:
+            n = prompt.count('\n  L1:')
+            return {'items': [{'id': i, 'verdict': '역전' if i == 0 else '명확', 'issue': 'L1이 가장 높음' if i == 0 else '',
+                               'suggestion': ''} for i in range(n)]}
+        if '구성요소를' in prompt:
+            return {'items': [{'id': 0, 'component': '도구', 'reason': '시뮬레이터 사용'}]}
+        if '부서별 스킬 목록' in prompt:
+            return {'summary': 'A부서는 언어 중심', 'gaps': ''}
+        return None
+    monkeypatch.setattr(jl, '_call', fake_call)
+    cache = str(tmp_path / 'llm.json')
+    st = jl.review(df, res, cache_path=cache, workers=2, log=lambda *a: None)
+    assert st['failed'] == 0 and st['calls'] == len(calls) > 0
+    assert res['same_summary'].iloc[0]['AI 차이 유형'] == '범위 차이'
+    assert (res['standardize']['AI 같은 스킬?'] == '같음').any()
+    assert res['level_ai'].iloc[0]['AI 판정'] == '역전'
+    assert (res['data']['AI 제안'] != '').any()
+    assert res['dept'][0]['ai_summary'] == 'A부서는 언어 중심'
+    res['llm_parts'] = jl.PARTS
+    from job_skill_report import build_workbook
+    from openpyxl import load_workbook
+    path = build_workbook(df, res, {'source': 'x', 'run_at': 'now'}, str(tmp_path / 'r.xlsx'))
+    assert '레벨 AI 점검' in load_workbook(path).sheetnames
+    # 다시 돌리면 캐시만 사용
+    res2 = jsa.analyze(df, embed_fn=_fake_embed, log=lambda *a: None)
+    n = len(calls)
+    st2 = jl.review(df, res2, cache_path=cache, workers=2, log=lambda *a: None)
+    assert len(calls) == n and st2['calls'] == 0 and st2['cached'] == st['calls']

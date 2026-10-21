@@ -1,9 +1,13 @@
 """
 직무 스킬셋 정규화(2026-10-21, 직무 스킬 분석 1차) — 로컬 PowerShell 분석(scripts/analyze_job_skills.py)이 사용.
 
-원천: data/raw/스킬셋.xlsx (헤더 1행, DRM이면 Windows Excel(xlwings)로 읽음 — excel_reader.read_xlsx)
-  → data/raw_csv/job_skill_set.csv   (원본 헤더 그대로, pipeline/sources.py 'job_skill_set'과 같은 이름)
-  → data/processed/job_skill_set.csv (영문 헤더로 정규화)
+원천(앞에서부터 있는 것): --input으로 지정한 파일(xlsx/csv) → data/raw/스킬셋.xlsx → data/raw_csv/job_skill_set.csv
+  - xlsx: DRM이면 Windows Excel(xlwings)로만 읽힌다. 리눅스 서버에서는 DRM 해제본(다른 이름으로 저장)이나
+    로컬에서 변환한 data/raw_csv/job_skill_set.csv를 써야 한다.
+  - data/raw/스킬셋.xlsx를 읽으면 data/raw_csv/job_skill_set.csv(원본 헤더 그대로, sources.py 'job_skill_set')도
+    갱신한다(쓰기 권한이 없으면 건너뜀).
+  → <출력 폴더>/job_skill_set.csv (영문 헤더로 정규화, 기본 data/analysis — 앱이 쓰는 data/processed는 건드리지 않음:
+    서버 호스트에서 직접 실행해도 컨테이너(uid 10001) 소유 파일을 바꾸지 않도록, 2026-10-21)
 
 헤더 매핑(공백·대소문자 무시):
   스킬명 → skill_name, 부서 → department, 직무 → job_function, 스킬 정의 → definition_skill,
@@ -26,13 +30,13 @@ import unicodedata
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from paths import BASE_DIR, OUT_DIR, RAW_DIR  # noqa: E402
+from paths import BASE_DIR, RAW_DIR  # noqa: E402
 
 SOURCE_NAME = 'job_skill_set'
 SOURCE_FILE = '스킬셋.xlsx'
 RAW_CSV_DIR = os.path.join(BASE_DIR, 'data', 'raw_csv')
 RAW_CSV_PATH = os.path.join(RAW_CSV_DIR, f'{SOURCE_NAME}.csv')
-OUT_PATH = os.path.join(OUT_DIR, f'{SOURCE_NAME}.csv')
+ANALYSIS_DIR = os.path.join(BASE_DIR, 'data', 'analysis')
 
 # 원본 헤더(공백 제거·소문자) → 영문 컬럼
 HEADER_MAP = {
@@ -72,26 +76,42 @@ def skill_key(name: str) -> str:
     return re.sub(r'[\s\-_·•.,/()\[\]{}"\'`]+', '', s)
 
 
-def convert_xlsx(force: bool = False) -> str | None:
-    """data/raw/스킬셋.xlsx → data/raw_csv/job_skill_set.csv(원본 헤더 그대로). xlsx가 raw_csv보다 새로울 때만
-    (또는 force). 반환: 변환했으면 xlsx 경로, 아니면 None."""
-    src = os.path.join(RAW_DIR, SOURCE_FILE)
-    if not os.path.exists(src):
-        return None
-    if not force and os.path.exists(RAW_CSV_PATH) and os.path.getmtime(RAW_CSV_PATH) >= os.path.getmtime(src):
-        return None
+def _read_excel(path: str) -> pd.DataFrame:
     from excel_reader import read_xlsx
     try:
-        from raw_archive import archive_raw_file
-        archive_raw_file(src, category=SOURCE_NAME)
-    except Exception as exc:  # noqa: BLE001 — 아카이브 실패가 변환을 막지 않게
-        print(f'  [WARN] 원본 아카이브 실패(무시하고 계속): {exc}')
-    df = read_xlsx(src, header_row=0)
+        df = read_xlsx(path, header_row=0)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f'{path}을 읽지 못했습니다({type(exc).__name__}: {exc}). DRM이 걸린 파일은 Windows Excel에서만 '
+                         f'열립니다 — 서버에서는 "다른 이름으로 저장"한 DRM 해제본이나 로컬에서 변환한 '
+                         f'data/raw_csv/{SOURCE_NAME}.csv를 쓰세요.') from exc
     if df.empty:
-        raise ValueError(f'{SOURCE_FILE}을 읽은 결과가 비어 있습니다.')
-    os.makedirs(RAW_CSV_DIR, exist_ok=True)
-    df.to_csv(RAW_CSV_PATH, index=False, encoding='utf-8-sig')
-    return src
+        raise ValueError(f'{path}을 읽은 결과가 비어 있습니다(DRM 파일이면 위 안내 참고).')
+    return df.astype(object).where(df.notna(), '')
+
+
+def load_raw(input_path: str | None = None, force_convert: bool = False) -> tuple[pd.DataFrame, str]:
+    """원본 DataFrame과 실제로 읽은 경로. data/raw/스킬셋.xlsx를 읽었으면 raw_csv 사본도 갱신(권한 없으면 건너뜀)."""
+    if input_path:
+        if not os.path.exists(input_path):
+            raise FileNotFoundError(f'{input_path} 파일이 없습니다.')
+        if input_path.lower().endswith('.csv'):
+            return pd.read_csv(input_path, encoding='utf-8-sig', dtype=str).fillna(''), input_path
+        return _read_excel(input_path), input_path
+    src = os.path.join(RAW_DIR, SOURCE_FILE)
+    if os.path.exists(src) and (force_convert or not os.path.exists(RAW_CSV_PATH)
+                                or os.path.getmtime(src) > os.path.getmtime(RAW_CSV_PATH)):
+        df = _read_excel(src)
+        try:
+            from raw_archive import archive_raw_file
+            archive_raw_file(src, category=SOURCE_NAME)
+            os.makedirs(RAW_CSV_DIR, exist_ok=True)
+            df.to_csv(RAW_CSV_PATH, index=False, encoding='utf-8-sig')
+        except OSError as exc:
+            print(f'  [WARN] raw_csv 사본 저장 생략(권한 등): {exc}')
+        return df, src
+    if os.path.exists(RAW_CSV_PATH):
+        return pd.read_csv(RAW_CSV_PATH, encoding='utf-8-sig', dtype=str).fillna(''), RAW_CSV_PATH
+    raise FileNotFoundError(f'{src} 또는 {RAW_CSV_PATH}가 없습니다(--input으로 파일을 직접 지정할 수 있습니다).')
 
 
 def normalize(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
@@ -123,21 +143,20 @@ def normalize(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     return df, info
 
 
-def run(force_convert: bool = False) -> tuple[pd.DataFrame, dict]:
-    """xlsx 변환(필요 시) → 정규화 → data/processed/job_skill_set.csv 저장. 반환: (DataFrame, 정보)."""
-    converted = convert_xlsx(force=force_convert)
-    if not os.path.exists(RAW_CSV_PATH):
-        raise FileNotFoundError(f'{os.path.join(RAW_DIR, SOURCE_FILE)} 또는 {RAW_CSV_PATH}가 없습니다.')
-    raw = pd.read_csv(RAW_CSV_PATH, encoding='utf-8-sig', dtype=str).fillna('')
+def run(input_path: str | None = None, out_dir: str | None = None,
+        force_convert: bool = False) -> tuple[pd.DataFrame, dict]:
+    """원본 읽기 → 정규화 → <out_dir>/job_skill_set.csv 저장. 반환: (DataFrame, 정보)."""
+    raw, source = load_raw(input_path, force_convert)
     df, info = normalize(raw)
-    info['source'] = converted or RAW_CSV_PATH
-    info['converted'] = bool(converted)
-    os.makedirs(OUT_DIR, exist_ok=True)
-    df.to_csv(OUT_PATH, index=False, encoding='utf-8-sig')
-    info['out_path'] = OUT_PATH
+    out_dir = out_dir or ANALYSIS_DIR
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f'{SOURCE_NAME}.csv')
+    df.to_csv(out_path, index=False, encoding='utf-8-sig')
+    info.update({'source': source, 'out_path': out_path})
     return df, info
 
 
 if __name__ == '__main__':
-    frame, meta = run('--force' in sys.argv)
+    frame, meta = run(sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith('--') else None,
+                      force_convert='--force' in sys.argv)
     print(f"[OK] {meta['out_path']} ({meta['rows']}행, 병합 셀 보정 {meta['filled_cells']}칸)")
