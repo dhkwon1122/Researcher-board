@@ -97,4 +97,6 @@ SOURCES = [
     ('mapping_job_function', '직무_직군_맵핑.xlsx', 0),  # 1번째 행(사용자 확인)
     ('exception_job_function', '직무_직군_맵핑_예외자.xlsx', 0),  # 1번째 행(사용자 확인)
     ('evaluation_exception', '평가표기예외자.xlsx', 0),  # 1번째 행(사용자 확인, 2026-09-09)
+    # 직무 스킬 분석(2026-10-21) — 로컬 PowerShell 분석 전용(scripts/analyze_job_skills.py), 웹 화면 없음
+    ('job_skill_set', '스킬셋.xlsx', 0),                 # 1번째 행(사용자 확인)
 ]
