@@ -14395,3 +14395,22 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 
 ## (66) 업무 시나리오 메뉴 순서 변경 (2026-10-16)
 - app.py 네비게이션 "업무 시나리오" 하위 메뉴 순서: 1. 조서 작성 → 2. 석세션 플랜(권한자만 보임) → 3. JOB Market.
+
+## (67) 직무 스킬 분석 1차 — 로컬 PowerShell 실행, 엑셀 리포트 (2026-10-21)
+- 웹 화면 없이 로컬에서 실행: `python scripts\analyze_job_skills.py` (`--open` 끝나면 엑셀 열기, `--no-embed` 임베딩 없이,
+  `--job 이름` 직무 필터, `--force-convert` xlsx 강제 재변환).
+- 원천: data/raw/스킬셋.xlsx(헤더 1행) — pipeline/sources.py에 'job_skill_set' 등록(전체 1단계 변환에도 포함).
+  pipeline/process_job_skill_set.py: xlsx가 더 새로우면 data/raw_csv/job_skill_set.csv(원본 헤더)로 변환 →
+  data/processed/job_skill_set.csv(영문 헤더: skill_name, department, job_function, definition_skill, skill_level_1~3,
+  components_skill). 헤더는 공백·대소문자 무시 매칭, 부서·직무 빈칸은 위 행 값으로 채움(병합 셀), skill_key = 공백·구두점·대소문자 무시 스킬명.
+- pipeline/job_skill_analysis.py: 핵심(직무별 부서 스킬 매트릭스 공통/일부/고유, 같은 스킬의 부서별 정의·Level1~3 비교) +
+  1 표준화 후보(이름 다른데 내용·이름 표기·이름 뜻 비슷) 2 부서 간 유사도(스킬명 Jaccard + 내용 기준 일치율)
+  3 구성요소 비율 4 레벨 점검(빈칸·이웃 단계 문구 동일·수준 표현 역전, 단어 기반 휴리스틱) 5 데이터 점검(누락·중복·표기 차이·구성요소 4종 외)
+  6 직무 간 공유 스킬.
+  유사도: 문구 일치도(글자 2~3gram TF-IDF 코사인) + 의미 유사도(사내 bge-m3, researcher_fit.cached_embed — .env의 EMBED_* 사용,
+  embedding_cache.json 캐시). 임베딩 실패 시 경고 후 문구 일치도로 계속. 임계값: 의미 0.85/0.70, 문구 0.80/0.50(같은 내용/일부 다름),
+  표준화 후보 의미 0.85(강점 분야 표준화와 같은 값).
+- pipeline/job_skill_report.py: data/analysis/job_skill_analysis_YYYYMMDD_HHMM.xlsx — 요약, 스킬 매트릭스, 같은 스킬 비교/상세,
+  표준화 후보, 부서 간 유사도(히트맵), 구성요소 비율, 레벨 점검, 데이터 점검, 직무 간 공유 스킬, 정규화 데이터. 콘솔에도 핵심 요약 출력.
+- 2차 예정(사용자 보류): 실제 인원(1단계 부서명 기준)·직무정보_부서 대조, 연구원 보유 전문성과 스킬 매칭.
+- 테스트 tests/test_job_skill_analysis.py.
