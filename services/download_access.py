@@ -15,7 +15,10 @@
   - 로그: 요청·승인·반려·안내 확인·다운로드(권한 보유자의 다운로드 포함)를 download_log.jsonl에 남기고
     관리자 탭에서 조회한다.
 
-저장: data/processed/download_requests.json, download_log.jsonl, download_prefill.json(파일 잠금).
+  - 요청 알림 메일(2026-10-26): 관리자 > 사용자/권한 관리 탭에서 고른 계정들에게 "누가 어떤 데이터를 요청했는지" 메일
+    (계정 이메일, 없으면 ID@samsung.com). 요청 화면이 메일 API를 기다리지 않도록 백그라운드로 보내고 결과는 로그에 남긴다.
+
+저장: data/processed/download_requests.json, download_log.jsonl, download_prefill.json, download_notify.json(파일 잠금).
 """
 from __future__ import annotations
 
@@ -31,6 +34,7 @@ from services import data_store
 REQUESTS_PATH = os.path.join(data_store.DATA_DIR, 'download_requests.json')
 LOG_PATH = os.path.join(data_store.DATA_DIR, 'download_log.jsonl')
 PREFILL_PATH = os.path.join(data_store.DATA_DIR, 'download_prefill.json')
+NOTIFY_PATH = os.path.join(data_store.DATA_DIR, 'download_notify.json')
 GRANT_DAYS = 7
 _LOCK = threading.Lock()
 
@@ -45,7 +49,8 @@ REQUESTABLE = ('report_builder', 'job_market', 'expertise')   # 연구원 명단
 RESPONSIBILITY_NOTICE = ('다운로드한 정보의 관리 책임은 전적으로 본인에게 있습니다. 승인된 사용목적 외 사용, '
                          '외부 유출·제3자 제공을 금지하며, 목적 달성 후에는 파일을 즉시 삭제해 주십시오.')
 
-EVENTS = {'request': '요청', 'approve': '승인', 'reject': '반려', 'acknowledge': '안내 확인', 'download': '다운로드'}
+EVENTS = {'request': '요청', 'notify': '알림 메일', 'approve': '승인', 'reject': '반려', 'acknowledge': '안내 확인',
+          'download': '다운로드'}
 
 
 def fixed_headers(feature: str) -> list:
@@ -194,7 +199,65 @@ def create_request(feature: str, target: str, purpose: str, context: dict | None
         items.append(req)
         _write(items)
     _log('request', feature, user, req, target=req['target'])
+    threading.Thread(target=_notify_request_mail, args=(req, user), daemon=True).start()
     return req
+
+
+# ─── 요청 알림 메일(관리자 지정 계정) ─────────────────────────────────────────
+
+def notify_recipients() -> list:
+    """알림 받을 계정 ID 목록(사용자/권한 관리 탭에서 지정)."""
+    data = _read_json(NOTIFY_PATH, {})
+    return [str(u) for u in data.get('user_ids', []) if u]
+
+
+def set_notify_recipients(user_ids: list) -> list:
+    from services.auth import can
+    if not can('manage_users'):
+        raise PermissionError('관리자만 설정할 수 있습니다.')
+    ids = list(dict.fromkeys(str(u) for u in (user_ids or []) if u))
+    with _file_lock():
+        _write_json(NOTIFY_PATH, {'user_ids': ids, 'updated_at': _now(),
+                                  'updated_by': _current_user().get('user_id', '')})
+    return ids
+
+
+def recipient_emails(user_ids: list | None = None) -> list:
+    """계정 ID → 메일 주소(계정 이메일, 없으면 ID@samsung.com — 사내 메일 기본 규칙)."""
+    from services.auth import list_users
+    ids = notify_recipients() if user_ids is None else user_ids
+    emails = {u['user_id']: (u.get('email') or '').strip() for u in list_users()}
+    return list(dict.fromkeys((emails.get(uid) or f'{uid}@samsung.com') for uid in ids))
+
+
+def request_mail_html(req: dict) -> str:
+    from html import escape
+    rows = [('요청자', f"{req.get('display_name') or req['user_id']} ({req['user_id']})"),
+            ('화면', req['feature_label']),
+            ('대상', f"{req.get('target') or '-'} · 대상자 {req.get('target_count', 0)}명"),
+            ('받을 헤더', ', '.join(req.get('headers') or []) or '-'),
+            ('사용목적', req.get('purpose', '')),
+            ('요청 시각', req.get('created_at', ''))]
+    body = ''.join(f'<tr><th style="text-align:left;padding:4px 10px;background:#F3F5F9;white-space:nowrap">{escape(k)}</th>'
+                   f'<td style="padding:4px 10px">{escape(str(v))}</td></tr>' for k, v in rows)
+    return (f'<p>엑셀 다운로드 요청이 들어왔습니다.</p>'
+            f'<table style="border-collapse:collapse;border:1px solid #DCE3EE;font-size:13px">{body}</table>'
+            f'<p>People in SAIT &gt; 관리자 &gt; <b>다운로드 요청</b> 탭에서 대상자 명단을 확인하고 승인 또는 반려해 주세요.</p>')
+
+
+def _notify_request_mail(req: dict, user: dict) -> None:
+    ids = notify_recipients()
+    if not ids:
+        return
+    try:
+        to = recipient_emails(ids)
+        from pipeline.mailer import send_html_email
+        send_html_email(to, f"[People in SAIT] 엑셀 다운로드 요청 — {req.get('display_name') or req['user_id']} · "
+                            f"{req['feature_label']}", request_mail_html(req))
+        _log('notify', req['feature'], user, req, result='발송', recipients=len(to))
+    except Exception as exc:  # noqa: BLE001 — 메일 실패가 요청을 막지 않게, 사유는 로그로
+        print(f'[download_access] 요청 알림 메일 실패: {exc}')
+        _log('notify', req['feature'], user, req, result=f'실패: {exc}'[:300], recipients=len(ids))
 
 
 def list_requests(status: str | None = None) -> list:

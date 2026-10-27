@@ -360,11 +360,89 @@ def _user_management_tab() -> html.Div:
         ], className='shadow-sm'),
 
         html.Div(id='admin-page-alert', className='mt-3'),
+        _download_notify_card(users),
 
         _user_modal(),
         _delete_modal(),
         _bulk_user_upload_modal(),
     ], className='pt-3')
+
+
+# ── 엑셀 다운로드 요청 알림 메일 받을 계정(2026-10-26) ─────────────────────────
+
+def _notify_options(users: list) -> list:
+    out = []
+    for u in sorted(users, key=lambda x: (x.get('display_name') or x['user_id'])):
+        mail = (u.get('email') or '').strip()
+        mail_label = mail or f"{u['user_id']}@samsung.com(기본)"
+        out.append({'label': f"{u.get('display_name') or u['user_id']} ({u['user_id']}) · {mail_label}",
+                    'value': u['user_id']})
+    return out
+
+
+def _mail_configured() -> bool:
+    import os
+    return all(os.environ.get(k, '').strip() for k in ('MAIL_API_URL', 'MAIL_TOKEN', 'MAIL_SYSTEM_ID', 'MAIL_FROM'))
+
+
+def _download_notify_card(users: list):
+    from services import download_access as da
+    status = (html.Span('메일 설정 확인됨', className='text-success') if _mail_configured() else
+              html.Span('메일 설정(.env의 MAIL_*)이 없어 지금은 발송되지 않습니다', className='text-danger'))
+    return dbc.Card([
+        dbc.CardHeader([html.I(className='bi bi-envelope me-2'), html.Span('엑셀 다운로드 요청 알림 메일', className='fw-semibold'),
+                        html.Small(' — 구성원이 1회성 다운로드를 요청하면 아래 계정으로 메일을 보냅니다', className='text-muted')]),
+        dbc.CardBody([
+            html.Div(['메일 내용: 요청자, 화면, 대상(대상자 수), 받을 헤더, 사용목적, 요청 시각. 주소는 계정 이메일, 없으면 ID@samsung.com. ',
+                      status], className='small text-muted mb-2'),
+            dbc.Row([
+                dbc.Col(dcc.Dropdown(id='dlnotify-recipients', options=_notify_options(users),
+                                     value=da.notify_recipients(), multi=True,
+                                     placeholder='알림 받을 계정 선택(비우면 메일 안 보냄)'), md=8),
+                dbc.Col([
+                    dbc.Button('저장', id='dlnotify-save', color='primary', size='sm', className='me-1'),
+                    dbc.Button('테스트 메일', id='dlnotify-test', color='secondary', outline=True, size='sm',
+                               title='선택한 계정으로 예시 요청 메일을 보냅니다(저장과 무관)'),
+                ], md=4, className='d-flex align-items-start'),
+            ], className='g-2'),
+            html.Div(id='dlnotify-msg', className='mt-2'),
+        ]),
+    ], className='shadow-sm mt-3')
+
+
+@callback(Output('dlnotify-recipients', 'options'), Input('user-list-store', 'data'), prevent_initial_call=True)
+def _refresh_notify_options(users):
+    return _notify_options(users or [])
+
+
+@callback(Output('dlnotify-msg', 'children'),
+          Input('dlnotify-save', 'n_clicks'), Input('dlnotify-test', 'n_clicks'),
+          State('dlnotify-recipients', 'value'), prevent_initial_call=True)
+def _save_or_test_notify(_save, _test, user_ids):
+    from services import download_access as da
+    user_ids = user_ids or []
+    if ctx.triggered_id == 'dlnotify-save':
+        try:
+            ids = da.set_notify_recipients(user_ids)
+        except PermissionError as exc:
+            return dbc.Alert(str(exc), color='warning', className='py-2 small mb-0')
+        text = f'저장했습니다 — {len(ids)}개 계정에 알림 메일을 보냅니다.' if ids else '저장했습니다 — 알림 메일을 보내지 않습니다.'
+        return dbc.Alert(text, color='success', dismissable=True, duration=5000, className='py-2 small mb-0')
+    if not user_ids:
+        return dbc.Alert('테스트 메일을 받을 계정을 먼저 고르세요.', color='warning', className='py-2 small mb-0')
+    from services.auth import can
+    if not can('manage_users'):
+        return dbc.Alert('관리자만 보낼 수 있습니다.', color='warning', className='py-2 small mb-0')
+    sample = {'user_id': 'example', 'display_name': '(테스트) 홍길동', 'feature_label': '조서 작성',
+              'target': 'AI플랫폼 과제원', 'target_count': 12, 'headers': ['성명', '부서(과제)', 'CL/년차'],
+              'purpose': '테스트 메일입니다 — 실제 요청이 아닙니다.', 'created_at': da._now()}
+    to = da.recipient_emails(user_ids)
+    try:
+        from pipeline.mailer import send_html_email
+        send_html_email(to, '[People in SAIT] (테스트) 엑셀 다운로드 요청 알림', da.request_mail_html(sample))
+    except Exception as exc:  # noqa: BLE001
+        return dbc.Alert(f'발송 실패: {exc}', color='danger', className='py-2 small mb-0')
+    return dbc.Alert(f"테스트 메일을 보냈습니다 → {', '.join(to)}", color='success', dismissable=True, className='py-2 small mb-0')
 
 
 # ── 콜백: 사용자 목록 갱신 ────────────────────────────────────────────────────

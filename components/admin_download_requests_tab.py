@@ -60,13 +60,15 @@ def _log_rows():
     items = da.read_log(300)
     if not items:
         return html.Div('기록이 없습니다.', className='text-muted small p-2')
-    colors = {'request': 'warning', 'approve': 'success', 'reject': 'secondary', 'acknowledge': 'info',
+    colors = {'request': 'warning', 'notify': 'light', 'approve': 'success', 'reject': 'secondary', 'acknowledge': 'info',
               'download': 'primary'}
     body = []
     for e in items:
         ev = e.get('event', '')
         detail = []
-        if ev == 'download':
+        if ev == 'notify':
+            detail.append(f"{e.get('result', '')} · 수신 {e.get('recipients', 0)}명")
+        elif ev == 'download':
             detail.append(f"{e.get('basis', '')} · {e.get('rows', 0)}명 · {e.get('filename', '')}")
             if e.get('file_headers'):
                 detail.append('헤더: ' + ', '.join(e['file_headers']))
@@ -80,7 +82,7 @@ def _log_rows():
         body.append(html.Tr([
             html.Td(e.get('at', ''), style={'whiteSpace': 'nowrap'}),
             html.Td(dbc.Badge(da.EVENTS.get(ev, ev), color=colors.get(ev, 'light'),
-                              text_color='dark' if ev == 'request' else None), className='text-center'),
+                              text_color='dark' if ev in ('request', 'notify') else None), className='text-center'),
             html.Td([html.Div(e.get('display_name') or e.get('user_id', '')), html.Div(e.get('user_id', ''), className='text-muted')]),
             html.Td(e.get('feature_label', '')),
             html.Td(requester if requester != (e.get('display_name') or e.get('user_id')) else ''),
@@ -105,6 +107,7 @@ def _download_requests_tab():
             html.Li('엑셀 다운로드 권한은 "사용자/권한 관리" 표의 "엑셀" 열에서 계정별로 켭니다(역할 기본값은 불허, 관리자 계정은 항상 허용).'),
             html.Li(f'권한이 없는 구성원이 헤더·대상자를 구성해 보낸 1회성 요청입니다. 승인하면 요청자가 "정보 관리 책임" 안내를 '
                     f'확인한 뒤 {da.GRANT_DAYS}일 안에 그 화면에서 승인된 구성 그대로 1번 다운로드할 수 있습니다.'),
+            html.Li('요청이 들어오면 알림 메일을 받을 계정은 "사용자/권한 관리" 탭 아래 "엑셀 다운로드 요청 알림 메일"에서 정합니다.'),
             html.Li('승인 안내: ' + da.RESPONSIBILITY_NOTICE),
         ], className='small text-muted mb-2'),
         html.Div(id='dlreq-admin-msg'),

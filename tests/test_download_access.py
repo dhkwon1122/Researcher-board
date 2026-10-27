@@ -21,6 +21,7 @@ def paths(tmp_path, monkeypatch):
     monkeypatch.setattr(da, 'REQUESTS_PATH', str(tmp_path / 'r.json'))
     monkeypatch.setattr(da, 'LOG_PATH', str(tmp_path / 'log.jsonl'))
     monkeypatch.setattr(da, 'PREFILL_PATH', str(tmp_path / 'p.json'))
+    monkeypatch.setattr(da, 'NOTIFY_PATH', str(tmp_path / 'n.json'))
 
 
 def test_role_default_denies_admin_allows(paths):
@@ -94,3 +95,36 @@ def test_prefill_roundtrip(paths):
     da.set_prefill('u1', ['R1', 'R2', 'R1'])
     assert da.pop_prefill('u1') == ['R1', 'R2']
     assert da.pop_prefill('u1') == []
+
+
+def test_request_notify_mail(paths, monkeypatch):
+    """요청이 들어오면 관리자가 지정한 계정으로 알림 메일(2026-10-26) — 계정 이메일, 없으면 ID@samsung.com."""
+    import threading
+    from services import auth
+    sent = []
+    import pipeline.mailer as mailer
+    monkeypatch.setattr(mailer, 'send_html_email', lambda to, subject, body: sent.append((to, subject, body)))
+    monkeypatch.setattr(auth, 'list_users', lambda: [{'user_id': 'adm', 'email': 'boss@x.com'}, {'user_id': 'hr1', 'email': ''}])
+    monkeypatch.setattr(threading, 'Thread', _InlineThread)
+    with auth.acting_as(USER):
+        with pytest.raises(PermissionError):
+            da.set_notify_recipients(['adm'])
+        da.create_request('expertise', '', '검토', {'ids': ['R1']}, ['사번'])
+    assert sent == []                                                # 지정 계정 없으면 메일 없음
+    with auth.acting_as(ADMIN):
+        assert da.set_notify_recipients(['adm', 'hr1', 'adm']) == ['adm', 'hr1']
+    with auth.acting_as(USER):
+        da.create_request('report_builder', 'AI플랫폼', '재배치 검토', RB_CTX)
+    assert len(sent) == 1
+    to, subject, body = sent[0]
+    assert to == ['boss@x.com', 'hr1@samsung.com'] and '홍길동' in subject and '조서 작성' in subject
+    assert '재배치 검토' in body and '대상자 2명' in body and '이름' in body
+    assert any(e['event'] == 'notify' and e['result'] == '발송' for e in da.read_log())
+
+
+class _InlineThread:
+    def __init__(self, target=None, args=(), kwargs=None, daemon=None, **_):
+        self._t, self._a, self._k = target, args, kwargs or {}
+
+    def start(self):
+        self._t(*self._a, **self._k)
