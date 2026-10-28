@@ -14440,3 +14440,10 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   주소는 계정 이메일, 없으면 ID@samsung.com. 요청 화면이 메일 API를 기다리지 않도록 백그라운드 스레드로 보내고, 발송/실패는
   다운로드 로그에 'notify'(알림 메일) 이벤트로 남김. 지정 계정이 없으면 보내지 않음.
 - 테스트 tests/test_download_access.py::test_request_notify_mail.
+
+## (70) 다운로드 승인/반려 메일에 헤더(열) 구성 (2026-10-28)
+- download_access.result_mail_html: 요청자에게 가는 승인/반려 메일을 표 형식으로 정리하고 "승인된 헤더(열) 구성"을 추가 —
+  조서 작성은 열마다 헤더·넣을 항목·묶는 방식(+여러 건 최대), 그 외 화면은 헤더 이름 목록(headers_html, 요청 알림 메일과 공용).
+  승인 메일에만 정보 관리 책임 안내. 사용자 입력은 HTML 이스케이프.
+- 받는 주소: 계정 이메일이 없으면 메일을 생략하던 것을 ID@samsung.com으로 보내도록(요청 알림 메일과 같은 규칙).
+- 테스트 tests/test_download_access.py::test_result_mail_includes_headers.

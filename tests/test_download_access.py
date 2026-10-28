@@ -128,3 +128,23 @@ class _InlineThread:
 
     def start(self):
         self._t(*self._a, **self._k)
+
+
+def test_result_mail_includes_headers(paths, monkeypatch):
+    """승인/반려 메일에 헤더(열) 구성 — 조서 작성은 열별 항목까지, 이메일 없으면 ID@samsung.com(2026-10-28)."""
+    from services import auth
+    sent = []
+    import pipeline.mailer as mailer
+    monkeypatch.setattr(mailer, 'send_html_email', lambda to, subject, body: sent.append((to, subject, body)))
+    with auth.acting_as(USER):
+        req = da.create_request('report_builder', 'AI플랫폼', '재배치 검토', RB_CTX)
+        req2 = da.create_request('expertise', '', '검토', {'ids': ['R1']}, ['사번', '유사 연구원 명단'])
+    with auth.acting_as(ADMIN):
+        da.decide(req['id'], True, '회의 후 삭제')
+        da.decide(req2['id'], False, '대상 과다')
+    (to1, subj1, body1), (to2, subj2, body2) = sent
+    assert to1 == ['u1@samsung.com'] and '승인' in subj1 and '조서 작성' in subj1
+    assert '승인된 헤더(열) 구성' in body1 and '<b>이름</b>' in body1 and '성명' in body1 and '여러 건 항목 최대 3건' in body1
+    assert da.RESPONSIBILITY_NOTICE in body1 and '회의 후 삭제' in body1
+    assert '반려' in subj2 and '<li>사번</li>' in body2 and '<li>유사 연구원 명단</li>' in body2
+    assert da.RESPONSIBILITY_NOTICE not in body2
