@@ -26,16 +26,10 @@ dash.register_page(
     title='연구원 명단',
 )
 
-_CURRENT_YEAR = datetime.now().year
 
-# 평가등급 컬럼("'24평가" 등)의 연도 — evaluations.csv와 동일한 회계연도
-# 기준(매년 3월 시작, services.evaluations)으로 오름차순(과거→최신) 계산.
-_EVAL_SALARY_YEARS = sorted(evaluation_years()[0])
-_EVAL_GRADE_COLUMNS = [f"'{str(y)[-2:]}평가" for y in _EVAL_SALARY_YEARS]
 _INCENTIVE_COL = '인센티브'
 
-# 평가등급 컬럼 판별용 정규식 — 기간 지정(period) 조회 시에는 _EVAL_GRADE_COLUMNS
-# (오늘 기준 3개년)와 다른 연도의 컬럼("'23평가" 등)이 만들어질 수 있어(2026-08-28),
+# 평가등급 컬럼 판별용 정규식 — 기간 지정(period) 조회 시에는 오늘 기준 3개년과 다른 연도의 컬럼("'23평가" 등)이 만들어질 수 있어(2026-08-28),
 # 권한 필터/조건부 색상 스타일 둘 다 이 패턴으로 "실제 df에 있는" 평가등급
 # 컬럼을 동적으로 찾아야 한다 — 고정 목록만 보면 기간 조회 시 권한 필터가
 # 그 컬럼을 못 찾아 평가등급이 권한 없이도 그대로 노출되는 문제가 생긴다.
@@ -75,13 +69,15 @@ def _build_summary_df(current_only: bool = True, period: tuple[date, date] | Non
         # 달라진다. period[1](조회 기간의 끝)을 기준 시점으로 삼아 그 3개년
         # 컬럼을 다시 계산한다 — process_tp_evaluation.py의 evaluation_years
         # (valid_date=...) 수정과 동일한 원리.
+        # 평가등급 컬럼("'24평가" 등)의 연도 — evaluations.csv와 동일한 회계연도 기준(매년 3월 시작)으로
+        # 오름차순. 2026-10-29: 오늘 기준도 조회할 때마다 계산(예전엔 모듈 임포트 시점에 고정).
         if period:
             eva = _resolve_period_snapshot(period, table='evaluations_history')
             eval_salary_years = sorted(evaluation_years(today=period[1])[0])
-            eval_grade_columns = [f"'{str(y)[-2:]}평가" for y in eval_salary_years]
         else:
             eva = read_processed('evaluations')
-            eval_salary_years, eval_grade_columns = _EVAL_SALARY_YEARS, _EVAL_GRADE_COLUMNS
+            eval_salary_years = sorted(evaluation_years()[0])
+        eval_grade_columns = [f"'{str(y)[-2:]}평가" for y in eval_salary_years]
         pub  = read_processed('publications')
         pat  = read_processed('patents')
         awd  = read_processed('awards')
@@ -150,7 +146,7 @@ def _build_summary_df(current_only: bool = True, period: tuple[date, date] | Non
         # ── 논문 ───────────────────────────────────────────────────────────
         pubs = pub[pub['researcher_id'] == rid]
         pub_total  = len(pubs)
-        pub_3yr    = int((pubs['pub_year'] >= _CURRENT_YEAR - 2).sum()) if not pubs.empty and 'pub_year' in pubs.columns else 0
+        pub_3yr    = int((pubs['pub_year'] >= datetime.now().year - 2).sum()) if not pubs.empty and 'pub_year' in pubs.columns else 0
         avg_if     = round(pubs['impact_factor'].mean(), 2) if not pubs.empty and 'impact_factor' in pubs.columns and pubs['impact_factor'].notna().any() else '-'
 
         # ── 특허 ───────────────────────────────────────────────────────────
@@ -216,7 +212,7 @@ def _build_summary_df(current_only: bool = True, period: tuple[date, date] | Non
 def _apply_permission_filter(df: pd.DataFrame, show_eval: bool, show_incentive: bool) -> pd.DataFrame:
     """평가/인센티브 열람 권한이 없으면 해당 컬럼을 통째로 제거한다.
     평가등급 컬럼은 df에 실제로 있는 컬럼 중 _EVAL_GRADE_PATTERN에 맞는
-    것을 전부 찾아 지운다(고정 _EVAL_GRADE_COLUMNS만 보면, 기간 지정 조회로
+    것을 전부 찾아 지운다(오늘 기준 3개년 목록만 보면, 기간 지정 조회로
     다른 연도의 컬럼이 만들어졌을 때 권한 필터가 그 컬럼을 놓친다)."""
     df = df.copy()
     drop = []

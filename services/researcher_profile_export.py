@@ -43,9 +43,19 @@ _BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
 # 반환하는데, 헤더("'24~'26")는 오름차순으로 읽히므로 오름차순으로 정렬해야
 # 셀 값 순서와 헤더가 맞는다(2026-08-29 발견·수정 — pages/researcher_list.py는
 # 이미 sorted()로 오름차순을 쓰고 있었는데 이 모듈만 정렬 없이 그대로 썼다).
-_EVAL_SALARY_YEARS = sorted(evaluations.evaluation_years()[0])
-_EVAL_HALF_YEARS = sorted(evaluations.evaluation_years()[1])
-_EVAL_HEADER = f"평가\n('{str(_EVAL_SALARY_YEARS[0])[-2:]}~'{str(_EVAL_SALARY_YEARS[-1])[-2:]})"
+def eval_salary_years() -> list[int]:
+    """연봉등급 3개년(오름차순) — 호출할 때마다 오늘 기준으로 계산(2026-10-29: 예전엔 모듈 임포트 시점에 고정돼
+    3/1 회계연도가 바뀐 뒤 서버를 재시작하기 전까지 화면(프로필 등)과 엑셀의 3개년이 달랐다)."""
+    return sorted(evaluations.evaluation_years()[0])
+
+
+def eval_half_years() -> list[int]:
+    return sorted(evaluations.evaluation_years()[1])
+
+
+def eval_header() -> str:
+    ys = eval_salary_years()
+    return f"평가\n('{str(ys[0])[-2:]}~'{str(ys[-1])[-2:]})"
 
 _PROMOTION_REF_BASE = date(2027, 3, 1)
 
@@ -232,7 +242,7 @@ def _col_evaluation(_rid, rows):
     """평가(종합) — 연봉등급 3개년을 첫 줄에 헤더("'24~'26")와 같은 오름차순으로
     "다/다/다", 그에 대응하는(각 연봉등급 연도 - 1) 상/하반기업적 3개년을
     둘째 줄에 역시 오름차순으로 표시(2026-08-29 수정 —
-    _EVAL_SALARY_YEARS/_EVAL_HALF_YEARS를 정렬 없이 그대로 써서
+    연봉등급/업적 연도 목록을 정렬 없이 그대로 써서
     evaluation_years()의 내림차순(최신 연도가 먼저)이 그대로 노출돼 헤더와
     셀 값 순서가 어긋나 있었다). 둘째 줄의 각 항목은
     evaluations.format_half_display()로 만든다 — 화면/A4 인쇄 카드와 동일한
@@ -256,7 +266,7 @@ def _col_evaluation(_rid, rows):
     eva_rows = rows['evaluations']
     eva = eva_rows[0] if eva_rows else {}
     is_exception = _rid in rows.get('evaluation_exception_ids', set())
-    salary_line = '/'.join(_s(eva.get(evaluations.salary_grade_column(y))) or '-' for y in _EVAL_SALARY_YEARS)
+    salary_line = '/'.join(_s(eva.get(evaluations.salary_grade_column(y))) or '-' for y in eval_salary_years())
     half_line = '(' + ', '.join(
         evaluations.format_half_display(
             _s(eva.get(evaluations.salary_grade_column(y + 1))),
@@ -264,7 +274,7 @@ def _col_evaluation(_rid, rows):
             _s(eva.get(evaluations.second_half_column(y))),
             is_exception,
         )
-        for y in _EVAL_HALF_YEARS
+        for y in eval_half_years()
     ) + ')'
     return f'{salary_line}\n{half_line}'
 
@@ -335,13 +345,18 @@ def _col_nurturing(_rid, rows):
     return '\n'.join(lines) if lines else '-'
 
 
+def incentive_selected(value) -> bool:
+    """핵심이력(incentive_selection.csv)의 selected 값이 '선정'인지 — 화면(profile_sections._inc_label)과 엑셀 공용."""
+    return _s(value).lower() in ('true', '1')
+
+
 def _col_incentive(_rid, rows):
     """핵심이력 — incentive_selection.csv 기반. 화면이 view_incentive 권한
     없는 역할에는 이 데이터를 안 보여주는 것과 동일하게 여기서도 가린다
     (권한은 rows['permissions']로 한 번만 계산해 전달받음 — _col_evaluation 참고)."""
     if not rows['permissions']['view_incentive']:
         return '-'
-    items = [i for i in rows['incentive_selection'] if _s(i.get('selected')).lower() in ('true', '1')]
+    items = [i for i in rows['incentive_selection'] if incentive_selected(i.get('selected'))]
     items.sort(key=lambda i: _s(i.get('year')))
     lines = [f"{_yy(i.get('year'))} : {_or_dash(i.get('category'))}" for i in items]
     return '\n'.join(lines) if lines else '-'
@@ -515,18 +530,22 @@ _WORK_EXPERIENCE_COLUMNS = [('근무 경력', _col_work_experience)]
 # "평가(종합 - 최근 3년)"/"연봉등급(최근 3년)"/"업적평가(최근 3년)"이지만,
 # 엑셀 컬럼 헤더 자체는 기존 표기를 그대로 유지한다(사용자 확정 — 체크박스
 # 라벨과 엑셀 헤더는 별개). 역량 컬럼은 2026-09-09부로 원본처리에서 완전
-# 제외돼(services/evaluations.py 참고) 셋 다 연도가 고정된(모듈 임포트
-# 시점 회계연도 기준) 정적 목록이다.
-_EVAL_SUMMARY_COLUMNS = [(_EVAL_HEADER, _col_evaluation)]
-_EVAL_SALARY_COLUMNS = [
-    (f'{y} 연봉등급', _col_eval_field(evaluations.salary_grade_column(y))) for y in _EVAL_SALARY_YEARS
-]
-_EVAL_HALF_COLUMNS = [
-    col for y in _EVAL_HALF_YEARS for col in (
-        (f'{y} 상반기업적', _col_eval_field(evaluations.first_half_column(y))),
-        (f'{y} 하반기업적', _col_eval_field(evaluations.second_half_column(y))),
-    )
-]
+# 제외돼(services/evaluations.py 참고) 셋 다 호출 시점 회계연도 기준으로 만든다(2026-10-29 — 예전엔 임포트 시점 고정).
+def eval_summary_columns() -> list:
+    return [(eval_header(), _col_evaluation)]
+
+
+def eval_salary_columns() -> list:
+    return [(f'{y} 연봉등급', _col_eval_field(evaluations.salary_grade_column(y))) for y in eval_salary_years()]
+
+
+def eval_half_columns() -> list:
+    return [
+        col for y in eval_half_years() for col in (
+            (f'{y} 상반기업적', _col_eval_field(evaluations.first_half_column(y))),
+            (f'{y} 하반기업적', _col_eval_field(evaluations.second_half_column(y))),
+        )
+    ]
 
 
 # (헤더, 값 계산 함수) — 순서 = 엑셀 컬럼 순서
@@ -767,8 +786,8 @@ def build_profile_workbook(
     include_*가 True인 항목만 해당 옵트인 컬럼 그룹(_PATENT_COLUMNS/
     _PUBLICATION_COLUMNS/_JOB_FUNCTION_COLUMNS/_JOB_PROFILE_COLUMNS/
     _EMPLOYMENT_STATUS_COLUMNS/_LANGUAGE_COLUMNS/_WORK_EXPERIENCE_COLUMNS/
-    _EXPERTISE_COLUMNS/_EVAL_SUMMARY_COLUMNS/_EVAL_SALARY_COLUMNS/
-    _EVAL_HALF_COLUMNS)을 이 순서대로 맨 끝에
+    _EXPERTISE_COLUMNS/eval_summary_columns()/eval_salary_columns()/
+    eval_half_columns())을 이 순서대로 맨 끝에
     추가한다 — 전부 기본값은 False(다운로드 화면 체크박스 기본 해제)이고,
     켜져도 _COLUMNS 자체는 건드리지 않고 이 함수 안에서만 로컬 사본에 덧붙인다.
 
@@ -794,14 +813,17 @@ def build_profile_workbook(
         columns.extend(_TECH_OWNERSHIP_COLUMNS)
         widths.extend([_TECH_OWNERSHIP_COLUMN_WIDTH] * len(_TECH_OWNERSHIP_COLUMNS))
     if include_eval_summary and permissions['view_evaluation']:
-        columns.extend(_EVAL_SUMMARY_COLUMNS)
-        widths.extend([_EVAL_SUMMARY_COLUMN_WIDTH] * len(_EVAL_SUMMARY_COLUMNS))
+        cols = eval_summary_columns()
+        columns.extend(cols)
+        widths.extend([_EVAL_SUMMARY_COLUMN_WIDTH] * len(cols))
     if include_salary_grade and permissions['view_evaluation']:
-        columns.extend(_EVAL_SALARY_COLUMNS)
-        widths.extend([_EVAL_DETAIL_COLUMN_WIDTH] * len(_EVAL_SALARY_COLUMNS))
+        cols = eval_salary_columns()
+        columns.extend(cols)
+        widths.extend([_EVAL_DETAIL_COLUMN_WIDTH] * len(cols))
     if include_eval_half and permissions['view_evaluation']:
-        columns.extend(_EVAL_HALF_COLUMNS)
-        widths.extend([_EVAL_DETAIL_COLUMN_WIDTH] * len(_EVAL_HALF_COLUMNS))
+        cols = eval_half_columns()
+        columns.extend(cols)
+        widths.extend([_EVAL_DETAIL_COLUMN_WIDTH] * len(cols))
     if include_patents:
         columns.extend(_PATENT_COLUMNS)
         widths.extend([_PATENT_COLUMN_WIDTH] * len(_PATENT_COLUMNS))

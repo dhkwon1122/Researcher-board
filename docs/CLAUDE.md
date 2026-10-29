@@ -14505,3 +14505,20 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 사용자 확정: 엑셀 방식이 맞음. 두 화면도 position_years()를 쓰도록 변경. 승격산정기준일자가 없으면 직급만 표시
   (프로필 카드가 근속년수 정수로 대신하던 것 제거 — 둘째 줄은 "CL3(16.8년)" 형태로 근속은 괄호에 그대로).
 - 테스트 tests/test_position_years_consistency.py.
+
+## (76) 화면·엑셀 표시 기준 통일 — 나이·근속·평가 연도·핵심이력 (2026-10-29)
+화면과 엑셀을 대조한 결과(사용자 요청 "년차처럼 로직이 다른 게 또 있나") 중 사용자가 고른 1·2·3·5번을 엑셀 기준으로 맞춤.
+- 나이: 프로필 사진 아래(photo_block)는 출생연도를 int()로만 읽어 NaN이면 "올해−30"(=30세)을 지어냈고, 연도도 서버 시작 시점
+  CURRENT_YEAR를 받았다 → researcher_profile_export._birth_year_int + date.today().year, 없으면 '-'. 석세션 카드(_info_lines)도
+  같은 함수로. photo_block의 current_year 인자는 호환용으로만 남기고 쓰지 않음.
+- 근속: 입사일이 없으면 입사연도로 근속을 대신 계산하던 것 제거 → 표시 안 함(둘째 줄은 직급-년차만).
+- 평가 3개년: researcher_profile_export(_EVAL_SALARY_YEARS/_EVAL_HALF_YEARS/_EVAL_HEADER/_EVAL_*_COLUMNS)와 연구원 명단
+  (_EVAL_SALARY_YEARS/_EVAL_GRADE_COLUMNS)이 모듈 임포트 시점에 고정돼, 3/1 회계연도가 바뀐 뒤 서버를 재시작하기 전까지
+  프로필·석세션·JOB Market(매번 계산)과 3개년이 달랐다 → eval_salary_years()/eval_half_years()/eval_header()/
+  eval_*_columns() 함수로 매번 계산. 조서 작성 FIELDS의 평가 항목은 라벨·값을 쓸 때 계산(_Field/_Dynamic, 키는 eval_salary_0~2,
+  eval_half_0~5 그대로라 저장된 양식 호환). 연구원 명단의 최근 3년 논문 수 기준 연도도 매번 계산.
+- 핵심이력(인센티브): 화면(_inc_label — 프로필 평가/인센티브 표, JOB Market 평가 열)이 구분을 '최우수'/'우수'/앞 4글자로 줄이고
+  selected 'yes'도 선정으로 봤다 → 엑셀(_col_incentive)처럼 구분 원문, 선정은 true/1만(공용 incentive_selected()).
+- 그대로 둔 것(사용자 결정): 양성이력 표기 차이(화면 최신순·국가 포함 / 엑셀 오래된순·기관만), 프로필 "과제"(현재 수행 과제)와
+  엑셀 "부서(과제)"(조직도 3단계)의 의미 차이.
+- 테스트 tests/test_position_years_consistency.py(나이·근속 빈 값, 평가 연도 회계연도 따라감, 핵심이력 표기).

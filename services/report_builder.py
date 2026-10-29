@@ -137,15 +137,43 @@ def _field_defs() -> list:
     ]
     defs += [(f'expertise_{i}', label.replace('보유전문성(', '보유전문성 - ').rstrip(')'), '보유 전문성(AI)', fn, None, True)
              for i, (label, fn) in enumerate(rpe._EXPERTISE_COLUMNS)]
-    defs.append(('eval_summary', rpe._EVAL_HEADER.replace('\n', ' '), '평가', rpe._col_evaluation, 'view_evaluation', False))
-    defs += [(f'eval_salary_{i}', label, '평가', fn, 'view_evaluation', False)
-             for i, (label, fn) in enumerate(rpe._EVAL_SALARY_COLUMNS)]
-    defs += [(f'eval_half_{i}', label, '평가', fn, 'view_evaluation', False)
-             for i, (label, fn) in enumerate(rpe._EVAL_HALF_COLUMNS)]
+    # 평가 항목은 연도가 회계연도(3/1)마다 바뀌므로 라벨·값을 쓸 때마다 다시 계산한다(2026-10-29 — 예전엔 임포트 시점 고정).
+    defs.append(('eval_summary', _Dynamic(lambda: rpe.eval_header().replace('\n', ' ')), '평가',
+                 rpe._col_evaluation, 'view_evaluation', False))
+    defs += [(f'eval_salary_{i}', _Dynamic(_eval_col(rpe.eval_salary_columns, i, 0)), '평가',
+              _eval_fn(rpe.eval_salary_columns, i), 'view_evaluation', False) for i in range(3)]
+    defs += [(f'eval_half_{i}', _Dynamic(_eval_col(rpe.eval_half_columns, i, 0)), '평가',
+              _eval_fn(rpe.eval_half_columns, i), 'view_evaluation', False) for i in range(6)]
     return defs
 
 
-FIELDS = {k: {'label': lbl, 'group': grp, 'fn': fn, 'perm': perm, 'multi': multi}
+class _Dynamic:
+    """라벨을 꺼낼 때 계산(평가 연도처럼 날짜에 따라 바뀌는 라벨)."""
+    def __init__(self, fn):
+        self.fn = fn
+
+
+def _eval_col(columns_fn, i, part):
+    return lambda: columns_fn()[i][part]
+
+
+def _eval_fn(columns_fn, i):
+    def _fn(rid, rows):
+        return columns_fn()[i][1](rid, rows)
+    return _fn
+
+
+class _Field(dict):
+    """FIELDS 항목 — 'label'이 _Dynamic이면 읽을 때마다 계산."""
+    def __getitem__(self, key):
+        value = super().__getitem__(key)
+        return value.fn() if isinstance(value, _Dynamic) else value
+
+    def get(self, key, default=None):
+        return self[key] if key in self else default
+
+
+FIELDS = {k: _Field(label=lbl, group=grp, fn=fn, perm=perm, multi=multi)
           for k, lbl, grp, fn, perm, multi in _field_defs()}
 GROUP_ORDER = ['인적', '소속', '경력', '학력', '실적·이력', '보유 전문성(AI)', '평가']
 
