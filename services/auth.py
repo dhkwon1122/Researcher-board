@@ -285,6 +285,24 @@ def change_password(user_id: str, new_password: str) -> bool:
     return True
 
 
+def reset_to_temp_password(user_id: str) -> bool:
+    """비밀번호를 잊은 사용자용(2026-10-29, 관리자 "수정" 화면) — DEFAULT_TEMP_PASSWORD로 바꾸고
+    must_change_password=True로 잠가 다음 로그인 때 새 비밀번호를 정하게 한다(신규 계정과 같은 규칙)."""
+    password_hash = generate_password_hash(DEFAULT_TEMP_PASSWORD)
+    if _database_configured():
+        if not user_store.available():
+            return False
+        return user_store.set_password_hash(user_id, password_hash, must_change_password=True)
+
+    users = _load_users_json()
+    if user_id not in users:
+        return False
+    users[user_id]['password_hash'] = password_hash
+    users[user_id]['must_change_password'] = True
+    _save_users_json(users)
+    return True
+
+
 def delete_user(user_id: str) -> bool:
     if _database_configured():
         if not user_store.available():

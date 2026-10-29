@@ -260,9 +260,10 @@ def update_permissions(user_id: str, permissions: dict) -> bool:
         return False
 
 
-def set_password_hash(user_id: str, password_hash: str) -> bool:
+def set_password_hash(user_id: str, password_hash: str, must_change_password: bool = False) -> bool:
     """비밀번호를 바꾼다 — 임시 비밀번호로 로그인했던 계정이라도 이 시점부터
-    must_change_password를 False로 되돌려 강제 변경 화면에서 풀어준다."""
+    must_change_password를 False로 되돌려 강제 변경 화면에서 풀어준다.
+    관리자 "임시 비밀번호로 초기화"(auth.reset_to_temp_password)는 True로 넘겨 다시 잠근다."""
     if not available():
         return False
     try:
@@ -270,7 +271,7 @@ def set_password_hash(user_id: str, password_hash: str) -> bool:
             _bound_statement_timeout(conn)
             result = conn.execute(
                 update(users).where(users.c.user_id == user_id)
-                .values(password_hash=password_hash, must_change_password=False)
+                .values(password_hash=password_hash, must_change_password=must_change_password)
             )
             return result.rowcount > 0
     except Exception as exc:

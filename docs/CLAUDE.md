@@ -14484,3 +14484,15 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 번호 입력칸에 min/max를 두지 않음 — 범위 밖 숫자를 넣으면 브라우저가 값을 None으로 보내 아무 일도 안 일어나는 문제(직접 확인).
 - 테스트 tests/test_user_order.py::test_role_grouped_order_and_move_limited_to_role. 브라우저로 같은 역할 3명 중 마지막 사람에
   1을 입력 → 묶음 첫 줄로, ↓ 이동, 버튼 활성 상태 확인.
+
+## (74) 사용자/권한 관리 — 순서 변경을 팀/리더 참조 방식으로, 임시 비밀번호 초기화 (2026-10-29)
+- (73)의 역할 묶음·번호 입력 방식을 되돌림(사용자 요청: "역할로 묶는 게 아니고 팀/리더 참조처럼"). 표 맨 앞 "선택" 체크박스 +
+  표 위 맨 위로/위로/아래로/맨 아래로 버튼(user-move-*-btn). services/user_order.move_selected(ids, selected, direction) —
+  위/아래는 한 칸씩(이동 방향 쪽부터 처리, 선택끼리는 겹쳐 넘지 않음, 못 움직인 개수 안내), 맨 위/맨 아래는 상대 순서 유지
+  (팀/리더 참조 _move_selected/_move_to_edge와 같은 규칙). 체크 상태는 user-selected 스토어에 두고 다시 그릴 때 유지.
+  이메일 열 삭제는 (73) 그대로.
+- 수정 모달에 "임시 비밀번호로 초기화"(수정 때만 보임) → 확인창(dcc.ConfirmDialog) → auth.reset_to_temp_password:
+  DEFAULT_TEMP_PASSWORD로 바꾸고 must_change_password=True(신규 계정과 같은 규칙, 다음 로그인 때 새 비밀번호 강제).
+  DB는 user_store.set_password_hash(..., must_change_password=True) 인자 추가. 표의 상태 배지가 "임시 비밀번호"로 바뀜.
+- 테스트 tests/test_user_order.py(선택 이동 4방향·새 계정·체크 유지·정렬은 보기만, 임시 비밀번호 초기화). 브라우저: 체크 →
+  맨 위로/아래로, 수정 → 초기화 확인창 → 메시지·배지·실제 로그인 해시 확인.
