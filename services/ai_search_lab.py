@@ -483,7 +483,7 @@ def start_run(items: list[dict], user: dict | None, label: str = '', current_onl
 def _run_loop(run: dict, items: list[dict], user, current_only, period, judge) -> None:
     try:
         with auth.acting_as(user or {'user_id': 'ai-search-lab', 'role': 'admin', 'is_admin': True,
-                                       'permissions': {}, 'eval_excluded_dep_ids': []}):
+                                       'permissions': {}}):
             for i, item in enumerate(items):
                 if _stop_requested():
                     run['status'] = 'stopped'
@@ -613,7 +613,7 @@ def start_generate(categories: list[str], per_category: int, include_golden: boo
     def _work():
         try:
             with auth.acting_as(user or {'user_id': 'ai-search-lab', 'role': 'admin', 'is_admin': True,
-                                           'permissions': {}, 'eval_excluded_dep_ids': []}):
+                                           'permissions': {}}):
                 new_items = []
                 if include_golden:
                     new_items += golden_items()

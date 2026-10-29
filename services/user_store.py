@@ -9,7 +9,6 @@ web/db.py와 동일한 SQLAlchemy Core 테이블 정의 방식을 따름). DB �
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, Column, DateTime, MetaData, String, Table, delete, select, text, update
@@ -69,10 +68,8 @@ users = Table(
     Column('perm_view_comments', Boolean),
     Column('perm_view_grade', Boolean),
     Column('perm_download_excel', Boolean),   # 엑셀 다운로드(2026-10-15)
-    # view_evaluation이 있어도 특정 부서(team_refer의 dep_id) 소속 연구원의
-    # 평가만은 못 보게 하는 예외 목록 — JSON 배열 문자열(예: '["D-003"]').
-    # dep_name(표시 라벨)이 아니라 dep_id를 쓰는 이유는 services/similarity_map.py
-    # org_code_dep_id_map() 참고(부서명이 나중에 바뀌어도 예외가 계속 유효해야 함).
+    # 예전 "People제외"(부서 단위 평가 제외) 목록 — 2026-10-29 기능 삭제(원천 데이터에서 제외하기로).
+    # 기존 DB 스키마와 맞추려고 컬럼만 남기고 읽거나 쓰지 않는다.
     Column('eval_excluded_dep_ids', String),
     Column('created_at', DateTime(timezone=True), nullable=False),
 )
@@ -146,12 +143,6 @@ def available() -> bool:
 
 
 def _row_to_dict(row) -> dict:
-    try:
-        excluded = json.loads(row.get('eval_excluded_dep_ids') or '[]')
-        if not isinstance(excluded, list):
-            excluded = []
-    except (TypeError, ValueError):
-        excluded = []
     return {
         'user_id': row['user_id'],
         'password_hash': row['password_hash'],
@@ -162,7 +153,6 @@ def _row_to_dict(row) -> dict:
         'is_admin': bool(row.get('is_admin')),
         # None이면 "역할 기본값 사용" — services/auth.py의 can()이 판정.
         'permissions': {col: row.get(f'perm_{col}') for col in PERMISSION_COLUMNS},
-        'eval_excluded_dep_ids': [str(d) for d in excluded if str(d).strip()],
     }
 
 
@@ -250,17 +240,14 @@ def update_fields(user_id: str, display_name: str | None = None,
         return False
 
 
-def update_permissions(user_id: str, permissions: dict, eval_excluded_dep_ids: list) -> bool:
-    """"사용자/권한 관리" 탭이 저장 버튼을 누를 때 쓴다 — permissions의 4개
+def update_permissions(user_id: str, permissions: dict) -> bool:
+    """"사용자/권한 관리" 탭이 체크박스를 바꿀 때 쓴다 — permissions의
     키(PERMISSION_COLUMNS)를 전부 명시적 True/False로 저장한다(이 함수를
     한 번이라도 거치면 그 계정은 이후 역할이 바뀌어도 이 값을 그대로 유지
-    — 사용자 확정). eval_excluded_dep_ids는 view_evaluation이 True일 때만
-    의미가 있지만, False로 저장하는 경우에도 목록 자체는 그대로 보존한다
-    (나중에 다시 True로 바꿀 때 이전에 골라둔 부서 목록이 남아있도록)."""
+    — 사용자 확정)."""
     if not available():
         return False
     values = {f'perm_{col}': permissions.get(col) for col in PERMISSION_COLUMNS}
-    values['eval_excluded_dep_ids'] = json.dumps(list(eval_excluded_dep_ids or []), ensure_ascii=False)
     try:
         with get_engine().begin() as conn:
             _bound_statement_timeout(conn)

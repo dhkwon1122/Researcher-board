@@ -213,29 +213,15 @@ def _build_summary_df(current_only: bool = True, period: tuple[date, date] | Non
     return pd.DataFrame(rows)
 
 
-def _apply_permission_filter(df: pd.DataFrame, show_eval: bool, show_incentive: bool,
-                              excluded_dep_ids: set | None = None,
-                              org_code_dep_id_map: dict | None = None) -> pd.DataFrame:
+def _apply_permission_filter(df: pd.DataFrame, show_eval: bool, show_incentive: bool) -> pd.DataFrame:
     """평가/인센티브 열람 권한이 없으면 해당 컬럼을 통째로 제거한다.
     평가등급 컬럼은 df에 실제로 있는 컬럼 중 _EVAL_GRADE_PATTERN에 맞는
     것을 전부 찾아 지운다(고정 _EVAL_GRADE_COLUMNS만 보면, 기간 지정 조회로
-    다른 연도의 컬럼이 만들어졌을 때 권한 필터가 그 컬럼을 놓친다).
-
-    show_eval이 True라도 excluded_dep_ids(부서 단위 평가 제외 목록, 2026-08-31)가
-    있으면 컬럼 자체는 남기되, 그 부서(org_code → dep_id로 판정) 소속 연구원
-    행만 평가등급 값을 비운다 — 같은 명단 화면 안에 "볼 수 있는 사람"과
-    "볼 수 없는 사람"이 섞여야 해서(컬럼 전체 삭제로는 표현할 수 없음)."""
+    다른 연도의 컬럼이 만들어졌을 때 권한 필터가 그 컬럼을 놓친다)."""
     df = df.copy()
     drop = []
     if not show_eval:
         drop.extend(c for c in df.columns if _EVAL_GRADE_PATTERN.match(str(c)))
-    elif excluded_dep_ids and org_code_dep_id_map and '_org_code' in df.columns:
-        grade_cols = [c for c in df.columns if _EVAL_GRADE_PATTERN.match(str(c))]
-        if grade_cols:
-            masked = df['_org_code'].map(
-                lambda oc: org_code_dep_id_map.get(str(oc), '') in excluded_dep_ids
-            )
-            df.loc[masked, grade_cols] = ''
     if not show_incentive:
         drop.append(_INCENTIVE_COL)
     if not drop:
@@ -437,16 +423,12 @@ def _download_request_ui(feature):
 
 
 def layout():
-    from services.auth import can, eval_excluded_dep_ids
+    from services.auth import can
     show_eval = can('view_evaluation')
     show_incentive = can('view_incentive')
-    excluded_dep_ids = eval_excluded_dep_ids()
 
     df = _build_summary_df(current_only=True)
-    display_df = _apply_permission_filter(
-        df, show_eval, show_incentive,
-        excluded_dep_ids, similarity_map.org_code_dep_id_map(),
-    )
+    display_df = _apply_permission_filter(df, show_eval, show_incentive)
 
     dept_opts     = similarity_map.level_filter_options(1)
     group_opts    = similarity_map.level_filter_options(2)
@@ -894,18 +876,14 @@ def toggle_org_filters(mode, period_start, period_end):
 )
 def update_table(_search_clicks, _apply_clicks, _clear_clicks, mode, ai_result, dept, group, project, pos, title,
                   gender, degree, major, employment, researcher, contribution, period_start, period_end):
-    from services.auth import can, eval_excluded_dep_ids
+    from services.auth import can
     show_eval = can('view_evaluation')
     show_incentive = can('view_incentive')
-    excluded_dep_ids = eval_excluded_dep_ids()
 
     current_only = (mode != 'all')
     period = _active_period(mode, period_start, period_end)
     df = _build_summary_df(current_only=current_only, period=period)
-    display_df = _apply_permission_filter(
-        df, show_eval, show_incentive,
-        excluded_dep_ids, similarity_map.org_code_dep_id_map(),
-    )
+    display_df = _apply_permission_filter(df, show_eval, show_incentive)
     # 기간을 지정했을 땐 그 시점 기준 값이 있어 직급/직책 필터도 다시 쓸 수
     # 있다(toggle_org_filters 콜백과 동일한 조건) — 부서/과제는 2026-09-10부로
     # 과거포함(기간 미지정)에서도 재직 기간 전체 이력으로 매칭하므로

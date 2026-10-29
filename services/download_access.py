@@ -231,18 +231,14 @@ def recipient_emails(user_ids: list | None = None) -> list:
 
 
 def request_mail_html(req: dict) -> str:
-    from html import escape
     rows = [('요청자', f"{req.get('display_name') or req['user_id']} ({req['user_id']})"),
             ('화면', req['feature_label']),
             ('대상', f"{req.get('target') or '-'} · 대상자 {req.get('target_count', 0)}명"),
-            ('받을 헤더', ', '.join(req.get('headers') or []) or '-'),
             ('사용목적', req.get('purpose', '')),
             ('요청 시각', req.get('created_at', ''))]
-    body = ''.join(f'<tr><th style="text-align:left;padding:4px 10px;background:#F3F5F9;white-space:nowrap">{escape(k)}</th>'
-                   f'<td style="padding:4px 10px">{escape(str(v))}</td></tr>' for k, v in rows)
-    return (f'<p>엑셀 다운로드 요청이 들어왔습니다.</p>'
-            f'<table style="border-collapse:collapse;border:1px solid #DCE3EE;font-size:13px">{body}</table>'
-            f'<p>People in SAIT &gt; 관리자 &gt; <b>다운로드 요청</b> 탭에서 대상자 명단을 확인하고 승인 또는 반려해 주세요.</p>')
+    return ('<p>엑셀 다운로드 요청이 들어왔습니다.</p>' + _info_table(rows)
+            + '<p style="margin:12px 0 4px"><b>받을 헤더(열) 구성</b></p>' + headers_html(req)
+            + '<p>People in SAIT &gt; 관리자 &gt; <b>다운로드 요청</b> 탭에서 대상자 명단을 확인하고 승인 또는 반려해 주세요.</p>')
 
 
 def _notify_request_mail(req: dict, user: dict) -> None:
@@ -294,23 +290,66 @@ def decide(request_id: str, approve: bool, comment: str = '') -> dict:
     return req
 
 
-def _notify_mail(req: dict) -> None:
-    """요청자에게 결과 메일(메일 API 설정이 없거나 실패해도 화면 알림은 그대로 동작)."""
-    to = req.get('email') or ''
-    if not to:   # 계정에 이메일이 없으면 화면 알림만
-        return
+def headers_html(req: dict) -> str:
+    """메일용 헤더(열) 목록 — 조서 작성은 열마다 넣을 항목·묶는 방식까지, 그 외 화면은 헤더 이름 순서대로."""
+    from html import escape
+    spec = req.get('spec') or {}
+    cols = spec.get('columns') or []
+    if cols:
+        from services import report_builder as rb
+        th = 'style="text-align:left;padding:3px 8px;background:#F3F5F9;border:1px solid #DCE3EE"'
+        td = 'style="padding:3px 8px;border:1px solid #DCE3EE"'
+        rows = ''.join(
+            f'<tr><td {td}>{i}</td><td {td}><b>{escape(c.get("header", ""))}</b></td>'
+            f'<td {td}>{escape(" + ".join(rb.FIELDS[f]["label"] if f in rb.FIELDS else f for f in c.get("fields", [])))}</td>'
+            f'<td {td}>{escape(rb.JOINS.get(c.get("join"), "").split(":")[0]) if len(c.get("fields", [])) > 1 else ""}</td></tr>'
+            for i, c in enumerate(cols, start=1))
+        extra = f'<p style="margin:4px 0">여러 건 항목 최대 {int(spec["max_items"])}건</p>' if spec.get('max_items') else ''
+        return (f'<table style="border-collapse:collapse;font-size:13px"><tr><th {th}>#</th><th {th}>헤더</th>'
+                f'<th {th}>넣을 항목</th><th {th}>묶는 방식</th></tr>{rows}</table>{extra}')
+    headers = req.get('headers') or []
+    if not headers:
+        return '<p>-</p>'
+    return '<ol style="margin:4px 0;padding-left:22px">' + ''.join(f'<li>{escape(h)}</li>' for h in headers) + '</ol>'
+
+
+def _info_table(rows: list) -> str:
+    from html import escape
+    body = ''.join(f'<tr><th style="text-align:left;padding:4px 10px;background:#F3F5F9;white-space:nowrap">{escape(k)}</th>'
+                   f'<td style="padding:4px 10px">{escape(str(v))}</td></tr>' for k, v in rows)
+    return f'<table style="border-collapse:collapse;border:1px solid #DCE3EE;font-size:13px">{body}</table>'
+
+
+def result_mail_html(req: dict) -> str:
+    """요청자에게 보내는 승인/반려 메일 본문 — 승인된 헤더(열) 구성과 정보 관리 책임 안내 포함."""
+    from html import escape
     approved = req['status'] == 'approved'
-    body = (f"<p>{req.get('display_name') or req['user_id']}님, 요청하신 엑셀 다운로드가 "
-            f"<b>{'승인' if approved else '반려'}</b>되었습니다.</p>"
-            f"<ul><li>화면: {req['feature_label']}</li><li>대상: {req.get('target') or '-'} ({req.get('target_count', 0)}명)</li>"
-            f"<li>헤더: {', '.join(req.get('headers') or [])}</li><li>사용목적: {req['purpose']}</li>"
-            + (f"<li>관리자 의견: {req['admin_comment']}</li>" if req.get('admin_comment') else '')
-            + (f"<li>유효기간: {req['expires_at']}까지 1회</li>" if approved else '') + '</ul>'
-            + (f"<p style='color:#b02a37'><b>{RESPONSIBILITY_NOTICE}</b></p>"
-               '<p>People in SAIT에 로그인해 알림을 확인한 뒤 다운로드할 수 있습니다.</p>' if approved else ''))
+    rows = [('화면', req['feature_label']),
+            ('대상', f"{req.get('target') or '-'} · 대상자 {req.get('target_count', 0)}명"),
+            ('사용목적', req.get('purpose', '')), ('요청 시각', req.get('created_at', ''))]
+    if req.get('admin_comment'):
+        rows.append(('관리자 의견', req['admin_comment']))
+    if approved:
+        rows.append(('유효기간', f"{req.get('expires_at', '')}까지 1회"))
+    out = (f'<p>{escape(req.get("display_name") or req["user_id"])}님, 요청하신 엑셀 다운로드가 '
+           f'<b>{"승인" if approved else "반려"}</b>되었습니다.</p>' + _info_table(rows)
+           + f'<p style="margin:12px 0 4px"><b>{"승인된" if approved else "요청한"} 헤더(열) 구성</b>'
+           + (' — 이 구성 그대로만 내려받을 수 있습니다.' if approved else '') + '</p>' + headers_html(req))
+    if approved:
+        out += (f"<p style='color:#b02a37'><b>{escape(RESPONSIBILITY_NOTICE)}</b></p>"
+                '<p>People in SAIT에 로그인해 알림을 확인한 뒤 해당 화면에서 다운로드할 수 있습니다.</p>')
+    return out
+
+
+def _notify_mail(req: dict) -> None:
+    """요청자에게 결과 메일(메일 API 설정이 없거나 실패해도 화면 알림은 그대로 동작).
+    주소: 요청 당시 계정 이메일, 없으면 ID@samsung.com(요청 알림 메일과 같은 규칙, 2026-10-28)."""
+    to = (req.get('email') or '').strip() or f"{req['user_id']}@samsung.com"
+    approved = req['status'] == 'approved'
     try:
         from pipeline.mailer import send_html_email
-        send_html_email([to], f"[People in SAIT] 엑셀 다운로드 요청 {'승인' if approved else '반려'}", body)
+        send_html_email([to], f"[People in SAIT] 엑셀 다운로드 요청 {'승인' if approved else '반려'} — {req['feature_label']}",
+                        result_mail_html(req))
     except Exception as exc:  # noqa: BLE001 — 메일 미설정·실패는 화면 알림으로 대체
         print(f'[download_access] 결과 메일 발송 생략/실패: {exc}')
 

@@ -432,9 +432,17 @@ def setup_page():
 # ── 로그아웃 ─────────────────────────────────────────────────────────────────
 @app.server.route('/logout')
 def logout():
+    """세션을 끊고, 이 브라우저에 남은 화면 기록(연구원 프로필 "최근 검색" 등 localStorage)도 지운다(2026-10-29 —
+    공용 PC에서 다음 사람이 보지 않게). Clear-Site-Data 헤더를 지원하지 않는 브라우저를 위해 스크립트로도 지운다."""
     from services.auth import clear_session
     clear_session()
-    return flask.redirect('/login')
+    resp = flask.make_response(
+        '<!doctype html><meta charset="utf-8"><title>로그아웃</title>'
+        '<script>try{localStorage.clear();sessionStorage.clear();}catch(e){}location.replace("/login");</script>'
+        '<noscript><meta http-equiv="refresh" content="0;url=/login"></noscript>')
+    resp.headers['Clear-Site-Data'] = '"storage"'
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
 
 
 # ── 비밀번호 변경 (일괄 계정 생성으로 만든 임시 비밀번호 강제 교체) ───────────

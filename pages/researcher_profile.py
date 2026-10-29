@@ -515,9 +515,10 @@ def _selector_card(dept_opts, res_opts, default_dept, default_rid, default_mode=
                 html.Span('최근 검색', className='small fw-semibold text-muted me-2'),
                 html.Div(id='researcher-history-chips', className='d-inline-flex flex-wrap'),
             ], className='mt-2 d-flex align-items-center flex-wrap'),
-            # storage_type='local' — 브라우저 localStorage에 저장돼 새로고침/재방문
-            # 후에도 남는다(로그인 체계가 없어 "나"는 이 브라우저 하나로 구분).
-            dcc.Store(id='researcher-search-history', storage_type='local', data=[]),
+            # storage_type='local' — 브라우저 localStorage에 저장돼 새로고침/재방문 후에도 남는다(서버에는 저장 안 함).
+            # 2026-10-29: {'user': 로그인 아이디, 'items': [...]} 형태로 계정별 구분 — 같은 PC에서 다른 계정으로
+            # 로그인하면 이전 계정의 이력은 보이지 않고 덮어쓴다. 로그아웃(/logout) 때 브라우저에서 지운다.
+            dcc.Store(id='researcher-search-history', storage_type='local', data=None),
         ]),
         className='mb-3 shadow-sm',
     )
@@ -1392,6 +1393,23 @@ def filter_by_dept(dept, group, project, mode, current_rid):
 _HISTORY_LIMIT = 8  # "최근 검색" 칩 최대 개수(오래된 항목부터 밀려남)
 
 
+def _history_owner() -> str:
+    from services.auth import get_current_user
+    return (get_current_user() or {}).get('user_id', '')
+
+
+def _history_items(data) -> list:
+    """브라우저에 저장된 최근 검색 중 지금 로그인한 계정의 것만(다른 계정·예전 형식(list)이면 빈 목록)."""
+    owner = _history_owner()
+    if not owner or not isinstance(data, dict) or data.get('user') != owner:
+        return []
+    return [h for h in (data.get('items') or []) if isinstance(h, dict)]
+
+
+def _history_data(items: list) -> dict:
+    return {'user': _history_owner(), 'items': items[:_HISTORY_LIMIT]}
+
+
 @callback(
     Output('researcher-search-history', 'data'),
     Input('researcher-select', 'value'),
@@ -1402,10 +1420,10 @@ def _record_search_history(rid, history):
     """researcher-select 값이 바뀔 때마다(직접 검색이든, 최근 검색 칩 클릭이든)
     그 사람을 이력 맨 앞으로 올린다(이미 있던 항목은 지우고 다시 넣어 중복
     없이 최신순 유지). storage_type='local'이라 브라우저에 남아 새로고침/재방문
-    후에도 이어서 볼 수 있다(로그인 체계가 없어 "나" = 이 브라우저)."""
-    if not rid:
+    후에도 이어서 볼 수 있다 — 로그인 계정별로 구분(_history_items)."""
+    if not rid or not _history_owner():
         return no_update
-    history = [h for h in (history or []) if h.get('rid') != rid]
+    history = [h for h in _history_items(history) if h.get('rid') != rid]
     res_df = read_processed('researchers')
     match = res_df[res_df['researcher_id'] == rid]
     if not match.empty:
@@ -1422,7 +1440,7 @@ def _record_search_history(rid, history):
     else:
         label = rid
     history.insert(0, {'rid': rid, 'label': label})
-    return history[:_HISTORY_LIMIT]
+    return _history_data(history)
 
 
 @callback(
@@ -1435,7 +1453,7 @@ def _render_history_chips(history):
     DOM을 타고 올라가 부모 Badge의 n_clicks(_select_from_history, 그
     사람을 선택)까지 같이 발생해버려("삭제"를 눌렀는데 그 사람이 선택되는
     버그) — 형제로 분리하면 이 문제가 없다."""
-    history = history or []
+    history = _history_items(history)
     if not history:
         return html.Span('아직 검색 이력이 없습니다.', className='text-muted small')
     chips = [
@@ -1481,7 +1499,7 @@ def _delete_history_entry(n_clicks_list, ids, history):
     if idx is None or not n_clicks_list[idx]:
         return no_update
     rid = triggered_id['rid']
-    return [h for h in (history or []) if h.get('rid') != rid]
+    return _history_data([h for h in _history_items(history) if h.get('rid') != rid])
 
 
 @callback(
@@ -1492,7 +1510,7 @@ def _delete_history_entry(n_clicks_list, ids, history):
 def _clear_history(n_clicks):
     if not n_clicks:
         return no_update
-    return []
+    return _history_data([])
 
 
 @callback(
@@ -1573,7 +1591,7 @@ def _build_print_block(rid, tables, researchers, name_map, show_eval):
 )
 def update_profile(rid):
     import sys
-    from services.auth import can, can_view_evaluation, get_current_user
+    from services.auth import can, get_current_user
 
     if get_current_user() is None:
         return _empty_profile_output()
@@ -1595,12 +1613,7 @@ def update_profile(rid):
         if rows.empty:
             return _empty_profile_output(role_show_eval)
         researcher = rows.iloc[0]
-        # 역할 권한(role_show_eval)만으로는 부족하다 — People팀처럼 부서
-        # 단위로 평가를 제외해 둔 사용자라면, 지금 보고 있는 이 연구원이
-        # 그 제외 부서 소속인지까지 봐야 한다(사용자 요청, 2026-08-31).
-        show_eval = can_view_evaluation(
-            str(researcher.get('org_code', '')), similarity_map.org_code_dep_id_map()
-        )
+        show_eval = role_show_eval
         # 평가등급 표의 연도 열 — evaluations.csv가 생성될 때와 동일한 회계연도
         # 기준(매년 3월 시작, services.evaluations)이어야 CSV의 실제 컬럼과
         # 항상 맞아떨어진다(달력연도 CURRENT_YEAR를 그대로 쓰면 1~2월에 어긋남).
@@ -1693,7 +1706,7 @@ def _append_bulk_print_block(_step, rid_list, progress):
     순환을 이어주지 않아 1명 뒤에 멈췄다. 지금 방식: 틱마다 클라이언트사이드 콜백이 *먼저 인터벌을 끄고*
     bulk-print-step을 갱신 → 이 콜백이 한 명을 만든 뒤 인터벌을 다시 켠다(끝나면 끈 채로 둔다). 요청이
     진행 중인 동안에는 틱이 없으므로 응답이 버려지지 않고, 콜백 그래프에 순환도 없다."""
-    from services.auth import can_view_evaluation, get_current_user
+    from services.auth import can, get_current_user
 
     fallback = (no_update, no_update, True, no_update, no_update, _BULK_BUILD_OVERLAY_HIDDEN_STYLE)
     if get_current_user() is None or not rid_list:
@@ -1712,12 +1725,7 @@ def _append_bulk_print_block(_step, rid_list, progress):
             block = None
         else:
             name_map = researchers.set_index('researcher_id')['name'].to_dict()
-            # update_profile()과 같은 이유로 부서 단위 예외까지 반영해야 한다
-            # — 일괄 인쇄 대상마다 소속 부서가 다를 수 있으므로 틱마다(그
-            # 사람의 org_code로) 다시 판정한다.
-            rows = researchers[researchers['researcher_id'] == rid]
-            org_code = str(rows.iloc[0].get('org_code', '')) if not rows.empty else ''
-            show_eval = can_view_evaluation(org_code, similarity_map.org_code_dep_id_map())
+            show_eval = can('view_evaluation')
             block = _build_print_block(rid, tables, researchers, name_map, show_eval)
     except Exception as exc:
         import sys

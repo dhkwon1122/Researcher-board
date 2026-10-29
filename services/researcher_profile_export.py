@@ -228,21 +228,6 @@ def _col_education(_rid, rows):
     return '\n'.join(lines) if lines else '-'
 
 
-def _eval_dept_excluded(rows) -> bool:
-    """view_evaluation은 있어도 부서 단위 평가 제외(2026-08-31, People팀
-    등)에 해당하는 연구원이면 True — 평가 관련 옵트인 컬럼 3종(종합/
-    연봉등급/업적평가) 전부 이 판정을 공유한다(사용자 확정
-    2026-08-31 — 3개 항목 모두 동일하게 적용). 화면(researcher_profile.py/
-    researcher_list.py)과 동일한 기준."""
-    excluded_dep_ids = rows.get('eval_excluded_dep_ids')
-    if not excluded_dep_ids:
-        return False
-    researcher = rows.get('researcher') or {}
-    org_code = _s(researcher.get('org_code'))
-    dep_id = (rows.get('org_code_dep_id_map') or {}).get(org_code, '')
-    return dep_id in excluded_dep_ids
-
-
 def _col_evaluation(_rid, rows):
     """평가(종합) — 연봉등급 3개년을 첫 줄에 헤더("'24~'26")와 같은 오름차순으로
     "다/다/다", 그에 대응하는(각 연봉등급 연도 - 1) 상/하반기업적 3개년을
@@ -266,7 +251,7 @@ def _col_evaluation(_rid, rows):
     화면에서 이 항목을 선택할 수 있고(pages/researcher_list.py), 선택
     여부와 무관하게 build_profile_workbook()이 권한을 다시 확인해 컬럼
     자체를 추가하지 않는다(요청을 조작해도 우회 불가)."""
-    if not rows['permissions']['view_evaluation'] or _eval_dept_excluded(rows):
+    if not rows['permissions']['view_evaluation']:
         return '-'
     eva_rows = rows['evaluations']
     eva = eva_rows[0] if eva_rows else {}
@@ -289,10 +274,9 @@ def _col_eval_field(field_key: str):
     2026-08-31 사용자 확정) 하나를 만든다 — evaluations.csv의 특정 컬럼
     (예: '2024_salary_grade') 값을 원본 그대로 보여준다(2026-09-09 확정 —
     _col_evaluation()의 "종합" 컬럼과 달리 평가표기 예외자 가공을 적용하지
-    않는다). 권한/부서 제외 판정은 _col_evaluation()과 동일하게 공유
-    (_eval_dept_excluded)한다."""
+    않는다). 권한 판정은 _col_evaluation()과 동일하다."""
     def _col(_rid, rows):
-        if not rows['permissions']['view_evaluation'] or _eval_dept_excluded(rows):
+        if not rows['permissions']['view_evaluation']:
             return '-'
         eva_rows = rows['evaluations']
         eva = eva_rows[0] if eva_rows else {}
@@ -570,17 +554,11 @@ _TECH_OWNERSHIP_COLUMNS = [('보유기술', _col_tech_ownership)]
 
 def _researcher_row_context(researcher_id: str, tables: dict, permissions: dict,
                              dep_pjt_maps: tuple | None = None,
-                             eval_excluded_dep_ids: set | None = None,
-                             org_code_dep_id_map: dict | None = None,
                              org_code_dep_code_map: dict | None = None,
                              evaluation_exception_ids: set | None = None) -> dict:
     researcher_rows = _rows_for(tables['researchers'], researcher_id)
     return {
         'dep_pjt_maps': dep_pjt_maps,
-        # 부서 단위 평가 제외(2026-08-31) — _col_evaluation 참고. 요청 단위로
-        # 한 번만 계산해 전달받는다(dep_pjt_maps와 같은 이유).
-        'eval_excluded_dep_ids': eval_excluded_dep_ids,
-        'org_code_dep_id_map': org_code_dep_id_map,
         # 평가표기 예외자(2026-09-09) — _col_evaluation() 참고.
         'evaluation_exception_ids': evaluation_exception_ids or set(),
         # 조직코드(A열, _col_org_code) 표시용 — org_code → dep_code(사용자
@@ -733,11 +711,6 @@ def prepare_rows(researcher_ids: list):
     # 임포트하므로(순환 임포트 방지) 여기서는 지연 임포트로 가져온다.
     from services import similarity_map
     dep_pjt_maps = similarity_map.org_code_label_maps()
-    # 부서 단위 평가 제외(2026-08-31) — view_evaluation은 있어도 특정 부서
-    # 소속 연구원의 평가만 가리는 사용자를 위해 화면(researcher_list.py/
-    # researcher_profile.py)과 동일한 기준을 엑셀에도 적용한다.
-    eval_excluded_dep_ids = auth.eval_excluded_dep_ids()
-    org_code_dep_id_map = similarity_map.org_code_dep_id_map() if eval_excluded_dep_ids else {}
     # 조직코드(A열) 표시 + 정렬(아래 참고) 모두에 필요 — 항상 계산.
     org_code_dep_code_map = similarity_map.org_code_dep_code_map()
     # 평가표기 예외자(2026-09-09) — _col_evaluation() 참고. 요청 단위로 한 번만
@@ -767,7 +740,6 @@ def prepare_rows(researcher_ids: list):
 
     def ctx_for(rid):
         return _researcher_row_context(rid, tables, permissions, dep_pjt_maps,
-                                       eval_excluded_dep_ids, org_code_dep_id_map,
                                        org_code_dep_code_map, evaluation_exception_ids)
     return sorted(researcher_ids, key=_export_sort_key), ctx_for, permissions
 

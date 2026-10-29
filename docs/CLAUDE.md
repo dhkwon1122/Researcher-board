@@ -14440,3 +14440,37 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   주소는 계정 이메일, 없으면 ID@samsung.com. 요청 화면이 메일 API를 기다리지 않도록 백그라운드 스레드로 보내고, 발송/실패는
   다운로드 로그에 'notify'(알림 메일) 이벤트로 남김. 지정 계정이 없으면 보내지 않음.
 - 테스트 tests/test_download_access.py::test_request_notify_mail.
+
+## (70) 다운로드 승인/반려 메일에 헤더(열) 구성 (2026-10-28)
+- download_access.result_mail_html: 요청자에게 가는 승인/반려 메일을 표 형식으로 정리하고 "승인된 헤더(열) 구성"을 추가 —
+  조서 작성은 열마다 헤더·넣을 항목·묶는 방식(+여러 건 최대), 그 외 화면은 헤더 이름 목록(headers_html, 요청 알림 메일과 공용).
+  승인 메일에만 정보 관리 책임 안내. 사용자 입력은 HTML 이스케이프.
+- 받는 주소: 계정 이메일이 없으면 메일을 생략하던 것을 ID@samsung.com으로 보내도록(요청 알림 메일과 같은 규칙).
+- 테스트 tests/test_download_access.py::test_result_mail_includes_headers.
+
+## (71) 관리자 사용자/권한 관리 정리 — People제외 삭제, 행 순서, 탭 순서 (2026-10-29)
+- "People제외"(부서 단위 평가등급 제외, eval_excluded_dep_ids) 기능 전부 삭제 — 사용자 결정: People팀 평가는 원천(Raw) 데이터
+  단계에서 빼기로. 관리자 표 열·체크박스·저장(admin_users_tab), auth(eval_excluded_dep_ids()·can_view_evaluation 삭제, can_table의
+  평가 테이블 차단 삭제, 세션·사용자 dict에서 제거, update_permissions(user_id, permissions)로 인자 축소), user_store(읽기·쓰기 중단 —
+  공유 DB 스키마 때문에 컬럼 정의만 남김), 화면·엑셀·AI 검색·JOB Market의 부서 예외 판정(researcher_list/_apply_permission_filter,
+  researcher_profile, researcher_profile_export/_eval_dept_excluded, nl_query 평가 조건, job_market 평가 열),
+  similarity_map.people_team_dep_ids 삭제. 이제 평가등급은 view_evaluation 권한만으로 판정. tests/test_nl_grade_people_exclusion.py 삭제.
+- "엑셀" 열 이름 → "다운로드 (엑셀)".
+- 행 순서: services/user_order.py — data/processed/user_order.json에 아이디 순서만 저장(계정 저장소 스키마 그대로). 표 맨 앞 "순서"
+  칸에서 번호 입력(그 자리로) 또는 ↑/↓(한 칸). 옮기면 열 정렬은 풀림. 순서에 없는 새 계정은 맨 뒤. 표가 다시 그려질 때도 콜백이
+  불리므로 번호가 바뀐 경우·버튼을 실제로 누른 경우만 처리. dbc.Input은 title 인자를 받지 않아 툴팁은 감싼 div에.
+- 관리자 탭 순서: 사용자/권한 관리, 데이터 업데이트, 팀/리더 참조, 다운로드 요청, AI 검색 로그, AI 검색 테스트, 직군 예외자,
+  개발업데이트 이력(pages/admin.py _TABS).
+- 테스트 tests/test_user_order.py(이동·새 계정·범위 밖, 순서 칸 렌더링). 브라우저로 3번째 행 → 1번째, ↓ 이동 확인.
+- (71 보충) 다운로드 요청 탭 안내 문구의 "엑셀" 열 → "다운로드 (엑셀)" 열.
+
+## (72) 연구원 프로필 "최근 검색" 계정별 구분·로그아웃 시 삭제 (2026-10-29)
+- 배경: 최근 검색은 서버가 아니라 브라우저 localStorage(dcc.Store storage_type='local')에 저장돼 다른 PC 사용자에게는 원래
+  보이지 않지만, 계정이 아니라 브라우저 기준이라 같은 PC에서 다른 아이디로 로그인하면 앞 사람 이력이 보였다(로그아웃해도 남음).
+- 저장 형식을 {'user': 로그인 아이디, 'items': [...]}로 바꾸고(pages/researcher_profile.py _history_owner/_history_items/_history_data),
+  현재 계정과 다르면(또는 예전 list 형식이면) 빈 목록으로 취급 — 다음 계정이 검색하면 덮어쓴다(다른 계정 이력을 남겨 두지 않음).
+- /logout(app.py): 리다이렉트 대신 localStorage/sessionStorage를 지우고 /login으로 가는 작은 페이지 + Clear-Site-Data: "storage" 헤더.
+  상단 로그아웃 링크는 dcc.Location(refresh=True)로 /logout 전체 페이지 이동이라 스크립트가 실행된다.
+- 참고: ?id= 딥링크로 연 프로필은 기존과 같이 최근 검색에 기록되지 않는다(검색 드롭다운으로 바꿀 때만 기록).
+- 테스트 tests/test_search_history_privacy.py(계정별 구분, /logout 헤더·스크립트). 브라우저 확인: A 검색 → 세션만 바꿔 B 로그인 시
+  빈 이력 → B 검색 → A 재로그인 시 빈 이력 → 로그아웃 후 localStorage 비어 있음.

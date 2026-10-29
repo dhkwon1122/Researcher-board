@@ -116,10 +116,6 @@ def _normalize_permissions(data: dict) -> dict:
     return {col: perms.get(col) for col in user_store.PERMISSION_COLUMNS}
 
 
-def _normalize_excluded_dep_ids(data: dict) -> list[str]:
-    return [str(d) for d in (data.get('eval_excluded_dep_ids') or []) if str(d).strip()]
-
-
 def authenticate(username: str, password: str) -> dict | None:
     """아이디/비밀번호 검증. 성공 시 사용자 dict, 실패 시 None."""
     if not username or not password:
@@ -139,7 +135,6 @@ def authenticate(username: str, password: str) -> dict | None:
             'must_change_password': bool(data.get('must_change_password')),
             'is_admin': bool(data.get('is_admin')),
             'permissions': _normalize_permissions(data),
-            'eval_excluded_dep_ids': _normalize_excluded_dep_ids(data),
         }
 
     data = _load_users_json().get(username)
@@ -155,7 +150,6 @@ def authenticate(username: str, password: str) -> dict | None:
         'must_change_password': bool(data.get('must_change_password')),
         'is_admin': bool(data.get('is_admin')),
         'permissions': _normalize_permissions(data),
-        'eval_excluded_dep_ids': _normalize_excluded_dep_ids(data),
     }
 
 
@@ -180,7 +174,6 @@ def list_users() -> list[dict]:
                 'must_change_password': bool(d.get('must_change_password')),
                 'is_admin': bool(d.get('is_admin')),
                 'permissions': _normalize_permissions(d),
-                'eval_excluded_dep_ids': _normalize_excluded_dep_ids(d),
             }
             for d in user_store.list_all()
         ]
@@ -193,7 +186,6 @@ def list_users() -> list[dict]:
             'must_change_password': bool(d.get('must_change_password')),
             'is_admin': bool(d.get('is_admin')),
             'permissions': _normalize_permissions(d),
-            'eval_excluded_dep_ids': _normalize_excluded_dep_ids(d),
         }
         for uid, d in _load_users_json().items()
     ]
@@ -230,7 +222,6 @@ def create_user(user_id: str, password: str, display_name: str,
         # 신규 계정은 전부 None(=역할 기본값 사용)으로 시작 — "사용자/권한
         # 관리" 탭에서 한 번이라도 저장해야 명시적 재정의가 생긴다.
         'permissions': {col: None for col in user_store.PERMISSION_COLUMNS},
-        'eval_excluded_dep_ids': [],
     }
     _save_users_json(users)
 
@@ -258,22 +249,21 @@ def update_user(user_id: str, display_name: str | None = None,
     return True
 
 
-def update_permissions(user_id: str, permissions: dict, eval_excluded_dep_ids: list) -> bool:
-    """"사용자/권한 관리" 탭의 저장 버튼 — 4개 권한(view_evaluation 등)을
-    이 계정 전용 값으로 명시적으로 고정하고, 평가 열람 예외 부서 목록도
-    함께 저장한다. permissions는 user_store.PERMISSION_COLUMNS 4개 키를
-    모두 bool로 채워서 넘겨야 한다(부분 업데이트 아님 — 화면이 4개
-    체크박스를 항상 전부 함께 저장)."""
+def update_permissions(user_id: str, permissions: dict) -> bool:
+    """"사용자/권한 관리" 탭의 체크박스 — 개별 권한(view_evaluation 등)을
+    이 계정 전용 값으로 명시적으로 고정한다. permissions는
+    user_store.PERMISSION_COLUMNS 키를 모두 bool로 채워서 넘겨야 한다(부분
+    업데이트 아님 — 화면이 체크박스를 항상 전부 함께 저장)."""
     if _database_configured():
         if not user_store.available():
             return False
-        return user_store.update_permissions(user_id, permissions, eval_excluded_dep_ids)
+        return user_store.update_permissions(user_id, permissions)
 
     users = _load_users_json()
     if user_id not in users:
         return False
     users[user_id]['permissions'] = {col: bool(permissions.get(col)) for col in user_store.PERMISSION_COLUMNS}
-    users[user_id]['eval_excluded_dep_ids'] = [str(d) for d in (eval_excluded_dep_ids or [])]
+    users[user_id].pop('eval_excluded_dep_ids', None)
     _save_users_json(users)
     return True
 
@@ -340,7 +330,6 @@ def get_current_user() -> dict | None:
         'must_change_password': bool(flask.session.get('must_change_password')),
         'is_admin': bool(flask.session.get('is_admin')),
         'permissions': flask.session.get('permissions') or {},
-        'eval_excluded_dep_ids': flask.session.get('eval_excluded_dep_ids') or [],
     }
 
 
@@ -392,58 +381,12 @@ def can_view_succession_plan() -> bool:
     return user.get('role') in SUCCESSION_PLAN_ROLES
 
 
-def eval_excluded_dep_ids() -> set[str]:
-    """현재 로그인 사용자가 평가등급을 볼 수 없는 부서(dep_id) 집합 —
-    view_evaluation 자체는 있어도 이 부서 소속 연구원만은 예외로 가린다
-    (사용자 확정 2026-08-31, "People팀 평가는 예외"류 세부 권한).
-    view_evaluation 권한이 아예 없으면 이 목록 자체가 무의미하므로 빈
-    집합을 돌려준다(호출부가 can('view_evaluation')과 별도로 이 함수만
-    보고 판단하는 실수를 막기 위함 — can_view_evaluation()을 쓰면 이 걱정
-    없이 한 번에 처리된다)."""
-    if not can('view_evaluation'):
-        return set()
-    user = get_current_user()
-    if user is None:
-        return set()
-    return {str(d) for d in user.get('eval_excluded_dep_ids', [])}
-
-
-def can_view_evaluation(org_code: str, org_code_dep_id_map: dict | None = None) -> bool:
-    """특정 연구원(org_code로 식별)의 평가등급을 지금 로그인한 사용자가 볼 수
-    있는지 — view_evaluation 권한 + 부서 단위 예외(eval_excluded_dep_ids)를
-    한 번에 판정한다. org_code_dep_id_map은 services.similarity_map.
-    org_code_dep_id_map()의 결과를 그대로 넘긴다(auth.py는 team_refer 등
-    데이터 계층을 직접 import하지 않기 위해 호출부가 매핑을 만들어 전달하는
-    구조 — 명단처럼 여러 명을 한꺼번에 판정할 때도 매핑을 한 번만 만들어
-    재사용할 수 있다). org_code_dep_id_map을 생략하면 부서 예외 판정 없이
-    view_evaluation만 확인한다(매핑을 못 구하는 예외적 호출부용 폴백)."""
-    if not can('view_evaluation'):
-        return False
-    excluded = eval_excluded_dep_ids()
-    if not excluded:
-        return True
-    if org_code_dep_id_map is None:
-        return True
-    dep_id = org_code_dep_id_map.get(org_code, '')
-    return dep_id not in excluded
-
-
 def can_table(table_name: str) -> bool:
-    """자연어 검색 테이블 권한을 기본 거부 방식으로 확인한다.
-
-    evaluations/evaluations_history는 부서 단위 예외(eval_excluded_dep_ids)가
-    있으면 통째로 차단한다 — AI 검색 결과는 행 단위로 부서를 걸러내는 기능이
-    아직 없어서, 어중간하게 열어두면 화면·엑셀에서는 못 보게 막은 특정 부서
-    평가를 AI 검색으로는 그대로 볼 수 있는 우회 경로가 생긴다(사용자 확정
-    2026-08-31 — "화면·엑셀만 우선 적용, AI 검색은 안전하게 전체 차단")."""
+    """자연어 검색 테이블 권한을 기본 거부 방식으로 확인한다."""
     if get_current_user() is None or table_name not in TABLE_PERMISSIONS:
         return False
     permission = TABLE_PERMISSIONS.get(table_name)
-    if not (True if permission is None else can(permission)):
-        return False
-    if table_name in ('evaluations', 'evaluations_history') and eval_excluded_dep_ids():
-        return False
-    return True
+    return True if permission is None else can(permission)
 
 
 def filter_permitted_tables(tables: dict) -> dict:
@@ -468,7 +411,6 @@ def set_session(user: dict) -> None:
     flask.session['must_change_password'] = bool(user.get('must_change_password'))
     flask.session['is_admin'] = bool(user.get('is_admin'))
     flask.session['permissions'] = user.get('permissions') or {}
-    flask.session['eval_excluded_dep_ids'] = user.get('eval_excluded_dep_ids') or []
     flask.current_app.permanent_session_lifetime = timedelta(hours=SESSION_LIFETIME_HOURS)
 
 

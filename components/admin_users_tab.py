@@ -24,18 +24,16 @@ _PERMISSION_LABELS = {
 }
 _PERMISSION_KEYS = list(_PERMISSION_LABELS.keys())
 
-# 2026-09-04: 기본 표에 인라인 체크박스로 노출하는 6개 권한 관련 컬럼
-# (관리자 권한 1개 + 개별 권한 4개 + People팀 평가제외 1개) — 컬럼 헤더는
+# 2026-09-04: 기본 표에 인라인 체크박스로 노출하는 권한 관련 컬럼
+# (관리자 권한 1개 + 개별 권한 5개, 2026-10-29 People제외 삭제) — 컬럼 헤더는
 # 좁은 표에 맞춰 짧게 쓰고, 전체 설명은 title 속성(네이티브 브라우저 툴팁)으로.
 _INLINE_PERM_COLUMNS = [
     ('is_admin', '관리자', '관리자 권한 (사용자 관리 페이지 접근 — 역할과 무관하게 이 계정에만 적용)'),
     ('view_evaluation', '평가등급', _PERMISSION_LABELS['view_evaluation']),
-    ('exclude_people_team', 'People제외',
-     'People팀 평가등급 제외 (People팀·하위 과제/파트 소속 연구원의 평가등급만 가림)'),
     ('view_incentive', '인센티브', _PERMISSION_LABELS['view_incentive']),
     ('view_comments', '코멘트', _PERMISSION_LABELS['view_comments']),
     ('view_grade', '리더십', _PERMISSION_LABELS['view_grade']),
-    ('download_excel', '엑셀', _PERMISSION_LABELS['download_excel']),
+    ('download_excel', '다운로드 (엑셀)', _PERMISSION_LABELS['download_excel']),
 ]
 # 정렬 가능한 전체 컬럼(신분 정보 5개 + 권한 6개) — '관리' 액션 컬럼은 제외.
 _SORTABLE_COLUMNS = [
@@ -45,8 +43,7 @@ _SORTABLE_COLUMNS = [
 
 
 def _effective_permissions(user: dict) -> dict:
-    """이 계정에 지금 실제로 적용되는 권한 6개(관리자 + 개별 4개 +
-    People팀 제외 여부)를 계산한다 — 개별 권한은 계정별 재정의(override)가
+    """이 계정에 지금 실제로 적용되는 권한(관리자 + 개별 5개)을 계산한다 — 개별 권한은 계정별 재정의(override)가
     있으면 그 값, 없으면(None) 역할 기본값(ROLE_PERMISSIONS)을 따른다
     (기존 '수정' 모달이 체크박스 초기값을 계산하던 것과 동일한 규칙)."""
     role_defaults = ROLE_PERMISSIONS.get(user.get('role', ''), {})
@@ -56,7 +53,6 @@ def _effective_permissions(user: dict) -> dict:
         for key in _PERMISSION_KEYS
     }
     result['is_admin'] = bool(user.get('is_admin'))
-    result['exclude_people_team'] = bool(user.get('eval_excluded_dep_ids'))
     return result
 
 
@@ -75,12 +71,30 @@ def _sort_key_value(user: dict, col: str):
 
 
 def _build_user_rows(users: list, sort_state: dict | None) -> list:
+    """users는 저장된 표시 순서(services/user_order) 그대로 — 순서 칸의 번호는 그 순서 기준이고,
+    열 제목을 눌러 정렬하면 보기만 바뀐다(순서를 옮기면 정렬은 풀린다)."""
     sort_state = sort_state or {}
+    position = {u['user_id']: i for i, u in enumerate(users, 1)}
     col = sort_state.get('column')
     if col:
         users = sorted(users, key=lambda u: _sort_key_value(u, col),
                         reverse=(sort_state.get('direction') == 'desc'))
-    return [_user_row(u) for u in users]
+    return [_user_row(u, position[u['user_id']], len(position)) for u in users]
+
+
+def _order_cell(user_id: str, pos: int, total: int):
+    """행 순서 칸(2026-10-29) — 번호를 직접 고치면 그 자리로, ↑/↓는 한 칸씩 옮긴다."""
+    def _btn(direction, icon, disabled):
+        return dbc.Button(html.I(className=f'bi {icon}'), id={'type': 'user-move', 'dir': direction, 'user_id': user_id},
+                          color='light', size='sm', className='px-1 py-0 border', disabled=disabled, n_clicks=0,
+                          title='한 칸 위로' if direction == 'up' else '한 칸 아래로')
+    return html.Td(html.Div([
+        dbc.Input(id={'type': 'user-pos', 'user_id': user_id}, type='number', min=1, max=total, step=1,
+                  value=pos, debounce=True, size='sm', className='text-center px-1',
+                  style={'width': '3.2rem'}),
+        _btn('up', 'bi-arrow-up', pos <= 1),
+        _btn('down', 'bi-arrow-down', pos >= total),
+    ], className='d-flex align-items-center gap-1', title='번호를 바꾸면 그 순서로 옮깁니다'), className='align-middle')
 
 
 def _sort_th(col: str, label: str, sort_state: dict | None, title_attr: str | None = None):
@@ -106,8 +120,8 @@ def _perm_checkbox_cell(user: dict, key: str, effective: dict):
 
     주의: row-admin-status/row-perm-status는 각각 관리자 콜백/개별권한
     콜백의 유일한 Output이라 행(user_id)당 정확히 1개의 DOM 요소만 이 id를
-    가져야 한다 — 개별 권한 5개 컬럼(4개 권한 + People팀 제외) 전부에 이
-    상태 span을 넣으면 같은 id가 한 행에 5번 중복되어 Dash가 "이 MATCH
+    가져야 한다 — 개별 권한 컬럼 전부에 이
+    상태 span을 넣으면 같은 id가 한 행에 여러 번 중복되어 Dash가 "이 MATCH
     그룹에 Output 대상이 여럿"이라며 콜백 자체를 포기해버린다(직접
     재현·확인한 버그, 2026-09-04) — 그래서 개별 권한 쪽은 대표로
     view_evaluation 컬럼에만 상태 아이콘을 둔다."""
@@ -117,8 +131,6 @@ def _perm_checkbox_cell(user: dict, key: str, effective: dict):
     if key == 'is_admin':
         checkbox_id = {'type': 'row-admin-check', 'user_id': user_id}
         status = html.Span(id={'type': 'row-admin-status', 'user_id': user_id}, className='small')
-    elif key == 'exclude_people_team':
-        checkbox_id = {'type': 'row-perm-exclude', 'user_id': user_id}
     else:
         checkbox_id = {'type': 'row-perm-check', 'field': key, 'user_id': user_id}
         if key == 'view_evaluation':
@@ -132,7 +144,7 @@ def _perm_checkbox_cell(user: dict, key: str, effective: dict):
     )
 
 
-def _user_row(user: dict):
+def _user_row(user: dict, pos: int = 1, total: int = 1):
     status = (
         dbc.Badge('임시 비밀번호', color='warning', text_color='dark', className='fw-normal')
         if user.get('must_change_password')
@@ -142,6 +154,7 @@ def _user_row(user: dict):
     user_id = user['user_id']
     perm_cells = [_perm_checkbox_cell(user, key, effective) for key, _label, _hint in _INLINE_PERM_COLUMNS]
     return html.Tr([
+        _order_cell(user_id, pos, total),
         html.Td(user_id, className='align-middle font-monospace small'),
         html.Td(user['display_name'], className='align-middle'),
         html.Td(ROLE_LABELS.get(user['role'], user['role']), className='align-middle small'),
@@ -307,13 +320,14 @@ _DEFAULT_USER_SORT = {'column': None, 'direction': 'asc'}
 
 
 def _user_management_tab() -> html.Div:
+    from services import user_order
     from services.auth import list_users
 
-    users = list_users()
+    users = user_order.apply(list_users())
 
     # 권한 관련 6개 헤더는 title 속성(네이티브 브라우저 툴팁)으로 전체 설명을 붙인다.
     perm_hint_by_col = {key: hint for key, _label, hint in _INLINE_PERM_COLUMNS}
-    header_cells = [
+    header_cells = [html.Th('순서', title='번호를 바꾸거나 ↑/↓로 행 순서를 옮깁니다(저장됨)')] + [
         _sort_th(col, label, _DEFAULT_USER_SORT, title_attr=perm_hint_by_col.get(col))
         for col, label in _SORTABLE_COLUMNS
     ]
@@ -453,10 +467,53 @@ def _save_or_test_notify(_save, _test, user_ids):
     prevent_initial_call=True,
 )
 def refresh_user_table(_counter):
+    from services import user_order
     from services.auth import can, list_users
     if not can('manage_users'):
         return []
-    return list_users()
+    return user_order.apply(list_users())
+
+
+# ── 콜백: 행 순서 옮기기(2026-10-29) ─────────────────────────────────────────
+
+@callback(
+    Output('user-refresh-counter', 'data', allow_duplicate=True),
+    Output('user-sort-state', 'data', allow_duplicate=True),
+    Input({'type': 'user-move', 'dir': ALL, 'user_id': ALL}, 'n_clicks'),
+    Input({'type': 'user-pos', 'user_id': ALL}, 'value'),
+    State('user-list-store', 'data'),
+    State('user-refresh-counter', 'data'),
+    prevent_initial_call=True,
+)
+def move_user_row(_clicks, _positions, users, counter):
+    """표가 다시 그려질 때도 호출되므로(새 버튼 n_clicks=0, 새 번호=현재 위치) 실제로 바뀐 경우만 처리한다."""
+    from services import user_order
+    from services.auth import can
+    trig = ctx.triggered_id
+    if not trig or not users or not can('manage_users'):
+        return no_update, no_update
+    ids = [u['user_id'] for u in users]
+    uid = trig.get('user_id')
+    if uid not in ids:
+        return no_update, no_update
+    current = ids.index(uid) + 1
+    value = ctx.triggered[0].get('value')
+    if trig.get('type') == 'user-move':
+        if not value:
+            return no_update, no_update
+        target = current - 1 if trig.get('dir') == 'up' else current + 1
+    else:
+        try:
+            target = int(value)
+        except (TypeError, ValueError):
+            return no_update, no_update
+    clamped = max(1, min(target, len(ids)))
+    if clamped == current:
+        # 범위 밖 번호(예: 0, 99)를 넣었는데 결과가 제자리면 입력칸만 원래 번호로 되돌린다
+        return ((counter or 0) + 1 if target != current else no_update), no_update
+    target = clamped
+    user_order.move(ids, uid, target)
+    return (counter or 0) + 1, _DEFAULT_USER_SORT
 
 
 # ── 콜백: 정렬 헤더 클릭 ──────────────────────────────────────────────────────
@@ -751,7 +808,7 @@ def save_row_admin(is_admin):
     return html.I(className='bi bi-check-circle text-success', title='저장되었습니다.'), no_update
 
 
-# ── 콜백: 표 안 개별 권한 체크박스(4개 + People팀 제외) — 클릭 즉시 저장 ────────
+# ── 콜백: 표 안 개별 권한 체크박스 — 클릭 즉시 저장 ─────────────────────────
 
 @callback(
     Output({'type': 'row-perm-status', 'user_id': MATCH}, 'children'),
@@ -759,20 +816,17 @@ def save_row_admin(is_admin):
     Input({'type': 'row-perm-check', 'field': 'view_incentive', 'user_id': MATCH}, 'value'),
     Input({'type': 'row-perm-check', 'field': 'view_comments', 'user_id': MATCH}, 'value'),
     Input({'type': 'row-perm-check', 'field': 'view_grade', 'user_id': MATCH}, 'value'),
-    Input({'type': 'row-perm-exclude', 'user_id': MATCH}, 'value'),
     Input({'type': 'row-perm-check', 'field': 'download_excel', 'user_id': MATCH}, 'value'),
     prevent_initial_call=True,
 )
-def save_row_permissions(view_evaluation, view_incentive, view_comments, view_grade, exclude_people_team,
-                         download_excel=True):
-    """개별 권한 4개 + People팀 평가제외 체크박스 — 하나라도 바뀌면 그 행의
+def save_row_permissions(view_evaluation, view_incentive, view_comments, view_grade, download_excel=True):
+    """개별 권한 5개 체크박스 — 하나라도 바뀌면 그 행의
     5개 값을 한꺼번에 읽어(MATCH로 같은 user_id 그룹만) update_permissions()
     로 즉시 저장한다. 이 API는 4개 권한을 부분 업데이트가 아니라 항상 전부
     함께 저장해야 해서(services/auth.py update_permissions 독스트링 참고),
     Input 5개를 한 콜백에 모아 매번 완전한 상태로 저장한다. save_row_admin과
     동일한 이유로 재마운트에 의한 재실행도 멱등이라 안전하다."""
     from services.auth import can, update_permissions
-    from services.similarity_map import people_team_dep_ids
     user_id = ctx.outputs_list['id']['user_id']
     if not can('manage_users'):
         return html.I(className='bi bi-x-circle text-danger', title='권한이 없습니다.')
@@ -783,8 +837,7 @@ def save_row_permissions(view_evaluation, view_incentive, view_comments, view_gr
         'view_grade': bool(view_grade),
         'download_excel': bool(download_excel),
     }
-    excluded_dep_ids = list(people_team_dep_ids()) if exclude_people_team else []
-    update_permissions(user_id, permissions, excluded_dep_ids)
+    update_permissions(user_id, permissions)
     return html.I(className='bi bi-check-circle text-success', title='저장되었습니다.')
 
 
