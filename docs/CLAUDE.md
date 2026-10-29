@@ -14447,3 +14447,18 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   승인 메일에만 정보 관리 책임 안내. 사용자 입력은 HTML 이스케이프.
 - 받는 주소: 계정 이메일이 없으면 메일을 생략하던 것을 ID@samsung.com으로 보내도록(요청 알림 메일과 같은 규칙).
 - 테스트 tests/test_download_access.py::test_result_mail_includes_headers.
+
+## (71) 관리자 사용자/권한 관리 정리 — People제외 삭제, 행 순서, 탭 순서 (2026-10-29)
+- "People제외"(부서 단위 평가등급 제외, eval_excluded_dep_ids) 기능 전부 삭제 — 사용자 결정: People팀 평가는 원천(Raw) 데이터
+  단계에서 빼기로. 관리자 표 열·체크박스·저장(admin_users_tab), auth(eval_excluded_dep_ids()·can_view_evaluation 삭제, can_table의
+  평가 테이블 차단 삭제, 세션·사용자 dict에서 제거, update_permissions(user_id, permissions)로 인자 축소), user_store(읽기·쓰기 중단 —
+  공유 DB 스키마 때문에 컬럼 정의만 남김), 화면·엑셀·AI 검색·JOB Market의 부서 예외 판정(researcher_list/_apply_permission_filter,
+  researcher_profile, researcher_profile_export/_eval_dept_excluded, nl_query 평가 조건, job_market 평가 열),
+  similarity_map.people_team_dep_ids 삭제. 이제 평가등급은 view_evaluation 권한만으로 판정. tests/test_nl_grade_people_exclusion.py 삭제.
+- "엑셀" 열 이름 → "다운로드 (엑셀)".
+- 행 순서: services/user_order.py — data/processed/user_order.json에 아이디 순서만 저장(계정 저장소 스키마 그대로). 표 맨 앞 "순서"
+  칸에서 번호 입력(그 자리로) 또는 ↑/↓(한 칸). 옮기면 열 정렬은 풀림. 순서에 없는 새 계정은 맨 뒤. 표가 다시 그려질 때도 콜백이
+  불리므로 번호가 바뀐 경우·버튼을 실제로 누른 경우만 처리. dbc.Input은 title 인자를 받지 않아 툴팁은 감싼 div에.
+- 관리자 탭 순서: 사용자/권한 관리, 데이터 업데이트, 팀/리더 참조, 다운로드 요청, AI 검색 로그, AI 검색 테스트, 직군 예외자,
+  개발업데이트 이력(pages/admin.py _TABS).
+- 테스트 tests/test_user_order.py(이동·새 계정·범위 밖, 순서 칸 렌더링). 브라우저로 3번째 행 → 1번째, ↓ 이동 확인.

@@ -9,9 +9,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from services import download_access as da  # noqa: E402
 
 USER = {'user_id': 'u1', 'display_name': '홍길동', 'email': '', 'role': 'talent_dev', 'is_admin': False,
-        'permissions': {}, 'eval_excluded_dep_ids': []}
+        'permissions': {}}
 ADMIN = {'user_id': 'adm', 'display_name': '관리자', 'email': '', 'role': 'talent_mng', 'is_admin': True,
-         'permissions': {}, 'eval_excluded_dep_ids': []}
+         'permissions': {}}
 RB_CTX = {'ids': ['R1', 'R2'], 'columns': [{'header': '이름', 'fields': ['name'], 'join': 'paren'},
                                            {'header': '', 'fields': [], 'join': 'paren'}], 'max_items': 3}
 

@@ -280,31 +280,22 @@ def _selected_chip(c: dict):
 
 
 def _eval_cells(roster: list) -> dict | None:
-    """평가(참고) 열 — 권한(view_evaluation + 부서 예외)이 있는 사람에게만, 추천 점수와는 무관한 참고 정보로
+    """평가(참고) 열 — 평가등급 열람 권한(view_evaluation)이 있는 사람에게만, 추천 점수와는 무관한 참고 정보로
     보여준다(2026-10-13). 아무도 볼 수 없으면 None(열 자체 숨김)."""
     from services.auth import can
     if not can('view_evaluation'):
         return None
     try:
         from components.profile_sections import evaluation_incentive_summary_text
-        from services import similarity_map as sm
-        from services.auth import can_view_evaluation
         from services.data_store import read_processed
         from services.evaluations import evaluation_years
         eva, inc, exc = (read_processed('evaluations'), read_processed('incentive_selection'),
                          read_processed('evaluation_exception'))
-        res = read_processed('researchers')
-        org = dict(zip(res['researcher_id'], res['org_code'].astype(str))) if not res.empty else {}
-        dep_map = sm.org_code_dep_id_map()
         years = sorted(evaluation_years()[0])
     except Exception:  # noqa: BLE001 — 참고 열이 화면 전체를 막지 않게
         return None
-    out = {}
-    for p in roster:
-        rid = p['researcher_id']
-        out[rid] = (evaluation_incentive_summary_text(eva, inc, exc, rid, years)
-                    if can_view_evaluation(org.get(rid, ''), dep_map) else html.Span('🔒', title='열람 권한 없음'))
-    return out
+    return {p['researcher_id']: evaluation_incentive_summary_text(eva, inc, exc, p['researcher_id'], years)
+            for p in roster}
 
 
 def _roster_table(roster: list):

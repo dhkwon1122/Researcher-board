@@ -1573,7 +1573,7 @@ def _build_print_block(rid, tables, researchers, name_map, show_eval):
 )
 def update_profile(rid):
     import sys
-    from services.auth import can, can_view_evaluation, get_current_user
+    from services.auth import can, get_current_user
 
     if get_current_user() is None:
         return _empty_profile_output()
@@ -1595,12 +1595,7 @@ def update_profile(rid):
         if rows.empty:
             return _empty_profile_output(role_show_eval)
         researcher = rows.iloc[0]
-        # 역할 권한(role_show_eval)만으로는 부족하다 — People팀처럼 부서
-        # 단위로 평가를 제외해 둔 사용자라면, 지금 보고 있는 이 연구원이
-        # 그 제외 부서 소속인지까지 봐야 한다(사용자 요청, 2026-08-31).
-        show_eval = can_view_evaluation(
-            str(researcher.get('org_code', '')), similarity_map.org_code_dep_id_map()
-        )
+        show_eval = role_show_eval
         # 평가등급 표의 연도 열 — evaluations.csv가 생성될 때와 동일한 회계연도
         # 기준(매년 3월 시작, services.evaluations)이어야 CSV의 실제 컬럼과
         # 항상 맞아떨어진다(달력연도 CURRENT_YEAR를 그대로 쓰면 1~2월에 어긋남).
@@ -1693,7 +1688,7 @@ def _append_bulk_print_block(_step, rid_list, progress):
     순환을 이어주지 않아 1명 뒤에 멈췄다. 지금 방식: 틱마다 클라이언트사이드 콜백이 *먼저 인터벌을 끄고*
     bulk-print-step을 갱신 → 이 콜백이 한 명을 만든 뒤 인터벌을 다시 켠다(끝나면 끈 채로 둔다). 요청이
     진행 중인 동안에는 틱이 없으므로 응답이 버려지지 않고, 콜백 그래프에 순환도 없다."""
-    from services.auth import can_view_evaluation, get_current_user
+    from services.auth import can, get_current_user
 
     fallback = (no_update, no_update, True, no_update, no_update, _BULK_BUILD_OVERLAY_HIDDEN_STYLE)
     if get_current_user() is None or not rid_list:
@@ -1712,12 +1707,7 @@ def _append_bulk_print_block(_step, rid_list, progress):
             block = None
         else:
             name_map = researchers.set_index('researcher_id')['name'].to_dict()
-            # update_profile()과 같은 이유로 부서 단위 예외까지 반영해야 한다
-            # — 일괄 인쇄 대상마다 소속 부서가 다를 수 있으므로 틱마다(그
-            # 사람의 org_code로) 다시 판정한다.
-            rows = researchers[researchers['researcher_id'] == rid]
-            org_code = str(rows.iloc[0].get('org_code', '')) if not rows.empty else ''
-            show_eval = can_view_evaluation(org_code, similarity_map.org_code_dep_id_map())
+            show_eval = can('view_evaluation')
             block = _build_print_block(rid, tables, researchers, name_map, show_eval)
     except Exception as exc:
         import sys
