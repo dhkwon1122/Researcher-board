@@ -8,9 +8,8 @@
 중에서 Ready Now/Ready Later 순위(1·2위)와 코멘트를 지정해 저장한다.
 """
 
-import math
 import os
-from datetime import date, datetime
+from datetime import datetime
 
 import dash
 import dash_bootstrap_components as dbc
@@ -111,8 +110,10 @@ def _info_lines(r_info):
         age_str = '-'
     position = str(r_info.get('position', '')).strip()
 
+    # 엑셀 "CL/년차"와 같은 계산(2026-10-29 통일) — 승격산정기준일자가 없으면 직급만.
+    from services.researcher_profile_export import position_years
     promo_dt = _parse_date(r_info.get('promotion_date'))
-    position_year = math.ceil((date(2027, 3, 1) - promo_dt).days / 365) if promo_dt else None
+    position_year = position_years(promo_dt.isoformat()) if promo_dt else None
 
     line1 = f'{name}({gender}/{age_str})' if gender else f'{name}({age_str})'
     if position:
