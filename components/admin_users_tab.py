@@ -70,53 +70,28 @@ def _sort_key_value(user: dict, col: str):
     return _effective_permissions(user).get(col, False)
 
 
-def _role_label(user: dict) -> str:
-    return ROLE_LABELS.get(user.get('role', ''), user.get('role', ''))
-
-
 def _ordered_users(users: list) -> list:
-    """표 기본 순서(2026-10-29 개정) — 역할 이름 오름차순으로 묶고, 같은 역할 안에서는 저장된 순서(services/user_order)."""
+    """표 기본 순서 — 저장된 순서(services/user_order, 체크 후 맨 위로/위로/아래로/맨 아래로로 바꿈)."""
     from services import user_order
-    return user_order.apply(users, group_key=_role_label)
+    return user_order.apply(users)
 
 
-def _role_range(users: list, user_id: str) -> tuple[int, int]:
-    """users(기본 순서)에서 user_id와 같은 역할 묶음의 첫·마지막 번호(1부터) — 행은 이 범위 안에서만 옮긴다."""
-    role = next((_role_label(u) for u in users if u['user_id'] == user_id), None)
-    rows = [i for i, u in enumerate(users, 1) if _role_label(u) == role]
-    return (rows[0], rows[-1]) if rows else (1, len(users))
-
-
-def _build_user_rows(users: list, sort_state: dict | None) -> list:
-    """users는 기본 순서(_ordered_users) 그대로 — 순서 칸의 번호는 그 순서 기준이고,
-    열 제목을 눌러 정렬하면 보기만 바뀐다(순서를 옮기면 정렬은 풀린다)."""
+def _build_user_rows(users: list, sort_state: dict | None, selected: list | None = None) -> list:
+    """users는 기본 순서(_ordered_users) 그대로 — 열 제목을 눌러 정렬하면 보기만 바뀐다(순서를 옮기면 정렬은 풀린다).
+    selected: 체크해 둔 아이디(이동 후 다시 그려도 체크 유지)."""
     sort_state = sort_state or {}
-    position = {u['user_id']: i for i, u in enumerate(users, 1)}
-    ranges = {u['user_id']: _role_range(users, u['user_id']) for u in users}
+    picked = set(selected or [])
     col = sort_state.get('column')
     if col:
         users = sorted(users, key=lambda u: _sort_key_value(u, col),
                         reverse=(sort_state.get('direction') == 'desc'))
-    return [_user_row(u, position[u['user_id']], ranges[u['user_id']]) for u in users]
+    return [_user_row(u, u['user_id'] in picked) for u in users]
 
 
-def _order_cell(user_id: str, pos: int, role_range: tuple[int, int]):
-    """행 순서 칸(2026-10-29) — 번호를 직접 고치면 그 자리로, ↑/↓는 한 칸씩 옮긴다. 같은 역할 안에서만 움직인다."""
-    lo, hi = role_range
-    def _btn(direction, icon, disabled):
-        return dbc.Button(html.I(className=f'bi {icon}'), id={'type': 'user-move', 'dir': direction, 'user_id': user_id},
-                          color='light', size='sm', className='px-1 py-0 border', disabled=disabled, n_clicks=0,
-                          title='한 칸 위로' if direction == 'up' else '한 칸 아래로')
-    return html.Td(html.Div([
-        # min/max는 두지 않는다 — 범위 밖 숫자를 넣으면 브라우저가 값을 None으로 넘겨 아무 일도 안 일어나므로,
-        # 서버(move_user_row)에서 같은 역할 범위로 맞춘다.
-        dbc.Input(id={'type': 'user-pos', 'user_id': user_id}, type='number', step=1,
-                  value=pos, debounce=True, size='sm', className='text-center px-1',
-                  style={'width': '3.2rem'}),
-        _btn('up', 'bi-arrow-up', pos <= lo),
-        _btn('down', 'bi-arrow-down', pos >= hi),
-    ], className='d-flex align-items-center gap-1',
-        title=f'같은 역할 안({lo}~{hi}번)에서 번호를 바꾸거나 ↑/↓로 옮깁니다'), className='align-middle')
+def _select_cell(user_id: str, checked: bool):
+    """행 선택 체크박스(2026-10-29) — 체크한 행을 표 위 맨 위로/위로/아래로/맨 아래로 버튼으로 옮긴다."""
+    return html.Td(dbc.Checkbox(id={'type': 'user-sel', 'user_id': user_id}, value=checked, className='du-check-box'),
+                   className='align-middle text-center')
 
 
 def _sort_th(col: str, label: str, sort_state: dict | None, title_attr: str | None = None):
@@ -166,7 +141,7 @@ def _perm_checkbox_cell(user: dict, key: str, effective: dict):
     )
 
 
-def _user_row(user: dict, pos: int = 1, role_range: tuple[int, int] = (1, 1)):
+def _user_row(user: dict, checked: bool = False):
     status = (
         dbc.Badge('임시 비밀번호', color='warning', text_color='dark', className='fw-normal')
         if user.get('must_change_password')
@@ -176,7 +151,7 @@ def _user_row(user: dict, pos: int = 1, role_range: tuple[int, int] = (1, 1)):
     user_id = user['user_id']
     perm_cells = [_perm_checkbox_cell(user, key, effective) for key, _label, _hint in _INLINE_PERM_COLUMNS]
     return html.Tr([
-        _order_cell(user_id, pos, role_range),
+        _select_cell(user_id, checked),
         html.Td(user_id, className='align-middle font-monospace small'),
         html.Td(user['display_name'], className='align-middle'),
         html.Td(ROLE_LABELS.get(user['role'], user['role']), className='align-middle small'),
@@ -258,6 +233,13 @@ def _user_modal():
             html.Div(
                 id='modal-new-password-note', className='small text-muted mb-2',
             ),
+            # 비밀번호를 잊은 사용자용(2026-10-29) — 수정 때만 보임. 임시 비밀번호로 바꾸고 다음 로그인 때 새 비밀번호를 정하게 한다.
+            html.Div([
+                dbc.Button([html.I(className='bi bi-key me-1'), '임시 비밀번호로 초기화'],
+                           id='btn-reset-temp-password', color='warning', outline=True, size='sm'),
+                html.Span(id='reset-temp-password-msg', className='small ms-2'),
+                dcc.ConfirmDialog(id='reset-temp-password-confirm'),
+            ], id='modal-reset-section', className='mb-2'),
             html.Div(id='user-modal-alert'),
         ]),
         dbc.ModalFooter([
@@ -347,7 +329,7 @@ def _user_management_tab() -> html.Div:
 
     # 권한 관련 6개 헤더는 title 속성(네이티브 브라우저 툴팁)으로 전체 설명을 붙인다.
     perm_hint_by_col = {key: hint for key, _label, hint in _INLINE_PERM_COLUMNS}
-    header_cells = [html.Th('순서', title='역할 이름 순으로 묶고, 같은 역할 안에서 번호나 ↑/↓로 순서를 옮깁니다(저장됨)')] + [
+    header_cells = [html.Th('선택', title='체크한 행을 위 버튼으로 옮깁니다(순서는 저장됨)', className='text-center')] + [
         _sort_th(col, label, _DEFAULT_USER_SORT, title_attr=perm_hint_by_col.get(col))
         for col, label in _SORTABLE_COLUMNS
     ]
@@ -366,6 +348,7 @@ def _user_management_tab() -> html.Div:
         dcc.Store(id='user-refresh-counter', data=0),
         dcc.Store(id='user-list-store', data=users),
         dcc.Store(id='user-sort-state', data=_DEFAULT_USER_SORT),
+        dcc.Store(id='user-selected', data=[]),
 
         dbc.Card([
             dbc.CardHeader(
@@ -390,7 +373,23 @@ def _user_management_tab() -> html.Div:
                     ),
                 ], align='center'),
             ),
-            dbc.CardBody(table, className='p-0'),
+            dbc.CardBody([
+                html.Div([
+                    dbc.ButtonGroup([
+                        dbc.Button([html.I(className='bi bi-arrow-bar-up me-1'), '맨 위로'],
+                                   id='user-move-top-btn', color='secondary', outline=True, size='sm'),
+                        dbc.Button([html.I(className='bi bi-arrow-up me-1'), '위로'],
+                                   id='user-move-up-btn', color='secondary', outline=True, size='sm'),
+                        dbc.Button([html.I(className='bi bi-arrow-down me-1'), '아래로'],
+                                   id='user-move-down-btn', color='secondary', outline=True, size='sm'),
+                        dbc.Button([html.I(className='bi bi-arrow-bar-down me-1'), '맨 아래로'],
+                                   id='user-move-bottom-btn', color='secondary', outline=True, size='sm'),
+                    ]),
+                    html.Span('행을 체크한 뒤 눌러 순서를 바꿉니다(저장됨)', className='small text-muted ms-2'),
+                    html.Span(id='user-move-msg', className='small ms-2'),
+                ], className='d-flex align-items-center flex-wrap p-2 border-bottom'),
+                table,
+            ], className='p-0'),
         ], className='shadow-sm'),
 
         html.Div(id='admin-page-alert', className='mt-3'),
@@ -493,47 +492,43 @@ def refresh_user_table(_counter):
     return _ordered_users(list_users())
 
 
-# ── 콜백: 행 순서 옮기기(2026-10-29) ─────────────────────────────────────────
+# ── 콜백: 행 선택·순서 옮기기(2026-10-29, 팀/리더 참조 탭과 같은 방식) ──────────
+
+@callback(
+    Output('user-selected', 'data'),
+    Input({'type': 'user-sel', 'user_id': ALL}, 'value'),
+    State({'type': 'user-sel', 'user_id': ALL}, 'id'),
+    prevent_initial_call=True,
+)
+def remember_user_selection(values, ids):
+    return [i['user_id'] for i, v in zip(ids, values) if v]
+
 
 @callback(
     Output('user-refresh-counter', 'data', allow_duplicate=True),
     Output('user-sort-state', 'data', allow_duplicate=True),
-    Input({'type': 'user-move', 'dir': ALL, 'user_id': ALL}, 'n_clicks'),
-    Input({'type': 'user-pos', 'user_id': ALL}, 'value'),
+    Output('user-move-msg', 'children'),
+    Input('user-move-top-btn', 'n_clicks'),
+    Input('user-move-up-btn', 'n_clicks'),
+    Input('user-move-down-btn', 'n_clicks'),
+    Input('user-move-bottom-btn', 'n_clicks'),
+    State('user-selected', 'data'),
     State('user-list-store', 'data'),
     State('user-refresh-counter', 'data'),
     prevent_initial_call=True,
 )
-def move_user_row(_clicks, _positions, users, counter):
-    """표가 다시 그려질 때도 호출되므로(새 버튼 n_clicks=0, 새 번호=현재 위치) 실제로 바뀐 경우만 처리한다."""
+def move_selected_users(_top, _up, _down, _bottom, selected, users, counter):
     from services import user_order
     from services.auth import can
-    trig = ctx.triggered_id
-    if not trig or not users or not can('manage_users'):
-        return no_update, no_update
-    ids = [u['user_id'] for u in users]
-    uid = trig.get('user_id')
-    if uid not in ids:
-        return no_update, no_update
-    current = ids.index(uid) + 1
-    value = ctx.triggered[0].get('value')
-    if trig.get('type') == 'user-move':
-        if not value:
-            return no_update, no_update
-        target = current - 1 if trig.get('dir') == 'up' else current + 1
-    else:
-        try:
-            target = int(value)
-        except (TypeError, ValueError):
-            return no_update, no_update
-    lo, hi = _role_range(users, uid)                      # 같은 역할 묶음 밖으로는 못 옮김
-    clamped = max(lo, min(target, hi))
-    if clamped == current:
-        # 범위 밖 번호(예: 다른 역할 자리, 99)를 넣었는데 결과가 제자리면 입력칸만 원래 번호로 되돌린다
-        return ((counter or 0) + 1 if target != current else no_update), no_update
-    target = clamped
-    user_order.move(ids, uid, target)
-    return (counter or 0) + 1, _DEFAULT_USER_SORT
+    direction = {'user-move-top-btn': 'top', 'user-move-up-btn': 'up', 'user-move-down-btn': 'down',
+                 'user-move-bottom-btn': 'bottom'}.get(ctx.triggered_id)
+    if not direction or not can('manage_users'):
+        return no_update, no_update, no_update
+    if not selected:
+        return no_update, no_update, html.Span('옮길 행을 먼저 체크해 주세요.', className='text-warning')
+    _ids, blocked = user_order.move_selected([u['user_id'] for u in users or []], selected, direction)
+    msg = html.Span(f'{blocked}개 행은 더 옮길 수 없습니다.', className='text-muted') if blocked else ''
+    return (counter or 0) + 1, _DEFAULT_USER_SORT, msg
 
 
 # ── 콜백: 정렬 헤더 클릭 ──────────────────────────────────────────────────────
@@ -562,9 +557,10 @@ def toggle_user_sort(n_clicks_list, sort_state):
     Output('user-table-body', 'children'),
     Input('user-sort-state', 'data'),
     Input('user-list-store', 'data'),
+    State('user-selected', 'data'),
 )
-def render_user_table_body(sort_state, users):
-    return _build_user_rows(users or [], sort_state)
+def render_user_table_body(sort_state, users, selected):
+    return _build_user_rows(users or [], sort_state, selected)
 
 
 # ── 콜백: 추가 버튼 → 모달 열기 ───────────────────────────────────────────────
@@ -584,6 +580,8 @@ def render_user_table_body(sort_state, users):
     Output('modal-password-section', 'style', allow_duplicate=True),
     Output('modal-new-password-note', 'children', allow_duplicate=True),
     Output('user-modal-alert', 'children', allow_duplicate=True),
+    Output('modal-reset-section', 'style'),
+    Output('reset-temp-password-msg', 'children', allow_duplicate=True),
     Input('btn-add-user', 'n_clicks'),
     prevent_initial_call=True,
 )
@@ -606,6 +604,8 @@ def open_add_modal(_):
         f'최초 로그인 후 반드시 새 비밀번호로 변경해야 합니다. '
         f'관리자 권한·개별 권한은 계정 생성 후 표에서 바로 설정할 수 있습니다.',
         [],
+        {'display': 'none'},  # 임시 비밀번호 초기화는 수정 때만
+        '',
     )
 
 
@@ -626,13 +626,15 @@ def open_add_modal(_):
     Output('modal-password-section', 'style', allow_duplicate=True),
     Output('modal-new-password-note', 'children', allow_duplicate=True),
     Output('user-modal-alert', 'children', allow_duplicate=True),
+    Output('modal-reset-section', 'style', allow_duplicate=True),
+    Output('reset-temp-password-msg', 'children', allow_duplicate=True),
     Input({'type': 'btn-edit', 'user_id': ALL}, 'n_clicks'),
     State('user-list-store', 'data'),
     prevent_initial_call=True,
 )
 def open_edit_modal(n_clicks_list, users):
     from services.auth import MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH
-    n_outputs = 14
+    n_outputs = 16
     if not any(n for n in n_clicks_list if n):
         return [no_update] * n_outputs
     triggered = ctx.triggered_id
@@ -652,7 +654,46 @@ def open_edit_modal(n_clicks_list, users):
         {},   # modal-password-section: 수정 화면에서는 보이도록
         '',   # modal-new-password-note: 수정 때는 안 씀
         [],
+        {},   # modal-reset-section
+        '',
     )
+
+
+# ── 콜백: 수정 화면 "임시 비밀번호로 초기화"(2026-10-29) ─────────────────────────
+
+@callback(
+    Output('reset-temp-password-confirm', 'displayed'),
+    Output('reset-temp-password-confirm', 'message'),
+    Input('btn-reset-temp-password', 'n_clicks'),
+    State('editing-user-id', 'data'),
+    prevent_initial_call=True,
+)
+def ask_reset_temp_password(n_clicks, user_id):
+    from services.auth import DEFAULT_TEMP_PASSWORD
+    if not n_clicks or not user_id:
+        return no_update, no_update
+    return True, (f'{user_id} 계정의 비밀번호를 임시 비밀번호 "{DEFAULT_TEMP_PASSWORD}"로 초기화할까요?\n'
+                  '다음 로그인 때 새 비밀번호를 정해야 합니다.')
+
+
+@callback(
+    Output('reset-temp-password-msg', 'children', allow_duplicate=True),
+    Output('user-refresh-counter', 'data', allow_duplicate=True),
+    Input('reset-temp-password-confirm', 'submit_n_clicks'),
+    State('editing-user-id', 'data'),
+    State('user-refresh-counter', 'data'),
+    prevent_initial_call=True,
+)
+def do_reset_temp_password(submitted, user_id, counter):
+    from services.auth import DEFAULT_TEMP_PASSWORD, can, reset_to_temp_password
+    if not submitted or not user_id:
+        return no_update, no_update
+    if not can('manage_users'):
+        return html.Span('권한이 없습니다.', className='text-danger'), no_update
+    if not reset_to_temp_password(user_id):
+        return html.Span('초기화하지 못했습니다(계정 저장소 확인 필요).', className='text-danger'), no_update
+    return (html.Span(f'초기화했습니다 — 임시 비밀번호 "{DEFAULT_TEMP_PASSWORD}"를 본인에게 따로 알려 주세요.',
+                      className='text-success'), (counter or 0) + 1)
 
 
 # ── 콜백: 모달 저장 ───────────────────────────────────────────────────────────
