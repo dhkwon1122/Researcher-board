@@ -14463,3 +14463,14 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   개발업데이트 이력(pages/admin.py _TABS).
 - 테스트 tests/test_user_order.py(이동·새 계정·범위 밖, 순서 칸 렌더링). 브라우저로 3번째 행 → 1번째, ↓ 이동 확인.
 - (71 보충) 다운로드 요청 탭 안내 문구의 "엑셀" 열 → "다운로드 (엑셀)" 열.
+
+## (72) 연구원 프로필 "최근 검색" 계정별 구분·로그아웃 시 삭제 (2026-10-29)
+- 배경: 최근 검색은 서버가 아니라 브라우저 localStorage(dcc.Store storage_type='local')에 저장돼 다른 PC 사용자에게는 원래
+  보이지 않지만, 계정이 아니라 브라우저 기준이라 같은 PC에서 다른 아이디로 로그인하면 앞 사람 이력이 보였다(로그아웃해도 남음).
+- 저장 형식을 {'user': 로그인 아이디, 'items': [...]}로 바꾸고(pages/researcher_profile.py _history_owner/_history_items/_history_data),
+  현재 계정과 다르면(또는 예전 list 형식이면) 빈 목록으로 취급 — 다음 계정이 검색하면 덮어쓴다(다른 계정 이력을 남겨 두지 않음).
+- /logout(app.py): 리다이렉트 대신 localStorage/sessionStorage를 지우고 /login으로 가는 작은 페이지 + Clear-Site-Data: "storage" 헤더.
+  상단 로그아웃 링크는 dcc.Location(refresh=True)로 /logout 전체 페이지 이동이라 스크립트가 실행된다.
+- 참고: ?id= 딥링크로 연 프로필은 기존과 같이 최근 검색에 기록되지 않는다(검색 드롭다운으로 바꿀 때만 기록).
+- 테스트 tests/test_search_history_privacy.py(계정별 구분, /logout 헤더·스크립트). 브라우저 확인: A 검색 → 세션만 바꿔 B 로그인 시
+  빈 이력 → B 검색 → A 재로그인 시 빈 이력 → 로그아웃 후 localStorage 비어 있음.

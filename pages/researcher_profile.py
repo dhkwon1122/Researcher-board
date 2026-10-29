@@ -515,9 +515,10 @@ def _selector_card(dept_opts, res_opts, default_dept, default_rid, default_mode=
                 html.Span('최근 검색', className='small fw-semibold text-muted me-2'),
                 html.Div(id='researcher-history-chips', className='d-inline-flex flex-wrap'),
             ], className='mt-2 d-flex align-items-center flex-wrap'),
-            # storage_type='local' — 브라우저 localStorage에 저장돼 새로고침/재방문
-            # 후에도 남는다(로그인 체계가 없어 "나"는 이 브라우저 하나로 구분).
-            dcc.Store(id='researcher-search-history', storage_type='local', data=[]),
+            # storage_type='local' — 브라우저 localStorage에 저장돼 새로고침/재방문 후에도 남는다(서버에는 저장 안 함).
+            # 2026-10-29: {'user': 로그인 아이디, 'items': [...]} 형태로 계정별 구분 — 같은 PC에서 다른 계정으로
+            # 로그인하면 이전 계정의 이력은 보이지 않고 덮어쓴다. 로그아웃(/logout) 때 브라우저에서 지운다.
+            dcc.Store(id='researcher-search-history', storage_type='local', data=None),
         ]),
         className='mb-3 shadow-sm',
     )
@@ -1392,6 +1393,23 @@ def filter_by_dept(dept, group, project, mode, current_rid):
 _HISTORY_LIMIT = 8  # "최근 검색" 칩 최대 개수(오래된 항목부터 밀려남)
 
 
+def _history_owner() -> str:
+    from services.auth import get_current_user
+    return (get_current_user() or {}).get('user_id', '')
+
+
+def _history_items(data) -> list:
+    """브라우저에 저장된 최근 검색 중 지금 로그인한 계정의 것만(다른 계정·예전 형식(list)이면 빈 목록)."""
+    owner = _history_owner()
+    if not owner or not isinstance(data, dict) or data.get('user') != owner:
+        return []
+    return [h for h in (data.get('items') or []) if isinstance(h, dict)]
+
+
+def _history_data(items: list) -> dict:
+    return {'user': _history_owner(), 'items': items[:_HISTORY_LIMIT]}
+
+
 @callback(
     Output('researcher-search-history', 'data'),
     Input('researcher-select', 'value'),
@@ -1402,10 +1420,10 @@ def _record_search_history(rid, history):
     """researcher-select 값이 바뀔 때마다(직접 검색이든, 최근 검색 칩 클릭이든)
     그 사람을 이력 맨 앞으로 올린다(이미 있던 항목은 지우고 다시 넣어 중복
     없이 최신순 유지). storage_type='local'이라 브라우저에 남아 새로고침/재방문
-    후에도 이어서 볼 수 있다(로그인 체계가 없어 "나" = 이 브라우저)."""
-    if not rid:
+    후에도 이어서 볼 수 있다 — 로그인 계정별로 구분(_history_items)."""
+    if not rid or not _history_owner():
         return no_update
-    history = [h for h in (history or []) if h.get('rid') != rid]
+    history = [h for h in _history_items(history) if h.get('rid') != rid]
     res_df = read_processed('researchers')
     match = res_df[res_df['researcher_id'] == rid]
     if not match.empty:
@@ -1422,7 +1440,7 @@ def _record_search_history(rid, history):
     else:
         label = rid
     history.insert(0, {'rid': rid, 'label': label})
-    return history[:_HISTORY_LIMIT]
+    return _history_data(history)
 
 
 @callback(
@@ -1435,7 +1453,7 @@ def _render_history_chips(history):
     DOM을 타고 올라가 부모 Badge의 n_clicks(_select_from_history, 그
     사람을 선택)까지 같이 발생해버려("삭제"를 눌렀는데 그 사람이 선택되는
     버그) — 형제로 분리하면 이 문제가 없다."""
-    history = history or []
+    history = _history_items(history)
     if not history:
         return html.Span('아직 검색 이력이 없습니다.', className='text-muted small')
     chips = [
@@ -1481,7 +1499,7 @@ def _delete_history_entry(n_clicks_list, ids, history):
     if idx is None or not n_clicks_list[idx]:
         return no_update
     rid = triggered_id['rid']
-    return [h for h in (history or []) if h.get('rid') != rid]
+    return _history_data([h for h in _history_items(history) if h.get('rid') != rid])
 
 
 @callback(
@@ -1492,7 +1510,7 @@ def _delete_history_entry(n_clicks_list, ids, history):
 def _clear_history(n_clicks):
     if not n_clicks:
         return no_update
-    return []
+    return _history_data([])
 
 
 @callback(
