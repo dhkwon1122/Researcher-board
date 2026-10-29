@@ -38,7 +38,7 @@ _INLINE_PERM_COLUMNS = [
 # 정렬 가능한 전체 컬럼(신분 정보 5개 + 권한 6개) — '관리' 액션 컬럼은 제외.
 _SORTABLE_COLUMNS = [
     ('user_id', '아이디'), ('display_name', '이름'), ('role', '역할'),
-    ('email', '이메일'), ('status', '상태'),
+    ('status', '상태'),
 ] + [(key, label) for key, label, _hint in _INLINE_PERM_COLUMNS]
 
 
@@ -70,31 +70,53 @@ def _sort_key_value(user: dict, col: str):
     return _effective_permissions(user).get(col, False)
 
 
+def _role_label(user: dict) -> str:
+    return ROLE_LABELS.get(user.get('role', ''), user.get('role', ''))
+
+
+def _ordered_users(users: list) -> list:
+    """표 기본 순서(2026-10-29 개정) — 역할 이름 오름차순으로 묶고, 같은 역할 안에서는 저장된 순서(services/user_order)."""
+    from services import user_order
+    return user_order.apply(users, group_key=_role_label)
+
+
+def _role_range(users: list, user_id: str) -> tuple[int, int]:
+    """users(기본 순서)에서 user_id와 같은 역할 묶음의 첫·마지막 번호(1부터) — 행은 이 범위 안에서만 옮긴다."""
+    role = next((_role_label(u) for u in users if u['user_id'] == user_id), None)
+    rows = [i for i, u in enumerate(users, 1) if _role_label(u) == role]
+    return (rows[0], rows[-1]) if rows else (1, len(users))
+
+
 def _build_user_rows(users: list, sort_state: dict | None) -> list:
-    """users는 저장된 표시 순서(services/user_order) 그대로 — 순서 칸의 번호는 그 순서 기준이고,
+    """users는 기본 순서(_ordered_users) 그대로 — 순서 칸의 번호는 그 순서 기준이고,
     열 제목을 눌러 정렬하면 보기만 바뀐다(순서를 옮기면 정렬은 풀린다)."""
     sort_state = sort_state or {}
     position = {u['user_id']: i for i, u in enumerate(users, 1)}
+    ranges = {u['user_id']: _role_range(users, u['user_id']) for u in users}
     col = sort_state.get('column')
     if col:
         users = sorted(users, key=lambda u: _sort_key_value(u, col),
                         reverse=(sort_state.get('direction') == 'desc'))
-    return [_user_row(u, position[u['user_id']], len(position)) for u in users]
+    return [_user_row(u, position[u['user_id']], ranges[u['user_id']]) for u in users]
 
 
-def _order_cell(user_id: str, pos: int, total: int):
-    """행 순서 칸(2026-10-29) — 번호를 직접 고치면 그 자리로, ↑/↓는 한 칸씩 옮긴다."""
+def _order_cell(user_id: str, pos: int, role_range: tuple[int, int]):
+    """행 순서 칸(2026-10-29) — 번호를 직접 고치면 그 자리로, ↑/↓는 한 칸씩 옮긴다. 같은 역할 안에서만 움직인다."""
+    lo, hi = role_range
     def _btn(direction, icon, disabled):
         return dbc.Button(html.I(className=f'bi {icon}'), id={'type': 'user-move', 'dir': direction, 'user_id': user_id},
                           color='light', size='sm', className='px-1 py-0 border', disabled=disabled, n_clicks=0,
                           title='한 칸 위로' if direction == 'up' else '한 칸 아래로')
     return html.Td(html.Div([
-        dbc.Input(id={'type': 'user-pos', 'user_id': user_id}, type='number', min=1, max=total, step=1,
+        # min/max는 두지 않는다 — 범위 밖 숫자를 넣으면 브라우저가 값을 None으로 넘겨 아무 일도 안 일어나므로,
+        # 서버(move_user_row)에서 같은 역할 범위로 맞춘다.
+        dbc.Input(id={'type': 'user-pos', 'user_id': user_id}, type='number', step=1,
                   value=pos, debounce=True, size='sm', className='text-center px-1',
                   style={'width': '3.2rem'}),
-        _btn('up', 'bi-arrow-up', pos <= 1),
-        _btn('down', 'bi-arrow-down', pos >= total),
-    ], className='d-flex align-items-center gap-1', title='번호를 바꾸면 그 순서로 옮깁니다'), className='align-middle')
+        _btn('up', 'bi-arrow-up', pos <= lo),
+        _btn('down', 'bi-arrow-down', pos >= hi),
+    ], className='d-flex align-items-center gap-1',
+        title=f'같은 역할 안({lo}~{hi}번)에서 번호를 바꾸거나 ↑/↓로 옮깁니다'), className='align-middle')
 
 
 def _sort_th(col: str, label: str, sort_state: dict | None, title_attr: str | None = None):
@@ -144,7 +166,7 @@ def _perm_checkbox_cell(user: dict, key: str, effective: dict):
     )
 
 
-def _user_row(user: dict, pos: int = 1, total: int = 1):
+def _user_row(user: dict, pos: int = 1, role_range: tuple[int, int] = (1, 1)):
     status = (
         dbc.Badge('임시 비밀번호', color='warning', text_color='dark', className='fw-normal')
         if user.get('must_change_password')
@@ -154,11 +176,10 @@ def _user_row(user: dict, pos: int = 1, total: int = 1):
     user_id = user['user_id']
     perm_cells = [_perm_checkbox_cell(user, key, effective) for key, _label, _hint in _INLINE_PERM_COLUMNS]
     return html.Tr([
-        _order_cell(user_id, pos, total),
+        _order_cell(user_id, pos, role_range),
         html.Td(user_id, className='align-middle font-monospace small'),
         html.Td(user['display_name'], className='align-middle'),
         html.Td(ROLE_LABELS.get(user['role'], user['role']), className='align-middle small'),
-        html.Td(user.get('email', ''), className='align-middle small text-muted'),
         html.Td(status, className='align-middle'),
         *perm_cells,
         html.Td(
@@ -320,14 +341,13 @@ _DEFAULT_USER_SORT = {'column': None, 'direction': 'asc'}
 
 
 def _user_management_tab() -> html.Div:
-    from services import user_order
     from services.auth import list_users
 
-    users = user_order.apply(list_users())
+    users = _ordered_users(list_users())
 
     # 권한 관련 6개 헤더는 title 속성(네이티브 브라우저 툴팁)으로 전체 설명을 붙인다.
     perm_hint_by_col = {key: hint for key, _label, hint in _INLINE_PERM_COLUMNS}
-    header_cells = [html.Th('순서', title='번호를 바꾸거나 ↑/↓로 행 순서를 옮깁니다(저장됨)')] + [
+    header_cells = [html.Th('순서', title='역할 이름 순으로 묶고, 같은 역할 안에서 번호나 ↑/↓로 순서를 옮깁니다(저장됨)')] + [
         _sort_th(col, label, _DEFAULT_USER_SORT, title_attr=perm_hint_by_col.get(col))
         for col, label in _SORTABLE_COLUMNS
     ]
@@ -467,11 +487,10 @@ def _save_or_test_notify(_save, _test, user_ids):
     prevent_initial_call=True,
 )
 def refresh_user_table(_counter):
-    from services import user_order
     from services.auth import can, list_users
     if not can('manage_users'):
         return []
-    return user_order.apply(list_users())
+    return _ordered_users(list_users())
 
 
 # ── 콜백: 행 순서 옮기기(2026-10-29) ─────────────────────────────────────────
@@ -507,9 +526,10 @@ def move_user_row(_clicks, _positions, users, counter):
             target = int(value)
         except (TypeError, ValueError):
             return no_update, no_update
-    clamped = max(1, min(target, len(ids)))
+    lo, hi = _role_range(users, uid)                      # 같은 역할 묶음 밖으로는 못 옮김
+    clamped = max(lo, min(target, hi))
     if clamped == current:
-        # 범위 밖 번호(예: 0, 99)를 넣었는데 결과가 제자리면 입력칸만 원래 번호로 되돌린다
+        # 범위 밖 번호(예: 다른 역할 자리, 99)를 넣었는데 결과가 제자리면 입력칸만 원래 번호로 되돌린다
         return ((counter or 0) + 1 if target != current else no_update), no_update
     target = clamped
     user_order.move(ids, uid, target)
