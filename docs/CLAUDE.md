@@ -14496,3 +14496,12 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   DB는 user_store.set_password_hash(..., must_change_password=True) 인자 추가. 표의 상태 배지가 "임시 비밀번호"로 바뀜.
 - 테스트 tests/test_user_order.py(선택 이동 4방향·새 계정·체크 유지·정렬은 보기만, 임시 비밀번호 초기화). 브라우저: 체크 →
   맨 위로/아래로, 수정 → 초기화 확인창 → 메시지·배지·실제 로그인 해시 확인.
+
+## (75) 직급-년차 계산 통일 (2026-10-29)
+- 문제: 엑셀·조서·JOB Market·유사 연구원(시니어/주니어)은 services/researcher_profile_export.position_years()
+  (기준일 = 2027-03-01부터 오늘을 지나지 않은 첫 3/1, (기준일−승격산정기준일자)/365를 소수 첫째 자리 버림 후 정수, 최소 1),
+  프로필 카드(components/profile_sections.photo_block)·석세션 플랜(pages/org_comparison._info_lines)은 2027-03-01 고정·올림으로
+  따로 계산 → 승격일 3/1이면 프로필이 1년 많게(2020-03-01: 엑셀 7, 프로필 8) 나왔다.
+- 사용자 확정: 엑셀 방식이 맞음. 두 화면도 position_years()를 쓰도록 변경. 승격산정기준일자가 없으면 직급만 표시
+  (프로필 카드가 근속년수 정수로 대신하던 것 제거 — 둘째 줄은 "CL3(16.8년)" 형태로 근속은 괄호에 그대로).
+- 테스트 tests/test_position_years_consistency.py.

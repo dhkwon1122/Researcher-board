@@ -1,4 +1,3 @@
-import math
 import os
 import sys
 from datetime import date, datetime
@@ -135,16 +134,15 @@ def photo_block(rid: str, name: str, row=None, current_year: int = 2026, *,
             hire_year = _int(row.get('hire_year'), current_year)
             tenure = float(current_year - hire_year)
 
-        # 직급연차: 2027-03-01 기준으로 올림
+        # 직급년차: 엑셀 "CL/년차"와 같은 계산(services/researcher_profile_export.position_years, 2026-10-29 통일).
+        # 승격산정기준일자가 없으면 년차 없이 직급만.
+        from services.researcher_profile_export import position_years
         promo_dt = _parse_date(row.get('promotion_date'))
-        if promo_dt:
-            ref = date(2027, 3, 1)
-            position_year = math.ceil((ref - promo_dt).days / 365)
-        else:
-            position_year = int(tenure)
+        position_year = position_years(promo_dt.isoformat()) if promo_dt else None
+        position_label = f'{position}-{position_year}' if position_year is not None else position
 
         line1 = f'{name}({gender}/{age}세)' if gender else f'{name}({age}세)'
-        line2 = f'{position}-{position_year}({tenure:.1f}년)' if position else f'{tenure:.1f}년 근속'
+        line2 = f'{position_label}({tenure:.1f}년)' if position else f'{tenure:.1f}년 근속'
 
         sub_lines = [
             html.P(line1, className='fw-bold mt-2 mb-0 text-center small'),
