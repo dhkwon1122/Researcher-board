@@ -14539,3 +14539,16 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   현재 재직자 목록으로 먼저 정해져 "연구원을 선택하세요"로 열리던 기존 버그.
 - 테스트 tests/test_missing_expertise.py. 브라우저: LLM을 가짜 응답으로 바꿔 선택 → 실행 → 완료 → 과거포함 카드·프로필 표시,
   엑셀 데이터 확인.
+
+## (78) JOB Market — 파견자(현재 명단에 없는 사람) 별도 분석으로 추천 (2026-11-12)
+- run_individual_search: 검색 대상자 중 배치 분석(read_expertise_profiles_std)이 없는 사람만 (77)의 별도 분석
+  (data_store.read_ondemand_expertise_latest, '_source': 'ondemand')으로 채운 subject_profiles를 만들어
+  recommend_for_researcher·심화 지표 Context에 넘긴다. 후보 과제 풀(과제원 전문성 = 근거 B)은 지금처럼 배치 분석만
+  (_with_ondemand_subjects — 선택하지 않은 다른 파견자는 섞이지 않음). 결과 화면의 보유 전문성 블록에는 (77)의
+  "별도 분석" 안내가 그대로 붙는다.
+- 개인별 검색 후보 목록(search_researchers)에 not_current/expertise(batch·ondemand·'') 추가 → "현재 미소속", "별도 분석" 배지,
+  분석이 없으면 "보유 전문성 > 과거포함에서 먼저 분석" 안내(이 상태로 검색하면 기존대로 "전문성 분석 데이터가 없어 추천할 수
+  없습니다").
+- 그대로 둔 것: 종료 예정 과제 단위 검색(현재 과제원 명단 기준), "본인이 지금 속한 과제" 자동 제외는 파견자도 인력현황상 마지막
+  소속 과제 기준으로 그대로 적용.
+- 테스트 tests/test_missing_expertise.py::test_job_market_individual_uses_ondemand_for_selected_only.

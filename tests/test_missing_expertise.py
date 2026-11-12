@@ -37,3 +37,30 @@ def test_missing_options_only_non_current_without_profile(monkeypatch):
     monkeypatch.setattr(m, 'read_expertise_profiles', lambda include_ondemand=False: {'00000003': {}})
     opts = m._missing_expertise_options()
     assert [o['value'] for o in opts] == ['00000002'] and '마지막 인력현황 2026-05' in opts[0]['label']
+
+
+def test_job_market_individual_uses_ondemand_for_selected_only(monkeypatch):
+    """JOB Market 개인별 검색 — 배치 분석이 없는 대상자는 별도 분석으로 추천, 후보 과제(근거 B)는 배치만(2026-11-12)."""
+    from services import job_market as jm
+    batch = {'00000001': {'researcher_id': '00000001', 'strength_fields': ['배치']}}
+    monkeypatch.setattr(jm.data_store, 'read_expertise_profiles_std', lambda: dict(batch))
+    monkeypatch.setattr(jm.data_store, 'read_ondemand_expertise_latest', lambda: {
+        '00000009': {'researcher_id': '00000009', 'strength_fields': ['파견']},
+        '00000007': {'researcher_id': '00000007', 'strength_fields': ['선택 안 함']}})
+    monkeypatch.setattr(jm.data_store, 'read_processed', lambda name: pd.DataFrame(
+        [{'researcher_id': r, 'org_code': ''} for r in ('00000001', '00000009')]))
+    monkeypatch.setattr(jm, 'build_roster', lambda ids: [{'researcher_id': r} for r in ids])
+    monkeypatch.setattr(jm, 'save_history', lambda report: 'h.json')
+    pools, seen = [], {}
+    monkeypatch.setattr(jm, '_build_candidate_pool', lambda excl, profiles: pools.append(set(profiles)) or {'P': {}})
+    monkeypatch.setattr(jm, '_safe_context', lambda profiles: None)
+
+    def fake_recommend(rid, profiles, pool, ctx):
+        seen[rid] = profiles.get(rid)
+        return {'recommendations': []}
+    monkeypatch.setattr(jm, 'recommend_for_researcher', fake_recommend)
+    monkeypatch.setattr(jm.llm_client, 'run_concurrent', lambda tasks, **k: [(t(), None) for t in tasks])
+    jm.run_individual_search(['00000001', '00000009'], [])
+    assert seen['00000001']['strength_fields'] == ['배치']
+    assert seen['00000009']['strength_fields'] == ['파견'] and seen['00000009']['_source'] == 'ondemand'
+    assert pools == [{'00000001'}]                                    # 후보 과제 풀은 배치 분석만
