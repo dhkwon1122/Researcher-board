@@ -312,6 +312,9 @@ def layout(id=None, ids=None, **_kwargs):
             dept_opts, all_opts, by_dept = _load_selector_data(current_only=False)
             if any(o['value'] == id for o in all_opts):
                 default_mode = 'all'
+                # 검색 드롭다운 옵션도 과거포함 목록으로 바꿔야 그 사람이 선택된다(2026-11-12 — 예전엔 res_opts가
+                # 위에서 현재 재직자 목록으로 먼저 정해져, 미소속자 딥링크가 "연구원을 선택하세요"로 열렸다).
+                res_opts = all_opts
         if any(o['value'] == id for o in all_opts):
             default_rid = id
             try:
@@ -1554,7 +1557,7 @@ def _build_print_block(rid, tables, researchers, name_map, show_eval):
     if rows.empty:
         return None
     researcher = rows.iloc[0]
-    profile = read_expertise_profiles().get(rid)
+    profile = read_expertise_profiles(include_ondemand=True).get(rid)
     salary_years, _half_years = evaluation_years()
     years = sorted(salary_years)
 
@@ -1620,7 +1623,7 @@ def update_profile(rid):
         salary_years, _half_years = evaluation_years()
         years = sorted(salary_years)
         leadership_options, leadership_default = leadership_year_options(tables['leadership'], rid)
-        profile = read_expertise_profiles().get(rid)
+        profile = read_expertise_profiles(include_ondemand=True).get(rid)
         similar = read_similar_researchers().get(rid, {}).get('similar', [])
         name_map = researchers.set_index('researcher_id')['name'].to_dict()
 

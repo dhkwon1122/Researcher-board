@@ -385,6 +385,11 @@ def llm_summary_block(profile: dict | None, similar: list | None = None, name_ma
     domain_skill = profile.get('domain_knowledge_skill') or []
 
     children = list(extra_rows)
+    if profile.get('_source') == 'ondemand':
+        # 배치 분석(현재 재직자) 대상이 아니라 화면에서 따로 요청해 분석한 결과(2026-11-12, 파견 등)
+        children.append(html.Div(
+            f"현재 명단에 없어 별도 분석한 결과({profile.get('as_of', '')} 기준 보유 데이터)",
+            className='small text-muted fst-italic mb-1'))
     if fields:
         if deemphasize_strength:
             children.append(html.Div([

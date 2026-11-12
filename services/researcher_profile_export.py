@@ -135,7 +135,7 @@ def _load_tables() -> dict:
         'language_qualification': data_store.read_processed('language_qualification'),
         'work_experience': data_store.read_processed('work_experience'),
         'evaluation_exception': data_store.read_processed('evaluation_exception'),
-        'expertise_profiles': data_store.read_expertise_profiles(),
+        'expertise_profiles': data_store.read_expertise_profiles(include_ondemand=True),  # 현재 명단에 없는 사람의 별도 분석 포함
     }
 
 
