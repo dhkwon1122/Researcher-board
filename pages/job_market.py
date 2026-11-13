@@ -263,9 +263,18 @@ def _person_card(person: dict, result: dict):
 
 
 def _candidate_row(c: dict):
+    # 현재 미소속(파견 등) 표시와 전문성 분석 상태(2026-11-12) — 별도 분석이 있으면 그걸로 추천한다
+    badges = []
+    if c.get('not_current'):
+        badges.append(dbc.Badge('현재 미소속', color='secondary', className='me-1'))
+    if c.get('expertise') == 'ondemand':
+        badges.append(dbc.Badge('별도 분석', color='info', className='me-1'))
+    elif c.get('expertise') == '':
+        badges.append(html.Span('전문성 분석 없음 — 보유 전문성 > 과거포함에서 먼저 분석', className='text-danger small me-2'))
     return html.Div([
         html.Span(f"{c['name']}({c['researcher_id']})", className='me-2'),
         html.Span(f"{c['department']} · {c['org_code']}", className='text-muted small me-2'),
+        *badges,
         dbc.Button('추가', id={'type': 'jm-add-candidate', 'rid': c['researcher_id']},
                    color='link', size='sm', n_clicks=0, className='py-0'),
     ], className='d-flex align-items-center mb-1')

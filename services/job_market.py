@@ -707,6 +707,19 @@ def _resolve_researcher_query(query: str, researchers_df) -> list:
     return contains['researcher_id'].tolist()
 
 
+def _with_ondemand_subjects(profiles: dict, researcher_ids: list) -> dict:
+    """profiles(배치 분석)에 없는 검색 대상자만 별도 분석(data_store.read_ondemand_expertise_latest)으로 채운 복사본."""
+    missing = [rid for rid in researcher_ids if rid not in profiles]
+    if not missing:
+        return profiles
+    supplement = data_store.read_ondemand_expertise_latest()
+    out = dict(profiles)
+    for rid in missing:
+        if rid in supplement:
+            out[rid] = {**supplement[rid], '_source': 'ondemand'}
+    return out
+
+
 def search_researchers(query: str) -> list:
     """이름/사번 검색창용 — 화면에서 여러 후보 중 골라 추가할 수 있도록,
     동명이인이어도(또는 부분 일치가 여럿이어도) 전부 반환한다(최대
@@ -717,12 +730,17 @@ def search_researchers(query: str) -> list:
     if not candidates:
         return []
     rows = researchers_df[researchers_df['researcher_id'].isin(candidates)]
+    profiles = data_store.read_expertise_profiles(include_ondemand=True)
     return [
         {
             'researcher_id': row['researcher_id'],
             'name': row.get('name', row['researcher_id']),
             'department': row.get('department', ''),
             'org_code': row.get('org_code', ''),
+            # 2026-11-12: 현재 미소속(파견 등) 표시와 전문성 분석 출처(batch/ondemand/'' = 없음) — 화면 안내용
+            'not_current': str(row.get('is_current', 'Y')) == 'N',
+            'expertise': ('ondemand' if profiles[row['researcher_id']].get('_source') == 'ondemand' else 'batch')
+                         if row['researcher_id'] in profiles else '',
         }
         for _, row in rows.iterrows()
     ][:MAX_SEARCH_RESULTS]
@@ -748,6 +766,9 @@ def run_individual_search(researcher_ids: list, excluded_org_codes: list, progre
 
     base_excluded_norm = _normalize_excluded_projects(set(excluded_org_codes))
     expertise_profiles = data_store.read_expertise_profiles_std()   # 강점 분야 표준화본 우선(2026-10-15)
+    # 검색 대상자 중 배치 분석이 없는 사람(파견 등 현재 명단에 없음)은 보유 전문성 화면에서 따로 만든 별도 분석으로
+    # 보충한다(2026-11-12). 후보 과제의 과제원 전문성(근거 B)은 지금처럼 배치 분석만 쓴다.
+    subject_profiles = _with_ondemand_subjects(expertise_profiles, researcher_ids)
 
     own_norm_by_rid = {}
     for rid in researcher_ids:
@@ -763,10 +784,10 @@ def run_individual_search(researcher_ids: list, excluded_org_codes: list, progre
     except LLMError as exc:
         return {'error': f'후보 과제 임베딩 계산 실패: {exc}'}
 
-    ctx = _safe_context(expertise_profiles)
+    ctx = _safe_context(subject_profiles)
     workers = llm_client.batch_concurrency()
     tasks = [
-        (lambda rid=rid: recommend_for_researcher(rid, expertise_profiles, pool_by_own_org[own_norm_by_rid[rid]], ctx))
+        (lambda rid=rid: recommend_for_researcher(rid, subject_profiles, pool_by_own_org[own_norm_by_rid[rid]], ctx))
         for rid in researcher_ids
     ]
     task_results = llm_client.run_concurrent(tasks, max_workers=workers, on_complete=_counter(progress, len(tasks))) \

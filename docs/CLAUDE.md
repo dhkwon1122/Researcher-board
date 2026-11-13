@@ -14505,3 +14505,50 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
 - 사용자 확정: 엑셀 방식이 맞음. 두 화면도 position_years()를 쓰도록 변경. 승격산정기준일자가 없으면 직급만 표시
   (프로필 카드가 근속년수 정수로 대신하던 것 제거 — 둘째 줄은 "CL3(16.8년)" 형태로 근속은 괄호에 그대로).
 - 테스트 tests/test_position_years_consistency.py.
+
+## (76) 화면·엑셀 표시 기준 통일 — 나이·근속·평가 연도·핵심이력 (2026-10-29)
+화면과 엑셀을 대조한 결과(사용자 요청 "년차처럼 로직이 다른 게 또 있나") 중 사용자가 고른 1·2·3·5번을 엑셀 기준으로 맞춤.
+- 나이: 프로필 사진 아래(photo_block)는 출생연도를 int()로만 읽어 NaN이면 "올해−30"(=30세)을 지어냈고, 연도도 서버 시작 시점
+  CURRENT_YEAR를 받았다 → researcher_profile_export._birth_year_int + date.today().year, 없으면 '-'. 석세션 카드(_info_lines)도
+  같은 함수로. photo_block의 current_year 인자는 호환용으로만 남기고 쓰지 않음.
+- 근속: 입사일이 없으면 입사연도로 근속을 대신 계산하던 것 제거 → 표시 안 함(둘째 줄은 직급-년차만).
+- 평가 3개년: researcher_profile_export(_EVAL_SALARY_YEARS/_EVAL_HALF_YEARS/_EVAL_HEADER/_EVAL_*_COLUMNS)와 연구원 명단
+  (_EVAL_SALARY_YEARS/_EVAL_GRADE_COLUMNS)이 모듈 임포트 시점에 고정돼, 3/1 회계연도가 바뀐 뒤 서버를 재시작하기 전까지
+  프로필·석세션·JOB Market(매번 계산)과 3개년이 달랐다 → eval_salary_years()/eval_half_years()/eval_header()/
+  eval_*_columns() 함수로 매번 계산. 조서 작성 FIELDS의 평가 항목은 라벨·값을 쓸 때 계산(_Field/_Dynamic, 키는 eval_salary_0~2,
+  eval_half_0~5 그대로라 저장된 양식 호환). 연구원 명단의 최근 3년 논문 수 기준 연도도 매번 계산.
+- 핵심이력(인센티브): 화면(_inc_label — 프로필 평가/인센티브 표, JOB Market 평가 열)이 구분을 '최우수'/'우수'/앞 4글자로 줄이고
+  selected 'yes'도 선정으로 봤다 → 엑셀(_col_incentive)처럼 구분 원문, 선정은 true/1만(공용 incentive_selected()).
+- 그대로 둔 것(사용자 결정): 양성이력 표기 차이(화면 최신순·국가 포함 / 엑셀 오래된순·기관만), 프로필 "과제"(현재 수행 과제)와
+  엑셀 "부서(과제)"(조직도 3단계)의 의미 차이.
+- 테스트 tests/test_position_years_consistency.py(나이·근속 빈 값, 평가 연도 회계연도 따라감, 핵심이력 표기).
+
+## (77) 현재 명단에 없는 연구원(파견 등) 전문성 분석 (2026-11-12)
+- 배경: 배치 전문성 분석(process_researcher_expertise.process)은 is_current=='Y'만 대상이라, 파견 등으로 최신 인력현황에 없는
+  사람은 전문성 요약이 비어 있었다(과거 인력현황에는 있음). 사용자 요청: 일부를 골라 분석할 수 있게.
+- 보유 전문성 > 연구원 > 과거포함 화면 아래 "현재 명단에 없는 연구원 전문성 분석(관리자)" 카드(관리자만): 대상 = is_current=='N'
+  이고 배치·별도 분석 결과가 모두 없는 사람(라벨에 마지막 인력현황 연월). 실행하면 기존 과거 시점 온디맨드 분석
+  (services/expertise_ondemand.request_analysis, 백그라운드·파일 락·캐시 expertise_ondemand_cache.json)을 오늘 날짜 기준으로
+  돌린다(그 사람의 남아 있는 과제·논문·특허·직무 이력 전체). 4초 간격 폴링, 끝나면 완료/오류 표시·목록 갱신.
+  프롬프트는 배치와 같은 _build_prompt(이름·사번 없음).
+- 표시: data_store.read_expertise_profiles(include_ondemand=True) — 배치 결과가 없는 사람에 한해 캐시의 오류 없는 최신 as_of
+  결과를 '_source': 'ondemand'로 보충(배치 우선). 켜는 곳: 연구원 프로필(화면·인쇄), 보유 전문성 과거포함 카드, 엑셀
+  (researcher_profile_export._load_tables). AI 검색·JOB Market·전문성 MAP·조직 분석은 현재 재직자 모수라 기본값(False) 유지.
+  llm_summary_block이 "현재 명단에 없어 별도 분석한 결과(기준일)" 안내를 붙임. 유사 연구원은 계산하지 않음.
+- 함께 고침: 연구원 프로필 딥링크(?id=)로 현재 미소속자를 열면 검색기준은 과거포함으로 바뀌지만 드롭다운 옵션(res_opts)이
+  현재 재직자 목록으로 먼저 정해져 "연구원을 선택하세요"로 열리던 기존 버그.
+- 테스트 tests/test_missing_expertise.py. 브라우저: LLM을 가짜 응답으로 바꿔 선택 → 실행 → 완료 → 과거포함 카드·프로필 표시,
+  엑셀 데이터 확인.
+
+## (78) JOB Market — 파견자(현재 명단에 없는 사람) 별도 분석으로 추천 (2026-11-12)
+- run_individual_search: 검색 대상자 중 배치 분석(read_expertise_profiles_std)이 없는 사람만 (77)의 별도 분석
+  (data_store.read_ondemand_expertise_latest, '_source': 'ondemand')으로 채운 subject_profiles를 만들어
+  recommend_for_researcher·심화 지표 Context에 넘긴다. 후보 과제 풀(과제원 전문성 = 근거 B)은 지금처럼 배치 분석만
+  (_with_ondemand_subjects — 선택하지 않은 다른 파견자는 섞이지 않음). 결과 화면의 보유 전문성 블록에는 (77)의
+  "별도 분석" 안내가 그대로 붙는다.
+- 개인별 검색 후보 목록(search_researchers)에 not_current/expertise(batch·ondemand·'') 추가 → "현재 미소속", "별도 분석" 배지,
+  분석이 없으면 "보유 전문성 > 과거포함에서 먼저 분석" 안내(이 상태로 검색하면 기존대로 "전문성 분석 데이터가 없어 추천할 수
+  없습니다").
+- 그대로 둔 것: 종료 예정 과제 단위 검색(현재 과제원 명단 기준), "본인이 지금 속한 과제" 자동 제외는 파견자도 인력현황상 마지막
+  소속 과제 기준으로 그대로 적용.
+- 테스트 tests/test_missing_expertise.py::test_job_market_individual_uses_ondemand_for_selected_only.

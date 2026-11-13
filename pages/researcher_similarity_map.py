@@ -287,7 +287,117 @@ def _cumulative_search_panel():
             className='mb-3',
         ),
         html.Div(id='expertise-cumulative-result'),
+        _missing_expertise_panel(),
     ])
+
+
+# ── 현재 명단에 없는 연구원 전문성 분석(2026-11-12) ──────────────────────────
+# 배치 분석(process_researcher_expertise.py)은 현재 재직자(is_current=='Y')만 대상이라, 파견 등으로 최신
+# 인력현황에 없는 사람은 전문성 요약이 비어 있다. 관리자가 그런 사람을 골라 분석을 요청하면 기존 과거 시점
+# 온디맨드 분석(services/expertise_ondemand.py, 백그라운드·캐시)을 "오늘 기준"(그 사람의 남아 있는 데이터
+# 전체)으로 돌리고, 결과는 data_store.read_expertise_profiles(include_ondemand=True)로 프로필·이 화면·엑셀에 보충된다.
+
+def _missing_expertise_options() -> list:
+    """현재 미소속(is_current=='N')이면서 전문성 분석(배치·별도 분석 모두)이 없는 사람."""
+    researchers_df = read_processed('researchers')
+    if researchers_df.empty or 'is_current' not in researchers_df.columns:
+        return []
+    have = read_expertise_profiles(include_ondemand=True)
+    rows = researchers_df[(researchers_df['is_current'].astype(str) == 'N')
+                          & ~researchers_df['researcher_id'].isin(list(have))]
+    options = []
+    for _, row in rows.sort_values(['department', 'name']).iterrows():
+        dept = str(row.get('department', '') or '').strip()
+        last = ''
+        try:
+            last = f" · 마지막 인력현황 {int(float(row.get('valid_year')))}-{int(float(row.get('valid_month'))):02d}"
+        except (TypeError, ValueError):
+            pass
+        options.append({'label': f"{row.get('name', '')}{f' [{dept}]' if dept else ''} ({row['researcher_id']}){last}",
+                        'value': row['researcher_id']})
+    return options
+
+
+def _missing_expertise_panel():
+    from services.auth import can
+    if not can('manage_users'):
+        return html.Div()
+    return dbc.Card([
+        dbc.CardHeader(html.Span([html.I(className='bi bi-stars me-1'),
+                                  '현재 명단에 없는 연구원 전문성 분석(관리자)'], className='small fw-semibold')),
+        dbc.CardBody([
+            html.Div('파견 등으로 최신 인력현황에 없어 전문성 요약이 비어 있는 연구원을 골라 분석합니다. 남아 있는 '
+                     '과제·논문·특허·직무 이력 등 전체를 오늘 기준으로 분석하며, 결과는 프로필·이 화면·엑셀에 '
+                     '"별도 분석"으로 표시됩니다. 한 명당 수십 초 걸리고, 다른 화면으로 가도 계속 진행됩니다. '
+                     '(유사 연구원은 계산하지 않습니다.)', className='small text-muted mb-2'),
+            dbc.Row([
+                dbc.Col(dcc.Dropdown(id='missing-expertise-select', options=_missing_expertise_options(),
+                                     multi=True, placeholder='분석할 연구원 선택(이름/사번 검색)'), md=9),
+                dbc.Col(dbc.Button([html.I(className='bi bi-play-fill me-1'), '전문성 분석 실행'],
+                                   id='missing-expertise-run', color='primary', size='sm', n_clicks=0), md=3),
+            ], className='g-2 align-items-center'),
+            html.Div(id='missing-expertise-status', className='small mt-2'),
+            dcc.Interval(id='missing-expertise-poll', interval=4000, disabled=True),
+            dcc.Store(id='missing-expertise-job'),
+        ]),
+    ], className='shadow-sm mt-4')
+
+
+@callback(
+    Output('missing-expertise-status', 'children'),
+    Output('missing-expertise-poll', 'disabled'),
+    Output('missing-expertise-job', 'data'),
+    Input('missing-expertise-run', 'n_clicks'),
+    State('missing-expertise-select', 'value'),
+    prevent_initial_call=True,
+)
+def _run_missing_expertise(n_clicks, researcher_ids):
+    from services.auth import can
+    if not n_clicks or not can('manage_users'):
+        return dash.no_update, dash.no_update, dash.no_update
+    if not researcher_ids:
+        return html.Span('분석할 연구원을 먼저 선택하세요.', className='text-warning'), True, None
+    status = expertise_ondemand.request_analysis(researcher_ids, date.today())
+    job = {'researcher_ids': researcher_ids, 'valid_date': date.today().isoformat()}
+    if status == 'busy':
+        return html.Span('다른 전문성 분석이 진행 중입니다. 잠시 후 다시 눌러 주세요.', className='text-warning'), True, None
+    if status == 'ready':
+        return _missing_expertise_result(job), True, None
+    return dbc.Spinner(html.Span(f'{len(researcher_ids)}명 분석 중… 끝나면 결과가 표시됩니다.', className='text-muted'),
+                       size='sm', color='primary'), False, job
+
+
+@callback(
+    Output('missing-expertise-status', 'children', allow_duplicate=True),
+    Output('missing-expertise-poll', 'disabled', allow_duplicate=True),
+    Output('missing-expertise-select', 'options'),
+    Output('missing-expertise-select', 'value'),
+    Input('missing-expertise-poll', 'n_intervals'),
+    State('missing-expertise-job', 'data'),
+    prevent_initial_call=True,
+)
+def _poll_missing_expertise(_n, job):
+    if not job:
+        return dash.no_update, True, dash.no_update, dash.no_update
+    if expertise_ondemand.lock_status() is not None:
+        return dash.no_update, False, dash.no_update, dash.no_update
+    return _missing_expertise_result(job), True, _missing_expertise_options(), []
+
+
+def _missing_expertise_result(job: dict):
+    researcher_ids = job['researcher_ids']
+    results = expertise_ondemand.get_results(researcher_ids, date.fromisoformat(job['valid_date']))
+    researchers_df = read_processed('researchers')
+    name_map = researchers_df.set_index('researcher_id')['name'].to_dict() if not researchers_df.empty else {}
+    ok = [rid for rid, r in zip(researcher_ids, results) if r and not r.get('error')]
+    failed = [(rid, (r or {}).get('error') or '결과 없음') for rid, r in zip(researcher_ids, results)
+              if not r or r.get('error')]
+    items = [html.Div([html.I(className='bi bi-check-circle text-success me-1'),
+                       f'완료 {len(ok)}명 — 위 검색창이나 프로필에서 확인하세요: ',
+                       ', '.join(f'{name_map.get(r, r)}({r})' for r in ok)])] if ok else []
+    items += [html.Div([html.I(className='bi bi-exclamation-triangle text-warning me-1'),
+                        f'{name_map.get(r, r)}({r}): {err}']) for r, err in failed]
+    return html.Div(items)
 
 
 def _render_cumulative_result(rid: str | None):
@@ -299,7 +409,7 @@ def _render_cumulative_result(rid: str | None):
         return html.Div('연구원 정보를 찾을 수 없습니다.', className='text-muted small p-2')
     researcher = match.iloc[0]
     name_map = researchers.set_index('researcher_id')['name'].to_dict()
-    profile = read_expertise_profiles().get(rid)
+    profile = read_expertise_profiles(include_ondemand=True).get(rid)
     similar = read_similar_researchers().get(rid, {}).get('similar', [])
     # 조회 대상(rid)은 누적기준으로 미소속자도 허용하지만, 추천되는 유사
     # 연구원 후보는 실제로 협업 가능한 사람이어야 하므로 항상 현재 소속자로

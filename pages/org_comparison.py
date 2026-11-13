@@ -104,10 +104,10 @@ def _info_lines(r_info):
     """1줄: 성명(성별/나이)   2줄: 직급-직급년차년차"""
     name = str(r_info.get('name', '-'))
     gender = str(r_info.get('gender', '')).strip()
-    try:
-        age_str = f'{CURRENT_YEAR - int(float(r_info["birth_year"]))}세'
-    except (TypeError, ValueError, KeyError):
-        age_str = '-'
+    # 엑셀과 같은 규칙 — 오늘 기준 연도, 출생연도 없으면 '-'(2026-10-29)
+    from services.researcher_profile_export import _birth_year_int
+    birth_year = _birth_year_int(r_info.get('birth_year'))
+    age_str = f'{datetime.now().year - birth_year}세' if birth_year is not None else '-'
     position = str(r_info.get('position', '')).strip()
 
     # 엑셀 "CL/년차"와 같은 계산(2026-10-29 통일) — 승격산정기준일자가 없으면 직급만.

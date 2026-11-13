@@ -85,13 +85,44 @@ def _read_json_records(table: str, filename: str) -> list:
         return json.load(f)
 
 
-def read_expertise_profiles() -> dict[str, dict]:
+def read_expertise_profiles(include_ondemand: bool = False) -> dict[str, dict]:
     """researcher_id -> 연구원 보유 전문성 분석 항목(dict) 매핑. DB(테이블
     expertise_profiles)가 있으면 그걸, 없으면 연구원 보유 전문성 분석.json을
     읽는다. 둘 다 없으면(파이프라인 미실행) 빈 dict — 호출부가 '분석 데이터
-    없음'으로 처리한다."""
+    없음'으로 처리한다.
+
+    include_ondemand=True(2026-11-12): 배치 분석(현재 재직자만)에 없는 사람에 한해, 화면에서 따로 요청한
+    온디맨드 분석(expertise_ondemand_cache.json, 파견 등으로 현재 명단에 없는 사람)의 가장 최근 결과를
+    보충한다 — '_source': 'ondemand', 'as_of'가 붙는다. 배치 결과가 있으면 항상 배치 결과가 우선.
+    보여주기용 화면(프로필·보유 전문성 과거포함·엑셀)만 켜고, AI 검색·JOB Market·전문성 MAP처럼 현재
+    재직자 모수를 전제로 하는 곳은 기본값(False)을 그대로 쓴다."""
     profiles = _read_json_records('expertise_profiles', '연구원 보유 전문성 분석.json')
-    return {p.get('researcher_id', ''): p for p in profiles}
+    out = {p.get('researcher_id', ''): p for p in profiles}
+    if include_ondemand:
+        for rid, p in read_ondemand_expertise_latest().items():
+            out.setdefault(rid, {**p, '_source': 'ondemand'})
+    return out
+
+
+ONDEMAND_CACHE_PATH = os.path.join(DATA_DIR, 'expertise_ondemand_cache.json')
+
+
+def read_ondemand_expertise_latest() -> dict[str, dict]:
+    """온디맨드 분석 캐시(services/expertise_ondemand.py, 키 '사번|기준일')에서 사번별로 오류 없는 가장 최근
+    기준일(as_of) 결과만. 캐시 파일이 없거나 깨졌으면 빈 dict."""
+    try:
+        with open(ONDEMAND_CACHE_PATH, encoding='utf-8') as f:
+            cache = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    latest: dict[str, dict] = {}
+    for r in (cache.values() if isinstance(cache, dict) else []):
+        if not isinstance(r, dict) or r.get('error') or not r.get('researcher_id'):
+            continue
+        rid = str(r['researcher_id']).zfill(8)
+        if rid not in latest or str(r.get('as_of', '')) > str(latest[rid].get('as_of', '')):
+            latest[rid] = r
+    return latest
 
 
 def read_expertise_profiles_std() -> dict[str, dict]:

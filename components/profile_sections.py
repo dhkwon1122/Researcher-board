@@ -79,7 +79,7 @@ def avatar(name: str, size: int = 88):
     )
 
 
-def photo_block(rid: str, name: str, row=None, current_year: int = 2026, *,
+def photo_block(rid: str, name: str, row=None, current_year: int | None = None, *,
                  hide_normal_employment_status: bool = False, img_max_height: int = 200):
     """hide_normal_employment_status=True면 재직상태가 "재직"(정상 재직 중,
     별도로 알릴 필요 없는 기본값)일 때는 "재직상태 : 재직" 줄 자체를 생략한다
@@ -100,12 +100,6 @@ def photo_block(rid: str, name: str, row=None, current_year: int = 2026, *,
 
     sub_lines = []
     if row is not None:
-        def _int(v, default):
-            try:
-                return int(v)
-            except (TypeError, ValueError):
-                return default
-
         def _parse_date(v):
             if v is None:
                 return None
@@ -121,18 +115,18 @@ def photo_block(rid: str, name: str, row=None, current_year: int = 2026, *,
                     continue
             return None
 
-        birth_year = _int(row.get('birth_year'), current_year - 30)
-        age        = current_year - birth_year
+        # 나이·근속은 엑셀과 같은 규칙(2026-10-29): 오늘 기준 연도로 계산하고, 값이 없으면 지어내지 않고 '-'.
+        # (예전엔 출생연도가 비면 "30세", 입사일이 비면 입사연도로 근속을 대신 계산했다.)
+        # current_year 인자는 호환용으로만 남김 — 서버 시작 시점 연도가 넘어오면 해가 바뀐 뒤 어긋나므로 쓰지 않는다.
+        from services.researcher_profile_export import _birth_year_int
+        birth_year = _birth_year_int(row.get('birth_year'))
+        age        = f'{date.today().year - birth_year}세' if birth_year is not None else '-'
         gender     = str(row.get('gender', '')).strip()
         position   = str(row.get('position', '')).strip()
 
-        # 근속: hire_date 있으면 정밀 계산, 없으면 hire_year 폴백
+        # 근속: (오늘 - 입사일)/365 소수 첫째 자리, 입사일이 없으면 표시하지 않음
         hire_dt = _parse_date(row.get('hire_date'))
-        if hire_dt:
-            tenure = round((date.today() - hire_dt).days / 365, 1)
-        else:
-            hire_year = _int(row.get('hire_year'), current_year)
-            tenure = float(current_year - hire_year)
+        tenure = round((date.today() - hire_dt).days / 365, 1) if hire_dt else None
 
         # 직급년차: 엑셀 "CL/년차"와 같은 계산(services/researcher_profile_export.position_years, 2026-10-29 통일).
         # 승격산정기준일자가 없으면 년차 없이 직급만.
@@ -141,8 +135,12 @@ def photo_block(rid: str, name: str, row=None, current_year: int = 2026, *,
         position_year = position_years(promo_dt.isoformat()) if promo_dt else None
         position_label = f'{position}-{position_year}' if position_year is not None else position
 
-        line1 = f'{name}({gender}/{age}세)' if gender else f'{name}({age}세)'
-        line2 = f'{position_label}({tenure:.1f}년)' if position else f'{tenure:.1f}년 근속'
+        line1 = f'{name}({gender}/{age})' if gender else f'{name}({age})'
+        tenure_label = f'{tenure:.1f}년' if tenure is not None else ''
+        if position:
+            line2 = f'{position_label}({tenure_label})' if tenure_label else position_label
+        else:
+            line2 = f'{tenure_label} 근속' if tenure_label else ''
 
         sub_lines = [
             html.P(line1, className='fw-bold mt-2 mb-0 text-center small'),
@@ -255,10 +253,12 @@ def _inc_label(inc: pd.DataFrame, year) -> str:
     row = inc[inc['year'].astype(str) == str(year)]
     if row.empty:
         return '-'
-    selected = str(row.iloc[0].get('selected', '')).lower()
-    if selected in ('true', '1', 'yes'):
-        category = str(row.iloc[0].get('category', '선정'))
-        return '최우수' if '최우수' in category else ('우수' if '우수' in category else category[:4])
+    # 엑셀 "핵심이력"(researcher_profile_export._col_incentive)과 같은 규칙(2026-10-29): 선정 판단은
+    # selected가 true/1일 때만, 표시는 구분 원문 그대로(예전엔 '최우수'/'우수'로 줄이거나 앞 4글자만).
+    from services.researcher_profile_export import incentive_selected
+    if incentive_selected(row.iloc[0].get('selected')):
+        category = str(row.iloc[0].get('category', '') or '').strip()
+        return category if category and category.lower() != 'nan' else '선정'
     return '-'
 
 
