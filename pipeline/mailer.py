@@ -41,7 +41,8 @@ class MailError(RuntimeError):
 
 
 def send_html_email(to: list[str], subject: str, html_body: str,
-                     attachments: list[tuple[str, bytes]] | None = None) -> None:
+                     attachments: list[tuple[str, bytes]] | None = None,
+                     sender_email: str | None = None, sender_user_id: str | None = None) -> None:
     """to(수신자 이메일 주소 목록)에게 html_body를 HTML 본문으로 발송한다.
     MAIL_API_URL은 base URL만 넣으면 된다(예: https://mail.internal.example.com)
     — 실제 호출은 이 함수가 뒤에 /mails/send?userId=...를 이어붙인 주소로
@@ -53,11 +54,15 @@ def send_html_email(to: list[str], subject: str, html_body: str,
     'mail' 필드(JSON 문자열, 파일명 없는 폼 필드)와 'attachments' 필드
     (파일마다 하나씩, 같은 필드명 반복)로 받는다(사용자가 실제 호출 코드로
     확인: requests.post(url, data=[('mail', (None, json.dumps(payload)))],
-    files=[('attachments', fileobj), ...])). 이 형태를 그대로 재현한다."""
+    files=[('attachments', fileobj), ...])). 이 형태를 그대로 재현한다.
+
+    sender_email/sender_user_id(2026-11-19, 인사발령 메일 — 사용자 요청 "팀 공용 계정 말고 담당자 계정으로"):
+    주면 발신 주소(payload sender)와 ?userId= 값을 그 계정으로 바꾼다. 안 주면 .env의 MAIL_FROM/MAIL_USER_ID
+    (팀 공용 계정) 그대로. 토큰·시스템 ID는 같은 것을 쓴다."""
     base_url = os.environ.get('MAIL_API_URL', '').strip()
     token = os.environ.get('MAIL_TOKEN', '').strip()
     system_id = os.environ.get('MAIL_SYSTEM_ID', '').strip()
-    sender = os.environ.get('MAIL_FROM', '').strip()
+    sender = (sender_email or '').strip() or os.environ.get('MAIL_FROM', '').strip()
     if not base_url or not token or not system_id or not sender:
         raise MailError(
             'MAIL_API_URL/MAIL_TOKEN/MAIL_SYSTEM_ID/MAIL_FROM이 설정되지 않았습니다 — '
@@ -67,7 +72,7 @@ def send_html_email(to: list[str], subject: str, html_body: str,
     if not recipients:
         raise MailError('수신자가 없습니다.')
 
-    user_id = os.environ.get('MAIL_USER_ID', '').strip() or _DEFAULT_USER_ID
+    user_id = (sender_user_id or '').strip() or os.environ.get('MAIL_USER_ID', '').strip() or _DEFAULT_USER_ID
 
     headers = {
         'Authorization': f'Bearer {token}',
