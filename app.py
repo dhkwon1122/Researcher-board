@@ -662,6 +662,12 @@ def refresh_navbar_user(_):
         [html.I(className='bi bi-signpost-split me-1'), 'JOB Market'],
         href='/job-market',
     ))
+    from services.hr_order_mail import can_use as can_use_hr_order
+    if can_use_hr_order():   # 인사발령(2026-11-19) — 관리자 + 관리자가 허용한 역할. 접근 차단은 pages/hr_order.py layout()도 확인
+        scenario_items.append(dbc.DropdownMenuItem(
+            [html.I(className='bi bi-envelope-paper me-1'), '인사발령'],
+            href='/hr-order',
+        ))
     items.append(dbc.NavItem(dbc.DropdownMenu(
         label=[html.I(className='bi bi-diagram-3 me-1'), '업무 시나리오'],
         children=scenario_items,
