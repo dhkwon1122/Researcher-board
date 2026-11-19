@@ -100,3 +100,68 @@ def test_mailer_sender_override(monkeypatch):
     assert json.loads(kw['data'][0][1][1])['sender'] == {'emailAddress': 'hong@samsung.com'}
     mailer.send_html_email(['a@x.com'], 's', 'b')
     assert calls[1][0].endswith('userId=people.sait') and '"people.sait@samsung.com"' in calls[1][1]['data']
+
+
+def test_workdays_reply_and_auto_dates(paths):
+    assert hom.reply_due(date(2026, 12, 16)) == date(2026, 12, 10)          # 사용자 예시: 12.16 → 12.10
+    assert hom.auto_send_date(date(2026, 12, 16)) == date(2026, 12, 7)
+    assert hom.reply_due(date(2026, 10, 1)) == date(2026, 9, 23)            # 추석 연휴(9.24~26) 제외
+    with auth.acting_as(ADMIN):
+        hom.set_company_holidays('2026-12-14')
+        with pytest.raises(ValueError):
+            hom.set_company_holidays('12/09')
+    assert hom.reply_due(date(2026, 12, 16)) == date(2026, 12, 9)           # 회사 휴무일(12.14)도 제외 → 12.9
+
+
+def test_template_render_and_save(paths):
+    d = date(2026, 12, 16)
+    assert hom.render('{발령일}자, 회신 {회신일_월일}, {기타}', d) == '2026.12.16자, 회신 12월 10일(목), {기타}'
+    with auth.acting_as(ADMIN):
+        hom.save_template('[발령] {발령일_월일}', '본문 {회신일}')
+    assert hom.template() == ('[발령] {발령일_월일}', '본문 {회신일}')
+
+
+def test_admin_sender_only_self_or_shared(paths):
+    with auth.acting_as(ADMIN):
+        assert [o['value'] for o in hom.sender_options()] == ['adm', hom.SHARED_SENDER]
+        with pytest.raises(PermissionError):
+            hom.send([{'dept': 'A', 'name': '', 'email': 'a@x.com'}], 's', 'b', [('f', b'1')], 'hong.gildong')
+
+
+def test_contact_for_person_uses_knox_id(paths, monkeypatch):
+    df = pd.DataFrame([{'researcher_id': '00000001', 'name': '홍길동', 'org_code': 'X', 'department': '원본부서',
+                        'knox_id': 'gd.hong'},
+                       {'researcher_id': '00000002', 'name': '무녹스', 'org_code': 'X', 'department': '원본부서',
+                        'knox_id': float('nan')}])
+    monkeypatch.setattr(hom.data_store, 'read_processed', lambda name: df)
+    import services.similarity_map as sm
+    monkeypatch.setattr(sm, 'dep_name_for_org_code', lambda oc: 'AI플랫폼')
+    assert hom.contact_for_person('00000001') == {'dept': 'AI플랫폼', 'name': '홍길동', 'email': 'gd.hong@samsung.com'}
+    assert hom.contact_for_person('00000002')['email'] == ''
+
+
+def test_auto_send_once_at_due_time(paths, monkeypatch, tmp_path):
+    from datetime import datetime
+    import pipeline.mailer as mailer
+    monkeypatch.setattr(hom, 'FILES_DIR', str(tmp_path / 'files'))
+    monkeypatch.setattr(hom, 'AUTO_SENT_PATH', str(tmp_path / 'sent.json'))
+    monkeypatch.setattr(hom, 'AUTO_LOCK_PATH', str(tmp_path / 'lock'))
+    sent = []
+    monkeypatch.setattr(mailer, 'send_html_email',
+                        lambda to, subject, body, attachments=None, sender_email=None, sender_user_id=None:
+                        sent.append((to, subject, body, sender_email)))
+    with auth.acting_as(HR | {'is_admin': True}):
+        hom.save_contacts([{'dept': 'A', 'name': '김', 'email': 'a@x.com'}, {'dept': 'B', 'name': '이', 'email': 'b@x.com'}])
+        hom.save_template('[발령] {발령일}', '회신 {회신일_월일}까지')
+        with pytest.raises(ValueError):
+            hom.save_auto(True, 9, 'hong.gildong')                     # 첨부 없으면 켤 수 없음
+        hom.save_auto_files([('양식.xlsx', b'x')])
+        hom.save_auto(True, 9, 'hong.gildong')
+    assert hom.next_auto_send(datetime(2026, 12, 2, 10))[0:2] == (date(2026, 12, 16), datetime(2026, 12, 7, 9))
+    assert hom.run_auto_if_due(datetime(2026, 12, 7, 8, 50)) is None                      # 아직 시각 전
+    r = hom.run_auto_if_due(datetime(2026, 12, 7, 9, 5))
+    assert r['order_date'] == date(2026, 12, 16) and len(sent) == 2
+    assert sent[0][1] == '[발령] 2026.12.16' and '12월 10일(목)까지' in sent[0][2] and sent[0][3] == 'hong@samsung.com'
+    assert hom.run_auto_if_due(datetime(2026, 12, 7, 9, 20)) is None and len(sent) == 2   # 같은 발령일은 한 번만
+    assert hom.next_auto_send(datetime(2026, 12, 7, 9, 20))[0] == date(2027, 1, 1)       # 다음 발령일로
+    assert hom.read_log()[0]['kind'] == 'auto'

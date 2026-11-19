@@ -709,6 +709,12 @@ def do_logout(n_clicks):
 # WSGI 진입점 (gunicorn app:server 로 구동).
 server = app.server
 
+# 인사발령 자동 발송(2026-11-19) — 워커마다 점검 스레드가 돌지만 실제 발송은 파일 잠금·발송 기록으로 발령일당 한 번.
+# 테스트 등에서 끄려면 HR_ORDER_AUTO_DISABLED=1.
+if not os.environ.get('PYTEST_CURRENT_TEST'):
+    from services.hr_order_mail import start_scheduler as _start_hr_order_scheduler
+    _start_hr_order_scheduler()
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', '8501'))
     # threaded=True: 기본 Werkzeug 개발 서버는 싱글 스레드라 요청 하나(UMAP 계산,

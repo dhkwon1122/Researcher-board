@@ -2,18 +2,28 @@
 업무 시나리오 > 인사발령 — 부서별 담당자에게 인사발령 작성 양식(첨부파일)을 메일로 보낸다(2026-11-19).
 
 사용자 확정 흐름: 시스템 안에서 발령 내용을 입력받는 대신, 화면에서 양식 파일을 올리면 선택한 부서 담당자들에게
-같은 첨부로 한 명씩 메일을 보낸다(매월 1일·16일 발령 취합용). 발신 계정은 기본이 로그인한 본인 계정이고
-(.env의 MAIL_FROM은 팀 공용 비실명 계정), 팀 공용 계정을 고르거나 관리자는 다른 등록 계정을 고를 수 있다.
+같은 첨부로 한 명씩 메일을 보낸다(매월 1일·16일 발령 취합용).
 
-저장: data/processed/hr_order_contacts.json(부서별 담당자 표), hr_order_settings.json(사용 허용 역할),
-hr_order_log.jsonl(발송 이력 — 첨부 파일 내용은 저장하지 않고 이름·크기만).
+- 발신 계정: 로그인한 본인 또는 팀 공용 계정(.env MAIL_FROM, 비실명)만(2026-11-19 개정). 토큰·시스템 ID는 공용,
+  본인이면 발신 주소와 ?userId=를 그 계정으로(pipeline/mailer.send_html_email).
+- 메일 문구: 담당자가 평소 쓰는 제목·본문을 그대로 템플릿으로 저장하고, {발령일}/{회신일} 등 자리표시자를 발령일에
+  맞춰 바꿔 넣는다. 회신일 = 발령일의 워킹데이 4일 전(예: 12.16 → 12.10).
+- 워킹데이: 토·일, 공휴일(holidays 패키지 KR — 대체공휴일·설·추석 포함), 관리자가 넣은 회사 휴무일 제외.
+- 자동 발송: 켜 두면 서버가 발령일(1일·16일)의 워킹데이 7일 전 지정 시각에 담당자 전체에게 저장된 템플릿·첨부로
+  보낸다(발령일당 한 번 — 발송 기록 파일로 중복 방지, gunicorn 워커 2개라 파일 잠금으로 한 곳에서만).
+
+저장(data/processed): hr_order_contacts.json(부서별 담당자), hr_order_settings.json(허용 역할·템플릿·자동 발송·휴무일),
+hr_order_files/(자동 발송용 첨부), hr_order_auto_sent.json(자동 발송 기록), hr_order_log.jsonl(발송 이력 — 첨부 내용 제외).
 """
 from __future__ import annotations
 
+import fcntl
 import html
 import json
 import os
+import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 
@@ -22,9 +32,20 @@ from services import data_store
 CONTACTS_PATH = os.path.join(data_store.DATA_DIR, 'hr_order_contacts.json')
 SETTINGS_PATH = os.path.join(data_store.DATA_DIR, 'hr_order_settings.json')
 LOG_PATH = os.path.join(data_store.DATA_DIR, 'hr_order_log.jsonl')
+FILES_DIR = os.path.join(data_store.DATA_DIR, 'hr_order_files')
+AUTO_SENT_PATH = os.path.join(data_store.DATA_DIR, 'hr_order_auto_sent.json')
+AUTO_LOCK_PATH = os.path.join(data_store.DATA_DIR, '.hr_order_auto.lock')
 MAX_TOTAL_BYTES = 20 * 1024 * 1024        # 첨부 합계 상한(메일 서버 제한 대비)
 SHARED_SENDER = '__shared__'              # 발신 계정 선택값: .env의 팀 공용 계정
+REPLY_WORKDAYS = 4                        # 회신일 = 발령일의 워킹데이 4일 전(사용자 확정)
+AUTO_SEND_WORKDAYS = 7                    # 자동 발송 = 발령일의 워킹데이 7일 전(사용자 확정)
+DEFAULT_AUTO_HOUR = 9
 _LOCK = threading.Lock()
+
+DEFAULT_SUBJECT = '[인사발령] {발령일}자 발령 대상 작성 요청'
+DEFAULT_BODY = ('안녕하세요.\n\n{발령일_월일}자 인사발령(부서이동·파트이동 등) 대상을 취합합니다.\n'
+                '첨부한 양식에 부서 내 발령 대상자를 작성하여 {회신일_월일}까지 회신 부탁드립니다.\n'
+                '해당 인원이 없는 경우에도 "해당 없음"으로 회신해 주세요.\n\n감사합니다.')
 
 
 def _read_json(path, default):
@@ -37,16 +58,29 @@ def _read_json(path, default):
 
 def _write_json(path, data) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = f'{path}.{threading.get_ident()}.tmp'
+    tmp = f'{path}.{os.getpid()}.{threading.get_ident()}.tmp'
     with open(tmp, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=1)
     os.replace(tmp, path)
 
 
+def _settings() -> dict:
+    data = _read_json(SETTINGS_PATH, {})
+    return data if isinstance(data, dict) else {}
+
+
+def _update_settings(**fields) -> dict:
+    with _LOCK:
+        data = _settings()
+        data.update(fields)
+        _write_json(SETTINGS_PATH, data)
+    return data
+
+
 # ── 사용 권한: 관리자 + 관리자가 허용한 역할 ──────────────────────────────────
 
 def allowed_roles() -> list:
-    return list(_read_json(SETTINGS_PATH, {}).get('roles') or [])
+    return list(_settings().get('roles') or [])
 
 
 def set_allowed_roles(roles: list) -> list:
@@ -55,10 +89,7 @@ def set_allowed_roles(roles: list) -> list:
         raise PermissionError('관리자만 바꿀 수 있습니다.')
     from config.auth_config import ROLE_LABELS
     roles = [r for r in dict.fromkeys(roles or []) if r in ROLE_LABELS]
-    with _LOCK:
-        data = _read_json(SETTINGS_PATH, {})
-        data['roles'] = roles
-        _write_json(SETTINGS_PATH, data)
+    _update_settings(roles=roles)
     return roles
 
 
@@ -70,6 +101,128 @@ def can_use() -> bool:
     return can('manage_users') or user.get('role') in allowed_roles()
 
 
+def _require_use() -> None:
+    if not can_use():
+        raise PermissionError('인사발령 메뉴 권한이 없습니다.')
+
+
+# ── 워킹데이 ────────────────────────────────────────────────────────────────
+
+def company_holidays() -> list:
+    return sorted(set(_settings().get('holidays') or []))
+
+
+def set_company_holidays(text: str) -> list:
+    """회사 휴무일(공휴일 외, 예: 창립기념일) — 줄/쉼표로 구분한 YYYY-MM-DD. 형식이 틀리면 ValueError."""
+    _require_use()
+    days = []
+    for tok in re.split(r'[\s,]+', text or ''):
+        if not tok:
+            continue
+        try:
+            days.append(date.fromisoformat(tok).isoformat())
+        except ValueError as exc:
+            raise ValueError(f'날짜 형식이 아닙니다: {tok} (예: 2026-11-02)') from exc
+    days = sorted(set(days))
+    _update_settings(holidays=days)
+    return days
+
+
+def _public_holidays(years) -> set:
+    try:
+        import holidays as _h
+    except ImportError:            # 패키지가 없으면 주말·회사 휴무일만 제외(화면에 안내)
+        return set()
+    return set(_h.KR(years=list(years)).keys())
+
+
+def holidays_available() -> bool:
+    try:
+        import holidays  # noqa: F401 — 설치 여부만 확인
+        return True
+    except ImportError:
+        return False
+
+
+def is_workday(d: date, _cache: dict | None = None) -> bool:
+    if d.weekday() >= 5:
+        return False
+    cache = _cache if _cache is not None else {}
+    if 'days' not in cache:
+        cache['days'] = _public_holidays(range(d.year - 1, d.year + 2)) | {
+            date.fromisoformat(s) for s in company_holidays()}
+    return d not in cache['days']
+
+
+def workdays_before(d: date, n: int) -> date:
+    """d의 워킹데이 n일 전(d 당일은 세지 않음). 예: 2026-12-16(수), 4 → 2026-12-10(목)."""
+    cache: dict = {}
+    cur, left = d, n
+    while left:
+        cur -= timedelta(days=1)
+        if is_workday(cur, cache):
+            left -= 1
+    return cur
+
+
+def next_order_date(today: date | None = None) -> date:
+    """다음 발령일(매월 1일·16일 중 오늘 이후 가장 가까운 날)."""
+    today = today or date.today()
+    if today.day < 16:
+        return today.replace(day=16)
+    return (today.replace(day=1) + timedelta(days=32)).replace(day=1)
+
+
+def reply_due(order_date: date) -> date:
+    return workdays_before(order_date, REPLY_WORKDAYS)
+
+
+def auto_send_date(order_date: date) -> date:
+    return workdays_before(order_date, AUTO_SEND_WORKDAYS)
+
+
+# ── 템플릿(담당자가 평소 쓰는 제목·본문 + 자리표시자) ─────────────────────────
+
+_WD = '월화수목금토일'
+PLACEHOLDERS = ('{발령일}', '{발령일_월일}', '{회신일}', '{회신일_월일}')
+
+
+def _md(d: date) -> str:
+    return f'{d.month}월 {d.day}일({_WD[d.weekday()]})'
+
+
+def placeholder_values(order_date: date) -> dict:
+    due = reply_due(order_date)
+    return {'발령일': f'{order_date:%Y.%m.%d}', '발령일_월일': _md(order_date),
+            '회신일': f'{due:%Y.%m.%d}', '회신일_월일': _md(due)}
+
+
+def render(text: str, order_date: date) -> str:
+    """{발령일}·{발령일_월일}·{회신일}·{회신일_월일}만 바꾼다(다른 중괄호는 그대로)."""
+    out = text or ''
+    for k, v in placeholder_values(order_date).items():
+        out = out.replace('{' + k + '}', v)
+    return out
+
+
+def template() -> tuple[str, str]:
+    t = _settings().get('template') or {}
+    return t.get('subject') or DEFAULT_SUBJECT, t.get('body') or DEFAULT_BODY
+
+
+def save_template(subject: str, body: str) -> None:
+    _require_use()
+    if not (subject or '').strip() or not (body or '').strip():
+        raise ValueError('제목과 본문을 입력하세요.')
+    _update_settings(template={'subject': subject.strip(), 'body': body})
+
+
+def body_html(text: str) -> str:
+    """본문 텍스트(사용자 입력)를 이스케이프하고, 줄바꿈·연속 공백은 그대로 보이게."""
+    return ('<div style="font-family:\'Malgun Gothic\',sans-serif;font-size:14px;line-height:1.7;white-space:pre-wrap">'
+            + html.escape(text or '').replace('\n', '<br>') + '</div>')
+
+
 # ── 부서별 담당자 표 ────────────────────────────────────────────────────────
 
 def load_contacts() -> list:
@@ -78,7 +231,7 @@ def load_contacts() -> list:
 
 def _clean_contacts(rows: list) -> tuple[list, list]:
     """빈 행은 버리고, 이메일 형식이 틀린 행은 오류로 돌려준다. 반환: (정리된 행, 오류 문구)."""
-    out, errors = [], []
+    out, errors, seen = [], [], set()
     for i, r in enumerate(rows or [], 1):
         dept = str(r.get('dept') or '').strip()
         name = str(r.get('name') or '').strip()
@@ -91,13 +244,16 @@ def _clean_contacts(rows: list) -> tuple[list, list]:
         if '@' not in email or ' ' in email:
             errors.append(f'{i}번째 행: 이메일 형식이 아닙니다({email}).')
             continue
+        if email.lower() in seen:
+            errors.append(f'{i}번째 행: 이메일이 중복됩니다({email}).')
+            continue
+        seen.add(email.lower())
         out.append({'dept': dept, 'name': name, 'email': email})
     return out, errors
 
 
 def save_contacts(rows: list) -> tuple[list, list]:
-    if not can_use():
-        raise PermissionError('인사발령 메뉴 권한이 없습니다.')
+    _require_use()
     rows, errors = _clean_contacts(rows)
     if not errors:
         with _LOCK:
@@ -116,6 +272,27 @@ def contacts_from_table(df) -> list:
             for r in df.fillna('').to_dict('records')]
 
 
+def person_options() -> list:
+    """현재 인력현황(재직자) 검색 옵션 — 담당자 추가용."""
+    from services.similarity_map import individual_search_options
+    return individual_search_options(current_only=True)
+
+
+def contact_for_person(researcher_id: str) -> dict:
+    """인력현황의 한 사람 → 담당자 행. 이메일은 Knox ID@samsung.com(사용자 확정), 부서는 1단계 부서명."""
+    from services.similarity_map import dep_name_for_org_code
+    df = data_store.read_processed('researchers')
+    rows = df[df['researcher_id'] == researcher_id] if not df.empty else df
+    if rows.empty:
+        raise ValueError('인력현황에서 찾을 수 없습니다.')
+    r = rows.iloc[0]
+    knox = str(r.get('knox_id', '') or '').strip()
+    if knox.lower() in ('', 'nan'):
+        knox = ''
+    dept = dep_name_for_org_code(str(r.get('org_code', '') or '')) or str(r.get('department', '') or '').strip()
+    return {'dept': dept, 'name': str(r.get('name', '') or ''), 'email': f'{knox}@samsung.com' if knox else ''}
+
+
 # ── 발신 계정 ───────────────────────────────────────────────────────────────
 
 def _account_email(user: dict) -> str:
@@ -123,9 +300,8 @@ def _account_email(user: dict) -> str:
 
 
 def sender_options() -> list:
-    """[{'label', 'value'}] — 첫 항목은 로그인한 본인(기본값). 팀 공용 계정(.env MAIL_FROM)이 있으면 그다음.
-    관리자는 다른 등록 계정도 고를 수 있다."""
-    from services.auth import can, get_current_user, list_users
+    """로그인한 본인(기본값)과 팀 공용 계정(.env MAIL_FROM)만(2026-11-19 사용자 확정)."""
+    from services.auth import get_current_user
     me = get_current_user() or {}
     opts = []
     if me.get('user_id'):
@@ -134,64 +310,53 @@ def sender_options() -> list:
     shared = os.environ.get('MAIL_FROM', '').strip()
     if shared:
         opts.append({'label': f'팀 공용 계정 · {shared}', 'value': SHARED_SENDER})
-    if can('manage_users'):
-        for u in list_users():
-            if u['user_id'] != me.get('user_id'):
-                opts.append({'label': f"{u.get('display_name') or u['user_id']} ({u['user_id']}) · {_account_email(u)}",
-                             'value': u['user_id']})
     return opts
 
 
-def _resolve_sender(value: str) -> tuple[str | None, str | None, str]:
-    """선택값 → (발신 이메일, 메일 API userId, 화면·로그 표시). 팀 공용이면 (None, None) — mailer가 .env 값 사용."""
-    from services.auth import can, get_current_user, list_users
-    if value == SHARED_SENDER:
-        return None, None, f"팀 공용 계정({os.environ.get('MAIL_FROM', '').strip()})"
-    me = get_current_user() or {}
-    if value != me.get('user_id') and not can('manage_users'):
-        raise PermissionError('다른 계정으로는 관리자만 보낼 수 있습니다.')
-    user = me if value == me.get('user_id') else next((u for u in list_users() if u['user_id'] == value), None)
-    if not user:
-        raise ValueError('발신 계정을 찾을 수 없습니다.')
-    email = _account_email(user)
-    return email, user['user_id'], email
-
-
-# ── 메일 ────────────────────────────────────────────────────────────────────
-
-def next_order_date(today: date | None = None) -> date:
-    """다음 발령일(매월 1일·16일 중 오늘 이후 가장 가까운 날)."""
-    today = today or date.today()
-    if today.day < 16:
-        return today.replace(day=16)
-    nxt = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
-    return nxt
-
-
-def default_subject(order_date: date) -> str:
-    return f'[인사발령] {order_date:%Y.%m.%d}자 발령 대상 작성 요청'
-
-
-def default_body(order_date: date) -> str:
-    due = order_date - timedelta(days=3)
-    return (f'안녕하세요.\n\n{order_date:%Y년 %m월 %d일}자 인사발령(부서이동·파트이동 등) 대상을 취합합니다.\n'
-            f'첨부한 양식에 부서 내 발령 대상자를 작성하여 {due:%m월 %d일}까지 회신 부탁드립니다.\n'
-            f'해당 인원이 없는 경우에도 "해당 없음"으로 회신해 주세요.\n\n감사합니다.')
-
-
-def body_html(text: str) -> str:
-    """본문 텍스트(사용자 입력)를 이스케이프해 줄바꿈만 살린 HTML로."""
-    return ('<div style="font-family:\'Malgun Gothic\',sans-serif;font-size:14px;line-height:1.7">'
-            + html.escape(text or '').replace('\n', '<br>') + '</div>')
-
-
-def send(contacts: list, subject: str, body_text: str, attachments: list, sender_value: str) -> list:
-    """선택한 담당자들에게 같은 첨부로 한 명씩 보낸다. 반환: [{'dept','name','email','ok','error'}].
-    attachments: [(파일명, bytes)]. 결과는 발송 이력(hr_order_log.jsonl)에 남긴다(파일 내용 제외)."""
-    from pipeline.mailer import MailError, send_html_email
+def _resolve_sender(value: str) -> dict:
+    """선택값 → {'email', 'user_id', 'label'}. 팀 공용이면 email/user_id None(mailer가 .env 값 사용)."""
     from services.auth import get_current_user
-    if not can_use():
-        raise PermissionError('인사발령 메뉴 권한이 없습니다.')
+    if value == SHARED_SENDER:
+        return {'email': None, 'user_id': None, 'label': f"팀 공용 계정({os.environ.get('MAIL_FROM', '').strip()})"}
+    me = get_current_user() or {}
+    if not me.get('user_id') or value != me['user_id']:
+        raise PermissionError('발신 계정은 본인 또는 팀 공용 계정만 고를 수 있습니다.')
+    email = _account_email(me)
+    return {'email': email, 'user_id': me['user_id'], 'label': email}
+
+
+# ── 발송 ────────────────────────────────────────────────────────────────────
+
+def _deliver(contacts: list, subject: str, body_text: str, attachments: list, sender: dict,
+             by: dict, kind: str, order_date: date | None) -> list:
+    from pipeline.mailer import MailError, send_html_email
+    html_body = body_html(body_text)
+
+    def _one(c):
+        try:
+            send_html_email([c['email']], subject.strip(), html_body, attachments,
+                            sender_email=sender['email'], sender_user_id=sender['user_id'])
+            return {**c, 'ok': True, 'error': ''}
+        except MailError as exc:
+            return {**c, 'ok': False, 'error': str(exc)}
+        except Exception as exc:  # noqa: BLE001 — 한 명 실패가 나머지 발송을 막지 않게
+            return {**c, 'ok': False, 'error': f'{type(exc).__name__}: {exc}'}
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(_one, contacts))
+    entry = {'at': datetime.now().isoformat(timespec='seconds'), 'kind': kind,
+             'order_date': order_date.isoformat() if order_date else '',
+             'by': by.get('user_id', ''), 'by_name': by.get('display_name', ''), 'sender': sender['label'],
+             'subject': subject.strip(), 'files': [{'name': n, 'size': len(b)} for n, b in attachments],
+             'results': [{k: r[k] for k in ('dept', 'name', 'email', 'ok', 'error')} for r in results]}
+    with _LOCK:
+        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+        with open(LOG_PATH, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + '\n')
+    return results
+
+
+def _check(contacts, subject, attachments):
     if not contacts:
         raise ValueError('받을 부서 담당자를 고르세요.')
     if not (subject or '').strip():
@@ -201,32 +366,17 @@ def send(contacts: list, subject: str, body_text: str, attachments: list, sender
     total = sum(len(b) for _, b in attachments)
     if total > MAX_TOTAL_BYTES:
         raise ValueError(f'첨부 합계가 {MAX_TOTAL_BYTES // (1024 * 1024)}MB를 넘습니다({total / 1048576:.1f}MB).')
-    sender_email, sender_user_id, sender_label = _resolve_sender(sender_value)
-    html_body = body_html(body_text)
 
-    def _one(c):
-        try:
-            send_html_email([c['email']], subject.strip(), html_body, attachments,
-                            sender_email=sender_email, sender_user_id=sender_user_id)
-            return {**c, 'ok': True, 'error': ''}
-        except MailError as exc:
-            return {**c, 'ok': False, 'error': str(exc)}
-        except Exception as exc:  # noqa: BLE001 — 한 명 실패가 나머지 발송을 막지 않게
-            return {**c, 'ok': False, 'error': f'{type(exc).__name__}: {exc}'}
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        results = list(pool.map(_one, contacts))
-
-    user = get_current_user() or {}
-    entry = {'at': datetime.now().isoformat(timespec='seconds'), 'by': user.get('user_id', ''),
-             'by_name': user.get('display_name', ''), 'sender': sender_label, 'subject': subject.strip(),
-             'files': [{'name': n, 'size': len(b)} for n, b in attachments],
-             'results': [{k: r[k] for k in ('dept', 'name', 'email', 'ok', 'error')} for r in results]}
-    with _LOCK:
-        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
-        with open(LOG_PATH, 'a', encoding='utf-8') as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + '\n')
-    return results
+def send(contacts: list, subject: str, body_text: str, attachments: list, sender_value: str,
+         order_date: date | None = None) -> list:
+    """화면에서 보내기 — 선택한 담당자들에게 같은 첨부로 한 명씩. subject/body는 이미 발령일이 들어간 문구.
+    반환: [{'dept','name','email','ok','error'}]. 결과는 발송 이력에 남긴다(파일 내용 제외)."""
+    from services.auth import get_current_user
+    _require_use()
+    _check(contacts, subject, attachments)
+    sender = _resolve_sender(sender_value)
+    return _deliver(contacts, subject, body_text, attachments, sender, get_current_user() or {}, 'manual', order_date)
 
 
 def read_log(limit: int = 50) -> list:
@@ -242,3 +392,156 @@ def read_log(limit: int = 50) -> list:
         except ValueError:
             continue
     return out
+
+
+# ── 자동 발송(발령일의 워킹데이 7일 전) ────────────────────────────────────────
+
+def auto_settings() -> dict:
+    a = _settings().get('auto') or {}
+    return {'enabled': bool(a.get('enabled')), 'hour': int(a.get('hour', DEFAULT_AUTO_HOUR)),
+            'sender': a.get('sender') or {}, 'files': list(a.get('files') or []),
+            'set_by': a.get('set_by', ''), 'set_at': a.get('set_at', '')}
+
+
+def auto_files() -> list:
+    """자동 발송용 첨부 [(이름, bytes)] — 저장된 순서대로, 없어진 파일은 건너뜀."""
+    out = []
+    for name in auto_settings()['files']:
+        path = os.path.join(FILES_DIR, os.path.basename(name))
+        try:
+            with open(path, 'rb') as f:
+                out.append((name, f.read()))
+        except OSError:
+            continue
+    return out
+
+
+def save_auto_files(files: list) -> list:
+    """자동 발송용 첨부를 바꾼다(기존 파일은 지움). files: [(이름, bytes)]."""
+    _require_use()
+    if sum(len(b) for _, b in files) > MAX_TOTAL_BYTES:
+        raise ValueError(f'첨부 합계가 {MAX_TOTAL_BYTES // (1024 * 1024)}MB를 넘습니다.')
+    names = []
+    with _LOCK:
+        os.makedirs(FILES_DIR, exist_ok=True)
+        for old in os.listdir(FILES_DIR):
+            os.remove(os.path.join(FILES_DIR, old))
+        for name, content in files:
+            safe = os.path.basename(name).strip() or 'attachment'
+            with open(os.path.join(FILES_DIR, safe), 'wb') as f:
+                f.write(content)
+            names.append(safe)
+    a = _settings().get('auto') or {}
+    _update_settings(auto={**a, 'files': names})
+    return names
+
+
+def save_auto(enabled: bool, hour: int, sender_value: str) -> dict:
+    """자동 발송 설정 — 발신 계정은 저장하는 사람 본인 또는 팀 공용(그대로 기억해 두었다가 자동 발송 때 사용)."""
+    from services.auth import get_current_user
+    _require_use()
+    hour = int(hour)
+    if not 0 <= hour <= 23:
+        raise ValueError('발송 시각은 0~23시입니다.')
+    sender = _resolve_sender(sender_value)
+    if enabled:
+        if not load_contacts():
+            raise ValueError('부서별 담당자를 먼저 등록하세요.')
+        if not auto_files():
+            raise ValueError('자동 발송에 쓸 첨부파일을 먼저 올리세요.')
+    me = get_current_user() or {}
+    a = _settings().get('auto') or {}
+    _update_settings(auto={**a, 'enabled': bool(enabled), 'hour': hour, 'sender': sender,
+                           'set_by': me.get('user_id', ''), 'set_at': datetime.now().isoformat(timespec='seconds')})
+    return auto_settings()
+
+
+def _auto_sent() -> dict:
+    data = _read_json(AUTO_SENT_PATH, {})
+    return data if isinstance(data, dict) else {}
+
+
+def _candidate_order_dates(today: date) -> list:
+    first = today.replace(day=1)
+    nxt = (first + timedelta(days=32)).replace(day=1)
+    nxt2 = (nxt + timedelta(days=32)).replace(day=1)
+    return [d for d in (first.replace(day=16), nxt, nxt.replace(day=16), nxt2) if d > today]
+
+
+def next_auto_send(now: datetime | None = None) -> tuple[date, datetime] | None:
+    """다음 자동 발송 예정(발령일, 발송 시각). 이미 보낸 발령일은 건너뜀."""
+    now = now or datetime.now()
+    hour = auto_settings()['hour']
+    sent = _auto_sent()
+    for od in _candidate_order_dates(now.date()):
+        if od.isoformat() in sent:
+            continue
+        due = reply_due(od)
+        if now.date() >= due:          # 회신 기한이 지난 발령일은 자동 발송하지 않음
+            continue
+        when = datetime.combine(auto_send_date(od), datetime.min.time()).replace(hour=hour)
+        return od, when
+    return None
+
+
+def run_auto_if_due(now: datetime | None = None) -> dict | None:
+    """자동 발송 시각이 지난 발령일이 있으면 한 번 보낸다(파일 잠금으로 워커 하나만, 발송 기록으로 중복 방지).
+    보낼 게 없으면 None, 보냈으면 {'order_date', 'results'}."""
+    now = now or datetime.now()
+    cfg = auto_settings()
+    if not cfg['enabled']:
+        return None
+    os.makedirs(os.path.dirname(AUTO_LOCK_PATH), exist_ok=True)
+    with open(AUTO_LOCK_PATH, 'a+') as lock_f:
+        try:
+            fcntl.flock(lock_f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return None                  # 다른 워커가 처리 중
+        try:
+            nxt = next_auto_send(now)
+            if not nxt or nxt[1] > now:
+                return None
+            od = nxt[0]
+            contacts, files = load_contacts(), auto_files()
+            subject_t, body_t = template()
+            sender = cfg['sender'] or _resolve_shared()
+            if not contacts or not files:
+                results = [{'dept': '', 'name': '', 'email': '', 'ok': False,
+                            'error': '담당자 또는 자동 발송용 첨부가 없어 보내지 못했습니다.'}]
+            else:
+                results = _deliver(contacts, render(subject_t, od), render(body_t, od), files, sender,
+                                   {'user_id': 'auto', 'display_name': '자동 발송'}, 'auto', od)
+            sent = _auto_sent()
+            sent[od.isoformat()] = {'at': now.isoformat(timespec='seconds'),
+                                    'ok': sum(1 for r in results if r['ok']), 'fail': sum(1 for r in results if not r['ok'])}
+            _write_json(AUTO_SENT_PATH, sent)
+            return {'order_date': od, 'results': results}
+        finally:
+            fcntl.flock(lock_f, fcntl.LOCK_UN)
+
+
+def _resolve_shared() -> dict:
+    return {'email': None, 'user_id': None, 'label': f"팀 공용 계정({os.environ.get('MAIL_FROM', '').strip()})"}
+
+
+_scheduler_started = False
+
+
+def start_scheduler(interval_seconds: int = 600) -> None:
+    """서버 프로세스마다 데몬 스레드 하나 — interval마다 run_auto_if_due(). 실제 발송은 잠금·기록으로 한 번만."""
+    global _scheduler_started
+    if _scheduler_started or os.environ.get('HR_ORDER_AUTO_DISABLED') == '1':
+        return
+    _scheduler_started = True
+
+    def _loop():
+        while True:
+            try:
+                r = run_auto_if_due()
+                if r:
+                    ok = sum(1 for x in r['results'] if x['ok'])
+                    print(f"[hr_order] {r['order_date']} 발령분 자동 발송 — 성공 {ok}/{len(r['results'])}")
+            except Exception as exc:  # noqa: BLE001 — 스케줄러가 죽지 않게
+                print(f'[hr_order] 자동 발송 점검 실패: {exc}')
+            time.sleep(interval_seconds)
+    threading.Thread(target=_loop, daemon=True, name='hr-order-auto').start()
