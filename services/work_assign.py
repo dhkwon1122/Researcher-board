@@ -183,7 +183,7 @@ def save_template(subject: str, body: str) -> None:
 # ── 발송 ────────────────────────────────────────────────────────────────────
 
 def _check(contacts, subject, attachments, gen_forms: bool) -> None:
-    """인사발령 검사와 같되, 부서별 양식을 자동 생성하면 공통 첨부는 없어도 된다."""
+    """인사발령 검사와 같되, 플랫폼별 양식을 자동 생성하면 공통 첨부는 없어도 된다."""
     hom._check(contacts, subject, attachments or ([('부서별 양식', b'')] if gen_forms else []))
 
 
@@ -278,7 +278,7 @@ def save_auto(enabled: bool, hour: int, sender_value: str) -> dict:
         if not hom.load_contacts():
             raise ValueError('부서별 담당자를 먼저 등록하세요(인사발령 화면).')
         if not auto_files() and not _gen_forms_on():
-            raise ValueError('자동 발송에 쓸 첨부파일을 올리거나 "부서별 양식 자동 생성"을 켜세요.')
+            raise ValueError('자동 발송에 쓸 첨부파일을 올리거나 "플랫폼별 양식 자동 생성"을 켜세요.')
     me = get_current_user() or {}
     a = _settings().get('auto') or {}
     _update_settings(auto={**a, 'enabled': bool(enabled), 'hour': hour, 'sender': sender,
@@ -384,7 +384,7 @@ def _safe(name: str) -> str:
 
 def match_department(filename: str, depts: list) -> str | None:
     """파일 이름에 들어 있는 부서명(가장 긴 것)으로 부서를 찾는다(공백·밑줄 무시)."""
-    norm = lambda t: re.sub(r'[\s_]+', '', t)  # noqa: E731 — 부서별 양식 파일명은 공백을 _로 바꿈
+    norm = lambda t: re.sub(r'[\s_]+', '', t)  # noqa: E731 — 플랫폼별 양식 파일명은 공백을 _로 바꿈
     key = norm(filename)
     hits = [d for d in depts if norm(d) and norm(d) in key]
     return max(hits, key=len) if hits else None
