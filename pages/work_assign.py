@@ -108,11 +108,13 @@ def _compose_card():
             html.Div(id='wa-result', className='mt-3'),
             dcc.Store(id='wa-files-store', data=[]),
             dbc.Modal([
-                dbc.ModalHeader(dbc.ModalTitle('메일을 보낼까요?')),
+                dbc.ModalHeader(dbc.ModalTitle('보낼 내용을 확인하세요')),
                 dbc.ModalBody(id='wa-confirm-body'),
-                dbc.ModalFooter([dbc.Button('취소', id='wa-confirm-cancel', color='secondary', size='sm'),
-                                 dbc.Button('보내기', id='wa-confirm-ok', color='primary', size='sm')]),
-            ], id='wa-confirm', is_open=False, size='lg'),
+                dbc.ModalFooter([html.Span('받는 사람별 첨부 파일을 내려받아 확인한 뒤 보내세요.', className='small text-muted me-auto'),
+                                 dbc.Button('취소', id='wa-confirm-cancel', color='secondary', size='sm'),
+                                 dbc.Button([html.I(className='bi bi-send me-1'), '확인했습니다 — 보내기'], id='wa-confirm-ok',
+                                            color='primary', size='sm')]),
+            ], id='wa-confirm', is_open=False, size='xl', scrollable=True),
         ]),
     ], className='shadow-sm mb-4')
 
@@ -145,7 +147,9 @@ def _form_box():
                                                                      color='secondary', outline=True, size='sm',
                                                                      className='py-0'), className='d-inline-block me-2'),
                   dbc.Button('기본 양식으로', id='wa-form-reset', color='link', size='sm', className='py-0 me-2'),
-                  dbc.Button([html.I(className='bi bi-file-earmark-zip me-1'), '플랫폼별 양식 미리 받기(zip)'], id='wa-form-zip',
+                  dbc.Button([html.I(className='bi bi-file-earmark-excel me-1'), '전체 명단 받기(한 파일)'], id='wa-form-full',
+                             color='success', outline=True, size='sm', className='py-0'),
+                  dbc.Button([html.I(className='bi bi-file-earmark-zip me-1'), '플랫폼별 파일 모두(zip)'], id='wa-form-zip',
                              color='success', outline=True, size='sm', className='py-0')],
                  className='d-flex flex-wrap align-items-center gap-1 mt-1'),
         html.Div(id='wa-form-msg', className='small mt-1'),
@@ -162,21 +166,33 @@ def _ref_src(target: str):
     return html.Span(f'없음 — {src}로 대신 채움' if src else '없음 — 참고 칸을 비워 둠', className='text-muted')
 
 
+def _dl_link(kind: str, platform: str, name: str):
+    return html.Span([html.I(className='bi bi-download me-1'), name], id={'type': kind, 'p': platform}, n_clicks=0,
+                     className='text-primary', style={'cursor': 'pointer'}, title='내려받아 확인')
+
+
 def _plan_view(target: str):
     pl = waf.plan(target)
     if not pl['platforms']:
         return html.Div('대상자가 없습니다(최신 인력현황·직급 확인).', className='text-warning')
+    total = sum(p['count'] for p in pl['platforms'])
     rows = [html.Tr([html.Td(p['platform']), html.Td(f"{p['count']}명"),
+                     html.Td(_dl_link('wa-form-dl', p['platform'], waf.file_name(target, p['platform']))),
                      html.Td(', '.join(f"{c.get('name') or ''} <{c['email']}>" for c in p['contacts'])
                              if p['contacts'] else html.Span('담당자 없음 — 보내지 않음', className='text-danger'))])
             for p in pl['platforms']]
+    rows.append(html.Tr([html.Td(html.B('전체')), html.Td(html.B(f'{total}명')),
+                         html.Td(_dl_link('wa-form-dl', '__all__', waf.file_name(target, None))),
+                         html.Td('확인용(보내지 않음)', className='text-muted')]))
     extra = []
     if pl['unmatched_contacts']:
         extra.append(html.Div(['플랫폼과 부서명이 맞지 않아 양식을 받지 못하는 담당자: ',
                                ', '.join(f"{c['dept']} · {c.get('name') or c['email']}" for c in pl['unmatched_contacts']),
                                ' — 인사발령 화면의 부서명을 플랫폼 이름과 같게 고치세요.'], className='text-danger mt-1'))
-    return html.Div([html.Div('플랫폼별 대상 인원과 받는 담당자', className='fw-semibold mb-1'),
-                     dbc.Table([html.Thead(html.Tr([html.Th('플랫폼'), html.Th('대상'), html.Th('받는 담당자')])),
+    return html.Div([html.Div(f"플랫폼별 대상 인원·생성 파일·받는 담당자 — 참고 칸 출처: {pl['ref'] or '없음'}",
+                              className='fw-semibold mb-1'),
+                     dbc.Table([html.Thead(html.Tr([html.Th('플랫폼'), html.Th('대상'), html.Th('파일(눌러서 받기)'),
+                                                    html.Th('받는 담당자')])),
                                 html.Tbody(rows)], size='sm', bordered=True, className='small mb-0'), *extra])
 
 
@@ -441,30 +457,40 @@ def _confirm(_send, _cancel, emails, options, subject, body, target, files, send
         return False, no_update, dbc.Alert(' '.join(problems), color='warning', className='small py-2')
     rcp = hom.recipient_settings()
     reply = _manual_reply()
-    label = {o['value']: o['label'] for o in options or []}
     sender_label = next((o['label'] for o in sender_opts or [] if o['value'] == sender), sender)
     single = rcp['mode'] == 'single' and not gen
     by_email = {c['email']: c for c in hom.load_contacts()}
+    chosen = [by_email[e] for e in emails if e in by_email]
     plats = set(waf.platforms()) if gen else set()
-    form_names = sorted({waf.file_name(target, by_email[e]['dept']) for e in emails
-                         if e in by_email and by_email[e]['dept'] in plats}) if gen else []
-    no_form = [by_email[e] for e in emails if gen and e in by_email and by_email[e]['dept'] not in plats]
-    people = lambda ps: html.Ul([html.Li(f"{p['name']} [{p['dept']}] · {p['email']}") for p in ps], className='small mb-2')  # noqa: E731
+    common = [f['name'] for f in files or []]
+    common_view = [html.Div([html.I(className='bi bi-paperclip me-1'), n]) for n in common]
+    rows, n_send = [], 0
+    for c in chosen:
+        has_form = c['dept'] in plats
+        skip = gen and not has_form
+        n_send += 0 if skip else 1
+        file_cell = common_view + ([html.Div(_dl_link('wa-form-dl2', c['dept'], waf.file_name(target, c['dept'])))]
+                                   if gen and has_form else [])
+        rows.append(html.Tr([
+            html.Td(f"{c.get('name') or ''} <{c['email']}>"), html.Td(c['dept']),
+            html.Td(file_cell or '-'),
+            html.Td(html.Span(f"'{c['dept']}' 플랫폼 대상자 없음 — 보내지 않음", className='text-danger') if skip
+                    else html.Span('보냄', className='text-success')),
+        ], className='table-danger' if skip else None))
+    cc_text = ', '.join(f"{p['name']} <{p['email']}>" for p in rcp['cc']) or '없음'
+    bcc_text = ', '.join(f"{p['name']} <{p['email']}>" for p in rcp['bcc'])
+    how = '담당자별 따로(플랫폼별 양식)' if gen else ('한 통으로(담당자 전원 TO)' if single else '담당자별 따로')
     return True, html.Div([
         html.Div([html.B('발신: '), sender_label], className='small mb-1'),
         html.Div([html.B('제목: '), wa.render(subject, target, reply)], className='small mb-1'),
-        html.Div([html.B('공통 첨부: '), ', '.join(f['name'] for f in files or []) or '없음'], className='small mb-1'),
-        html.Div([html.B('플랫폼별 양식: '), ', '.join(form_names) or '없음'], className='small mb-1') if gen else None,
-        html.Div([html.B('양식이 없어 보내지 않을 담당자: '), ', '.join(f"{c['dept']} · {c['email']}" for c in no_form)],
-                 className='small text-danger mb-1') if no_form else None,
-        html.Div(_body_frame(body, target, reply, '240px'), className='border rounded mb-2'),
-        html.Div(html.B(f"수신(TO) {len(emails)}명 — " + ('한 통으로 발송' if single else '한 명씩 따로 발송')),
-                 className='small'),
-        html.Ul([html.Li(label.get(e, e)) for e in emails], className='small mb-2'),
-        html.Div(html.B(f"참조(CC) {len(rcp['cc'])}명"), className='small') if rcp['cc'] else None,
-        people(rcp['cc']) if rcp['cc'] else None,
-        html.Div(html.B(f"비밀참조(BCC) {len(rcp['bcc'])}명"), className='small') if rcp['bcc'] else None,
-        people(rcp['bcc']) if rcp['bcc'] else None,
+        html.Div([html.B('발송 방식: '), how, ' · ', html.B('참조(CC): '), cc_text,
+                  (html.Span([' · ', html.B('비밀참조: '), bcc_text]) if bcc_text else '')], className='small mb-2'),
+        html.Div(html.B(f'받는 사람과 첨부 파일 — 보냄 {n_send}명' + (f' / 보내지 않음 {len(chosen) - n_send}명'
+                                                                if n_send < len(chosen) else '')), className='small mb-1'),
+        dbc.Table([html.Thead(html.Tr([html.Th('받는 사람(TO)'), html.Th('부서'), html.Th('첨부 파일'), html.Th('상태')])),
+                   html.Tbody(rows)], size='sm', bordered=True, className='small mb-2'),
+        html.Details([html.Summary('본문 미리보기', className='small'),
+                      html.Div(_body_frame(body, target, reply, '240px'), className='border rounded mt-1')], open=False),
     ]), no_update
 
 
@@ -530,7 +556,7 @@ def _ref_upload(content, _del, filename, target, ver):
 def _ref_and_plan(target, _ver, gen):
     if not target:
         return '', ''
-    return _ref_src(target), (_plan_view(target) if gen else '')
+    return _ref_src(target), _plan_view(target)
 
 
 @callback(Output('wa-form-src', 'children'), Output('wa-form-msg', 'children', allow_duplicate=True),
@@ -548,6 +574,33 @@ def _form_template(content, _reset, filename):
     except (PermissionError, ValueError) as exc:
         return no_update, html.Span(str(exc), className='text-danger'), None
     return _form_status(), html.Span('양식 원본을 저장했습니다.', className='text-success'), None
+
+
+def _clicks_of(trig: dict) -> int:
+    """패턴 매칭 입력 중 trig에 해당하는 n_clicks — ctx.triggered의 value가 None으로 오는 경우가 있어 inputs_list에서 찾는다."""
+    for group in ctx.inputs_list:
+        for item in group if isinstance(group, list) else [group]:
+            if item.get('id') == trig:
+                return item.get('value') or 0
+    return 0
+
+
+@callback(Output('wa-download', 'data', allow_duplicate=True), Output('wa-form-msg', 'children', allow_duplicate=True),
+          Input('wa-form-full', 'n_clicks'), Input({'type': 'wa-form-dl', 'p': ALL}, 'n_clicks'),
+          Input({'type': 'wa-form-dl2', 'p': ALL}, 'n_clicks'), State('wa-target', 'value'), prevent_initial_call=True)
+def _form_file(_full, dl, dl2, target):
+    """생성 양식 확인용 다운로드 — 전체 명단 한 파일 또는 플랫폼 하나(계획 표·확인창)."""
+    trig = ctx.triggered_id
+    if not wa.can_use() or not target:
+        return no_update, no_update
+    if isinstance(trig, dict) and not _clicks_of(trig):   # 표·확인창이 다시 그려질 때(클릭 아님)는 무시
+        return no_update, no_update
+    platform = None if trig == 'wa-form-full' or (isinstance(trig, dict) and trig['p'] == '__all__') else trig['p']
+    try:
+        name, content = waf.build_form(target, platform)
+    except ValueError as exc:
+        return no_update, html.Span(str(exc), className='text-danger')
+    return dcc.send_bytes(content, name), no_update
 
 
 @callback(Output('wa-download', 'data', allow_duplicate=True), Output('wa-form-msg', 'children', allow_duplicate=True),
