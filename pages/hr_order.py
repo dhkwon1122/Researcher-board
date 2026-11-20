@@ -31,8 +31,14 @@ def _md(d: date) -> str:
 
 
 def _contact_option(c: dict) -> dict:
+    """c는 group_contacts의 묶음(겸직이면 dept = 'A · B') 또는 담당자 행."""
     who = f" · {c['name']}" if c.get('name') else ''
     return {'label': f"{c['dept']}{who} <{c['email']}>", 'value': c['email']}
+
+
+def _recipient_options(contacts: list) -> list:
+    """받는 사람 체크 목록 — 겸직 담당자는 한 줄(부서를 · 로 이어서), 값은 이메일."""
+    return [_contact_option(g) for g in hom.group_contacts(contacts)]
 
 
 def _fmt_size(n: int) -> str:
@@ -115,7 +121,7 @@ def _compose_card():
                 dbc.Button('전체 선택', id='hro-all', color='link', size='sm', className='p-0 me-3'),
                 dbc.Button('선택 해제', id='hro-none', color='link', size='sm', className='p-0'),
             ], className='mb-1'),
-            dbc.Checklist(id='hro-recipients', options=[_contact_option(c) for c in contacts], value=[],
+            dbc.Checklist(id='hro-recipients', options=_recipient_options(contacts), value=[],
                           className='small mb-1', style={'columns': '2'}),
             html.Div('아래 "부서별 담당자"에 먼저 등록하세요.' if not contacts else '', id='hro-recipients-hint',
                      className='small text-muted mb-3'),
@@ -501,8 +507,7 @@ def _send(n, emails, subject, body, od, files, sender, cc, bcc, mode):
     if not n:
         return no_update, no_update, no_update
     d = date.fromisoformat(od)
-    by_email = {c['email']: c for c in hom.load_contacts()}
-    contacts = [by_email[e] for e in emails or [] if e in by_email]
+    contacts = hom.contacts_for_emails(emails)            # 겸직이면 여러 행 — 발송 때 한 통으로 묶임
     attachments = [(f['name'], base64.b64decode(f['b64'])) for f in files or []]
     try:
         cc_p, bcc_p = _cc_people(cc, bcc)
@@ -570,7 +575,7 @@ def _save_contacts(n, rows):
     if errors:
         return html.Div([html.Div(e, className='text-danger') for e in errors]), no_update, no_update
     return (html.Span(f'{len(saved)}명 저장했습니다.', className='text-success'),
-            [_contact_option(c) for c in saved], '' if saved else '아래 "부서별 담당자"에 먼저 등록하세요.')
+            _recipient_options(saved), '' if saved else '아래 "부서별 담당자"에 먼저 등록하세요.')
 
 
 # ── 콜백: 자동 발송 ─────────────────────────────────────────────────────────

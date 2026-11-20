@@ -4,7 +4,7 @@
 흐름·저장·일정 계산은 services/work_assign.py 참고.
 """
 import base64
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import dash
 import dash_ag_grid as dag
@@ -12,7 +12,7 @@ import dash_bootstrap_components as dbc
 from dash import ALL, Input, Output, State, callback, ctx, dcc, html, no_update
 
 from components.rich_editor import register_rich_editor, rich_editor
-from pages.hr_order import _contact_option, _file_list, _md, _rcp_summary, _upload_box
+from pages.hr_order import _file_list, _md, _rcp_summary, _recipient_options, _upload_box
 from services import hr_order_mail as hom
 from services import work_assign as wa
 from services import work_assign_form as waf
@@ -48,11 +48,6 @@ def _body_frame(body: str, target: str, reply: date, height: str = '300px'):
     return html.Iframe(srcDoc=doc, sandbox='', style={'width': '100%', 'height': height, 'border': '0', 'background': '#fff'})
 
 
-def _manual_reply() -> date:
-    """수동 발송의 회신 기한 = 오늘(보내는 날)로부터 워킹데이 K일 후."""
-    return wa.workdays_after(date.today(), wa.reply_workdays())
-
-
 # ── 카드: 양식 메일 ─────────────────────────────────────────────────────────
 
 def _compose_card():
@@ -75,7 +70,7 @@ def _compose_card():
                 dbc.Button('선택 해제', id='wa-none', color='link', size='sm', className='p-0 me-3'),
                 dbc.Button('미제출 부서만', id='wa-unsub', color='link', size='sm', className='p-0'),
             ], className='mb-1'),
-            dbc.Checklist(id='wa-recipients', options=[_contact_option(c) for c in contacts], value=[],
+            dbc.Checklist(id='wa-recipients', options=_recipient_options(contacts), value=[],
                           className='small mb-1', style={'columns': '2'}),
             html.Div(['부서별 담당자가 없습니다 — ', dcc.Link('인사발령 화면', href='/hr-order'), '에서 먼저 등록하세요.']
                      if not contacts else '', className='small text-muted mb-2'),
@@ -90,7 +85,7 @@ def _compose_card():
                     html.Div(['평소 쓰시는 문구를 붙여 넣고(서식 유지), ', html.Code('{대상월}'), ' ', html.Code('{대상월_숫자}'),
                               ' ', html.Code('{회신일}'), ' ', html.Code('{회신일_월일}'),
                               '을 넣으면 대상월·회신 기한에 맞춰 바뀝니다(예: 2026년 12월 / 2026.12 / 11월 30일(월)). '
-                              '회신 기한은 보내는 날로부터 워킹데이 아래 "자동 발송"에서 정한 일수 후입니다.'],
+                              '회신 기한은 대상월의 아래 "자동 발송"에서 정한 날(기본 1일, 휴일이면 다음 워킹데이)입니다.'],
                              className='small text-muted mb-2'),
                     dbc.Input(id='wa-subject', value=subject_t, size='sm', className='mb-2'),
                     rich_editor('wa', body_t),
@@ -176,9 +171,14 @@ def _plan_view(target: str):
     if not pl['platforms']:
         return html.Div('대상자가 없습니다(최신 인력현황·직급 확인).', className='text-warning')
     total = sum(p['count'] for p in pl['platforms'])
+    multi = {}
+    for p in pl['platforms']:
+        for c in p['contacts']:
+            multi[c['email'].lower()] = multi.get(c['email'].lower(), 0) + 1
     rows = [html.Tr([html.Td(p['platform']), html.Td(f"{p['count']}명"),
                      html.Td(_dl_link('wa-form-dl', p['platform'], waf.file_name(target, p['platform']))),
-                     html.Td(', '.join(f"{c.get('name') or ''} <{c['email']}>" for c in p['contacts'])
+                     html.Td(', '.join(f"{c.get('name') or ''} <{c['email']}>" + (' (겸직 — 한 통으로)' if multi[c['email'].lower()] > 1 else '')
+                                       for c in p['contacts'])
                              if p['contacts'] else html.Span('담당자 없음 — 보내지 않음', className='text-danger'))])
             for p in pl['platforms']]
     rows.append(html.Tr([html.Td(html.B('전체')), html.Td(html.B(f'{total}명')),
@@ -272,14 +272,14 @@ def _auto_status():
     nxt = wa.next_auto_send()
     who = (cfg['sender'] or {}).get('label', '')
     lines = [html.Div([html.I(className='bi bi-check-circle text-success me-1'),
-                       f'켜짐 — 매월 마지막 워킹데이 {wa.send_workdays()}일 전 발송·회신 기한 발송 후 {wa.reply_workdays()}일, '
+                       f'켜짐 — 매월 마지막 워킹데이 {wa.send_workdays()}일 전 발송·회신 기한 대상월 {wa.reply_day()}일, '
                        f'발신 {who}, 담당자 {len(hom.load_contacts())}명 전체, 공통 첨부 {len(cfg["files"])}개'
                        + (', 플랫폼별 양식 자동 생성(담당자별 따로)' if waf.settings()['enabled'] else '')
                        + _rcp_summary(hom.recipient_settings())])]
     if nxt:
         t, when = nxt
         lines.append(html.Div(f'다음 발송: {_md(when.date())} {when:%H:%M} — {wa.target_label(t)}분'
-                              f'(회신 {_md(wa.reply_due(t, when.date()))})', className='fw-semibold'))
+                              f'(회신 {_md(wa.reply_due(t))})', className='fw-semibold'))
     return html.Div(lines)
 
 
@@ -289,7 +289,10 @@ def _days_preview(send, reply):
     t = wa.target_of(date.today(), 1)
     base = wa.base_date(t)
     sd = hom.workdays_before(base, int(send))
-    rd = wa.workdays_after(sd, int(reply))
+    y, m = wa._month(t)
+    rd = date(y, m, int(reply))
+    while not hom.is_workday(rd):
+        rd += timedelta(days=1)
     return [html.Div(f'예) {wa.target_label(t)}분: 마지막 워킹데이 {_md(base)} → 발송 {_md(sd)}, 회신 기한 {_md(rd)}')]
 
 
@@ -317,9 +320,10 @@ def _auto_card():
                          dcc.Dropdown(id='wa-send-days', value=wa.send_workdays(), clearable=False,
                                       options=[{'label': '당일(마지막 워킹데이)' if n == 0 else f'{n}일 전', 'value': n}
                                                for n in range(0, wa.MAX_DAYS + 1)])], md=3),
-                dbc.Col([dbc.Label('회신 기한 — 발송일로부터 워킹데이', className='small mb-1'),
-                         dcc.Dropdown(id='wa-reply-days', value=wa.reply_workdays(), clearable=False,
-                                      options=[{'label': f'{n}일 후', 'value': n} for n in range(1, wa.MAX_DAYS + 1)])], md=3),
+                dbc.Col([dbc.Label('회신 기한 — 대상월 며칠(수동·자동 공통)', className='small mb-1'),
+                         dcc.Dropdown(id='wa-reply-days', value=wa.reply_day(), clearable=False,
+                                      options=[{'label': '1일(당일)' if n == 1 else f'{n}일', 'value': n}
+                                               for n in range(1, wa.MAX_REPLY_DAY + 1)])], md=3),
                 dbc.Col(html.Div(id='wa-days-preview', className='small text-muted'), md=6),
             ], className='g-2 align-items-end mb-2'),
             dbc.Label('자동 발송용 첨부(서버에 보관)', className='small mb-1'),
@@ -392,7 +396,7 @@ def _default_sender(options):
 def _preview(target, subject, body):
     if not target:
         return ''
-    reply = _manual_reply()
+    reply = wa.reply_due(target)
     return html.Div([html.Div([html.B('제목: '), wa.render(subject, target, reply)], className='mb-2'),
                      _body_frame(body, target, reply)])
 
@@ -416,8 +420,9 @@ def _select(_a, _n, _u, options, target):
     if ctx.triggered_id == 'wa-none':
         return []
     if ctx.triggered_id == 'wa-unsub':
-        submitted = set(wa.submissions(target or ''))
-        return [c['email'] for c in hom.load_contacts() if c['dept'] not in submitted]
+        submitted = set(wa.submissions(target or ''))     # 겸직이면 맡은 부서 중 하나라도 미제출이면 선택
+        return [g['email'] for g in hom.group_contacts(hom.load_contacts())
+                if any(d not in submitted for d in g['depts'])]
     return [o['value'] for o in options or []]
 
 
@@ -456,21 +461,24 @@ def _confirm(_send, _cancel, emails, options, subject, body, target, files, send
     if problems:
         return False, no_update, dbc.Alert(' '.join(problems), color='warning', className='small py-2')
     rcp = hom.recipient_settings()
-    reply = _manual_reply()
+    reply = wa.reply_due(target)
     sender_label = next((o['label'] for o in sender_opts or [] if o['value'] == sender), sender)
     single = rcp['mode'] == 'single' and not gen
-    by_email = {c['email']: c for c in hom.load_contacts()}
-    chosen = [by_email[e] for e in emails if e in by_email]
+    chosen = hom.group_contacts(hom.contacts_for_emails(emails))     # 겸직 담당자는 한 줄·한 통
     plats = set(waf.platforms()) if gen else set()
     common = [f['name'] for f in files or []]
     common_view = [html.Div([html.I(className='bi bi-paperclip me-1'), n]) for n in common]
     rows, n_send = [], 0
     for c in chosen:
-        has_form = c['dept'] in plats
+        mine = [d for d in c['depts'] if d in plats]
+        has_form = bool(mine)
         skip = gen and not has_form
         n_send += 0 if skip else 1
-        file_cell = common_view + ([html.Div(_dl_link('wa-form-dl2', c['dept'], waf.file_name(target, c['dept'])))]
-                                   if gen and has_form else [])
+        file_cell = common_view + ([html.Div(_dl_link('wa-form-dl2', d, waf.file_name(target, d))) for d in mine]
+                                   if gen else [])
+        if gen and has_form and len(mine) < len(c['depts']):
+            file_cell.append(html.Div(f"양식 없음: {', '.join(d for d in c['depts'] if d not in plats)}",
+                                      className='text-warning'))
         rows.append(html.Tr([
             html.Td(f"{c.get('name') or ''} <{c['email']}>"), html.Td(c['dept']),
             html.Td(file_cell or '-'),
@@ -503,9 +511,8 @@ def _confirm(_send, _cancel, emails, options, subject, body, target, files, send
 def _send(n, emails, subject, body, target, files, sender, gen):
     if not n:
         return no_update, no_update, no_update
-    reply = _manual_reply()
-    by_email = {c['email']: c for c in hom.load_contacts()}
-    contacts = [by_email[e] for e in emails or [] if e in by_email]
+    reply = wa.reply_due(target)
+    contacts = hom.contacts_for_emails(emails)            # 겸직이면 여러 행 — 발송 때 한 통으로 묶임
     attachments = [(f['name'], base64.b64decode(f['b64'])) for f in files or []]
     rcp = hom.recipient_settings()
     try:

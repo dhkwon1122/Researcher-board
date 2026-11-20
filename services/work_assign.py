@@ -9,7 +9,8 @@
 - 회신 관리: 부서별 제출 현황 + 통합표(양식의 열 그대로 + 부서 열, 엑셀 다운로드).
 
 기간 키는 "대상월"(YYYY-MM) — 월말에 다음 달 업무분장을 미리 취합한다는 전제로, 대상월의 전달 마지막 워킹데이를 기준일로
-잡는다(예: 대상월 2026-12 → 기준일 2026-11-30(월), N=3이면 11-25(수) 발송). 회신 기한 = 발송일로부터 워킹데이 K일 후.
+잡는다(예: 대상월 2026-12 → 기준일 2026-11-30(월), N=3이면 11-25(수) 발송). 회신 기한 = 대상월 D일(1 = 1일 당일, 휴일이면
+다음 워킹데이 — 2026-11-20 개정, 예전엔 발송일로부터 워킹데이 K일 후).
 자리표시자: {대상월}(2026년 12월)·{대상월_숫자}(2026.12)·{회신일}·{회신일_월일}.
 
 권한·워킹데이(공휴일·회사 휴무일)·발신 계정·본문 서식 정리·메일 발송은 인사발령 모듈을 그대로 쓴다.
@@ -39,7 +40,8 @@ AUTO_LOCK_PATH = os.path.join(data_store.DATA_DIR, '.work_assign_auto.lock')
 SUBMISSIONS_PATH = os.path.join(data_store.DATA_DIR, 'work_assign_submissions.json')
 SUBMIT_DIR = os.path.join(data_store.DATA_DIR, 'work_assign_files')
 SEND_DAYS_DEFAULT = 3                     # 마지막 워킹데이 3일 전 발송(기본값)
-REPLY_DAYS_DEFAULT = 3                    # 발송일로부터 워킹데이 3일 후 회신(기본값)
+REPLY_DAY_DEFAULT = 1                     # 회신 기한 = 대상월 1일(기본값, 휴일이면 다음 워킹데이)
+MAX_REPLY_DAY = 20
 MAX_DAYS = 15
 DEFAULT_AUTO_HOUR = 9
 _LOCK = threading.Lock()
@@ -116,29 +118,36 @@ def send_workdays() -> int:
     return int((_settings().get('days') or {}).get('send', SEND_DAYS_DEFAULT))
 
 
-def reply_workdays() -> int:
-    return int((_settings().get('days') or {}).get('reply', REPLY_DAYS_DEFAULT))
+def reply_day() -> int:
+    """회신 기한 = 대상월 며칠(1 = 1일 당일, 2026-11-20 사용자 요청 "매월 1일 당일 또는 이후로"). 휴일이면 다음 워킹데이."""
+    return int((_settings().get('days') or {}).get('reply_day', REPLY_DAY_DEFAULT))
 
 
-def set_workdays(send: int, reply: int) -> tuple[int, int]:
+def set_workdays(send: int, reply_day_: int) -> tuple[int, int]:
+    """발송일(마지막 워킹데이 며칠 전)·회신 기한(대상월 며칠) 저장."""
     _require_use()
     try:
-        send, reply = int(send), int(reply)
+        send, reply_day_ = int(send), int(reply_day_)
     except (TypeError, ValueError):
         raise ValueError('발송일·회신 기한을 숫자로 고르세요.') from None
-    if not 0 <= send <= MAX_DAYS or not 1 <= reply <= MAX_DAYS:
-        raise ValueError(f'발송은 마지막 워킹데이 0~{MAX_DAYS}일 전, 회신 기한은 발송 후 1~{MAX_DAYS} 워킹데이입니다.')
-    _update_settings(days={'send': send, 'reply': reply})
-    return send, reply
+    if not 0 <= send <= MAX_DAYS or not 1 <= reply_day_ <= MAX_REPLY_DAY:
+        raise ValueError(f'발송은 마지막 워킹데이 0~{MAX_DAYS}일 전, 회신 기한은 대상월 1~{MAX_REPLY_DAY}일입니다.')
+    _update_settings(days={'send': send, 'reply_day': reply_day_})
+    return send, reply_day_
 
 
 def send_date(target: str) -> date:
     return hom.workdays_before(base_date(target), send_workdays())
 
 
-def reply_due(target: str, sent_on: date | None = None) -> date:
-    """회신 기한 = 발송일(수동이면 실제 보낸 날)로부터 워킹데이 K일 후."""
-    return workdays_after(sent_on or send_date(target), reply_workdays())
+def reply_due(target: str) -> date:
+    """회신 기한 = 대상월 reply_day()일(휴일이면 다음 워킹데이) — 수동·자동 발송 모두 같은 날."""
+    y, m = _month(target)
+    d = date(y, m, reply_day())
+    cache = {}
+    while not hom.is_workday(d, cache):
+        d += timedelta(days=1)
+    return d
 
 
 def target_label(target: str) -> str:
@@ -304,7 +313,7 @@ def next_auto_send(now: datetime | None = None) -> tuple[str, datetime] | None:
         if target in sent:
             continue
         sd = send_date(target)
-        if now.date() >= reply_due(target, sd):
+        if now.date() >= reply_due(target):
             continue
         when = datetime.combine(sd, datetime.min.time()).replace(hour=cfg['hour'])
         if set_at and when < set_at:
@@ -332,7 +341,7 @@ def run_auto_if_due(now: datetime | None = None) -> dict | None:
             contacts, files = hom.load_contacts(), auto_files()
             subject_t, body_t = template()
             sender = cfg['sender'] or hom._resolve_shared()
-            reply = reply_due(target, now.date())
+            reply = reply_due(target)
             gen = _gen_forms_on()
             if not contacts or not (files or gen):
                 results = [{'dept': '', 'name': '', 'email': '', 'ok': False,

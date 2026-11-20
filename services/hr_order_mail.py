@@ -400,10 +400,11 @@ def _clean_contacts(rows: list) -> tuple[list, list]:
         if '@' not in email or ' ' in email:
             errors.append(f'{i}번째 행: 이메일 형식이 아닙니다({email}).')
             continue
-        if email.lower() in seen:
-            errors.append(f'{i}번째 행: 이메일이 중복됩니다({email}).')
+        key = (dept, email.lower())          # 겸직(2026-11-20): 같은 이메일이 여러 부서 담당자일 수 있음 — 같은 부서에 두 번만 막음
+        if key in seen:
+            errors.append(f'{i}번째 행: 같은 부서에 같은 이메일이 중복됩니다({dept} · {email}).')
             continue
-        seen.add(email.lower())
+        seen.add(key)
         out.append({'dept': dept, 'name': name, 'email': email})
     return out, errors
 
@@ -415,6 +416,32 @@ def save_contacts(rows: list) -> tuple[list, list]:
         with _LOCK:
             _write_json(CONTACTS_PATH, rows)
     return rows, errors
+
+
+def group_contacts(contacts: list) -> list:
+    """같은 이메일(겸직 담당자)을 한 사람으로 — [{'email','name','depts':[...],'dept':'A · B'}] (처음 나온 순서)."""
+    out, idx = [], {}
+    for c in contacts or []:
+        k = (c.get('email') or '').strip().lower()
+        if not k:
+            continue
+        if k not in idx:
+            idx[k] = len(out)
+            out.append({'email': c['email'], 'name': c.get('name', ''), 'depts': []})
+        g = out[idx[k]]
+        if c.get('dept') and c['dept'] not in g['depts']:
+            g['depts'].append(c['dept'])
+        if not g['name'] and c.get('name'):
+            g['name'] = c['name']
+    for g in out:
+        g['dept'] = ' · '.join(g['depts'])
+    return out
+
+
+def contacts_for_emails(emails: list) -> list:
+    """선택한 이메일들의 담당자 행 전부(겸직이면 여러 행)."""
+    want = {(e or '').strip().lower() for e in emails or []}
+    return [c for c in load_contacts() if c['email'].lower() in want]
 
 
 def contacts_from_table(df) -> list:
@@ -537,6 +564,7 @@ def _deliver(contacts: list, subject: str, body_text: str, attachments: list, se
     담당자 전원을 TO로 한 메일 한 통에 참조로 넣는다(결과는 담당자마다 같은 성공/실패)."""
     from pipeline.mailer import MailError, send_html_email
     html_body = body_html(body_text)
+    contacts = group_contacts(contacts)      # 겸직 담당자는 메일 한 통(부서별 첨부는 per_contact가 합쳐 줌)
     cc_emails = [p['email'] for p in cc or []]
     bcc_emails = [p['email'] for p in bcc or []]
 
