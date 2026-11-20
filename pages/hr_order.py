@@ -162,16 +162,34 @@ def _compose_card():
     ], className='shadow-sm mb-4')
 
 
+def _dept_options() -> list:
+    """담당 부서 선택지 — 팀/리더 참조의 1단계 부서명(= 업무분장 플랫폼)과 이미 등록된 부서명."""
+    try:
+        from services.similarity_map import level_filter_options
+        names = [o['value'] for o in level_filter_options(1)]
+    except Exception:  # noqa: BLE001 — 조직도가 없어도 화면은 뜨게
+        names = []
+    for c in hom.load_contacts():
+        if c.get('dept') and c['dept'] not in names:
+            names.append(c['dept'])
+    return [{'label': n, 'value': n} for n in names]
+
+
 def _contacts_card():
     return dbc.Card([
         dbc.CardHeader(html.Span([html.I(className='bi bi-people me-1'), '부서별 담당자'], className='fw-semibold')),
         dbc.CardBody([
             dbc.Row([
                 dbc.Col(dcc.Dropdown(id='hro-person', options=hom.person_options(),
-                                     placeholder='인력현황에서 이름·사번 검색해 추가(이메일 = Knox ID@samsung.com)'), md=8),
+                                     placeholder='인력현황에서 이름·사번 검색(이메일 = Knox ID@samsung.com)'), md=5),
+                dbc.Col(dcc.Dropdown(id='hro-person-dept', options=_dept_options(), multi=True,
+                                     placeholder='담당 부서(비우면 본인 소속) — 겸직이면 여러 개'), md=5),
                 dbc.Col(dbc.Button([html.I(className='bi bi-person-plus me-1'), '담당자로 추가'], id='hro-person-add',
-                                   color='primary', outline=True, size='sm'), md=4),
-            ], className='g-2 align-items-center mb-2'),
+                                   color='primary', outline=True, size='sm'), md=2),
+            ], className='g-2 align-items-center mb-1'),
+            html.Div('겸직 담당자: 담당 부서를 여러 개 고르거나, 같은 사람을 부서를 바꿔 다시 추가하세요. 같은 이메일은 받는 사람 목록에서 '
+                     '한 줄로 합쳐지고 메일도 한 통만 갑니다(업무분장은 맡은 플랫폼 파일을 모두 첨부).',
+                     className='small text-muted mb-2'),
             html.Div([
                 dbc.Button([html.I(className='bi bi-plus me-1'), '빈 행 추가'], id='hro-row-add', color='secondary',
                            outline=True, size='sm', className='me-1'),
@@ -529,8 +547,8 @@ def _send(n, emails, subject, body, od, files, sender, cc, bcc, mode):
           Input('hro-row-add', 'n_clicks'), Input('hro-row-del', 'n_clicks'), Input('hro-contacts-upload', 'contents'),
           Input('hro-person-add', 'n_clicks'),
           State('hro-contacts-upload', 'filename'), State('hro-contacts', 'rowData'), State('hro-contacts', 'selectedRows'),
-          State('hro-person', 'value'), prevent_initial_call=True)
-def _edit_contacts(_add, _del, content, _padd, filename, rows, selected, person):
+          State('hro-person', 'value'), State('hro-person-dept', 'value'), prevent_initial_call=True)
+def _edit_contacts(_add, _del, content, _padd, filename, rows, selected, person, person_depts):
     rows = list(rows or [])
     trig = ctx.triggered_id
     if trig == 'hro-person-add':
@@ -540,11 +558,14 @@ def _edit_contacts(_add, _del, content, _padd, filename, rows, selected, person)
             c = hom.contact_for_person(person)
         except ValueError as exc:
             return no_update, html.Span(str(exc), className='text-danger')
-        if c['email'] and any(str(r.get('email', '')).lower() == c['email'].lower() for r in rows):
-            return no_update, html.Span(f"{c['name']}님은 이미 목록에 있습니다.", className='text-warning')
+        depts = [d for d in (person_depts or []) if d] or [c['dept']]       # 겸직: 고른 부서마다 한 행
+        have = {(str(r.get('dept', '')), str(r.get('email', '')).lower()) for r in rows}
+        new = [{**c, 'dept': d} for d in depts if not (c['email'] and (d, c['email'].lower()) in have)]
+        if not new:
+            return no_update, html.Span(f"{c['name']}님은 이미 그 부서 담당자로 있습니다.", className='text-warning')
         note = '' if c['email'] else ' — Knox ID가 없어 이메일을 직접 입력해야 합니다.'
-        return rows + [c], html.Span(f"{c['name']}({c['dept']})을 추가했습니다{note} — 저장을 눌러야 반영됩니다.",
-                                     className='text-warning' if note else 'text-muted')
+        return rows + new, html.Span(f"{c['name']}({', '.join(n['dept'] for n in new)})을 추가했습니다{note} — "
+                                     f"저장을 눌러야 반영됩니다.", className='text-warning' if note else 'text-muted')
     if trig == 'hro-row-add':
         return rows + [{'dept': '', 'name': '', 'email': ''}], ''
     if trig == 'hro-row-del':
