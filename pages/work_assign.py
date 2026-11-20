@@ -124,7 +124,8 @@ def _submit_card():
                                  className='fw-semibold')),
         dbc.CardBody([
             html.Div('메일로 회신받은 업무분장표(엑셀·CSV)를 올리면 부서별 제출 현황에 표시되고, 아래 통합표에 양식의 열 그대로 '
-                     '"부서" 열을 붙여 합쳐집니다. 파일 이름에 부서명이 들어 있으면 여러 개를 한 번에 올려도 부서가 자동으로 '
+                     '"부서" 열을 붙여 합쳐집니다(양식 오른쪽 "참고 : 이전 달" 열은 기본으로 빼고, 체크하면 "참고_" 열로 함께 표시). '
+                     '파일 이름에 부서명이 들어 있으면 여러 개를 한 번에 올려도 부서가 자동으로 '
                      '연결되고, 아니면 부서를 고른 뒤 한 개씩 올리세요. 같은 부서에 다시 올리면 새 파일로 바뀝니다.',
                      className='small text-muted mb-2'),
             dbc.Row([
@@ -142,7 +143,9 @@ def _submit_card():
             html.Div(id='wa-sub-status', className='mb-3'),
             html.Div([html.Span('통합표', className='fw-semibold small me-2'),
                       dbc.Button([html.I(className='bi bi-file-earmark-excel me-1'), '다운로드 (엑셀)'], id='wa-merged-dl',
-                                 color='success', outline=True, size='sm', className='py-0')],
+                                 color='success', outline=True, size='sm', className='py-0 me-3'),
+                      dbc.Checkbox(id='wa-merged-ref', value=False, label='참고(이전 달) 열 포함',
+                                   className='small mb-0')],
                      className='d-flex align-items-center mb-1'),
             dag.AgGrid(id='wa-merged', rowData=[], columnDefs=[], className='ag-theme-alpine',
                        defaultColDef={'resizable': True, 'sortable': True, 'filter': True, 'minWidth': 90},
@@ -445,19 +448,19 @@ def _submit(contents, dels, filenames, target, dept, ver):
 
 
 @callback(Output('wa-sub-status', 'children'), Output('wa-merged', 'rowData'), Output('wa-merged', 'columnDefs'),
-          Input('wa-sub-target', 'value'), Input('wa-sub-ver', 'data'))
-def _status(target, _ver):
+          Input('wa-sub-target', 'value'), Input('wa-sub-ver', 'data'), Input('wa-merged-ref', 'value'))
+def _status(target, _ver, include_ref):
     if not target:
         return '', [], []
-    df = wa.merged(target)
+    df = wa.merged(target, bool(include_ref))
     cols = [{'field': c, 'headerName': c, 'pinned': 'left' if i == 0 else None} for i, c in enumerate(df.columns)]
     return _status_table(target), df.to_dict('records'), cols
 
 
 @callback(Output('wa-download', 'data'), Input('wa-merged-dl', 'n_clicks'),
           Input({'type': 'wa-sub-dl', 'dept': ALL}, 'n_clicks'), State('wa-sub-target', 'value'),
-          prevent_initial_call=True)
-def _download(_m, dls, target):
+          State('wa-merged-ref', 'value'), prevent_initial_call=True)
+def _download(_m, dls, target, include_ref):
     if not wa.can_use() or not target:
         return no_update
     if isinstance(ctx.triggered_id, dict):
@@ -465,9 +468,9 @@ def _download(_m, dls, target):
             return no_update
         f = wa.submission_file(target, ctx.triggered_id['dept'])
         return dcc.send_bytes(f[1], f[0]) if f else no_update
-    if wa.merged(target).empty:
+    if wa.merged(target, bool(include_ref)).empty:
         return no_update
-    return dcc.send_bytes(wa.merged_excel(target), f'업무분장_통합_{target}.xlsx')
+    return dcc.send_bytes(wa.merged_excel(target, bool(include_ref)), f'업무분장_통합_{target}.xlsx')
 
 
 # ── 콜백: 자동 발송 ─────────────────────────────────────────────────────────

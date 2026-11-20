@@ -97,3 +97,37 @@ def test_submissions_status_and_merged(paths):
         assert not wa.status('2026-12')[0]['submitted'] and wa.submission_file('2026-12', 'AI플랫폼') is None
         with pytest.raises(ValueError):
             wa.save_submission('2026-12', '없는부서', 'a.xlsx', _xlsx([{'a': 1}]))
+
+
+def _real_form(rows_target, rows_ref) -> bytes:
+    """실제 "업무분장 양식" 구조 — 1행 병합 묶음 머리글, 2행 열 이름(대상월·참고 10개 열 반복)."""
+    from openpyxl import Workbook
+    cols = ['플랫폼', '그룹', '과제/파트명', '성명', '담당업무', '상세업무', '인력 Assign 형태', '주과제 참여율', '부과제명', '비고']
+    wb = Workbook()
+    ws = wb.active
+    ws['A1'], ws['C1'], ws['M1'] = 'Knox ID, 재직현황', "'26년 12월 1일자", "참고 : '26년 11월 1일자"
+    ws.merge_cells('A1:B1'), ws.merge_cells('C1:L1'), ws.merge_cells('M1:V1')
+    ws.append(['Knox ID', '재직현황'] + cols + cols)
+    for t, r in zip(rows_target, rows_ref):
+        ws.append(t + r)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def test_real_form_two_row_header_and_reference_columns(paths):
+    t1 = ['gd.hong', '재직', 'P1', 'G1', '과제A', '홍길동', '기획', '상세', '전담', '100%', '', '']
+    r1 = ['P1', 'G1', '과제A', '홍길동', '분석', '', '전담', '100%', '', '']
+    empty = [''] * 12
+    r2 = ['P1', 'G1', '과제B', '퇴사자', '개발', '', '겸임', '50%', '', '']
+    content = _real_form([t1, empty], [r1, r2])
+    df = wa.read_table('AI플랫폼.xlsx', content)
+    assert list(df.columns)[:3] == ['Knox ID', '재직현황', '플랫폼'] and '참고_담당업무' in df.columns
+    assert not any(c.endswith('_2') for c in df.columns)
+    with auth.acting_as(ADMIN):
+        rec = wa.save_submission('2026-12', 'AI플랫폼', 'AI플랫폼.xlsx', content)
+    assert rec['rows'] == 1                                         # 참고만 채워진 행은 세지 않음
+    m = wa.merged('2026-12')
+    assert len(m) == 1 and m.loc[0, '담당업무'] == '기획' and not any(c.startswith('참고_') for c in m.columns)
+    m2 = wa.merged('2026-12', include_ref=True)
+    assert len(m2) == 2 and m2['참고_성명'].tolist() == ['홍길동', '퇴사자']

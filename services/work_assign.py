@@ -335,6 +335,7 @@ def run_auto_if_due(now: datetime | None = None) -> dict | None:
 # ── 회신 파일: 부서별 제출 현황 + 통합표 ──────────────────────────────────────
 
 _TABLE_EXT = ('.xlsx', '.xlsm', '.xls', '.csv')
+REF_PREFIX = '참고_'                       # 양식의 "참고 : 이전 달" 묶음 열
 
 
 def departments() -> list:
@@ -389,10 +390,20 @@ def read_table(name: str, content: bytes) -> pd.DataFrame:
     head = raw.head(10)
     counts = head.notna().sum(axis=1)
     hdr_idx = counts.idxmax()
+    # 실제 양식(2026-11-20, "업무분장 양식" 구글 시트): 1행에 병합 머리글(Knox ID, 재직현황 / '26년 12월 1일자 /
+    # 참고 : '26년 11월 1일자), 2행에 열 이름 — 플랫폼~비고 10개 열이 대상월·참고(이전 달)로 두 번 반복된다.
+    # 머리글 바로 위 행을 묶음 이름으로 보고(병합 칸은 오른쪽으로 채움), "참고"로 시작하는 묶음의 열은 '참고_' 접두어.
+    pos = list(raw.index).index(hdr_idx)
+    groups = [''] * raw.shape[1]
+    if pos > 0:
+        grp = raw.iloc[pos - 1].ffill().tolist()
+        groups = [str(g).strip() if pd.notna(g) else '' for g in grp]
     header, cols = [], []
     for i, v in enumerate(raw.loc[hdr_idx].tolist()):
         h = str(v).strip() if isinstance(v, str) or pd.notna(v) else ''
         h = h or f'열{i + 1}'
+        if groups[i].startswith('참고'):
+            h = f'{REF_PREFIX}{h}'
         base, k = h, 2
         while h in header:
             h, k = f'{base}_{k}', k + 1
@@ -403,6 +414,12 @@ def read_table(name: str, content: bytes) -> pd.DataFrame:
     body = body.dropna(how='all').fillna('')
     strip = getattr(body, 'map', None) if hasattr(pd.DataFrame, 'map') else body.applymap
     return strip(lambda x: str(x).strip())
+
+
+def _target_rows(df: pd.DataFrame) -> int:
+    """참고(이전 달) 열을 뺀 칸이 하나라도 채워진 행 수."""
+    cols = [c for c in df.columns if not c.startswith(REF_PREFIX)]
+    return int((df[cols] != '').any(axis=1).sum()) if cols and not df.empty else 0
 
 
 def save_submission(target: str, dept: str, name: str, content: bytes) -> dict:
@@ -428,7 +445,7 @@ def save_submission(target: str, dept: str, name: str, content: bytes) -> dict:
         with open(os.path.join(folder, fname), 'wb') as f:
             f.write(content)
         data = _submissions()
-        rec = {'file': fname, 'name': os.path.basename(name), 'size': len(content), 'rows': int(len(df)),
+        rec = {'file': fname, 'name': os.path.basename(name), 'size': len(content), 'rows': _target_rows(df),
                'by': me.get('user_id', ''), 'by_name': me.get('display_name', ''),
                'at': datetime.now().isoformat(timespec='seconds')}
         data.setdefault(target, {})[dept] = rec
@@ -493,8 +510,9 @@ def status(target: str) -> list:
     return rows
 
 
-def merged(target: str) -> pd.DataFrame:
-    """제출된 부서 파일을 합친 통합표 — 맨 앞에 '부서' 열, 열은 처음 나온 순서대로 합침."""
+def merged(target: str, include_ref: bool = False) -> pd.DataFrame:
+    """제출된 부서 파일을 합친 통합표 — 맨 앞에 '부서' 열, 열은 처음 나온 순서대로 합침.
+    include_ref=False(기본)면 양식의 "참고(이전 달)" 열을 빼고, 대상월 칸이 모두 빈 행(참고만 채워진 행)도 뺀다."""
     frames = []
     for d in departments():
         f = submission_file(target, d)
@@ -504,6 +522,9 @@ def merged(target: str) -> pd.DataFrame:
             df = read_table(*f)
         except ValueError:
             continue
+        if not include_ref:
+            df = df[[c for c in df.columns if not c.startswith(REF_PREFIX)]]
+            df = df[(df != '').any(axis=1)]
         if df.empty:
             continue
         df.insert(0, '제출부서' if '부서' in df.columns else '부서', d)
@@ -513,8 +534,8 @@ def merged(target: str) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True, sort=False).fillna('')
 
 
-def merged_excel(target: str) -> bytes:
-    df = merged(target)
+def merged_excel(target: str, include_ref: bool = False) -> bytes:
+    df = merged(target, include_ref)
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='openpyxl') as xw:
         df.to_excel(xw, index=False, sheet_name=f'업무분장_{target}')
