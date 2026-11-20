@@ -255,3 +255,10 @@ def test_auto_send_with_generated_forms_only(forms, monkeypatch):
     assert r['target'] == '2026-12' and all(x['ok'] for x in r['results'])
     assert sorted(sent) == [(['a@x.com'], ['업무분장_26년12월_AI플랫폼.xlsx']),
                             (['b@x.com'], ['업무분장_26년12월_소재_연구.xlsx'])]
+
+
+def test_full_list_file_for_review(forms):
+    name, content = forms.build_form('2026-12', None)
+    assert name == '업무분장_26년12월_전체.xlsx'
+    rows = _sheet(content)
+    assert [r[0] for r in rows[2:]] == ['cl4.park', 'gd.hong', 'new.one', 'mat.kim']   # 전 플랫폼, 조직 순서

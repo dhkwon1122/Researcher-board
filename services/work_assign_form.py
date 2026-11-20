@@ -261,8 +261,9 @@ def platforms(people: list | None = None) -> list:
     return out
 
 
-def platform_rows(target: str, platform: str, people: list | None = None, ref: pd.DataFrame | None = None) -> list:
-    """한 플랫폼 파일의 행 [{'common': {...}, 'target': {...}, 'ref': {...}}]."""
+def platform_rows(target: str, platform: str | None, people: list | None = None, ref: pd.DataFrame | None = None
+                  ) -> list:
+    """한 플랫폼 파일의 행 [{'common': {...}, 'target': {...}, 'ref': {...}}]. platform=None이면 전체 명단."""
     people = people if people is not None else target_people()
     if ref is None:
         ref = _ref_table(target)[0]
@@ -273,7 +274,7 @@ def platform_rows(target: str, platform: str, people: list | None = None, ref: p
             ref_by_key.setdefault(k, {f: _s(rec.get(f)) for f in FIELDS if f in rec})
     rows, used = [], set()
     for p in people:
-        if p['플랫폼'] != platform:
+        if platform is not None and p['플랫폼'] != platform:
             continue
         k = _key(p['knox'], p[NAME])
         alt = _key('', p[NAME])
@@ -284,7 +285,7 @@ def platform_rows(target: str, platform: str, people: list | None = None, ref: p
     # 참고에만 있는(이번 대상이 아닌) 같은 플랫폼 사람 — 참고 칸만 채워 뒤에 붙임
     all_status = _all_status()
     for k, rec in ref_by_key.items():
-        if k in used or rec.get('플랫폼', '') != platform:
+        if k in used or (platform is not None and rec.get('플랫폼', '') != platform):
             continue
         knox = k[2:] if k.startswith('k:') else ''
         rows.append({'common': {KNOX: knox, STATUS: all_status.get(knox, '현 명단 없음')}, 'target': {}, 'ref': rec})
@@ -306,14 +307,14 @@ def _fmt_date_label(y: int, m: int) -> str:
     return f"'{y % 100:02d}년 {m}월 1일자"
 
 
-def file_name(target: str, dept: str) -> str:
+def file_name(target: str, platform: str | None) -> str:
     y, m = wa._month(target)
-    return f'업무분장_{y % 100:02d}년{m}월_{wa._safe(dept)}.xlsx'
+    return f"업무분장_{y % 100:02d}년{m}월_{wa._safe(platform) if platform else '전체'}.xlsx"
 
 
-def build_form(target: str, platform: str, people: list | None = None, ref: pd.DataFrame | None = None
+def build_form(target: str, platform: str | None, people: list | None = None, ref: pd.DataFrame | None = None
                ) -> tuple[str, bytes]:
-    """플랫폼 하나의 양식(파일명, xlsx bytes)."""
+    """플랫폼 하나의 양식(파일명, xlsx bytes). platform=None이면 전체 명단 한 파일(확인용)."""
     wb = _load(template_bytes())
     ws = wb.active
     lay = _layout(ws)
