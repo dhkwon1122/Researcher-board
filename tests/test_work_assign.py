@@ -43,12 +43,14 @@ def test_month_end_schedule(paths):
     assert wa.last_workday(2026, 10) == date(2026, 10, 30)          # 31일 토요일 → 30일(금)
     assert wa.base_date('2026-12') == date(2026, 11, 30)
     assert wa.send_date('2026-12') == date(2026, 11, 25)            # 기본 3일 전
-    assert wa.reply_due('2026-12') == date(2026, 11, 30)            # 발송 후 3일
+    assert wa.reply_due('2026-12') == date(2026, 12, 1)             # 기본 대상월 1일 당일
+    assert wa.reply_due('2027-01') == date(2027, 1, 4)              # 1.1 공휴일 → 다음 워킹데이(1.2·3 주말)
     with auth.acting_as(ADMIN):
         assert wa.set_workdays(0, 5) == (0, 5)
-        with pytest.raises(ValueError):
-            wa.set_workdays(16, 3)
-    assert wa.send_date('2026-12') == date(2026, 11, 30) and wa.reply_due('2026-12') == date(2026, 12, 7)
+        for bad in ((16, 3), (3, 0), (3, 21)):
+            with pytest.raises(ValueError):
+                wa.set_workdays(*bad)
+    assert wa.send_date('2026-12') == date(2026, 11, 30) and wa.reply_due('2026-12') == date(2026, 12, 7)   # 12.5 토 → 12.7
     assert wa.render('{대상월} {대상월_숫자} {회신일_월일}', '2026-12', date(2026, 11, 30)) == '2026년 12월 2026.12 11월 30일(월)'
 
 
@@ -69,7 +71,7 @@ def test_auto_send_once_with_shared_recipients(paths, monkeypatch):
     r = wa.run_auto_if_due(datetime(2026, 11, 25, 9, 5))
     assert r['target'] == '2026-12'
     assert sent == [(['a@x.com', 'b@x.com'], '[업무분장] 2026년 12월', sent[0][2], ['m@x.com'])]   # 인사발령 명단·참조·방식
-    assert '11월 30일(월)까지' in sent[0][2]
+    assert '12월 1일(화)까지' in sent[0][2]
     assert wa.run_auto_if_due(datetime(2026, 11, 25, 9, 30)) is None and len(sent) == 1
     log = wa.read_log()[0]
     assert log['target'] == '2026-12' and log['kind'] == 'auto'
@@ -262,3 +264,26 @@ def test_full_list_file_for_review(forms):
     assert name == '업무분장_26년12월_전체.xlsx'
     rows = _sheet(content)
     assert [r[0] for r in rows[2:]] == ['cl4.park', 'gd.hong', 'new.one', 'mat.kim']   # 전 플랫폼, 조직 순서
+
+
+def test_concurrent_contact_gets_one_mail_with_all_platform_files(forms, monkeypatch):
+    import pipeline.mailer as mailer
+    with auth.acting_as(ADMIN):
+        saved, errors = hom.save_contacts([{'dept': 'AI플랫폼', 'name': '김', 'email': 'a@x.com'},
+                                           {'dept': '소재 연구', 'name': '김', 'email': 'A@x.com'},   # 겸직(대소문자 무시)
+                                           {'dept': '소재 연구', 'name': '이', 'email': 'b@x.com'}])
+        assert not errors
+        _, errors = hom.save_contacts([{'dept': 'X', 'email': 'a@x.com'}, {'dept': 'X', 'email': 'a@x.com'}])
+        assert errors                                                    # 같은 부서에 같은 이메일은 중복
+    groups = hom.group_contacts(hom.load_contacts())
+    assert [(g['email'], g['dept']) for g in groups] == [('a@x.com', 'AI플랫폼 · 소재 연구'), ('b@x.com', '소재 연구')]
+    sent = []
+    monkeypatch.setattr(mailer, 'send_html_email', lambda to, s, b, a=None, sender_email=None, sender_user_id=None,
+                        cc=None, bcc=None: sent.append((to, [n for n, _ in a])))
+    with auth.acting_as(ADMIN):
+        res = wa.send(hom.contacts_for_emails(['a@x.com', 'b@x.com']), '제목', '본문', [], hom.SHARED_SENDER, '2026-12',
+                      gen_forms=True)
+    assert sorted(sent) == [(['a@x.com'], ['업무분장_26년12월_AI플랫폼.xlsx', '업무분장_26년12월_소재_연구.xlsx']),
+                            (['b@x.com'], ['업무분장_26년12월_소재_연구.xlsx'])]           # 겸직자는 한 통에 두 파일
+    assert [(r['email'], r['dept'], r['ok']) for r in res] == [('a@x.com', 'AI플랫폼 · 소재 연구', True),
+                                                               ('b@x.com', '소재 연구', True)]

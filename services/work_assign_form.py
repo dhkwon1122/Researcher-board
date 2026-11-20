@@ -375,12 +375,13 @@ def plan(target: str) -> dict:
 
 
 def per_contact_forms(target: str):
-    """발송용 — 담당자 부서(= 플랫폼) 파일만 붙이는 함수. 그 플랫폼 대상자가 없으면 그 담당자는 보내지 않음(실패 기록)."""
+    """발송용 — 담당자 부서(= 플랫폼) 파일만 붙이는 함수(겸직이면 맡은 플랫폼 파일 모두). 하나도 없으면 보내지 않음(실패 기록)."""
     forms = build_all(target)
 
     def _for(c: dict) -> list:
-        f = forms.get(c.get('dept', ''))
-        if not f:
-            raise ValueError(f"'{c.get('dept', '')}' 플랫폼 대상자가 없어 보내지 않았습니다(담당자 부서명 확인)")
-        return [f]
+        depts = c.get('depts') or [c.get('dept', '')]          # 겸직 담당자는 맡은 플랫폼 파일을 모두 한 메일에
+        files = [forms[d] for d in depts if d in forms]
+        if not files:
+            raise ValueError(f"'{' · '.join(depts)}' 플랫폼 대상자가 없어 보내지 않았습니다(담당자 부서명 확인)")
+        return files
     return _for
