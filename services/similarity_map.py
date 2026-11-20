@@ -613,6 +613,16 @@ def org_code_level_names(org_code: str) -> tuple[str, str, str]:
     return ('', '', '')
 
 
+def org_code_level_name_map() -> dict:
+    """org_code → (1단계, 2단계, 3단계) 부서명 전체 — org_code_level_names를 여러 명에 쓸 때 한 번에(2026-11-20 업무분장 양식)."""
+    out = {}
+    for r in _org_rows():
+        code = (r.get('org_name_wd') or '').strip()
+        if code and code not in out:
+            out[code] = (_cell(r, 1), _cell(r, 2), _cell(r, 3))
+    return out
+
+
 def _team_refer_org_code_timeline() -> dict:
     """org_code(=org_name_wd)별로 [(valid_date_tuple, dep_1st_name,
     dep_3rd_name), ...] 타임라인을 만든다 — researcher_ids_ever_matching_org_field()

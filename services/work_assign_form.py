@@ -1,19 +1,20 @@
 """
-업무분장 부서별 양식 자동 생성(2026-11-20, 사용자 요청 "부서별 양식 자동 생성 기능도 넣어줘").
+업무분장 플랫폼별 양식 자동 생성(2026-11-20).
 
 양식 구조(실제 "업무분장 양식" 구글 시트): 1행 병합 묶음 머리글(A:B "Knox ID, 재직현황" / C:L "'26년 12월 1일자" /
 M:V "참고 : '26년 11월 1일자"), 2행 열 이름(Knox ID·재직현황 + 플랫폼~비고 10개 열이 대상월·참고로 반복).
 
-부서마다 이 양식에 다음을 채운 엑셀을 만든다.
-- 참고(이전 달) 칸: 그 부서가 지난달(대상월-1) 회신한 업무분장(대상월 칸 내용). 지난달 회신이 없으면 비움.
-- 대상월 칸: 설정(prefill_target)이 켜져 있으면 지난달 내용을 그대로 복사 — 바뀐 부분만 고쳐 회신하도록.
-- Knox ID·재직현황: 지난달 명단의 Knox ID + 현재 인력현황 대조 결과(재직 / 부서 변경(확인) / 미재직(확인)).
-  현재 인력현황상 그 부서인데 지난달 명단에 없던 사람은 "신규(확인)"으로 성명·Knox ID만 넣어 뒤에 붙인다.
-  지난달 회신이 아예 없으면 현재 인력현황의 부서원 명단(성명·Knox ID·재직)으로 시작.
-- 1행 날짜 문구('26년 12월 1일자 / 참고 : '26년 11월 1일자)를 대상월에 맞게 바꾼다.
+사용자 확정(2026-11-20 개정 — 처음 만든 "지난달 회신 기반" 방식을 바꿈):
+- 대상자 = 웹의 최신 인력현황(is_current=Y) 중 직급(position) CL1·CL2·CL3·CL4·H2.
+- 채우는 칸 = Knox ID, 재직현황(인력현황 재직상태명), 대상월 묶음의 플랫폼·그룹·과제/파트명(team_refer 1·2·3단계 부서명),
+  성명. 담당업무~비고는 부서가 작성하도록 비운다.
+- "참고 : 지난달" 묶음 = 사용자가 대상월마다 따로 올리는 엑셀(지난달 업무분장)에서 Knox ID(없으면 성명)로 찾아 채움. 참고
+  엑셀에만 있고 현재 대상자가 아닌 사람은 그 플랫폼 파일 맨 아래에 참고 칸만 채워 붙인다(재직현황 = 인력현황 값 또는
+  "현 명단 없음"). 참고 엑셀을 안 올렸으면 지난달 회신(통합표)으로 대신한다.
+- 1행 날짜 문구는 대상월에 맞춰 바뀜('27년 1월분이면 '27년 1월 1일자 / 참고 : '26년 12월 1일자).
+- 전체 명단을 플랫폼(1단계 부서명) 단위 파일로 나누고, 담당자 명단의 부서가 그 플랫폼인 담당자에게만 그 파일을 보낸다.
 
-양식 원본: 화면에서 올린 엑셀(work_assign_form_template.xlsx)이 있으면 그 서식을 그대로 쓰고, 없으면 같은 구조의 기본
-양식을 만든다. 부서는 담당자 명단의 부서명 = 인력현황 org_code의 1단계 부서명(similarity_map.dep_name_for_org_code).
+양식 원본: 화면에서 올린 엑셀(work_assign_form_template.xlsx)이 있으면 그 서식을 그대로 쓰고, 없으면 같은 구조의 기본 양식.
 """
 from __future__ import annotations
 
@@ -28,6 +29,9 @@ from services import data_store
 from services import work_assign as wa
 
 TEMPLATE_PATH = os.path.join(data_store.DATA_DIR, 'work_assign_form_template.xlsx')
+REF_DIR = os.path.join(data_store.DATA_DIR, 'work_assign_ref')        # 대상월별 참고(지난달) 엑셀
+TARGET_POSITIONS = ('CL1', 'CL2', 'CL3', 'CL4', 'H2')                # 대상 직급(사용자 확정)
+ORG_FIELDS = ('플랫폼', '그룹', '과제/파트명')
 FIELDS = ['플랫폼', '그룹', '과제/파트명', '성명', '담당업무', '상세업무', '인력 Assign 형태', '주과제 참여율', '부과제명', '비고']
 KNOX, STATUS, NAME = 'Knox ID', '재직현황', '성명'
 _DATE_RE = re.compile(r"'?\d{2,4}\s*년\s*\d{1,2}\s*월\s*1\s*일자")
@@ -37,14 +41,14 @@ _DATE_RE = re.compile(r"'?\d{2,4}\s*년\s*\d{1,2}\s*월\s*1\s*일자")
 
 def settings() -> dict:
     f = wa._settings().get('form') or {}
-    return {'enabled': bool(f.get('enabled')), 'prefill_target': f.get('prefill_target', True) is not False,
+    return {'enabled': bool(f.get('enabled')),
             'template_name': f.get('template_name', '') if os.path.exists(TEMPLATE_PATH) else ''}
 
 
-def save_settings(enabled: bool, prefill_target: bool) -> dict:
+def save_settings(enabled: bool) -> dict:
     wa._require_use()
     f = wa._settings().get('form') or {}
-    wa._update_settings(form={**f, 'enabled': bool(enabled), 'prefill_target': bool(prefill_target)})
+    wa._update_settings(form={**f, 'enabled': bool(enabled)})
     return settings()
 
 
@@ -159,61 +163,143 @@ def _layout(ws) -> dict:
     return {'header_row': best, 'group_row': group_row, 'common': common, 'target': target, 'ref': ref}
 
 
-# ── 부서별 데이터 ────────────────────────────────────────────────────────────
+# ── 대상자·참고 데이터 ──────────────────────────────────────────────────────
 
-def _researchers() -> pd.DataFrame:
-    df = data_store.read_processed('researchers')
-    if df.empty:
-        return df
-    from services.similarity_map import dep_name_for_org_code
-    df = df.copy()
-    cache = {}
-    df['_dept'] = [cache.setdefault(oc, dep_name_for_org_code(str(oc or ''))) for oc in df.get('org_code', '')]
-    if 'knox_id' in df.columns:
-        df['_knox'] = df['knox_id'].fillna('').astype(str).str.strip().str.lower().replace('nan', '')
-    else:
-        df['_knox'] = ''
-    if 'is_current' in df.columns:
-        df = df[df['is_current'].astype(str) == 'Y']
-    return df
+def _ref_path(target: str) -> str:
+    wa._month(target)
+    return os.path.join(REF_DIR, f'{target}.xlsx')
 
 
-def department_rows(target: str, dept: str, prefill_target: bool = True) -> list:
-    """양식에 쓸 행 [{'common': {...}, 'target': {...}, 'ref': {...}}]."""
+def ref_info(target: str) -> dict:
+    """대상월의 참고 엑셀 정보 {'name','rows','at'} — 없으면 {}."""
+    return dict(((wa._settings().get('form') or {}).get('ref') or {}).get(target) or {}) \
+        if os.path.exists(_ref_path(target)) else {}
+
+
+def save_ref(target: str, name: str, content: bytes) -> dict:
+    """참고(지난달 업무분장) 엑셀 저장 — 양식 그대로(대상월·참고 묶음)든 단순 표든 첫 묶음 열을 쓴다."""
+    from datetime import datetime
+    wa._require_use()
+    df = wa.read_table(name, content)
+    main = [c for c in df.columns if not c.startswith(wa.REF_PREFIX)]
+    if not ({KNOX, NAME} & set(main)):
+        raise ValueError('참고 엑셀에서 Knox ID 또는 성명 열을 찾지 못했습니다.')
+    os.makedirs(REF_DIR, exist_ok=True)
+    with open(_ref_path(target), 'wb') as fh:
+        fh.write(content)
+    f = wa._settings().get('form') or {}
+    ref = dict(f.get('ref') or {})
+    ref[target] = {'name': os.path.basename(name), 'rows': int((df[main] != '').any(axis=1).sum()),
+                   'at': datetime.now().isoformat(timespec='seconds')}
+    wa._update_settings(form={**f, 'ref': ref})
+    return ref[target]
+
+
+def delete_ref(target: str) -> None:
+    wa._require_use()
+    try:
+        os.remove(_ref_path(target))
+    except OSError:
+        pass
+
+
+def _ref_table(target: str) -> tuple[pd.DataFrame, str]:
+    """참고 데이터(지난달) 표와 출처 설명. 올린 참고 엑셀 → 없으면 지난달 회신 통합표."""
+    try:
+        with open(_ref_path(target), 'rb') as fh:
+            df = wa.read_table('ref.xlsx', fh.read())
+        return df[[c for c in df.columns if not c.startswith(wa.REF_PREFIX)]], '올린 참고 엑셀'
+    except OSError:
+        pass
     y, m = wa._month(target)
     py, pm = wa._shift_month(y, m, -1)
-    prev = wa.submission_file(f'{py:04d}-{pm:02d}', dept)
-    cur = _researchers()
-    by_knox = {k: r for k, r in zip(cur['_knox'], cur.to_dict('records'))} if not cur.empty else {}
-    members = cur[cur['_dept'] == dept] if not cur.empty else cur
-    rows, seen = [], set()
-    if prev:
-        try:
-            df = wa.read_table(*prev)
-        except ValueError:
-            df = pd.DataFrame()
-        cols = [c for c in df.columns if not c.startswith(wa.REF_PREFIX)]
-        for rec in df[cols].to_dict('records') if not df.empty else []:
-            if not any(str(v).strip() for v in rec.values()):
-                continue
-            fields = {k: rec.get(k, '') for k in FIELDS if k in rec}
-            knox = str(rec.get(KNOX, '') or '').strip()
-            hit = by_knox.get(knox.lower()) if knox else None
-            if knox:
-                seen.add(knox.lower())
-            status = ('재직' if hit is not None and hit['_dept'] == dept else
-                      '부서 변경(확인)' if hit is not None else '미재직(확인)') if knox else ''
-            rows.append({'common': {KNOX: knox, STATUS: status}, 'ref': fields,
-                         'target': dict(fields) if prefill_target else {}})
-    new_status = '신규(확인)' if prev else '재직'
-    for rec in members.sort_values('name').to_dict('records') if not members.empty else []:
-        if rec['_knox'] and rec['_knox'] in seen:
+    df = wa.merged(f'{py:04d}-{pm:02d}')
+    return df, ('지난달 회신 통합표' if not df.empty else '')
+
+
+def _key(knox: str, name: str) -> str:
+    knox = (knox or '').strip().lower()
+    return f'k:{knox}' if knox and knox != 'nan' else f'n:{(name or "").strip()}'
+
+
+def _s(v) -> str:
+    v = '' if v is None else str(v).strip()
+    return '' if v.lower() == 'nan' else v
+
+
+def target_people() -> list:
+    """대상자 [{'knox','status','플랫폼','그룹','과제/파트명','성명','_order'}] — 최신 인력현황, 대상 직급만."""
+    df = data_store.read_processed('researchers')
+    if df.empty:
+        return []
+    if 'is_current' in df.columns:
+        df = df[df['is_current'].astype(str) == 'Y']
+    if 'position' not in df.columns:
+        return []
+    df = df[df['position'].astype(str).str.strip().str.upper().isin(TARGET_POSITIONS)]
+    from services import similarity_map as sm
+    levels = sm.org_code_level_name_map()
+    order = sm.org_code_dep_code_map()
+    out = []
+    for r in df.to_dict('records'):
+        oc = _s(r.get('org_code'))
+        l1, l2, l3 = levels.get(oc, ('', '', ''))
+        l1 = l1 or sm.dep_name_for_org_code(oc) or _s(r.get('department'))
+        out.append({'knox': _s(r.get('knox_id')), 'status': _s(r.get('employment_status')) or '재직',
+                    '플랫폼': l1, '그룹': l2, '과제/파트명': l3 or oc, NAME: _s(r.get('name')),
+                    '_order': (str(order.get(oc, '')), _s(r.get('name')))})
+    out.sort(key=lambda p: p['_order'])
+    return out
+
+
+def platforms(people: list | None = None) -> list:
+    """대상자가 있는 플랫폼(조직 순서)."""
+    out = []
+    for p in people if people is not None else target_people():
+        if p['플랫폼'] and p['플랫폼'] not in out:
+            out.append(p['플랫폼'])
+    return out
+
+
+def platform_rows(target: str, platform: str, people: list | None = None, ref: pd.DataFrame | None = None) -> list:
+    """한 플랫폼 파일의 행 [{'common': {...}, 'target': {...}, 'ref': {...}}]."""
+    people = people if people is not None else target_people()
+    if ref is None:
+        ref = _ref_table(target)[0]
+    ref_by_key = {}
+    for rec in ref.to_dict('records') if not ref.empty else []:
+        k = _key(rec.get(KNOX, ''), rec.get(NAME, ''))
+        if k not in ('n:', 'k:'):
+            ref_by_key.setdefault(k, {f: _s(rec.get(f)) for f in FIELDS if f in rec})
+    rows, used = [], set()
+    for p in people:
+        if p['플랫폼'] != platform:
             continue
-        knox = str(rec.get('knox_id', '') or '').strip()
-        knox = '' if knox.lower() == 'nan' else knox
-        rows.append({'common': {KNOX: knox, STATUS: new_status}, 'ref': {},
-                     'target': {NAME: str(rec.get('name', '') or '')}})
+        k = _key(p['knox'], p[NAME])
+        alt = _key('', p[NAME])
+        ref_rec = ref_by_key.get(k) or (ref_by_key.get(alt) if not p['knox'] else None) or {}
+        used.update({k, alt} if ref_rec else set())
+        rows.append({'common': {KNOX: p['knox'], STATUS: p['status']},
+                     'target': {f: p[f] for f in ORG_FIELDS + (NAME,)}, 'ref': ref_rec})
+    # 참고에만 있는(이번 대상이 아닌) 같은 플랫폼 사람 — 참고 칸만 채워 뒤에 붙임
+    all_status = _all_status()
+    for k, rec in ref_by_key.items():
+        if k in used or rec.get('플랫폼', '') != platform:
+            continue
+        knox = k[2:] if k.startswith('k:') else ''
+        rows.append({'common': {KNOX: knox, STATUS: all_status.get(knox, '현 명단 없음')}, 'target': {}, 'ref': rec})
     return rows
+
+
+def _all_status() -> dict:
+    """Knox ID(소문자) → 최신 인력현황 재직상태(대상 직급이 아니어도) — 참고에만 있는 사람 표시용."""
+    df = data_store.read_processed('researchers')
+    if df.empty or 'knox_id' not in df.columns:
+        return {}
+    if 'is_current' in df.columns:
+        df = df[df['is_current'].astype(str) == 'Y']
+    st = df['employment_status'] if 'employment_status' in df.columns else pd.Series(['재직'] * len(df), index=df.index)
+    return {_s(k).lower(): (_s(v) or '재직') for k, v in zip(df['knox_id'], st) if _s(k)}
 
 
 def _fmt_date_label(y: int, m: int) -> str:
@@ -225,10 +311,9 @@ def file_name(target: str, dept: str) -> str:
     return f'업무분장_{y % 100:02d}년{m}월_{wa._safe(dept)}.xlsx'
 
 
-def build_form(target: str, dept: str, prefill_target: bool | None = None) -> tuple[str, bytes]:
-    """부서 하나의 양식(파일명, xlsx bytes)."""
-    if prefill_target is None:
-        prefill_target = settings()['prefill_target']
+def build_form(target: str, platform: str, people: list | None = None, ref: pd.DataFrame | None = None
+               ) -> tuple[str, bytes]:
+    """플랫폼 하나의 양식(파일명, xlsx bytes)."""
     wb = _load(template_bytes())
     ws = wb.active
     lay = _layout(ws)
@@ -248,7 +333,7 @@ def build_form(target: str, dept: str, prefill_target: bool | None = None) -> tu
             cell = ws.cell(row=r, column=col)
             if not type(cell).__name__ == 'MergedCell':
                 cell.value = None
-    for i, row in enumerate(department_rows(target, dept, prefill_target)):
+    for i, row in enumerate(platform_rows(target, platform, people, ref)):
         for part in ('common', 'target', 'ref'):
             for name, val in row[part].items():
                 col = lay[part].get(name)
@@ -256,28 +341,45 @@ def build_form(target: str, dept: str, prefill_target: bool | None = None) -> tu
                     ws.cell(row=start + i, column=col, value=val)
     buf = io.BytesIO()
     wb.save(buf)
-    return file_name(target, dept), buf.getvalue()
+    return file_name(target, platform), buf.getvalue()
+
+
+def build_all(target: str) -> dict:
+    """전체 명단을 플랫폼별 파일로 {플랫폼: (파일명, bytes)} — 대상자·참고 데이터는 한 번만 읽는다."""
+    people = target_people()
+    ref = _ref_table(target)[0]
+    return {p: build_form(target, p, people, ref) for p in platforms(people)}
 
 
 def build_all_zip(target: str) -> bytes:
+    forms = build_all(target)
+    if not forms:
+        raise ValueError('대상자(최신 인력현황의 CL1~CL4·H2)가 없습니다.')
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
-        for d in wa.departments():
-            name, content = build_form(target, d)
+        for name, content in forms.values():
             z.writestr(name, content)
     return buf.getvalue()
 
 
+def plan(target: str) -> dict:
+    """발송 전 확인용 — {'platforms': [{'platform','count','contacts':[...]}], 'unmatched_contacts': [...], 'ref': 출처}."""
+    people = target_people()
+    contacts = wa.hom.load_contacts()
+    plats = platforms(people)
+    out = [{'platform': p, 'count': sum(1 for x in people if x['플랫폼'] == p),
+            'contacts': [c for c in contacts if c.get('dept') == p]} for p in plats]
+    return {'platforms': out, 'unmatched_contacts': [c for c in contacts if c.get('dept') not in plats],
+            'ref': _ref_table(target)[1]}
+
+
 def per_contact_forms(target: str):
-    """발송용 — 담당자(c['dept'])마다 그 부서 양식을 붙이는 함수(부서별 한 번만 생성)."""
-    cache = {}
+    """발송용 — 담당자 부서(= 플랫폼) 파일만 붙이는 함수. 그 플랫폼 대상자가 없으면 그 담당자는 보내지 않음(실패 기록)."""
+    forms = build_all(target)
 
     def _for(c: dict) -> list:
-        d = c.get('dept', '')
-        if d not in cache:
-            cache[d] = [build_form(target, d)] if d else []
-        return cache[d]
-    for d in wa.departments():                      # 스레드 발송 전에 미리 만들어 둠
-        _for({'dept': d})
+        f = forms.get(c.get('dept', ''))
+        if not f:
+            raise ValueError(f"'{c.get('dept', '')}' 플랫폼 대상자가 없어 보내지 않았습니다(담당자 부서명 확인)")
+        return [f]
     return _for
-

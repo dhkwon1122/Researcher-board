@@ -557,7 +557,9 @@ def _deliver(contacts: list, subject: str, body_text: str, attachments: list, se
     else:
         def _one(c):
             try:
-                own = per_contact(c) if per_contact else []     # 담당자별 첨부(업무분장 부서별 양식 등)
+                own = per_contact(c) if per_contact else []     # 담당자별 첨부(업무분장 플랫폼별 양식 등)
+            except ValueError as exc:                           # 보낼 양식이 없음 등 — 사유 그대로
+                return {**c, 'ok': False, 'error': str(exc)}
             except Exception as exc:  # noqa: BLE001 — 양식 생성 실패는 그 담당자 결과로
                 return {**c, 'ok': False, 'error': f'첨부 생성 실패: {exc}'}
             ok, err = _try([c['email']], own)
