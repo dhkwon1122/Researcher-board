@@ -131,3 +131,110 @@ def test_real_form_two_row_header_and_reference_columns(paths):
     assert len(m) == 1 and m.loc[0, '담당업무'] == '기획' and not any(c.startswith('참고_') for c in m.columns)
     m2 = wa.merged('2026-12', include_ref=True)
     assert len(m2) == 2 and m2['참고_성명'].tolist() == ['홍길동', '퇴사자']
+
+
+def _researchers_df():
+    return pd.DataFrame([
+        {'researcher_id': '1', 'name': '홍길동', 'org_code': 'A', 'knox_id': 'gd.hong', 'is_current': 'Y'},
+        {'researcher_id': '2', 'name': '새사람', 'org_code': 'A', 'knox_id': 'new.one', 'is_current': 'Y'},
+        {'researcher_id': '3', 'name': '이동자', 'org_code': 'B', 'knox_id': 'mv.lee', 'is_current': 'Y'},
+        {'researcher_id': '4', 'name': '퇴사자', 'org_code': 'A', 'knox_id': 'gone', 'is_current': 'N'},
+    ])
+
+
+@pytest.fixture
+def forms(paths, monkeypatch, tmp_path):
+    from services import work_assign_form as waf
+    import services.similarity_map as sm
+    monkeypatch.setattr(waf, 'TEMPLATE_PATH', str(tmp_path / 'tpl.xlsx'))
+    df = _researchers_df()
+    monkeypatch.setattr(waf.data_store, 'read_processed', lambda name: df if name == 'researchers' else pd.DataFrame())
+    monkeypatch.setattr(sm, 'dep_name_for_org_code', lambda oc: {'A': 'AI플랫폼', 'B': '소재 연구'}.get(oc, ''))
+    return waf
+
+
+def _sheet(content):
+    from openpyxl import load_workbook
+    ws = load_workbook(io.BytesIO(content)).active
+    return [[c.value for c in row] for row in ws.iter_rows(min_row=1, max_row=ws.max_row, max_col=22)]
+
+
+def test_form_without_previous_month_starts_from_roster(forms):
+    name, content = forms.build_form('2026-12', 'AI플랫폼')
+    assert name == '업무분장_26년12월_AI플랫폼.xlsx'
+    rows = _sheet(content)
+    assert rows[0][2] == "'26년 12월 1일자" and rows[0][12] == "참고 : '26년 11월 1일자"
+    assert rows[1][:4] == ['Knox ID', '재직현황', '플랫폼', '그룹']
+    assert [(r[0], r[1], r[5]) for r in rows[2:]] == [('new.one', '재직', '새사람'), ('gd.hong', '재직', '홍길동')]
+
+
+def test_form_from_previous_month_reply(forms):
+    prev = _real_form(
+        [['gd.hong', '재직', 'P1', 'G1', '과제A', '홍길동', '기획', '상세', '전담', '100%', '', ''],
+         ['mv.lee', '재직', 'P1', 'G1', '과제B', '이동자', '개발', '', '겸임', '50%', '', ''],
+         ['gone', '재직', 'P1', 'G1', '과제C', '퇴사자', '지원', '', '', '', '', '']],
+        [[''] * 10] * 3)
+    with auth.acting_as(ADMIN):
+        wa.save_submission('2026-11', 'AI플랫폼', 'AI플랫폼.xlsx', prev)
+        forms.save_settings(True, True)
+    rows = _sheet(forms.build_form('2026-12', 'AI플랫폼')[1])
+    data = [(r[0], r[1], r[5], r[6], r[15], r[16]) for r in rows[2:]]
+    assert data == [('gd.hong', '재직', '홍길동', '기획', '홍길동', '기획'),
+                    ('mv.lee', '부서 변경(확인)', '이동자', '개발', '이동자', '개발'),
+                    ('gone', '미재직(확인)', '퇴사자', '지원', '퇴사자', '지원'),
+                    ('new.one', '신규(확인)', '새사람', None, None, None)]
+    rows = _sheet(forms.build_form('2026-12', 'AI플랫폼', prefill_target=False)[1])
+    assert rows[2][5] is None and rows[2][15] == '홍길동'                   # 대상월 칸은 비우고 참고만
+    # 회신으로 다시 올리면 통합표가 그대로 읽힘(파일명으로 부서 자동 연결)
+    name, content = forms.build_form('2026-12', 'AI플랫폼')
+    with auth.acting_as(ADMIN):
+        name2, content2 = forms.build_form('2026-12', '소재 연구')
+        done, _ = wa.save_uploads('2026-12', [(name, content), (name2, content2)])
+    assert done == [('AI플랫폼', name), ('소재 연구', name2)] and wa.merged('2026-12')['성명'].tolist()[:2] == ['홍길동', '이동자']
+
+
+def test_custom_template_and_send_per_department(forms, monkeypatch):
+    import pipeline.mailer as mailer
+    from openpyxl import load_workbook
+    wb = load_workbook(io.BytesIO(forms.default_template()))
+    wb.active['A5'] = '예시 값'                                         # 원본의 예시 값은 지워짐
+    buf = io.BytesIO()
+    wb.save(buf)
+    with auth.acting_as(ADMIN):
+        assert forms.save_template('우리양식.xlsx', buf.getvalue())['template_name'] == '우리양식.xlsx'
+        with pytest.raises(ValueError):
+            forms.save_template('a.xlsx', _xlsx([{'x': 1}], title=False))
+    assert '예시 값' not in str(_sheet(forms.build_form('2026-12', '소재 연구')[1]))
+    sent = []
+    monkeypatch.setattr(mailer, 'send_html_email', lambda to, s, b, a=None, sender_email=None, sender_user_id=None,
+                        cc=None, bcc=None: sent.append((to, [n for n, _ in a])))
+    contacts = hom.load_contacts()
+    with auth.acting_as(ADMIN):
+        res = wa.send(contacts, '제목', '본문', [], hom.SHARED_SENDER, '2026-12', mode='single', gen_forms=True)
+    assert all(r['ok'] for r in res)
+    assert sorted(sent) == [(['a@x.com'], ['업무분장_26년12월_AI플랫폼.xlsx']),
+                            (['b@x.com'], ['업무분장_26년12월_소재_연구.xlsx'])]     # 한 통으로여도 부서별 따로
+    assert wa.read_log()[0]['gen_forms'] is True
+    with auth.acting_as(ADMIN):
+        with pytest.raises(ValueError):
+            wa.send(contacts, '제목', '본문', [], hom.SHARED_SENDER, '2026-12')    # 양식 생성 끄면 첨부 필수
+    import zipfile
+    z = zipfile.ZipFile(io.BytesIO(forms.build_all_zip('2026-12')))
+    assert sorted(z.namelist()) == ['업무분장_26년12월_AI플랫폼.xlsx', '업무분장_26년12월_소재_연구.xlsx']
+
+
+def test_auto_send_with_generated_forms_only(forms, monkeypatch):
+    import pipeline.mailer as mailer
+    sent = []
+    monkeypatch.setattr(mailer, 'send_html_email', lambda to, s, b, a=None, sender_email=None, sender_user_id=None,
+                        cc=None, bcc=None: sent.append((to, [n for n, _ in a])))
+    with auth.acting_as(ADMIN):
+        with pytest.raises(ValueError):
+            wa.save_auto(True, 9, hom.SHARED_SENDER)                     # 첨부도 양식 생성도 없음
+        forms.save_settings(True, True)
+        wa.save_auto(True, 9, hom.SHARED_SENDER)
+    wa._update_settings(auto={**wa._settings()['auto'], 'set_at': '2026-11-01T00:00:00'})
+    r = wa.run_auto_if_due(datetime(2026, 11, 25, 9, 5))
+    assert r['target'] == '2026-12' and all(x['ok'] for x in r['results'])
+    assert sorted(sent) == [(['a@x.com'], ['업무분장_26년12월_AI플랫폼.xlsx']),
+                            (['b@x.com'], ['업무분장_26년12월_소재_연구.xlsx'])]

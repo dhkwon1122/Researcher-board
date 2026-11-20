@@ -182,17 +182,36 @@ def save_template(subject: str, body: str) -> None:
 
 # ── 발송 ────────────────────────────────────────────────────────────────────
 
+def _check(contacts, subject, attachments, gen_forms: bool) -> None:
+    """인사발령 검사와 같되, 부서별 양식을 자동 생성하면 공통 첨부는 없어도 된다."""
+    hom._check(contacts, subject, attachments or ([('부서별 양식', b'')] if gen_forms else []))
+
+
+def _forms(target: str, gen_forms: bool):
+    if not gen_forms:
+        return None, {}
+    from services import work_assign_form as waf
+    return waf.per_contact_forms(target), {'gen_forms': True}
+
+
 def send(contacts: list, subject: str, body_html_text: str, attachments: list, sender_value: str, target: str,
-         cc: list | None = None, bcc: list | None = None, mode: str = 'each') -> list:
-    """수동 발송 — subject/body는 이미 대상월·회신일이 들어간 문구. 받는 사람·참조인은 인사발령과 같은 명단."""
+         cc: list | None = None, bcc: list | None = None, mode: str = 'each', gen_forms: bool = False) -> list:
+    """수동 발송 — subject/body는 이미 대상월·회신일이 들어간 문구. 받는 사람·참조인은 인사발령과 같은 명단.
+    gen_forms면 담당자마다 그 부서 양식(services/work_assign_form)을 더 붙인다 — 부서마다 첨부가 달라 항상 담당자별 따로."""
     from services.auth import get_current_user
     _require_use()
-    hom._check(contacts, subject, attachments)
+    _check(contacts, subject, attachments, gen_forms)
     if mode not in hom.SEND_MODES:
         raise ValueError('발송 방식이 올바르지 않습니다.')
     sender = hom._resolve_sender(sender_value)
+    per_contact, extra = _forms(target, gen_forms)
     return hom._deliver(contacts, subject, body_html_text, attachments, sender, get_current_user() or {}, 'manual',
-                        None, cc=cc, bcc=bcc, mode=mode, log_path=LOG_PATH, extra={'target': target})
+                        None, cc=cc, bcc=bcc, mode='each' if gen_forms else mode, log_path=LOG_PATH,
+                        extra={'target': target, **extra}, per_contact=per_contact)
+
+
+def _gen_forms_on() -> bool:
+    return bool((_settings().get('form') or {}).get('enabled'))
 
 
 def read_log(limit: int = 50) -> list:
@@ -258,8 +277,8 @@ def save_auto(enabled: bool, hour: int, sender_value: str) -> dict:
     if enabled:
         if not hom.load_contacts():
             raise ValueError('부서별 담당자를 먼저 등록하세요(인사발령 화면).')
-        if not auto_files():
-            raise ValueError('자동 발송에 쓸 첨부파일을 먼저 올리세요.')
+        if not auto_files() and not _gen_forms_on():
+            raise ValueError('자동 발송에 쓸 첨부파일을 올리거나 "부서별 양식 자동 생성"을 켜세요.')
     me = get_current_user() or {}
     a = _settings().get('auto') or {}
     _update_settings(auto={**a, 'enabled': bool(enabled), 'hour': hour, 'sender': sender,
@@ -314,15 +333,17 @@ def run_auto_if_due(now: datetime | None = None) -> dict | None:
             subject_t, body_t = template()
             sender = cfg['sender'] or hom._resolve_shared()
             reply = reply_due(target, now.date())
-            if not contacts or not files:
+            gen = _gen_forms_on()
+            if not contacts or not (files or gen):
                 results = [{'dept': '', 'name': '', 'email': '', 'ok': False,
                             'error': '담당자 또는 자동 발송용 첨부가 없어 보내지 못했습니다.'}]
             else:
                 rcp = hom.recipient_settings()
+                per_contact, extra = _forms(target, gen)
                 results = hom._deliver(contacts, render(subject_t, target, reply), render(body_t, target, reply), files,
                                        sender, {'user_id': 'auto', 'display_name': '자동 발송'}, 'auto', None,
-                                       cc=rcp['cc'], bcc=rcp['bcc'], mode=rcp['mode'], log_path=LOG_PATH,
-                                       extra={'target': target})
+                                       cc=rcp['cc'], bcc=rcp['bcc'], mode='each' if gen else rcp['mode'],
+                                       log_path=LOG_PATH, extra={'target': target, **extra}, per_contact=per_contact)
             sent = _auto_sent()
             sent[target] = {'at': now.isoformat(timespec='seconds'),
                             'ok': sum(1 for r in results if r['ok']), 'fail': sum(1 for r in results if not r['ok'])}
@@ -362,9 +383,10 @@ def _safe(name: str) -> str:
 
 
 def match_department(filename: str, depts: list) -> str | None:
-    """파일 이름에 들어 있는 부서명(가장 긴 것)으로 부서를 찾는다(공백 무시)."""
-    key = re.sub(r'\s+', '', filename)
-    hits = [d for d in depts if re.sub(r'\s+', '', d) and re.sub(r'\s+', '', d) in key]
+    """파일 이름에 들어 있는 부서명(가장 긴 것)으로 부서를 찾는다(공백·밑줄 무시)."""
+    norm = lambda t: re.sub(r'[\s_]+', '', t)  # noqa: E731 — 부서별 양식 파일명은 공백을 _로 바꿈
+    key = norm(filename)
+    hits = [d for d in depts if norm(d) and norm(d) in key]
     return max(hits, key=len) if hits else None
 
 

@@ -531,7 +531,8 @@ def _resolve_sender(value: str) -> dict:
 
 def _deliver(contacts: list, subject: str, body_text: str, attachments: list, sender: dict,
              by: dict, kind: str, order_date: date | None, cc: list | None = None, bcc: list | None = None,
-             mode: str = 'each', log_path: str | None = None, extra: dict | None = None) -> list:
+             mode: str = 'each', log_path: str | None = None, extra: dict | None = None,
+             per_contact=None) -> list:
     """contacts(TO)에게 발송. cc/bcc는 [{'email',...}] — 담당자별 따로(each)면 메일마다 참조로, 한 통으로(single)면
     담당자 전원을 TO로 한 메일 한 통에 참조로 넣는다(결과는 담당자마다 같은 성공/실패)."""
     from pipeline.mailer import MailError, send_html_email
@@ -539,9 +540,9 @@ def _deliver(contacts: list, subject: str, body_text: str, attachments: list, se
     cc_emails = [p['email'] for p in cc or []]
     bcc_emails = [p['email'] for p in bcc or []]
 
-    def _try(to_emails):
+    def _try(to_emails, own=()):
         try:
-            send_html_email(to_emails, subject.strip(), html_body, attachments,
+            send_html_email(to_emails, subject.strip(), html_body, list(attachments) + list(own),
                             sender_email=sender['email'], sender_user_id=sender['user_id'],
                             cc=cc_emails, bcc=bcc_emails)
             return True, ''
@@ -550,12 +551,16 @@ def _deliver(contacts: list, subject: str, body_text: str, attachments: list, se
         except Exception as exc:  # noqa: BLE001 — 한 명 실패가 나머지 발송을 막지 않게
             return False, f'{type(exc).__name__}: {exc}'
 
-    if mode == 'single':
+    if mode == 'single' and per_contact is None:
         ok, err = _try([c['email'] for c in contacts])
         results = [{**c, 'ok': ok, 'error': err} for c in contacts]
     else:
         def _one(c):
-            ok, err = _try([c['email']])
+            try:
+                own = per_contact(c) if per_contact else []     # 담당자별 첨부(업무분장 부서별 양식 등)
+            except Exception as exc:  # noqa: BLE001 — 양식 생성 실패는 그 담당자 결과로
+                return {**c, 'ok': False, 'error': f'첨부 생성 실패: {exc}'}
+            ok, err = _try([c['email']], own)
             return {**c, 'ok': ok, 'error': err}
 
         with ThreadPoolExecutor(max_workers=4) as pool:

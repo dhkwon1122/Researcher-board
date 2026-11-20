@@ -15,6 +15,7 @@ from components.rich_editor import register_rich_editor, rich_editor
 from pages.hr_order import _contact_option, _file_list, _md, _rcp_summary, _upload_box
 from services import hr_order_mail as hom
 from services import work_assign as wa
+from services import work_assign_form as waf
 
 dash.register_page(__name__, path='/work-assign', name='업무분장', title='업무분장')
 
@@ -99,7 +100,8 @@ def _compose_card():
                     html.Div(id='wa-preview', className='border rounded p-2 small bg-light', style={'minHeight': '260px'}),
                 ], md=6),
             ], className='g-3 mb-3'),
-            dbc.Label('첨부파일(업무분장 양식)', className='small mb-1'),
+            _form_box(),
+            dbc.Label('공통 첨부파일(부서별 양식을 쓰면 선택 — 함께 보냄)', className='small mb-1'),
             _upload_box('wa-upload', '클릭 또는 끌어다 놓아 첨부(여러 개 가능, 합계 20MB까지)'),
             html.Div(id='wa-files', className='small mb-3'),
             dbc.Button([html.I(className='bi bi-send me-1'), '메일 보내기'], id='wa-send', color='primary'),
@@ -113,6 +115,40 @@ def _compose_card():
             ], id='wa-confirm', is_open=False, size='lg'),
         ]),
     ], className='shadow-sm mb-4')
+
+
+def _form_status():
+    st = waf.settings()
+    src = (f"올린 양식 원본: {st['template_name']}" if st['template_name']
+           else '기본 양식(구글 시트 "업무분장 양식"과 같은 구조) 사용 중 — 서식을 바꾸려면 엑셀 원본을 올리세요')
+    return html.Span(src, className='text-muted')
+
+
+def _form_box():
+    st = waf.settings()
+    return html.Div([
+        html.Div([html.I(className='bi bi-magic me-1'), html.B('부서별 양식 자동 생성')], className='small mb-1'),
+        html.Div('켜면 담당자마다 그 부서 양식을 만들어 첨부합니다(파일명 업무분장_26년12월_부서.xlsx — 회신 파일을 올릴 때 부서가 '
+                 '자동 연결). 오른쪽 "참고(이전 달)" 칸은 그 부서의 지난달 회신으로, Knox ID·재직현황은 인력현황과 대조해 채우고 '
+                 '(재직 / 부서 변경(확인) / 미재직(확인) / 새로 온 사람은 신규(확인)), 1행 날짜는 대상월에 맞춥니다. 지난달 회신이 '
+                 '없으면 현재 인력현황의 부서원 명단으로 시작합니다. 부서마다 첨부가 달라 항상 담당자별로 따로 보냅니다.',
+                 className='small text-muted mb-2'),
+        dbc.Row([
+            dbc.Col(dbc.Switch(id='wa-gen', value=st['enabled'], label='부서별 양식 자동 생성해 첨부(수동·자동 발송)',
+                               className='small'), md=6),
+            dbc.Col(dbc.Checkbox(id='wa-prefill', value=st['prefill_target'],
+                                 label='대상월 칸도 지난달 내용으로 미리 채우기(바뀐 부분만 고쳐 회신)', className='small'), md=6),
+        ], className='g-2'),
+        html.Div([html.Span(id='wa-form-src', children=_form_status(), className='small me-2'),
+                  dcc.Upload(id='wa-form-upload', children=dbc.Button([html.I(className='bi bi-upload me-1'), '양식 원본 올리기'],
+                                                                     color='secondary', outline=True, size='sm',
+                                                                     className='py-0'), className='d-inline-block me-2'),
+                  dbc.Button('기본 양식으로', id='wa-form-reset', color='link', size='sm', className='py-0 me-2'),
+                  dbc.Button([html.I(className='bi bi-file-earmark-zip me-1'), '부서별 양식 미리 받기(zip)'], id='wa-form-zip',
+                             color='success', outline=True, size='sm', className='py-0')],
+                 className='d-flex flex-wrap align-items-center gap-1 mt-1'),
+        html.Div(id='wa-form-msg', className='small mt-1'),
+    ], className='border rounded p-2 mb-3')
 
 
 # ── 카드: 회신 관리 ─────────────────────────────────────────────────────────
@@ -192,7 +228,8 @@ def _auto_status():
     who = (cfg['sender'] or {}).get('label', '')
     lines = [html.Div([html.I(className='bi bi-check-circle text-success me-1'),
                        f'켜짐 — 매월 마지막 워킹데이 {wa.send_workdays()}일 전 발송·회신 기한 발송 후 {wa.reply_workdays()}일, '
-                       f'발신 {who}, 담당자 {len(hom.load_contacts())}명 전체, 첨부 {len(cfg["files"])}개'
+                       f'발신 {who}, 담당자 {len(hom.load_contacts())}명 전체, 공통 첨부 {len(cfg["files"])}개'
+                       + (', 부서별 양식 자동 생성(담당자별 따로)' if waf.settings()['enabled'] else '')
                        + _rcp_summary(hom.recipient_settings())])]
     if nxt:
         t, when = nxt
@@ -364,12 +401,12 @@ def _files_view(files):
           Input('wa-send', 'n_clicks'), Input('wa-confirm-cancel', 'n_clicks'),
           State('wa-recipients', 'value'), State('wa-recipients', 'options'), State('wa-subject', 'value'),
           State('wa-body', 'data'), State('wa-target', 'value'), State('wa-files-store', 'data'),
-          State('wa-sender', 'value'), State('wa-sender', 'options'), prevent_initial_call=True)
-def _confirm(_send, _cancel, emails, options, subject, body, target, files, sender, sender_opts):
+          State('wa-sender', 'value'), State('wa-sender', 'options'), State('wa-gen', 'value'), prevent_initial_call=True)
+def _confirm(_send, _cancel, emails, options, subject, body, target, files, sender, sender_opts, gen):
     if ctx.triggered_id == 'wa-confirm-cancel':
         return False, no_update, no_update
     problems = [m for ok, m in ((emails, '받을 담당자를 고르세요.'), ((subject or '').strip(), '제목을 입력하세요.'),
-                                (files, '첨부파일을 올리세요.'), (sender, '발신 계정을 고르세요.'), (target, '대상월을 고르세요.'))
+                                (files or gen, '첨부파일을 올리거나 부서별 양식 자동 생성을 켜세요.'), (sender, '발신 계정을 고르세요.'), (target, '대상월을 고르세요.'))
                 if not ok]
     if problems:
         return False, no_update, dbc.Alert(' '.join(problems), color='warning', className='small py-2')
@@ -377,12 +414,15 @@ def _confirm(_send, _cancel, emails, options, subject, body, target, files, send
     reply = _manual_reply()
     label = {o['value']: o['label'] for o in options or []}
     sender_label = next((o['label'] for o in sender_opts or [] if o['value'] == sender), sender)
-    single = rcp['mode'] == 'single'
+    single = rcp['mode'] == 'single' and not gen
+    by_email = {c['email']: c for c in hom.load_contacts()}
+    form_names = sorted({waf.file_name(target, by_email[e]['dept']) for e in emails if e in by_email}) if gen else []
     people = lambda ps: html.Ul([html.Li(f"{p['name']} [{p['dept']}] · {p['email']}") for p in ps], className='small mb-2')  # noqa: E731
     return True, html.Div([
         html.Div([html.B('발신: '), sender_label], className='small mb-1'),
         html.Div([html.B('제목: '), wa.render(subject, target, reply)], className='small mb-1'),
-        html.Div([html.B('첨부: '), ', '.join(f['name'] for f in files)], className='small mb-2'),
+        html.Div([html.B('공통 첨부: '), ', '.join(f['name'] for f in files or []) or '없음'], className='small mb-1'),
+        html.Div([html.B('부서별 양식: '), ', '.join(form_names)], className='small mb-2') if gen else None,
         html.Div(_body_frame(body, target, reply, '240px'), className='border rounded mb-2'),
         html.Div(html.B(f"수신(TO) {len(emails)}명 — " + ('한 통으로 발송' if single else '한 명씩 따로 발송')),
                  className='small'),
@@ -399,8 +439,8 @@ def _confirm(_send, _cancel, emails, options, subject, body, target, files, send
           Input('wa-confirm-ok', 'n_clicks'),
           State('wa-recipients', 'value'), State('wa-subject', 'value'), State('wa-body', 'data'),
           State('wa-target', 'value'), State('wa-files-store', 'data'), State('wa-sender', 'value'),
-          prevent_initial_call=True)
-def _send(n, emails, subject, body, target, files, sender):
+          State('wa-gen', 'value'), prevent_initial_call=True)
+def _send(n, emails, subject, body, target, files, sender, gen):
     if not n:
         return no_update, no_update, no_update
     reply = _manual_reply()
@@ -410,7 +450,7 @@ def _send(n, emails, subject, body, target, files, sender):
     rcp = hom.recipient_settings()
     try:
         results = wa.send(contacts, wa.render(subject, target, reply), wa.render(body, target, reply), attachments, sender,
-                          target, cc=rcp['cc'], bcc=rcp['bcc'], mode=rcp['mode'])
+                          target, cc=rcp['cc'], bcc=rcp['bcc'], mode=rcp['mode'], gen_forms=bool(gen))
     except (PermissionError, ValueError) as exc:
         return dbc.Alert(str(exc), color='danger', className='small py-2'), False, no_update
     ok = [r for r in results if r['ok']]
@@ -419,6 +459,49 @@ def _send(n, emails, subject, body, target, files, sender):
     items += [html.Div([html.I(className='bi bi-x-circle text-danger me-1'), f"{r['dept']} {r['email']}: {r['error']}"])
               for r in fail]
     return dbc.Alert(items, color='success' if not fail else 'warning', className='small py-2'), False, _log_table()
+
+
+# ── 콜백: 부서별 양식 ───────────────────────────────────────────────────────
+
+@callback(Output('wa-form-msg', 'children'), Output('wa-auto-status', 'children', allow_duplicate=True),
+          Input('wa-gen', 'value'), Input('wa-prefill', 'value'), prevent_initial_call=True)
+def _form_settings(gen, prefill):
+    try:
+        waf.save_settings(bool(gen), bool(prefill))
+    except PermissionError as exc:
+        return html.Span(str(exc), className='text-danger'), no_update
+    return html.Span('저장했습니다.', className='text-success'), _auto_status()
+
+
+@callback(Output('wa-form-src', 'children'), Output('wa-form-msg', 'children', allow_duplicate=True),
+          Output('wa-form-upload', 'contents'),
+          Input('wa-form-upload', 'contents'), Input('wa-form-reset', 'n_clicks'), State('wa-form-upload', 'filename'),
+          prevent_initial_call=True)
+def _form_template(content, _reset, filename):
+    try:
+        if ctx.triggered_id == 'wa-form-reset':
+            waf.delete_template()
+            return _form_status(), html.Span('기본 양식으로 돌렸습니다.', className='text-muted'), no_update
+        if not content:
+            return no_update, no_update, no_update
+        waf.save_template(filename, base64.b64decode(content.split(',', 1)[1]))
+    except (PermissionError, ValueError) as exc:
+        return no_update, html.Span(str(exc), className='text-danger'), None
+    return _form_status(), html.Span('양식 원본을 저장했습니다.', className='text-success'), None
+
+
+@callback(Output('wa-download', 'data', allow_duplicate=True), Output('wa-form-msg', 'children', allow_duplicate=True),
+          Input('wa-form-zip', 'n_clicks'), State('wa-target', 'value'), prevent_initial_call=True)
+def _form_zip(n, target):
+    if not n or not wa.can_use() or not target:
+        return no_update, no_update
+    if not wa.departments():
+        return no_update, html.Span('부서별 담당자가 없습니다(인사발령 화면에서 등록).', className='text-warning')
+    try:
+        data = waf.build_all_zip(target)
+    except ValueError as exc:
+        return no_update, html.Span(str(exc), className='text-danger')
+    return dcc.send_bytes(data, f'업무분장_부서별양식_{target}.zip'), no_update
 
 
 # ── 콜백: 회신 관리 ─────────────────────────────────────────────────────────
