@@ -381,8 +381,9 @@ def body_html(body: str) -> str:
 
 # ── 부서별 담당자 표 ────────────────────────────────────────────────────────
 
-def load_contacts() -> list:
-    return [c for c in _read_json(CONTACTS_PATH, []) if isinstance(c, dict)]
+def load_contacts(path: str | None = None) -> list:
+    """부서별 담당자. path를 주면 그 파일(업무분장은 자기 명단 — services/work_assign.CONTACTS_PATH, 2026-11-20 분리)."""
+    return [c for c in _read_json(path or CONTACTS_PATH, []) if isinstance(c, dict)]
 
 
 def _clean_contacts(rows: list) -> tuple[list, list]:
@@ -409,12 +410,12 @@ def _clean_contacts(rows: list) -> tuple[list, list]:
     return out, errors
 
 
-def save_contacts(rows: list) -> tuple[list, list]:
+def save_contacts(rows: list, path: str | None = None) -> tuple[list, list]:
     _require_use()
     rows, errors = _clean_contacts(rows)
     if not errors:
         with _LOCK:
-            _write_json(CONTACTS_PATH, rows)
+            _write_json(path or CONTACTS_PATH, rows)
     return rows, errors
 
 
@@ -438,10 +439,10 @@ def group_contacts(contacts: list) -> list:
     return out
 
 
-def contacts_for_emails(emails: list) -> list:
+def contacts_for_emails(emails: list, path: str | None = None) -> list:
     """선택한 이메일들의 담당자 행 전부(겸직이면 여러 행)."""
     want = {(e or '').strip().lower() for e in emails or []}
-    return [c for c in load_contacts() if c['email'].lower() in want]
+    return [c for c in load_contacts(path) if c['email'].lower() in want]
 
 
 def contacts_from_table(df) -> list:
@@ -481,9 +482,16 @@ def contact_for_person(researcher_id: str) -> dict:
 SEND_MODES = ('each', 'single')           # each: 담당자별 따로 / single: 한 통으로(담당자 전원 TO)
 
 
-def recipient_settings() -> dict:
-    """저장된 참조인 — {'cc': [{'rid','dept','name','email'}], 'bcc': [...], 'mode': 'each'|'single'}."""
-    r = _settings().get('recipients') or {}
+MAIL_PREFIX = 'mail:'                       # 참조 선택값 중 직접 입력한 주소(비실명·팀 계정 등 — 인력현황 검색 불가)
+
+
+def is_email(addr: str) -> bool:
+    return bool(re.fullmatch(r'[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+', (addr or '').strip()))
+
+
+def parse_recipients(raw: dict | None) -> dict:
+    """저장 형식 → {'cc': [...], 'bcc': [...], 'mode'} (빈 값·잘못된 값 정리)."""
+    r = raw or {}
     mode = r.get('mode') if r.get('mode') in SEND_MODES else 'each'
     return {'cc': [p for p in r.get('cc') or [] if isinstance(p, dict) and p.get('email')],
             'bcc': [p for p in r.get('bcc') or [] if isinstance(p, dict) and p.get('email')], 'mode': mode}
@@ -501,6 +509,12 @@ def people_for(researcher_ids: list, saved: list | None = None) -> list:
         if rid in known:
             out.append(known[rid])
             continue
+        if str(rid).startswith(MAIL_PREFIX):          # 직접 입력한 주소(팀 계정 등)
+            addr = rid[len(MAIL_PREFIX):].strip()
+            if not is_email(addr):
+                raise ValueError(f'이메일 형식이 아닙니다({addr}).')
+            out.append({'rid': rid, 'dept': '', 'name': addr.split('@')[0], 'email': addr})
+            continue
         c = contact_for_person(rid)
         if not c['email']:
             raise ValueError(f"{c['name'] or rid}: 인력현황에 Knox ID가 없어 참조에 넣을 수 없습니다.")
@@ -508,17 +522,26 @@ def people_for(researcher_ids: list, saved: list | None = None) -> list:
     return out
 
 
+def recipient_settings() -> dict:
+    """저장된 참조인 — {'cc': [{'rid','dept','name','email'}], 'bcc': [...], 'mode': 'each'|'single'}."""
+    return parse_recipients(_settings().get('recipients'))
+
+
+def build_recipients(cc_vals: list, bcc_vals: list, mode: str, saved: list) -> dict:
+    """선택값(사번 또는 mail:주소) → 저장할 참조 설정. CC와 겹치는 BCC는 뺌."""
+    if mode not in SEND_MODES:
+        raise ValueError('발송 방식이 올바르지 않습니다.')
+    cc = people_for(cc_vals, saved)
+    cc_emails = {p['email'].lower() for p in cc}
+    bcc = [p for p in people_for(bcc_vals, saved) if p['email'].lower() not in cc_emails]
+    return {'cc': cc, 'bcc': bcc, 'mode': mode}
+
+
 def save_recipient_settings(cc_rids: list, bcc_rids: list, mode: str) -> dict:
     """참조/비밀참조/발송 방식 저장(수동 화면의 기본값이자 자동 발송에 사용)."""
     _require_use()
-    if mode not in SEND_MODES:
-        raise ValueError('발송 방식이 올바르지 않습니다.')
     cur = recipient_settings()
-    saved = cur['cc'] + cur['bcc']
-    cc = people_for(cc_rids, saved)
-    cc_emails = {p['email'].lower() for p in cc}
-    bcc = [p for p in people_for(bcc_rids, saved) if p['email'].lower() not in cc_emails]
-    _update_settings(recipients={'cc': cc, 'bcc': bcc, 'mode': mode})
+    _update_settings(recipients=build_recipients(cc_rids, bcc_rids, mode, cur['cc'] + cur['bcc']))
     return recipient_settings()
 
 

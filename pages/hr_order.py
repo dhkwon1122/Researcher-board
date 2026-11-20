@@ -3,42 +3,26 @@
 흐름·저장·권한·자동 발송은 services/hr_order_mail.py 참고.
 """
 import base64
-import io
 from datetime import date, datetime
 
 import dash
-import dash_ag_grid as dag
 import dash_bootstrap_components as dbc
-import pandas as pd
 from dash import Input, Output, State, callback, ctx, dcc, html, no_update
 
+from components import mail_recipients as mr
 from components.rich_editor import register_rich_editor, rich_editor
 from services import hr_order_mail as hom
 
 dash.register_page(__name__, path='/hr-order', name='인사발령', title='인사발령')
 
-_CONTACT_COLUMNS = [
-    {'field': 'dept', 'headerName': '부서', 'editable': True, 'checkboxSelection': True, 'headerCheckboxSelection': True,
-     'flex': 1},
-    {'field': 'name', 'headerName': '담당자', 'editable': True, 'flex': 1},
-    {'field': 'email', 'headerName': '이메일', 'editable': True, 'flex': 2},
-]
+# 받는 사람·참조 UI는 components/mail_recipients(업무분장과 공용, 명단은 각자 — 2026-11-20 분리)
+HR_STORE = mr.RecipientStore(hom.load_contacts, hom.save_contacts, hom.recipient_settings, hom.save_recipient_settings)
+
 _WD = '월화수목금토일'
 
 
 def _md(d: date) -> str:
     return f'{d.month}월 {d.day}일({_WD[d.weekday()]})'
-
-
-def _contact_option(c: dict) -> dict:
-    """c는 group_contacts의 묶음(겸직이면 dept = 'A · B') 또는 담당자 행."""
-    who = f" · {c['name']}" if c.get('name') else ''
-    return {'label': f"{c['dept']}{who} <{c['email']}>", 'value': c['email']}
-
-
-def _recipient_options(contacts: list) -> list:
-    """받는 사람 체크 목록 — 겸직 담당자는 한 줄(부서를 · 로 이어서), 값은 이메일."""
-    return [_contact_option(g) for g in hom.group_contacts(contacts)]
 
 
 def _fmt_size(n: int) -> str:
@@ -61,39 +45,6 @@ def _file_list(files: list, del_type: str):
                                html.Span(' ×', id={'type': del_type, 'i': i}, n_clicks=0, className='text-danger ms-1',
                                          style={'cursor': 'pointer'}, title='빼기')])
                      for i, f in enumerate(files)] + [html.Div(f'합계 {_fmt_size(total)}', className='text-muted')])
-
-
-def _cc_options(saved: list) -> list:
-    """참조 선택 옵션 — 현재 인력현황 + 이미 저장된 사람(인력현황에서 빠졌어도 유지)."""
-    opts = hom.person_options()
-    have = {o['value'] for o in opts}
-    extra = [{'label': f"{p.get('name', '')} [{p.get('dept', '')}] ({p['rid']})", 'value': p['rid']}
-             for p in saved if p.get('rid') and p['rid'] not in have]
-    return extra + opts
-
-
-def _cc_block():
-    rcp = hom.recipient_settings()
-    opts = _cc_options(rcp['cc'] + rcp['bcc'])
-    return html.Div([
-        dbc.Row([
-            dbc.Col([dbc.Label('참조(CC) — 우리 부서 동료 등', className='small mb-1'),
-                     dcc.Dropdown(id='hro-cc', options=opts, value=[p['rid'] for p in rcp['cc'] if p.get('rid')],
-                                  multi=True, placeholder='인력현황에서 이름/사번 검색')], md=6),
-            dbc.Col([dbc.Label('비밀참조(BCC)', className='small mb-1'),
-                     dcc.Dropdown(id='hro-bcc', options=opts, value=[p['rid'] for p in rcp['bcc'] if p.get('rid')],
-                                  multi=True, placeholder='필요할 때만')], md=6),
-        ], className='g-2 mb-2'),
-        dbc.Label('발송 방식', className='small mb-0'),
-        dbc.RadioItems(id='hro-mode', value=rcp['mode'], className='small', options=[
-            {'label': '담당자별 따로 — 부서끼리 주소가 안 보임, 참조인은 담당자 수만큼 받음', 'value': 'each'},
-            {'label': '한 통으로 — 담당자 전원을 수신(TO)에 넣어 한 번, 참조인도 한 통만 받음', 'value': 'single'},
-        ]),
-        html.Div([dbc.Button([html.I(className='bi bi-save me-1'), '참조·발송 방식 저장'], id='hro-rcp-save',
-                             color='secondary', outline=True, size='sm', className='py-0'),
-                  html.Span('저장하면 다음에도, 자동 발송에도 이 참조인·방식을 씁니다.', className='small text-muted ms-2'),
-                  html.Span(id='hro-rcp-msg', className='small ms-2')], className='d-flex align-items-center mt-1'),
-    ], className='border rounded p-2 mb-3')
 
 
 def _upload_box(upload_id: str, text: str):
@@ -121,11 +72,11 @@ def _compose_card():
                 dbc.Button('전체 선택', id='hro-all', color='link', size='sm', className='p-0 me-3'),
                 dbc.Button('선택 해제', id='hro-none', color='link', size='sm', className='p-0'),
             ], className='mb-1'),
-            dbc.Checklist(id='hro-recipients', options=_recipient_options(contacts), value=[],
+            dbc.Checklist(id='hro-recipients', options=mr.recipient_options(contacts), value=[],
                           className='small mb-1', style={'columns': '2'}),
             html.Div('아래 "부서별 담당자"에 먼저 등록하세요.' if not contacts else '', id='hro-recipients-hint',
                      className='small text-muted mb-3'),
-            _cc_block(),
+            mr.cc_block('hro', HR_STORE),
             dbc.Row([
                 dbc.Col([
                     html.Div([dbc.Label('제목·본문 템플릿', className='small mb-0 me-2'),
@@ -158,55 +109,6 @@ def _compose_card():
                 dbc.ModalFooter([dbc.Button('취소', id='hro-confirm-cancel', color='secondary', size='sm'),
                                  dbc.Button('보내기', id='hro-confirm-ok', color='primary', size='sm')]),
             ], id='hro-confirm', is_open=False),
-        ]),
-    ], className='shadow-sm mb-4')
-
-
-def _dept_options() -> list:
-    """담당 부서 선택지 — 팀/리더 참조의 1단계 부서명(= 업무분장 플랫폼)과 이미 등록된 부서명."""
-    try:
-        from services.similarity_map import level_filter_options
-        names = [o['value'] for o in level_filter_options(1)]
-    except Exception:  # noqa: BLE001 — 조직도가 없어도 화면은 뜨게
-        names = []
-    for c in hom.load_contacts():
-        if c.get('dept') and c['dept'] not in names:
-            names.append(c['dept'])
-    return [{'label': n, 'value': n} for n in names]
-
-
-def _contacts_card():
-    return dbc.Card([
-        dbc.CardHeader(html.Span([html.I(className='bi bi-people me-1'), '부서별 담당자'], className='fw-semibold')),
-        dbc.CardBody([
-            dbc.Row([
-                dbc.Col(dcc.Dropdown(id='hro-person', options=hom.person_options(),
-                                     placeholder='인력현황에서 이름·사번 검색(이메일 = Knox ID@samsung.com)'), md=5),
-                dbc.Col(dcc.Dropdown(id='hro-person-dept', options=_dept_options(), multi=True,
-                                     placeholder='담당 부서(비우면 본인 소속) — 겸직이면 여러 개'), md=5),
-                dbc.Col(dbc.Button([html.I(className='bi bi-person-plus me-1'), '담당자로 추가'], id='hro-person-add',
-                                   color='primary', outline=True, size='sm'), md=2),
-            ], className='g-2 align-items-center mb-1'),
-            html.Div('겸직 담당자: 담당 부서를 여러 개 고르거나, 같은 사람을 부서를 바꿔 다시 추가하세요. 같은 이메일은 받는 사람 목록에서 '
-                     '한 줄로 합쳐지고 메일도 한 통만 갑니다(업무분장은 맡은 플랫폼 파일을 모두 첨부).',
-                     className='small text-muted mb-2'),
-            html.Div([
-                dbc.Button([html.I(className='bi bi-plus me-1'), '빈 행 추가'], id='hro-row-add', color='secondary',
-                           outline=True, size='sm', className='me-1'),
-                dbc.Button([html.I(className='bi bi-trash me-1'), '선택 삭제'], id='hro-row-del', color='danger',
-                           outline=True, size='sm', className='me-1'),
-                dbc.Button([html.I(className='bi bi-save me-1'), '저장'], id='hro-row-save', color='primary', size='sm',
-                           className='me-2'),
-                dcc.Upload(id='hro-contacts-upload', children=dbc.Button(
-                    [html.I(className='bi bi-file-earmark-excel me-1'), '엑셀로 불러오기'], color='success', outline=True,
-                    size='sm'), accept='.xlsx,.xls,.csv'),
-                html.Span('추가·수정 뒤 저장을 눌러야 반영됩니다(엑셀 열: 부서 · 담당자 · 이메일)', className='small text-muted ms-2'),
-            ], className='d-flex align-items-center flex-wrap mb-2'),
-            dag.AgGrid(id='hro-contacts', columnDefs=_CONTACT_COLUMNS, rowData=hom.load_contacts(),
-                       dashGridOptions={'rowSelection': 'multiple', 'singleClickEdit': True,
-                                        'stopEditingWhenCellsLoseFocus': True},
-                       style={'height': '320px'}, className='ag-theme-alpine'),
-            html.Div(id='hro-contacts-msg', className='small mt-2'),
         ]),
     ], className='shadow-sm mb-4')
 
@@ -373,7 +275,7 @@ def layout():
                f'(아래 자동 발송 설정에서 변경).',
                className='text-muted small'),
         _compose_card(),
-        _contacts_card(),
+        mr.contacts_card('hro', HR_STORE),
         _auto_card(),
         _settings_card(),
         _log_card(),
@@ -417,20 +319,6 @@ def _save_template(n, subject, body):
     except (PermissionError, ValueError) as exc:
         return html.Span(str(exc), className='text-danger')
     return html.Span('저장했습니다.', className='text-success')
-
-
-@callback(Output('hro-rcp-msg', 'children'), Output('hro-auto-status', 'children', allow_duplicate=True),
-          Input('hro-rcp-save', 'n_clicks'), State('hro-cc', 'value'), State('hro-bcc', 'value'),
-          State('hro-mode', 'value'), prevent_initial_call=True)
-def _save_rcp(n, cc, bcc, mode):
-    if not n:
-        return no_update, no_update
-    try:
-        rcp = hom.save_recipient_settings(cc or [], bcc or [], mode or 'each')
-    except (PermissionError, ValueError) as exc:
-        return html.Span(str(exc), className='text-danger'), no_update
-    return (html.Span(f"저장했습니다(참조 {len(rcp['cc'])}명, 비밀참조 {len(rcp['bcc'])}명).", className='text-success'),
-            _auto_status())
 
 
 @callback(Output('hro-recipients', 'value'), Input('hro-all', 'n_clicks'), Input('hro-none', 'n_clicks'),
@@ -481,7 +369,7 @@ def _confirm(_send, _cancel, emails, options, subject, body, od, files, sender, 
     if problems:
         return False, no_update, dbc.Alert(' '.join(problems), color='warning', className='small py-2')
     try:
-        cc_p, bcc_p = _cc_people(cc, bcc)
+        cc_p, bcc_p = mr.cc_people(HR_STORE, cc, bcc)
     except ValueError as exc:
         return False, no_update, dbc.Alert(str(exc), color='warning', className='small py-2')
     d = date.fromisoformat(od)
@@ -505,15 +393,6 @@ def _confirm(_send, _cancel, emails, options, subject, body, od, files, sender, 
     ]), no_update
 
 
-def _cc_people(cc, bcc):
-    saved = hom.recipient_settings()
-    pool = saved['cc'] + saved['bcc']
-    cc_p = hom.people_for(cc or [], pool)
-    cc_e = {p['email'].lower() for p in cc_p}
-    bcc_p = [p for p in hom.people_for(bcc or [], pool) if p['email'].lower() not in cc_e]
-    return cc_p, bcc_p
-
-
 @callback(Output('hro-result', 'children', allow_duplicate=True), Output('hro-confirm', 'is_open', allow_duplicate=True),
           Output('hro-log', 'children'),
           Input('hro-confirm-ok', 'n_clicks'),
@@ -528,7 +407,7 @@ def _send(n, emails, subject, body, od, files, sender, cc, bcc, mode):
     contacts = hom.contacts_for_emails(emails)            # 겸직이면 여러 행 — 발송 때 한 통으로 묶임
     attachments = [(f['name'], base64.b64decode(f['b64'])) for f in files or []]
     try:
-        cc_p, bcc_p = _cc_people(cc, bcc)
+        cc_p, bcc_p = mr.cc_people(HR_STORE, cc, bcc)
         results = hom.send(contacts, hom.render(subject, d), hom.render(body, d), attachments, sender, order_date=d,
                            cc=cc_p, bcc=bcc_p, mode=mode or 'each')
     except (PermissionError, ValueError) as exc:
@@ -540,63 +419,6 @@ def _send(n, emails, subject, body, od, files, sender, cc, bcc, mode):
               for r in fail]
     return (dbc.Alert(items, color='success' if not fail else 'warning', className='small py-2'), False, _log_table())
 
-
-# ── 콜백: 부서별 담당자 ─────────────────────────────────────────────────────
-
-@callback(Output('hro-contacts', 'rowData'), Output('hro-contacts-msg', 'children'),
-          Input('hro-row-add', 'n_clicks'), Input('hro-row-del', 'n_clicks'), Input('hro-contacts-upload', 'contents'),
-          Input('hro-person-add', 'n_clicks'),
-          State('hro-contacts-upload', 'filename'), State('hro-contacts', 'rowData'), State('hro-contacts', 'selectedRows'),
-          State('hro-person', 'value'), State('hro-person-dept', 'value'), prevent_initial_call=True)
-def _edit_contacts(_add, _del, content, _padd, filename, rows, selected, person, person_depts):
-    rows = list(rows or [])
-    trig = ctx.triggered_id
-    if trig == 'hro-person-add':
-        if not person:
-            return no_update, html.Span('추가할 사람을 먼저 검색해 고르세요.', className='text-warning')
-        try:
-            c = hom.contact_for_person(person)
-        except ValueError as exc:
-            return no_update, html.Span(str(exc), className='text-danger')
-        depts = [d for d in (person_depts or []) if d] or [c['dept']]       # 겸직: 고른 부서마다 한 행
-        have = {(str(r.get('dept', '')), str(r.get('email', '')).lower()) for r in rows}
-        new = [{**c, 'dept': d} for d in depts if not (c['email'] and (d, c['email'].lower()) in have)]
-        if not new:
-            return no_update, html.Span(f"{c['name']}님은 이미 그 부서 담당자로 있습니다.", className='text-warning')
-        note = '' if c['email'] else ' — Knox ID가 없어 이메일을 직접 입력해야 합니다.'
-        return rows + new, html.Span(f"{c['name']}({', '.join(n['dept'] for n in new)})을 추가했습니다{note} — "
-                                     f"저장을 눌러야 반영됩니다.", className='text-warning' if note else 'text-muted')
-    if trig == 'hro-row-add':
-        return rows + [{'dept': '', 'name': '', 'email': ''}], ''
-    if trig == 'hro-row-del':
-        if not selected:
-            return no_update, html.Span('삭제할 행을 체크하세요.', className='text-warning')
-        return [r for r in rows if r not in selected], html.Span('삭제했습니다 — 저장을 눌러야 반영됩니다.', className='text-muted')
-    if content:
-        try:
-            raw = base64.b64decode(content.split(',', 1)[1])
-            df = pd.read_csv(io.BytesIO(raw)) if (filename or '').lower().endswith('.csv') else pd.read_excel(io.BytesIO(raw))
-            new = hom.contacts_from_table(df)
-        except Exception as exc:  # noqa: BLE001
-            return no_update, html.Span(f'불러오지 못했습니다: {exc}', className='text-danger')
-        return new, html.Span(f'{len(new)}행을 불러왔습니다 — 확인 후 저장을 누르세요.', className='text-muted')
-    return no_update, no_update
-
-
-@callback(Output('hro-contacts-msg', 'children', allow_duplicate=True), Output('hro-recipients', 'options'),
-          Output('hro-recipients-hint', 'children'),
-          Input('hro-row-save', 'n_clicks'), State('hro-contacts', 'rowData'), prevent_initial_call=True)
-def _save_contacts(n, rows):
-    if not n:
-        return no_update, no_update, no_update
-    try:
-        saved, errors = hom.save_contacts(rows)
-    except PermissionError as exc:
-        return html.Span(str(exc), className='text-danger'), no_update, no_update
-    if errors:
-        return html.Div([html.Div(e, className='text-danger') for e in errors]), no_update, no_update
-    return (html.Span(f'{len(saved)}명 저장했습니다.', className='text-success'),
-            _recipient_options(saved), '' if saved else '아래 "부서별 담당자"에 먼저 등록하세요.')
 
 
 # ── 콜백: 자동 발송 ─────────────────────────────────────────────────────────
@@ -659,3 +481,6 @@ def _save_roles(n, roles):
     except PermissionError as exc:
         return html.Span(str(exc), className='text-danger')
     return html.Span(f'저장했습니다({len(saved)}개 역할 허용).', className='text-success')
+
+
+mr.register('hro', HR_STORE, 'hro-auto-status', lambda: _auto_status())

@@ -14732,3 +14732,20 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
   "담당 부서" 다중 선택(hro-person-dept — 팀/리더 참조 1단계 부서명 + 이미 등록된 부서명, 비우면 본인 소속) 추가: 고른 부서마다
   한 행으로 추가하고, 같은 (부서, 이메일)만 "이미 그 부서 담당자"로 막음. 겸직 안내 문구 추가. 브라우저: 두 부서로 추가 → 재추가
   차단 → 저장 → 받는 사람 목록 한 줄 확인.
+
+### (87) 2026-11-20 — 받는 사람 직접 입력(비실명·팀 계정), 업무분장 명단을 인사발령과 분리
+- 사용자 요청: "수신자를 임직원 검색뿐만 아니라 수기로 넣을 수도 있도록 해줘(비실명계정은 검색 안됨, 예; 팀 계정), 그리고 인사발령이랑
+  동일하게 쓰고 있는데, 그냥 분리해줘 똑같아도 구분해서 쓸수있도록".
+- components/mail_recipients.py 신설(pages/hr_order.py에서 옮김): RecipientStore(load/save contacts, recipient_settings/save) +
+  contacts_card(p, store)·cc_block(p, store)·register(p, store, status_id, status_fn)·recipient_options·cc_people. 인사발령 'hro',
+  업무분장 'wa' 접두어로 같은 화면을 각자 명단으로.
+  - 부서별 담당자: 인력현황 검색 + 담당 부서 외에 "직접 추가"(부서·이름·이메일 — 형식 검사, 같은 부서·이메일 중복 막음).
+  - 참조/비밀참조: 검색 외에 직접 입력 칸(쉼표로 여러 개) → "참조에 추가"/"비밀참조에 추가". 값은 'mail:주소'(hom.MAIL_PREFIX),
+    people_for가 이메일 형식 검사 후 {'rid': 'mail:…', 'name': 주소 앞부분, 'email'}로 저장 — 다음에 열면 "주소 (직접 입력)" 옵션.
+- services/hr_order_mail: load_contacts/save_contacts/contacts_for_emails에 path 인자, parse_recipients·build_recipients·is_email 분리.
+- services/work_assign: 전용 CONTACTS_PATH(work_assign_contacts.json)·설정 recipients. load_contacts는 파일이 없으면 인사발령
+  명단을 한 번 복사해 시작, recipient_settings는 저장 전이면 인사발령 값을 보여 줌 — 이후 서로 영향 없음. 업무분장 내부(발송·
+  자동 발송·부서 목록·플랫폼 계획)가 모두 이 명단 사용. 화면: 읽기 전용 참조 요약 대신 참조 블록, "부서별 담당자(업무분장)"
+  카드 추가, 확인창·발송이 화면의 참조/방식 선택값 사용(인사발령과 같은 방식).
+- 테스트 1개 추가(처음 복사·직접 입력 담당자·mail: 참조·잘못된 주소·인사발령과 서로 영향 없음, 총 188). 브라우저: 업무분장에서
+  직접 추가·저장·참조 직접 입력(잘못된 주소 경고)·저장·확인창·발송(참조 포함), 인사발령 목록·참조는 그대로.

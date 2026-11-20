@@ -4,7 +4,9 @@
 
 사용자 확정(2026-11-20):
 - 형태: 메일 취합 + 회신 파일 관리 "둘 다".
-- 받는 사람: 인사발령과 같은 명단(부서별 담당자·참조/비밀참조·발송 방식 공유 — services/hr_order_mail.py가 관리).
+- 받는 사람: 처음엔 "인사발령과 같은 명단"으로 공유했으나 2026-11-20 사용자 요청("똑같아도 구분해서 쓸 수 있도록")으로 분리 —
+  업무분장 전용 부서별 담당자(work_assign_contacts.json)·참조/비밀참조·발송 방식(설정 recipients). 처음 읽을 때 인사발령 값을
+  한 번 복사해 시작하고, 이후는 따로 관리.
 - 주기: 매월, "마지막 워킹데이 N일 전"에 자동 발송(N은 화면에서 설정, 0이면 마지막 워킹데이 당일).
 - 회신 관리: 부서별 제출 현황 + 통합표(양식의 열 그대로 + 부서 열, 엑셀 다운로드).
 
@@ -39,6 +41,7 @@ AUTO_SENT_PATH = os.path.join(data_store.DATA_DIR, 'work_assign_auto_sent.json')
 AUTO_LOCK_PATH = os.path.join(data_store.DATA_DIR, '.work_assign_auto.lock')
 SUBMISSIONS_PATH = os.path.join(data_store.DATA_DIR, 'work_assign_submissions.json')
 SUBMIT_DIR = os.path.join(data_store.DATA_DIR, 'work_assign_files')
+CONTACTS_PATH = os.path.join(data_store.DATA_DIR, 'work_assign_contacts.json')     # 업무분장 전용 담당자(2026-11-20 분리)
 SEND_DAYS_DEFAULT = 3                     # 마지막 워킹데이 3일 전 발송(기본값)
 REPLY_DAY_DEFAULT = 1                     # 회신 기한 = 대상월 1일(기본값, 휴일이면 다음 워킹데이)
 MAX_REPLY_DAY = 20
@@ -67,6 +70,40 @@ def _update_settings(**fields) -> dict:
 
 can_use = hom.can_use
 _require_use = hom._require_use
+
+
+# ── 받는 사람(업무분장 전용 — 처음 한 번 인사발령에서 복사) ───────────────────────
+
+def load_contacts() -> list:
+    if not os.path.exists(CONTACTS_PATH):
+        start = hom.load_contacts()                 # 분리 전엔 인사발령 명단을 같이 썼으므로 그 값으로 시작
+        with _LOCK:
+            if not os.path.exists(CONTACTS_PATH):
+                hom._write_json(CONTACTS_PATH, start)
+    return hom.load_contacts(CONTACTS_PATH)
+
+
+def save_contacts(rows: list) -> tuple[list, list]:
+    return hom.save_contacts(rows, CONTACTS_PATH)
+
+
+def contacts_for_emails(emails: list) -> list:
+    load_contacts()
+    return hom.contacts_for_emails(emails, CONTACTS_PATH)
+
+
+def recipient_settings() -> dict:
+    raw = _settings().get('recipients')
+    if raw is None:                                 # 아직 저장 전이면 인사발령 설정으로 시작
+        return hom.recipient_settings()
+    return hom.parse_recipients(raw)
+
+
+def save_recipient_settings(cc_vals: list, bcc_vals: list, mode: str) -> dict:
+    _require_use()
+    cur = recipient_settings()
+    _update_settings(recipients=hom.build_recipients(cc_vals, bcc_vals, mode, cur['cc'] + cur['bcc']))
+    return recipient_settings()
 
 
 # ── 날짜 ────────────────────────────────────────────────────────────────────
@@ -205,7 +242,7 @@ def _forms(target: str, gen_forms: bool):
 
 def send(contacts: list, subject: str, body_html_text: str, attachments: list, sender_value: str, target: str,
          cc: list | None = None, bcc: list | None = None, mode: str = 'each', gen_forms: bool = False) -> list:
-    """수동 발송 — subject/body는 이미 대상월·회신일이 들어간 문구. 받는 사람·참조인은 인사발령과 같은 명단.
+    """수동 발송 — subject/body는 이미 대상월·회신일이 들어간 문구. 받는 사람·참조인은 업무분장 전용 명단.
     gen_forms면 담당자마다 그 부서 양식(services/work_assign_form)을 더 붙인다 — 부서마다 첨부가 달라 항상 담당자별 따로."""
     from services.auth import get_current_user
     _require_use()
@@ -284,8 +321,8 @@ def save_auto(enabled: bool, hour: int, sender_value: str) -> dict:
         raise ValueError('발송 시각은 0~23시입니다.')
     sender = hom._resolve_sender(sender_value)
     if enabled:
-        if not hom.load_contacts():
-            raise ValueError('부서별 담당자를 먼저 등록하세요(인사발령 화면).')
+        if not load_contacts():
+            raise ValueError('부서별 담당자를 먼저 등록하세요.')
         if not auto_files() and not _gen_forms_on():
             raise ValueError('자동 발송에 쓸 첨부파일을 올리거나 "플랫폼별 양식 자동 생성"을 켜세요.')
     me = get_current_user() or {}
@@ -338,7 +375,7 @@ def run_auto_if_due(now: datetime | None = None) -> dict | None:
             if not nxt or nxt[1] > now:
                 return None
             target = nxt[0]
-            contacts, files = hom.load_contacts(), auto_files()
+            contacts, files = load_contacts(), auto_files()
             subject_t, body_t = template()
             sender = cfg['sender'] or hom._resolve_shared()
             reply = reply_due(target)
@@ -347,7 +384,7 @@ def run_auto_if_due(now: datetime | None = None) -> dict | None:
                 results = [{'dept': '', 'name': '', 'email': '', 'ok': False,
                             'error': '담당자 또는 자동 발송용 첨부가 없어 보내지 못했습니다.'}]
             else:
-                rcp = hom.recipient_settings()
+                rcp = recipient_settings()
                 per_contact, extra = _forms(target, gen)
                 results = hom._deliver(contacts, render(subject_t, target, reply), render(body_t, target, reply), files,
                                        sender, {'user_id': 'auto', 'display_name': '자동 발송'}, 'auto', None,
@@ -371,7 +408,7 @@ REF_PREFIX = '참고_'                       # 양식의 "참고 : 이전 달" �
 def departments() -> list:
     """제출 현황의 부서 목록 = 인사발령 부서별 담당자의 부서(등록 순서, 중복 제거)."""
     out = []
-    for c in hom.load_contacts():
+    for c in load_contacts():
         if c.get('dept') and c['dept'] not in out:
             out.append(c['dept'])
     return out
@@ -530,7 +567,7 @@ def status(target: str) -> list:
     """부서별 제출 현황 [{'dept','contact','submitted','name','rows','at','by_name'}] — 담당자 명단 순서."""
     subs = submissions(target)
     contacts = {}
-    for c in hom.load_contacts():
+    for c in load_contacts():
         contacts.setdefault(c['dept'], []).append(c.get('name') or c.get('email', ''))
     rows = []
     for d in departments():
