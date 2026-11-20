@@ -42,7 +42,8 @@ class MailError(RuntimeError):
 
 def send_html_email(to: list[str], subject: str, html_body: str,
                      attachments: list[tuple[str, bytes]] | None = None,
-                     sender_email: str | None = None, sender_user_id: str | None = None) -> None:
+                     sender_email: str | None = None, sender_user_id: str | None = None,
+                     cc: list[str] | None = None, bcc: list[str] | None = None) -> None:
     """to(수신자 이메일 주소 목록)에게 html_body를 HTML 본문으로 발송한다.
     MAIL_API_URL은 base URL만 넣으면 된다(예: https://mail.internal.example.com)
     — 실제 호출은 이 함수가 뒤에 /mails/send?userId=...를 이어붙인 주소로
@@ -58,7 +59,10 @@ def send_html_email(to: list[str], subject: str, html_body: str,
 
     sender_email/sender_user_id(2026-11-19, 인사발령 메일 — 사용자 요청 "팀 공용 계정 말고 담당자 계정으로"):
     주면 발신 주소(payload sender)와 ?userId= 값을 그 계정으로 바꾼다. 안 주면 .env의 MAIL_FROM/MAIL_USER_ID
-    (팀 공용 계정) 그대로. 토큰·시스템 ID는 같은 것을 쓴다."""
+    (팀 공용 계정) 그대로. 토큰·시스템 ID는 같은 것을 쓴다.
+
+    cc/bcc(2026-11-20, 인사발령 메일 참조인): recipients 각 항목의 recipientType을 'CC'(참조)/'BCC'(비밀참조)로
+    넣는다(사내 API: TO 수신, CC 참조, BCC 비밀참조). to에 이미 있는 주소는 참조에서 뺀다."""
     base_url = os.environ.get('MAIL_API_URL', '').strip()
     token = os.environ.get('MAIL_TOKEN', '').strip()
     system_id = os.environ.get('MAIL_SYSTEM_ID', '').strip()
@@ -71,6 +75,13 @@ def send_html_email(to: list[str], subject: str, html_body: str,
     recipients = [addr.strip() for addr in to if addr.strip()]
     if not recipients:
         raise MailError('수신자가 없습니다.')
+    typed, seen = [], set()
+    for kind, addrs in (('TO', recipients), ('CC', cc or []), ('BCC', bcc or [])):
+        for addr in addrs:
+            addr = (addr or '').strip()
+            if addr and addr.lower() not in seen:
+                seen.add(addr.lower())
+                typed.append({'emailAddress': addr, 'recipientType': kind})
 
     user_id = (sender_user_id or '').strip() or os.environ.get('MAIL_USER_ID', '').strip() or _DEFAULT_USER_ID
 
@@ -85,9 +96,7 @@ def send_html_email(to: list[str], subject: str, html_body: str,
         'contentType': 'html',
         'docSecuType': 'PERSONAL',
         'sender': {'emailAddress': sender},
-        'recipients': [
-            {'emailAddress': addr, 'recipientType': 'TO'} for addr in recipients
-        ],
+        'recipients': typed,
     }
     # 사내망 전용 엔드포인트라 프록시를 거치지 않고 직접 접속한다(LLM2/
     # Confluence 등 다른 외부 호출용 프록시 설정과는 무관).

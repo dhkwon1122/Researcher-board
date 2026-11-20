@@ -9,10 +9,15 @@
 - 메일 문구: 담당자가 평소 쓰는 제목·본문을 그대로 템플릿으로 저장하고, {발령일}/{회신일} 등 자리표시자를 발령일에
   맞춰 바꿔 넣는다. 회신일 = 발령일의 워킹데이 4일 전(예: 12.16 → 12.10).
 - 워킹데이: 토·일, 공휴일(holidays 패키지 KR — 대체공휴일·설·추석 포함), 관리자가 넣은 회사 휴무일 제외.
+- 본문 서식(2026-11-20): 본문은 HTML(화면의 서식 편집기 — 글꼴·크기·굵게·밑줄·글자색·바탕색 등). 저장·발송 전에
+  sanitize_html로 허용한 태그·스타일만 남긴다(스크립트·이벤트 속성·url() 등 제거). 예전 텍스트 템플릿은 읽을 때 HTML로 바꿈.
+- 참조(CC)·비밀참조(BCC)(2026-11-20): 받는 부서 담당자(TO)와 별도로, 인력현황에서 고른 동료를 참조/비밀참조로
+  넣는다. 화면에서 저장해 두면 수동·자동 발송 모두에 쓴다. 발송 방식은 "담당자별 따로"(기본 — 참조인은 담당자 수만큼
+  받음) 또는 "한 통으로"(담당자 전원 TO + 참조인 한 번) 중 선택.
 - 자동 발송: 켜 두면 서버가 발령일(1일·16일)의 워킹데이 7일 전 지정 시각에 담당자 전체에게 저장된 템플릿·첨부로
   보낸다(발령일당 한 번 — 발송 기록 파일로 중복 방지, gunicorn 워커 2개라 파일 잠금으로 한 곳에서만).
 
-저장(data/processed): hr_order_contacts.json(부서별 담당자), hr_order_settings.json(허용 역할·템플릿·자동 발송·휴무일),
+저장(data/processed): hr_order_contacts.json(부서별 담당자), hr_order_settings.json(허용 역할·템플릿·자동 발송·휴무일·참조인),
 hr_order_files/(자동 발송용 첨부), hr_order_auto_sent.json(자동 발송 기록), hr_order_log.jsonl(발송 이력 — 첨부 내용 제외).
 """
 from __future__ import annotations
@@ -26,6 +31,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
+from html.parser import HTMLParser
 
 from services import data_store
 
@@ -205,22 +211,145 @@ def render(text: str, order_date: date) -> str:
     return out
 
 
+def text_to_html(text: str) -> str:
+    """예전 텍스트 본문 → HTML(이스케이프 + 줄바꿈 <br>)."""
+    return html.escape(text or '', quote=False).replace('\n', '<br>')
+
+
 def template() -> tuple[str, str]:
+    """(제목, 본문 HTML). 2026-11-20 이전에 저장된 텍스트 본문은 HTML로 바꿔 돌려준다."""
     t = _settings().get('template') or {}
-    return t.get('subject') or DEFAULT_SUBJECT, t.get('body') or DEFAULT_BODY
+    body = t.get('body') or ''
+    if not body:
+        body = text_to_html(DEFAULT_BODY)
+    elif t.get('format') != 'html':
+        body = text_to_html(body)
+    return t.get('subject') or DEFAULT_SUBJECT, body
+
+
+def _plain(body_html_text: str) -> str:
+    return re.sub(r'<[^>]+>', '', body_html_text or '').replace('&nbsp;', ' ').strip()
 
 
 def save_template(subject: str, body: str) -> None:
+    """body는 서식 편집기의 HTML — 허용한 서식만 남겨 저장."""
     _require_use()
-    if not (subject or '').strip() or not (body or '').strip():
+    body = sanitize_html(body)
+    if not (subject or '').strip() or not _plain(body):
         raise ValueError('제목과 본문을 입력하세요.')
-    _update_settings(template={'subject': subject.strip(), 'body': body})
+    _update_settings(template={'subject': subject.strip(), 'body': body, 'format': 'html'})
 
 
-def body_html(text: str) -> str:
-    """본문 텍스트(사용자 입력)를 이스케이프하고, 줄바꿈·연속 공백은 그대로 보이게."""
-    return ('<div style="font-family:\'Malgun Gothic\',sans-serif;font-size:14px;line-height:1.7;white-space:pre-wrap">'
-            + html.escape(text or '').replace('\n', '<br>') + '</div>')
+# 본문 서식 허용 목록 — 메일 본문에 필요한 글자 서식·문단·목록·링크만. 나머지 태그는 글자만 남기고, 스크립트류는 내용째 버림.
+_ALLOWED_TAGS = {'b', 'strong', 'i', 'em', 'u', 's', 'strike', 'del', 'sub', 'sup', 'br', 'hr', 'p', 'div', 'span',
+                 'font', 'ul', 'ol', 'li', 'blockquote', 'a', 'h1', 'h2', 'h3', 'h4', 'table', 'thead', 'tbody', 'tr',
+                 'td', 'th', 'center'}
+_VOID_TAGS = {'br', 'hr'}
+_DROP_WITH_CONTENT = {'script', 'style', 'iframe', 'object', 'embed', 'head', 'title', 'svg', 'math', 'template',
+                      'noscript', 'textarea', 'select', 'button', 'form', 'xml'}
+_ALLOWED_CSS = {'color', 'background-color', 'background', 'font-family', 'font-size', 'font-weight', 'font-style',
+                'text-decoration', 'text-decoration-line', 'text-align', 'margin-left', 'padding-left', 'line-height',
+                'border', 'border-collapse', 'padding', 'width', 'vertical-align'}
+_CSS_VALUE_RE = re.compile(r"""^[\w\s#,.'"%()+-]*$""")
+_CSS_BANNED = ('url(', 'expression', 'javascript', 'behavior', '@import', '\\')
+
+
+def _clean_style(style: str) -> str:
+    out = []
+    for decl in (style or '').split(';'):
+        if ':' not in decl:
+            continue
+        prop, val = decl.split(':', 1)
+        prop, val = prop.strip().lower(), val.strip()
+        low = val.lower()
+        if prop in _ALLOWED_CSS and val and _CSS_VALUE_RE.match(val) and not any(b in low for b in _CSS_BANNED):
+            out.append(f'{prop}: {val}')
+    return '; '.join(out)
+
+
+def _clean_attrs(tag: str, attrs: list) -> str:
+    keep = []
+    for name, value in attrs:
+        name, value = (name or '').lower(), value or ''
+        if name == 'style':
+            value = _clean_style(value)
+        elif tag == 'font' and name == 'color':
+            if not re.fullmatch(r'#?[\w]{1,20}', value):
+                continue
+        elif tag == 'font' and name == 'face':
+            if not re.fullmatch(r"""[\w\s,'"-]{1,80}""", value):
+                continue
+        elif tag == 'font' and name == 'size':
+            if not re.fullmatch(r'[1-7]', value):
+                continue
+        elif tag == 'a' and name == 'href':
+            if not re.match(r'(https?:|mailto:)', value.strip(), re.I):
+                continue
+        elif tag in ('td', 'th') and name in ('colspan', 'rowspan'):
+            if not value.isdigit():
+                continue
+        elif name == 'align' and value.lower() in ('left', 'center', 'right', 'justify'):
+            pass
+        else:
+            continue
+        if value:
+            keep.append(f' {name}="{html.escape(value, quote=True)}"')
+    if tag == 'a' and any(k.startswith(' href=') for k in keep):
+        keep.append(' target="_blank" rel="noopener"')
+    return ''.join(keep)
+
+
+class _Sanitizer(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.out, self.stack, self.skip = [], [], 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in _DROP_WITH_CONTENT:
+            self.skip += 1
+            return
+        if self.skip or tag not in _ALLOWED_TAGS:
+            return
+        self.out.append(f'<{tag}{_clean_attrs(tag, attrs)}>')
+        if tag not in _VOID_TAGS:
+            self.stack.append(tag)
+
+    def handle_startendtag(self, tag, attrs):
+        if tag in _VOID_TAGS and not self.skip:
+            self.out.append(f'<{tag}>')
+
+    def handle_endtag(self, tag):
+        if tag in _DROP_WITH_CONTENT:
+            self.skip = max(0, self.skip - 1)
+            return
+        if self.skip or tag not in self.stack:
+            return
+        while self.stack:
+            t = self.stack.pop()
+            self.out.append(f'</{t}>')
+            if t == tag:
+                break
+
+    def handle_data(self, data):
+        if not self.skip:
+            self.out.append(html.escape(data, quote=False))
+
+    def result(self) -> str:
+        return ''.join(self.out) + ''.join(f'</{t}>' for t in reversed(self.stack))
+
+
+def sanitize_html(text: str) -> str:
+    """서식 편집기·붙여넣기 HTML에서 허용한 태그·속성·스타일만 남긴다(메일 본문·미리보기 공용)."""
+    p = _Sanitizer()
+    p.feed(re.sub(r'<!--.*?-->', '', text or '', flags=re.S))
+    p.close()
+    return p.result()
+
+
+def body_html(body: str) -> str:
+    """본문 HTML(서식 편집기)을 정리해 기본 글꼴(맑은 고딕 14px)로 감싼다."""
+    return ('<div style="font-family:\'Malgun Gothic\',sans-serif;font-size:14px;line-height:1.7">'
+            + sanitize_html(body) + '</div>')
 
 
 # ── 부서별 담당자 표 ────────────────────────────────────────────────────────
@@ -293,6 +422,52 @@ def contact_for_person(researcher_id: str) -> dict:
     return {'dept': dept, 'name': str(r.get('name', '') or ''), 'email': f'{knox}@samsung.com' if knox else ''}
 
 
+# ── 참조(CC)·비밀참조(BCC) ─────────────────────────────────────────────────────
+
+SEND_MODES = ('each', 'single')           # each: 담당자별 따로 / single: 한 통으로(담당자 전원 TO)
+
+
+def recipient_settings() -> dict:
+    """저장된 참조인 — {'cc': [{'rid','dept','name','email'}], 'bcc': [...], 'mode': 'each'|'single'}."""
+    r = _settings().get('recipients') or {}
+    mode = r.get('mode') if r.get('mode') in SEND_MODES else 'each'
+    return {'cc': [p for p in r.get('cc') or [] if isinstance(p, dict) and p.get('email')],
+            'bcc': [p for p in r.get('bcc') or [] if isinstance(p, dict) and p.get('email')], 'mode': mode}
+
+
+def people_for(researcher_ids: list, saved: list | None = None) -> list:
+    """인력현황 사번 목록 → [{'rid','dept','name','email'}]. Knox ID가 없으면 ValueError.
+    saved(이미 저장된 사람)에 있으면 그 값을 쓴다(파견 등으로 인력현황에서 빠져도 유지)."""
+    known = {p.get('rid'): p for p in saved or []}
+    out, seen = [], set()
+    for rid in researcher_ids or []:
+        if rid in seen:
+            continue
+        seen.add(rid)
+        if rid in known:
+            out.append(known[rid])
+            continue
+        c = contact_for_person(rid)
+        if not c['email']:
+            raise ValueError(f"{c['name'] or rid}: 인력현황에 Knox ID가 없어 참조에 넣을 수 없습니다.")
+        out.append({'rid': rid, **c})
+    return out
+
+
+def save_recipient_settings(cc_rids: list, bcc_rids: list, mode: str) -> dict:
+    """참조/비밀참조/발송 방식 저장(수동 화면의 기본값이자 자동 발송에 사용)."""
+    _require_use()
+    if mode not in SEND_MODES:
+        raise ValueError('발송 방식이 올바르지 않습니다.')
+    cur = recipient_settings()
+    saved = cur['cc'] + cur['bcc']
+    cc = people_for(cc_rids, saved)
+    cc_emails = {p['email'].lower() for p in cc}
+    bcc = [p for p in people_for(bcc_rids, saved) if p['email'].lower() not in cc_emails]
+    _update_settings(recipients={'cc': cc, 'bcc': bcc, 'mode': mode})
+    return recipient_settings()
+
+
 # ── 발신 계정 ───────────────────────────────────────────────────────────────
 
 def _account_email(user: dict) -> str:
@@ -328,25 +503,41 @@ def _resolve_sender(value: str) -> dict:
 # ── 발송 ────────────────────────────────────────────────────────────────────
 
 def _deliver(contacts: list, subject: str, body_text: str, attachments: list, sender: dict,
-             by: dict, kind: str, order_date: date | None) -> list:
+             by: dict, kind: str, order_date: date | None, cc: list | None = None, bcc: list | None = None,
+             mode: str = 'each') -> list:
+    """contacts(TO)에게 발송. cc/bcc는 [{'email',...}] — 담당자별 따로(each)면 메일마다 참조로, 한 통으로(single)면
+    담당자 전원을 TO로 한 메일 한 통에 참조로 넣는다(결과는 담당자마다 같은 성공/실패)."""
     from pipeline.mailer import MailError, send_html_email
     html_body = body_html(body_text)
+    cc_emails = [p['email'] for p in cc or []]
+    bcc_emails = [p['email'] for p in bcc or []]
 
-    def _one(c):
+    def _try(to_emails):
         try:
-            send_html_email([c['email']], subject.strip(), html_body, attachments,
-                            sender_email=sender['email'], sender_user_id=sender['user_id'])
-            return {**c, 'ok': True, 'error': ''}
+            send_html_email(to_emails, subject.strip(), html_body, attachments,
+                            sender_email=sender['email'], sender_user_id=sender['user_id'],
+                            cc=cc_emails, bcc=bcc_emails)
+            return True, ''
         except MailError as exc:
-            return {**c, 'ok': False, 'error': str(exc)}
+            return False, str(exc)
         except Exception as exc:  # noqa: BLE001 — 한 명 실패가 나머지 발송을 막지 않게
-            return {**c, 'ok': False, 'error': f'{type(exc).__name__}: {exc}'}
+            return False, f'{type(exc).__name__}: {exc}'
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        results = list(pool.map(_one, contacts))
+    if mode == 'single':
+        ok, err = _try([c['email'] for c in contacts])
+        results = [{**c, 'ok': ok, 'error': err} for c in contacts]
+    else:
+        def _one(c):
+            ok, err = _try([c['email']])
+            return {**c, 'ok': ok, 'error': err}
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(_one, contacts))
     entry = {'at': datetime.now().isoformat(timespec='seconds'), 'kind': kind,
              'order_date': order_date.isoformat() if order_date else '',
              'by': by.get('user_id', ''), 'by_name': by.get('display_name', ''), 'sender': sender['label'],
+             'mode': mode, 'cc': [{'name': p.get('name', ''), 'email': p['email']} for p in cc or []],
+             'bcc': [{'name': p.get('name', ''), 'email': p['email']} for p in bcc or []],
              'subject': subject.strip(), 'files': [{'name': n, 'size': len(b)} for n, b in attachments],
              'results': [{k: r[k] for k in ('dept', 'name', 'email', 'ok', 'error')} for r in results]}
     with _LOCK:
@@ -369,14 +560,18 @@ def _check(contacts, subject, attachments):
 
 
 def send(contacts: list, subject: str, body_text: str, attachments: list, sender_value: str,
-         order_date: date | None = None) -> list:
-    """화면에서 보내기 — 선택한 담당자들에게 같은 첨부로 한 명씩. subject/body는 이미 발령일이 들어간 문구.
-    반환: [{'dept','name','email','ok','error'}]. 결과는 발송 이력에 남긴다(파일 내용 제외)."""
+         order_date: date | None = None, cc: list | None = None, bcc: list | None = None, mode: str = 'each') -> list:
+    """화면에서 보내기 — 선택한 담당자들에게 같은 첨부로(기본 한 명씩). subject/body는 이미 발령일이 들어간 문구.
+    cc/bcc: [{'email', 'name', ...}](people_for 결과). 반환: [{'dept','name','email','ok','error'}].
+    결과는 발송 이력에 남긴다(파일 내용 제외)."""
     from services.auth import get_current_user
     _require_use()
     _check(contacts, subject, attachments)
+    if mode not in SEND_MODES:
+        raise ValueError('발송 방식이 올바르지 않습니다.')
     sender = _resolve_sender(sender_value)
-    return _deliver(contacts, subject, body_text, attachments, sender, get_current_user() or {}, 'manual', order_date)
+    return _deliver(contacts, subject, body_text, attachments, sender, get_current_user() or {}, 'manual', order_date,
+                    cc=cc, bcc=bcc, mode=mode)
 
 
 def read_log(limit: int = 50) -> list:
@@ -509,8 +704,10 @@ def run_auto_if_due(now: datetime | None = None) -> dict | None:
                 results = [{'dept': '', 'name': '', 'email': '', 'ok': False,
                             'error': '담당자 또는 자동 발송용 첨부가 없어 보내지 못했습니다.'}]
             else:
+                rcp = recipient_settings()
                 results = _deliver(contacts, render(subject_t, od), render(body_t, od), files, sender,
-                                   {'user_id': 'auto', 'display_name': '자동 발송'}, 'auto', od)
+                                   {'user_id': 'auto', 'display_name': '자동 발송'}, 'auto', od,
+                                   cc=rcp['cc'], bcc=rcp['bcc'], mode=rcp['mode'])
             sent = _auto_sent()
             sent[od.isoformat()] = {'at': now.isoformat(timespec='seconds'),
                                     'ok': sum(1 for r in results if r['ok']), 'fail': sum(1 for r in results if not r['ok'])}

@@ -14585,3 +14585,33 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
     회신 기한이 지난 발령일은 자동 발송하지 않음(서버가 오래 꺼져 있었을 때 늦은 발송 방지). HR_ORDER_AUTO_DISABLED=1로 끔.
     이력에 구분(수동/자동)·발령일 표시.
   - 테스트 tests/test_hr_order_mail.py 10개(워킹데이·추석·회사 휴무일, 템플릿, 발신 계정 제한, Knox ID, 자동 발송 시각·한 번만).
+
+### (80) 2026-11-20 — 인사발령 메일 수신(TO)·참조(CC)·비밀참조(BCC) 분리
+- 사용자 요청: "받을 부서 담당자 외에 사용자 부서 동료에게 CC로 메일을 넣고 싶은데, 수신인과 참조인을 분리해줘 / 사내 REST API를
+  보니 recipientsType에 따라 수신 참조 비밀참조 변경 가능(TO : 수신, CC : 참조, BCC : 비밀참조)".
+- pipeline/mailer.send_html_email에 cc/bcc 인자 추가 — payload recipients 각 항목의 recipientType을 'TO'/'CC'/'BCC'로(필드명은
+  기존에 동작하던 recipientType 그대로). 같은 주소가 겹치면 앞 구분(TO > CC > BCC)만 남김. 기존 호출부는 변화 없음.
+- services/hr_order_mail.py: 참조인 설정 hr_order_settings.json recipients = {cc:[{rid,dept,name,email}], bcc:[...], mode}.
+  recipient_settings()/save_recipient_settings(cc_rids, bcc_rids, mode)/people_for(rids, saved) — 인력현황 검색값(사번) →
+  Knox ID@samsung.com(없으면 오류), 이미 저장된 사람은 인력현황에서 빠져도 유지. CC와 겹치는 BCC는 뺌.
+  발송 방식 mode: each(기본, 담당자별 따로 — 부서끼리 주소 안 보임, 참조인은 담당자 수만큼 받음) / single(담당자 전원 TO로 한
+  통 — 참조인도 한 통). _deliver/send에 cc·bcc·mode, 자동 발송은 저장된 참조인·방식 사용. 이력에 mode·cc·bcc(이름·주소) 기록.
+- pages/hr_order.py: 받을 담당자 아래 참조(CC)·비밀참조(BCC) 다중 선택(인력현황 검색), 발송 방식 라디오, "참조·발송 방식 저장".
+  확인창에 수신/참조/비밀참조를 나눠 표시하고 참조인이 받을 메일 수 안내. 자동 발송 상태·발송 이력(참조 열)에 반영.
+- 테스트: mailer CC/BCC recipientType·중복 제거, 담당자별 따로/한 통으로 발송과 이력(총 12개). 브라우저: 참조·비밀참조 선택 →
+  저장 → 한 통으로 발송(가짜 mailer) → 확인창·결과·이력 확인.
+
+### (81) 2026-11-20 — 인사발령 메일 본문 서식(글꼴·크기·굵게·밑줄·글자색·바탕색 등)
+- 사용자 요청: "본문에 글자체, 폰트 크기, 굵게, 밑줄, 글자색, 바탕색 등 서식을 넣을 수 있도록 해줘".
+- 새 패키지 없이 구현: pages/hr_order.py 본문 칸을 contentEditable 편집기(#hro-body-editor) + 도구 모음(글꼴·크기 선택, 굵게·
+  기울임·밑줄·취소선, 글자색·바탕색 견본, 글머리 기호·번호, 정렬, 되돌리기, 서식 지우기)으로 교체. 동작은
+  assets/hr_order_editor.js(document.execCommand, 선택 영역 보존, 입력마다 dash_clientside.set_props로 dcc.Store hro-body에
+  HTML 반영). 저장된 템플릿 HTML은 clientside 콜백이 편집기에 채움. 로컬 메일에서 복사해 붙여 넣으면 서식이 유지됨(그림 제외).
+- services/hr_order_mail.py: 본문은 이제 HTML. sanitize_html(HTMLParser 기반 허용 목록) — 글자·문단·목록·표·링크 태그,
+  style은 color/background-color/font-*/text-decoration/text-align 등만, url()·expression·javascript·이벤트 속성·script/style/
+  iframe 등 제거, 링크는 http(s)/mailto만. save_template·body_html(발송)·미리보기 모두 이 함수를 거침. 템플릿에 format='html'
+  저장, 이전 텍스트 템플릿과 기본 문구는 읽을 때 이스케이프 + <br>로 변환(text_to_html).
+- 미리보기·확인창 본문은 sandbox iframe(srcDoc)으로 표시(스크립트 실행 없음, 화면 CSS와 분리).
+- 자리표시자({발령일} 등)는 서식 중간에 끊기지 않게 통째로 서식을 줘야 바뀜(일부 글자만 서식 주면 태그로 갈라짐).
+- 테스트: 발송 본문 서식 유지·스크립트 제거, 템플릿 저장 정리·옛 텍스트 변환, sanitize 허용/제거 규칙(총 13개). 브라우저: 둘째
+  줄 선택 → 굵게·밑줄·크기·글꼴·글자색·바탕색 → 미리보기·템플릿 저장·재로드·발송(가짜 mailer) HTML 확인.
