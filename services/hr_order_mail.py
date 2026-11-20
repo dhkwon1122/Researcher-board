@@ -151,6 +151,20 @@ def holidays_available() -> bool:
         return False
 
 
+def day_off_reason(d: date) -> str:
+    """워킹데이가 아닌 이유 — '토요일'/'일요일'/공휴일 이름/'회사 휴무일', 워킹데이면 ''(화면 안내용)."""
+    if d.weekday() >= 5:
+        return '토요일' if d.weekday() == 5 else '일요일'
+    try:
+        import holidays as _h
+        name = _h.KR(years=[d.year]).get(d)
+    except ImportError:
+        name = None
+    if name:
+        return name
+    return '회사 휴무일' if d.isoformat() in company_holidays() else ''
+
+
 def is_workday(d: date, _cache: dict | None = None) -> bool:
     if d.weekday() >= 5:
         return False
@@ -224,16 +238,23 @@ def _md(d: date) -> str:
     return f'{d.month}월 {d.day}일({_WD[d.weekday()]})'
 
 
-def placeholder_values(order_date: date) -> dict:
+def sent_on_values(sent_on: date | None = None) -> dict:
+    """{메일 발송일}(2026-11-20 추가) — 메일을 보내는 날(수동은 오늘, 자동은 자동 발송일). 띄어쓰기 없는 표기도 받음."""
+    d = sent_on or date.today()
+    full, md = f'{d:%Y.%m.%d}', _md(d)
+    return {'메일 발송일': full, '메일발송일': full, '메일 발송일_월일': md, '메일발송일_월일': md}
+
+
+def placeholder_values(order_date: date, sent_on: date | None = None) -> dict:
     due = reply_due(order_date)
     return {'발령일': f'{order_date:%Y.%m.%d}', '발령일_월일': _md(order_date),
-            '회신일': f'{due:%Y.%m.%d}', '회신일_월일': _md(due)}
+            '회신일': f'{due:%Y.%m.%d}', '회신일_월일': _md(due), **sent_on_values(sent_on)}
 
 
-def render(text: str, order_date: date) -> str:
+def render(text: str, order_date: date, sent_on: date | None = None) -> str:
     """{발령일}·{발령일_월일}·{회신일}·{회신일_월일}만 바꾼다(다른 중괄호는 그대로)."""
     out = text or ''
-    for k, v in placeholder_values(order_date).items():
+    for k, v in placeholder_values(order_date, sent_on).items():
         out = out.replace('{' + k + '}', v)
     return out
 
@@ -810,7 +831,7 @@ def run_auto_if_due(now: datetime | None = None) -> dict | None:
                             'error': '담당자 또는 자동 발송용 첨부가 없어 보내지 못했습니다.'}]
             else:
                 rcp = recipient_settings()
-                results = _deliver(contacts, render(subject_t, od), render(body_t, od), files, sender,
+                results = _deliver(contacts, render(subject_t, od, now.date()), render(body_t, od, now.date()), files, sender,
                                    {'user_id': 'auto', 'display_name': '자동 발송'}, 'auto', od,
                                    cc=rcp['cc'], bcc=rcp['bcc'], mode=rcp['mode'])
             sent = _auto_sent()
