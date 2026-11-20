@@ -531,7 +531,8 @@ def _resolve_sender(value: str) -> dict:
 
 def _deliver(contacts: list, subject: str, body_text: str, attachments: list, sender: dict,
              by: dict, kind: str, order_date: date | None, cc: list | None = None, bcc: list | None = None,
-             mode: str = 'each') -> list:
+             mode: str = 'each', log_path: str | None = None, extra: dict | None = None,
+             per_contact=None) -> list:
     """contacts(TO)에게 발송. cc/bcc는 [{'email',...}] — 담당자별 따로(each)면 메일마다 참조로, 한 통으로(single)면
     담당자 전원을 TO로 한 메일 한 통에 참조로 넣는다(결과는 담당자마다 같은 성공/실패)."""
     from pipeline.mailer import MailError, send_html_email
@@ -539,9 +540,9 @@ def _deliver(contacts: list, subject: str, body_text: str, attachments: list, se
     cc_emails = [p['email'] for p in cc or []]
     bcc_emails = [p['email'] for p in bcc or []]
 
-    def _try(to_emails):
+    def _try(to_emails, own=()):
         try:
-            send_html_email(to_emails, subject.strip(), html_body, attachments,
+            send_html_email(to_emails, subject.strip(), html_body, list(attachments) + list(own),
                             sender_email=sender['email'], sender_user_id=sender['user_id'],
                             cc=cc_emails, bcc=bcc_emails)
             return True, ''
@@ -550,12 +551,16 @@ def _deliver(contacts: list, subject: str, body_text: str, attachments: list, se
         except Exception as exc:  # noqa: BLE001 — 한 명 실패가 나머지 발송을 막지 않게
             return False, f'{type(exc).__name__}: {exc}'
 
-    if mode == 'single':
+    if mode == 'single' and per_contact is None:
         ok, err = _try([c['email'] for c in contacts])
         results = [{**c, 'ok': ok, 'error': err} for c in contacts]
     else:
         def _one(c):
-            ok, err = _try([c['email']])
+            try:
+                own = per_contact(c) if per_contact else []     # 담당자별 첨부(업무분장 부서별 양식 등)
+            except Exception as exc:  # noqa: BLE001 — 양식 생성 실패는 그 담당자 결과로
+                return {**c, 'ok': False, 'error': f'첨부 생성 실패: {exc}'}
+            ok, err = _try([c['email']], own)
             return {**c, 'ok': ok, 'error': err}
 
         with ThreadPoolExecutor(max_workers=4) as pool:
@@ -567,9 +572,11 @@ def _deliver(contacts: list, subject: str, body_text: str, attachments: list, se
              'bcc': [{'name': p.get('name', ''), 'email': p['email']} for p in bcc or []],
              'subject': subject.strip(), 'files': [{'name': n, 'size': len(b)} for n, b in attachments],
              'results': [{k: r[k] for k in ('dept', 'name', 'email', 'ok', 'error')} for r in results]}
+    entry.update(extra or {})
+    log_path = log_path or LOG_PATH            # 업무분장(services/work_assign.py)은 자기 이력 파일로
     with _LOCK:
-        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
-        with open(LOG_PATH, 'a', encoding='utf-8') as f:
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        with open(log_path, 'a', encoding='utf-8') as f:
             f.write(json.dumps(entry, ensure_ascii=False) + '\n')
     return results
 
@@ -601,9 +608,9 @@ def send(contacts: list, subject: str, body_text: str, attachments: list, sender
                     cc=cc, bcc=bcc, mode=mode)
 
 
-def read_log(limit: int = 50) -> list:
+def read_log(limit: int = 50, log_path: str | None = None) -> list:
     try:
-        with open(LOG_PATH, encoding='utf-8') as f:
+        with open(log_path or LOG_PATH, encoding='utf-8') as f:
             lines = f.readlines()
     except OSError:
         return []
@@ -785,5 +792,13 @@ def start_scheduler(interval_seconds: int = 600) -> None:
                     print(f"[hr_order] {r['order_date']} 발령분 자동 발송 — 성공 {ok}/{len(r['results'])}")
             except Exception as exc:  # noqa: BLE001 — 스케줄러가 죽지 않게
                 print(f'[hr_order] 자동 발송 점검 실패: {exc}')
+            try:                          # 업무분장 자동 발송(2026-11-20)도 같은 스레드에서 점검
+                from services import work_assign
+                r = work_assign.run_auto_if_due()
+                if r:
+                    ok = sum(1 for x in r['results'] if x['ok'])
+                    print(f"[work_assign] {r['target']} 업무분장 자동 발송 — 성공 {ok}/{len(r['results'])}")
+            except Exception as exc:  # noqa: BLE001
+                print(f'[work_assign] 자동 발송 점검 실패: {exc}')
             time.sleep(interval_seconds)
     threading.Thread(target=_loop, daemon=True, name='hr-order-auto').start()
