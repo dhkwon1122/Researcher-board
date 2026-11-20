@@ -9,6 +9,8 @@
 - 메일 문구: 담당자가 평소 쓰는 제목·본문을 그대로 템플릿으로 저장하고, {발령일}/{회신일} 등 자리표시자를 발령일에
   맞춰 바꿔 넣는다. 회신일 = 발령일의 워킹데이 4일 전(예: 12.16 → 12.10).
 - 워킹데이: 토·일, 공휴일(holidays 패키지 KR — 대체공휴일·설·추석 포함), 관리자가 넣은 회사 휴무일 제외.
+- 본문 서식(2026-11-20): 본문은 HTML(화면의 서식 편집기 — 글꼴·크기·굵게·밑줄·글자색·바탕색 등). 저장·발송 전에
+  sanitize_html로 허용한 태그·스타일만 남긴다(스크립트·이벤트 속성·url() 등 제거). 예전 텍스트 템플릿은 읽을 때 HTML로 바꿈.
 - 참조(CC)·비밀참조(BCC)(2026-11-20): 받는 부서 담당자(TO)와 별도로, 인력현황에서 고른 동료를 참조/비밀참조로
   넣는다. 화면에서 저장해 두면 수동·자동 발송 모두에 쓴다. 발송 방식은 "담당자별 따로"(기본 — 참조인은 담당자 수만큼
   받음) 또는 "한 통으로"(담당자 전원 TO + 참조인 한 번) 중 선택.
@@ -29,6 +31,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
+from html.parser import HTMLParser
 
 from services import data_store
 
@@ -208,22 +211,145 @@ def render(text: str, order_date: date) -> str:
     return out
 
 
+def text_to_html(text: str) -> str:
+    """예전 텍스트 본문 → HTML(이스케이프 + 줄바꿈 <br>)."""
+    return html.escape(text or '', quote=False).replace('\n', '<br>')
+
+
 def template() -> tuple[str, str]:
+    """(제목, 본문 HTML). 2026-11-20 이전에 저장된 텍스트 본문은 HTML로 바꿔 돌려준다."""
     t = _settings().get('template') or {}
-    return t.get('subject') or DEFAULT_SUBJECT, t.get('body') or DEFAULT_BODY
+    body = t.get('body') or ''
+    if not body:
+        body = text_to_html(DEFAULT_BODY)
+    elif t.get('format') != 'html':
+        body = text_to_html(body)
+    return t.get('subject') or DEFAULT_SUBJECT, body
+
+
+def _plain(body_html_text: str) -> str:
+    return re.sub(r'<[^>]+>', '', body_html_text or '').replace('&nbsp;', ' ').strip()
 
 
 def save_template(subject: str, body: str) -> None:
+    """body는 서식 편집기의 HTML — 허용한 서식만 남겨 저장."""
     _require_use()
-    if not (subject or '').strip() or not (body or '').strip():
+    body = sanitize_html(body)
+    if not (subject or '').strip() or not _plain(body):
         raise ValueError('제목과 본문을 입력하세요.')
-    _update_settings(template={'subject': subject.strip(), 'body': body})
+    _update_settings(template={'subject': subject.strip(), 'body': body, 'format': 'html'})
 
 
-def body_html(text: str) -> str:
-    """본문 텍스트(사용자 입력)를 이스케이프하고, 줄바꿈·연속 공백은 그대로 보이게."""
-    return ('<div style="font-family:\'Malgun Gothic\',sans-serif;font-size:14px;line-height:1.7;white-space:pre-wrap">'
-            + html.escape(text or '').replace('\n', '<br>') + '</div>')
+# 본문 서식 허용 목록 — 메일 본문에 필요한 글자 서식·문단·목록·링크만. 나머지 태그는 글자만 남기고, 스크립트류는 내용째 버림.
+_ALLOWED_TAGS = {'b', 'strong', 'i', 'em', 'u', 's', 'strike', 'del', 'sub', 'sup', 'br', 'hr', 'p', 'div', 'span',
+                 'font', 'ul', 'ol', 'li', 'blockquote', 'a', 'h1', 'h2', 'h3', 'h4', 'table', 'thead', 'tbody', 'tr',
+                 'td', 'th', 'center'}
+_VOID_TAGS = {'br', 'hr'}
+_DROP_WITH_CONTENT = {'script', 'style', 'iframe', 'object', 'embed', 'head', 'title', 'svg', 'math', 'template',
+                      'noscript', 'textarea', 'select', 'button', 'form', 'xml'}
+_ALLOWED_CSS = {'color', 'background-color', 'background', 'font-family', 'font-size', 'font-weight', 'font-style',
+                'text-decoration', 'text-decoration-line', 'text-align', 'margin-left', 'padding-left', 'line-height',
+                'border', 'border-collapse', 'padding', 'width', 'vertical-align'}
+_CSS_VALUE_RE = re.compile(r"""^[\w\s#,.'"%()+-]*$""")
+_CSS_BANNED = ('url(', 'expression', 'javascript', 'behavior', '@import', '\\')
+
+
+def _clean_style(style: str) -> str:
+    out = []
+    for decl in (style or '').split(';'):
+        if ':' not in decl:
+            continue
+        prop, val = decl.split(':', 1)
+        prop, val = prop.strip().lower(), val.strip()
+        low = val.lower()
+        if prop in _ALLOWED_CSS and val and _CSS_VALUE_RE.match(val) and not any(b in low for b in _CSS_BANNED):
+            out.append(f'{prop}: {val}')
+    return '; '.join(out)
+
+
+def _clean_attrs(tag: str, attrs: list) -> str:
+    keep = []
+    for name, value in attrs:
+        name, value = (name or '').lower(), value or ''
+        if name == 'style':
+            value = _clean_style(value)
+        elif tag == 'font' and name == 'color':
+            if not re.fullmatch(r'#?[\w]{1,20}', value):
+                continue
+        elif tag == 'font' and name == 'face':
+            if not re.fullmatch(r"""[\w\s,'"-]{1,80}""", value):
+                continue
+        elif tag == 'font' and name == 'size':
+            if not re.fullmatch(r'[1-7]', value):
+                continue
+        elif tag == 'a' and name == 'href':
+            if not re.match(r'(https?:|mailto:)', value.strip(), re.I):
+                continue
+        elif tag in ('td', 'th') and name in ('colspan', 'rowspan'):
+            if not value.isdigit():
+                continue
+        elif name == 'align' and value.lower() in ('left', 'center', 'right', 'justify'):
+            pass
+        else:
+            continue
+        if value:
+            keep.append(f' {name}="{html.escape(value, quote=True)}"')
+    if tag == 'a' and any(k.startswith(' href=') for k in keep):
+        keep.append(' target="_blank" rel="noopener"')
+    return ''.join(keep)
+
+
+class _Sanitizer(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.out, self.stack, self.skip = [], [], 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in _DROP_WITH_CONTENT:
+            self.skip += 1
+            return
+        if self.skip or tag not in _ALLOWED_TAGS:
+            return
+        self.out.append(f'<{tag}{_clean_attrs(tag, attrs)}>')
+        if tag not in _VOID_TAGS:
+            self.stack.append(tag)
+
+    def handle_startendtag(self, tag, attrs):
+        if tag in _VOID_TAGS and not self.skip:
+            self.out.append(f'<{tag}>')
+
+    def handle_endtag(self, tag):
+        if tag in _DROP_WITH_CONTENT:
+            self.skip = max(0, self.skip - 1)
+            return
+        if self.skip or tag not in self.stack:
+            return
+        while self.stack:
+            t = self.stack.pop()
+            self.out.append(f'</{t}>')
+            if t == tag:
+                break
+
+    def handle_data(self, data):
+        if not self.skip:
+            self.out.append(html.escape(data, quote=False))
+
+    def result(self) -> str:
+        return ''.join(self.out) + ''.join(f'</{t}>' for t in reversed(self.stack))
+
+
+def sanitize_html(text: str) -> str:
+    """서식 편집기·붙여넣기 HTML에서 허용한 태그·속성·스타일만 남긴다(메일 본문·미리보기 공용)."""
+    p = _Sanitizer()
+    p.feed(re.sub(r'<!--.*?-->', '', text or '', flags=re.S))
+    p.close()
+    return p.result()
+
+
+def body_html(body: str) -> str:
+    """본문 HTML(서식 편집기)을 정리해 기본 글꼴(맑은 고딕 14px)로 감싼다."""
+    return ('<div style="font-family:\'Malgun Gothic\',sans-serif;font-size:14px;line-height:1.7">'
+            + sanitize_html(body) + '</div>')
 
 
 # ── 부서별 담당자 표 ────────────────────────────────────────────────────────

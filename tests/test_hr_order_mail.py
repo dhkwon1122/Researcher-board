@@ -68,12 +68,13 @@ def test_send_as_logged_in_user_one_mail_each(paths, monkeypatch):
         assert [o['value'] for o in hom.sender_options()] == ['hong.gildong', hom.SHARED_SENDER]   # 관리자 아니면 본인·공용만
         with pytest.raises(PermissionError):
             hom.send(contacts, '제목', '본문', [('양식.xlsx', b'x')], 'adm')                      # 남의 계정은 관리자만
-        res = hom.send(contacts, '[인사발령] 12.01', '줄1\n<b>줄2</b>', [('양식.xlsx', b'xyz')], 'hong.gildong')
+        res = hom.send(contacts, '[인사발령] 12.01', '줄1<br><b>줄2</b><script>alert(1)</script>', [('양식.xlsx', b'xyz')],
+                       'hong.gildong')
     assert [r['ok'] for r in res] == [True, False]
     to, subject, body, att, s_email, s_uid = sent[0]
     assert to == ['a@x.com'] and att == [('양식.xlsx', b'xyz')]
     assert (s_email, s_uid) == ('hong@samsung.com', 'hong.gildong')                               # 본인 계정으로 발신
-    assert '줄1<br>&lt;b&gt;줄2' in body                                                          # 본문 이스케이프
+    assert '줄1<br><b>줄2</b>' in body and 'script' not in body and 'alert' not in body             # 서식 유지·스크립트 제거
     log = hom.read_log()[0]
     assert log['sender'] == 'hong@samsung.com' and log['files'] == [{'name': '양식.xlsx', 'size': 3}]
     assert 'xyz' not in json.dumps(log)                                                           # 파일 내용은 기록 안 함
@@ -117,8 +118,22 @@ def test_template_render_and_save(paths):
     d = date(2026, 12, 16)
     assert hom.render('{발령일}자, 회신 {회신일_월일}, {기타}', d) == '2026.12.16자, 회신 12월 10일(목), {기타}'
     with auth.acting_as(ADMIN):
-        hom.save_template('[발령] {발령일_월일}', '본문 {회신일}')
-    assert hom.template() == ('[발령] {발령일_월일}', '본문 {회신일}')
+        hom.save_template('[발령] {발령일_월일}', '본문 <u>{회신일}</u><img src=x onerror=y>')
+    assert hom.template() == ('[발령] {발령일_월일}', '본문 <u>{회신일}</u>')
+    hom._update_settings(template={'subject': 's', 'body': '옛 텍스트\n<둘째 줄>'})        # 2026-11-20 이전 텍스트 템플릿
+    assert hom.template()[1] == '옛 텍스트<br>&lt;둘째 줄&gt;'
+
+
+def test_sanitize_html_keeps_formatting_only():
+    out = hom.sanitize_html('<p class="MsoNormal" style="color:#c00;background-color:yellow;mso-bidi:x;'
+                            'background:url(http://e/x.png)" onclick="x">가<span style="font-family:\'맑은 고딕\';'
+                            'font-size:18px;font-weight:bold;text-decoration:underline">나</span></p>'
+                            '<font size="5" color="red" face="Arial">다</font><a href="javascript:alert(1)">라</a>'
+                            '<a href="https://x.com">마</a><style>p{}</style><!-- c --><o:p></o:p><iframe>z</iframe>')
+    assert out == ('<p style="color: #c00; background-color: yellow">가<span style="font-family: &#x27;맑은 고딕&#x27;; '
+                   'font-size: 18px; font-weight: bold; text-decoration: underline">나</span></p>'
+                   '<font size="5" color="red" face="Arial">다</font><a>라</a>'
+                   '<a href="https://x.com" target="_blank" rel="noopener">마</a>')
 
 
 def test_admin_sender_only_self_or_shared(paths):

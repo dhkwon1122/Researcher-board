@@ -56,6 +56,50 @@ def _file_list(files: list, del_type: str):
                      for i, f in enumerate(files)] + [html.Div(f'합계 {_fmt_size(total)}', className='text-muted')])
 
 
+_FONTS = [('맑은 고딕', "'Malgun Gothic'"), ('굴림', 'Gulim'), ('돋움', 'Dotum'), ('바탕', 'Batang'), ('궁서', 'Gungsuh'),
+          ('Arial', 'Arial'), ('Times New Roman', "'Times New Roman'"), ('Courier New', "'Courier New'")]
+_SIZES = [('10', '1'), ('13', '2'), ('16', '3'), ('18', '4'), ('24', '5'), ('32', '6')]
+
+
+def _tb_btn(icon: str, cmd: str, tip: str, val: str | None = None):
+    kw = {'data-hro-cmd': cmd}
+    if val:
+        kw['data-hro-val'] = val
+    return html.Button(html.I(className=f'bi bi-{icon}'), type='button', title=tip,
+                       className='btn btn-sm btn-light border px-2 py-0', **kw)
+
+
+def _editor_toolbar():
+    """본문 서식 도구 모음 — 실제 동작은 assets/hr_order_editor.js(document.execCommand)."""
+    select_cls = 'form-select form-select-sm d-inline-block w-auto py-0'
+    return html.Div([
+        html.Select([html.Option('글꼴', value='')] + [html.Option(n, value=v) for n, v in _FONTS],
+                    className=select_cls, title='글꼴', **{'data-hro-cmd': 'fontName'}),
+        html.Select([html.Option('크기', value='')] + [html.Option(f'{n}px', value=v) for n, v in _SIZES],
+                    className=select_cls, title='글자 크기', **{'data-hro-cmd': 'fontSize'}),
+        html.Span(className='vr mx-1'),
+        _tb_btn('type-bold', 'bold', '굵게(Ctrl+B)'),
+        _tb_btn('type-italic', 'italic', '기울임(Ctrl+I)'),
+        _tb_btn('type-underline', 'underline', '밑줄(Ctrl+U)'),
+        _tb_btn('type-strikethrough', 'strikeThrough', '취소선'),
+        html.Span(className='vr mx-1'),
+        html.Label([html.I(className='bi bi-fonts me-1'), html.Span('글자색', className='small'),
+                    html.Div(className='hro-color', **{'data-hro-cmd': 'foreColor', 'data-hro-color': '#d00000'})],
+                   className='d-inline-flex align-items-center mb-0 me-1', title='글자색'),
+        html.Label([html.I(className='bi bi-paint-bucket me-1'), html.Span('바탕색', className='small'),
+                    html.Div(className='hro-color', **{'data-hro-cmd': 'hiliteColor', 'data-hro-color': '#ffff00'})],
+                   className='d-inline-flex align-items-center mb-0 me-1', title='바탕색(형광펜)'),
+        html.Span(className='vr mx-1'),
+        _tb_btn('list-ul', 'insertUnorderedList', '글머리 기호'),
+        _tb_btn('list-ol', 'insertOrderedList', '번호 매기기'),
+        _tb_btn('text-left', 'justifyLeft', '왼쪽 정렬'),
+        _tb_btn('text-center', 'justifyCenter', '가운데 정렬'),
+        html.Span(className='vr mx-1'),
+        _tb_btn('arrow-counterclockwise', 'undo', '되돌리기(Ctrl+Z)'),
+        _tb_btn('eraser', 'removeFormat', '서식 지우기'),
+    ], className='d-flex flex-wrap align-items-center gap-1 border border-bottom-0 rounded-top bg-light px-2 py-1')
+
+
 def _cc_options(saved: list) -> list:
     """참조 선택 옵션 — 현재 인력현황 + 이미 저장된 사람(인력현황에서 빠졌어도 유지)."""
     opts = hom.person_options()
@@ -126,12 +170,18 @@ def _compose_card():
                                          color='secondary', outline=True, size='sm', className='py-0'),
                               html.Span(id='hro-tpl-msg', className='small ms-2')],
                              className='d-flex align-items-center mb-1'),
-                    html.Div(['평소 쓰시는 제목·본문을 그대로 붙여 넣고, 날짜 자리에 ',
+                    html.Div(['평소 쓰시는 제목·본문을 그대로 붙여 넣고(서식 유지, 그림은 빠짐), 날짜 자리에 ',
                               html.Code('{발령일}'), ' ', html.Code('{발령일_월일}'), ' ', html.Code('{회신일}'), ' ',
                               html.Code('{회신일_월일}'), '을 넣으면 발령일에 맞춰 바뀝니다(예: 2026.12.16 / 12월 16일(수)). '
                               '저장하면 다음에도, 자동 발송에도 이 템플릿을 씁니다.'], className='small text-muted mb-2'),
                     dbc.Input(id='hro-subject', value=subject_t, size='sm', className='mb-2'),
-                    dbc.Textarea(id='hro-body', value=body_t, rows=10, className='small'),
+                    _editor_toolbar(),
+                    html.Div(id='hro-body-editor', contentEditable='true', className='form-control hro-editor',
+                             style={'minHeight': '260px', 'maxHeight': '480px', 'overflowY': 'auto',
+                                    'fontFamily': "'Malgun Gothic', sans-serif", 'fontSize': '14px', 'lineHeight': '1.7',
+                                    'borderTopLeftRadius': 0, 'borderTopRightRadius': 0}),
+                    dcc.Store(id='hro-body', data=body_t),
+                    dcc.Store(id='hro-editor-init'),
                 ], md=6),
                 dbc.Col([
                     dbc.Label('미리보기(발령일 적용)', className='small mb-1'),
@@ -335,18 +385,35 @@ def _default_sender(options):
     return options[0]['value'] if options else None
 
 
+def _body_frame(body: str, d: date, height: str = '300px'):
+    """서식 본문 미리보기 — 정리(sanitize)한 HTML을 sandbox iframe에(스크립트 실행 없음, 화면 CSS와 분리)."""
+    doc = ('<html><head><meta charset="utf-8"></head><body style="margin:8px">'
+           + hom.body_html(hom.render(body or '', d)) + '</body></html>')
+    return html.Iframe(srcDoc=doc, sandbox='', style={'width': '100%', 'height': height, 'border': '0',
+                                                      'background': '#fff'})
+
+
+# 편집기 첫 내용 채우기(저장된 템플릿 HTML) — 이후 입력은 assets/hr_order_editor.js가 hro-body로 올려 보냄
+dash.clientside_callback(
+    """function(data) {
+        const ed = document.getElementById('hro-body-editor');
+        if (ed && typeof data === 'string' && ed.innerHTML !== data) { ed.innerHTML = data; }
+        return window.dash_clientside.no_update;
+    }""",
+    Output('hro-editor-init', 'data'), Input('hro-body', 'data'))
+
+
 @callback(Output('hro-preview', 'children'), Input('hro-order-date', 'value'), Input('hro-subject', 'value'),
-          Input('hro-body', 'value'))
+          Input('hro-body', 'data'))
 def _preview(od, subject, body):
     if not od:
         return ''
     d = date.fromisoformat(od)
-    return html.Div([html.Div([html.B('제목: '), hom.render(subject, d)], className='mb-2'),
-                     html.Div(hom.render(body, d), style={'whiteSpace': 'pre-wrap'})])
+    return html.Div([html.Div([html.B('제목: '), hom.render(subject, d)], className='mb-2'), _body_frame(body, d)])
 
 
 @callback(Output('hro-tpl-msg', 'children'), Input('hro-tpl-save', 'n_clicks'), State('hro-subject', 'value'),
-          State('hro-body', 'value'), prevent_initial_call=True)
+          State('hro-body', 'data'), prevent_initial_call=True)
 def _save_template(n, subject, body):
     if not n:
         return no_update
@@ -406,7 +473,7 @@ def _files_view(files):
 @callback(Output('hro-confirm', 'is_open'), Output('hro-confirm-body', 'children'), Output('hro-result', 'children'),
           Input('hro-send', 'n_clicks'), Input('hro-confirm-cancel', 'n_clicks'),
           State('hro-recipients', 'value'), State('hro-recipients', 'options'), State('hro-subject', 'value'),
-          State('hro-body', 'value'), State('hro-order-date', 'value'),
+          State('hro-body', 'data'), State('hro-order-date', 'value'),
           State('hro-files-store', 'data'), State('hro-sender', 'value'), State('hro-sender', 'options'),
           State('hro-cc', 'value'), State('hro-bcc', 'value'), State('hro-mode', 'value'),
           prevent_initial_call=True)
@@ -431,7 +498,7 @@ def _confirm(_send, _cancel, emails, options, subject, body, od, files, sender, 
         html.Div([html.B('발신: '), sender_label], className='small mb-1'),
         html.Div([html.B('제목: '), hom.render(subject, d)], className='small mb-1'),
         html.Div([html.B('첨부: '), ', '.join(f['name'] for f in files)], className='small mb-2'),
-        html.Div(hom.render(body, d), className='small border rounded p-2 mb-2 bg-light', style={'whiteSpace': 'pre-wrap'}),
+        html.Div(_body_frame(body, d, '240px'), className='border rounded mb-2'),
         html.Div(html.B(f"수신(TO) {len(emails)}명 — " + ('한 통으로 발송' if single else '한 명씩 따로 발송')),
                  className='small'),
         html.Ul([html.Li(label.get(e, e)) for e in emails], className='small mb-2'),
@@ -455,7 +522,7 @@ def _cc_people(cc, bcc):
 @callback(Output('hro-result', 'children', allow_duplicate=True), Output('hro-confirm', 'is_open', allow_duplicate=True),
           Output('hro-log', 'children'),
           Input('hro-confirm-ok', 'n_clicks'),
-          State('hro-recipients', 'value'), State('hro-subject', 'value'), State('hro-body', 'value'),
+          State('hro-recipients', 'value'), State('hro-subject', 'value'), State('hro-body', 'data'),
           State('hro-order-date', 'value'), State('hro-files-store', 'data'), State('hro-sender', 'value'),
           State('hro-cc', 'value'), State('hro-bcc', 'value'), State('hro-mode', 'value'),
           prevent_initial_call=True)
