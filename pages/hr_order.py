@@ -1,10 +1,10 @@
 """
 업무 시나리오 > 인사발령(2026-11-19) — 인사발령 작성 양식(첨부파일)을 부서별 담당자에게 메일로 보낸다.
-흐름·저장·권한은 services/hr_order_mail.py 참고.
+흐름·저장·권한·자동 발송은 services/hr_order_mail.py 참고.
 """
 import base64
 import io
-from datetime import date
+from datetime import date, datetime
 
 import dash
 import dash_ag_grid as dag
@@ -22,6 +22,11 @@ _CONTACT_COLUMNS = [
     {'field': 'name', 'headerName': '담당자', 'editable': True, 'flex': 1},
     {'field': 'email', 'headerName': '이메일', 'editable': True, 'flex': 2},
 ]
+_WD = '월화수목금토일'
+
+
+def _md(d: date) -> str:
+    return f'{d.month}월 {d.day}일({_WD[d.weekday()]})'
 
 
 def _contact_option(c: dict) -> dict:
@@ -33,18 +38,43 @@ def _fmt_size(n: int) -> str:
     return f'{n / 1048576:.1f}MB' if n >= 1048576 else f'{max(1, n // 1024)}KB'
 
 
+def _order_date_options() -> list:
+    d, out = hom.next_order_date(), []
+    for _ in range(6):
+        out.append({'label': f'{d:%Y.%m.%d}자 (회신 {_md(hom.reply_due(d))})', 'value': d.isoformat()})
+        d = hom.next_order_date(d)
+    return out
+
+
+def _file_list(files: list, del_type: str):
+    if not files:
+        return html.Span('첨부한 파일이 없습니다.', className='text-muted')
+    total = sum(f['size'] for f in files)
+    return html.Div([html.Div([html.I(className='bi bi-file-earmark me-1'), f"{f['name']} ({_fmt_size(f['size'])})",
+                               html.Span(' ×', id={'type': del_type, 'i': i}, n_clicks=0, className='text-danger ms-1',
+                                         style={'cursor': 'pointer'}, title='빼기')])
+                     for i, f in enumerate(files)] + [html.Div(f'합계 {_fmt_size(total)}', className='text-muted')])
+
+
+def _upload_box(upload_id: str, text: str):
+    return dcc.Upload(id=upload_id, multiple=True, children=html.Div([html.I(className='bi bi-paperclip me-1'), text]),
+                      className='border border-2 rounded text-center text-muted small py-3 mb-2',
+                      style={'borderStyle': 'dashed', 'cursor': 'pointer'})
+
+
 def _compose_card():
-    order_date = hom.next_order_date()
     contacts = hom.load_contacts()
+    subject_t, body_t = hom.template()
+    order_opts = _order_date_options()
     return dbc.Card([
         dbc.CardHeader(html.Span([html.I(className='bi bi-envelope-paper me-1'), '양식 메일 보내기'], className='fw-semibold')),
         dbc.CardBody([
             dbc.Row([
                 dbc.Col([dbc.Label('발신 계정', className='small mb-1'),
-                         dcc.Dropdown(id='hro-sender', options=hom.sender_options(), clearable=False)], md=7),
-                dbc.Col([dbc.Label('발령일', className='small mb-1 d-block'),
-                         dcc.DatePickerSingle(id='hro-order-date', date=order_date.isoformat(), display_format='YYYY-MM-DD')],
-                        md=3),
+                         dcc.Dropdown(id='hro-sender', options=hom.sender_options(), clearable=False)], md=6),
+                dbc.Col([dbc.Label('발령일', className='small mb-1'),
+                         dcc.Dropdown(id='hro-order-date', options=order_opts, value=order_opts[0]['value'],
+                                      clearable=False)], md=6),
             ], className='g-2 mb-3'),
             dbc.Label('받을 부서 담당자', className='small mb-1'),
             html.Div([
@@ -55,15 +85,28 @@ def _compose_card():
                           className='small mb-1', style={'columns': '2'}),
             html.Div('아래 "부서별 담당자"에 먼저 등록하세요.' if not contacts else '', id='hro-recipients-hint',
                      className='small text-muted mb-3'),
-            dbc.Label('제목', className='small mb-1'),
-            dbc.Input(id='hro-subject', value=hom.default_subject(order_date), size='sm', className='mb-2'),
-            dbc.Label('본문', className='small mb-1'),
-            dbc.Textarea(id='hro-body', value=hom.default_body(order_date), rows=8, className='mb-2 small'),
+            dbc.Row([
+                dbc.Col([
+                    html.Div([dbc.Label('제목·본문 템플릿', className='small mb-0 me-2'),
+                              dbc.Button([html.I(className='bi bi-save me-1'), '템플릿 저장'], id='hro-tpl-save',
+                                         color='secondary', outline=True, size='sm', className='py-0'),
+                              html.Span(id='hro-tpl-msg', className='small ms-2')],
+                             className='d-flex align-items-center mb-1'),
+                    html.Div(['평소 쓰시는 제목·본문을 그대로 붙여 넣고, 날짜 자리에 ',
+                              html.Code('{발령일}'), ' ', html.Code('{발령일_월일}'), ' ', html.Code('{회신일}'), ' ',
+                              html.Code('{회신일_월일}'), '을 넣으면 발령일에 맞춰 바뀝니다(예: 2026.12.16 / 12월 16일(수)). '
+                              '저장하면 다음에도, 자동 발송에도 이 템플릿을 씁니다.'], className='small text-muted mb-2'),
+                    dbc.Input(id='hro-subject', value=subject_t, size='sm', className='mb-2'),
+                    dbc.Textarea(id='hro-body', value=body_t, rows=10, className='small'),
+                ], md=6),
+                dbc.Col([
+                    dbc.Label('미리보기(발령일 적용)', className='small mb-1'),
+                    html.Div(id='hro-preview', className='border rounded p-2 small bg-light',
+                             style={'minHeight': '260px'}),
+                ], md=6),
+            ], className='g-3 mb-3'),
             dbc.Label('첨부파일', className='small mb-1'),
-            dcc.Upload(id='hro-upload', multiple=True, children=html.Div(
-                [html.I(className='bi bi-paperclip me-1'), '클릭 또는 끌어다 놓아 첨부(여러 개 가능, 합계 20MB까지)']),
-                className='border border-2 rounded text-center text-muted small py-3 mb-2',
-                style={'borderStyle': 'dashed', 'cursor': 'pointer'}),
+            _upload_box('hro-upload', '클릭 또는 끌어다 놓아 첨부(여러 개 가능, 합계 20MB까지)'),
             html.Div(id='hro-files', className='small mb-3'),
             dbc.Button([html.I(className='bi bi-send me-1'), '메일 보내기'], id='hro-send', color='primary'),
             html.Div(id='hro-result', className='mt-3'),
@@ -82,8 +125,14 @@ def _contacts_card():
     return dbc.Card([
         dbc.CardHeader(html.Span([html.I(className='bi bi-people me-1'), '부서별 담당자'], className='fw-semibold')),
         dbc.CardBody([
+            dbc.Row([
+                dbc.Col(dcc.Dropdown(id='hro-person', options=hom.person_options(),
+                                     placeholder='인력현황에서 이름·사번 검색해 추가(이메일 = Knox ID@samsung.com)'), md=8),
+                dbc.Col(dbc.Button([html.I(className='bi bi-person-plus me-1'), '담당자로 추가'], id='hro-person-add',
+                                   color='primary', outline=True, size='sm'), md=4),
+            ], className='g-2 align-items-center mb-2'),
             html.Div([
-                dbc.Button([html.I(className='bi bi-plus me-1'), '행 추가'], id='hro-row-add', color='secondary',
+                dbc.Button([html.I(className='bi bi-plus me-1'), '빈 행 추가'], id='hro-row-add', color='secondary',
                            outline=True, size='sm', className='me-1'),
                 dbc.Button([html.I(className='bi bi-trash me-1'), '선택 삭제'], id='hro-row-del', color='danger',
                            outline=True, size='sm', className='me-1'),
@@ -92,12 +141,64 @@ def _contacts_card():
                 dcc.Upload(id='hro-contacts-upload', children=dbc.Button(
                     [html.I(className='bi bi-file-earmark-excel me-1'), '엑셀로 불러오기'], color='success', outline=True,
                     size='sm'), accept='.xlsx,.xls,.csv'),
-                html.Span('열: 부서 · 담당자 · 이메일 — 불러온 뒤 저장을 눌러야 반영', className='small text-muted ms-2'),
+                html.Span('추가·수정 뒤 저장을 눌러야 반영됩니다(엑셀 열: 부서 · 담당자 · 이메일)', className='small text-muted ms-2'),
             ], className='d-flex align-items-center flex-wrap mb-2'),
             dag.AgGrid(id='hro-contacts', columnDefs=_CONTACT_COLUMNS, rowData=hom.load_contacts(),
-                       dashGridOptions={'rowSelection': 'multiple', 'singleClickEdit': True, 'stopEditingWhenCellsLoseFocus': True},
+                       dashGridOptions={'rowSelection': 'multiple', 'singleClickEdit': True,
+                                        'stopEditingWhenCellsLoseFocus': True},
                        style={'height': '320px'}, className='ag-theme-alpine'),
             html.Div(id='hro-contacts-msg', className='small mt-2'),
+        ]),
+    ], className='shadow-sm mb-4')
+
+
+def _auto_status():
+    cfg = hom.auto_settings()
+    if not cfg['enabled']:
+        return html.Span('자동 발송이 꺼져 있습니다.', className='text-muted')
+    nxt = hom.next_auto_send()
+    who = (cfg['sender'] or {}).get('label', '')
+    lines = [html.Div([html.I(className='bi bi-check-circle text-success me-1'),
+                       f'켜짐 — 발신 {who}, 담당자 {len(hom.load_contacts())}명 전체, 첨부 {len(cfg["files"])}개'])]
+    if nxt:
+        od, when = nxt
+        lines.append(html.Div(f'다음 발송: {_md(when.date())} {when:%H:%M} — {od:%Y.%m.%d}자 발령분'
+                              f'(회신 {_md(hom.reply_due(od))})', className='fw-semibold'))
+    return html.Div(lines)
+
+
+def _auto_card():
+    cfg = hom.auto_settings()
+    files = [{'name': n, 'size': len(b)} for n, b in hom.auto_files()]
+    sender_value = hom.SHARED_SENDER if cfg['sender'] and not cfg['sender'].get('user_id') else None
+    return dbc.Card([
+        dbc.CardHeader(html.Span([html.I(className='bi bi-alarm me-1'), '자동 발송'], className='fw-semibold')),
+        dbc.CardBody([
+            html.Div(f'켜 두면 매월 1일·16일 발령일의 워킹데이 {hom.AUTO_SEND_WORKDAYS}일 전, 지정한 시각에 위 "부서별 담당자" '
+                     f'전체에게 저장된 템플릿과 아래 첨부로 보냅니다(발령일당 한 번). 워킹데이는 토·일, 공휴일(대체공휴일 포함), '
+                     f'아래 회사 휴무일을 뺀 날입니다.', className='small text-muted mb-2'),
+            dbc.Row([
+                dbc.Col(dbc.Switch(id='hro-auto-on', label='자동 발송 사용', value=cfg['enabled']), md=3),
+                dbc.Col([dbc.Label('발송 시각', className='small mb-1'),
+                         dcc.Dropdown(id='hro-auto-hour', options=[{'label': f'{h:02d}:00', 'value': h} for h in range(7, 20)],
+                                      value=cfg['hour'], clearable=False)], md=3),
+                dbc.Col([dbc.Label('발신 계정', className='small mb-1'),
+                         dcc.Dropdown(id='hro-auto-sender', options=hom.sender_options(), value=sender_value,
+                                      clearable=False)], md=6),
+            ], className='g-2 align-items-end mb-2'),
+            dbc.Label('자동 발송용 첨부(서버에 보관)', className='small mb-1'),
+            _upload_box('hro-auto-upload', '클릭 또는 끌어다 놓아 첨부 — 올리면 기존 자동 발송용 첨부를 바꿉니다'),
+            html.Div(_file_list(files, 'hro-auto-file-del'), id='hro-auto-files', className='small mb-2'),
+            dcc.Store(id='hro-auto-files-store', data=None),
+            dbc.Label('회사 휴무일(공휴일 외, 예: 창립기념일) — YYYY-MM-DD, 줄바꿈이나 쉼표로 구분', className='small mb-1'),
+            dbc.Textarea(id='hro-holidays', value='\n'.join(hom.company_holidays()), rows=2, className='small mb-1'),
+            html.Div('' if hom.holidays_available() else
+                     '공휴일 계산 패키지(holidays)가 설치되지 않아 지금은 주말·회사 휴무일만 뺍니다 — 서버 재빌드 필요.',
+                     className='small text-danger mb-1'),
+            dbc.Button([html.I(className='bi bi-save me-1'), '자동 발송 설정 저장'], id='hro-auto-save', color='primary',
+                       size='sm', className='mt-1'),
+            html.Div(id='hro-auto-msg', className='small mt-2'),
+            html.Div(_auto_status(), id='hro-auto-status', className='small mt-2'),
         ]),
     ], className='shadow-sm mb-4')
 
@@ -141,7 +242,9 @@ def _log_table():
         fail = [r for r in e.get('results', []) if not r.get('ok')]
         body.append(html.Tr([
             html.Td(e.get('at', '').replace('T', ' ')[:16], className='text-nowrap'),
-            html.Td(f"{e.get('by_name') or e.get('by')}"),
+            html.Td('자동' if e.get('kind') == 'auto' else '수동'),
+            html.Td(e.get('order_date', '').replace('-', '.')),
+            html.Td(e.get('by_name') or e.get('by')),
             html.Td(e.get('sender', '')),
             html.Td(e.get('subject', '')),
             html.Td(', '.join(f['name'] for f in e.get('files', []))),
@@ -149,7 +252,8 @@ def _log_table():
                      html.Span(f'실패 {len(fail)}', className='text-danger') if fail else None],
                     title='\n'.join(f"{r['dept']} {r['email']}: {r['error']}" for r in fail) or None),
         ]))
-    return dbc.Table([html.Thead(html.Tr([html.Th(h) for h in ('시각', '보낸 사람', '발신 계정', '제목', '첨부', '결과')])),
+    return dbc.Table([html.Thead(html.Tr([html.Th(h) for h in ('시각', '구분', '발령일', '보낸 사람', '발신 계정', '제목',
+                                                               '첨부', '결과')])),
                       html.Tbody(body)], size='sm', bordered=True, className='small mb-0')
 
 
@@ -158,29 +262,44 @@ def layout():
         return dbc.Alert('인사발령 메뉴를 쓸 권한이 없습니다. 관리자에게 요청하세요.', color='warning', className='mt-3')
     return dbc.Container([
         html.H4([html.I(className='bi bi-envelope-paper me-2 text-primary'), '인사발령'], className='fw-bold mt-2'),
-        html.P('매월 1일·16일 발령분 취합 양식을 부서별 담당자에게 메일로 보냅니다. 선택한 담당자에게 같은 첨부로 한 명씩 '
-               '따로 발송됩니다.', className='text-muted small'),
+        html.P(f'매월 1일·16일 발령분 취합 양식을 부서별 담당자에게 메일로 보냅니다. 선택한 담당자에게 같은 첨부로 한 명씩 '
+               f'따로 발송되며, 회신일은 발령일의 워킹데이 {hom.REPLY_WORKDAYS}일 전으로 자동 계산합니다.',
+               className='text-muted small'),
         _compose_card(),
         _contacts_card(),
+        _auto_card(),
         _settings_card(),
         _log_card(),
     ], fluid=True, className='py-3')
 
 
-# ── 콜백 ───────────────────────────────────────────────────────────────────
+# ── 콜백: 양식 메일 ─────────────────────────────────────────────────────────
 
 @callback(Output('hro-sender', 'value'), Input('hro-sender', 'options'))
 def _default_sender(options):
     return options[0]['value'] if options else None
 
 
-@callback(Output('hro-subject', 'value'), Output('hro-body', 'value'), Input('hro-order-date', 'date'),
-          prevent_initial_call=True)
-def _date_changed(d):
-    if not d:
-        return no_update, no_update
-    od = date.fromisoformat(d[:10])
-    return hom.default_subject(od), hom.default_body(od)
+@callback(Output('hro-preview', 'children'), Input('hro-order-date', 'value'), Input('hro-subject', 'value'),
+          Input('hro-body', 'value'))
+def _preview(od, subject, body):
+    if not od:
+        return ''
+    d = date.fromisoformat(od)
+    return html.Div([html.Div([html.B('제목: '), hom.render(subject, d)], className='mb-2'),
+                     html.Div(hom.render(body, d), style={'whiteSpace': 'pre-wrap'})])
+
+
+@callback(Output('hro-tpl-msg', 'children'), Input('hro-tpl-save', 'n_clicks'), State('hro-subject', 'value'),
+          State('hro-body', 'value'), prevent_initial_call=True)
+def _save_template(n, subject, body):
+    if not n:
+        return no_update
+    try:
+        hom.save_template(subject, body)
+    except (PermissionError, ValueError) as exc:
+        return html.Span(str(exc), className='text-danger')
+    return html.Span('저장했습니다.', className='text-success')
 
 
 @callback(Output('hro-recipients', 'value'), Input('hro-all', 'n_clicks'), Input('hro-none', 'n_clicks'),
@@ -189,53 +308,54 @@ def _select_all(_a, _n, options):
     return [o['value'] for o in options or []] if ctx.triggered_id == 'hro-all' else []
 
 
-@callback(Output('hro-files-store', 'data'), Output('hro-upload', 'contents'),
-          Input('hro-upload', 'contents'), Input({'type': 'hro-file-del', 'i': dash.ALL}, 'n_clicks'),
-          State('hro-upload', 'filename'), State('hro-files-store', 'data'), prevent_initial_call=True)
-def _files(contents, _dels, filenames, files):
+def _add_uploads(files, contents, filenames):
     files = list(files or [])
-    trig = ctx.triggered_id
-    if isinstance(trig, dict):                       # × 눌러 빼기
-        if not any(_dels or []):
-            return no_update, no_update
-        files.pop(trig['i'])
-        return files, no_update
     for content, name in zip(contents or [], filenames or []):
         b64 = content.split(',', 1)[1]
         files.append({'name': name, 'b64': b64, 'size': len(base64.b64decode(b64))})
-    return files, None
+    return files
+
+
+@callback(Output('hro-files-store', 'data'), Output('hro-upload', 'contents'),
+          Input('hro-upload', 'contents'), Input({'type': 'hro-file-del', 'i': dash.ALL}, 'n_clicks'),
+          State('hro-upload', 'filename'), State('hro-files-store', 'data'), prevent_initial_call=True)
+def _files(contents, dels, filenames, files):
+    if isinstance(ctx.triggered_id, dict):           # × 눌러 빼기
+        if not any(dels or []):
+            return no_update, no_update
+        files = list(files or [])
+        files.pop(ctx.triggered_id['i'])
+        return files, no_update
+    return _add_uploads(files, contents, filenames), None
 
 
 @callback(Output('hro-files', 'children'), Input('hro-files-store', 'data'))
 def _files_view(files):
-    if not files:
-        return html.Span('첨부한 파일이 없습니다.', className='text-muted')
-    total = sum(f['size'] for f in files)
-    return html.Div([html.Div([html.I(className='bi bi-file-earmark me-1'), f"{f['name']} ({_fmt_size(f['size'])})",
-                               html.Span(' ×', id={'type': 'hro-file-del', 'i': i}, n_clicks=0, className='text-danger ms-1',
-                                         style={'cursor': 'pointer'}, title='빼기')])
-                     for i, f in enumerate(files)]
-                    + [html.Div(f'합계 {_fmt_size(total)}', className='text-muted')])
+    return _file_list(files, 'hro-file-del')
 
 
 @callback(Output('hro-confirm', 'is_open'), Output('hro-confirm-body', 'children'), Output('hro-result', 'children'),
           Input('hro-send', 'n_clicks'), Input('hro-confirm-cancel', 'n_clicks'),
           State('hro-recipients', 'value'), State('hro-recipients', 'options'), State('hro-subject', 'value'),
+          State('hro-body', 'value'), State('hro-order-date', 'value'),
           State('hro-files-store', 'data'), State('hro-sender', 'value'), State('hro-sender', 'options'),
           prevent_initial_call=True)
-def _confirm(_send, _cancel, emails, options, subject, files, sender, sender_opts):
+def _confirm(_send, _cancel, emails, options, subject, body, od, files, sender, sender_opts):
     if ctx.triggered_id == 'hro-confirm-cancel':
         return False, no_update, no_update
     problems = [m for ok, m in ((emails, '받을 담당자를 고르세요.'), ((subject or '').strip(), '제목을 입력하세요.'),
-                                (files, '첨부파일을 올리세요.'), (sender, '발신 계정을 고르세요.')) if not ok]
+                                (files, '첨부파일을 올리세요.'), (sender, '발신 계정을 고르세요.'), (od, '발령일을 고르세요.'))
+                if not ok]
     if problems:
         return False, no_update, dbc.Alert(' '.join(problems), color='warning', className='small py-2')
+    d = date.fromisoformat(od)
     label = {o['value']: o['label'] for o in options or []}
     sender_label = next((o['label'] for o in sender_opts or [] if o['value'] == sender), sender)
     return True, html.Div([
         html.Div([html.B('발신: '), sender_label], className='small mb-1'),
-        html.Div([html.B('제목: '), subject], className='small mb-1'),
+        html.Div([html.B('제목: '), hom.render(subject, d)], className='small mb-1'),
         html.Div([html.B('첨부: '), ', '.join(f['name'] for f in files)], className='small mb-2'),
+        html.Div(hom.render(body, d), className='small border rounded p-2 mb-2 bg-light', style={'whiteSpace': 'pre-wrap'}),
         html.Div(html.B(f'받는 사람 {len(emails)}명(한 명씩 따로 발송)'), className='small'),
         html.Ul([html.Li(label.get(e, e)) for e in emails], className='small mb-0'),
     ]), no_update
@@ -245,15 +365,17 @@ def _confirm(_send, _cancel, emails, options, subject, files, sender, sender_opt
           Output('hro-log', 'children'),
           Input('hro-confirm-ok', 'n_clicks'),
           State('hro-recipients', 'value'), State('hro-subject', 'value'), State('hro-body', 'value'),
-          State('hro-files-store', 'data'), State('hro-sender', 'value'), prevent_initial_call=True)
-def _send(n, emails, subject, body, files, sender):
+          State('hro-order-date', 'value'), State('hro-files-store', 'data'), State('hro-sender', 'value'),
+          prevent_initial_call=True)
+def _send(n, emails, subject, body, od, files, sender):
     if not n:
         return no_update, no_update, no_update
+    d = date.fromisoformat(od)
     by_email = {c['email']: c for c in hom.load_contacts()}
     contacts = [by_email[e] for e in emails or [] if e in by_email]
     attachments = [(f['name'], base64.b64decode(f['b64'])) for f in files or []]
     try:
-        results = hom.send(contacts, subject, body, attachments, sender)
+        results = hom.send(contacts, hom.render(subject, d), hom.render(body, d), attachments, sender, order_date=d)
     except (PermissionError, ValueError) as exc:
         return dbc.Alert(str(exc), color='danger', className='small py-2'), False, no_update
     ok = [r for r in results if r['ok']]
@@ -264,19 +386,34 @@ def _send(n, emails, subject, body, files, sender):
     return (dbc.Alert(items, color='success' if not fail else 'warning', className='small py-2'), False, _log_table())
 
 
+# ── 콜백: 부서별 담당자 ─────────────────────────────────────────────────────
+
 @callback(Output('hro-contacts', 'rowData'), Output('hro-contacts-msg', 'children'),
           Input('hro-row-add', 'n_clicks'), Input('hro-row-del', 'n_clicks'), Input('hro-contacts-upload', 'contents'),
+          Input('hro-person-add', 'n_clicks'),
           State('hro-contacts-upload', 'filename'), State('hro-contacts', 'rowData'), State('hro-contacts', 'selectedRows'),
-          prevent_initial_call=True)
-def _edit_contacts(_add, _del, content, filename, rows, selected):
+          State('hro-person', 'value'), prevent_initial_call=True)
+def _edit_contacts(_add, _del, content, _padd, filename, rows, selected, person):
     rows = list(rows or [])
-    if ctx.triggered_id == 'hro-row-add':
+    trig = ctx.triggered_id
+    if trig == 'hro-person-add':
+        if not person:
+            return no_update, html.Span('추가할 사람을 먼저 검색해 고르세요.', className='text-warning')
+        try:
+            c = hom.contact_for_person(person)
+        except ValueError as exc:
+            return no_update, html.Span(str(exc), className='text-danger')
+        if c['email'] and any(str(r.get('email', '')).lower() == c['email'].lower() for r in rows):
+            return no_update, html.Span(f"{c['name']}님은 이미 목록에 있습니다.", className='text-warning')
+        note = '' if c['email'] else ' — Knox ID가 없어 이메일을 직접 입력해야 합니다.'
+        return rows + [c], html.Span(f"{c['name']}({c['dept']})을 추가했습니다{note} — 저장을 눌러야 반영됩니다.",
+                                     className='text-warning' if note else 'text-muted')
+    if trig == 'hro-row-add':
         return rows + [{'dept': '', 'name': '', 'email': ''}], ''
-    if ctx.triggered_id == 'hro-row-del':
+    if trig == 'hro-row-del':
         if not selected:
             return no_update, html.Span('삭제할 행을 체크하세요.', className='text-warning')
-        drop = [r for r in selected]
-        return [r for r in rows if r not in drop], html.Span('삭제했습니다 — 저장을 눌러야 반영됩니다.', className='text-muted')
+        return [r for r in rows if r not in selected], html.Span('삭제했습니다 — 저장을 눌러야 반영됩니다.', className='text-muted')
     if content:
         try:
             raw = base64.b64decode(content.split(',', 1)[1])
@@ -302,6 +439,48 @@ def _save_contacts(n, rows):
         return html.Div([html.Div(e, className='text-danger') for e in errors]), no_update, no_update
     return (html.Span(f'{len(saved)}명 저장했습니다.', className='text-success'),
             [_contact_option(c) for c in saved], '' if saved else '아래 "부서별 담당자"에 먼저 등록하세요.')
+
+
+# ── 콜백: 자동 발송 ─────────────────────────────────────────────────────────
+
+@callback(Output('hro-auto-sender', 'value'), Input('hro-auto-sender', 'options'), State('hro-auto-sender', 'value'))
+def _default_auto_sender(options, value):
+    return value or (options[0]['value'] if options else None)
+
+
+@callback(Output('hro-auto-files', 'children'), Output('hro-auto-upload', 'contents'), Output('hro-auto-msg', 'children'),
+          Input('hro-auto-upload', 'contents'), Input({'type': 'hro-auto-file-del', 'i': dash.ALL}, 'n_clicks'),
+          State('hro-auto-upload', 'filename'), prevent_initial_call=True)
+def _auto_files(contents, dels, filenames):
+    current = hom.auto_files()
+    try:
+        if isinstance(ctx.triggered_id, dict):
+            if not any(dels or []):
+                return no_update, no_update, no_update
+            current.pop(ctx.triggered_id['i'])
+            hom.save_auto_files(current)
+        else:
+            new = [(n, base64.b64decode(c.split(',', 1)[1])) for c, n in zip(contents or [], filenames or [])]
+            hom.save_auto_files(new)
+    except (PermissionError, ValueError) as exc:
+        return no_update, None, html.Span(str(exc), className='text-danger')
+    files = [{'name': n, 'size': len(b)} for n, b in hom.auto_files()]
+    return _file_list(files, 'hro-auto-file-del'), None, html.Span('자동 발송용 첨부를 저장했습니다.', className='text-success')
+
+
+@callback(Output('hro-auto-msg', 'children', allow_duplicate=True), Output('hro-auto-status', 'children'),
+          Input('hro-auto-save', 'n_clicks'),
+          State('hro-auto-on', 'value'), State('hro-auto-hour', 'value'), State('hro-auto-sender', 'value'),
+          State('hro-holidays', 'value'), prevent_initial_call=True)
+def _save_auto(n, enabled, hour, sender, holidays_text):
+    if not n:
+        return no_update, no_update
+    try:
+        hom.set_company_holidays(holidays_text)
+        hom.save_auto(bool(enabled), hour, sender)
+    except (PermissionError, ValueError) as exc:
+        return html.Span(str(exc), className='text-danger'), _auto_status()
+    return html.Span(f'저장했습니다({datetime.now():%H:%M}).', className='text-success'), _auto_status()
 
 
 @callback(Output('hro-roles-msg', 'children'), Input('hro-roles-save', 'n_clicks'), State('hro-roles', 'value'),
