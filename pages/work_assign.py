@@ -77,8 +77,10 @@ def _compose_card():
                               html.Span(id='wa-tpl-msg', className='small ms-2')],
                              className='d-flex align-items-center mb-1'),
                     html.Div(['평소 쓰시는 문구를 붙여 넣고(서식 유지), ', html.Code('{대상월}'), ' ', html.Code('{대상월_숫자}'),
-                              ' ', html.Code('{회신일}'), ' ', html.Code('{회신일_월일}'),
-                              '을 넣으면 대상월·회신 기한에 맞춰 바뀝니다(예: 2026년 12월 / 2026.12 / 11월 30일(월)). '
+                              ' ', html.Code('{회신일}'), ' ', html.Code('{회신일_월일}'), ' ', html.Code('{메일 발송일}'), ' ',
+                              html.Code('{메일 발송일_월일}'),
+                              '을 넣으면 대상월·회신 기한·메일 보내는 날(수동은 오늘, 자동은 자동 발송일)에 맞춰 바뀝니다'
+                              '(예: 2026년 12월 / 2026.12 / 12월 1일(화) / 2026.11.25). '
                               '회신 기한은 대상월의 아래 "자동 발송"에서 정한 날(기본 1일, 휴일이면 다음 워킹데이)입니다.'],
                              className='small text-muted mb-2'),
                     dbc.Input(id='wa-subject', value=subject_t, size='sm', className='mb-2'),
@@ -280,14 +282,23 @@ def _auto_status():
 def _days_preview(send, reply):
     if send is None or not reply:
         return []
-    t = wa.target_of(date.today(), 1)
-    base = wa.base_date(t)
-    sd = hom.workdays_before(base, int(send))
-    y, m = wa._month(t)
-    rd = date(y, m, int(reply))
-    while not hom.is_workday(rd):
-        rd += timedelta(days=1)
-    return [html.Div(f'예) {wa.target_label(t)}분: 마지막 워킹데이 {_md(base)} → 발송 {_md(sd)}, 회신 기한 {_md(rd)}')]
+    lines = []
+    for k in (1, 2, 3):                                  # 다음 3개월 — 휴일로 밀리는 경우를 미리 보이게
+        t = wa.target_of(date.today(), k)
+        base = wa.base_date(t)
+        sd = hom.workdays_before(base, int(send))
+        y, m = wa._month(t)
+        first = date(y, m, int(reply))
+        rd, skipped = first, []
+        while not hom.is_workday(rd):
+            skipped.append(f'{rd.month}.{rd.day} {hom.day_off_reason(rd)}')
+            rd += timedelta(days=1)
+        why = f" ({', '.join(skipped)} → 다음 워킹데이)" if skipped else ''
+        lines.append(html.Div(f'{wa.target_label(t)}분: 발송 {_md(sd)}, 회신 기한 {_md(rd)}{why}'))
+    if not hom.holidays_available():
+        lines.append(html.Div('공휴일 계산 패키지(holidays)가 없어 지금은 주말·회사 휴무일만 뺍니다 — 서버 재빌드 필요.',
+                              className='text-danger'))
+    return lines
 
 
 def _auto_card():

@@ -86,7 +86,8 @@ def _compose_card():
                              className='d-flex align-items-center mb-1'),
                     html.Div(['평소 쓰시는 제목·본문을 그대로 붙여 넣고(서식 유지, 그림은 빠짐), 날짜 자리에 ',
                               html.Code('{발령일}'), ' ', html.Code('{발령일_월일}'), ' ', html.Code('{회신일}'), ' ',
-                              html.Code('{회신일_월일}'), '을 넣으면 발령일에 맞춰 바뀝니다(예: 2026.12.16 / 12월 16일(수)). '
+                              html.Code('{회신일_월일}'), ' ', html.Code('{메일 발송일}'), ' ', html.Code('{메일 발송일_월일}'),
+                              '을 넣으면 발령일·메일 보내는 날에 맞춰 바뀝니다(예: 2026.12.16 / 12월 16일(수)). '
                               '저장하면 다음에도, 자동 발송에도 이 템플릿을 씁니다.'], className='small text-muted mb-2'),
                     dbc.Input(id='hro-subject', value=subject_t, size='sm', className='mb-2'),
                     rich_editor('hro', body_t),

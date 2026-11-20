@@ -200,15 +200,15 @@ def target_options(today: date | None = None, n: int = 6) -> list:
 
 # ── 템플릿 ──────────────────────────────────────────────────────────────────
 
-def placeholder_values(target: str, reply: date) -> dict:
+def placeholder_values(target: str, reply: date, sent_on: date | None = None) -> dict:
     y, m = _month(target)
     return {'대상월': f'{y}년 {m}월', '대상월_숫자': f'{y}.{m:02d}', '회신일': f'{reply:%Y.%m.%d}',
-            '회신일_월일': hom._md(reply)}
+            '회신일_월일': hom._md(reply), **hom.sent_on_values(sent_on)}
 
 
-def render(text: str, target: str, reply: date) -> str:
+def render(text: str, target: str, reply: date, sent_on: date | None = None) -> str:
     out = text or ''
-    for k, v in placeholder_values(target, reply).items():
+    for k, v in placeholder_values(target, reply, sent_on).items():
         out = out.replace('{' + k + '}', v)
     return out
 
@@ -386,7 +386,7 @@ def run_auto_if_due(now: datetime | None = None) -> dict | None:
             else:
                 rcp = recipient_settings()
                 per_contact, extra = _forms(target, gen)
-                results = hom._deliver(contacts, render(subject_t, target, reply), render(body_t, target, reply), files,
+                results = hom._deliver(contacts, render(subject_t, target, reply, now.date()), render(body_t, target, reply, now.date()), files,
                                        sender, {'user_id': 'auto', 'display_name': '자동 발송'}, 'auto', None,
                                        cc=rcp['cc'], bcc=rcp['bcc'], mode='each' if gen else rcp['mode'],
                                        log_path=LOG_PATH, extra={'target': target, **extra}, per_contact=per_contact)

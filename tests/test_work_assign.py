@@ -304,3 +304,12 @@ def test_contacts_and_cc_separate_from_hr_order(paths, monkeypatch):
     with auth.acting_as(ADMIN):
         hom.save_contacts([{'dept': 'Z', 'email': 'z@x.com'}])
     assert [c['email'] for c in wa.load_contacts()] == ['hr.team@samsung.com']                  # 이후엔 서로 영향 없음
+
+
+def test_mail_send_date_placeholder_and_holiday_reason(paths):
+    assert wa.render('{메일 발송일} {메일발송일_월일} {메일 발송일_월일}', '2026-12', date(2026, 12, 1), date(2026, 11, 25)) == \
+        '2026.11.25 11월 25일(수) 11월 25일(수)'
+    assert hom.render('{메일 발송일}', date(2026, 12, 16), date(2026, 12, 7)) == '2026.12.07'
+    assert hom.render('{메일 발송일}', date(2026, 12, 16)) == f'{date.today():%Y.%m.%d}'      # 기본은 오늘
+    assert [hom.day_off_reason(date(2027, 1, d)) for d in (1, 2, 3, 4)] == ['신정연휴', '토요일', '일요일', '']   # holidays 패키지 표기
+    assert wa.reply_due('2027-01') == date(2027, 1, 4)
