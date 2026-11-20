@@ -9,10 +9,13 @@
 - 메일 문구: 담당자가 평소 쓰는 제목·본문을 그대로 템플릿으로 저장하고, {발령일}/{회신일} 등 자리표시자를 발령일에
   맞춰 바꿔 넣는다. 회신일 = 발령일의 워킹데이 4일 전(예: 12.16 → 12.10).
 - 워킹데이: 토·일, 공휴일(holidays 패키지 KR — 대체공휴일·설·추석 포함), 관리자가 넣은 회사 휴무일 제외.
+- 참조(CC)·비밀참조(BCC)(2026-11-20): 받는 부서 담당자(TO)와 별도로, 인력현황에서 고른 동료를 참조/비밀참조로
+  넣는다. 화면에서 저장해 두면 수동·자동 발송 모두에 쓴다. 발송 방식은 "담당자별 따로"(기본 — 참조인은 담당자 수만큼
+  받음) 또는 "한 통으로"(담당자 전원 TO + 참조인 한 번) 중 선택.
 - 자동 발송: 켜 두면 서버가 발령일(1일·16일)의 워킹데이 7일 전 지정 시각에 담당자 전체에게 저장된 템플릿·첨부로
   보낸다(발령일당 한 번 — 발송 기록 파일로 중복 방지, gunicorn 워커 2개라 파일 잠금으로 한 곳에서만).
 
-저장(data/processed): hr_order_contacts.json(부서별 담당자), hr_order_settings.json(허용 역할·템플릿·자동 발송·휴무일),
+저장(data/processed): hr_order_contacts.json(부서별 담당자), hr_order_settings.json(허용 역할·템플릿·자동 발송·휴무일·참조인),
 hr_order_files/(자동 발송용 첨부), hr_order_auto_sent.json(자동 발송 기록), hr_order_log.jsonl(발송 이력 — 첨부 내용 제외).
 """
 from __future__ import annotations
@@ -293,6 +296,52 @@ def contact_for_person(researcher_id: str) -> dict:
     return {'dept': dept, 'name': str(r.get('name', '') or ''), 'email': f'{knox}@samsung.com' if knox else ''}
 
 
+# ── 참조(CC)·비밀참조(BCC) ─────────────────────────────────────────────────────
+
+SEND_MODES = ('each', 'single')           # each: 담당자별 따로 / single: 한 통으로(담당자 전원 TO)
+
+
+def recipient_settings() -> dict:
+    """저장된 참조인 — {'cc': [{'rid','dept','name','email'}], 'bcc': [...], 'mode': 'each'|'single'}."""
+    r = _settings().get('recipients') or {}
+    mode = r.get('mode') if r.get('mode') in SEND_MODES else 'each'
+    return {'cc': [p for p in r.get('cc') or [] if isinstance(p, dict) and p.get('email')],
+            'bcc': [p for p in r.get('bcc') or [] if isinstance(p, dict) and p.get('email')], 'mode': mode}
+
+
+def people_for(researcher_ids: list, saved: list | None = None) -> list:
+    """인력현황 사번 목록 → [{'rid','dept','name','email'}]. Knox ID가 없으면 ValueError.
+    saved(이미 저장된 사람)에 있으면 그 값을 쓴다(파견 등으로 인력현황에서 빠져도 유지)."""
+    known = {p.get('rid'): p for p in saved or []}
+    out, seen = [], set()
+    for rid in researcher_ids or []:
+        if rid in seen:
+            continue
+        seen.add(rid)
+        if rid in known:
+            out.append(known[rid])
+            continue
+        c = contact_for_person(rid)
+        if not c['email']:
+            raise ValueError(f"{c['name'] or rid}: 인력현황에 Knox ID가 없어 참조에 넣을 수 없습니다.")
+        out.append({'rid': rid, **c})
+    return out
+
+
+def save_recipient_settings(cc_rids: list, bcc_rids: list, mode: str) -> dict:
+    """참조/비밀참조/발송 방식 저장(수동 화면의 기본값이자 자동 발송에 사용)."""
+    _require_use()
+    if mode not in SEND_MODES:
+        raise ValueError('발송 방식이 올바르지 않습니다.')
+    cur = recipient_settings()
+    saved = cur['cc'] + cur['bcc']
+    cc = people_for(cc_rids, saved)
+    cc_emails = {p['email'].lower() for p in cc}
+    bcc = [p for p in people_for(bcc_rids, saved) if p['email'].lower() not in cc_emails]
+    _update_settings(recipients={'cc': cc, 'bcc': bcc, 'mode': mode})
+    return recipient_settings()
+
+
 # ── 발신 계정 ───────────────────────────────────────────────────────────────
 
 def _account_email(user: dict) -> str:
@@ -328,25 +377,41 @@ def _resolve_sender(value: str) -> dict:
 # ── 발송 ────────────────────────────────────────────────────────────────────
 
 def _deliver(contacts: list, subject: str, body_text: str, attachments: list, sender: dict,
-             by: dict, kind: str, order_date: date | None) -> list:
+             by: dict, kind: str, order_date: date | None, cc: list | None = None, bcc: list | None = None,
+             mode: str = 'each') -> list:
+    """contacts(TO)에게 발송. cc/bcc는 [{'email',...}] — 담당자별 따로(each)면 메일마다 참조로, 한 통으로(single)면
+    담당자 전원을 TO로 한 메일 한 통에 참조로 넣는다(결과는 담당자마다 같은 성공/실패)."""
     from pipeline.mailer import MailError, send_html_email
     html_body = body_html(body_text)
+    cc_emails = [p['email'] for p in cc or []]
+    bcc_emails = [p['email'] for p in bcc or []]
 
-    def _one(c):
+    def _try(to_emails):
         try:
-            send_html_email([c['email']], subject.strip(), html_body, attachments,
-                            sender_email=sender['email'], sender_user_id=sender['user_id'])
-            return {**c, 'ok': True, 'error': ''}
+            send_html_email(to_emails, subject.strip(), html_body, attachments,
+                            sender_email=sender['email'], sender_user_id=sender['user_id'],
+                            cc=cc_emails, bcc=bcc_emails)
+            return True, ''
         except MailError as exc:
-            return {**c, 'ok': False, 'error': str(exc)}
+            return False, str(exc)
         except Exception as exc:  # noqa: BLE001 — 한 명 실패가 나머지 발송을 막지 않게
-            return {**c, 'ok': False, 'error': f'{type(exc).__name__}: {exc}'}
+            return False, f'{type(exc).__name__}: {exc}'
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        results = list(pool.map(_one, contacts))
+    if mode == 'single':
+        ok, err = _try([c['email'] for c in contacts])
+        results = [{**c, 'ok': ok, 'error': err} for c in contacts]
+    else:
+        def _one(c):
+            ok, err = _try([c['email']])
+            return {**c, 'ok': ok, 'error': err}
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(_one, contacts))
     entry = {'at': datetime.now().isoformat(timespec='seconds'), 'kind': kind,
              'order_date': order_date.isoformat() if order_date else '',
              'by': by.get('user_id', ''), 'by_name': by.get('display_name', ''), 'sender': sender['label'],
+             'mode': mode, 'cc': [{'name': p.get('name', ''), 'email': p['email']} for p in cc or []],
+             'bcc': [{'name': p.get('name', ''), 'email': p['email']} for p in bcc or []],
              'subject': subject.strip(), 'files': [{'name': n, 'size': len(b)} for n, b in attachments],
              'results': [{k: r[k] for k in ('dept', 'name', 'email', 'ok', 'error')} for r in results]}
     with _LOCK:
@@ -369,14 +434,18 @@ def _check(contacts, subject, attachments):
 
 
 def send(contacts: list, subject: str, body_text: str, attachments: list, sender_value: str,
-         order_date: date | None = None) -> list:
-    """화면에서 보내기 — 선택한 담당자들에게 같은 첨부로 한 명씩. subject/body는 이미 발령일이 들어간 문구.
-    반환: [{'dept','name','email','ok','error'}]. 결과는 발송 이력에 남긴다(파일 내용 제외)."""
+         order_date: date | None = None, cc: list | None = None, bcc: list | None = None, mode: str = 'each') -> list:
+    """화면에서 보내기 — 선택한 담당자들에게 같은 첨부로(기본 한 명씩). subject/body는 이미 발령일이 들어간 문구.
+    cc/bcc: [{'email', 'name', ...}](people_for 결과). 반환: [{'dept','name','email','ok','error'}].
+    결과는 발송 이력에 남긴다(파일 내용 제외)."""
     from services.auth import get_current_user
     _require_use()
     _check(contacts, subject, attachments)
+    if mode not in SEND_MODES:
+        raise ValueError('발송 방식이 올바르지 않습니다.')
     sender = _resolve_sender(sender_value)
-    return _deliver(contacts, subject, body_text, attachments, sender, get_current_user() or {}, 'manual', order_date)
+    return _deliver(contacts, subject, body_text, attachments, sender, get_current_user() or {}, 'manual', order_date,
+                    cc=cc, bcc=bcc, mode=mode)
 
 
 def read_log(limit: int = 50) -> list:
@@ -509,8 +578,10 @@ def run_auto_if_due(now: datetime | None = None) -> dict | None:
                 results = [{'dept': '', 'name': '', 'email': '', 'ok': False,
                             'error': '담당자 또는 자동 발송용 첨부가 없어 보내지 못했습니다.'}]
             else:
+                rcp = recipient_settings()
                 results = _deliver(contacts, render(subject_t, od), render(body_t, od), files, sender,
-                                   {'user_id': 'auto', 'display_name': '자동 발송'}, 'auto', od)
+                                   {'user_id': 'auto', 'display_name': '자동 발송'}, 'auto', od,
+                                   cc=rcp['cc'], bcc=rcp['bcc'], mode=rcp['mode'])
             sent = _auto_sent()
             sent[od.isoformat()] = {'at': now.isoformat(timespec='seconds'),
                                     'ok': sum(1 for r in results if r['ok']), 'fail': sum(1 for r in results if not r['ok'])}

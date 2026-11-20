@@ -14585,3 +14585,18 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
     회신 기한이 지난 발령일은 자동 발송하지 않음(서버가 오래 꺼져 있었을 때 늦은 발송 방지). HR_ORDER_AUTO_DISABLED=1로 끔.
     이력에 구분(수동/자동)·발령일 표시.
   - 테스트 tests/test_hr_order_mail.py 10개(워킹데이·추석·회사 휴무일, 템플릿, 발신 계정 제한, Knox ID, 자동 발송 시각·한 번만).
+
+### (80) 2026-11-20 — 인사발령 메일 수신(TO)·참조(CC)·비밀참조(BCC) 분리
+- 사용자 요청: "받을 부서 담당자 외에 사용자 부서 동료에게 CC로 메일을 넣고 싶은데, 수신인과 참조인을 분리해줘 / 사내 REST API를
+  보니 recipientsType에 따라 수신 참조 비밀참조 변경 가능(TO : 수신, CC : 참조, BCC : 비밀참조)".
+- pipeline/mailer.send_html_email에 cc/bcc 인자 추가 — payload recipients 각 항목의 recipientType을 'TO'/'CC'/'BCC'로(필드명은
+  기존에 동작하던 recipientType 그대로). 같은 주소가 겹치면 앞 구분(TO > CC > BCC)만 남김. 기존 호출부는 변화 없음.
+- services/hr_order_mail.py: 참조인 설정 hr_order_settings.json recipients = {cc:[{rid,dept,name,email}], bcc:[...], mode}.
+  recipient_settings()/save_recipient_settings(cc_rids, bcc_rids, mode)/people_for(rids, saved) — 인력현황 검색값(사번) →
+  Knox ID@samsung.com(없으면 오류), 이미 저장된 사람은 인력현황에서 빠져도 유지. CC와 겹치는 BCC는 뺌.
+  발송 방식 mode: each(기본, 담당자별 따로 — 부서끼리 주소 안 보임, 참조인은 담당자 수만큼 받음) / single(담당자 전원 TO로 한
+  통 — 참조인도 한 통). _deliver/send에 cc·bcc·mode, 자동 발송은 저장된 참조인·방식 사용. 이력에 mode·cc·bcc(이름·주소) 기록.
+- pages/hr_order.py: 받을 담당자 아래 참조(CC)·비밀참조(BCC) 다중 선택(인력현황 검색), 발송 방식 라디오, "참조·발송 방식 저장".
+  확인창에 수신/참조/비밀참조를 나눠 표시하고 참조인이 받을 메일 수 안내. 자동 발송 상태·발송 이력(참조 열)에 반영.
+- 테스트: mailer CC/BCC recipientType·중복 제거, 담당자별 따로/한 통으로 발송과 이력(총 12개). 브라우저: 참조·비밀참조 선택 →
+  저장 → 한 통으로 발송(가짜 mailer) → 확인창·결과·이력 확인.

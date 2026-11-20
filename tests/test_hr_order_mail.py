@@ -56,7 +56,7 @@ def test_send_as_logged_in_user_one_mail_each(paths, monkeypatch):
     import pipeline.mailer as mailer
     sent = []
 
-    def fake(to, subject, body, attachments=None, sender_email=None, sender_user_id=None):
+    def fake(to, subject, body, attachments=None, sender_email=None, sender_user_id=None, cc=None, bcc=None):
         if to == ['bad@x.com']:
             raise mailer.MailError('수신 거부')
         sent.append((to, subject, body, attachments, sender_email, sender_user_id))
@@ -148,8 +148,8 @@ def test_auto_send_once_at_due_time(paths, monkeypatch, tmp_path):
     monkeypatch.setattr(hom, 'AUTO_LOCK_PATH', str(tmp_path / 'lock'))
     sent = []
     monkeypatch.setattr(mailer, 'send_html_email',
-                        lambda to, subject, body, attachments=None, sender_email=None, sender_user_id=None:
-                        sent.append((to, subject, body, sender_email)))
+                        lambda to, subject, body, attachments=None, sender_email=None, sender_user_id=None, cc=None, bcc=None:
+                        sent.append((to, subject, body, sender_email, cc)))
     with auth.acting_as(HR | {'is_admin': True}):
         hom.save_contacts([{'dept': 'A', 'name': '김', 'email': 'a@x.com'}, {'dept': 'B', 'name': '이', 'email': 'b@x.com'}])
         hom.save_template('[발령] {발령일}', '회신 {회신일_월일}까지')
@@ -165,3 +165,50 @@ def test_auto_send_once_at_due_time(paths, monkeypatch, tmp_path):
     assert hom.run_auto_if_due(datetime(2026, 12, 7, 9, 20)) is None and len(sent) == 2   # 같은 발령일은 한 번만
     assert hom.next_auto_send(datetime(2026, 12, 7, 9, 20))[0] == date(2027, 1, 1)       # 다음 발령일로
     assert hom.read_log()[0]['kind'] == 'auto'
+
+
+def test_mailer_cc_bcc_recipient_types(monkeypatch):
+    import pipeline.mailer as mailer
+    for k, v in {'MAIL_API_URL': 'https://m.example', 'MAIL_TOKEN': 't', 'MAIL_SYSTEM_ID': 's',
+                 'MAIL_FROM': 'people.sait@samsung.com'}.items():
+        monkeypatch.setenv(k, v)
+    calls = []
+
+    class R:
+        def raise_for_status(self):
+            pass
+    monkeypatch.setattr(mailer.requests, 'post', lambda url, **kw: calls.append(kw) or R())
+    mailer.send_html_email(['a@x.com'], 's', 'b', cc=['c@x.com', 'A@x.com'], bcc=['d@x.com', 'c@x.com'])
+    assert json.loads(calls[0]['data'])['recipients'] == [
+        {'emailAddress': 'a@x.com', 'recipientType': 'TO'}, {'emailAddress': 'c@x.com', 'recipientType': 'CC'},
+        {'emailAddress': 'd@x.com', 'recipientType': 'BCC'}]                     # 중복 주소는 앞 구분만
+
+
+def test_send_with_cc_each_and_single(paths, monkeypatch):
+    import pipeline.mailer as mailer
+    df = pd.DataFrame([{'researcher_id': '00000009', 'name': '동료', 'org_code': 'X', 'department': '인사',
+                        'knox_id': 'mate'}, {'researcher_id': '00000008', 'name': '팀장', 'org_code': 'X',
+                                             'department': '인사', 'knox_id': 'boss'}])
+    monkeypatch.setattr(hom.data_store, 'read_processed', lambda name: df)
+    import services.similarity_map as sm
+    monkeypatch.setattr(sm, 'dep_name_for_org_code', lambda oc: '인사팀')
+    sent = []
+    monkeypatch.setattr(mailer, 'send_html_email',
+                        lambda to, subject, body, attachments=None, sender_email=None, sender_user_id=None, cc=None,
+                        bcc=None: sent.append((to, cc, bcc)))
+    contacts = [{'dept': 'A', 'name': '김', 'email': 'a@x.com'}, {'dept': 'B', 'name': '이', 'email': 'b@x.com'}]
+    with auth.acting_as(ADMIN):
+        rcp = hom.save_recipient_settings(['00000009'], ['00000008', '00000009'], 'single')
+        assert [p['email'] for p in rcp['cc']] == ['mate@samsung.com']
+        assert [p['email'] for p in rcp['bcc']] == ['boss@samsung.com']       # CC와 겹치면 BCC에서 뺌
+        assert rcp['mode'] == 'single'
+        hom.send(contacts, '제목', '본문', [('a.xlsx', b'1')], hom.SHARED_SENDER, cc=rcp['cc'], bcc=rcp['bcc'])
+        assert sorted(sent) == [(['a@x.com'], ['mate@samsung.com'], ['boss@samsung.com']),
+                                (['b@x.com'], ['mate@samsung.com'], ['boss@samsung.com'])]   # 담당자별 따로 + 매번 참조
+        sent.clear()
+        res = hom.send(contacts, '제목', '본문', [('a.xlsx', b'1')], hom.SHARED_SENDER, cc=rcp['cc'], mode='single')
+        assert sent == [(['a@x.com', 'b@x.com'], ['mate@samsung.com'], [])] and all(r['ok'] for r in res)
+        with pytest.raises(ValueError):
+            hom.save_recipient_settings([], [], 'weird')
+    log = hom.read_log()[0]
+    assert log['mode'] == 'single' and log['cc'] == [{'name': '동료', 'email': 'mate@samsung.com'}]
