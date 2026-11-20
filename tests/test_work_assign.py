@@ -20,11 +20,12 @@ def paths(tmp_path, monkeypatch):
         monkeypatch.setattr(wa, name, str(tmp_path / f'wa_{name}'))
     monkeypatch.setattr(wa, 'AUTO_FILES_DIR', str(tmp_path / 'wa_auto'))
     monkeypatch.setattr(wa, 'SUBMIT_DIR', str(tmp_path / 'wa_sub'))
+    monkeypatch.setattr(wa, 'CONTACTS_PATH', str(tmp_path / 'wa_contacts.json'))
     monkeypatch.setenv('MAIL_FROM', 'people.sait@samsung.com')
     monkeypatch.setattr(auth, 'list_users', lambda: [ADMIN])
     with auth.acting_as(ADMIN):
         hom.save_contacts([{'dept': 'AI플랫폼', 'name': '김', 'email': 'a@x.com'},
-                           {'dept': '소재 연구', 'name': '이', 'email': 'b@x.com'}])
+                           {'dept': '소재 연구', 'name': '이', 'email': 'b@x.com'}])   # 업무분장은 처음 읽을 때 이걸 복사
     return tmp_path
 
 
@@ -217,7 +218,7 @@ def test_send_platform_file_only_to_that_platform_contact(forms, monkeypatch):
     wb.save(buf)
     with auth.acting_as(ADMIN):
         assert forms.save_template('우리양식.xlsx', buf.getvalue())['template_name'] == '우리양식.xlsx'
-        hom.save_contacts([{'dept': 'AI플랫폼', 'name': '김', 'email': 'a@x.com'},
+        wa.save_contacts([{'dept': 'AI플랫폼', 'name': '김', 'email': 'a@x.com'},
                            {'dept': '소재 연구', 'name': '이', 'email': 'b@x.com'},
                            {'dept': '없는플랫폼', 'name': '박', 'email': 'c@x.com'}])
     assert '예시 값' not in str(_sheet(forms.build_form('2026-12', '소재 연구')[1]))
@@ -229,14 +230,14 @@ def test_send_platform_file_only_to_that_platform_contact(forms, monkeypatch):
     monkeypatch.setattr(mailer, 'send_html_email', lambda to, s, b, a=None, sender_email=None, sender_user_id=None,
                         cc=None, bcc=None: sent.append((to, [n for n, _ in a])))
     with auth.acting_as(ADMIN):
-        res = wa.send(hom.load_contacts(), '제목', '본문', [], hom.SHARED_SENDER, '2026-12', mode='single', gen_forms=True)
+        res = wa.send(wa.load_contacts(), '제목', '본문', [], hom.SHARED_SENDER, '2026-12', mode='single', gen_forms=True)
     assert sorted(sent) == [(['a@x.com'], ['업무분장_26년12월_AI플랫폼.xlsx']),
                             (['b@x.com'], ['업무분장_26년12월_소재_연구.xlsx'])]     # 자기 플랫폼 파일만
     assert [(r['email'], r['ok']) for r in res] == [('a@x.com', True), ('b@x.com', True), ('c@x.com', False)]
     assert wa.read_log()[0]['gen_forms'] is True
     with auth.acting_as(ADMIN):
         with pytest.raises(ValueError):
-            wa.send(hom.load_contacts(), '제목', '본문', [], hom.SHARED_SENDER, '2026-12')
+            wa.send(wa.load_contacts(), '제목', '본문', [], hom.SHARED_SENDER, '2026-12')
     import zipfile
     z = zipfile.ZipFile(io.BytesIO(forms.build_all_zip('2026-12')))
     assert sorted(z.namelist()) == ['업무분장_26년12월_AI플랫폼.xlsx', '업무분장_26년12월_소재_연구.xlsx']
@@ -269,21 +270,37 @@ def test_full_list_file_for_review(forms):
 def test_concurrent_contact_gets_one_mail_with_all_platform_files(forms, monkeypatch):
     import pipeline.mailer as mailer
     with auth.acting_as(ADMIN):
-        saved, errors = hom.save_contacts([{'dept': 'AI플랫폼', 'name': '김', 'email': 'a@x.com'},
+        saved, errors = wa.save_contacts([{'dept': 'AI플랫폼', 'name': '김', 'email': 'a@x.com'},
                                            {'dept': '소재 연구', 'name': '김', 'email': 'A@x.com'},   # 겸직(대소문자 무시)
                                            {'dept': '소재 연구', 'name': '이', 'email': 'b@x.com'}])
         assert not errors
         _, errors = hom.save_contacts([{'dept': 'X', 'email': 'a@x.com'}, {'dept': 'X', 'email': 'a@x.com'}])
         assert errors                                                    # 같은 부서에 같은 이메일은 중복
-    groups = hom.group_contacts(hom.load_contacts())
+    groups = hom.group_contacts(wa.load_contacts())
     assert [(g['email'], g['dept']) for g in groups] == [('a@x.com', 'AI플랫폼 · 소재 연구'), ('b@x.com', '소재 연구')]
     sent = []
     monkeypatch.setattr(mailer, 'send_html_email', lambda to, s, b, a=None, sender_email=None, sender_user_id=None,
                         cc=None, bcc=None: sent.append((to, [n for n, _ in a])))
     with auth.acting_as(ADMIN):
-        res = wa.send(hom.contacts_for_emails(['a@x.com', 'b@x.com']), '제목', '본문', [], hom.SHARED_SENDER, '2026-12',
+        res = wa.send(wa.contacts_for_emails(['a@x.com', 'b@x.com']), '제목', '본문', [], hom.SHARED_SENDER, '2026-12',
                       gen_forms=True)
     assert sorted(sent) == [(['a@x.com'], ['업무분장_26년12월_AI플랫폼.xlsx', '업무분장_26년12월_소재_연구.xlsx']),
                             (['b@x.com'], ['업무분장_26년12월_소재_연구.xlsx'])]           # 겸직자는 한 통에 두 파일
     assert [(r['email'], r['dept'], r['ok']) for r in res] == [('a@x.com', 'AI플랫폼 · 소재 연구', True),
                                                                ('b@x.com', '소재 연구', True)]
+
+
+def test_contacts_and_cc_separate_from_hr_order(paths, monkeypatch):
+    # 처음엔 인사발령 명단·참조로 시작
+    assert [c['email'] for c in wa.load_contacts()] == ['a@x.com', 'b@x.com']
+    with auth.acting_as(ADMIN):
+        wa.save_contacts([{'dept': '인사팀', 'name': '인사팀 공용', 'email': 'hr.team@samsung.com'}])   # 비실명 계정 직접 입력
+        rcp = wa.save_recipient_settings(['mail:team.box@samsung.com'], [], 'single')
+        with pytest.raises(ValueError):
+            wa.save_recipient_settings(['mail:잘못된주소'], [], 'each')
+    assert rcp['cc'] == [{'rid': 'mail:team.box@samsung.com', 'dept': '', 'name': 'team.box', 'email': 'team.box@samsung.com'}]
+    assert [c['email'] for c in hom.load_contacts()] == ['a@x.com', 'b@x.com']                  # 인사발령은 그대로
+    assert hom.recipient_settings()['cc'] == [] and hom.recipient_settings()['mode'] == 'each'
+    with auth.acting_as(ADMIN):
+        hom.save_contacts([{'dept': 'Z', 'email': 'z@x.com'}])
+    assert [c['email'] for c in wa.load_contacts()] == ['hr.team@samsung.com']                  # 이후엔 서로 영향 없음

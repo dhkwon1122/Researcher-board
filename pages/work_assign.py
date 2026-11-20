@@ -1,6 +1,6 @@
 """
 업무 시나리오 > 업무분장(2026-11-20) — 매월 업무분장표 작성 양식을 부서별 담당자에게 메일로 보내고(수동·자동),
-회신받은 업무분장표를 올려 부서별 제출 현황과 통합표로 관리한다. 받는 사람·참조인·발송 방식은 인사발령과 공유.
+회신받은 업무분장표를 올려 부서별 제출 현황과 통합표로 관리한다. 받는 사람·참조인·발송 방식은 업무분장 전용(2026-11-20 인사발령과 분리).
 흐름·저장·일정 계산은 services/work_assign.py 참고.
 """
 import base64
@@ -12,12 +12,16 @@ import dash_bootstrap_components as dbc
 from dash import ALL, Input, Output, State, callback, ctx, dcc, html, no_update
 
 from components.rich_editor import register_rich_editor, rich_editor
-from pages.hr_order import _file_list, _md, _rcp_summary, _recipient_options, _upload_box
+from components import mail_recipients as mr
+from pages.hr_order import _file_list, _md, _rcp_summary, _upload_box
 from services import hr_order_mail as hom
 from services import work_assign as wa
 from services import work_assign_form as waf
 
 dash.register_page(__name__, path='/work-assign', name='업무분장', title='업무분장')
+
+# 받는 사람·참조는 업무분장 전용 명단(2026-11-20 인사발령과 분리 — 처음엔 인사발령 값으로 시작)
+WA_STORE = mr.RecipientStore(wa.load_contacts, wa.save_contacts, wa.recipient_settings, wa.save_recipient_settings)
 
 
 def _target_options() -> list:
@@ -32,16 +36,6 @@ def _sub_target_options() -> list:
     return [{'label': f'{wa.target_label(t)}분', 'value': t} for t in (wa.target_of(today, k) for k in range(2, -7, -1))]
 
 
-def _rcp_text():
-    rcp = hom.recipient_settings()
-    cc = ', '.join(p['name'] for p in rcp['cc']) or '없음'
-    bcc = ', '.join(p['name'] for p in rcp['bcc'])
-    mode = '한 통으로' if rcp['mode'] == 'single' else '담당자별 따로'
-    return html.Div([html.B('참조(CC): '), cc, (html.Span([' · ', html.B('비밀참조: '), bcc]) if bcc else ''),
-                     ' · ', html.B('발송 방식: '), mode, ' — ',
-                     dcc.Link('인사발령 화면에서 변경', href='/hr-order')], className='small border rounded p-2 mb-3 bg-light')
-
-
 def _body_frame(body: str, target: str, reply: date, height: str = '300px'):
     doc = ('<html><head><meta charset="utf-8"></head><body style="margin:8px">'
            + hom.body_html(wa.render(body or '', target, reply)) + '</body></html>')
@@ -51,7 +45,7 @@ def _body_frame(body: str, target: str, reply: date, height: str = '300px'):
 # ── 카드: 양식 메일 ─────────────────────────────────────────────────────────
 
 def _compose_card():
-    contacts = hom.load_contacts()
+    contacts = wa.load_contacts()
     subject_t, body_t = wa.template()
     opts = _target_options()
     return dbc.Card([
@@ -64,17 +58,17 @@ def _compose_card():
                 dbc.Col([dbc.Label('대상월', className='small mb-1'),
                          dcc.Dropdown(id='wa-target', options=opts, value=opts[1]['value'], clearable=False)], md=6),
             ], className='g-2 mb-3'),
-            dbc.Label('받을 부서 담당자(수신 TO) — 인사발령과 같은 명단', className='small mb-1'),
+            dbc.Label('받을 부서 담당자(수신 TO)', className='small mb-1'),
             html.Div([
                 dbc.Button('전체 선택', id='wa-all', color='link', size='sm', className='p-0 me-3'),
                 dbc.Button('선택 해제', id='wa-none', color='link', size='sm', className='p-0 me-3'),
                 dbc.Button('미제출 부서만', id='wa-unsub', color='link', size='sm', className='p-0'),
             ], className='mb-1'),
-            dbc.Checklist(id='wa-recipients', options=_recipient_options(contacts), value=[],
+            dbc.Checklist(id='wa-recipients', options=mr.recipient_options(contacts), value=[],
                           className='small mb-1', style={'columns': '2'}),
-            html.Div(['부서별 담당자가 없습니다 — ', dcc.Link('인사발령 화면', href='/hr-order'), '에서 먼저 등록하세요.']
-                     if not contacts else '', className='small text-muted mb-2'),
-            _rcp_text(),
+            html.Div('아래 "부서별 담당자(업무분장)"에 먼저 등록하세요.' if not contacts else '', id='wa-recipients-hint',
+                     className='small text-muted mb-2'),
+            mr.cc_block('wa', WA_STORE),
             dbc.Row([
                 dbc.Col([
                     html.Div([dbc.Label('제목·본문 템플릿', className='small mb-0 me-2'),
@@ -188,7 +182,7 @@ def _plan_view(target: str):
     if pl['unmatched_contacts']:
         extra.append(html.Div(['플랫폼과 부서명이 맞지 않아 양식을 받지 못하는 담당자: ',
                                ', '.join(f"{c['dept']} · {c.get('name') or c['email']}" for c in pl['unmatched_contacts']),
-                               ' — 인사발령 화면의 부서명을 플랫폼 이름과 같게 고치세요.'], className='text-danger mt-1'))
+                               ' — 아래 부서별 담당자(업무분장)의 부서명을 플랫폼 이름과 같게 고치세요.'], className='text-danger mt-1'))
     return html.Div([html.Div(f"플랫폼별 대상 인원·생성 파일·받는 담당자 — 참고 칸 출처: {pl['ref'] or '없음'}",
                               className='fw-semibold mb-1'),
                      dbc.Table([html.Thead(html.Tr([html.Th('플랫폼'), html.Th('대상'), html.Th('파일(눌러서 받기)'),
@@ -240,7 +234,7 @@ def _submit_card():
 def _status_table(target: str):
     rows = wa.status(target)
     if not rows:
-        return html.Div(['부서별 담당자가 없습니다 — ', dcc.Link('인사발령 화면', href='/hr-order'), '에서 먼저 등록하세요.'],
+        return html.Div(['부서별 담당자가 없습니다 — 위 "부서별 담당자(업무분장)"에 먼저 등록하세요.'],
                         className='small text-muted')
     done = sum(1 for r in rows if r['submitted'])
     body = []
@@ -273,9 +267,9 @@ def _auto_status():
     who = (cfg['sender'] or {}).get('label', '')
     lines = [html.Div([html.I(className='bi bi-check-circle text-success me-1'),
                        f'켜짐 — 매월 마지막 워킹데이 {wa.send_workdays()}일 전 발송·회신 기한 대상월 {wa.reply_day()}일, '
-                       f'발신 {who}, 담당자 {len(hom.load_contacts())}명 전체, 공통 첨부 {len(cfg["files"])}개'
+                       f'발신 {who}, 담당자 {len(wa.load_contacts())}명 전체, 공통 첨부 {len(cfg["files"])}개'
                        + (', 플랫폼별 양식 자동 생성(담당자별 따로)' if waf.settings()['enabled'] else '')
-                       + _rcp_summary(hom.recipient_settings())])]
+                       + _rcp_summary(wa.recipient_settings())])]
     if nxt:
         t, when = nxt
         lines.append(html.Div(f'다음 발송: {_md(when.date())} {when:%H:%M} — {wa.target_label(t)}분'
@@ -370,9 +364,13 @@ def layout():
     return dbc.Container([
         html.H4([html.I(className='bi bi-list-task me-2 text-primary'), '업무분장'], className='fw-bold mt-2'),
         html.P('매월 업무분장표 작성 양식을 부서별 담당자에게 메일로 보내고, 회신받은 업무분장표를 올려 제출 현황과 통합표로 '
-               '관리합니다. 받는 사람·참조인·발송 방식과 사용 권한은 인사발령 화면 설정을 함께 씁니다.',
+               '관리합니다. 받는 사람·참조인·발송 방식은 업무분장 전용이고(인사발령과 따로), 사용 권한·회사 휴무일은 인사발령 설정을 '
+               '함께 씁니다.',
                className='text-muted small'),
         _compose_card(),
+        mr.contacts_card('wa', WA_STORE, title='부서별 담당자(업무분장)',
+                         note='업무분장 전용 명단입니다(인사발령 명단과 따로 — 처음엔 인사발령 명단을 복사해 시작). 업무분장 '
+                              '플랫폼별 양식은 부서명이 플랫폼 이름과 같은 담당자에게만 갑니다.'),
         _submit_card(),
         _auto_card(),
         dbc.Card([dbc.CardHeader(html.Span([html.I(className='bi bi-clock-history me-1'), '발송 이력(최근 50건)'],
@@ -421,7 +419,7 @@ def _select(_a, _n, _u, options, target):
         return []
     if ctx.triggered_id == 'wa-unsub':
         submitted = set(wa.submissions(target or ''))     # 겸직이면 맡은 부서 중 하나라도 미제출이면 선택
-        return [g['email'] for g in hom.group_contacts(hom.load_contacts())
+        return [g['email'] for g in hom.group_contacts(wa.load_contacts())
                 if any(d not in submitted for d in g['depts'])]
     return [o['value'] for o in options or []]
 
@@ -451,8 +449,9 @@ def _files_view(files):
           Input('wa-send', 'n_clicks'), Input('wa-confirm-cancel', 'n_clicks'),
           State('wa-recipients', 'value'), State('wa-recipients', 'options'), State('wa-subject', 'value'),
           State('wa-body', 'data'), State('wa-target', 'value'), State('wa-files-store', 'data'),
-          State('wa-sender', 'value'), State('wa-sender', 'options'), State('wa-gen', 'value'), prevent_initial_call=True)
-def _confirm(_send, _cancel, emails, options, subject, body, target, files, sender, sender_opts, gen):
+          State('wa-sender', 'value'), State('wa-sender', 'options'), State('wa-gen', 'value'),
+          State('wa-cc', 'value'), State('wa-bcc', 'value'), State('wa-mode', 'value'), prevent_initial_call=True)
+def _confirm(_send, _cancel, emails, options, subject, body, target, files, sender, sender_opts, gen, cc, bcc, mode):
     if ctx.triggered_id == 'wa-confirm-cancel':
         return False, no_update, no_update
     problems = [m for ok, m in ((emails, '받을 담당자를 고르세요.'), ((subject or '').strip(), '제목을 입력하세요.'),
@@ -460,11 +459,14 @@ def _confirm(_send, _cancel, emails, options, subject, body, target, files, send
                 if not ok]
     if problems:
         return False, no_update, dbc.Alert(' '.join(problems), color='warning', className='small py-2')
-    rcp = hom.recipient_settings()
+    try:
+        cc_p, bcc_p = mr.cc_people(WA_STORE, cc, bcc)
+    except ValueError as exc:
+        return False, no_update, dbc.Alert(str(exc), color='warning', className='small py-2')
     reply = wa.reply_due(target)
     sender_label = next((o['label'] for o in sender_opts or [] if o['value'] == sender), sender)
-    single = rcp['mode'] == 'single' and not gen
-    chosen = hom.group_contacts(hom.contacts_for_emails(emails))     # 겸직 담당자는 한 줄·한 통
+    single = mode == 'single' and not gen
+    chosen = hom.group_contacts(wa.contacts_for_emails(emails))     # 겸직 담당자는 한 줄·한 통
     plats = set(waf.platforms()) if gen else set()
     common = [f['name'] for f in files or []]
     common_view = [html.Div([html.I(className='bi bi-paperclip me-1'), n]) for n in common]
@@ -485,8 +487,8 @@ def _confirm(_send, _cancel, emails, options, subject, body, target, files, send
             html.Td(html.Span(f"'{c['dept']}' 플랫폼 대상자 없음 — 보내지 않음", className='text-danger') if skip
                     else html.Span('보냄', className='text-success')),
         ], className='table-danger' if skip else None))
-    cc_text = ', '.join(f"{p['name']} <{p['email']}>" for p in rcp['cc']) or '없음'
-    bcc_text = ', '.join(f"{p['name']} <{p['email']}>" for p in rcp['bcc'])
+    cc_text = ', '.join(f"{p['name']} <{p['email']}>" for p in cc_p) or '없음'
+    bcc_text = ', '.join(f"{p['name']} <{p['email']}>" for p in bcc_p)
     how = '담당자별 따로(플랫폼별 양식)' if gen else ('한 통으로(담당자 전원 TO)' if single else '담당자별 따로')
     return True, html.Div([
         html.Div([html.B('발신: '), sender_label], className='small mb-1'),
@@ -507,17 +509,18 @@ def _confirm(_send, _cancel, emails, options, subject, body, target, files, send
           Input('wa-confirm-ok', 'n_clicks'),
           State('wa-recipients', 'value'), State('wa-subject', 'value'), State('wa-body', 'data'),
           State('wa-target', 'value'), State('wa-files-store', 'data'), State('wa-sender', 'value'),
-          State('wa-gen', 'value'), prevent_initial_call=True)
-def _send(n, emails, subject, body, target, files, sender, gen):
+          State('wa-gen', 'value'), State('wa-cc', 'value'), State('wa-bcc', 'value'), State('wa-mode', 'value'),
+          prevent_initial_call=True)
+def _send(n, emails, subject, body, target, files, sender, gen, cc, bcc, mode):
     if not n:
         return no_update, no_update, no_update
     reply = wa.reply_due(target)
-    contacts = hom.contacts_for_emails(emails)            # 겸직이면 여러 행 — 발송 때 한 통으로 묶임
+    contacts = wa.contacts_for_emails(emails)             # 겸직이면 여러 행 — 발송 때 한 통으로 묶임
     attachments = [(f['name'], base64.b64decode(f['b64'])) for f in files or []]
-    rcp = hom.recipient_settings()
     try:
+        cc_p, bcc_p = mr.cc_people(WA_STORE, cc, bcc)
         results = wa.send(contacts, wa.render(subject, target, reply), wa.render(body, target, reply), attachments, sender,
-                          target, cc=rcp['cc'], bcc=rcp['bcc'], mode=rcp['mode'], gen_forms=bool(gen))
+                          target, cc=cc_p, bcc=bcc_p, mode=mode or 'each', gen_forms=bool(gen))
     except (PermissionError, ValueError) as exc:
         return dbc.Alert(str(exc), color='danger', className='small py-2'), False, no_update
     ok = [r for r in results if r['ok']]
@@ -722,3 +725,6 @@ def _save_auto(n, enabled, hour, sender, send_days, reply_days):
         return html.Span(str(exc), className='text-danger'), _auto_status(), no_update
     return (html.Span(f'저장했습니다({datetime.now():%H:%M}).', className='text-success'), _auto_status(),
             _target_options())
+
+
+mr.register('wa', WA_STORE, 'wa-auto-status', lambda: _auto_status(), empty_hint='아래 "부서별 담당자(업무분장)"에 먼저 등록하세요.')

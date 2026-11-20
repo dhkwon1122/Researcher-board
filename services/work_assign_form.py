@@ -366,7 +366,7 @@ def build_all_zip(target: str) -> bytes:
 def plan(target: str) -> dict:
     """발송 전 확인용 — {'platforms': [{'platform','count','contacts':[...]}], 'unmatched_contacts': [...], 'ref': 출처}."""
     people = target_people()
-    contacts = wa.hom.load_contacts()
+    contacts = wa.load_contacts()
     plats = platforms(people)
     out = [{'platform': p, 'count': sum(1 for x in people if x['플랫폼'] == p),
             'contacts': [c for c in contacts if c.get('dept') == p]} for p in plats]
