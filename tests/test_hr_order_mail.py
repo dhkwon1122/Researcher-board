@@ -227,3 +227,32 @@ def test_send_with_cc_each_and_single(paths, monkeypatch):
             hom.save_recipient_settings([], [], 'weird')
     log = hom.read_log()[0]
     assert log['mode'] == 'single' and log['cc'] == [{'name': '동료', 'email': 'mate@samsung.com'}]
+
+
+def test_configurable_days_and_multiple_auto_files(paths, monkeypatch, tmp_path):
+    monkeypatch.setattr(hom, 'FILES_DIR', str(tmp_path / 'files'))
+    od = date(2026, 12, 16)
+    assert (hom.send_workdays(), hom.reply_workdays()) == (7, 4)
+    with auth.acting_as(ADMIN):
+        for bad in ((4, 4), (3, 5), (21, 4), (5, 0)):
+            with pytest.raises(ValueError):
+                hom.set_workdays(*bad)
+        assert hom.set_workdays(10, 3) == (10, 3)
+        assert hom.auto_send_date(od) == date(2026, 12, 2) and hom.reply_due(od) == date(2026, 12, 11)
+        hom.add_auto_files([('양식.xlsx', b'1'), ('안내.pdf', b'22')])
+        hom.add_auto_files([('추가.docx', b'333'), ('양식.xlsx', b'new')])         # 누적, 같은 이름은 교체
+        assert hom.auto_files() == [('안내.pdf', b'22'), ('추가.docx', b'333'), ('양식.xlsx', b'new')]
+        hom.remove_auto_file('안내.pdf')
+        assert [n for n, _ in hom.auto_files()] == ['추가.docx', '양식.xlsx']
+
+
+def test_auto_skips_slots_already_past_when_saved(paths, monkeypatch, tmp_path):
+    from datetime import datetime
+    monkeypatch.setattr(hom, 'FILES_DIR', str(tmp_path / 'files'))
+    monkeypatch.setattr(hom, 'AUTO_SENT_PATH', str(tmp_path / 'sent.json'))
+    with auth.acting_as(ADMIN):
+        hom.set_workdays(10, 3)
+        hom.save_auto(False, 9, hom.SHARED_SENDER)
+    hom._update_settings(auto={**hom._settings()['auto'], 'set_at': '2026-11-20T08:00:00'})
+    # 12.01 발령분 발송 예정 11.17은 저장(11.20) 전에 지났으므로 건너뛰고 다음 발령일로
+    assert hom.next_auto_send(datetime(2026, 11, 20, 8, 5))[0] == date(2026, 12, 16)

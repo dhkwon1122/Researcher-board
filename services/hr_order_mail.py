@@ -43,8 +43,9 @@ AUTO_SENT_PATH = os.path.join(data_store.DATA_DIR, 'hr_order_auto_sent.json')
 AUTO_LOCK_PATH = os.path.join(data_store.DATA_DIR, '.hr_order_auto.lock')
 MAX_TOTAL_BYTES = 20 * 1024 * 1024        # 첨부 합계 상한(메일 서버 제한 대비)
 SHARED_SENDER = '__shared__'              # 발신 계정 선택값: .env의 팀 공용 계정
-REPLY_WORKDAYS = 4                        # 회신일 = 발령일의 워킹데이 4일 전(사용자 확정)
-AUTO_SEND_WORKDAYS = 7                    # 자동 발송 = 발령일의 워킹데이 7일 전(사용자 확정)
+REPLY_WORKDAYS = 4                        # 회신일 기본값 = 발령일의 워킹데이 4일 전(화면에서 변경 — reply_workdays())
+AUTO_SEND_WORKDAYS = 7                    # 자동 발송 기본값 = 발령일의 워킹데이 7일 전(화면에서 변경 — send_workdays())
+MAX_WORKDAYS = 20
 DEFAULT_AUTO_HOUR = 9
 _LOCK = threading.Lock()
 
@@ -179,12 +180,38 @@ def next_order_date(today: date | None = None) -> date:
     return (today.replace(day=1) + timedelta(days=32)).replace(day=1)
 
 
+def _days_setting() -> dict:
+    return _settings().get('days') or {}
+
+
+def send_workdays() -> int:
+    """자동 발송 시점 — 발령일의 워킹데이 며칠 전(2026-11-20부터 화면에서 설정, 기본 7)."""
+    return int(_days_setting().get('send', AUTO_SEND_WORKDAYS))
+
+
+def reply_workdays() -> int:
+    """회신 기한 — 발령일의 워킹데이 며칠 전(기본 4). 수동 발송의 {회신일}에도 같이 쓰임."""
+    return int(_days_setting().get('reply', REPLY_WORKDAYS))
+
+
+def set_workdays(send: int, reply: int) -> tuple[int, int]:
+    _require_use()
+    try:
+        send, reply = int(send), int(reply)
+    except (TypeError, ValueError):
+        raise ValueError('발송일·회신 기한을 숫자로 고르세요.') from None
+    if not 1 <= reply < send <= MAX_WORKDAYS:
+        raise ValueError(f'발송은 회신 기한보다 앞서야 합니다(1 ≤ 회신 기한 < 발송 ≤ {MAX_WORKDAYS} 워킹데이 전).')
+    _update_settings(days={'send': send, 'reply': reply})
+    return send, reply
+
+
 def reply_due(order_date: date) -> date:
-    return workdays_before(order_date, REPLY_WORKDAYS)
+    return workdays_before(order_date, reply_workdays())
 
 
 def auto_send_date(order_date: date) -> date:
-    return workdays_before(order_date, AUTO_SEND_WORKDAYS)
+    return workdays_before(order_date, send_workdays())
 
 
 # ── 템플릿(담당자가 평소 쓰는 제목·본문 + 자리표시자) ─────────────────────────
@@ -589,7 +616,7 @@ def read_log(limit: int = 50) -> list:
     return out
 
 
-# ── 자동 발송(발령일의 워킹데이 7일 전) ────────────────────────────────────────
+# ── 자동 발송(발령일의 워킹데이 N일 전, 기본 7) ──────────────────────────────────
 
 def auto_settings() -> dict:
     a = _settings().get('auto') or {}
@@ -631,6 +658,17 @@ def save_auto_files(files: list) -> list:
     return names
 
 
+def add_auto_files(files: list) -> list:
+    """자동 발송용 첨부를 추가(2026-11-20 — 여러 개 누적). 이름이 같으면 새 파일로 바꾼다."""
+    new_names = {os.path.basename(n).strip() or 'attachment' for n, _ in files}
+    keep = [(n, b) for n, b in auto_files() if n not in new_names]
+    return save_auto_files(keep + [(os.path.basename(n).strip() or 'attachment', b) for n, b in files])
+
+
+def remove_auto_file(name: str) -> list:
+    return save_auto_files([(n, b) for n, b in auto_files() if n != name])
+
+
 def save_auto(enabled: bool, hour: int, sender_value: str) -> dict:
     """자동 발송 설정 — 발신 계정은 저장하는 사람 본인 또는 팀 공용(그대로 기억해 두었다가 자동 발송 때 사용)."""
     from services.auth import get_current_user
@@ -666,7 +704,12 @@ def _candidate_order_dates(today: date) -> list:
 def next_auto_send(now: datetime | None = None) -> tuple[date, datetime] | None:
     """다음 자동 발송 예정(발령일, 발송 시각). 이미 보낸 발령일은 건너뜀."""
     now = now or datetime.now()
-    hour = auto_settings()['hour']
+    cfg = auto_settings()
+    hour = cfg['hour']
+    try:
+        set_at = datetime.fromisoformat(cfg['set_at']) if cfg['set_at'] else None
+    except ValueError:
+        set_at = None
     sent = _auto_sent()
     for od in _candidate_order_dates(now.date()):
         if od.isoformat() in sent:
@@ -675,6 +718,8 @@ def next_auto_send(now: datetime | None = None) -> tuple[date, datetime] | None:
         if now.date() >= due:          # 회신 기한이 지난 발령일은 자동 발송하지 않음
             continue
         when = datetime.combine(auto_send_date(od), datetime.min.time()).replace(hour=hour)
+        if set_at and when < set_at:     # 설정을 저장(켜기·발송일 변경)하기 전에 이미 지난 예정분은 늦게 보내지 않음
+            continue
         return od, when
     return None
 

@@ -253,13 +253,30 @@ def _auto_status():
     nxt = hom.next_auto_send()
     who = (cfg['sender'] or {}).get('label', '')
     lines = [html.Div([html.I(className='bi bi-check-circle text-success me-1'),
-                       f'켜짐 — 발신 {who}, 담당자 {len(hom.load_contacts())}명 전체, 첨부 {len(cfg["files"])}개'
+                       f'켜짐 — 발령일 워킹데이 {hom.send_workdays()}일 전 발송·회신 기한 {hom.reply_workdays()}일 전, '
+                       f'발신 {who}, 담당자 {len(hom.load_contacts())}명 전체, 첨부 {len(cfg["files"])}개'
                        + _rcp_summary(hom.recipient_settings())])]
     if nxt:
         od, when = nxt
         lines.append(html.Div(f'다음 발송: {_md(when.date())} {when:%H:%M} — {od:%Y.%m.%d}자 발령분'
                               f'(회신 {_md(hom.reply_due(od))})', className='fw-semibold'))
     return html.Div(lines)
+
+
+def _day_opts() -> list:
+    return [{'label': f'{n}일 전', 'value': n} for n in range(1, hom.MAX_WORKDAYS + 1)]
+
+
+def _days_preview(send, reply) -> list:
+    """다음 발령일 기준 발송일·회신 기한 예시(설정 화면에서 바로 확인용)."""
+    if not send or not reply:
+        return []
+    od = hom.next_order_date()
+    s, r = hom.workdays_before(od, int(send)), hom.workdays_before(od, int(reply))
+    warn = int(reply) >= int(send)
+    return [html.Div(f'예) {od:%Y.%m.%d}자 발령 → 발송 {_md(s)}, 회신 기한 {_md(r)} '
+                     f'(받는 사람에게 워킹데이 {max(int(send) - int(reply), 0)}일)'),
+            html.Div('발송일이 회신 기한보다 앞서야 합니다.', className='text-danger') if warn else None]
 
 
 def _auto_card():
@@ -269,7 +286,7 @@ def _auto_card():
     return dbc.Card([
         dbc.CardHeader(html.Span([html.I(className='bi bi-alarm me-1'), '자동 발송'], className='fw-semibold')),
         dbc.CardBody([
-            html.Div(f'켜 두면 매월 1일·16일 발령일의 워킹데이 {hom.AUTO_SEND_WORKDAYS}일 전, 지정한 시각에 위 "부서별 담당자" '
+            html.Div(f'켜 두면 매월 1일·16일 발령일의 워킹데이 아래 설정한 일수 전, 지정한 시각에 위 "부서별 담당자" '
                      f'전체에게 저장된 템플릿·참조인·발송 방식과 아래 첨부로 보냅니다(발령일당 한 번). 워킹데이는 토·일, 공휴일(대체공휴일 포함), '
                      f'아래 회사 휴무일을 뺀 날입니다.', className='small text-muted mb-2'),
             dbc.Row([
@@ -281,8 +298,17 @@ def _auto_card():
                          dcc.Dropdown(id='hro-auto-sender', options=hom.sender_options(), value=sender_value,
                                       clearable=False)], md=6),
             ], className='g-2 align-items-end mb-2'),
+            dbc.Row([
+                dbc.Col([dbc.Label('발송일 — 발령일의 워킹데이 며칠 전', className='small mb-1'),
+                         dcc.Dropdown(id='hro-send-days', options=_day_opts(), value=hom.send_workdays(),
+                                      clearable=False)], md=3),
+                dbc.Col([dbc.Label('회신 기한 — 발령일의 워킹데이 며칠 전', className='small mb-1'),
+                         dcc.Dropdown(id='hro-reply-days', options=_day_opts(), value=hom.reply_workdays(),
+                                      clearable=False)], md=3),
+                dbc.Col(html.Div(id='hro-days-preview', className='small text-muted'), md=6),
+            ], className='g-2 align-items-end mb-2'),
             dbc.Label('자동 발송용 첨부(서버에 보관)', className='small mb-1'),
-            _upload_box('hro-auto-upload', '클릭 또는 끌어다 놓아 첨부 — 올리면 기존 자동 발송용 첨부를 바꿉니다'),
+            _upload_box('hro-auto-upload', '클릭 또는 끌어다 놓아 첨부(여러 개 가능, 계속 추가됨 — 같은 이름이면 새 파일로 바뀜, 합계 20MB까지)'),
             html.Div(_file_list(files, 'hro-auto-file-del'), id='hro-auto-files', className='small mb-2'),
             dcc.Store(id='hro-auto-files-store', data=None),
             dbc.Label('회사 휴무일(공휴일 외, 예: 창립기념일) — YYYY-MM-DD, 줄바꿈이나 쉼표로 구분', className='small mb-1'),
@@ -368,7 +394,8 @@ def layout():
     return dbc.Container([
         html.H4([html.I(className='bi bi-envelope-paper me-2 text-primary'), '인사발령'], className='fw-bold mt-2'),
         html.P(f'매월 1일·16일 발령분 취합 양식을 부서별 담당자에게 메일로 보냅니다. 선택한 담당자(수신)에게 같은 첨부로 '
-               f'보내고 참조·비밀참조를 따로 넣을 수 있으며, 회신일은 발령일의 워킹데이 {hom.REPLY_WORKDAYS}일 전으로 자동 계산합니다.',
+               f'보내고 참조·비밀참조를 따로 넣을 수 있으며, 회신일은 발령일의 워킹데이 {hom.reply_workdays()}일 전으로 자동 계산합니다'
+               f'(아래 자동 발송 설정에서 변경).',
                className='text-muted small'),
         _compose_card(),
         _contacts_card(),
@@ -604,6 +631,11 @@ def _save_contacts(n, rows):
 
 # ── 콜백: 자동 발송 ─────────────────────────────────────────────────────────
 
+@callback(Output('hro-days-preview', 'children'), Input('hro-send-days', 'value'), Input('hro-reply-days', 'value'))
+def _days_preview_cb(send, reply):
+    return _days_preview(send, reply)
+
+
 @callback(Output('hro-auto-sender', 'value'), Input('hro-auto-sender', 'options'), State('hro-auto-sender', 'value'))
 def _default_auto_sender(options, value):
     return value or (options[0]['value'] if options else None)
@@ -618,11 +650,12 @@ def _auto_files(contents, dels, filenames):
         if isinstance(ctx.triggered_id, dict):
             if not any(dels or []):
                 return no_update, no_update, no_update
-            current.pop(ctx.triggered_id['i'])
-            hom.save_auto_files(current)
+            i = ctx.triggered_id['i']
+            if i < len(current):
+                hom.remove_auto_file(current[i][0])
         else:
             new = [(n, base64.b64decode(c.split(',', 1)[1])) for c, n in zip(contents or [], filenames or [])]
-            hom.save_auto_files(new)
+            hom.add_auto_files(new)
     except (PermissionError, ValueError) as exc:
         return no_update, None, html.Span(str(exc), className='text-danger')
     files = [{'name': n, 'size': len(b)} for n, b in hom.auto_files()]
@@ -632,11 +665,13 @@ def _auto_files(contents, dels, filenames):
 @callback(Output('hro-auto-msg', 'children', allow_duplicate=True), Output('hro-auto-status', 'children'),
           Input('hro-auto-save', 'n_clicks'),
           State('hro-auto-on', 'value'), State('hro-auto-hour', 'value'), State('hro-auto-sender', 'value'),
-          State('hro-holidays', 'value'), prevent_initial_call=True)
-def _save_auto(n, enabled, hour, sender, holidays_text):
+          State('hro-holidays', 'value'), State('hro-send-days', 'value'), State('hro-reply-days', 'value'),
+          prevent_initial_call=True)
+def _save_auto(n, enabled, hour, sender, holidays_text, send_days, reply_days):
     if not n:
         return no_update, no_update
     try:
+        hom.set_workdays(send_days, reply_days)
         hom.set_company_holidays(holidays_text)
         hom.save_auto(bool(enabled), hour, sender)
     except (PermissionError, ValueError) as exc:
