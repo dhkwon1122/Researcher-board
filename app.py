@@ -668,6 +668,10 @@ def refresh_navbar_user(_):
             [html.I(className='bi bi-envelope-paper me-1'), '인사발령'],
             href='/hr-order',
         ))
+        scenario_items.append(dbc.DropdownMenuItem(   # 업무분장(2026-11-20) — 인사발령과 같은 권한
+            [html.I(className='bi bi-list-task me-1'), '업무분장'],
+            href='/work-assign',
+        ))
     items.append(dbc.NavItem(dbc.DropdownMenu(
         label=[html.I(className='bi bi-diagram-3 me-1'), '업무 시나리오'],
         children=scenario_items,

@@ -1,48 +1,53 @@
-// pages/hr_order.py(인사발령) 본문 서식 편집기 전용(2026-11-20).
-// 본문 칸(#hro-body-editor, contentEditable)에서 고친 내용을 dcc.Store(#hro-body)로 올려 보내고,
-// 도구 모음([data-hro-cmd])의 글꼴·크기·굵게·밑줄·글자색·바탕색 등을 document.execCommand로 적용한다.
+// 메일 본문 서식 편집기(components/rich_editor.py) — 인사발령(2026-11-20)에서 시작, 업무분장과 공용.
+// .rich-wrap 안의 편집기(.rich-editor, contentEditable)에서 고친 내용을 data-store에 적힌 dcc.Store로 올려 보내고,
+// 같은 .rich-wrap의 도구 모음([data-hro-cmd])으로 글꼴·크기·굵게·밑줄·글자색·바탕색 등을 document.execCommand로 적용한다.
 // 저장·발송 전에 서버(services/hr_order_mail.sanitize_html)가 허용한 서식만 남긴다.
 (function () {
-  var saved = null;   // 편집기 안의 마지막 선택 영역(도구 모음을 누르면 포커스가 빠지므로 되살린다)
+  var saved = null;      // 마지막 선택 영역(도구 모음을 누르면 포커스가 빠지므로 되살린다)
+  var savedEd = null;    // 그 선택 영역이 있던 편집기
 
-  function editor() { return document.getElementById('hro-body-editor'); }
+  function editorOf(el) {
+    var wrap = el && el.closest && el.closest('.rich-wrap');
+    return wrap ? wrap.querySelector('.rich-editor') : null;
+  }
 
-  function sync() {
-    var ed = editor();
-    if (ed && window.dash_clientside && window.dash_clientside.set_props) {
-      window.dash_clientside.set_props('hro-body', { data: ed.innerHTML });
+  function sync(ed) {
+    var store = ed && ed.getAttribute('data-store');
+    if (store && window.dash_clientside && window.dash_clientside.set_props) {
+      window.dash_clientside.set_props(store, { data: ed.innerHTML });
     }
   }
 
-  function restore() {
-    var ed = editor();
-    if (!ed) { return false; }
+  function restore(ed) {
     ed.focus();
-    if (saved) {
+    if (saved && savedEd === ed) {
       var sel = window.getSelection();
       sel.removeAllRanges();
       sel.addRange(saved);
     }
-    return true;
   }
 
-  function exec(cmd, val) {
-    if (!restore()) { return; }
+  function exec(ed, cmd, val) {
+    if (!ed) { return; }
+    restore(ed);
     document.execCommand('styleWithCSS', false, cmd !== 'fontSize');
     document.execCommand(cmd, false, val == null ? null : val);
-    sync();
+    sync(ed);
   }
 
   document.addEventListener('selectionchange', function () {
-    var ed = editor();
     var sel = window.getSelection();
-    if (ed && sel.rangeCount && ed.contains(sel.anchorNode)) {
+    if (!sel.rangeCount) { return; }
+    var node = sel.anchorNode && (sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement);
+    var ed = node && node.closest && node.closest('.rich-editor');
+    if (ed) {
       saved = sel.getRangeAt(0).cloneRange();
+      savedEd = ed;
     }
   });
 
   document.addEventListener('input', function (ev) {
-    if (ev.target && ev.target.id === 'hro-body-editor') { sync(); }
+    if (ev.target && ev.target.classList && ev.target.classList.contains('rich-editor')) { sync(ev.target); }
   });
 
   // 버튼: mousedown에서 기본 동작(포커스 이동)을 막아 선택 영역 유지
@@ -50,7 +55,7 @@
     var btn = ev.target.closest && ev.target.closest('button[data-hro-cmd]');
     if (btn) {
       ev.preventDefault();
-      exec(btn.getAttribute('data-hro-cmd'), btn.getAttribute('data-hro-val'));
+      exec(editorOf(btn), btn.getAttribute('data-hro-cmd'), btn.getAttribute('data-hro-val'));
     }
   });
 
@@ -58,16 +63,18 @@
   document.addEventListener('change', function (ev) {
     var t = ev.target;
     if (t && t.tagName === 'SELECT' && t.getAttribute('data-hro-cmd')) {
-      if (t.value) { exec(t.getAttribute('data-hro-cmd'), t.value); }
+      if (t.value) { exec(editorOf(t), t.getAttribute('data-hro-cmd'), t.value); }
       t.selectedIndex = 0;
     }
   });
 
-  // 글자색·바탕색: 견본(.hro-color)을 누르면 색상 선택 창을 열고, 고른 색을 적용·견본에 표시
+  // 글자색·바탕색: 견본(.hro-color)이 든 라벨을 누르면 색상 선택 창을 열고, 고른 색을 적용·견본에 표시
   document.addEventListener('click', function (ev) {
-    var sw = ev.target.closest && ev.target.closest('label') && ev.target.closest('label').querySelector('.hro-color');
+    var label = ev.target.closest && ev.target.closest('label');
+    var sw = label && label.querySelector('.hro-color');
     if (!sw) { return; }
     ev.preventDefault();
+    var ed = editorOf(sw);
     var input = document.createElement('input');
     input.type = 'color';
     input.value = sw.getAttribute('data-hro-color') || '#000000';
@@ -79,7 +86,7 @@
     input.addEventListener('change', function () {
       sw.setAttribute('data-hro-color', input.value);
       sw.style.background = input.value;
-      exec(sw.getAttribute('data-hro-cmd'), input.value);
+      exec(ed, sw.getAttribute('data-hro-cmd'), input.value);
       input.remove();
     });
     input.addEventListener('blur', function () { setTimeout(function () { input.remove(); }, 500); });
