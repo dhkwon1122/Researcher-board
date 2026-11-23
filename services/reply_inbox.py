@@ -37,6 +37,9 @@ from email.utils import parseaddr, parsedate_to_datetime
 
 from services import data_store
 from services import hr_order_mail as hom
+from services.db import load_env_file
+
+load_env_file()          # 도커 밖에서 실행할 때도 .env의 MAIL_POP3_*를 읽도록(이미 있는 환경변수는 덮지 않음)
 
 log = logging.getLogger(__name__)
 
@@ -407,7 +410,9 @@ def run_once(connect=None) -> dict:
     """한 번 가져오기 — 주기 실행과 '지금 가져오기'가 겹치지 않게 파일 잠금(겹치면 busy). 결과는 상태 파일에."""
     at = datetime.now().strftime('%Y-%m-%d %H:%M')
     if not is_configured() and connect is None:
-        return {'at': at, 'ok': False, 'error': 'MAIL_POP3_HOST/MAIL_POP3_USER가 설정되지 않았습니다.'}
+        return {'at': at, 'ok': False, 'error': 'MAIL_POP3_HOST/MAIL_POP3_USER가 앱에 전달되지 않았습니다 — .env에 넣은 뒤 '
+                                                 'docker-compose.yml의 app environment에도 있는지 확인하고 '
+                                                 '`docker compose up -d app`으로 다시 띄우세요.'}
     os.makedirs(os.path.dirname(FETCH_LOCK), exist_ok=True)
     with open(FETCH_LOCK, 'w') as lock:
         try:

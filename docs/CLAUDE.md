@@ -14830,3 +14830,13 @@ TypeError → "추출" 클릭 콜백과 폴링 콜백이 둘 다 조용히 실�
     그대로 + 회신 부서), 6행부터 부서 순서대로 회신 행, C6 틀 고정. '회신 현황' 시트는 그대로.
   - 테스트: 양식 구조 그대로 만든 파일 읽기(묶음 접두어·날짜), 통합 시트 묶음·열 이름·값·회신 부서·기타 열(총 195).
     브라우저: 가짜 POP3로 양식 회신 → 통합 시트·화면 표 열 확인.
+
+### (93) 2026-11-23 — MAIL_POP3_*가 컨테이너에 전달되지 않던 문제
+- 사용자 보고: ".env 파일에 MAIL_POP3_HOST, MAIL_POP3_USER 입력했는데 '가져오기 실패: MAIL_POP3_HOST/MAIL_POP3_USER가 설정되지
+  않았습니다' 메세지 발생".
+- 원인: .env는 이미지에 들어가지 않고(.dockerignore), docker-compose.yml app.environment에 나열한 키만 컨테이너로 전달되는데
+  (90)에서 MAIL_POP3_* 등을 추가하지 않았음. services/reply_inbox.py는 load_env_file()도 부르지 않았음.
+- 수정: docker-compose.yml app.environment에 MAIL_POP3_HOST/PORT/SSL/USER/PASSWORD, MAIL_POLL_MINUTES, MAIL_SINCE_DAYS,
+  MAIL_MAX_PER_RUN, MAIL_MAX_ATTACHMENT_MB, REPLY_INBOX_DISABLED, HR_ORDER_AUTO_DISABLED 추가. reply_inbox가 import 때
+  load_env_file()(도커 밖 실행 대비). 미설정 메시지에 compose 확인·재기동 안내.
+- 교훈: 새 환경변수를 쓰면 docker-compose.yml app.environment에도 반드시 추가할 것.
