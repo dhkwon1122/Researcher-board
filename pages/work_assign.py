@@ -13,6 +13,7 @@ from dash import ALL, Input, Output, State, callback, ctx, dcc, html, no_update
 
 from components.rich_editor import register_rich_editor, rich_editor
 from components import mail_recipients as mr
+from components import reply_inbox_ui as ri_ui
 from pages.hr_order import _file_list, _md, _rcp_summary, _upload_box
 from services import hr_order_mail as hom
 from services import work_assign as wa
@@ -383,6 +384,7 @@ def layout():
                          note='업무분장 전용 명단입니다(인사발령 명단과 따로 — 처음엔 인사발령 명단을 복사해 시작). 업무분장 '
                               '플랫폼별 양식은 부서명이 플랫폼 이름과 같은 담당자에게만 갑니다.'),
         _submit_card(),
+        ri_ui.card('wa', 'work_assign'),
         _auto_card(),
         dbc.Card([dbc.CardHeader(html.Span([html.I(className='bi bi-clock-history me-1'), '발송 이력(최근 50건)'],
                                            className='fw-semibold')),
@@ -739,3 +741,4 @@ def _save_auto(n, enabled, hour, sender, send_days, reply_days):
 
 
 mr.register('wa', WA_STORE, 'wa-auto-status', lambda: _auto_status(), empty_hint='아래 "부서별 담당자(업무분장)"에 먼저 등록하세요.')
+ri_ui.register('wa', 'work_assign', 'wa-sub-ver')

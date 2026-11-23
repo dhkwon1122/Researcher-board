@@ -718,6 +718,9 @@ server = app.server
 if not os.environ.get('PYTEST_CURRENT_TEST'):
     from services.hr_order_mail import start_scheduler as _start_hr_order_scheduler
     _start_hr_order_scheduler()
+    # 회신 메일 자동 취합(2026-11-23) — 비실명 계정 POP3(MAIL_POP3_*)가 설정돼 있으면 워커 하나가 주기적으로 가져옴
+    from services.reply_inbox import start_poller as _start_reply_inbox
+    _start_reply_inbox()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', '8501'))

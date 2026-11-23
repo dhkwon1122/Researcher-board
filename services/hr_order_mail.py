@@ -566,6 +566,104 @@ def save_recipient_settings(cc_rids: list, bcc_rids: list, mode: str) -> dict:
     return recipient_settings()
 
 
+# ── 회신 현황(2026-11-23 — 비실명 계정 POP3로 받은 회신·화면 업로드) ─────────────────
+
+REPLIES_PATH = os.path.join(data_store.DATA_DIR, 'hr_order_replies.json')
+REPLIES_DIR = os.path.join(data_store.DATA_DIR, 'hr_order_replies')
+
+
+def departments() -> list:
+    out = []
+    for c in load_contacts():
+        if c.get('dept') and c['dept'] not in out:
+            out.append(c['dept'])
+    return out
+
+
+def _replies() -> dict:
+    data = _read_json(REPLIES_PATH, {})
+    return data if isinstance(data, dict) else {}
+
+
+def replies(order_date: str) -> dict:
+    """{부서: {'files': [{'name','file','size'}], 'at', 'by_name', 'source', 'sender', 'mail_subject'}}."""
+    return dict(_replies().get(order_date) or {})
+
+
+def _safe_name(name: str) -> str:
+    return re.sub(r'[\\/:*?"<>|]+', '_', os.path.basename(name or '')).strip() or 'file'
+
+
+def store_reply(order_date: str, dept: str, files: list, by: dict, source: str = 'upload', sender: str = '',
+                mail_subject: str = '') -> dict:
+    """부서 회신 저장(권한 확인 없음 — 화면은 save_reply, 메일 취합은 reply_inbox가 부름). 같은 부서는 새 회신으로 교체."""
+    date.fromisoformat(order_date)
+    if dept not in departments():
+        raise ValueError(f'{dept}: 부서별 담당자에 없는 부서입니다.')
+    if not files:
+        raise ValueError('첨부 파일이 없습니다.')
+    folder = os.path.join(REPLIES_DIR, order_date, re.sub(r'[\\/:*?"<>|\s]+', '_', dept))
+    with _LOCK:
+        if os.path.isdir(folder):
+            for old in os.listdir(folder):
+                os.remove(os.path.join(folder, old))
+        os.makedirs(folder, exist_ok=True)
+        saved = []
+        for name, content in files:
+            fname = _safe_name(name)
+            with open(os.path.join(folder, fname), 'wb') as f:
+                f.write(content)
+            saved.append({'name': os.path.basename(name), 'file': fname, 'size': len(content)})
+        data = _replies()
+        rec = {'files': saved, 'at': datetime.now().isoformat(timespec='seconds'), 'by_name': (by or {}).get('display_name', ''),
+               'source': source, 'sender': sender, 'mail_subject': mail_subject}
+        data.setdefault(order_date, {})[dept] = rec
+        _write_json(REPLIES_PATH, data)
+    return rec
+
+
+def save_reply(order_date: str, dept: str, files: list) -> dict:
+    from services.auth import get_current_user
+    _require_use()
+    return store_reply(order_date, dept, files, get_current_user() or {})
+
+
+def reply_file(order_date: str, dept: str, name: str) -> tuple[str, bytes] | None:
+    rec = replies(order_date).get(dept) or {}
+    f = next((x for x in rec.get('files', []) if x['name'] == name), None)
+    if not f:
+        return None
+    try:
+        with open(os.path.join(REPLIES_DIR, order_date, re.sub(r'[\\/:*?"<>|\s]+', '_', dept), f['file']), 'rb') as fh:
+            return f['name'], fh.read()
+    except OSError:
+        return None
+
+
+def delete_reply(order_date: str, dept: str) -> None:
+    _require_use()
+    with _LOCK:
+        data = _replies()
+        if (data.get(order_date) or {}).pop(dept, None) is not None:
+            folder = os.path.join(REPLIES_DIR, order_date, re.sub(r'[\\/:*?"<>|\s]+', '_', dept))
+            if os.path.isdir(folder):
+                for old in os.listdir(folder):
+                    os.remove(os.path.join(folder, old))
+            _write_json(REPLIES_PATH, data)
+
+
+def reply_status(order_date: str) -> list:
+    """부서별 회신 현황 [{'dept','contact','replied','files','at','source','sender'}] — 담당자 명단 순서."""
+    reps = replies(order_date)
+    names = {}
+    for c in load_contacts():
+        names.setdefault(c['dept'], []).append(c.get('name') or c.get('email', ''))
+    return [{'dept': d, 'contact': ', '.join(names.get(d, [])), 'replied': d in reps,
+             'files': [f['name'] for f in (reps.get(d) or {}).get('files', [])], 'at': (reps.get(d) or {}).get('at', ''),
+             'source': (reps.get(d) or {}).get('source', ''), 'sender': (reps.get(d) or {}).get('sender', '')}
+            for d in departments()]
+
+
 # ── 발신 계정 ───────────────────────────────────────────────────────────────
 
 def _account_email(user: dict) -> str:

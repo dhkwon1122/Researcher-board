@@ -494,11 +494,16 @@ def save_submission(target: str, dept: str, name: str, content: bytes) -> dict:
     """부서 회신 파일 저장(같은 부서는 새 파일로 교체). 표를 읽을 수 없으면 ValueError."""
     from services.auth import get_current_user
     _require_use()
+    return store_submission(target, dept, name, content, get_current_user() or {})
+
+
+def store_submission(target: str, dept: str, name: str, content: bytes, by: dict, source: str = 'upload') -> dict:
+    """권한 확인 없이 저장 — 화면 업로드(save_submission)와 회신 메일 자동 취합(services/reply_inbox)이 같이 쓴다."""
     _month(target)
     if dept not in departments():
         raise ValueError(f'{dept}: 부서별 담당자에 없는 부서입니다.')
     df = read_table(name, content)
-    me = get_current_user() or {}
+    me = by or {}
     ext = os.path.splitext(name)[1].lower()
     fname = f'{_safe(dept)}{ext}'
     folder = os.path.join(SUBMIT_DIR, target)
@@ -514,7 +519,7 @@ def save_submission(target: str, dept: str, name: str, content: bytes) -> dict:
             f.write(content)
         data = _submissions()
         rec = {'file': fname, 'name': os.path.basename(name), 'size': len(content), 'rows': _target_rows(df),
-               'by': me.get('user_id', ''), 'by_name': me.get('display_name', ''),
+               'by': me.get('user_id', ''), 'by_name': me.get('display_name', ''), 'source': source,
                'at': datetime.now().isoformat(timespec='seconds')}
         data.setdefault(target, {})[dept] = rec
         hom._write_json(SUBMISSIONS_PATH, data)
