@@ -21,6 +21,9 @@ def paths(tmp_path, monkeypatch):
     monkeypatch.setattr(wa, 'AUTO_FILES_DIR', str(tmp_path / 'wa_auto'))
     monkeypatch.setattr(wa, 'SUBMIT_DIR', str(tmp_path / 'wa_sub'))
     monkeypatch.setattr(wa, 'CONTACTS_PATH', str(tmp_path / 'wa_contacts.json'))
+    from services import work_assign_form as _waf
+    monkeypatch.setattr(_waf, 'MERGED_DIR', str(tmp_path / 'wa_merged'))
+    monkeypatch.setattr(_waf, 'TEMPLATE_PATH', str(tmp_path / 'wa_tpl.xlsx'))
     monkeypatch.setenv('MAIL_FROM', 'people.sait@samsung.com')
     monkeypatch.setattr(auth, 'list_users', lambda: [ADMIN])
     with auth.acting_as(ADMIN):
@@ -313,3 +316,32 @@ def test_mail_send_date_placeholder_and_holiday_reason(paths):
     assert hom.render('{메일 발송일}', date(2026, 12, 16)) == f'{date.today():%Y.%m.%d}'      # 기본은 오늘
     assert [hom.day_off_reason(date(2027, 1, d)) for d in (1, 2, 3, 4)] == ['신정연휴', '토요일', '일요일', '']   # holidays 패키지 표기
     assert wa.reply_due('2027-01') == date(2027, 1, 4)
+
+
+def test_merged_workbook_auto_refreshed_in_form_layout(forms):
+    from openpyxl import load_workbook
+    reply_a = _real_form([['gd.hong', '재직', '', 'G1', '과제A', '홍길동', '기획', '상세', '전담', '100%', '', '']],
+                         [['AI플랫폼', 'G1', '과제A', '홍길동', '분석', '', '', '', '', '']])
+    reply_b = _real_form([['mat.kim', '재직', '소재 연구', 'G9', '파트Z', '소재인', '분석', '', '겸임', '50%', '', '비고']],
+                         [[''] * 10])
+    with auth.acting_as(ADMIN):
+        wa.save_submission('2026-12', '소재 연구', 'b.xlsx', reply_b)
+        wa.save_submission('2026-12', 'AI플랫폼', 'a.xlsx', reply_a)
+    info = forms.merged_info('2026-12')
+    assert info['rows'] == 2
+    name, content = forms.merged_file('2026-12')
+    assert name == '업무분장_통합_26년12월.xlsx'
+    wb = load_workbook(io.BytesIO(content))
+    ws = wb['통합']
+    rows = [[c.value for c in r] for r in ws.iter_rows(max_col=22)]
+    assert rows[0][2] == "'26년 12월 1일자" and rows[0][12] == "참고 : '26년 11월 1일자"
+    assert [r[0] for r in rows[2:4]] == ['gd.hong', 'mat.kim']                # 담당자 명단(부서) 순서
+    assert rows[2][2] == 'AI플랫폼' and rows[2][6] == '기획' and rows[2][16] == '분석'   # 빈 플랫폼은 제출 부서, 참고 유지
+    st = [[c.value for c in r] for r in wb['제출 현황'].iter_rows()]
+    assert st[0][:3] == ['부서', '담당자', '상태'] and [r[2] for r in st[1:]] == ['제출', '제출']
+    with auth.acting_as(ADMIN):
+        wa.delete_submission('2026-12', 'AI플랫폼')
+    assert forms.merged_info('2026-12')['rows'] == 1                          # 지우면 다시 정리
+    with auth.acting_as(ADMIN):
+        wa.delete_submission('2026-12', '소재 연구')
+    assert forms.merged_info('2026-12') == {} and forms.merged_file('2026-12') is None

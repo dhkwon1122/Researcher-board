@@ -22,6 +22,9 @@ def env(tmp_path, monkeypatch):
     for name in ('SETTINGS_PATH', 'LOG_PATH', 'SUBMISSIONS_PATH', 'CONTACTS_PATH'):
         monkeypatch.setattr(wa, name, str(tmp_path / f'wa_{name}'))
     monkeypatch.setattr(wa, 'SUBMIT_DIR', str(tmp_path / 'wa_sub'))
+    from services import work_assign_form as _waf
+    monkeypatch.setattr(_waf, 'MERGED_DIR', str(tmp_path / 'wa_merged'))
+    monkeypatch.setattr(_waf, 'TEMPLATE_PATH', str(tmp_path / 'wa_tpl.xlsx'))
     for name in ('INDEX_PATH', 'STATUS_PATH', 'FETCH_LOCK'):
         monkeypatch.setattr(ri, name, str(tmp_path / f'ri_{name}'))
     monkeypatch.setattr(ri, 'FILES_DIR', str(tmp_path / 'ri_files'))
@@ -104,6 +107,8 @@ def test_fetch_registers_work_assign_and_hr_replies(env):
     assert st['ok'] and (st['new'], st['skipped'], st['registered'], st['review']) == (4, 1, 3, 1)
     assert sorted(wa.submissions('2026-12')) == ['A플랫폼', 'B플랫폼', 'C플랫폼']
     assert wa.submissions('2026-12')['B플랫폼']['source'] == 'mail'
+    from services import work_assign_form as waf
+    assert waf.merged_info('2026-12')['rows'] == 3                                  # 회신 메일로도 통합표 자동 정리
     rep = hom.replies('2026-12-16')['B플랫폼']
     assert [f['name'] for f in rep['files']] == ['B플랫폼 발령.xlsx', '메모.pdf'] and rep['source'] == 'mail'
     assert hom.reply_file('2026-12-16', 'B플랫폼', '메모.pdf') == ('메모.pdf', b'y')

@@ -523,7 +523,18 @@ def store_submission(target: str, dept: str, name: str, content: bytes, by: dict
                'at': datetime.now().isoformat(timespec='seconds')}
         data.setdefault(target, {})[dept] = rec
         hom._write_json(SUBMISSIONS_PATH, data)
+    _refresh_merged(target)
     return rec
+
+
+def _refresh_merged(target: str) -> None:
+    """회신 통합표 자동 정리(services/work_assign_form.refresh_merged) — 실패해도 제출 저장은 그대로."""
+    try:
+        from services import work_assign_form
+        work_assign_form.refresh_merged(target)
+    except Exception:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).exception('업무분장 통합표 정리 실패 %s', target)
 
 
 def save_uploads(target: str, files: list, dept: str | None = None) -> tuple[list, list]:
@@ -555,6 +566,7 @@ def delete_submission(target: str, dept: str) -> None:
             except OSError:
                 pass
             hom._write_json(SUBMISSIONS_PATH, data)
+    _refresh_merged(target)
 
 
 def submission_file(target: str, dept: str) -> tuple[str, bytes] | None:
