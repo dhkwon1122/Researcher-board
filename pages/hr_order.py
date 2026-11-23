@@ -6,6 +6,7 @@ import base64
 from datetime import date, datetime
 
 import dash
+import dash_ag_grid as dag
 import dash_bootstrap_components as dbc
 from dash import ALL, Input, Output, State, callback, ctx, dcc, html, no_update
 
@@ -245,7 +246,17 @@ def _reply_card():
                                    style={'borderStyle': 'dashed', 'cursor': 'pointer'}), md=6),
             ], className='g-2 align-items-end mb-2'),
             html.Div(id='hro-rep-msg', className='small mb-2'),
-            html.Div(id='hro-rep-status'),
+            html.Div(id='hro-rep-status', className='mb-3'),
+            html.Div([html.Span('통합표', className='fw-semibold small me-2'),
+                      dbc.Button([html.I(className='bi bi-file-earmark-excel me-1'), '통합표 엑셀(자동 정리)'],
+                                 id='hro-merged-dl', color='success', size='sm', className='py-0 me-2'),
+                      html.Span(id='hro-merged-at', className='small text-muted')],
+                     className='d-flex align-items-center flex-wrap mb-1'),
+            html.Div('부서가 회신한 엑셀·CSV 표를 머리글 그대로 읽어(위쪽 제목 행은 건너뜀) 맨 앞에 "부서" 열을 붙여 합칩니다. 표가 '
+                     '아닌 첨부(PDF 등)는 엑셀의 "회신 현황" 시트에 파일 이름만 남습니다.', className='small text-muted mb-1'),
+            dag.AgGrid(id='hro-merged', rowData=[], columnDefs=[], className='ag-theme-alpine',
+                       defaultColDef={'resizable': True, 'sortable': True, 'filter': True, 'minWidth': 90},
+                       dashGridOptions={'enableCellTextSelection': True}, style={'height': '320px'}),
             dcc.Store(id='hro-rep-ver', data=0),
             dcc.Download(id='hro-rep-download'),
         ]),
@@ -554,9 +565,27 @@ def _clicks_of(trig: dict) -> int:
     return 0
 
 
-@callback(Output('hro-rep-status', 'children'), Input('hro-rep-date', 'value'), Input('hro-rep-ver', 'data'))
+@callback(Output('hro-rep-status', 'children'), Output('hro-merged', 'rowData'), Output('hro-merged', 'columnDefs'),
+          Output('hro-merged-at', 'children'),
+          Input('hro-rep-date', 'value'), Input('hro-rep-ver', 'data'))
 def _rep_status(order_date, _ver):
-    return _reply_table(order_date) if order_date else ''
+    if not order_date:
+        return '', [], [], ''
+    df, _notes = hom.merged_table(order_date)
+    cols = [{'field': c, 'headerName': c, 'pinned': 'left' if i == 0 else None} for i, c in enumerate(df.columns)]
+    info = hom.merged_info(order_date)
+    at = (f"회신이 등록될 때마다 자동으로 다시 정리 — 마지막 {info['at']}, {info['rows']}행" if info
+          else '회신이 등록되면 자동으로 정리됩니다')
+    return _reply_table(order_date), df.to_dict('records'), cols, at
+
+
+@callback(Output('hro-rep-download', 'data', allow_duplicate=True), Input('hro-merged-dl', 'n_clicks'),
+          State('hro-rep-date', 'value'), prevent_initial_call=True)
+def _merged_download(n, order_date):
+    if not n or not order_date or not hom.can_use():
+        return no_update
+    f = hom.merged_file(order_date)
+    return dcc.send_bytes(f[1], f[0]) if f else no_update
 
 
 @callback(Output('hro-rep-msg', 'children'), Output('hro-rep-ver', 'data'), Output('hro-rep-upload', 'contents'),

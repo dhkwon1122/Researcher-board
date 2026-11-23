@@ -19,6 +19,7 @@ def env(tmp_path, monkeypatch):
     for name in ('CONTACTS_PATH', 'SETTINGS_PATH', 'LOG_PATH', 'REPLIES_PATH'):
         monkeypatch.setattr(hom, name, str(tmp_path / f'hr_{name}'))
     monkeypatch.setattr(hom, 'REPLIES_DIR', str(tmp_path / 'hr_replies'))
+    monkeypatch.setattr(hom, 'MERGED_DIR', str(tmp_path / 'hr_merged'))
     for name in ('SETTINGS_PATH', 'LOG_PATH', 'SUBMISSIONS_PATH', 'CONTACTS_PATH'):
         monkeypatch.setattr(wa, name, str(tmp_path / f'wa_{name}'))
     monkeypatch.setattr(wa, 'SUBMIT_DIR', str(tmp_path / 'wa_sub'))
@@ -133,3 +134,32 @@ def test_not_configured_and_permission(env, monkeypatch):
     with pytest.raises(PermissionError):
         with auth.acting_as({'user_id': 'x', 'role': 'viewer', 'is_admin': False, 'permissions': {}}):
             ri.assign(1, 'work_assign', '2026-12', 'A플랫폼')
+
+
+def test_hr_replies_merged_workbook(env):
+    import io
+    from openpyxl import load_workbook
+    title_table = io.BytesIO()
+    pd.DataFrame([['12.16자 인사발령 대상', None, None], [None, None, None], ['성명', '발령구분', '발령 후 부서'],
+                  ['홍길동', '부서이동', 'B플랫폼'], ['김영희', '파트이동', '과제C']]).to_excel(title_table, index=False, header=False)
+    hom.store_reply('2026-12-16', 'A플랫폼', [('A 발령.xlsx', title_table.getvalue()), ('설명.pdf', b'%PDF')], {}, source='mail',
+                    sender='kim@samsung.com')
+    info = hom.merged_info('2026-12-16')
+    assert info['rows'] == 2
+    hom.store_reply('2026-12-16', 'B플랫폼', [('b.csv', '성명,발령구분,비고\n이철수,전배,확인\n'.encode('utf-8'))], {})
+    name, content = hom.merged_file('2026-12-16')
+    assert name == '인사발령_회신통합_20261216.xlsx'
+    wb = load_workbook(io.BytesIO(content))
+    rows = [[c.value for c in r] for r in wb['통합'].iter_rows()]
+    assert rows[0] == ['부서', '성명', '발령구분', '발령 후 부서', '비고']                  # 위쪽 제목 행 건너뜀, 열 합집합
+    assert [r[:3] for r in rows[1:]] == [['A플랫폼', '홍길동', '부서이동'], ['A플랫폼', '김영희', '파트이동'],
+                                          ['B플랫폼', '이철수', '전배']]
+    st = {(r[0], r[3]): r for r in [[c.value for c in r] for r in wb['회신 현황'].iter_rows()][1:]}
+    assert st[('A플랫폼', '설명.pdf')][4] == '표 아님(합치지 않음)' and st[('A플랫폼', 'A 발령.xlsx')][4] == '합침 2행'
+    assert st[('A플랫폼', 'A 발령.xlsx')][6].startswith('회신 메일')
+    with auth.acting_as(ADMIN):
+        hom.delete_reply('2026-12-16', 'A플랫폼')
+    assert hom.merged_info('2026-12-16')['rows'] == 1
+    with auth.acting_as(ADMIN):
+        hom.delete_reply('2026-12-16', 'B플랫폼')
+    assert hom.merged_file('2026-12-16') is None and hom.merged_info('2026-12-16') == {}
