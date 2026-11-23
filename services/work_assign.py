@@ -466,12 +466,22 @@ def read_table(name: str, content: bytes) -> pd.DataFrame:
     if pos > 0:
         grp = raw.iloc[pos - 1].ffill().tolist()
         groups = [str(g).strip() if pd.notna(g) else '' for g in grp]
-    header, cols = [], []
+    names = []
     for i, v in enumerate(raw.loc[hdr_idx].tolist()):
         h = str(v).strip() if isinstance(v, str) or pd.notna(v) else ''
         h = h or f'열{i + 1}'
         if groups[i].startswith('참고'):
             h = f'{REF_PREFIX}{h}'
+        names.append(h)
+    # 같은 열 이름이 다른 묶음에 반복되면 묶음 이름을 앞에 붙인다(2026-11-23 인사발령 양식: 이동 전/이동 후 아래 플랫폼/팀·
+    # 과제/파트 반복 → "이동 전 플랫폼/팀"·"이동 후 플랫폼/팀"). 묶음 이름이 없거나 같으면 예전처럼 _2.
+    for h in {x for x in names if names.count(x) > 1}:
+        idx = [i for i, x in enumerate(names) if x == h]
+        if len({groups[i] for i in idx}) == len(idx) and all(groups[i] for i in idx):
+            for i in idx:
+                names[i] = f'{groups[i]} {h}'
+    header, cols = [], []
+    for i, h in enumerate(names):
         base, k = h, 2
         while h in header:
             h, k = f'{base}_{k}', k + 1
@@ -481,7 +491,8 @@ def read_table(name: str, content: bytes) -> pd.DataFrame:
     body.columns = header
     body = body.dropna(how='all').fillna('')
     strip = getattr(body, 'map', None) if hasattr(pd.DataFrame, 'map') else body.applymap
-    return strip(lambda x: str(x).strip())
+    # 엑셀 날짜 칸은 문자열로 읽으면 '2026-12-16 00:00:00'이 되므로 날짜만 남긴다
+    return strip(lambda x: re.sub(r'^(\d{4}-\d{2}-\d{2}) 00:00:00$', r'\1', str(x).strip()))
 
 
 def _target_rows(df: pd.DataFrame) -> int:
@@ -494,11 +505,16 @@ def save_submission(target: str, dept: str, name: str, content: bytes) -> dict:
     """부서 회신 파일 저장(같은 부서는 새 파일로 교체). 표를 읽을 수 없으면 ValueError."""
     from services.auth import get_current_user
     _require_use()
+    return store_submission(target, dept, name, content, get_current_user() or {})
+
+
+def store_submission(target: str, dept: str, name: str, content: bytes, by: dict, source: str = 'upload') -> dict:
+    """권한 확인 없이 저장 — 화면 업로드(save_submission)와 회신 메일 자동 취합(services/reply_inbox)이 같이 쓴다."""
     _month(target)
     if dept not in departments():
         raise ValueError(f'{dept}: 부서별 담당자에 없는 부서입니다.')
     df = read_table(name, content)
-    me = get_current_user() or {}
+    me = by or {}
     ext = os.path.splitext(name)[1].lower()
     fname = f'{_safe(dept)}{ext}'
     folder = os.path.join(SUBMIT_DIR, target)
@@ -514,11 +530,22 @@ def save_submission(target: str, dept: str, name: str, content: bytes) -> dict:
             f.write(content)
         data = _submissions()
         rec = {'file': fname, 'name': os.path.basename(name), 'size': len(content), 'rows': _target_rows(df),
-               'by': me.get('user_id', ''), 'by_name': me.get('display_name', ''),
+               'by': me.get('user_id', ''), 'by_name': me.get('display_name', ''), 'source': source,
                'at': datetime.now().isoformat(timespec='seconds')}
         data.setdefault(target, {})[dept] = rec
         hom._write_json(SUBMISSIONS_PATH, data)
+    _refresh_merged(target)
     return rec
+
+
+def _refresh_merged(target: str) -> None:
+    """회신 통합표 자동 정리(services/work_assign_form.refresh_merged) — 실패해도 제출 저장은 그대로."""
+    try:
+        from services import work_assign_form
+        work_assign_form.refresh_merged(target)
+    except Exception:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).exception('업무분장 통합표 정리 실패 %s', target)
 
 
 def save_uploads(target: str, files: list, dept: str | None = None) -> tuple[list, list]:
@@ -550,6 +577,7 @@ def delete_submission(target: str, dept: str) -> None:
             except OSError:
                 pass
             hom._write_json(SUBMISSIONS_PATH, data)
+    _refresh_merged(target)
 
 
 def submission_file(target: str, dept: str) -> tuple[str, bytes] | None:

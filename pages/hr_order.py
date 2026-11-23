@@ -6,10 +6,12 @@ import base64
 from datetime import date, datetime
 
 import dash
+import dash_ag_grid as dag
 import dash_bootstrap_components as dbc
-from dash import Input, Output, State, callback, ctx, dcc, html, no_update
+from dash import ALL, Input, Output, State, callback, ctx, dcc, html, no_update
 
 from components import mail_recipients as mr
+from components import reply_inbox_ui as ri_ui
 from components.rich_editor import register_rich_editor, rich_editor
 from services import hr_order_mail as hom
 
@@ -223,6 +225,70 @@ def _settings_card():
     ], className='shadow-sm mb-4')
 
 
+def _reply_card():
+    """회신 현황(2026-11-23) — 발령일별 부서 회신(비실명 계정 메일 자동 취합 + 직접 올리기)."""
+    opts = ri_ui.period_options('hr_order')
+    nxt = hom.next_order_date().isoformat()
+    value = nxt if any(o['value'] == nxt for o in opts) else opts[0]['value']
+    return dbc.Card([
+        dbc.CardHeader(html.Span([html.I(className='bi bi-inboxes me-1'), '회신 현황 — 부서별'], className='fw-semibold')),
+        dbc.CardBody([
+            html.Div('부서 담당자의 회신 메일이 아래 "받은 회신 메일"에서 자동으로 여기에 등록됩니다. 메일로 받지 못한 회신은 부서를 '
+                     '고르고 직접 올리세요(같은 부서는 새 회신으로 바뀜).', className='small text-muted mb-2'),
+            dbc.Row([
+                dbc.Col([dbc.Label('발령일', className='small mb-1'),
+                         dcc.Dropdown(id='hro-rep-date', options=opts, value=value, clearable=False)], md=3),
+                dbc.Col([dbc.Label('부서(직접 올릴 때)', className='small mb-1'),
+                         dcc.Dropdown(id='hro-rep-dept', options=hom.departments(), placeholder='부서')], md=3),
+                dbc.Col(dcc.Upload(id='hro-rep-upload', multiple=True,
+                                   children=html.Div([html.I(className='bi bi-upload me-1'), '회신 파일 직접 올리기(여러 개 가능)']),
+                                   className='border border-2 rounded text-center text-muted small py-2',
+                                   style={'borderStyle': 'dashed', 'cursor': 'pointer'}), md=6),
+            ], className='g-2 align-items-end mb-2'),
+            html.Div(id='hro-rep-msg', className='small mb-2'),
+            html.Div(id='hro-rep-status', className='mb-3'),
+            html.Div([html.Span('통합표', className='fw-semibold small me-2'),
+                      dbc.Button([html.I(className='bi bi-file-earmark-excel me-1'), '통합표 엑셀(자동 정리)'],
+                                 id='hro-merged-dl', color='success', size='sm', className='py-0 me-2'),
+                      html.Span(id='hro-merged-at', className='small text-muted')],
+                     className='d-flex align-items-center flex-wrap mb-1'),
+            html.Div('부서가 회신한 엑셀·CSV 표를 머리글 그대로 읽어(위쪽 제목 행은 건너뜀) 맨 앞에 "부서" 열을 붙여 합칩니다. 표가 '
+                     '아닌 첨부(PDF 등)는 엑셀의 "회신 현황" 시트에 파일 이름만 남습니다.', className='small text-muted mb-1'),
+            dag.AgGrid(id='hro-merged', rowData=[], columnDefs=[], className='ag-theme-alpine',
+                       defaultColDef={'resizable': True, 'sortable': True, 'filter': True, 'minWidth': 90},
+                       dashGridOptions={'enableCellTextSelection': True}, style={'height': '320px'}),
+            dcc.Store(id='hro-rep-ver', data=0),
+            dcc.Download(id='hro-rep-download'),
+        ]),
+    ], className='shadow-sm mb-4')
+
+
+def _reply_table(order_date: str):
+    rows = hom.reply_status(order_date)
+    if not rows:
+        return html.Div('부서별 담당자가 없습니다.', className='small text-muted')
+    done = sum(1 for r in rows if r['replied'])
+    body = []
+    for r in rows:
+        files = [html.Div(html.Span([html.I(className='bi bi-download me-1'), n],
+                                    id={'type': 'hro-rep-dl', 'd': r['dept'], 'n': n}, n_clicks=0, className='text-primary',
+                                    style={'cursor': 'pointer'})) for n in r['files']]
+        body.append(html.Tr([
+            html.Td(r['dept']), html.Td(r['contact']),
+            html.Td(dbc.Badge('회신', color='success') if r['replied'] else dbc.Badge('미회신', color='secondary')),
+            html.Td(files or ''), html.Td(r['at'].replace('T', ' ')[:16]),
+            html.Td(('메일' + (f" ({r['sender']})" if r['sender'] else '')) if r['source'] == 'mail'
+                    else ('직접 올림' if r['replied'] else '')),
+            html.Td(html.Span(html.I(className='bi bi-trash'), id={'type': 'hro-rep-del', 'd': r['dept']}, n_clicks=0,
+                              className='text-danger', style={'cursor': 'pointer'}, title='회신 지우기') if r['replied'] else ''),
+        ]))
+    return html.Div([
+        html.Div(f'{order_date.replace("-", ".")}자 회신 {done}/{len(rows)}개 부서', className='small fw-semibold mb-1'),
+        dbc.Table([html.Thead(html.Tr([html.Th(h) for h in ('부서', '담당자', '상태', '파일', '받은 시각', '경로', '')])),
+                   html.Tbody(body)], size='sm', bordered=True, hover=True, className='small mb-0'),
+    ])
+
+
 def _log_card():
     return dbc.Card([
         dbc.CardHeader(html.Span([html.I(className='bi bi-clock-history me-1'), '발송 이력(최근 50건)'],
@@ -277,6 +343,8 @@ def layout():
                className='text-muted small'),
         _compose_card(),
         mr.contacts_card('hro', HR_STORE),
+        _reply_card(),
+        ri_ui.card('hro', 'hr_order'),
         _auto_card(),
         _settings_card(),
         _log_card(),
@@ -485,3 +553,72 @@ def _save_roles(n, roles):
 
 
 mr.register('hro', HR_STORE, 'hro-auto-status', lambda: _auto_status())
+
+
+# ── 콜백: 회신 현황 ─────────────────────────────────────────────────────────
+
+def _clicks_of(trig: dict) -> int:
+    for group in ctx.inputs_list:
+        for item in group if isinstance(group, list) else [group]:
+            if item.get('id') == trig:
+                return item.get('value') or 0
+    return 0
+
+
+@callback(Output('hro-rep-status', 'children'), Output('hro-merged', 'rowData'), Output('hro-merged', 'columnDefs'),
+          Output('hro-merged-at', 'children'),
+          Input('hro-rep-date', 'value'), Input('hro-rep-ver', 'data'))
+def _rep_status(order_date, _ver):
+    if not order_date:
+        return '', [], [], ''
+    df, _notes = hom.merged_table(order_date)
+    cols = [{'field': c, 'headerName': c, 'pinned': 'left' if i == 0 else None} for i, c in enumerate(df.columns)]
+    info = hom.merged_info(order_date)
+    at = (f"회신이 등록될 때마다 자동으로 다시 정리 — 마지막 {info['at']}, {info['rows']}행" if info
+          else '회신이 등록되면 자동으로 정리됩니다')
+    return _reply_table(order_date), df.to_dict('records'), cols, at
+
+
+@callback(Output('hro-rep-download', 'data', allow_duplicate=True), Input('hro-merged-dl', 'n_clicks'),
+          State('hro-rep-date', 'value'), prevent_initial_call=True)
+def _merged_download(n, order_date):
+    if not n or not order_date or not hom.can_use():
+        return no_update
+    f = hom.merged_file(order_date)
+    return dcc.send_bytes(f[1], f[0]) if f else no_update
+
+
+@callback(Output('hro-rep-msg', 'children'), Output('hro-rep-ver', 'data'), Output('hro-rep-upload', 'contents'),
+          Input('hro-rep-upload', 'contents'), Input({'type': 'hro-rep-del', 'd': ALL}, 'n_clicks'),
+          State('hro-rep-upload', 'filename'), State('hro-rep-date', 'value'), State('hro-rep-dept', 'value'),
+          State('hro-rep-ver', 'data'), prevent_initial_call=True)
+def _rep_edit(contents, _dels, filenames, order_date, dept, ver):
+    trig = ctx.triggered_id
+    try:
+        if isinstance(trig, dict):
+            if not _clicks_of(trig):
+                return no_update, no_update, no_update
+            hom.delete_reply(order_date, trig['d'])
+            return html.Span(f"{trig['d']} 회신을 지웠습니다.", className='text-muted'), (ver or 0) + 1, no_update
+        if not contents:
+            return no_update, no_update, no_update
+        if not dept:
+            return html.Span('부서를 먼저 고르세요.', className='text-warning'), no_update, None
+        files = [(n, base64.b64decode(c.split(',', 1)[1])) for c, n in zip(contents, filenames or [])]
+        hom.save_reply(order_date, dept, files)
+    except (PermissionError, ValueError) as exc:
+        return html.Span(str(exc), className='text-danger'), no_update, None
+    return html.Span(f'{dept} 회신을 저장했습니다({len(files)}개 파일).', className='text-success'), (ver or 0) + 1, None
+
+
+@callback(Output('hro-rep-download', 'data'), Input({'type': 'hro-rep-dl', 'd': ALL, 'n': ALL}, 'n_clicks'),
+          State('hro-rep-date', 'value'), prevent_initial_call=True)
+def _rep_download(_n, order_date):
+    trig = ctx.triggered_id
+    if not isinstance(trig, dict) or not _clicks_of(trig) or not hom.can_use():
+        return no_update
+    f = hom.reply_file(order_date, trig['d'], trig['n'])
+    return dcc.send_bytes(f[1], f[0]) if f else no_update
+
+
+ri_ui.register('hro', 'hr_order', 'hro-rep-ver')

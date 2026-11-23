@@ -566,6 +566,286 @@ def save_recipient_settings(cc_rids: list, bcc_rids: list, mode: str) -> dict:
     return recipient_settings()
 
 
+# ── 회신 현황(2026-11-23 — 비실명 계정 POP3로 받은 회신·화면 업로드) ─────────────────
+
+REPLIES_PATH = os.path.join(data_store.DATA_DIR, 'hr_order_replies.json')
+REPLIES_DIR = os.path.join(data_store.DATA_DIR, 'hr_order_replies')
+
+
+def departments() -> list:
+    out = []
+    for c in load_contacts():
+        if c.get('dept') and c['dept'] not in out:
+            out.append(c['dept'])
+    return out
+
+
+def _replies() -> dict:
+    data = _read_json(REPLIES_PATH, {})
+    return data if isinstance(data, dict) else {}
+
+
+def replies(order_date: str) -> dict:
+    """{부서: {'files': [{'name','file','size'}], 'at', 'by_name', 'source', 'sender', 'mail_subject'}}."""
+    return dict(_replies().get(order_date) or {})
+
+
+def _safe_name(name: str) -> str:
+    return re.sub(r'[\\/:*?"<>|]+', '_', os.path.basename(name or '')).strip() or 'file'
+
+
+def store_reply(order_date: str, dept: str, files: list, by: dict, source: str = 'upload', sender: str = '',
+                mail_subject: str = '') -> dict:
+    """부서 회신 저장(권한 확인 없음 — 화면은 save_reply, 메일 취합은 reply_inbox가 부름). 같은 부서는 새 회신으로 교체."""
+    date.fromisoformat(order_date)
+    if dept not in departments():
+        raise ValueError(f'{dept}: 부서별 담당자에 없는 부서입니다.')
+    if not files:
+        raise ValueError('첨부 파일이 없습니다.')
+    folder = os.path.join(REPLIES_DIR, order_date, re.sub(r'[\\/:*?"<>|\s]+', '_', dept))
+    with _LOCK:
+        if os.path.isdir(folder):
+            for old in os.listdir(folder):
+                os.remove(os.path.join(folder, old))
+        os.makedirs(folder, exist_ok=True)
+        saved = []
+        for name, content in files:
+            fname = _safe_name(name)
+            with open(os.path.join(folder, fname), 'wb') as f:
+                f.write(content)
+            saved.append({'name': os.path.basename(name), 'file': fname, 'size': len(content)})
+        data = _replies()
+        rec = {'files': saved, 'at': datetime.now().isoformat(timespec='seconds'), 'by_name': (by or {}).get('display_name', ''),
+               'source': source, 'sender': sender, 'mail_subject': mail_subject}
+        data.setdefault(order_date, {})[dept] = rec
+        _write_json(REPLIES_PATH, data)
+    _refresh_merged(order_date)
+    return rec
+
+
+def save_reply(order_date: str, dept: str, files: list) -> dict:
+    from services.auth import get_current_user
+    _require_use()
+    return store_reply(order_date, dept, files, get_current_user() or {})
+
+
+def reply_file(order_date: str, dept: str, name: str) -> tuple[str, bytes] | None:
+    rec = replies(order_date).get(dept) or {}
+    f = next((x for x in rec.get('files', []) if x['name'] == name), None)
+    if not f:
+        return None
+    try:
+        with open(os.path.join(REPLIES_DIR, order_date, re.sub(r'[\\/:*?"<>|\s]+', '_', dept), f['file']), 'rb') as fh:
+            return f['name'], fh.read()
+    except OSError:
+        return None
+
+
+def delete_reply(order_date: str, dept: str) -> None:
+    _require_use()
+    with _LOCK:
+        data = _replies()
+        if (data.get(order_date) or {}).pop(dept, None) is not None:
+            folder = os.path.join(REPLIES_DIR, order_date, re.sub(r'[\\/:*?"<>|\s]+', '_', dept))
+            if os.path.isdir(folder):
+                for old in os.listdir(folder):
+                    os.remove(os.path.join(folder, old))
+            _write_json(REPLIES_PATH, data)
+    _refresh_merged(order_date)
+
+
+def reply_status(order_date: str) -> list:
+    """부서별 회신 현황 [{'dept','contact','replied','files','at','source','sender'}] — 담당자 명단 순서."""
+    reps = replies(order_date)
+    names = {}
+    for c in load_contacts():
+        names.setdefault(c['dept'], []).append(c.get('name') or c.get('email', ''))
+    return [{'dept': d, 'contact': ', '.join(names.get(d, [])), 'replied': d in reps,
+             'files': [f['name'] for f in (reps.get(d) or {}).get('files', [])], 'at': (reps.get(d) or {}).get('at', ''),
+             'source': (reps.get(d) or {}).get('source', ''), 'sender': (reps.get(d) or {}).get('sender', '')}
+            for d in departments()]
+
+
+# ── 회신 통합표 자동 정리(2026-11-23, 사용자 요청 "인사발령 회신도 통합표 엑셀로 자동 정리해줘") ─────────────
+# 인사발령 회신 양식은 정해 두지 않았으므로(부서가 보낸 표 그대로) 업무분장과 같은 표 읽기(work_assign.read_table — 위쪽 제목
+# 행을 건너뛰고 머리글 행을 찾음, 2행 묶음 머리글의 "참고"는 참고_ 접두어)로 부서별 엑셀·CSV를 읽어 맨 앞에 "부서" 열을 붙이고 열
+# 합집합으로 합친다. 회신이 등록·교체·삭제될 때마다 hr_order_merged/<발령일>.xlsx를 다시 만든다(시트 '통합'·'회신 현황').
+
+MERGED_DIR = os.path.join(data_store.DATA_DIR, 'hr_order_merged')
+_TABLE_EXT = ('.xlsx', '.xlsm', '.xls', '.csv')
+
+
+def merged_table(order_date: str):
+    """(통합 DataFrame, 파일별 메모 {(부서, 파일 이름): '합침 N행'/'표 아님'/'읽지 못함: …'})."""
+    import pandas as pd
+    from services import work_assign as wa
+    frames, notes = [], {}
+    reps = replies(order_date)
+    for d in departments():
+        for f in (reps.get(d) or {}).get('files', []):
+            name = f['name']
+            if not name.lower().endswith(_TABLE_EXT):
+                notes[(d, name)] = '표 아님(합치지 않음)'
+                continue
+            got = reply_file(order_date, d, name)
+            if not got:
+                notes[(d, name)] = '파일 없음'
+                continue
+            try:
+                df = wa.read_table(name, got[1])
+            except ValueError as exc:
+                notes[(d, name)] = f'읽지 못함: {exc}'
+                continue
+            df = df[(df != '').any(axis=1)] if not df.empty else df
+            if df.empty:
+                notes[(d, name)] = '빈 표'
+                continue
+            df = df.copy()
+            df.insert(0, '제출부서' if '부서' in df.columns else '부서', d)
+            frames.append(df)
+            notes[(d, name)] = f'합침 {len(df)}행'
+    merged = pd.concat(frames, ignore_index=True, sort=False).fillna('') if frames else pd.DataFrame()
+    return merged, notes
+
+
+def merged_file_name(order_date: str) -> str:
+    return f'인사발령_회신통합_{order_date.replace("-", "")}.xlsx'
+
+
+# 인사발령 양식(구글 시트 "인사발령 양식", 2026-11-23 사용자 제공): 1~4행 안내, 6행 병합 묶음(대상 / 이동 전 / 이동 후 / 발령
+# 사항), 7행 열 이름. 이동 전·이동 후 아래 플랫폼/팀·과제/파트가 반복돼 read_table은 "이동 전 플랫폼/팀"처럼 묶음 이름을 붙인다.
+HR_FORM = [('대상', ['이름', 'Knox ID']), ('이동 전', ['플랫폼/팀', '과제/파트', '현 직무']),
+           ('이동 후', ['플랫폼/팀', '과제/파트', '변경 직무']), ('발령 사항', ['발령구분', '발령일자', '파견종료일', '발령 사유'])]
+
+
+def hr_form_columns() -> list:
+    """[(묶음, 열 이름, read_table 키)] — 묶음 사이에 반복되는 이름은 '묶음 이름' 키."""
+    names = [n for _, cols in HR_FORM for n in cols]
+    return [(g, n, f'{g} {n}' if names.count(n) > 1 else n) for g, cols in HR_FORM for n in cols]
+
+
+def build_merged(order_date: str) -> bytes:
+    """시트 '통합' = 인사발령 양식 모양(묶음 행 + 열 이름 행)에 부서 순서대로 모든 회신 행 + 맨 오른쪽 '회신 부서'(양식에 없는
+    열을 회신한 부서가 있으면 그 뒤 '기타' 묶음으로), 시트 '회신 현황'."""
+    import io
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    df, notes = merged_table(order_date)
+    form = hr_form_columns()
+    dept_col = '제출부서' if '제출부서' in df.columns else '부서'
+    known = {k for _, _, k in form} | {dept_col}
+    extras = [c for c in df.columns if c not in known]
+    layout = [(g, n, k) for g, n, k in form] + [('회신', '회신 부서', dept_col)] + [('기타', c, c) for c in extras]
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = '통합'
+    od = date.fromisoformat(order_date)
+    ws['A1'] = f'인사발령 회신 통합 — {od:%Y.%m.%d}자'
+    ws['A1'].font = Font(bold=True, size=13)
+    ws['A2'] = (f'부서별 회신을 양식 그대로 합침(맨 오른쪽 "회신 부서") · 정리 {datetime.now():%Y-%m-%d %H:%M} · '
+                f'회신 {len(replies(order_date))}/{len(departments())}개 부서')
+    ws['A2'].font = Font(color='666666')
+    thin = Side(style='thin', color='999999')
+    fills = {'대상': 'E7E6E6', '이동 전': 'FCE4D6', '이동 후': 'DDEBF7', '발령 사항': 'E2EFDA', '회신': 'FFF2CC', '기타': 'F2F2F2'}
+    g_row, h_row = 4, 5
+    col = 1
+    while col <= len(layout):
+        g = layout[col - 1][0]
+        end = col
+        while end < len(layout) and layout[end][0] == g:
+            end += 1
+        ws.cell(row=g_row, column=col, value=g)
+        if end > col:
+            ws.merge_cells(start_row=g_row, start_column=col, end_row=g_row, end_column=end)
+        col = end + 1
+    for i, (g, n, _k) in enumerate(layout, start=1):
+        ws.cell(row=h_row, column=i, value=n)
+        for r in (g_row, h_row):
+            c = ws.cell(row=r, column=i)
+            c.font = Font(bold=True)
+            c.fill = PatternFill('solid', fgColor=fills.get(g, 'F2F2F2'))
+            c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+            c.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+        width = {'발령 사유': 30, 'Knox ID': 14, '회신 부서': 14}.get(n, 13)
+        ws.column_dimensions[c.column_letter].width = width
+    for r_i, rec in enumerate(df.to_dict('records') if not df.empty else [], start=h_row + 1):
+        for c_i, (_g, _n, k) in enumerate(layout, start=1):
+            v = rec.get(k, '')
+            if v not in (None, ''):
+                cell = ws.cell(row=r_i, column=c_i, value=v)
+                cell.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    if df.empty:
+        ws.cell(row=h_row + 1, column=1, value='합칠 수 있는 표(엑셀·CSV) 회신이 아직 없습니다.')
+    ws.freeze_panes = ws.cell(row=h_row + 1, column=3)
+
+    rows = []
+    for r in reply_status(order_date):
+        for name in (r['files'] or ['']):
+            rows.append({'부서': r['dept'], '담당자': r['contact'], '상태': '회신' if r['replied'] else '미회신',
+                         '파일': name, '처리': notes.get((r['dept'], name), '') if name else '',
+                         '받은 시각': r['at'].replace('T', ' ')[:16],
+                         '경로': ('회신 메일' + (f" ({r['sender']})" if r['sender'] else '')) if r['source'] == 'mail'
+                         else ('직접 올림' if r['replied'] else '')})
+    st = wb.create_sheet('회신 현황')
+    cols = ['부서', '담당자', '상태', '파일', '처리', '받은 시각', '경로']
+    st.append(cols)
+    for row in rows:
+        st.append([row[c] for c in cols])
+    for c in st[1]:
+        c.font = Font(bold=True)
+        c.fill = PatternFill('solid', fgColor='DDEBF7')
+    for letter, w in zip('ABCDEFG', (16, 14, 8, 34, 22, 18, 26)):
+        st.column_dimensions[letter].width = w
+    st.freeze_panes = 'A2'
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def refresh_merged(order_date: str) -> str:
+    path = os.path.join(MERGED_DIR, f'{order_date}.xlsx')
+    if not replies(order_date):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return ''
+    data = build_merged(order_date)
+    os.makedirs(MERGED_DIR, exist_ok=True)
+    tmp = path + '.tmp'
+    with open(tmp, 'wb') as fh:
+        fh.write(data)
+    os.replace(tmp, path)
+    return path
+
+
+def _refresh_merged(order_date: str) -> None:
+    try:
+        refresh_merged(order_date)
+    except Exception:  # noqa: BLE001 — 정리 실패가 회신 저장을 막지 않게
+        import logging
+        logging.getLogger(__name__).exception('인사발령 통합표 정리 실패 %s', order_date)
+
+
+def merged_info(order_date: str) -> dict:
+    path = os.path.join(MERGED_DIR, f'{order_date}.xlsx')
+    if not os.path.exists(path):
+        return {}
+    return {'at': datetime.fromtimestamp(os.path.getmtime(path)).strftime('%Y-%m-%d %H:%M'),
+            'rows': len(merged_table(order_date)[0])}
+
+
+def merged_file(order_date: str) -> tuple[str, bytes] | None:
+    path = os.path.join(MERGED_DIR, f'{order_date}.xlsx')
+    if not replies(order_date):
+        return None
+    if not os.path.exists(path) or (os.path.exists(REPLIES_PATH) and os.path.getmtime(REPLIES_PATH) > os.path.getmtime(path)):
+        refresh_merged(order_date)
+    with open(path, 'rb') as fh:
+        return merged_file_name(order_date), fh.read()
+
+
 # ── 발신 계정 ───────────────────────────────────────────────────────────────
 
 def _account_email(user: dict) -> str:

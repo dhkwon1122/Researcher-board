@@ -315,6 +315,15 @@ def file_name(target: str, platform: str | None) -> str:
 def build_form(target: str, platform: str | None, people: list | None = None, ref: pd.DataFrame | None = None
                ) -> tuple[str, bytes]:
     """플랫폼 하나의 양식(파일명, xlsx bytes). platform=None이면 전체 명단 한 파일(확인용)."""
+    wb, ws, lay = _prepared(target)
+    _write_rows(ws, lay, platform_rows(target, platform, people, ref))
+    buf = io.BytesIO()
+    wb.save(buf)
+    return file_name(target, platform), buf.getvalue()
+
+
+def _prepared(target: str):
+    """양식 원본을 열어 1행 날짜를 대상월에 맞추고 예시 값을 지운 (wb, ws, layout)."""
     wb = _load(template_bytes())
     ws = wb.active
     lay = _layout(ws)
@@ -334,15 +343,116 @@ def build_form(target: str, platform: str | None, people: list | None = None, re
             cell = ws.cell(row=r, column=col)
             if not type(cell).__name__ == 'MergedCell':
                 cell.value = None
-    for i, row in enumerate(platform_rows(target, platform, people, ref)):
+    return wb, ws, lay
+
+
+def _write_rows(ws, lay: dict, rows: list) -> None:
+    start = lay['header_row'] + 1
+    for i, row in enumerate(rows):
         for part in ('common', 'target', 'ref'):
             for name, val in row[part].items():
                 col = lay[part].get(name)
                 if col and val not in (None, ''):
                     ws.cell(row=start + i, column=col, value=val)
+
+
+# ── 회신 통합표 자동 정리(2026-11-23, 사용자 요청 "업무분장 회신도 통합표 엑셀로 자동 정리해줘") ──────────────
+# 회신이 등록·교체·삭제될 때마다(화면 업로드·회신 메일 자동 취합 모두) 대상월 통합표를 다시 만들어 둔다.
+# 시트1 = 양식 그대로(1행 날짜·2행 머리글, 대상월·참고 묶음)에 부서 순서대로 모든 회신 행, 시트2 = 제출 현황.
+
+MERGED_DIR = os.path.join(data_store.DATA_DIR, 'work_assign_merged')
+
+
+def merged_rows(target: str) -> list:
+    """제출된 회신 파일들의 행(양식 칸 이름 기준) — 부서(담당자 명단) 순서, 파일 안 순서 그대로."""
+    out = []
+    for d in wa.departments():
+        f = wa.submission_file(target, d)
+        if not f:
+            continue
+        try:
+            df = wa.read_table(*f)
+        except ValueError:
+            continue
+        for rec in df.to_dict('records'):
+            vals = {k: _s(v) for k, v in rec.items()}
+            if not any(vals.values()):
+                continue
+            tgt = {k: vals.get(k, '') for k in FIELDS}
+            if not tgt.get('플랫폼'):
+                tgt['플랫폼'] = d                       # 플랫폼 칸을 비워 회신했으면 제출 부서로
+            out.append({'common': {KNOX: vals.get(KNOX, ''), STATUS: vals.get(STATUS, '')}, 'target': tgt,
+                        'ref': {k: vals.get(wa.REF_PREFIX + k, '') for k in FIELDS}})
+    return out
+
+
+def merged_file_name(target: str) -> str:
+    y, m = wa._month(target)
+    return f'업무분장_통합_{y % 100:02d}년{m}월.xlsx'
+
+
+def build_merged(target: str) -> bytes:
+    from openpyxl.styles import Font, PatternFill
+    wb, ws, lay = _prepared(target)
+    rows = merged_rows(target)
+    _write_rows(ws, lay, rows)
+    ws.title = '통합'
+    st = wb.create_sheet('제출 현황')
+    st.append(['부서', '담당자', '상태', '파일', '행 수', '올린 시각', '올린 사람', '경로'])
+    for c in st[1]:
+        c.font = Font(bold=True)
+        c.fill = PatternFill('solid', fgColor='DDEBF7')
+    subs = wa.submissions(target)
+    for r in wa.status(target):
+        src = (subs.get(r['dept']) or {}).get('source', '')
+        st.append([r['dept'], r['contact'], '제출' if r['submitted'] else '미제출', r['name'], r['rows'] or '',
+                   r['at'].replace('T', ' ')[:16], r['by_name'], {'mail': '회신 메일', 'upload': '직접 올림'}.get(src, '')])
+    for col, w in zip('ABCDEFGH', (16, 16, 8, 34, 8, 18, 12, 10)):
+        st.column_dimensions[col].width = w
     buf = io.BytesIO()
     wb.save(buf)
-    return file_name(target, platform), buf.getvalue()
+    return buf.getvalue()
+
+
+def refresh_merged(target: str) -> str:
+    """통합표를 다시 만들어 저장하고 경로를 돌려준다(제출이 하나도 없으면 지움)."""
+    path = os.path.join(MERGED_DIR, f'{target}.xlsx')
+    if not wa.submissions(target):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return ''
+    data = build_merged(target)
+    os.makedirs(MERGED_DIR, exist_ok=True)
+    tmp = path + '.tmp'
+    with open(tmp, 'wb') as fh:
+        fh.write(data)
+    os.replace(tmp, path)
+    return path
+
+
+def merged_info(target: str) -> dict:
+    """{'at': 마지막 정리 시각, 'rows': 행 수} — 파일이 없으면 {}."""
+    path = os.path.join(MERGED_DIR, f'{target}.xlsx')
+    if not os.path.exists(path):
+        return {}
+    from datetime import datetime
+    return {'at': datetime.fromtimestamp(os.path.getmtime(path)).strftime('%Y-%m-%d %H:%M'),
+            'rows': len(merged_rows(target))}
+
+
+def merged_file(target: str) -> tuple[str, bytes] | None:
+    """자동 정리된 통합표(없거나 제출 기록보다 오래됐으면 다시 만듦)."""
+    path = os.path.join(MERGED_DIR, f'{target}.xlsx')
+    if not wa.submissions(target):
+        return None
+    stale = not os.path.exists(path) or (os.path.exists(wa.SUBMISSIONS_PATH)
+                                         and os.path.getmtime(wa.SUBMISSIONS_PATH) > os.path.getmtime(path))
+    if stale:
+        refresh_merged(target)
+    with open(path, 'rb') as fh:
+        return merged_file_name(target), fh.read()
 
 
 def build_all(target: str) -> dict:

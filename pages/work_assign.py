@@ -13,6 +13,7 @@ from dash import ALL, Input, Output, State, callback, ctx, dcc, html, no_update
 
 from components.rich_editor import register_rich_editor, rich_editor
 from components import mail_recipients as mr
+from components import reply_inbox_ui as ri_ui
 from pages.hr_order import _file_list, _md, _rcp_summary, _upload_box
 from services import hr_order_mail as hom
 from services import work_assign as wa
@@ -200,7 +201,8 @@ def _submit_card():
         dbc.CardHeader(html.Span([html.I(className='bi bi-inboxes me-1'), '회신 업무분장표 — 부서별 제출 현황·통합표'],
                                  className='fw-semibold')),
         dbc.CardBody([
-            html.Div('메일로 회신받은 업무분장표(엑셀·CSV)를 올리면 부서별 제출 현황에 표시되고, 아래 통합표에 양식의 열 그대로 '
+            html.Div('메일로 회신받은 업무분장표(엑셀·CSV)를 올리면(받은 회신 메일에서 자동 등록 포함) 부서별 제출 현황에 표시되고, '
+                     '"통합표 엑셀(양식 형식)"이 자동으로 다시 정리됩니다. 아래 화면 통합표는 양식의 열 그대로 '
                      '"부서" 열을 붙여 합쳐집니다(양식 오른쪽 "참고 : 이전 달" 열은 기본으로 빼고, 체크하면 "참고_" 열로 함께 표시). '
                      '파일 이름에 부서명이 들어 있으면 여러 개를 한 번에 올려도 부서가 자동으로 '
                      '연결되고, 아니면 부서를 고른 뒤 한 개씩 올리세요. 같은 부서에 다시 올리면 새 파일로 바뀝니다.',
@@ -219,7 +221,10 @@ def _submit_card():
             html.Div(id='wa-sub-msg', className='small mb-2'),
             html.Div(id='wa-sub-status', className='mb-3'),
             html.Div([html.Span('통합표', className='fw-semibold small me-2'),
-                      dbc.Button([html.I(className='bi bi-file-earmark-excel me-1'), '다운로드 (엑셀)'], id='wa-merged-dl',
+                      dbc.Button([html.I(className='bi bi-file-earmark-excel me-1'), '통합표 엑셀(양식 형식·자동 정리)'],
+                                 id='wa-merged-form-dl', color='success', size='sm', className='py-0 me-2'),
+                      html.Span(id='wa-merged-at', className='small text-muted me-3'),
+                      dbc.Button([html.I(className='bi bi-table me-1'), '단순 표 엑셀'], id='wa-merged-dl',
                                  color='success', outline=True, size='sm', className='py-0 me-3'),
                       dbc.Checkbox(id='wa-merged-ref', value=False, label='참고(이전 달) 열 포함',
                                    className='small mb-0')],
@@ -383,6 +388,7 @@ def layout():
                          note='업무분장 전용 명단입니다(인사발령 명단과 따로 — 처음엔 인사발령 명단을 복사해 시작). 업무분장 '
                               '플랫폼별 양식은 부서명이 플랫폼 이름과 같은 담당자에게만 갑니다.'),
         _submit_card(),
+        ri_ui.card('wa', 'work_assign'),
         _auto_card(),
         dbc.Card([dbc.CardHeader(html.Span([html.I(className='bi bi-clock-history me-1'), '발송 이력(최근 50건)'],
                                            className='fw-semibold')),
@@ -663,21 +669,28 @@ def _submit(contents, dels, filenames, target, dept, ver):
 
 
 @callback(Output('wa-sub-status', 'children'), Output('wa-merged', 'rowData'), Output('wa-merged', 'columnDefs'),
+          Output('wa-merged-at', 'children'),
           Input('wa-sub-target', 'value'), Input('wa-sub-ver', 'data'), Input('wa-merged-ref', 'value'))
 def _status(target, _ver, include_ref):
     if not target:
-        return '', [], []
+        return '', [], [], ''
     df = wa.merged(target, bool(include_ref))
     cols = [{'field': c, 'headerName': c, 'pinned': 'left' if i == 0 else None} for i, c in enumerate(df.columns)]
-    return _status_table(target), df.to_dict('records'), cols
+    info = waf.merged_info(target)
+    at = (f"회신이 등록될 때마다 자동으로 다시 정리 — 마지막 {info['at']}, {info['rows']}행" if info
+          else '회신이 등록되면 자동으로 정리됩니다')
+    return _status_table(target), df.to_dict('records'), cols, at
 
 
 @callback(Output('wa-download', 'data'), Input('wa-merged-dl', 'n_clicks'),
-          Input({'type': 'wa-sub-dl', 'dept': ALL}, 'n_clicks'), State('wa-sub-target', 'value'),
-          State('wa-merged-ref', 'value'), prevent_initial_call=True)
-def _download(_m, dls, target, include_ref):
+          Input({'type': 'wa-sub-dl', 'dept': ALL}, 'n_clicks'), Input('wa-merged-form-dl', 'n_clicks'),
+          State('wa-sub-target', 'value'), State('wa-merged-ref', 'value'), prevent_initial_call=True)
+def _download(_m, dls, _f, target, include_ref):
     if not wa.can_use() or not target:
         return no_update
+    if ctx.triggered_id == 'wa-merged-form-dl':
+        f = waf.merged_file(target)
+        return dcc.send_bytes(f[1], f[0]) if f else no_update
     if isinstance(ctx.triggered_id, dict):
         if not any(dls or []):
             return no_update
@@ -739,3 +752,4 @@ def _save_auto(n, enabled, hour, sender, send_days, reply_days):
 
 
 mr.register('wa', WA_STORE, 'wa-auto-status', lambda: _auto_status(), empty_hint='아래 "부서별 담당자(업무분장)"에 먼저 등록하세요.')
+ri_ui.register('wa', 'work_assign', 'wa-sub-ver')
