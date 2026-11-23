@@ -466,12 +466,22 @@ def read_table(name: str, content: bytes) -> pd.DataFrame:
     if pos > 0:
         grp = raw.iloc[pos - 1].ffill().tolist()
         groups = [str(g).strip() if pd.notna(g) else '' for g in grp]
-    header, cols = [], []
+    names = []
     for i, v in enumerate(raw.loc[hdr_idx].tolist()):
         h = str(v).strip() if isinstance(v, str) or pd.notna(v) else ''
         h = h or f'열{i + 1}'
         if groups[i].startswith('참고'):
             h = f'{REF_PREFIX}{h}'
+        names.append(h)
+    # 같은 열 이름이 다른 묶음에 반복되면 묶음 이름을 앞에 붙인다(2026-11-23 인사발령 양식: 이동 전/이동 후 아래 플랫폼/팀·
+    # 과제/파트 반복 → "이동 전 플랫폼/팀"·"이동 후 플랫폼/팀"). 묶음 이름이 없거나 같으면 예전처럼 _2.
+    for h in {x for x in names if names.count(x) > 1}:
+        idx = [i for i, x in enumerate(names) if x == h]
+        if len({groups[i] for i in idx}) == len(idx) and all(groups[i] for i in idx):
+            for i in idx:
+                names[i] = f'{groups[i]} {h}'
+    header, cols = [], []
+    for i, h in enumerate(names):
         base, k = h, 2
         while h in header:
             h, k = f'{base}_{k}', k + 1
@@ -481,7 +491,8 @@ def read_table(name: str, content: bytes) -> pd.DataFrame:
     body.columns = header
     body = body.dropna(how='all').fillna('')
     strip = getattr(body, 'map', None) if hasattr(pd.DataFrame, 'map') else body.applymap
-    return strip(lambda x: str(x).strip())
+    # 엑셀 날짜 칸은 문자열로 읽으면 '2026-12-16 00:00:00'이 되므로 날짜만 남긴다
+    return strip(lambda x: re.sub(r'^(\d{4}-\d{2}-\d{2}) 00:00:00$', r'\1', str(x).strip()))
 
 
 def _target_rows(df: pd.DataFrame) -> int:

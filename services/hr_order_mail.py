@@ -712,11 +712,73 @@ def merged_file_name(order_date: str) -> str:
     return f'인사발령_회신통합_{order_date.replace("-", "")}.xlsx'
 
 
+# 인사발령 양식(구글 시트 "인사발령 양식", 2026-11-23 사용자 제공): 1~4행 안내, 6행 병합 묶음(대상 / 이동 전 / 이동 후 / 발령
+# 사항), 7행 열 이름. 이동 전·이동 후 아래 플랫폼/팀·과제/파트가 반복돼 read_table은 "이동 전 플랫폼/팀"처럼 묶음 이름을 붙인다.
+HR_FORM = [('대상', ['이름', 'Knox ID']), ('이동 전', ['플랫폼/팀', '과제/파트', '현 직무']),
+           ('이동 후', ['플랫폼/팀', '과제/파트', '변경 직무']), ('발령 사항', ['발령구분', '발령일자', '파견종료일', '발령 사유'])]
+
+
+def hr_form_columns() -> list:
+    """[(묶음, 열 이름, read_table 키)] — 묶음 사이에 반복되는 이름은 '묶음 이름' 키."""
+    names = [n for _, cols in HR_FORM for n in cols]
+    return [(g, n, f'{g} {n}' if names.count(n) > 1 else n) for g, cols in HR_FORM for n in cols]
+
+
 def build_merged(order_date: str) -> bytes:
+    """시트 '통합' = 인사발령 양식 모양(묶음 행 + 열 이름 행)에 부서 순서대로 모든 회신 행 + 맨 오른쪽 '회신 부서'(양식에 없는
+    열을 회신한 부서가 있으면 그 뒤 '기타' 묶음으로), 시트 '회신 현황'."""
     import io
-    import pandas as pd
-    from openpyxl.styles import Font, PatternFill
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     df, notes = merged_table(order_date)
+    form = hr_form_columns()
+    dept_col = '제출부서' if '제출부서' in df.columns else '부서'
+    known = {k for _, _, k in form} | {dept_col}
+    extras = [c for c in df.columns if c not in known]
+    layout = [(g, n, k) for g, n, k in form] + [('회신', '회신 부서', dept_col)] + [('기타', c, c) for c in extras]
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = '통합'
+    od = date.fromisoformat(order_date)
+    ws['A1'] = f'인사발령 회신 통합 — {od:%Y.%m.%d}자'
+    ws['A1'].font = Font(bold=True, size=13)
+    ws['A2'] = (f'부서별 회신을 양식 그대로 합침(맨 오른쪽 "회신 부서") · 정리 {datetime.now():%Y-%m-%d %H:%M} · '
+                f'회신 {len(replies(order_date))}/{len(departments())}개 부서')
+    ws['A2'].font = Font(color='666666')
+    thin = Side(style='thin', color='999999')
+    fills = {'대상': 'E7E6E6', '이동 전': 'FCE4D6', '이동 후': 'DDEBF7', '발령 사항': 'E2EFDA', '회신': 'FFF2CC', '기타': 'F2F2F2'}
+    g_row, h_row = 4, 5
+    col = 1
+    while col <= len(layout):
+        g = layout[col - 1][0]
+        end = col
+        while end < len(layout) and layout[end][0] == g:
+            end += 1
+        ws.cell(row=g_row, column=col, value=g)
+        if end > col:
+            ws.merge_cells(start_row=g_row, start_column=col, end_row=g_row, end_column=end)
+        col = end + 1
+    for i, (g, n, _k) in enumerate(layout, start=1):
+        ws.cell(row=h_row, column=i, value=n)
+        for r in (g_row, h_row):
+            c = ws.cell(row=r, column=i)
+            c.font = Font(bold=True)
+            c.fill = PatternFill('solid', fgColor=fills.get(g, 'F2F2F2'))
+            c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+            c.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+        width = {'발령 사유': 30, 'Knox ID': 14, '회신 부서': 14}.get(n, 13)
+        ws.column_dimensions[c.column_letter].width = width
+    for r_i, rec in enumerate(df.to_dict('records') if not df.empty else [], start=h_row + 1):
+        for c_i, (_g, _n, k) in enumerate(layout, start=1):
+            v = rec.get(k, '')
+            if v not in (None, ''):
+                cell = ws.cell(row=r_i, column=c_i, value=v)
+                cell.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    if df.empty:
+        ws.cell(row=h_row + 1, column=1, value='합칠 수 있는 표(엑셀·CSV) 회신이 아직 없습니다.')
+    ws.freeze_panes = ws.cell(row=h_row + 1, column=3)
+
     rows = []
     for r in reply_status(order_date):
         for name in (r['files'] or ['']):
@@ -725,19 +787,19 @@ def build_merged(order_date: str) -> bytes:
                          '받은 시각': r['at'].replace('T', ' ')[:16],
                          '경로': ('회신 메일' + (f" ({r['sender']})" if r['sender'] else '')) if r['source'] == 'mail'
                          else ('직접 올림' if r['replied'] else '')})
+    st = wb.create_sheet('회신 현황')
+    cols = ['부서', '담당자', '상태', '파일', '처리', '받은 시각', '경로']
+    st.append(cols)
+    for row in rows:
+        st.append([row[c] for c in cols])
+    for c in st[1]:
+        c.font = Font(bold=True)
+        c.fill = PatternFill('solid', fgColor='DDEBF7')
+    for letter, w in zip('ABCDEFG', (16, 14, 8, 34, 22, 18, 26)):
+        st.column_dimensions[letter].width = w
+    st.freeze_panes = 'A2'
     buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine='openpyxl') as xw:
-        (df if not df.empty else pd.DataFrame({'안내': ['합칠 수 있는 표(엑셀·CSV) 회신이 아직 없습니다.']})) \
-            .to_excel(xw, index=False, sheet_name='통합')
-        pd.DataFrame(rows).to_excel(xw, index=False, sheet_name='회신 현황')
-        for ws in xw.sheets.values():
-            for c in ws[1]:
-                c.font = Font(bold=True)
-                c.fill = PatternFill('solid', fgColor='DDEBF7')
-            for col in ws.columns:
-                width = max(len(str(c.value or '')) for c in col)
-                ws.column_dimensions[col[0].column_letter].width = min(max(10, width * 1.6), 50)
-            ws.freeze_panes = 'A2'
+    wb.save(buf)
     return buf.getvalue()
 
 

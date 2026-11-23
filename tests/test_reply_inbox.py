@@ -136,24 +136,63 @@ def test_not_configured_and_permission(env, monkeypatch):
             ri.assign(1, 'work_assign', '2026-12', 'A플랫폼')
 
 
+def _hr_form(rows) -> bytes:
+    """구글 시트 "인사발령 양식"과 같은 구조 — 1~4행 안내, 6행 병합 묶음, 7행 열 이름."""
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    for i, t in enumerate(['발령 취합 관련', '1. 이동 전 / 이동 후 모두 작성', '2. 과제 이동의 경우도 작성',
+                           '3. 워킹데이 4일전 마감'], start=1):
+        ws.cell(row=i, column=1, value=t)
+    for c, g in ((1, '대상'), (3, '이동 전'), (6, '이동 후'), (9, '발령 사항')):
+        ws.cell(row=6, column=c, value=g)
+    for rng in ('A6:B6', 'C6:E6', 'F6:H6', 'I6:L6'):
+        ws.merge_cells(rng)
+    for i, h in enumerate(['이름', 'Knox ID', '플랫폼/팀', '과제/파트', '현 직무', '플랫폼/팀', '과제/파트', '변경 직무',
+                           '발령구분', '발령일자', '파견종료일', '발령 사유'], start=1):
+        ws.cell(row=7, column=i, value=h)
+    for r in rows:
+        ws.append(r)
+    from datetime import datetime as _dt
+    for row in ws.iter_rows(min_row=8, min_col=10, max_col=10):
+        for c in row:
+            if c.value:
+                c.value = _dt.fromisoformat(c.value)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def test_hr_form_read_with_before_after_groups():
+    content = _hr_form([['홍길동', 'gd.hong', 'A플랫폼', '과제1', '개발', 'B플랫폼', '과제9', '기획', '부서이동', '2026-12-16',
+                         '', '조직 개편']])
+    df = wa.read_table('발령.xlsx', content)
+    assert list(df.columns) == ['이름', 'Knox ID', '이동 전 플랫폼/팀', '이동 전 과제/파트', '현 직무', '이동 후 플랫폼/팀',
+                                '이동 후 과제/파트', '변경 직무', '발령구분', '발령일자', '파견종료일', '발령 사유']
+    assert df.iloc[0]['이동 후 플랫폼/팀'] == 'B플랫폼' and df.iloc[0]['발령일자'] == '2026-12-16'   # 날짜 칸 시간 제거
+
+
 def test_hr_replies_merged_workbook(env):
-    import io
     from openpyxl import load_workbook
-    title_table = io.BytesIO()
-    pd.DataFrame([['12.16자 인사발령 대상', None, None], [None, None, None], ['성명', '발령구분', '발령 후 부서'],
-                  ['홍길동', '부서이동', 'B플랫폼'], ['김영희', '파트이동', '과제C']]).to_excel(title_table, index=False, header=False)
-    hom.store_reply('2026-12-16', 'A플랫폼', [('A 발령.xlsx', title_table.getvalue()), ('설명.pdf', b'%PDF')], {}, source='mail',
+    a_form = _hr_form([['홍길동', 'gd.hong', 'A플랫폼', '과제1', '개발', 'B플랫폼', '과제9', '기획', '부서이동', '2026-12-16',
+                        '', '조직 개편'],
+                       ['김영희', 'yh.kim', 'A플랫폼', '과제1', '분석', 'A플랫폼', '과제2', '분석', '과제이동', '2026-12-16', '', '']])
+    hom.store_reply('2026-12-16', 'A플랫폼', [('A 발령.xlsx', a_form), ('설명.pdf', b'%PDF')], {}, source='mail',
                     sender='kim@samsung.com')
-    info = hom.merged_info('2026-12-16')
-    assert info['rows'] == 2
-    hom.store_reply('2026-12-16', 'B플랫폼', [('b.csv', '성명,발령구분,비고\n이철수,전배,확인\n'.encode('utf-8'))], {})
+    assert hom.merged_info('2026-12-16')['rows'] == 2
+    hom.store_reply('2026-12-16', 'B플랫폼', [('b.csv', '이름,발령구분,메모\n이철수,파견,확인 필요\n'.encode('utf-8'))], {})
     name, content = hom.merged_file('2026-12-16')
     assert name == '인사발령_회신통합_20261216.xlsx'
     wb = load_workbook(io.BytesIO(content))
-    rows = [[c.value for c in r] for r in wb['통합'].iter_rows()]
-    assert rows[0] == ['부서', '성명', '발령구분', '발령 후 부서', '비고']                  # 위쪽 제목 행 건너뜀, 열 합집합
-    assert [r[:3] for r in rows[1:]] == [['A플랫폼', '홍길동', '부서이동'], ['A플랫폼', '김영희', '파트이동'],
-                                          ['B플랫폼', '이철수', '전배']]
+    ws = wb['통합']
+    rows = [[c.value for c in r] for r in ws.iter_rows()]
+    assert rows[0][0] == '인사발령 회신 통합 — 2026.12.16자'
+    assert [rows[3][i] for i in (0, 2, 5, 8, 12, 13)] == ['대상', '이동 전', '이동 후', '발령 사항', '회신', '기타']
+    assert rows[4] == ['이름', 'Knox ID', '플랫폼/팀', '과제/파트', '현 직무', '플랫폼/팀', '과제/파트', '변경 직무', '발령구분',
+                       '발령일자', '파견종료일', '발령 사유', '회신 부서', '메모']
+    assert rows[5][:13] == ['홍길동', 'gd.hong', 'A플랫폼', '과제1', '개발', 'B플랫폼', '과제9', '기획', '부서이동', '2026-12-16',
+                            None, '조직 개편', 'A플랫폼']
+    assert rows[7][0] == '이철수' and rows[7][8] == '파견' and rows[7][12] == 'B플랫폼' and rows[7][13] == '확인 필요'
     st = {(r[0], r[3]): r for r in [[c.value for c in r] for r in wb['회신 현황'].iter_rows()][1:]}
     assert st[('A플랫폼', '설명.pdf')][4] == '표 아님(합치지 않음)' and st[('A플랫폼', 'A 발령.xlsx')][4] == '합침 2행'
     assert st[('A플랫폼', 'A 발령.xlsx')][6].startswith('회신 메일')
